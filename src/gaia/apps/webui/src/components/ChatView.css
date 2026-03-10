@@ -55,7 +55,7 @@
 }
 
 .title-edit:focus {
-    box-shadow: 0 0 0 3px rgba(237, 28, 36, 0.15);
+    box-shadow: 0 0 0 3px rgba(226, 60, 64, 0.12);
 }
 
 .model-badge {
@@ -170,7 +170,7 @@
 .empty-chat-chip:hover {
     border-color: var(--amd-red);
     color: var(--amd-red);
-    background: rgba(237, 28, 36, 0.04);
+    background: rgba(226, 60, 64, 0.04);
     transform: translateY(-1px);
     box-shadow: var(--shadow-sm);
 }
@@ -186,7 +186,7 @@
     align-items: center;
     justify-content: center;
     gap: 10px;
-    background: rgba(237, 28, 36, 0.04);
+    background: rgba(226, 60, 64, 0.04);
     border: 2px dashed var(--amd-red);
     border-radius: var(--radius-md);
     margin: 8px;
@@ -255,7 +255,7 @@
 
 .input-box:focus-within {
     border-color: var(--amd-red);
-    box-shadow: 0 0 0 3px rgba(237, 28, 36, 0.1), var(--shadow-md);
+    box-shadow: 0 0 0 3px rgba(226, 60, 64, 0.08), var(--shadow-md);
 }
 
 .msg-input {
@@ -294,7 +294,7 @@
 .send-btn:hover {
     background: var(--amd-red-dark);
     transform: scale(1.05);
-    box-shadow: 0 2px 8px rgba(237, 28, 36, 0.3);
+    box-shadow: 0 2px 8px rgba(226, 60, 64, 0.2);
 }
 .send-btn:active {
     transform: scale(0.95);

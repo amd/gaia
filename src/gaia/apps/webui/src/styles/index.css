@@ -54,27 +54,27 @@
 }
 
 [data-theme="dark"] {
-    --bg-primary: #0d0d0d;
-    --bg-secondary: #161616;
-    --bg-tertiary: #1e1e1e;
-    --bg-sidebar: #0a0a0a;
-    --bg-input: #141414;
-    --bg-hover: #222222;
-    --bg-active: #2a2a2a;
-    --bg-code: #080808;
-    --bg-user-msg: #141414;
-    --bg-modal-overlay: rgba(0, 0, 0, 0.65);
+    --bg-primary: #111113;
+    --bg-secondary: #18181b;
+    --bg-tertiary: #1f1f23;
+    --bg-sidebar: #0e0e11;
+    --bg-input: #151518;
+    --bg-hover: #232328;
+    --bg-active: #2b2b30;
+    --bg-code: #0c0c0e;
+    --bg-user-msg: #151518;
+    --bg-modal-overlay: rgba(0, 0, 0, 0.7);
 
-    --text-primary: #e6edf3;
-    --text-secondary: #8b949e;
-    --text-muted: #6e7681;
+    --text-primary: #e4e4e7;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
 
-    --border: #262626;
-    --border-light: #1a1a1a;
+    --border: #27272a;
+    --border-light: #1c1c20;
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
-    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.6);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
 }
 
 /* Reset */
@@ -132,7 +132,7 @@ textarea:focus-visible {
 .btn-primary:hover {
     background: var(--amd-red-dark);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(237, 28, 36, 0.3);
+    box-shadow: 0 4px 12px rgba(226, 60, 64, 0.2);
 }
 .btn-primary:active {
     transform: translateY(0);
@@ -148,7 +148,7 @@ textarea:focus-visible {
 .btn-secondary:hover {
     border-color: var(--amd-red);
     color: var(--amd-red);
-    background: rgba(237, 28, 36, 0.04);
+    background: rgba(226, 60, 64, 0.04);
 }
 
 .btn-danger {
@@ -308,8 +308,8 @@ textarea:focus-visible {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes glow {
-    0%, 100% { box-shadow: 0 0 4px rgba(237, 28, 36, 0.2); }
-    50% { box-shadow: 0 0 12px rgba(237, 28, 36, 0.4); }
+    0%, 100% { box-shadow: 0 0 4px rgba(226, 60, 64, 0.15); }
+    50% { box-shadow: 0 0 12px rgba(226, 60, 64, 0.3); }
 }
 
 /* ── Responsive: Tablet (<= 900px) ─────────────────────────────── */

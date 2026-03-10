@@ -1,18 +1,16 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
     ChevronDown,
     ChevronRight,
     Wrench,
-    Brain,
     ListChecks,
     AlertCircle,
     CheckCircle2,
     Loader2,
     Zap,
-    Info,
     Search,
     FileText,
     Terminal,
@@ -23,9 +21,11 @@ import {
     Globe,
     Code2,
     FileEdit,
+    Copy,
+    Check,
     type LucideIcon,
 } from 'lucide-react';
-import type { AgentStep } from '../types';
+import type { AgentStep, CommandOutput } from '../types';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -71,17 +71,96 @@ interface AgentActivityProps {
     variant?: 'inline' | 'summary';
 }
 
-/** Displays agent activity with collapsible step details. */
+/** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
 export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActivityProps) {
     const [expanded, setExpanded] = useState(variant === 'inline');
-    const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
+    const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
+    const prevStepCountRef = useRef(0);
+    const collapseTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
-    const toolSteps = steps.filter((s) => s.type === 'tool');
-    const errorSteps = steps.filter((s) => s.type === 'error');
+    // Cleanup timers on unmount
+    useEffect(() => {
+        return () => {
+            collapseTimersRef.current.forEach((timer) => clearTimeout(timer));
+            collapseTimersRef.current.clear();
+        };
+    }, []);
+
+    // ── Consolidate display steps ────────────────────────────────────
+    // Merge consecutive thinking/status steps into one.
+    const displaySteps = useMemo(() => {
+        const result: AgentStep[] = [];
+        for (const step of steps) {
+            const prev = result[result.length - 1];
+            // Merge consecutive thinking steps
+            if (step.type === 'thinking' && prev && prev.type === 'thinking') {
+                result[result.length - 1] = { ...step, detail: step.detail || prev.detail };
+                continue;
+            }
+            // Merge consecutive status steps
+            if (step.type === 'status' && prev && prev.type === 'status' && step.active !== false) {
+                result[result.length - 1] = { ...step, label: step.label || prev.label };
+                continue;
+            }
+            // Absorb thinking into adjacent status
+            if (step.type === 'thinking' && prev && prev.type === 'status' && prev.active !== false) {
+                result[result.length - 1] = { ...prev, detail: step.detail || prev.detail, active: step.active };
+                continue;
+            }
+            // Absorb status into adjacent thinking
+            if (step.type === 'status' && prev && prev.type === 'thinking') {
+                result[result.length - 1] = { ...prev, label: step.label || prev.label, detail: step.detail || prev.detail, active: step.active ?? prev.active };
+                continue;
+            }
+            result.push(step);
+        }
+        return result;
+    }, [steps]);
+
+    const toolSteps = displaySteps.filter((s) => s.type === 'tool');
+    const errorSteps = displaySteps.filter((s) => s.type === 'error');
     const hasErrors = errorSteps.length > 0;
 
-    const toggleStep = useCallback((id: number) => {
-        setExpandedSteps((prev) => {
+    // Auto-expand tool cards when they appear; auto-collapse after 3s when done
+    useEffect(() => {
+        if (displaySteps.length > prevStepCountRef.current && isActive) {
+            const newStep = displaySteps[displaySteps.length - 1];
+            if (newStep && newStep.type === 'tool') {
+                // Expand the new tool
+                setExpandedTools((prev) => new Set(prev).add(newStep.id));
+            }
+        }
+        prevStepCountRef.current = displaySteps.length;
+    }, [displaySteps, isActive]);
+
+    // When a tool finishes (active goes from true to false), start a collapse timer
+    useEffect(() => {
+        for (const step of displaySteps) {
+            if (step.type === 'tool' && !step.active && step.success !== undefined) {
+                // Tool just finished — schedule collapse after 2s minimum display
+                if (expandedTools.has(step.id) && !collapseTimersRef.current.has(step.id)) {
+                    const timer = setTimeout(() => {
+                        setExpandedTools((prev) => {
+                            const next = new Set(prev);
+                            next.delete(step.id);
+                            return next;
+                        });
+                        collapseTimersRef.current.delete(step.id);
+                    }, 2500);
+                    collapseTimersRef.current.set(step.id, timer);
+                }
+            }
+        }
+    }, [displaySteps, expandedTools]);
+
+    const toggleTool = useCallback((id: number) => {
+        // Clear any pending collapse timer when user manually toggles
+        const timer = collapseTimersRef.current.get(id);
+        if (timer) {
+            clearTimeout(timer);
+            collapseTimersRef.current.delete(id);
+        }
+        setExpandedTools((prev) => {
             const next = new Set(prev);
             if (next.has(id)) next.delete(id);
             else next.add(id);
@@ -90,39 +169,39 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     }, []);
 
     // Don't render until there are real steps to show
-    if (steps.length === 0) return null;
+    if (displaySteps.length === 0) return null;
 
-    // Build rich summary text
-    const activeStep = steps.find((s) => s.active);
+    // Build summary text
+    const activeStep = displaySteps.find((s) => s.active);
     let summaryText: string;
-    let summaryTools: string[] = [];
 
     if (isActive && activeStep) {
-        // Show active step's friendly label
         if (activeStep.type === 'tool' && activeStep.tool) {
-            const meta = getToolMeta(activeStep.tool);
-            summaryText = meta.activeLabel;
+            summaryText = getToolMeta(activeStep.tool).activeLabel;
+        } else if (activeStep.type === 'thinking') {
+            summaryText = 'Thinking...';
         } else {
             summaryText = activeStep.label || 'Working...';
         }
     } else if (isActive) {
-        summaryText = `${steps.length} step${steps.length !== 1 ? 's' : ''}...`;
+        summaryText = 'Thinking...';
     } else {
-        // Completed: show tool names used
-        summaryTools = [...new Set(toolSteps.map((s) => s.tool).filter(Boolean) as string[])];
-        if (summaryTools.length > 0) {
-            const toolLabels = summaryTools.slice(0, 3).map((t) => getToolMeta(t).label);
+        const uniqueTools = [...new Set(toolSteps.map((s) => s.tool).filter(Boolean) as string[])];
+        if (uniqueTools.length > 0) {
+            const toolLabels = uniqueTools.slice(0, 3).map((t) => getToolMeta(t).label);
             summaryText = toolLabels.join(', ');
-            if (summaryTools.length > 3) summaryText += ` +${summaryTools.length - 3} more`;
+            if (uniqueTools.length > 3) summaryText += ` +${uniqueTools.length - 3} more`;
         } else {
-            summaryText = `${steps.length} step${steps.length !== 1 ? 's' : ''}`;
+            summaryText = `${displaySteps.length} step${displaySteps.length !== 1 ? 's' : ''}`;
         }
-        summaryText += ` \u00b7 ${toolSteps.length} tool${toolSteps.length !== 1 ? 's' : ''}`;
+        if (toolSteps.length > 0) {
+            summaryText += ` \u00b7 ${toolSteps.length} tool${toolSteps.length !== 1 ? 's' : ''}`;
+        }
     }
 
     return (
         <div className={`agent-activity ${variant} ${isActive ? 'active' : 'done'} ${hasErrors ? 'has-errors' : ''}`}>
-            {/* Summary bar - always visible */}
+            {/* Summary bar */}
             <button
                 className="agent-summary-bar"
                 onClick={() => setExpanded(!expanded)}
@@ -146,127 +225,219 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                 </div>
             </button>
 
-            {/* Expanded step list */}
-            {expanded && steps.length > 0 && (
-                <div className="agent-steps">
-                    {steps.map((step, index) => (
-                        <AgentStepRow
-                            key={step.id}
-                            step={step}
-                            isExpanded={expandedSteps.has(step.id)}
-                            onToggle={() => toggleStep(step.id)}
-                            isLast={index === steps.length - 1}
-                        />
-                    ))}
+            {/* Flow content — thinking text + inline tool cards */}
+            {expanded && displaySteps.length > 0 && (
+                <div className="agent-flow">
+                    {displaySteps.map((step) => {
+                        if (step.type === 'thinking' || step.type === 'status') {
+                            return <FlowThought key={step.id} step={step} />;
+                        }
+                        if (step.type === 'tool') {
+                            return (
+                                <FlowToolCard
+                                    key={step.id}
+                                    step={step}
+                                    isExpanded={expandedTools.has(step.id)}
+                                    onToggle={() => toggleTool(step.id)}
+                                />
+                            );
+                        }
+                        if (step.type === 'plan') {
+                            return <FlowPlan key={step.id} step={step} />;
+                        }
+                        if (step.type === 'error') {
+                            return <FlowError key={step.id} step={step} />;
+                        }
+                        return null;
+                    })}
                 </div>
             )}
         </div>
     );
 }
 
-// ── Step Row ──────────────────────────────────────────────────────────────
+// ── Flow: Thinking text ──────────────────────────────────────────────────
 
-interface AgentStepRowProps {
+function FlowThought({ step }: { step: AgentStep }) {
+    const text = step.detail || step.label || '';
+    if (!text || text === 'Thinking') return null;
+
+    return (
+        <div className={`flow-thought ${step.active ? 'active' : ''}`}>
+            {step.active && <Loader2 size={11} className="flow-thought-spinner" />}
+            <span className="flow-thought-text">{text}</span>
+        </div>
+    );
+}
+
+// ── Flow: Tool Card ──────────────────────────────────────────────────────
+
+interface FlowToolCardProps {
     step: AgentStep;
     isExpanded: boolean;
     onToggle: () => void;
-    isLast: boolean;
 }
 
-function AgentStepRow({ step, isExpanded, onToggle, isLast }: AgentStepRowProps) {
-    const hasDetail = !!(step.detail || step.result || step.planSteps);
-    const meta = step.type === 'tool' ? getToolMeta(step.tool) : null;
-    const Icon = meta?.icon || stepIcon(step);
-    const iconColor = meta?.color || stepIconColor(step);
-    const friendlyLabel = step.type === 'tool'
-        ? (step.active ? (meta?.activeLabel || step.label) : (meta?.label || step.label))
-        : step.label;
+function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
+    const meta = getToolMeta(step.tool);
+    const Icon = meta.icon;
+    const color = meta.color;
+    const friendlyLabel = step.active ? meta.activeLabel : meta.label;
+    const hasDetail = !!(step.detail || step.result || step.commandOutput);
 
     return (
-        <div className={`agent-step-row ${step.active ? 'active' : ''} ${step.type} ${isLast ? 'last' : ''}`}>
-            {/* Timeline connector */}
-            <div className="step-timeline">
-                <div
-                    className={`step-dot ${step.active ? 'dot-active' : ''} ${step.success === false ? 'dot-error' : ''}`}
-                    style={{ '--dot-color': iconColor } as React.CSSProperties}
-                >
+        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false ? 'error' : ''}`}>
+            <button
+                className="flow-tool-header"
+                onClick={hasDetail ? onToggle : undefined}
+                style={hasDetail ? undefined : { cursor: 'default' }}
+            >
+                <div className="flow-tool-left">
                     {step.active ? (
-                        <Loader2 size={10} className="dot-spinner" />
+                        <Loader2 size={13} className="flow-tool-spinner" style={{ color }} />
                     ) : step.success === false ? (
-                        <AlertCircle size={10} />
+                        <AlertCircle size={13} style={{ color: '#ef4444' }} />
                     ) : step.success === true ? (
-                        <CheckCircle2 size={10} />
+                        <CheckCircle2 size={13} style={{ color: '#22c55e' }} />
                     ) : (
-                        <Icon size={10} />
+                        <Icon size={13} style={{ color }} />
+                    )}
+                    <span className="flow-tool-label">{friendlyLabel}</span>
+                    <span className="flow-tool-badge" style={{ '--badge-color': color } as React.CSSProperties}>
+                        {step.tool}
+                    </span>
+                </div>
+                <div className="flow-tool-right">
+                    {hasDetail && (
+                        <span className={`flow-tool-chevron ${isExpanded ? 'expanded' : ''}`}>
+                            <ChevronRight size={12} />
+                        </span>
                     )}
                 </div>
-                {!isLast && <div className="step-line" />}
-            </div>
+            </button>
 
-            {/* Step content */}
-            <div className="step-content">
-                <button
-                    className="step-header"
-                    onClick={hasDetail ? onToggle : undefined}
-                    aria-expanded={hasDetail ? isExpanded : undefined}
-                    style={hasDetail ? undefined : { cursor: 'default' }}
-                >
-                    <div className="step-left">
-                        <Icon size={14} className="step-icon" style={{ color: iconColor }} />
-                        <span className="step-label">{friendlyLabel}</span>
-                        {step.tool && (
-                            <span className="step-tool-badge" style={{ '--badge-color': iconColor } as React.CSSProperties}>
-                                {step.tool}
-                            </span>
-                        )}
-                    </div>
-                    <div className="step-right">
-                        {step.success === true && !step.active && (
-                            <CheckCircle2 size={13} className="step-check" />
-                        )}
-                        {step.success === false && (
-                            <AlertCircle size={13} className="step-error-icon" />
-                        )}
-                        {hasDetail && (
-                            <span className={`step-chevron-wrap ${isExpanded ? 'expanded' : ''}`}>
-                                <ChevronRight size={13} className="step-chevron" />
-                            </span>
-                        )}
-                    </div>
-                </button>
+            {isExpanded && hasDetail && (
+                <div className="flow-tool-detail">
+                    {/* Arguments (except for commands) */}
+                    {step.detail && !step.commandOutput && (
+                        <div className="step-detail-args">
+                            <span className="detail-section-label">Arguments</span>
+                            <div className="detail-args-content">
+                                {formatArgsDisplay(step.detail)}
+                            </div>
+                        </div>
+                    )}
 
-                {/* Expandable detail */}
-                {isExpanded && hasDetail && (
-                    <div className="step-detail">
-                        {step.detail && (
-                            <div className="step-detail-args">
-                                <span className="detail-section-label">Arguments</span>
-                                <div className="detail-args-content">
-                                    {formatArgsDisplay(step.detail)}
-                                </div>
-                            </div>
-                        )}
-                        {step.result && (
-                            <div className={`step-detail-result ${step.success === false ? 'result-error' : 'result-success'}`}>
-                                <span className="detail-section-label">
-                                    {step.success === false ? 'Error' : 'Result'}
-                                </span>
-                                <div className="detail-result-content">{step.result}</div>
-                            </div>
-                        )}
-                        {step.planSteps && step.planSteps.length > 0 && (
-                            <div className="step-detail-plan">
-                                <span className="detail-section-label">Plan</span>
-                                <ol className="step-plan-list">
-                                    {step.planSteps.map((ps, i) => (
-                                        <li key={i} className="step-plan-item">{ps}</li>
-                                    ))}
-                                </ol>
-                            </div>
-                        )}
-                    </div>
-                )}
+                    {/* Command output - terminal style */}
+                    {step.commandOutput && (
+                        <CommandOutputView output={step.commandOutput} />
+                    )}
+
+                    {/* Generic result */}
+                    {step.result && !step.commandOutput && (
+                        <div className={`step-detail-result ${step.success === false ? 'result-error' : 'result-success'}`}>
+                            <span className="detail-section-label">
+                                {step.success === false ? 'Error' : 'Result'}
+                            </span>
+                            <div className="detail-result-content">{step.result}</div>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ── Flow: Plan ───────────────────────────────────────────────────────────
+
+function FlowPlan({ step }: { step: AgentStep }) {
+    if (!step.planSteps || step.planSteps.length === 0) return null;
+
+    return (
+        <div className="flow-plan">
+            <div className="flow-plan-header">
+                <ListChecks size={12} />
+                <span>Plan</span>
             </div>
+            <ol className="flow-plan-list">
+                {step.planSteps.map((ps, i) => (
+                    <li key={i} className="flow-plan-item">{ps}</li>
+                ))}
+            </ol>
+        </div>
+    );
+}
+
+// ── Flow: Error ──────────────────────────────────────────────────────────
+
+function FlowError({ step }: { step: AgentStep }) {
+    return (
+        <div className="flow-error">
+            <AlertCircle size={13} />
+            <span>{step.detail || step.label || 'An error occurred'}</span>
+        </div>
+    );
+}
+
+// ── Command Output View (Terminal Style) ──────────────────────────────────
+
+function CommandOutputView({ output }: { output: CommandOutput }) {
+    const [copied, setCopied] = useState(false);
+    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+        };
+    }, []);
+
+    const handleCopy = useCallback(() => {
+        const text = output.stdout || output.stderr || '';
+        navigator.clipboard.writeText(text).catch(() => {});
+        setCopied(true);
+        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+    }, [output]);
+
+    const hasOutput = !!(output.stdout || output.stderr);
+    const isError = output.returnCode !== 0;
+
+    return (
+        <div className={`cmd-output ${isError ? 'cmd-error' : ''}`}>
+            <div className="cmd-header">
+                <div className="cmd-header-left">
+                    <Terminal size={12} className="cmd-header-icon" />
+                    <span className="cmd-header-title">Terminal</span>
+                    {output.cwd && <span className="cmd-cwd">{output.cwd}</span>}
+                </div>
+                <div className="cmd-header-right">
+                    {output.durationSeconds != null && (
+                        <span className="cmd-duration">{output.durationSeconds.toFixed(1)}s</span>
+                    )}
+                    {output.returnCode !== 0 && (
+                        <span className="cmd-exit-code">exit {output.returnCode}</span>
+                    )}
+                    {hasOutput && (
+                        <button
+                            className={`cmd-copy ${copied ? 'copied' : ''}`}
+                            onClick={handleCopy}
+                            title={copied ? 'Copied!' : 'Copy output'}
+                        >
+                            {copied ? <Check size={11} /> : <Copy size={11} />}
+                        </button>
+                    )}
+                </div>
+            </div>
+            <div className="cmd-line">
+                <span className="cmd-prompt">$</span>
+                <span className="cmd-text">{output.command}</span>
+            </div>
+            {output.stdout && <pre className="cmd-stdout">{output.stdout}</pre>}
+            {output.stderr && <pre className="cmd-stderr">{output.stderr}</pre>}
+            {output.truncated && (
+                <div className="cmd-truncated">Output was truncated (exceeded size limit)</div>
+            )}
+            {!hasOutput && <div className="cmd-empty">No output</div>}
         </div>
     );
 }
@@ -274,7 +445,6 @@ function AgentStepRow({ step, isExpanded, onToggle, isLast }: AgentStepRowProps)
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 function formatArgsDisplay(detail: string): React.ReactNode {
-    // Split comma-separated or newline-separated args into key-value pairs
     const parts = detail.includes('\n')
         ? detail.split('\n').filter(Boolean)
         : detail.split(', ').filter(Boolean);
@@ -301,26 +471,4 @@ function formatArgsDisplay(detail: string): React.ReactNode {
             })}
         </div>
     );
-}
-
-function stepIcon(step: AgentStep): LucideIcon {
-    switch (step.type) {
-        case 'thinking': return Brain;
-        case 'tool': return Wrench;
-        case 'plan': return ListChecks;
-        case 'error': return AlertCircle;
-        case 'status': return Info;
-        default: return Info;
-    }
-}
-
-function stepIconColor(step: AgentStep): string {
-    switch (step.type) {
-        case 'thinking': return '#8b5cf6';
-        case 'tool': return '#3b82f6';
-        case 'plan': return '#f59e0b';
-        case 'error': return '#ef4444';
-        case 'status': return '#6e7681';
-        default: return '#6e7681';
-    }
 }

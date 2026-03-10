@@ -169,15 +169,50 @@ class SSEOutputHandler(OutputHandler):
 
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
-        self._emit(
-            {
-                "type": "tool_result",
-                "title": title,
-                "summary": summary,
-                "success": (
-                    data.get("status") != "error" if isinstance(data, dict) else True
-                ),
+        event = {
+            "type": "tool_result",
+            "title": title,
+            "summary": summary,
+            "success": (
+                data.get("status") != "error" if isinstance(data, dict) else True
+            ),
+        }
+
+        # For command execution results, include structured output data
+        # so the frontend can render a proper terminal view
+        if isinstance(data, dict) and "command" in data and ("stdout" in data or "stderr" in data):
+            event["command_output"] = {
+                "command": data.get("command", ""),
+                "stdout": data.get("stdout", ""),
+                "stderr": data.get("stderr", ""),
+                "return_code": data.get("return_code", 0),
+                "cwd": data.get("cwd", ""),
+                "duration_seconds": data.get("duration_seconds"),
+                "truncated": data.get("output_truncated", False),
             }
+
+        # For file search results, include structured file list
+        if isinstance(data, dict) and ("files" in data or "file_list" in data):
+            files = data.get("file_list", data.get("files", []))
+            if isinstance(files, list):
+                event["result_data"] = {
+                    "type": "file_list",
+                    "files": files[:20],  # Limit to 20 files
+                    "total": data.get("count", len(files)),
+                }
+
+        # For search results with chunks, include preview
+        if isinstance(data, dict) and "chunks" in data:
+            chunks = data.get("chunks", [])
+            if isinstance(chunks, list):
+                event["result_data"] = {
+                    "type": "search_results",
+                    "count": len(chunks),
+                    "scores": data.get("scores", []),
+                    "previews": [str(c)[:200] for c in chunks[:5]],
+                }
+
+        self._emit(event
         )
 
     # === Status Messages ===
@@ -211,8 +246,12 @@ class SSEOutputHandler(OutputHandler):
     # === Progress Indicators ===
 
     def start_progress(self, message: str):
+        # Filter redundant "Executing <tool_name>" progress messages -
+        # these just echo the tool name which the frontend already shows.
+        if message and message.lower().startswith("executing "):
+            return
         # Emit as "thinking" so the frontend shows a visible spinner
-        # while the LLM is working (instead of filtered "status" events).
+        # while the LLM is working.
         self._emit(
             {
                 "type": "thinking",

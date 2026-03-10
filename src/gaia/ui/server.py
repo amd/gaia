@@ -1558,6 +1558,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         event.get("summary") or event.get("title") or "Done"
                     )
                     captured_steps[-1]["success"] = event.get("success", True)
+                    # Persist structured command output for terminal rendering
+                    if event.get("command_output"):
+                        captured_steps[-1]["commandOutput"] = event["command_output"]
                 elif event_type == "plan":
                     step_id += 1
                     for s in captured_steps:

@@ -17,7 +17,7 @@
 }
 .drop-zone:hover, .drop-zone.drag-over {
     border-color: var(--amd-red);
-    background: rgba(237, 28, 36, 0.03);
+    background: rgba(226, 60, 64, 0.03);
     color: var(--amd-red);
 }
 .drop-zone.uploading {

@@ -302,11 +302,24 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
                 if (event.type === 'tool_result') {
-                    updateLastAgentStep({
+                    const updates: Partial<AgentStep> = {
                         result: event.summary || event.title || 'Done',
                         active: false,
                         success: event.success !== false,
-                    });
+                    };
+                    // Pass through structured command output if available
+                    if (event.command_output) {
+                        updates.commandOutput = {
+                            command: event.command_output.command,
+                            stdout: event.command_output.stdout,
+                            stderr: event.command_output.stderr,
+                            returnCode: event.command_output.return_code,
+                            cwd: event.command_output.cwd,
+                            durationSeconds: event.command_output.duration_seconds,
+                            truncated: event.command_output.truncated,
+                        };
+                    }
+                    updateLastAgentStep(updates);
                     return;
                 }
                 // Tool args update the last tool step with detail
@@ -316,15 +329,53 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     });
                     return;
                 }
-                // Show working/warning/info status events, filter started/complete
+
+                // ── Consolidate thinking events ──────────────────────────
+                // Instead of creating a new step for every thought, update
+                // the existing thinking step so we get ONE "Thinking" entry
+                // that shows the latest thought, not a massive stream.
+                if (event.type === 'thinking') {
+                    const currentSteps = useChatStore.getState().agentSteps;
+                    const lastStep = currentSteps[currentSteps.length - 1];
+                    if (lastStep && lastStep.type === 'thinking') {
+                        // Update the existing thinking step with new content
+                        updateLastAgentStep({
+                            detail: event.content,
+                            active: true,
+                        });
+                        return;
+                    }
+                    // First thinking step or after a non-thinking step - create it
+                    const step = agentEventToStep(event, stepIdRef);
+                    if (step) addAgentStep(step);
+                    return;
+                }
+
+                // ── Consolidate status events ────────────────────────────
+                // Working/info status messages are progress indicators.
+                // Consolidate consecutive ones into a single entry.
                 if (event.type === 'status') {
                     const status = event.status;
+                    const msg = (event.message || '').trim();
+                    // Skip "Executing <tool>" messages - redundant with tool_start
+                    if (msg.toLowerCase().startsWith('executing ')) return;
                     if (status === 'working' || status === 'warning' || status === 'info') {
+                        const currentSteps = useChatStore.getState().agentSteps;
+                        const lastStep = currentSteps[currentSteps.length - 1];
+                        // Consolidate with previous status/thinking step
+                        if (lastStep && (lastStep.type === 'status' || lastStep.type === 'thinking') && lastStep.active) {
+                            updateLastAgentStep({
+                                label: msg || 'Working',
+                                detail: msg,
+                            });
+                            return;
+                        }
                         const step = agentEventToStep(event, stepIdRef);
                         if (step) addAgentStep(step);
                     }
                     return;
                 }
+
                 if (event.type === 'step') {
                     return; // Step headers are redundant with actual tool/thinking steps
                 }

@@ -97,6 +97,18 @@ class ChatResponse(BaseModel):
     tokens: Optional[Dict[str, int]] = None
 
 
+class CommandOutputResponse(BaseModel):
+    """Structured output from a shell command execution."""
+
+    command: str = ""
+    stdout: str = ""
+    stderr: str = ""
+    return_code: int = 0
+    cwd: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    truncated: bool = False
+
+
 class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
@@ -110,6 +122,7 @@ class AgentStepResponse(BaseModel):
     active: bool = False
     planSteps: Optional[List[str]] = None
     timestamp: int = 0
+    commandOutput: Optional[CommandOutputResponse] = None
 
 
 class MessageResponse(BaseModel):

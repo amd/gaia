@@ -1,4 +1,4 @@
-/* Agent Activity - collapsible step display with timeline */
+/* Agent Activity - flow layout with thinking + inline tool cards */
 
 .agent-activity {
     max-width: 900px;
@@ -47,7 +47,7 @@
 .agent-icon-done { color: var(--text-muted); }
 .agent-icon-error { color: #ef4444; }
 
-/* Spinner wrap with subtle glow */
+/* Spinner */
 .agent-spinner-wrap {
     display: flex;
     align-items: center;
@@ -65,13 +65,13 @@
 
 /* Active state */
 .agent-activity.active .agent-summary-bar {
-    border-color: rgba(237, 28, 36, 0.25);
-    background: rgba(237, 28, 36, 0.04);
-    box-shadow: 0 0 0 1px rgba(237, 28, 36, 0.06);
+    border-color: rgba(226, 60, 64, 0.2);
+    background: rgba(226, 60, 64, 0.03);
+    box-shadow: 0 0 0 1px rgba(226, 60, 64, 0.05);
 }
 [data-theme="dark"] .agent-activity.active .agent-summary-bar {
-    background: rgba(237, 28, 36, 0.06);
-    box-shadow: 0 0 12px rgba(237, 28, 36, 0.06);
+    background: rgba(226, 60, 64, 0.06);
+    box-shadow: 0 0 12px rgba(226, 60, 64, 0.06);
 }
 
 /* Summary variant (post-completion) */
@@ -91,162 +91,138 @@
     background: transparent;
 }
 
-/* ── Step list ────────────────────────────────────────────────── */
-.agent-steps {
+/* ── Flow container ──────────────────────────────────────────── */
+.agent-flow {
     margin-top: 6px;
-    padding: 4px 0 4px 4px;
-    animation: slideDown 200ms var(--ease);
-}
-
-@keyframes slideDown {
-    from {
-        opacity: 0;
-        transform: translateY(-6px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-/* ── Individual step with timeline ────────────────────────────── */
-.agent-step-row {
-    display: flex;
-    gap: 0;
-    min-height: 32px;
-}
-
-/* ── Timeline (left column) ───────────────────────────────────── */
-.step-timeline {
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
     display: flex;
     flex-direction: column;
-    align-items: center;
-    width: 24px;
-    flex-shrink: 0;
-    padding-top: 2px;
+    gap: 6px;
+    animation: flowSlideDown 200ms var(--ease);
+    max-height: 500px;
+    overflow-y: auto;
 }
 
-.step-dot {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
+/* Subtle scrollbar for flow container */
+.agent-flow::-webkit-scrollbar {
+    width: 4px;
+}
+.agent-flow::-webkit-scrollbar-track {
+    background: transparent;
+}
+.agent-flow::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 2px;
+}
+
+@keyframes flowSlideDown {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Flow: Thinking text ─────────────────────────────────────── */
+.flow-thought {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-tertiary);
-    border: 1.5px solid var(--border);
+    align-items: flex-start;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    animation: fadeIn 150ms var(--ease);
+}
+
+.flow-thought.active {
+    color: var(--text-secondary);
+}
+
+.flow-thought-spinner {
+    animation: spin 1s linear infinite;
     color: var(--text-muted);
     flex-shrink: 0;
-    transition: all var(--duration) var(--ease);
-    z-index: 1;
+    margin-top: 2px;
 }
 
-/* Color the dot based on the tool's color */
-.step-dot:not(.dot-active):not(.dot-error) {
-    border-color: var(--dot-color, var(--border));
-    color: var(--dot-color, var(--text-muted));
+.flow-thought-text {
+    font-style: italic;
+    word-break: break-word;
 }
 
-.step-dot.dot-active {
-    border-color: var(--amd-red);
-    background: rgba(237, 28, 36, 0.1);
-    color: var(--amd-red);
-    box-shadow: 0 0 8px rgba(237, 28, 36, 0.2);
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
-.step-dot.dot-error {
-    border-color: #ef4444;
-    background: rgba(239, 68, 68, 0.1);
-    color: #ef4444;
+/* ── Flow: Tool Card ─────────────────────────────────────────── */
+.flow-tool {
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    overflow: hidden;
+    transition: border-color var(--duration-fast) var(--ease);
+    animation: fadeIn 150ms var(--ease);
 }
 
-.dot-spinner {
-    animation: spin 1s linear infinite;
+.flow-tool.active {
+    border-color: rgba(226, 60, 64, 0.25);
+    box-shadow: 0 0 0 1px rgba(226, 60, 64, 0.05);
 }
 
-/* Completed dots with success */
-.agent-step-row:not(.active) .step-dot .lucide-check-circle-2 {
-    color: #22c55e;
+.flow-tool.error {
+    border-color: rgba(239, 68, 68, 0.25);
 }
 
-.step-line {
-    width: 1.5px;
-    flex: 1;
-    min-height: 8px;
-    background: var(--border-light);
-    margin: 2px 0;
-}
-
-[data-theme="dark"] .step-line {
-    background: var(--border);
-    opacity: 0.5;
-}
-
-.agent-step-row.last .step-line {
-    display: none;
-}
-
-/* ── Step content (right column) ──────────────────────────────── */
-.step-content {
-    flex: 1;
-    min-width: 0;
-    padding-bottom: 4px;
-}
-
-.step-header {
+.flow-tool-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    padding: 4px 8px;
-    border-radius: 8px;
-    font-size: 12.5px;
+    padding: 6px 10px;
+    font-size: 12px;
     color: var(--text-secondary);
     transition: background var(--duration-fast) var(--ease);
+    cursor: pointer;
 }
-.step-header:hover {
+.flow-tool-header:hover {
     background: var(--bg-hover);
 }
 
-.step-left {
+.flow-tool-left {
     display: flex;
     align-items: center;
     gap: 7px;
     min-width: 0;
 }
 
-.step-right {
+.flow-tool-right {
     display: flex;
     align-items: center;
-    gap: 5px;
     flex-shrink: 0;
 }
 
-.step-icon {
+.flow-tool-spinner {
+    animation: spin 1s linear infinite;
     flex-shrink: 0;
-    opacity: 0.85;
 }
 
-.step-label {
+.flow-tool-label {
+    font-weight: 600;
+    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 500;
     color: var(--text-primary);
+    font-size: 12px;
 }
 
-/* Active step label emphasis */
-.agent-step-row.active .step-label {
-    color: var(--text-primary);
-    font-weight: 600;
-}
-
-/* Tool badge - styled code pill */
-.step-tool-badge {
+/* Tool badge pill */
+.flow-tool-badge {
     font-family: var(--font-mono);
-    font-size: 10.5px;
-    padding: 1px 7px;
-    border-radius: 5px;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
     background: color-mix(in srgb, var(--badge-color, #3b82f6) 8%, transparent);
     color: var(--badge-color, #3b82f6);
     white-space: nowrap;
@@ -255,44 +231,91 @@
     letter-spacing: -0.01em;
 }
 
-/* Fallback for browsers without color-mix */
 @supports not (background: color-mix(in srgb, red 50%, blue)) {
-    .step-tool-badge {
+    .flow-tool-badge {
         background: var(--bg-tertiary);
         color: var(--text-muted);
         border-color: var(--border-light);
     }
 }
 
-.step-check { color: #22c55e; }
-.step-error-icon { color: #ef4444; }
-
-/* Chevron rotation */
-.step-chevron-wrap {
+/* Chevron */
+.flow-tool-chevron {
     display: flex;
     align-items: center;
+    color: var(--text-muted);
     transition: transform var(--duration-fast) var(--ease);
 }
-.step-chevron-wrap.expanded {
+.flow-tool-chevron.expanded {
     transform: rotate(90deg);
 }
-.step-chevron { color: var(--text-muted); }
 
-/* ── Step detail (expanded) ───────────────────────────────────── */
-.step-detail {
-    margin: 4px 0 6px 8px;
-    padding: 0;
-    animation: fadeIn 150ms var(--ease);
+/* Tool detail (expanded) */
+.flow-tool-detail {
+    padding: 0 10px 8px;
     display: flex;
     flex-direction: column;
     gap: 6px;
+    animation: fadeIn 150ms var(--ease);
+    border-top: 1px solid var(--border-light);
 }
 
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+/* ── Flow: Plan ──────────────────────────────────────────────── */
+.flow-plan {
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(245, 158, 11, 0.04);
+    border: 1px solid rgba(245, 158, 11, 0.12);
+    animation: fadeIn 150ms var(--ease);
 }
 
+[data-theme="dark"] .flow-plan {
+    background: rgba(245, 158, 11, 0.06);
+    border-color: rgba(245, 158, 11, 0.15);
+}
+
+.flow-plan-header {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #f59e0b;
+    margin-bottom: 4px;
+}
+
+.flow-plan-list {
+    margin: 0 0 0 16px;
+    padding: 0;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+}
+.flow-plan-item {
+    margin-bottom: 2px;
+    line-height: 1.4;
+}
+
+/* ── Flow: Error ─────────────────────────────────────────────── */
+.flow-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(239, 68, 68, 0.05);
+    border: 1px solid rgba(239, 68, 68, 0.15);
+    font-size: 12px;
+    color: #ef4444;
+    animation: fadeIn 150ms var(--ease);
+}
+
+[data-theme="dark"] .flow-error {
+    background: rgba(239, 68, 68, 0.08);
+}
+
+/* ── Shared detail styles (reused from tool detail) ──────────── */
 .detail-section-label {
     display: block;
     font-size: 10px;
@@ -301,6 +324,7 @@
     letter-spacing: 0.5px;
     color: var(--text-muted);
     margin-bottom: 4px;
+    margin-top: 6px;
 }
 
 /* Arguments display */
@@ -385,48 +409,185 @@
     word-break: break-word;
 }
 
-/* Plan steps */
-.step-detail-plan {
-    padding: 8px 10px;
+/* ── Command Output (Terminal View) ───────────────────────────── */
+.cmd-output {
     border-radius: 8px;
-    background: rgba(245, 158, 11, 0.04);
-    border: 1px solid rgba(245, 158, 11, 0.12);
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--bg-code, #1e1e1e);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    margin-top: 6px;
 }
 
-[data-theme="dark"] .step-detail-plan {
-    background: rgba(245, 158, 11, 0.06);
-    border-color: rgba(245, 158, 11, 0.15);
+.cmd-output.cmd-error {
+    border-color: rgba(239, 68, 68, 0.3);
 }
 
-.step-plan-list {
-    margin: 0 0 0 18px;
-    padding: 0;
-    font-size: 12px;
-    color: var(--text-secondary);
+.cmd-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
-.step-plan-item {
-    margin-bottom: 3px;
-    line-height: 1.5;
+
+.cmd-header-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.cmd-header-icon {
+    color: #6e7681;
+}
+
+.cmd-header-title {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.cmd-cwd {
+    font-size: 10px;
+    color: #6e7681;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cmd-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.cmd-duration {
+    font-size: 10px;
+    color: #6e7681;
+}
+
+.cmd-exit-code {
+    font-size: 10px;
+    font-weight: 600;
+    color: #ef4444;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.cmd-copy {
+    display: flex;
+    align-items: center;
+    padding: 2px 4px;
+    border-radius: 4px;
+    color: #6e7681;
+    transition: all 120ms var(--ease);
+    cursor: pointer;
+}
+.cmd-copy:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #8b949e;
+}
+.cmd-copy.copied {
+    color: #22c55e;
+}
+
+.cmd-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px 10px 4px;
+    color: #e6edf3;
+}
+
+.cmd-prompt {
+    color: #22c55e;
+    font-weight: 700;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.cmd-text {
+    color: #e6edf3;
+    word-break: break-all;
+}
+
+.cmd-stdout {
+    padding: 4px 10px 8px 22px;
+    margin: 0;
+    color: #d4d4d4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.cmd-stdout::-webkit-scrollbar {
+    width: 5px;
+}
+.cmd-stdout::-webkit-scrollbar-track {
+    background: transparent;
+}
+.cmd-stdout::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 3px;
+}
+.cmd-stdout::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.cmd-stderr {
+    padding: 4px 10px 8px 22px;
+    margin: 0;
+    color: #f87171;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 200px;
+    overflow-y: auto;
+    background: rgba(239, 68, 68, 0.04);
+    border-top: 1px solid rgba(239, 68, 68, 0.1);
+}
+
+.cmd-truncated {
+    padding: 4px 10px;
+    font-size: 10px;
+    color: #f59e0b;
+    text-align: center;
+    background: rgba(245, 158, 11, 0.05);
+    border-top: 1px solid rgba(245, 158, 11, 0.1);
+}
+
+.cmd-empty {
+    padding: 6px 10px 8px 22px;
+    color: #6e7681;
+    font-style: italic;
 }
 
 /* ── Accessibility: reduced motion ────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
     .agent-spinner,
-    .dot-spinner {
+    .flow-tool-spinner,
+    .flow-thought-spinner {
         animation: none;
     }
 
-    .agent-steps,
-    .step-detail {
+    .agent-flow,
+    .flow-thought,
+    .flow-tool,
+    .flow-tool-detail,
+    .flow-plan,
+    .flow-error {
         animation: none;
     }
 
-    .step-chevron-wrap {
+    .flow-tool-chevron {
         transition: none;
-    }
-
-    .step-dot.dot-active {
-        box-shadow: none;
     }
 }
 
@@ -436,7 +597,7 @@
         padding: 0 16px;
     }
 
-    .step-tool-badge {
+    .flow-tool-badge {
         display: none;
     }
 }
