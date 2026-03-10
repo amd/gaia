@@ -384,11 +384,14 @@ gaia mcp remove <name>           # Remove server
   </Accordion>
 
   <Accordion title="Config file not found">
-    `load_mcp_servers_from_config()` returns 0 servers. GAIA looks in three places:
+    `load_mcp_servers_from_config()` returns 0 servers. GAIA looks for a local config in two places (in order):
 
     1. Current working directory (`./mcp_servers.json`)
-    2. The script's own directory (e.g., `examples/mcp_servers.json` when running `uv run examples/agent.py`)
-    3. Global config (`~/.gaia/mcp_servers.json`)
+    2. The directory containing the script being run (i.e., `__main__.__file__` parent)
+
+    Then merges in the global config:
+
+    3. `~/.gaia/mcp_servers.json`
 
     Verify the files exist:
     ```bash
@@ -396,7 +399,7 @@ gaia mcp remove <name>           # Remove server
     cat ~/.gaia/mcp_servers.json  # Global config
     ```
 
-    If running a script from a different directory (e.g., repo root), place `mcp_servers.json`
+    If running a script from a different directory, place `mcp_servers.json`
     in the same directory as the script — GAIA will find it automatically.
   </Accordion>
 

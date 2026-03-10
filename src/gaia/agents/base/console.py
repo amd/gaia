@@ -793,7 +793,7 @@ class AgentConsole(OutputHandler):
         if self.rich_available:
             self.console.print(f"\n[bold blue]{action_desc}[/bold blue]")
             if action_desc == tool_descriptions["default"]:
-                # If using default, also show the (human-readable) tool name
+                # If using default, also show the tool display name
                 self.console.print(f"  [dim]Tool: {display_name}[/dim]")
         else:
             print(f"\n{action_desc}")
