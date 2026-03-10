@@ -181,6 +181,9 @@ atlassian_config.json
 *.mcp.json
 .mcp.json
 
+# Local settings files (machine-specific, not for repo)
+*local.json
+
 # version files
 version.txt
 installer/version.nsh
