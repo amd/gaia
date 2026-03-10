@@ -8,8 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-
 from gaia.mcp.client.config import MCPConfig
 
 
