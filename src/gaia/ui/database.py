@@ -121,9 +121,7 @@ class ChatDatabase:
         try:
             doc_cols = [
                 row[1]
-                for row in self._conn.execute(
-                    "PRAGMA table_info(documents)"
-                ).fetchall()
+                for row in self._conn.execute("PRAGMA table_info(documents)").fetchall()
             ]
             if "indexing_status" not in doc_cols:
                 self._conn.execute(

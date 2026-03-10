@@ -421,18 +421,31 @@ def create_app(db_path: str = None) -> FastAPI:
         async def _background_index(doc_id: str, filepath: Path):
             """Run indexing in background, updating DB status on completion."""
             try:
-                logger.info("Background indexing started for %s (%s)", filepath.name, doc_id)
+                logger.info(
+                    "Background indexing started for %s (%s)", filepath.name, doc_id
+                )
                 chunk_count = await _index_document(filepath)
                 # Check if task was cancelled while we were indexing
                 if doc_id in _indexing_tasks:
-                    db.update_document_status(doc_id, "complete", chunk_count=chunk_count)
-                    logger.info("Background indexing complete for %s: %d chunks", filepath.name, chunk_count)
+                    db.update_document_status(
+                        doc_id, "complete", chunk_count=chunk_count
+                    )
+                    logger.info(
+                        "Background indexing complete for %s: %d chunks",
+                        filepath.name,
+                        chunk_count,
+                    )
             except asyncio.CancelledError:
                 db.update_document_status(doc_id, "cancelled")
                 logger.info("Background indexing cancelled for %s", filepath.name)
             except Exception as e:
                 db.update_document_status(doc_id, "failed")
-                logger.error("Background indexing failed for %s: %s", filepath.name, e, exc_info=True)
+                logger.error(
+                    "Background indexing failed for %s: %s",
+                    filepath.name,
+                    e,
+                    exc_info=True,
+                )
             finally:
                 _indexing_tasks.pop(doc_id, None)
 
@@ -462,7 +475,9 @@ def create_app(db_path: str = None) -> FastAPI:
         """Cancel a running background indexing task."""
         task = _indexing_tasks.get(doc_id)
         if not task:
-            raise HTTPException(status_code=404, detail="No active indexing task for this document")
+            raise HTTPException(
+                status_code=404, detail="No active indexing task for this document"
+            )
         task.cancel()
         db.update_document_status(doc_id, "cancelled")
         _indexing_tasks.pop(doc_id, None)

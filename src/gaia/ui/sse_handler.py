@@ -180,7 +180,11 @@ class SSEOutputHandler(OutputHandler):
 
         # For command execution results, include structured output data
         # so the frontend can render a proper terminal view
-        if isinstance(data, dict) and "command" in data and ("stdout" in data or "stderr" in data):
+        if (
+            isinstance(data, dict)
+            and "command" in data
+            and ("stdout" in data or "stderr" in data)
+        ):
             event["command_output"] = {
                 "command": data.get("command", ""),
                 "stdout": data.get("stdout", ""),
@@ -212,8 +216,7 @@ class SSEOutputHandler(OutputHandler):
                     "previews": [str(c)[:200] for c in chunks[:5]],
                 }
 
-        self._emit(event
-        )
+        self._emit(event)
 
     # === Status Messages ===
 
@@ -348,7 +351,7 @@ class SSEOutputHandler(OutputHandler):
             if '"tool"' in stripped and '{"tool"' in self._stream_buffer:
                 json_idx = self._stream_buffer.find('{"tool"')
                 if json_idx < 0:
-                    json_idx = self._stream_buffer.find("{\"tool\"")
+                    json_idx = self._stream_buffer.find('{"tool"')
                 if json_idx > 0:
                     # Emit the text before the JSON
                     text_before = self._stream_buffer[:json_idx]
@@ -359,7 +362,10 @@ class SSEOutputHandler(OutputHandler):
                     json_stripped = json_part.strip()
                     if json_stripped.endswith("}"):
                         if _TOOL_CALL_JSON_RE.match(json_stripped):
-                            logger.debug("Filtered embedded tool-call JSON: %s", json_stripped[:100])
+                            logger.debug(
+                                "Filtered embedded tool-call JSON: %s",
+                                json_stripped[:100],
+                            )
                             self._stream_buffer = ""
                             return
                         self._emit({"type": "chunk", "content": json_part})

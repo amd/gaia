@@ -43,7 +43,9 @@ def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ConnectionError:
-        return {"error": f"Cannot connect to GAIA backend at {base_url}. Is it running?"}
+        return {
+            "error": f"Cannot connect to GAIA backend at {base_url}. Is it running?"
+        }
     except requests.exceptions.HTTPError as e:
         return {"error": f"HTTP {e.response.status_code}: {e.response.text[:500]}"}
     except Exception as e:
@@ -148,9 +150,9 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
         full_content,
     )
     # 3. Remove trailing unclosed code fences
-    full_content = re.sub(r'\n?```\s*$', "", full_content)
+    full_content = re.sub(r"\n?```\s*$", "", full_content)
     # 4. Remove <think> tags
-    full_content = re.sub(r'<think>[\s\S]*?</think>', "", full_content)
+    full_content = re.sub(r"<think>[\s\S]*?</think>", "", full_content)
     full_content = full_content.strip()
 
     return {
@@ -193,9 +195,7 @@ def create_chat_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
     def delete_session(session_id: str) -> Dict[str, Any]:
         """Delete a chat session and all its messages."""
         try:
-            r = requests.delete(
-                f"{backend_url}/api/sessions/{session_id}", timeout=30
-            )
+            r = requests.delete(f"{backend_url}/api/sessions/{session_id}", timeout=30)
             r.raise_for_status()
             return {"deleted": True, "session_id": session_id}
         except Exception as e:
@@ -289,9 +289,7 @@ def create_chat_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
     @mcp.tool()
     def preview_file(filepath: str) -> Dict[str, Any]:
         """Preview the contents of a file (first lines for text, metadata for binary)."""
-        return _api(
-            backend_url, "get", "/files/preview", params={"path": filepath}
-        )
+        return _api(backend_url, "get", "/files/preview", params={"path": filepath})
 
     # ── Screenshot ──────────────────────────────────────────────
 
@@ -349,7 +347,13 @@ def create_chat_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
                 hwnd = _find_browser_window("GAIA Agent UI")
                 if not hwnd:
                     # Fallback: try common browser titles
-                    for title in ["GAIA", "localhost:4200", "Chrome", "Edge", "Firefox"]:
+                    for title in [
+                        "GAIA",
+                        "localhost:4200",
+                        "Chrome",
+                        "Edge",
+                        "Firefox",
+                    ]:
                         hwnd = _find_browser_window(title)
                         if hwnd:
                             break
@@ -429,7 +433,11 @@ def create_chat_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
 
         # Skip if this exact URL was already opened (avoid duplicate tabs)
         if _last_opened_url["url"] == target_url:
-            return {"opened": False, "url": target_url, "note": "Already open in browser"}
+            return {
+                "opened": False,
+                "url": target_url,
+                "note": "Already open in browser",
+            }
 
         try:
             webbrowser.open(target_url)
