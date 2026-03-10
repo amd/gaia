@@ -340,15 +340,33 @@ class RAGSDK:
             numpy array of embeddings with shape (num_texts, embedding_dim)
         """
 
+        # Truncate texts that exceed the embedding model's context window.
+        # Lemonade GGUF embedding models silently return empty data for
+        # inputs that exceed their token limit (~512 tokens). Using 1200
+        # chars as a conservative limit (~3 chars/token average).
+        MAX_EMBED_CHARS = 1200
+        truncated = 0
+        safe_texts = []
+        for t in texts:
+            if len(t) > MAX_EMBED_CHARS:
+                safe_texts.append(t[:MAX_EMBED_CHARS])
+                truncated += 1
+            else:
+                safe_texts.append(t)
+        if truncated > 0:
+            self.log.info(
+                f"   ✂️  Truncated {truncated}/{len(texts)} chunks to {MAX_EMBED_CHARS} chars for embedding"
+            )
+
         # Batch embedding requests to avoid timeouts
         BATCH_SIZE = 25  # Smaller batches for reliability (25 chunks ~= 12KB text)
         all_embeddings = []
 
-        total_batches = (len(texts) + BATCH_SIZE - 1) // BATCH_SIZE
+        total_batches = (len(safe_texts) + BATCH_SIZE - 1) // BATCH_SIZE
         total_start = time.time()
 
-        for batch_idx in range(0, len(texts), BATCH_SIZE):
-            batch_texts = texts[batch_idx : batch_idx + BATCH_SIZE]
+        for batch_idx in range(0, len(safe_texts), BATCH_SIZE):
+            batch_texts = safe_texts[batch_idx : batch_idx + BATCH_SIZE]
             batch_num = (batch_idx // BATCH_SIZE) + 1
 
             batch_start = time.time()
@@ -381,6 +399,38 @@ class RAGSDK:
 
             batch_duration = time.time() - batch_start
 
+            # Extract embeddings from response
+            # Expected format: {"data": [{"embedding": [...]}, ...]}
+            batch_embeddings = []
+            for item in response.get("data", []):
+                embedding = item.get("embedding", [])
+                batch_embeddings.append(embedding)
+
+            # If batch returned empty, fall back to one-by-one encoding
+            if len(batch_embeddings) == 0 and len(batch_texts) > 0:
+                self.log.warning(
+                    f"   ⚠️  Batch {batch_num} returned 0 embeddings, trying one-by-one"
+                )
+                for single_text in batch_texts:
+                    try:
+                        single_resp = self.embedder.embeddings(
+                            [single_text],
+                            model=self.config.embedding_model,
+                            timeout=60,
+                        )
+                        single_data = single_resp.get("data", [])
+                        if single_data:
+                            batch_embeddings.append(single_data[0].get("embedding", []))
+                        else:
+                            self.log.warning(
+                                "   ⚠️  Single text (%d chars) returned no embedding, skipping",
+                                len(single_text),
+                            )
+                    except Exception as e:
+                        self.log.warning(f"   ⚠️  Single embedding failed: {e}")
+
+            all_embeddings.extend(batch_embeddings)
+
             if show_progress or self.config.show_stats:
                 chunks_per_sec = (
                     len(batch_texts) / batch_duration if batch_duration > 0 else 0
@@ -389,15 +439,9 @@ class RAGSDK:
                     f"   ✅ Batch {batch_num} complete in {batch_duration:.2f}s ({chunks_per_sec:.1f} chunks/sec)"
                 )
 
-            # Extract embeddings from response
-            # Expected format: {"data": [{"embedding": [...]}, ...]}
-            for item in response.get("data", []):
-                embedding = item.get("embedding", [])
-                all_embeddings.append(embedding)
-
         total_duration = time.time() - total_start
-        if len(texts) > BATCH_SIZE:
-            overall_rate = len(texts) / total_duration if total_duration > 0 else 0
+        if len(safe_texts) > BATCH_SIZE:
+            overall_rate = len(safe_texts) / total_duration if total_duration > 0 else 0
             self.log.info(
                 f"   🎯 Total embedding time: {total_duration:.2f}s ({overall_rate:.1f} chunks/sec, {total_batches} batches)"
             )
