@@ -51,12 +51,12 @@ class MCPTool:
 
         return {
             "name": f"mcp_{server_name}_{self.name}",
+            "display_name": f"{self.name} ({server_name})",
             "description": f"[MCP:{server_name}] {self.description}",
             "parameters": gaia_params,
             "atomic": True,
             # Metadata for debugging/routing
             "_mcp_server": server_name,
-            "_mcp_tool_name": self.name,
         }
 
 

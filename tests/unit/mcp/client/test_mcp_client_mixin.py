@@ -612,10 +612,10 @@ class TestToolDisplayName:
         """MCP tools show '{mcp_tool_name} ({mcp_server})' as display name."""
         _TOOL_REGISTRY["mcp_oem_launch_experience_zone"] = {
             "name": "mcp_oem_launch_experience_zone",
+            "display_name": "launch_experience_zone (oem)",
             "description": "[MCP:oem] Launch the experience zone",
             "parameters": {},
             "_mcp_server": "oem",
-            "_mcp_tool_name": "launch_experience_zone",
         }
 
         display = get_tool_display_name("mcp_oem_launch_experience_zone")
