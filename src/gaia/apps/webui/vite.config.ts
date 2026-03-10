@@ -34,7 +34,20 @@ export default defineConfig({
     server: {
         port: 5174,
         proxy: {
-            '/api': 'http://localhost:4200',
+            '/api': {
+                target: 'http://localhost:4200',
+                changeOrigin: true,
+                // Disable buffering for SSE streaming support
+                configure: (proxy) => {
+                    proxy.on('proxyRes', (proxyRes) => {
+                        // Prevent response buffering for text/event-stream
+                        if (proxyRes.headers['content-type']?.includes('text/event-stream')) {
+                            proxyRes.headers['cache-control'] = 'no-cache';
+                            proxyRes.headers['x-accel-buffering'] = 'no';
+                        }
+                    });
+                },
+            },
         },
     },
     build: {

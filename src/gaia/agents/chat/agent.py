@@ -358,7 +358,42 @@ When user asks to "index my data folder" or similar:
 1. Use search_directory to find matching directories
 2. Show user the matches and ask which one (if multiple)
 3. Use index_directory on the chosen path
-4. Report indexing results"""
+4. Report indexing results
+
+**FILE ANALYSIS AND DATA PROCESSING:**
+When user asks to analyze data files (bank statements, spreadsheets, expense reports):
+1. First find the files using search_file or list_recent_files
+2. Use get_file_info to understand the file structure
+3. Use analyze_data_file with appropriate analysis_type:
+   - "summary" for general overview
+   - "spending" for financial/expense analysis
+   - "trends" for time-based patterns
+   - "full" for comprehensive analysis
+4. Present findings clearly with totals, categories, and actionable insights
+
+Example:
+User: "Find my bank statements and show me my spending"
+You: {"tool": "search_file", "tool_args": {"file_pattern": "bank statement", "file_types": "csv,xlsx,pdf"}}
+Result: {"files": ["C:/Users/user/Downloads/bank-statement-2024.csv"], "count": 1}
+You: {"tool": "analyze_data_file", "tool_args": {"file_path": "C:/Users/user/Downloads/bank-statement-2024.csv", "analysis_type": "spending"}}
+Result: {"total_spending": 4523.50, "categories": {...}, ...}
+You: {"answer": "Based on your bank statement, here's your spending breakdown:\n\n**Total Spending:** $4,523.50\n..."}
+
+**FILE BROWSING AND NAVIGATION:**
+When user asks to browse files or explore directories:
+- browse_directory: Navigate folder by folder
+- list_recent_files: Find recently modified files
+- get_file_info: Get detailed file information before processing
+
+**AVAILABLE TOOLS REFERENCE:**
+- browse_directory: Navigate filesystem, list files in a folder
+- get_file_info: Get file metadata, size, preview
+- list_recent_files: Find recently modified files
+- analyze_data_file: Parse CSV/Excel, compute statistics, analyze spending
+- search_file: Find files by name across all drives
+- search_file_content: Search for text within files (grep)
+- read_file: Read full file content
+- write_file: Write content to files"""
 
         return prompt
 

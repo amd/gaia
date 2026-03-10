@@ -552,7 +552,11 @@ class RAGSDK:
                 print(
                     f"\n  ✅ Extracted {len(full_text):,} characters from {total_pages} pages"
                 )
-                pages_per_sec = total_pages / extract_duration if extract_duration > 0 else float('inf')
+                pages_per_sec = (
+                    total_pages / extract_duration
+                    if extract_duration > 0
+                    else float("inf")
+                )
                 print(
                     f"  ⏱️  Total extraction time: {extract_duration:.2f}s ({pages_per_sec:.1f} pages/sec)"
                 )

@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, StreamEvent, TunnelStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -119,7 +119,7 @@ export interface StreamCallbacks {
 /** Agent event types that represent activity rather than content. */
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
-    'tool_start', 'tool_end', 'tool_result', 'agent_error',
+    'tool_start', 'tool_end', 'tool_result', 'tool_args', 'agent_error',
 ]);
 
 export function sendMessageStream(
@@ -268,6 +268,48 @@ export async function attachDocument(sessionId: string, documentId: string): Pro
 
 export async function detachDocument(sessionId: string, documentId: string): Promise<void> {
     return apiFetch('DELETE', `/sessions/${sessionId}/documents/${documentId}`);
+}
+
+// -- File Browser -----------------------------------------------------------------
+
+export async function browseFiles(path?: string): Promise<BrowseResponse> {
+    const params = path ? `?path=${encodeURIComponent(path)}` : '';
+    return apiFetch('GET', `/files/browse${params}`);
+}
+
+export async function indexFolder(folderPath: string, recursive: boolean = true): Promise<IndexFolderResponse> {
+    return apiFetch('POST', '/documents/index-folder', { folder_path: folderPath, recursive });
+}
+
+// -- File Search & Preview ----------------------------------------------------------
+
+export async function searchFiles(query: string, fileTypes?: string, maxResults?: number): Promise<{
+    results: Array<{ name: string; path: string; size: number; size_display: string; extension: string; modified: string; directory: string }>;
+    total: number;
+    query: string;
+}> {
+    const params = new URLSearchParams({ query });
+    if (fileTypes) params.set('file_types', fileTypes);
+    if (maxResults) params.set('max_results', String(maxResults));
+    return apiFetch('GET', `/files/search?${params}`);
+}
+
+export async function previewFile(path: string, lines?: number): Promise<{
+    path: string;
+    name: string;
+    size: number;
+    size_display: string;
+    extension: string;
+    modified: string;
+    is_text: boolean;
+    preview_lines: string[];
+    total_lines: number | null;
+    columns: string[] | null;
+    row_count: number | null;
+}> {
+    const params = new URLSearchParams({ path });
+    if (lines) params.set('lines', String(lines));
+    return apiFetch('GET', `/files/preview?${params}`);
 }
 
 // -- Mobile Access / Tunnel -------------------------------------------------------

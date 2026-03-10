@@ -1141,6 +1141,13 @@ class RAGToolsMixin:
         def list_indexed_documents() -> Dict[str, Any]:
             """List indexed documents."""
             try:
+                if self.rag is None:
+                    return {
+                        "status": "success",
+                        "documents": [],
+                        "count": 0,
+                        "total_chunks": 0,
+                    }
                 docs = list(self.rag.indexed_files)
                 return {
                     "status": "success",

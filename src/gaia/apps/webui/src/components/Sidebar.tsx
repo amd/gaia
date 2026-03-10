@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Plus, Search, FileText, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone } from 'lucide-react';
+import { Plus, Search, FileText, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, FolderSearch } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -19,7 +19,7 @@ interface SidebarProps {
 export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
     const {
         sessions, currentSessionId, setCurrentSession, removeSession,
-        setMessages, theme, toggleTheme, setShowDocLibrary, setShowSettings,
+        setMessages, theme, toggleTheme, setShowDocLibrary, setShowFileBrowser, setShowSettings,
         sidebarOpen, setSidebarOpen, setLoadingMessages,
         sidebarCollapsed, toggleSidebarCollapsed,
         sidebarWidth, setSidebarWidth,
@@ -260,6 +260,9 @@ export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle
                     )}
                     <button className="btn-icon" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Document Library">
                         <FileText size={17} />
+                    </button>
+                    <button className="btn-icon" onClick={() => setShowFileBrowser(true)} title="Browse Files" aria-label="Browse Files">
+                        <FolderSearch size={17} />
                     </button>
                     <button className="btn-icon" onClick={() => setShowSettings(true)} title="Settings" aria-label="Settings">
                         <Settings size={17} />

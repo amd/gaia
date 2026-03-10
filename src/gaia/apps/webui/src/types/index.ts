@@ -54,6 +54,41 @@ export interface SystemStatus {
     version: string;
 }
 
+// ── File Browser Types ───────────────────────────────────────────────────
+
+/** A single file or folder entry returned by the browse endpoint. */
+export interface FileEntry {
+    name: string;
+    path: string;
+    type: 'file' | 'folder';
+    size: number;
+    extension: string;
+    modified: string;
+}
+
+/** A quick-access link (Desktop, Documents, Downloads, etc.). */
+export interface QuickLink {
+    name: string;
+    path: string;
+    icon: string;
+}
+
+/** Response from the /files/browse endpoint. */
+export interface BrowseResponse {
+    current_path: string;
+    parent_path: string | null;
+    entries: FileEntry[];
+    quick_links: QuickLink[];
+}
+
+/** Response from the /documents/index-folder endpoint. */
+export interface IndexFolderResponse {
+    indexed: number;
+    failed: number;
+    documents: Document[];
+    errors: string[];
+}
+
 // ── Mobile Access / Tunnel Types ─────────────────────────────────────────
 
 /** Status of the ngrok tunnel for mobile access. */

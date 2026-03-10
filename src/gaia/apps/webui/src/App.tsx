@@ -7,6 +7,7 @@ import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { DocumentLibrary } from './components/DocumentLibrary';
+import { FileBrowser } from './components/FileBrowser';
 import { SettingsModal } from './components/SettingsModal';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
@@ -22,6 +23,7 @@ function App() {
         addSession,
         setMessages,
         showDocLibrary,
+        showFileBrowser,
         showSettings,
         sidebarOpen,
         toggleSidebar,
@@ -241,6 +243,7 @@ function App() {
             </div>
 
             {showDocLibrary && <DocumentLibrary />}
+            {showFileBrowser && <FileBrowser />}
             {showSettings && <SettingsModal />}
 
             {/* Mobile Access Modal */}

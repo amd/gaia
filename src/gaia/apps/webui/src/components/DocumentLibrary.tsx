@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useCallback } from 'react';
-import { X, Upload, Trash2, FileText, FolderOpen } from 'lucide-react';
+import { X, Upload, Trash2, FileText, FolderOpen, Search } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -10,7 +10,7 @@ import type { Document } from '../types';
 import './DocumentLibrary.css';
 
 export function DocumentLibrary() {
-    const { documents, setDocuments, setShowDocLibrary } = useChatStore();
+    const { documents, setDocuments, setShowDocLibrary, setShowFileBrowser } = useChatStore();
     const [isDragOver, setIsDragOver] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
@@ -138,6 +138,15 @@ export function DocumentLibrary() {
                         />
                         <button type="submit" className="btn-secondary" disabled={!folderPath.trim() || isUploading}>
                             Index
+                        </button>
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => { setShowDocLibrary(false); setShowFileBrowser(true); }}
+                            title="Browse files on this computer"
+                        >
+                            <Search size={14} />
+                            Browse Files
                         </button>
                     </form>
 

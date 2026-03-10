@@ -408,12 +408,15 @@ class ChatDatabase:
 
             if existing:
                 doc = dict(existing)
-                # Update last_accessed_at
+                # Update last_accessed_at and chunk_count (if newly indexed
+                # count is higher, e.g. fixing a previous 0-chunk bug)
+                new_chunk_count = max(chunk_count, doc.get("chunk_count", 0))
                 self._conn.execute(
-                    "UPDATE documents SET last_accessed_at = ? WHERE id = ?",
-                    (now, doc["id"]),
+                    "UPDATE documents SET last_accessed_at = ?, chunk_count = ? WHERE id = ?",
+                    (now, new_chunk_count, doc["id"]),
                 )
                 self._conn.commit()
+                doc["chunk_count"] = new_chunk_count
                 return self._enrich_document(doc)
 
             # Insert new document (still under lock)

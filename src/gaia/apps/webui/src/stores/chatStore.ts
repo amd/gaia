@@ -28,6 +28,7 @@ interface ChatState {
     streamingContent: string;
     setStreaming: (streaming: boolean) => void;
     appendStreamContent: (content: string) => void;
+    setStreamContent: (content: string) => void;
     clearStreamContent: () => void;
 
     // Agent activity (steps during current response)
@@ -49,6 +50,7 @@ interface ChatState {
     // UI state
     theme: 'light' | 'dark';
     showDocLibrary: boolean;
+    showFileBrowser: boolean;
     showSettings: boolean;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
@@ -56,6 +58,7 @@ interface ChatState {
     isLoadingMessages: boolean;
     toggleTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
+    setShowFileBrowser: (show: boolean) => void;
     setShowSettings: (show: boolean) => void;
     toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;
@@ -104,6 +107,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setStreaming: (streaming) => set({ isStreaming: streaming }),
     appendStreamContent: (content) =>
         set((state) => ({ streamingContent: state.streamingContent + content })),
+    setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
 
     // Agent activity
@@ -141,6 +145,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         catch { return 'dark'; }
     })(),
     showDocLibrary: false,
+    showFileBrowser: false,
     showSettings: false,
     toggleTheme: () =>
         set((state) => {
@@ -160,6 +165,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })(),
     isLoadingMessages: false,
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
+    setShowFileBrowser: (show) => set({ showFileBrowser: show }),
     setShowSettings: (show) => set({ showSettings: show }),
     toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),

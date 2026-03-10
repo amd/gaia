@@ -150,3 +150,107 @@ class AttachDocumentRequest(BaseModel):
     """Request to attach a document to a session."""
 
     document_id: str
+
+
+# ── File Browsing ──────────────────────────────────────────────────────────
+
+
+class FileEntry(BaseModel):
+    """A single file or folder entry in a directory listing."""
+
+    name: str
+    path: str
+    type: str = Field(..., description="Either 'file' or 'folder'")
+    size: int = 0
+    extension: Optional[str] = None
+    modified: Optional[str] = None
+
+
+class QuickLink(BaseModel):
+    """A quick-access link to a common filesystem location."""
+
+    name: str
+    path: str
+    icon: str = "folder"
+
+
+class BrowseResponse(BaseModel):
+    """Response from the file/folder browse endpoint."""
+
+    current_path: str
+    parent_path: Optional[str] = None
+    entries: List[FileEntry]
+    quick_links: List[QuickLink] = Field(default_factory=list)
+
+
+# ── Folder Indexing ────────────────────────────────────────────────────────
+
+
+class IndexFolderRequest(BaseModel):
+    """Request to index all supported documents in a folder."""
+
+    folder_path: str
+    recursive: bool = True
+
+
+class IndexFolderResponse(BaseModel):
+    """Response from folder indexing operation."""
+
+    indexed: int = 0
+    failed: int = 0
+    documents: List[DocumentResponse] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
+
+
+# ── File Search & Preview ─────────────────────────────────────────────
+
+
+class FileSearchRequest(BaseModel):
+    """Request to search for files across the filesystem."""
+
+    query: str = Field(..., description="Search pattern (file name or keywords)")
+    file_types: Optional[str] = Field(
+        None, description="Comma-separated extensions to filter (e.g., 'csv,xlsx,pdf')"
+    )
+    locations: Optional[List[str]] = Field(
+        None, description="Specific directories to search in"
+    )
+    max_results: int = Field(default=20, ge=1, le=100)
+
+
+class FileSearchResult(BaseModel):
+    """A single file search result."""
+
+    name: str
+    path: str
+    size: int
+    size_display: str
+    extension: str
+    modified: str
+    directory: str
+
+
+class FileSearchResponse(BaseModel):
+    """Response from file search."""
+
+    results: List[FileSearchResult]
+    total: int
+    query: str
+    searched_locations: List[str] = Field(default_factory=list)
+
+
+class FilePreviewResponse(BaseModel):
+    """Response with file content preview."""
+
+    path: str
+    name: str
+    size: int
+    size_display: str
+    extension: str
+    modified: str
+    is_text: bool
+    preview_lines: List[str] = Field(default_factory=list)
+    total_lines: Optional[int] = None
+    columns: Optional[List[str]] = None
+    row_count: Optional[int] = None
+    encoding: Optional[str] = None

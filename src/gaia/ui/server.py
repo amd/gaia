@@ -11,13 +11,16 @@ Provides REST API endpoints for the chat desktop application:
 """
 
 import asyncio
+import datetime
 import hashlib
 import json
 import logging
 import os
+import platform
 import shutil
+import string
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,14 +30,23 @@ from fastapi.staticfiles import StaticFiles
 from .database import ChatDatabase
 from .models import (
     AttachDocumentRequest,
+    BrowseResponse,
     ChatRequest,
     ChatResponse,
     CreateSessionRequest,
     DocumentListResponse,
     DocumentResponse,
     DocumentUploadRequest,
+    FileEntry,
+    FilePreviewResponse,
+    FileSearchRequest,
+    FileSearchResponse,
+    FileSearchResult,
+    IndexFolderRequest,
+    IndexFolderResponse,
     MessageListResponse,
     MessageResponse,
+    QuickLink,
     SessionListResponse,
     SessionResponse,
     SourceInfo,
@@ -446,6 +458,466 @@ def create_app(db_path: str = None) -> FastAPI:
         """Get current tunnel status."""
         return tunnel.get_status()
 
+    # ── File Browsing Endpoint ───────────────────────────────────────────
+
+    @app.get("/api/files/browse", response_model=BrowseResponse)
+    async def browse_files(path: Optional[str] = None):
+        """Browse files and folders for the document picker.
+
+        Lists folders (always shown) and files whose extension is in
+        _ALLOWED_EXTENSIONS.  Results are sorted folders-first, then
+        alphabetically by name.
+
+        Args:
+            path: Directory to browse. Defaults to user home directory.
+                  On Windows, pass an empty string or "/" to list drive
+                  letters.
+        """
+        quick_links = _build_quick_links()
+
+        # On Windows, treat None / empty / "/" as "list drive letters"
+        if platform.system() == "Windows" and (not path or path in ("/", "\\")):
+            entries = _list_windows_drives()
+            return BrowseResponse(
+                current_path="/",
+                parent_path=None,
+                entries=entries,
+                quick_links=quick_links,
+            )
+
+        # Default to home directory when no path is given
+        if not path:
+            path = str(Path.home())
+
+        # Security: reject null bytes
+        if "\x00" in path:
+            raise HTTPException(status_code=400, detail="Invalid path")
+
+        resolved = Path(path).resolve(strict=False)
+
+        # Do not follow symlinks
+        if resolved.is_symlink():
+            raise HTTPException(
+                status_code=400, detail="Symbolic links are not supported"
+            )
+
+        if not resolved.is_dir():
+            raise HTTPException(status_code=404, detail="Directory not found")
+
+        # Determine parent path
+        parent_path: Optional[str] = None
+        if resolved.parent != resolved:
+            parent_path = str(resolved.parent)
+        elif platform.system() == "Windows":
+            # At a drive root (e.g. C:\) — go back to drive listing
+            parent_path = "/"
+
+        entries: List[FileEntry] = []
+        try:
+            for item in resolved.iterdir():
+                # Skip symlinks for security
+                if item.is_symlink():
+                    continue
+
+                try:
+                    stat = item.stat()
+                except (OSError, PermissionError):
+                    continue
+
+                if item.is_dir():
+                    entries.append(
+                        FileEntry(
+                            name=item.name,
+                            path=str(item),
+                            type="folder",
+                            size=0,
+                            extension=None,
+                            modified=datetime.datetime.fromtimestamp(
+                                stat.st_mtime
+                            ).isoformat(),
+                        )
+                    )
+                elif item.is_file():
+                    ext = item.suffix.lower()
+                    if ext in _ALLOWED_EXTENSIONS:
+                        entries.append(
+                            FileEntry(
+                                name=item.name,
+                                path=str(item),
+                                type="file",
+                                size=stat.st_size,
+                                extension=ext,
+                                modified=datetime.datetime.fromtimestamp(
+                                    stat.st_mtime
+                                ).isoformat(),
+                            )
+                        )
+        except PermissionError:
+            raise HTTPException(
+                status_code=403, detail="Permission denied for this directory"
+            )
+
+        # Sort: folders first, then files, alphabetically within each group
+        entries.sort(key=lambda e: (e.type != "folder", e.name.lower()))
+
+        return BrowseResponse(
+            current_path=str(resolved),
+            parent_path=parent_path,
+            entries=entries,
+            quick_links=quick_links,
+        )
+
+    # ── File Search Endpoint ──────────────────────────────────────────────
+
+    @app.get("/api/files/search", response_model=FileSearchResponse)
+    async def search_files(
+        query: str,
+        file_types: Optional[str] = None,
+        max_results: int = 20,
+    ):
+        """Search for files across the filesystem by name pattern.
+
+        Searches common user directories (Documents, Downloads, Desktop)
+        then expands to deeper search if needed. Results sorted by
+        modification date (most recent first).
+
+        Args:
+            query: File name pattern to search for (partial matches supported).
+            file_types: Comma-separated extensions to filter (e.g., 'csv,xlsx').
+            max_results: Maximum results to return (1-100, default 20).
+        """
+        import time as _time
+
+        if not query or not query.strip():
+            raise HTTPException(status_code=400, detail="Search query is required")
+
+        # Security: reject null bytes
+        if "\x00" in query:
+            raise HTTPException(status_code=400, detail="Invalid search query")
+
+        query_lower = query.strip().lower()
+        max_results = min(max(max_results, 1), 100)
+
+        # Build extension filter
+        extensions = None
+        if file_types:
+            extensions = {
+                f".{ext.strip().lower()}"
+                for ext in file_types.split(",")
+                if ext.strip()
+            }
+
+        matching_files: list = []
+        searched_locations: list = []
+        start_time = _time.monotonic()
+
+        def matches(file_path: Path) -> bool:
+            """Check if file matches the search criteria."""
+            name_match = query_lower in file_path.name.lower()
+            if not name_match:
+                return False
+            if extensions:
+                return file_path.suffix.lower() in extensions
+            return True
+
+        def scan_directory(directory: Path, max_depth: int = 5, depth: int = 0):
+            """Recursively scan a directory for matching files."""
+            if depth > max_depth or len(matching_files) >= max_results:
+                return
+            if not directory.exists() or not directory.is_dir():
+                return
+
+            searched_locations.append(str(directory))
+
+            try:
+                for item in directory.iterdir():
+                    if len(matching_files) >= max_results:
+                        return
+                    # Skip hidden/system directories
+                    if item.name.startswith((".", "$", "__")):
+                        continue
+                    if item.name in (
+                        "node_modules",
+                        ".git",
+                        "Windows",
+                        "Program Files",
+                        "Program Files (x86)",
+                        "ProgramData",
+                        "AppData",
+                    ):
+                        continue
+                    try:
+                        if item.is_symlink():
+                            continue
+                        if item.is_file() and matches(item):
+                            stat = item.stat()
+                            size = stat.st_size
+                            matching_files.append(
+                                {
+                                    "name": item.name,
+                                    "path": str(item),
+                                    "size": size,
+                                    "size_display": _format_size(size),
+                                    "extension": item.suffix.lower(),
+                                    "modified": datetime.datetime.fromtimestamp(
+                                        stat.st_mtime
+                                    ).isoformat(),
+                                    "directory": str(item.parent),
+                                }
+                            )
+                        elif item.is_dir() and depth < max_depth:
+                            scan_directory(item, max_depth, depth + 1)
+                    except (PermissionError, OSError):
+                        continue
+            except (PermissionError, OSError):
+                pass
+
+        # Search common locations first
+        home = Path.home()
+        priority_locations = [
+            home / "Documents",
+            home / "Downloads",
+            home / "Desktop",
+            home / "OneDrive",
+        ]
+
+        for loc in priority_locations:
+            if len(matching_files) >= max_results:
+                break
+            scan_directory(loc, max_depth=4)
+
+        # If not enough results, search home directory more broadly
+        if len(matching_files) < max_results:
+            scan_directory(home, max_depth=3)
+
+        # Sort by modification date (most recent first)
+        matching_files.sort(key=lambda f: f["modified"], reverse=True)
+        matching_files = matching_files[:max_results]
+
+        elapsed = _time.monotonic() - start_time
+        logger.info(
+            "File search for '%s': %d results in %.2fs (%d locations)",
+            query,
+            len(matching_files),
+            elapsed,
+            len(searched_locations),
+        )
+
+        return FileSearchResponse(
+            results=[FileSearchResult(**f) for f in matching_files],
+            total=len(matching_files),
+            query=query,
+            searched_locations=searched_locations[:10],  # Limit for response size
+        )
+
+    # ── File Preview Endpoint ─────────────────────────────────────────────
+
+    @app.get("/api/files/preview", response_model=FilePreviewResponse)
+    async def preview_file(path: str, lines: int = 50):
+        """Get a preview of a file's contents.
+
+        For text files, returns the first N lines.
+        For CSV/TSV, also returns column names and row count.
+        For binary files, returns metadata only.
+
+        Args:
+            path: Absolute path to the file.
+            lines: Number of lines to preview (default 50, max 200).
+        """
+        if not path:
+            raise HTTPException(status_code=400, detail="File path is required")
+
+        if "\x00" in path:
+            raise HTTPException(status_code=400, detail="Invalid file path")
+
+        resolved = Path(path).resolve(strict=False)
+
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        if not resolved.is_file():
+            raise HTTPException(status_code=400, detail="Path is not a file")
+
+        if resolved.is_symlink():
+            raise HTTPException(status_code=400, detail="Symbolic links not supported")
+
+        lines = min(max(lines, 1), 200)
+        stat = resolved.stat()
+        ext = resolved.suffix.lower()
+
+        result = {
+            "path": str(resolved),
+            "name": resolved.name,
+            "size": stat.st_size,
+            "size_display": _format_size(stat.st_size),
+            "extension": ext,
+            "modified": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "is_text": False,
+            "preview_lines": [],
+            "total_lines": None,
+            "columns": None,
+            "row_count": None,
+            "encoding": None,
+        }
+
+        # Try to read as text
+        text_extensions = {
+            ".txt",
+            ".md",
+            ".csv",
+            ".tsv",
+            ".json",
+            ".xml",
+            ".yaml",
+            ".yml",
+            ".py",
+            ".js",
+            ".ts",
+            ".html",
+            ".css",
+            ".log",
+            ".ini",
+            ".cfg",
+            ".toml",
+            ".sql",
+            ".sh",
+            ".bat",
+            ".ps1",
+            ".java",
+            ".c",
+            ".cpp",
+            ".h",
+            ".rs",
+            ".go",
+            ".rb",
+        }
+
+        if ext in text_extensions or stat.st_size < 1_000_000:  # Try text for < 1MB
+            for encoding in ("utf-8", "latin-1", "cp1252"):
+                try:
+                    with open(resolved, "r", encoding=encoding) as f:
+                        all_lines = f.readlines()
+                    result["is_text"] = True
+                    result["encoding"] = encoding
+                    result["total_lines"] = len(all_lines)
+                    result["preview_lines"] = [
+                        line.rstrip("\n\r")[:500] for line in all_lines[:lines]
+                    ]
+
+                    # CSV/TSV specific info
+                    if ext in (".csv", ".tsv"):
+                        import csv as csv_mod
+
+                        delimiter = "\t" if ext == ".tsv" else ","
+                        try:
+                            with open(resolved, "r", encoding=encoding) as cf:
+                                reader = csv_mod.reader(cf, delimiter=delimiter)
+                                header = next(reader, None)
+                                if header:
+                                    result["columns"] = header
+                                    row_count = sum(1 for _ in reader)
+                                    result["row_count"] = row_count
+                        except Exception:
+                            pass
+                    break
+                except (UnicodeDecodeError, UnicodeError):
+                    continue
+
+        return FilePreviewResponse(**result)
+
+    # ── Folder Indexing Endpoint ─────────────────────────────────────────
+
+    @app.post("/api/documents/index-folder", response_model=IndexFolderResponse)
+    async def index_folder(request: IndexFolderRequest):
+        """Index all supported documents in a folder.
+
+        Scans the given folder for files with extensions in
+        _ALLOWED_EXTENSIONS and indexes each one using the RAG pipeline.
+        Indexing runs in a thread-pool executor to avoid blocking the
+        event loop.
+
+        Args:
+            request: Contains folder_path and recursive flag.
+        """
+        folder_path = request.folder_path
+
+        # Security: reject null bytes
+        if "\x00" in folder_path:
+            raise HTTPException(status_code=400, detail="Invalid folder path")
+
+        resolved = Path(folder_path).resolve(strict=False)
+
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="Folder not found")
+
+        if not resolved.is_dir():
+            raise HTTPException(status_code=400, detail="Path is not a directory")
+
+        # Collect all candidate files
+        candidate_files: List[Path] = []
+        try:
+            pattern_iter = (
+                resolved.rglob("*") if request.recursive else resolved.iterdir()
+            )
+            for item in pattern_iter:
+                if item.is_symlink():
+                    continue
+                if item.is_file() and item.suffix.lower() in _ALLOWED_EXTENSIONS:
+                    candidate_files.append(item)
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="Permission denied while scanning folder",
+            )
+
+        if not candidate_files:
+            return IndexFolderResponse(indexed=0, failed=0, documents=[], errors=[])
+
+        logger.info(
+            "Indexing %d files from %s (recursive=%s)",
+            len(candidate_files),
+            resolved,
+            request.recursive,
+        )
+
+        indexed_docs: List[DocumentResponse] = []
+        errors: List[str] = []
+
+        for filepath in candidate_files:
+            try:
+                file_hash = await asyncio.get_running_loop().run_in_executor(
+                    None, _compute_file_hash, filepath
+                )
+                file_size = filepath.stat().st_size
+
+                chunk_count = await _index_document(filepath)
+
+                doc = db.add_document(
+                    filename=filepath.name,
+                    filepath=str(filepath),
+                    file_hash=file_hash,
+                    file_size=file_size,
+                    chunk_count=chunk_count,
+                )
+                indexed_docs.append(_doc_to_response(doc))
+            except Exception as e:
+                error_msg = f"{filepath.name}: {e}"
+                logger.warning("Failed to index %s: %s", filepath, e)
+                errors.append(error_msg)
+
+        logger.info(
+            "Folder indexing complete: %d indexed, %d failed",
+            len(indexed_docs),
+            len(errors),
+        )
+
+        return IndexFolderResponse(
+            indexed=len(indexed_docs),
+            failed=len(errors),
+            documents=indexed_docs,
+            errors=errors,
+        )
+
     # ── Serve Frontend Static Files ──────────────────────────────────────
     # Look for built frontend assets in the webui dist directory
     _webui_dist = Path(__file__).resolve().parent.parent / "apps" / "webui" / "dist"
@@ -682,6 +1154,66 @@ def _validate_file_path(filepath: Path) -> None:
         )
 
 
+def _build_quick_links() -> list:
+    """Build a list of common quick-access filesystem locations.
+
+    Returns platform-appropriate links to Desktop, Documents, Downloads,
+    and the user home directory.
+    """
+    home = Path.home()
+    links = [
+        QuickLink(name="Home", path=str(home), icon="home"),
+    ]
+
+    candidates = [
+        ("Desktop", home / "Desktop", "desktop"),
+        ("Documents", home / "Documents", "documents"),
+        ("Downloads", home / "Downloads", "download"),
+    ]
+
+    for name, candidate_path, icon in candidates:
+        if candidate_path.is_dir():
+            links.append(QuickLink(name=name, path=str(candidate_path), icon=icon))
+
+    return links
+
+
+def _list_windows_drives() -> list:
+    """List available Windows drive letters as FileEntry items.
+
+    Iterates A-Z and returns an entry for each drive letter whose
+    root directory exists on the system.
+    """
+    entries = []
+    for letter in string.ascii_uppercase:
+        drive = f"{letter}:\\"
+        if Path(drive).exists():
+            entries.append(
+                FileEntry(
+                    name=f"{letter}:",
+                    path=drive,
+                    type="folder",
+                    size=0,
+                    extension=None,
+                    modified=None,
+                )
+            )
+    return entries
+
+
+def _format_size(size_bytes: int) -> str:
+    """Format bytes as human-readable string."""
+    if size_bytes <= 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    i = 0
+    size = float(size_bytes)
+    while size >= 1024 and i < len(units) - 1:
+        size /= 1024
+        i += 1
+    return f"{size:.1f} {units[i]}"
+
+
 def _compute_file_hash(filepath: Path) -> str:
     """Compute SHA-256 hash of file contents."""
     sha256 = hashlib.sha256()
@@ -704,7 +1236,11 @@ async def _index_document(filepath: Path) -> int:
         config = RAGConfig()
         rag = RAGSDK(config)
         result = rag.index_document(str(filepath))
-        return result.get("chunk_count", 0) if isinstance(result, dict) else 0
+        logger.info("RAG index_document result for %s: %s", filepath, result)
+        if isinstance(result, dict):
+            # RAG SDK returns "num_chunks", not "chunk_count"
+            return result.get("num_chunks", 0) or result.get("chunk_count", 0)
+        return 0
 
     try:
         loop = asyncio.get_running_loop()
@@ -742,35 +1278,85 @@ def _build_history_pairs(
     return pairs
 
 
+def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> list:
+    """Resolve document IDs to file paths for RAG.
+
+    If the session has specific documents attached (document_ids non-empty),
+    resolves those IDs to file paths.  Otherwise falls back to ALL indexed
+    documents in the global library so that newly-indexed files are
+    immediately available to the agent without manual attachment.
+
+    Returns:
+        List of file-path strings suitable for ChatAgentConfig.rag_documents.
+    """
+    rag_file_paths = []
+    if document_ids:
+        for doc_id in document_ids:
+            doc = db.get_document(doc_id)
+            if doc and doc.get("filepath"):
+                rag_file_paths.append(doc["filepath"])
+            else:
+                logger.warning("Document %s not found in database, skipping", doc_id)
+    else:
+        # No specific docs attached — use entire library
+        all_docs = db.list_documents()
+        for doc in all_docs:
+            if doc.get("filepath"):
+                rag_file_paths.append(doc["filepath"])
+    return rag_file_paths
+
+
 async def _get_chat_response(
     db: ChatDatabase, session: dict, request: ChatRequest
 ) -> str:
-    """Get a non-streaming chat response from the LLM.
+    """Get a non-streaming chat response from the ChatAgent.
 
-    Runs the synchronous ChatSDK.send() in a thread pool executor
+    Uses the full ChatAgent (with tools) instead of plain ChatSDK
+    so non-streaming mode also has agentic capabilities.
+
+    Runs the synchronous agent in a thread pool executor
     to avoid blocking the async event loop.
     """
 
     def _do_chat():
-        from gaia.chat.sdk import ChatConfig, ChatSDK
+        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
         # Build conversation history from database
         messages = db.get_messages(request.session_id, limit=20)
         history_pairs = _build_history_pairs(messages)
 
-        config = ChatConfig(
-            model=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
-            system_prompt=session.get("system_prompt"),
+        # Resolve document IDs to file paths.
+        # If the session has specific documents attached, use those.
+        # Otherwise, use ALL documents from the global library so newly
+        # indexed documents are immediately available to the agent.
+        document_ids = session.get("document_ids", [])
+        rag_file_paths = _resolve_rag_paths(db, document_ids)
+
+        if rag_file_paths:
+            logger.info("Chat using %d document(s) for RAG", len(rag_file_paths))
+
+        config = ChatAgentConfig(
+            model_id=session.get("model"),
+            max_steps=10,
+            silent_mode=True,
+            debug=False,
+            rag_documents=rag_file_paths,
         )
-        chat = ChatSDK(config)
+        agent = ChatAgent(config)
 
-        # Restore history
+        # Restore conversation history
         for user_msg, assistant_msg in history_pairs[-4:]:
-            chat.chat_history.append(f"user: {user_msg}")
-            chat.chat_history.append(f"assistant: {assistant_msg}")
+            if hasattr(agent, "conversation_history"):
+                agent.conversation_history.append({"role": "user", "content": user_msg})
+                agent.conversation_history.append(
+                    {"role": "assistant", "content": assistant_msg}
+                )
 
-        response = chat.send(request.message)
-        return response.text
+        result = agent.process_query(request.message)
+        if isinstance(result, dict):
+            # process_query returns {"result": "...", "status": "...", ...}
+            return result.get("result", "") or result.get("answer", "")
+        return str(result) if result else ""
 
     try:
         loop = asyncio.get_running_loop()
@@ -803,13 +1389,20 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         sse_handler = SSEOutputHandler()
 
         # Create ChatAgent with SSE handler
+        # Resolve document IDs to file paths (falls back to all indexed docs)
         document_ids = session.get("document_ids", [])
+        rag_file_paths = _resolve_rag_paths(db, document_ids)
+
+        if rag_file_paths:
+            logger.info("Streaming chat using %d document(s) for RAG", len(rag_file_paths))
+
         config = ChatAgentConfig(
             model_id=session.get("model"),
             max_steps=10,
+            streaming=True,
             silent_mode=False,
             debug=False,
-            rag_documents=document_ids,
+            rag_documents=rag_file_paths,
         )
         agent = ChatAgent(config)
         agent.console = sse_handler  # Replace console with SSE handler
@@ -829,7 +1422,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             try:
                 result = agent.process_query(request.message)
                 if isinstance(result, dict):
-                    result_holder["answer"] = result.get("answer", "")
+                    # process_query returns {"result": "...", "status": "...", ...}
+                    result_holder["answer"] = result.get("result", "") or result.get(
+                        "answer", ""
+                    )
                 else:
                     result_holder["answer"] = str(result) if result else ""
             except Exception as e:

@@ -32,6 +32,7 @@ class SSEOutputHandler(OutputHandler):
         self._start_time: Optional[float] = None
         self._step_count = 0
         self._tool_count = 0
+        self._last_tool_name: Optional[str] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -86,12 +87,10 @@ class SSEOutputHandler(OutputHandler):
         )
 
     def print_goal(self, goal: str):
-        # Fold goal into status rather than separate event
         self._emit(
             {
-                "type": "status",
-                "status": "working",
-                "message": goal,
+                "type": "thinking",
+                "content": goal,
             }
         )
 
@@ -101,7 +100,12 @@ class SSEOutputHandler(OutputHandler):
         for step in plan:
             if isinstance(step, dict):
                 if "tool" in step:
-                    plan_strs.append(f"Use {step['tool']}")
+                    args_str = ""
+                    if step.get("tool_args"):
+                        args_str = " — " + ", ".join(
+                            f"{k}={v!r}" for k, v in step["tool_args"].items()
+                        )
+                    plan_strs.append(f"{step['tool']}{args_str}")
                 else:
                     plan_strs.append(json.dumps(step))
             else:
@@ -119,6 +123,7 @@ class SSEOutputHandler(OutputHandler):
 
     def print_tool_usage(self, tool_name: str):
         self._tool_count += 1
+        self._last_tool_name = tool_name
         self._emit(
             {
                 "type": "tool_start",
@@ -135,7 +140,21 @@ class SSEOutputHandler(OutputHandler):
         )
 
     def pretty_print_json(self, data: Dict[str, Any], title: str = None):
-        # Summarize tool results for the frontend (don't send raw data)
+        # When title is "Arguments", emit tool args as a detail update
+        # so the frontend can show what the tool was called with.
+        if title == "Arguments" and isinstance(data, dict):
+            detail = _format_tool_args(self._last_tool_name, data)
+            self._emit(
+                {
+                    "type": "tool_args",
+                    "tool": self._last_tool_name,
+                    "args": data,
+                    "detail": detail,
+                }
+            )
+            return
+
+        # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
         self._emit(
             {
@@ -262,10 +281,29 @@ class SSEOutputHandler(OutputHandler):
         self._emit(None)  # Sentinel value
 
 
+def _format_tool_args(tool_name: str, args: Dict[str, Any]) -> str:
+    """Format tool arguments into a human-readable string."""
+    if not args:
+        return ""
+
+    parts = []
+    for key, value in args.items():
+        if value is None or value == "" or value is False:
+            continue
+        if value is True:
+            parts.append(key)
+        elif isinstance(value, str) and len(value) > 100:
+            parts.append(f"{key}: {value[:100]}...")
+        else:
+            parts.append(f"{key}: {value}")
+
+    return ", ".join(parts)
+
+
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
-    """Create a brief human-readable summary of a tool result."""
+    """Create a detailed human-readable summary of a tool result."""
     if not isinstance(data, dict):
-        return str(data)[:200]
+        return str(data)[:300]
 
     # Command execution results
     if "command" in data and "stdout" in data:
@@ -273,38 +311,84 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         rc = data.get("return_code", 0)
         lines = stdout.strip().split("\n") if stdout.strip() else []
         if rc != 0:
-            return f"Command failed (exit {rc})"
+            stderr = data.get("stderr", "")
+            return f"Command failed (exit {rc})" + (f": {stderr[:150]}" if stderr else "")
         if lines:
-            return f"{len(lines)} line(s) of output"
-        return "Command completed"
+            # Show first few lines of output
+            preview = "\n".join(lines[:5])
+            if len(lines) > 5:
+                preview += f"\n... ({len(lines)} lines total)"
+            return preview
+        return "Command completed (no output)"
 
-    # Search/query results
+    # File search results
+    if "files" in data or "file_list" in data:
+        files = data.get("file_list", data.get("files", []))
+        count = data.get("count", len(files) if isinstance(files, list) else 0)
+        display_msg = data.get("display_message", "")
+        if isinstance(files, list) and files:
+            file_names = []
+            for f in files[:5]:
+                if isinstance(f, dict):
+                    name = f.get("name", f.get("filename", ""))
+                    directory = f.get("directory", "")
+                    if directory:
+                        file_names.append(f"{name} ({directory})")
+                    else:
+                        file_names.append(name)
+                else:
+                    file_names.append(str(f))
+            result = "\n".join(f"  {name}" for name in file_names)
+            if count > 5:
+                result += f"\n  ... +{count - 5} more"
+            return (display_msg + "\n" + result) if display_msg else f"Found {count} file(s):\n{result}"
+        if display_msg:
+            return display_msg
+        return f"Found {count} file(s)"
+
+    # Search/query results with chunks
+    if "chunks" in data:
+        chunks = data["chunks"]
+        if isinstance(chunks, list):
+            scores = data.get("scores", [])
+            result = f"Found {len(chunks)} relevant chunk(s)"
+            if scores:
+                result += f" (best score: {max(scores):.2f})"
+            # Show brief preview of top chunk
+            if chunks and isinstance(chunks[0], str):
+                preview = chunks[0][:120].replace("\n", " ")
+                result += f"\n  Top match: \"{preview}...\""
+            return result
+
+    # Search/query results generic
     if "results" in data:
         results = data["results"]
         if isinstance(results, list):
             return f"Found {len(results)} result(s)"
-        return str(results)[:100]
+        return str(results)[:200]
+
+    # Document indexing results
+    if "num_chunks" in data or "chunk_count" in data:
+        chunks = data.get("num_chunks", data.get("chunk_count", 0))
+        filename = data.get("filename", data.get("file_path", ""))
+        if filename:
+            return f"Indexed {filename} ({chunks} chunks)"
+        return f"Indexed document ({chunks} chunks)"
 
     # File read results
     if "content" in data and "filepath" in data:
         content = data["content"]
         lines = content.split("\n") if isinstance(content, str) else []
-        return f"Read {len(lines)} lines from {data.get('filename', 'file')}"
+        return f"Read {len(lines)} lines from {data.get('filename', data.get('filepath', 'file'))}"
 
     # Status-based results
     if "status" in data:
         status = data["status"]
-        msg = data.get("message", data.get("error", ""))
+        msg = data.get("message", data.get("error", data.get("display_message", "")))
         if msg:
-            return f"{status}: {str(msg)[:100]}"
+            return f"{status}: {str(msg)[:200]}"
         return str(status)
 
-    # RAG results
-    if "chunks" in data:
-        chunks = data["chunks"]
-        if isinstance(chunks, list):
-            return f"Found {len(chunks)} relevant chunk(s)"
-
-    # Generic fallback
-    keys = list(data.keys())[:4]
+    # Generic fallback - show more useful info
+    keys = list(data.keys())[:6]
     return f"Result with keys: {', '.join(keys)}"

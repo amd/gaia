@@ -3,12 +3,17 @@
 
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { Copy, Check, AlertTriangle, Trash2, RefreshCw } from 'lucide-react';
-import type { Message } from '../types';
+import { AgentActivity } from './AgentActivity';
+import type { Message, AgentStep } from '../types';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
     message: Message;
     isStreaming?: boolean;
+    /** Agent steps to display inside this message bubble. */
+    agentSteps?: AgentStep[];
+    /** Whether agent steps are currently active (streaming). */
+    agentStepsActive?: boolean;
     /** Called when user clicks the delete button. */
     onDelete?: (messageId: number) => void;
     /** Called when user clicks the resend button (user messages only). */
@@ -30,7 +35,7 @@ function isErrorContent(content: string): boolean {
     );
 }
 
-export function MessageBubble({ message, isStreaming, onDelete, onResend }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, onDelete, onResend }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -114,6 +119,14 @@ export function MessageBubble({ message, isStreaming, onDelete, onResend }: Mess
                     )}
                 </div>
                 <div className="msg-body">
+                    {/* Agent activity inside the message bubble */}
+                    {agentSteps && agentSteps.length > 0 && (
+                        <AgentActivity
+                            steps={agentSteps}
+                            isActive={agentStepsActive ?? false}
+                            variant={agentStepsActive ? 'inline' : 'summary'}
+                        />
+                    )}
                     {isError && (
                         <div className="error-banner">
                             <AlertTriangle size={14} />

@@ -189,7 +189,10 @@ class SimpleBlenderMCPServer:
                     area for area in bpy.context.screen.areas if area.type == "VIEW_3D"
                 ]
                 if not view3d_areas:
-                    return {"status": "error", "message": "No VIEW_3D area found in Blender context"}
+                    return {
+                        "status": "error",
+                        "message": "No VIEW_3D area found in Blender context",
+                    }
                 override["area"] = view3d_areas[0]
                 with bpy.context.temp_override(**override):
                     return self._execute_command_internal(command)

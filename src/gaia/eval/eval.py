@@ -3129,17 +3129,11 @@ Performance ranking: {ranking_text}
             # Add specific issues from analysis
             for model in accuracy_issues[:3]:  # Limit to top 3 worst performers
                 analysis_text = (model["analysis"] or "").lower()
-                if (
-                    "jurisdictional" in analysis_text
-                    or "confusion" in analysis_text
-                ):
+                if "jurisdictional" in analysis_text or "confusion" in analysis_text:
                     failure_patterns.append(
                         f"- **{model['name']}**: Jurisdictional confusion (US vs Canadian regulations)"
                     )
-                if (
-                    "incorrect" in analysis_text
-                    or "wrong" in analysis_text
-                ):
+                if "incorrect" in analysis_text or "wrong" in analysis_text:
                     failure_patterns.append(
                         f"- **{model['name']}**: Incorrect core values, wrong regulatory stages"
                     )
@@ -3304,9 +3298,7 @@ if __name__ == "__main__":
 
             print("\nMetrics:")
             print(f"Number of questions: {metrics.get('num_questions', 'N/A')}")
-            print(
-                f"Similarity threshold: {_fmt(metrics.get('similarity_threshold'))}"
-            )
+            print(f"Similarity threshold: {_fmt(metrics.get('similarity_threshold'))}")
             print(f"Pass rate: {_fmt(metrics.get('pass_rate'))}")
             print(f"Passed threshold: {metrics.get('num_passed', 'N/A')}")
             print(f"Failed threshold: {metrics.get('num_failed', 'N/A')}")

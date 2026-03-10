@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
-import { AgentActivity } from './AgentActivity';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -49,6 +48,13 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 label: `Step ${event.step}${event.total ? ` of ${event.total}` : ''}`,
                 active: true, timestamp: ts,
             };
+        case 'status':
+            return {
+                id, type: 'status',
+                label: event.message || event.status || 'Working',
+                active: event.status === 'working',
+                timestamp: ts,
+            };
         case 'agent_error':
             return {
                 id, type: 'error', label: 'Error',
@@ -67,9 +73,9 @@ interface ChatViewProps {
 export function ChatView({ sessionId }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
-        isStreaming, streamingContent, setStreaming, appendStreamContent, clearStreamContent,
+        isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, clearAgentSteps,
-        documents, setDocuments, setShowDocLibrary, isLoadingMessages, setLoadingMessages,
+        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
     } = useChatStore();
 
     const session = sessions.find((s) => s.id === sessionId);
@@ -85,6 +91,22 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
+
+    // ── Streaming chunk buffer ──────────────────────────────────────
+    // Buffer SSE chunks in a ref and flush to the store via rAF.
+    // This limits React re-renders to ~60fps instead of once per chunk
+    // (which can be hundreds/sec), dramatically reducing DOM mutations
+    // and eliminating extension-triggered "runtime.lastError" floods.
+    const streamBufferRef = useRef('');
+    const rafRef = useRef<number | null>(null);
+    const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const flushStreamBuffer = useCallback(() => {
+        rafRef.current = null;
+        if (streamBufferRef.current) {
+            setStreamContent(streamBufferRef.current);
+        }
+    }, [setStreamContent]);
 
     // Load messages on mount
     useEffect(() => {
@@ -126,21 +148,33 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [sessionId]);
 
-    // Auto-scroll
+    // Auto-scroll (debounced to avoid excessive DOM mutations during streaming)
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+        scrollTimerRef.current = setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 80);
     }, [messages, streamingContent, agentSteps]);
 
     // Focus input
     useEffect(() => { inputRef.current?.focus(); }, [sessionId]);
 
-    // Abort active stream when component unmounts (e.g., switching sessions)
+    // Abort active stream and clean up timers when component unmounts
     useEffect(() => {
         return () => {
             if (abortRef.current) {
                 abortRef.current.abort();
                 abortRef.current = null;
             }
+            if (rafRef.current !== null) {
+                cancelAnimationFrame(rafRef.current);
+                rafRef.current = null;
+            }
+            if (scrollTimerRef.current) {
+                clearTimeout(scrollTimerRef.current);
+                scrollTimerRef.current = null;
+            }
+            streamBufferRef.current = '';
         };
     }, [sessionId]);
 
@@ -163,19 +197,27 @@ export function ChatView({ sessionId }: ChatViewProps) {
             abortRef.current.abort();
             abortRef.current = null;
         }
-        if (streamingContent) {
-            log.stream.info(`Saving partial response (${streamingContent.length} chars)`);
+        // Cancel any pending rAF flush
+        if (rafRef.current !== null) {
+            cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
+        }
+        // Use the buffer (most up-to-date) or fall back to store content
+        const content = streamBufferRef.current || streamingContent;
+        if (content) {
+            log.stream.info(`Saving partial response (${content.length} chars)`);
             const assistantMsg: Message = {
                 id: Date.now() + 1,
                 session_id: sessionId,
                 role: 'assistant',
-                content: streamingContent,
+                content,
                 created_at: new Date().toISOString(),
                 rag_sources: null,
                 agentSteps: agentSteps.length > 0 ? [...agentSteps] : undefined,
             };
             addMessage(assistantMsg);
         }
+        streamBufferRef.current = '';
         setStreaming(false);
         clearStreamContent();
         setCompletedSteps([]);
@@ -227,13 +269,19 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         let fullContent = '';
         let doneHandled = false;
+        streamBufferRef.current = '';
 
         const controller = api.sendMessageStream(sessionId, text, {
             onChunk: (event) => {
                 const content = event.content || '';
                 if (content) {
                     fullContent += content;
-                    appendStreamContent(content);
+                    // Buffer chunks and flush to store at most once per frame (~60fps)
+                    // instead of triggering a React re-render on every single SSE chunk
+                    streamBufferRef.current = fullContent;
+                    if (rafRef.current === null) {
+                        rafRef.current = requestAnimationFrame(flushStreamBuffer);
+                    }
                 }
             },
             onAgentEvent: (event) => {
@@ -250,9 +298,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     });
                     return;
                 }
-                // Filter out noisy status events - only show substantive activity
+                // Tool args update the last tool step with detail
+                if (event.type === 'tool_args') {
+                    updateLastAgentStep({
+                        detail: event.detail || JSON.stringify(event.args),
+                    });
+                    return;
+                }
+                // Show working/warning/info status events, filter started/complete
                 if (event.type === 'status') {
-                    return; // Status events are internal bookkeeping, not user-facing
+                    const status = event.status;
+                    if (status === 'working' || status === 'warning' || status === 'info') {
+                        const step = agentEventToStep(event, stepIdRef);
+                        if (step) addAgentStep(step);
+                    }
+                    return;
                 }
                 if (event.type === 'step') {
                     return; // Step headers are redundant with actual tool/thinking steps
@@ -264,6 +324,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onDone: (event) => {
                 if (doneHandled) return;
                 doneHandled = true;
+
+                // Cancel any pending rAF flush — we have the final content
+                if (rafRef.current !== null) {
+                    cancelAnimationFrame(rafRef.current);
+                    rafRef.current = null;
+                }
+                streamBufferRef.current = '';
 
                 const content = event.content || fullContent;
                 log.chat.timed(`Agent response complete: ${content.length} chars`, streamStart);
@@ -300,6 +367,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
             },
             onError: (err) => {
+                // Cancel any pending rAF flush
+                if (rafRef.current !== null) {
+                    cancelAnimationFrame(rafRef.current);
+                    rafRef.current = null;
+                }
+                streamBufferRef.current = '';
+
                 log.chat.error(`Chat error for session=${sessionId}`, err);
                 // Provide a user-friendly error message based on the error type
                 let errorContent: string;
@@ -336,7 +410,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         });
 
         abortRef.current = controller;
-    }, [input, isStreaming, sessionId, session, addMessage, setStreaming, appendStreamContent, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, clearAgentSteps]);
+    }, [input, isStreaming, sessionId, session, addMessage, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, clearAgentSteps]);
 
     // Delete a single message
     const handleDeleteMessage = useCallback(async (messageId: number) => {
@@ -480,6 +554,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Attach documents">
                         <Paperclip size={15} />
                     </button>
+                    <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files" aria-label="Browse files">
+                        <FolderSearch size={15} />
+                    </button>
                     <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export chat">
                         <Download size={15} />
                     </button>
@@ -536,44 +613,30 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
                 {messages.map((msg) => (
                     <div key={msg.id}>
-                        {/* Show collapsed agent steps above assistant messages */}
-                        {msg.role === 'assistant' && msg.agentSteps && msg.agentSteps.length > 0 && (
-                            <AgentActivity
-                                steps={msg.agentSteps}
-                                isActive={false}
-                                variant="summary"
-                            />
-                        )}
                         <MessageBubble
                             message={msg}
+                            agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
                             onDelete={!isStreaming ? handleDeleteMessage : undefined}
                             onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
                         />
                     </div>
                 ))}
 
-                {/* Active agent activity during streaming */}
+                {/* Active streaming message with agent activity inside */}
                 {isStreaming && (
-                    <>
-                        <AgentActivity
-                            steps={agentSteps}
-                            isActive={true}
-                            variant="inline"
-                        />
-                        {streamingContent && (
-                            <MessageBubble
-                                message={{
-                                    id: -1,
-                                    session_id: sessionId,
-                                    role: 'assistant',
-                                    content: streamingContent,
-                                    created_at: '',
-                                    rag_sources: null,
-                                }}
-                                isStreaming
-                            />
-                        )}
-                    </>
+                    <MessageBubble
+                        message={{
+                            id: -1,
+                            session_id: sessionId,
+                            role: 'assistant',
+                            content: streamingContent || '',
+                            created_at: '',
+                            rag_sources: null,
+                        }}
+                        isStreaming
+                        agentSteps={agentSteps}
+                        agentStepsActive={true}
+                    />
                 )}
                 <div ref={messagesEndRef} />
             </div>
@@ -610,6 +673,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <div className="input-btns">
                         <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">
                             <Upload size={15} />
+                        </button>
+                        <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files" aria-label="Browse files">
+                            <FolderSearch size={15} />
                         </button>
                         {isStreaming ? (
                             <button

@@ -312,7 +312,11 @@ class KokoroTTS:
         stats = {
             "processing_time": round(processing_time, 3),
             "audio_duration": round(total_duration, 3),
-            "realtime_ratio": round(processing_time / total_duration, 2) if total_duration > 0 else 0.0,
+            "realtime_ratio": (
+                round(processing_time / total_duration, 2)
+                if total_duration > 0
+                else 0.0
+            ),
             "peak_memory": round(peak_memory, 2),
         }
 
