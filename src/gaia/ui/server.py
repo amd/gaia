@@ -39,7 +39,6 @@ from .models import (
     DocumentUploadRequest,
     FileEntry,
     FilePreviewResponse,
-    FileSearchRequest,
     FileSearchResponse,
     FileSearchResult,
     IndexFolderRequest,
@@ -1508,6 +1507,14 @@ async def _get_chat_response(
         return "Error: Could not get response from LLM. Is Lemonade Server running? Check server logs for details."
 
 
+def _find_last_tool_step(steps: list) -> dict | None:
+    """Find the last tool step in captured_steps, searching backwards."""
+    for i in range(len(steps) - 1, -1, -1):
+        if steps[i].get("type") == "tool":
+            return steps[i]
+    return steps[-1] if steps else None
+
+
 async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):
     """Stream chat response as Server-Sent Events.
 
@@ -1639,20 +1646,27 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         }
                     )
                 elif event_type == "tool_args" and captured_steps:
-                    # Update the last tool step with argument detail
-                    captured_steps[-1]["detail"] = event.get("detail", "")
+                    # Update the last TOOL step (not just last step, since thinking
+                    # events may have been interleaved during tool execution)
+                    tool_step = _find_last_tool_step(captured_steps)
+                    if tool_step is not None:
+                        tool_step["detail"] = event.get("detail", "")
                 elif event_type == "tool_end" and captured_steps:
-                    captured_steps[-1]["active"] = False
-                    captured_steps[-1]["success"] = event.get("success", True)
+                    tool_step = _find_last_tool_step(captured_steps)
+                    if tool_step is not None:
+                        tool_step["active"] = False
+                        tool_step["success"] = event.get("success", True)
                 elif event_type == "tool_result" and captured_steps:
-                    captured_steps[-1]["active"] = False
-                    captured_steps[-1]["result"] = (
-                        event.get("summary") or event.get("title") or "Done"
-                    )
-                    captured_steps[-1]["success"] = event.get("success", True)
-                    # Persist structured command output for terminal rendering
-                    if event.get("command_output"):
-                        captured_steps[-1]["commandOutput"] = event["command_output"]
+                    tool_step = _find_last_tool_step(captured_steps)
+                    if tool_step is not None:
+                        tool_step["active"] = False
+                        tool_step["result"] = (
+                            event.get("summary") or event.get("title") or "Done"
+                        )
+                        tool_step["success"] = event.get("success", True)
+                        # Persist structured command output for terminal rendering
+                        if event.get("command_output"):
+                            tool_step["commandOutput"] = event["command_output"]
                 elif event_type == "plan":
                     step_id += 1
                     for s in captured_steps:

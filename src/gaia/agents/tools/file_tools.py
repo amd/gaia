@@ -9,6 +9,7 @@ These tools are agent-agnostic and don't depend on specific agent functionality.
 
 import ast
 import csv
+import fnmatch
 import logging
 import mimetypes
 import os
@@ -106,9 +107,18 @@ class FileSearchToolsMixin:
                 pattern_lower = file_pattern.lower()
                 searched_locations = []
 
+                # Detect if the pattern is a glob (contains * or ?)
+                is_glob = "*" in file_pattern or "?" in file_pattern
+
                 def matches_pattern_and_type(file_path: Path) -> bool:
                     """Check if file matches pattern and is a document type."""
-                    name_match = pattern_lower in file_path.name.lower()
+                    name_lower = file_path.name.lower()
+                    if is_glob:
+                        # Use fnmatch for glob patterns like *.pdf, report*.docx
+                        name_match = fnmatch.fnmatch(name_lower, pattern_lower)
+                    else:
+                        # Substring match for plain text queries like 'oil', 'manual'
+                        name_match = pattern_lower in name_lower
                     type_match = file_path.suffix.lower() in doc_extensions
                     return name_match and type_match
 
@@ -554,8 +564,6 @@ class FileSearchToolsMixin:
             Searches actual file contents on disk, not RAG indexed documents.
             """
             try:
-                import fnmatch
-
                 directory = Path(directory).resolve()
 
                 if not directory.exists():

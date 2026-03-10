@@ -394,7 +394,9 @@ class SSEOutputHandler(OutputHandler):
         self._emit(None)  # Sentinel value
 
 
-def _format_tool_args(tool_name: str, args: Dict[str, Any]) -> str:
+def _format_tool_args(  # pylint: disable=unused-argument
+    tool_name: str, args: Dict[str, Any]
+) -> str:
     """Format tool arguments into a human-readable string."""
     if not args:
         return ""

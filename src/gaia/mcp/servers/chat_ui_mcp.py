@@ -13,8 +13,6 @@ Usage:
 """
 
 import argparse
-import base64
-import io
 import json
 import logging
 import os
@@ -22,7 +20,7 @@ import re
 import sys
 import tempfile
 import webbrowser
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -482,10 +480,11 @@ def main():
     else:
         mcp.settings.host = args.host
         mcp.settings.port = args.port
-        print(f"\n🚀 GAIA Chat UI MCP Server")
+        print("\n🚀 GAIA Chat UI MCP Server")
         print(f"   Backend: {args.backend}")
         print(f"   MCP: http://{args.host}:{args.port}/mcp")
-        print(f"   Tools: {len(mcp._tool_manager._tools)} registered\n")
+        tool_count = len(mcp._tool_manager._tools)  # pylint: disable=protected-access
+        print(f"   Tools: {tool_count} registered\n")
         mcp.run(transport="streamable-http")
 
 
