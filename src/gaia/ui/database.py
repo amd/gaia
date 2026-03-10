@@ -117,6 +117,23 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for agent_steps: %s", e)
 
+        # Add indexing_status column for background indexing progress
+        try:
+            doc_cols = [
+                row[1]
+                for row in self._conn.execute(
+                    "PRAGMA table_info(documents)"
+                ).fetchall()
+            ]
+            if "indexing_status" not in doc_cols:
+                self._conn.execute(
+                    "ALTER TABLE documents ADD COLUMN indexing_status TEXT DEFAULT 'complete'"
+                )
+                self._conn.commit()
+                logger.info("Migrated documents table: added indexing_status column")
+        except Exception as e:
+            logger.debug("Migration check for indexing_status: %s", e)
+
     def close(self):
         """Close database connection."""
         if self._conn:
@@ -550,6 +567,37 @@ class ChatDatabase:
                 (session_id,),
             ).fetchall()
             return [self._enrich_document(dict(row)) for row in rows]
+
+    # ── Document Status ────────────────────────────────────────────
+
+    def update_document_status(
+        self, doc_id: str, status: str, chunk_count: int = None
+    ) -> bool:
+        """Update a document's indexing status and optionally its chunk count.
+
+        Args:
+            doc_id: Document ID.
+            status: New status ('pending', 'indexing', 'complete', 'failed', 'cancelled').
+            chunk_count: If provided, also update the chunk count.
+
+        Returns:
+            True if the document was found and updated.
+        """
+        with self._lock:
+            parts = ["indexing_status = ?"]
+            params: list = [status]
+            if chunk_count is not None:
+                parts.append("chunk_count = ?")
+                params.append(chunk_count)
+            parts.append("last_accessed_at = ?")
+            params.append(self._now())
+            params.append(doc_id)
+            cursor = self._conn.execute(
+                f"UPDATE documents SET {', '.join(parts)} WHERE id = ?",
+                params,
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
 
     # ── Stats ───────────────────────────────────────────────────────────
 

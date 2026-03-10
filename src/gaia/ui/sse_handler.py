@@ -270,7 +270,7 @@ class SSEOutputHandler(OutputHandler):
         self._emit(
             {
                 "type": "answer",
-                "content": answer,
+                "content": _fix_double_escaped(answer) if answer else answer,
                 "elapsed": self._elapsed(),
                 "steps": self._step_count,
                 "tools_used": self._tool_count,
@@ -505,3 +505,21 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
     # Generic fallback - show more useful info
     keys = list(data.keys())[:6]
     return f"Result with keys: {', '.join(keys)}"
+
+
+def _fix_double_escaped(text: str) -> str:
+    """Fix double-escaped newlines/tabs from LLM output.
+
+    Some models output literal '\\n' (two chars) instead of actual newlines,
+    which breaks markdown rendering. Only unescape when there are significantly
+    more literal \\n sequences than real newlines.
+    """
+    if not text:
+        return text
+    literal_count = text.count("\\n")
+    real_count = text.count("\n")
+    if literal_count > 2 and literal_count > real_count * 2:
+        text = text.replace("\\n", "\n")
+        text = text.replace("\\t", "\t")
+        text = text.replace('\\"', '"')
+    return text

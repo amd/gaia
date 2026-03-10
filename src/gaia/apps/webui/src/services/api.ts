@@ -262,6 +262,19 @@ export async function deleteDocument(id: string): Promise<void> {
     return apiFetch('DELETE', `/documents/${id}`);
 }
 
+export async function getDocumentStatus(id: string): Promise<{
+    id: string;
+    indexing_status: string;
+    chunk_count: number;
+    is_active: boolean;
+}> {
+    return apiFetch('GET', `/documents/${id}/status`);
+}
+
+export async function cancelIndexing(id: string): Promise<{ cancelled: boolean; id: string }> {
+    return apiFetch('POST', `/documents/${id}/cancel`);
+}
+
 export async function attachDocument(sessionId: string, documentId: string): Promise<void> {
     return apiFetch('POST', `/sessions/${sessionId}/documents`, { document_id: documentId });
 }

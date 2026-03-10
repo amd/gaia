@@ -53,6 +53,7 @@ from .models import (
     SystemStatus,
     UpdateSessionRequest,
 )
+from .sse_handler import _fix_double_escaped
 from .tunnel import TunnelManager
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,11 @@ def create_app(db_path: str = None) -> FastAPI:
     # Initialize tunnel manager for mobile access
     tunnel = TunnelManager(port=DEFAULT_PORT)
     app.state.tunnel = tunnel
+
+    # Background indexing: track running tasks by document ID
+    # so we can report status and cancel them.
+    _indexing_tasks: dict = {}  # doc_id -> asyncio.Task
+    _LARGE_FILE_THRESHOLD = 5 * 1024 * 1024  # 5 MB
 
     # ── System Endpoints ────────────────────────────────────────────────
 
@@ -371,8 +377,13 @@ def create_app(db_path: str = None) -> FastAPI:
 
     @app.post("/api/documents/upload-path", response_model=DocumentResponse)
     async def upload_by_path(request: DocumentUploadRequest):
-        """Index a document by file path (for Electron/local use)."""
-        # Validate and sanitize the user-provided path
+        """Index a document by file path (for Electron/local use).
+
+        Small files (<5 MB) are indexed synchronously. Larger files are
+        indexed in the background so the UI stays responsive; the returned
+        document will have ``indexing_status='indexing'`` and the frontend
+        can poll ``GET /api/documents/{id}/status`` for progress.
+        """
         safe_filepath = _sanitize_document_path(request.filepath)
 
         if not safe_filepath.exists():
@@ -381,22 +392,82 @@ def create_app(db_path: str = None) -> FastAPI:
         if not safe_filepath.is_file():
             raise HTTPException(status_code=400, detail="Path is not a file")
 
-        # Compute file hash
         file_hash = _compute_file_hash(safe_filepath)
         file_size = safe_filepath.stat().st_size
 
-        # Index the document with RAG
-        chunk_count = await _index_document(safe_filepath)
+        if file_size <= _LARGE_FILE_THRESHOLD:
+            # Small file: index synchronously (fast)
+            chunk_count = await _index_document(safe_filepath)
+            doc = db.add_document(
+                filename=safe_filepath.name,
+                filepath=str(safe_filepath),
+                file_hash=file_hash,
+                file_size=file_size,
+                chunk_count=chunk_count,
+            )
+            return _doc_to_response(doc)
 
+        # Large file: create a placeholder record and index in background
         doc = db.add_document(
             filename=safe_filepath.name,
             filepath=str(safe_filepath),
             file_hash=file_hash,
             file_size=file_size,
-            chunk_count=chunk_count,
+            chunk_count=0,
         )
+        doc_id = doc["id"]
+        db.update_document_status(doc_id, "indexing")
 
+        async def _background_index(doc_id: str, filepath: Path):
+            """Run indexing in background, updating DB status on completion."""
+            try:
+                logger.info("Background indexing started for %s (%s)", filepath.name, doc_id)
+                chunk_count = await _index_document(filepath)
+                # Check if task was cancelled while we were indexing
+                if doc_id in _indexing_tasks:
+                    db.update_document_status(doc_id, "complete", chunk_count=chunk_count)
+                    logger.info("Background indexing complete for %s: %d chunks", filepath.name, chunk_count)
+            except asyncio.CancelledError:
+                db.update_document_status(doc_id, "cancelled")
+                logger.info("Background indexing cancelled for %s", filepath.name)
+            except Exception as e:
+                db.update_document_status(doc_id, "failed")
+                logger.error("Background indexing failed for %s: %s", filepath.name, e, exc_info=True)
+            finally:
+                _indexing_tasks.pop(doc_id, None)
+
+        task = asyncio.create_task(_background_index(doc_id, safe_filepath))
+        _indexing_tasks[doc_id] = task
+
+        # Return immediately with indexing_status='indexing'
+        doc["indexing_status"] = "indexing"
         return _doc_to_response(doc)
+
+    @app.get("/api/documents/{doc_id}/status")
+    async def get_document_status(doc_id: str):
+        """Get current indexing status for a document."""
+        doc = db.get_document(doc_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        is_active = doc_id in _indexing_tasks
+        return {
+            "id": doc_id,
+            "indexing_status": doc.get("indexing_status", "complete"),
+            "chunk_count": doc.get("chunk_count", 0),
+            "is_active": is_active,
+        }
+
+    @app.post("/api/documents/{doc_id}/cancel")
+    async def cancel_indexing(doc_id: str):
+        """Cancel a running background indexing task."""
+        task = _indexing_tasks.get(doc_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="No active indexing task for this document")
+        task.cancel()
+        db.update_document_status(doc_id, "cancelled")
+        _indexing_tasks.pop(doc_id, None)
+        logger.info("Indexing cancelled by user for document %s", doc_id)
+        return {"cancelled": True, "id": doc_id}
 
     @app.delete("/api/documents/{doc_id}")
     async def delete_document(doc_id: str):
@@ -608,6 +679,7 @@ def create_app(db_path: str = None) -> FastAPI:
             }
 
         matching_files: list = []
+        seen_paths: set = set()
         searched_locations: list = []
         start_time = _time.monotonic()
 
@@ -650,6 +722,10 @@ def create_app(db_path: str = None) -> FastAPI:
                         if item.is_symlink():
                             continue
                         if item.is_file() and matches(item):
+                            resolved_str = str(item.resolve())
+                            if resolved_str in seen_paths:
+                                continue
+                            seen_paths.add(resolved_str)
                             stat = item.stat()
                             size = stat.st_size
                             matching_files.append(
@@ -1024,6 +1100,7 @@ def _doc_to_response(doc: dict) -> DocumentResponse:
         indexed_at=doc["indexed_at"],
         last_accessed_at=doc.get("last_accessed_at"),
         sessions_using=doc.get("sessions_using", 0),
+        indexing_status=doc.get("indexing_status", "complete"),
     )
 
 
@@ -1625,6 +1702,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             full_response = result_holder["answer"]
             # Send as answer event since it wasn't streamed
             yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
+
+        # Clean double-escaped newlines before DB storage
+        if full_response:
+            full_response = _fix_double_escaped(full_response)
 
         # Save complete response to DB (including captured agent steps)
         if full_response:

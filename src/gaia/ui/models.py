@@ -158,6 +158,7 @@ class DocumentResponse(BaseModel):
     indexed_at: str
     last_accessed_at: Optional[str] = None
     sessions_using: int = 0
+    indexing_status: str = "complete"  # pending | indexing | complete | failed | cancelled
 
 
 class DocumentListResponse(BaseModel):

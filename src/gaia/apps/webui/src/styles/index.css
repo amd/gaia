@@ -98,7 +98,7 @@ a:hover { text-decoration: underline; }
 
 /* Layout */
 .app { display: flex; height: 100vh; height: 100dvh; position: relative; }
-.main-content { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.main-content { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; }
 
 /* Focus indicators for keyboard accessibility */
 :focus-visible {

@@ -42,6 +42,7 @@ export interface Document {
     indexed_at: string;
     last_accessed_at: string | null;
     sessions_using: number;
+    indexing_status?: 'pending' | 'indexing' | 'complete' | 'failed' | 'cancelled';
 }
 
 export interface SystemStatus {

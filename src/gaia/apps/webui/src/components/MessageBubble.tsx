@@ -72,6 +72,19 @@ function cleanToolCallContent(content: string): string {
     // Remove <think>...</think> tags that some models output
     cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '');
 
+    // Fix double-escaped newlines/tabs from LLM output.
+    // Some models output literal "\n" (two chars) instead of actual newlines,
+    // which breaks markdown rendering. Only unescape when there are many
+    // literal \n sequences compared to real newlines (avoids breaking code blocks).
+    const literalNewlines = (cleaned.match(/\\n/g) || []).length;
+    const realNewlines = (cleaned.match(/\n/g) || []).length;
+    if (literalNewlines > 2 && literalNewlines > realNewlines * 2) {
+        cleaned = cleaned.replace(/\\n/g, '\n');
+        cleaned = cleaned.replace(/\\t/g, '\t');
+        // Also clean up any remaining double-escaped quotes
+        cleaned = cleaned.replace(/\\"/g, '"');
+    }
+
     // Remove leading/trailing whitespace
     cleaned = cleaned.trim();
 

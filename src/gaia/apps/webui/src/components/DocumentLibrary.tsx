@@ -1,13 +1,22 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useState, useCallback } from 'react';
-import { X, Upload, Trash2, FileText, FolderOpen, Search } from 'lucide-react';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import type { Document } from '../types';
 import './DocumentLibrary.css';
+
+/** Compute elapsed time as human-readable string. */
+function elapsed(startMs: number): string {
+    const sec = Math.floor((Date.now() - startMs) / 1000);
+    if (sec < 60) return `${sec}s`;
+    const min = Math.floor(sec / 60);
+    const rem = sec % 60;
+    return `${min}m ${rem}s`;
+}
 
 export function DocumentLibrary() {
     const { documents, setDocuments, setShowDocLibrary, setShowFileBrowser } = useChatStore();
@@ -15,8 +24,12 @@ export function DocumentLibrary() {
     const [isUploading, setIsUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
     const [folderPath, setFolderPath] = useState('');
+    // Track indexing start times for elapsed display
+    const indexingStartTimes = useRef<Map<string, number>>(new Map());
+    // Force re-render for elapsed time updates
+    const [, setTick] = useState(0);
 
-    // Load documents
+    // Load documents on mount
     useEffect(() => {
         log.doc.info('Loading document library...');
         const t = log.doc.time();
@@ -31,6 +44,57 @@ export function DocumentLibrary() {
                 setDocuments([]);
             });
     }, [setDocuments]);
+
+    // Poll for indexing status on documents that are still 'indexing'
+    useEffect(() => {
+        const indexingDocs = documents.filter(
+            (d) => d.indexing_status === 'indexing' || d.indexing_status === 'pending'
+        );
+        if (indexingDocs.length === 0) return;
+
+        // Set start times for new indexing docs
+        for (const doc of indexingDocs) {
+            if (!indexingStartTimes.current.has(doc.id)) {
+                indexingStartTimes.current.set(doc.id, Date.now());
+            }
+        }
+
+        const interval = setInterval(async () => {
+            // Tick to update elapsed time display
+            setTick((n) => n + 1);
+
+            for (const doc of indexingDocs) {
+                try {
+                    const status = await api.getDocumentStatus(doc.id);
+                    if (status.indexing_status !== 'indexing' && status.indexing_status !== 'pending') {
+                        // Indexing finished - refresh the full document list
+                        indexingStartTimes.current.delete(doc.id);
+                        const data = await api.listDocuments();
+                        setDocuments(data.documents || []);
+                        break; // list refreshed, no need to continue
+                    }
+                } catch {
+                    // ignore poll errors
+                }
+            }
+        }, 2000);
+
+        return () => clearInterval(interval);
+    }, [documents, setDocuments]);
+
+    // Clean up start times for docs that are no longer indexing
+    useEffect(() => {
+        const activeIds = new Set(
+            documents
+                .filter((d) => d.indexing_status === 'indexing' || d.indexing_status === 'pending')
+                .map((d) => d.id)
+        );
+        for (const id of indexingStartTimes.current.keys()) {
+            if (!activeIds.has(id)) {
+                indexingStartTimes.current.delete(id);
+            }
+        }
+    }, [documents]);
 
     const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
     const totalChunks = documents.reduce((sum, d) => sum + d.chunk_count, 0);
@@ -51,6 +115,7 @@ export function DocumentLibrary() {
         try {
             const doc = await api.uploadDocumentByPath(filepath);
             log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, t);
+            // Refresh document list
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
             setUploadStatus('');
@@ -78,10 +143,26 @@ export function DocumentLibrary() {
         log.doc.info(`Deleting document: ${doc?.filename || id}`);
         try {
             await api.deleteDocument(id);
+            indexingStartTimes.current.delete(id);
             setDocuments(documents.filter((d) => d.id !== id));
             log.doc.info(`Deleted document: ${doc?.filename || id}`);
         } catch (err) {
             log.doc.error(`Failed to delete document: ${doc?.filename || id}`, err);
+        }
+    }, [documents, setDocuments]);
+
+    const handleCancelIndexing = useCallback(async (id: string) => {
+        const doc = documents.find((d) => d.id === id);
+        log.doc.info(`Cancelling indexing for: ${doc?.filename || id}`);
+        try {
+            await api.cancelIndexing(id);
+            indexingStartTimes.current.delete(id);
+            // Refresh
+            const data = await api.listDocuments();
+            setDocuments(data.documents || []);
+            log.doc.info(`Cancelled indexing for: ${doc?.filename || id}`);
+        } catch (err) {
+            log.doc.error(`Failed to cancel indexing: ${doc?.filename || id}`, err);
         }
     }, [documents, setDocuments]);
 
@@ -92,6 +173,56 @@ export function DocumentLibrary() {
         await uploadFile(folderPath.trim(), folderPath.trim().split(/[\\/]/).pop() || 'file');
         setFolderPath('');
     }, [folderPath, uploadFile]);
+
+    const renderDocStatus = (doc: Document) => {
+        const status = doc.indexing_status || 'complete';
+        const startTime = indexingStartTimes.current.get(doc.id);
+
+        switch (status) {
+            case 'indexing':
+            case 'pending':
+                return (
+                    <div className="doc-indexing-status">
+                        <div className="doc-indexing-bar">
+                            <div className="doc-indexing-bar-track">
+                                <div className="doc-indexing-bar-fill" />
+                            </div>
+                            <span className="doc-indexing-label">
+                                <Loader size={12} className="doc-spin" />
+                                Indexing{startTime ? ` (${elapsed(startTime)})` : '...'}
+                            </span>
+                        </div>
+                        <button
+                            className="btn-cancel"
+                            onClick={(e) => { e.stopPropagation(); handleCancelIndexing(doc.id); }}
+                            title="Cancel indexing"
+                            aria-label={`Cancel indexing ${doc.filename}`}
+                        >
+                            <StopCircle size={14} />
+                            Cancel
+                        </button>
+                    </div>
+                );
+            case 'failed':
+                return (
+                    <span className="doc-status-badge doc-status-failed">
+                        <AlertCircle size={12} /> Failed
+                    </span>
+                );
+            case 'cancelled':
+                return (
+                    <span className="doc-status-badge doc-status-cancelled">
+                        <StopCircle size={12} /> Cancelled
+                    </span>
+                );
+            default:
+                return (
+                    <span className="doc-meta">
+                        {formatSize(doc.file_size)} &middot; {doc.chunk_count} chunks
+                    </span>
+                );
+        }
+    };
 
     return (
         <div className="modal-overlay" onClick={() => setShowDocLibrary(false)} role="dialog" aria-modal="true" aria-label="Document Library">
@@ -171,21 +302,21 @@ export function DocumentLibrary() {
                             </div>
                         )}
                         {documents.map((doc) => (
-                            <div key={doc.id} className="doc-row">
+                            <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
                                     <span className="doc-name">{doc.filename}</span>
-                                    <span className="doc-meta">
-                                        {formatSize(doc.file_size)} &middot; {doc.chunk_count} chunks
-                                    </span>
+                                    {renderDocStatus(doc)}
                                 </div>
-                                <button
-                                    className="btn-icon-sm doc-delete"
-                                    onClick={() => handleDeleteDoc(doc.id)}
-                                    title="Remove"
-                                    aria-label={`Remove ${doc.filename}`}
-                                >
-                                    <Trash2 size={14} />
-                                </button>
+                                {doc.indexing_status !== 'indexing' && doc.indexing_status !== 'pending' && (
+                                    <button
+                                        className="btn-icon-sm doc-delete"
+                                        onClick={() => handleDeleteDoc(doc.id)}
+                                        title="Remove"
+                                        aria-label={`Remove ${doc.filename}`}
+                                    >
+                                        <Trash2 size={14} />
+                                    </button>
+                                )}
                             </div>
                         ))}
                     </div>
