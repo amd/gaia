@@ -20,6 +20,7 @@
 #include "console.h"
 #include "json_utils.h"
 #include "mcp_client.h"
+#include "security.h"
 #include "tool_registry.h"
 #include "types.h"
 #include "gaia/export.h"
@@ -67,6 +68,14 @@ public:
 
     /// Get the tool registry (for inspection/testing).
     const ToolRegistry& tools() const { return tools_; }
+
+    /// Set the confirmation callback for CONFIRM-policy tools.
+    /// Delegates to ToolRegistry::setConfirmCallback().
+    void setToolConfirmCallback(ToolConfirmCallback cb);
+
+    /// Set the default policy for all tools (local and MCP) registered without an explicit policy.
+    /// Delegates to ToolRegistry::setDefaultPolicy().
+    void setDefaultPolicy(ToolPolicy policy);
 
     /// Get the output handler.
     OutputHandler& console() { return *console_; }
@@ -137,6 +146,9 @@ private:
 
     std::vector<std::string> errorHistory_;
     std::vector<Message> conversationHistory_;
+
+    // Security: persistent allowed-tools store (shared with tools_)
+    std::shared_ptr<AllowedToolsStore> allowedToolsStore_;
 
     // MCP clients and their configs (configs stored for reconnect)
     std::map<std::string, std::unique_ptr<MCPClient>> mcpClients_;

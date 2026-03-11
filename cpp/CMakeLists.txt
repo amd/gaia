@@ -89,6 +89,7 @@ add_library(gaia_core
     src/json_utils.cpp
     src/agent.cpp
     src/mcp_client.cpp
+    src/security.cpp
 )
 
 add_library(gaia::gaia_core ALIAS gaia_core)
@@ -175,6 +176,11 @@ if(GAIA_BUILD_EXAMPLES AND WIN32)
     target_link_libraries(wifi_agent PRIVATE gaia::gaia_core)
 endif()
 
+if(GAIA_BUILD_EXAMPLES)
+    add_executable(secure_agent examples/secure_agent.cpp)
+    target_link_libraries(secure_agent PRIVATE gaia::gaia_core)
+endif()
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -190,6 +196,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_console.cpp
         tests/test_clean_console.cpp
         tests/test_tool_integration.cpp
+        tests/test_security.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE

@@ -113,12 +113,44 @@ struct ToolParameter {
 // Takes JSON arguments, returns JSON result.
 using ToolCallback = std::function<json(const json&)>;
 
+// ---- Security Types ----
+
+enum class ToolPolicy { ALLOW, CONFIRM, DENY };
+
+enum class ToolConfirmResult { ALLOW_ONCE, ALWAYS_ALLOW, DENY };
+
+// Returns sanitized args or throws std::invalid_argument to reject the call.
+using ToolValidateCallback = std::function<json(const std::string& toolName, const json& args)>;
+
+// Returns ALLOW_ONCE, ALWAYS_ALLOW, or DENY.
+using ToolConfirmCallback = std::function<ToolConfirmResult(const std::string& toolName, const json& args)>;
+
+inline std::string toolPolicyToString(ToolPolicy p) {
+    switch (p) {
+        case ToolPolicy::ALLOW:   return "ALLOW";
+        case ToolPolicy::CONFIRM: return "CONFIRM";
+        case ToolPolicy::DENY:    return "DENY";
+    }
+    return "UNKNOWN";
+}
+
+inline std::string toolConfirmResultToString(ToolConfirmResult r) {
+    switch (r) {
+        case ToolConfirmResult::ALLOW_ONCE:    return "ALLOW_ONCE";
+        case ToolConfirmResult::ALWAYS_ALLOW:  return "ALWAYS_ALLOW";
+        case ToolConfirmResult::DENY:          return "DENY";
+    }
+    return "UNKNOWN";
+}
+
 struct ToolInfo {
     std::string name;
     std::string description;
     std::vector<ToolParameter> parameters;
     ToolCallback callback;
     bool atomic = false;
+    ToolPolicy policy = ToolPolicy::ALLOW;                // default = backwards-compatible
+    std::optional<ToolValidateCallback> validateArgs;     // per-tool argument validator
 
     // MCP metadata (populated when tool comes from MCP server)
     std::optional<std::string> mcpServer;

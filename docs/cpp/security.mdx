@@ -1,0 +1,261 @@
+---
+title: "C++ Security"
+description: "Production-ready guardrails for the GAIA C++ agent framework: tool policies, argument validation, user confirmation, and path safety."
+---
+
+## Overview
+
+The GAIA C++ framework executes tool calls requested by the LLM. Without guardrails, a prompt injection could trick the model into calling a sensitive tool with malicious arguments. This guide describes the security primitives available to restrict, validate, and confirm tool calls before they execute.
+
+## Threat Model
+
+| Threat | Mitigation |
+|--------|-----------|
+| LLM requests a sensitive tool it should never call | `ToolPolicy::DENY` |
+| LLM passes malformed or dangerous arguments | `validateArgs` callback |
+| LLM calls a high-risk tool without user awareness | `ToolPolicy::CONFIRM` callback |
+| Path traversal via `..` in file arguments | `gaia::validatePath()` |
+| Shell injection via user-controlled argument strings | `gaia::isSafeShellArg()` |
+
+---
+
+## Tool Policies
+
+Every `ToolInfo` has a `policy` field (defaults to `ToolPolicy::ALLOW` for backwards compatibility):
+
+```cpp
+#include <gaia/types.h>
+
+enum class ToolPolicy {
+    ALLOW,    // Execute immediately (default)
+    CONFIRM,  // Ask the user before executing
+    DENY,     // Never execute; return an error to the LLM
+};
+```
+
+### Example: deny a dangerous tool
+
+```cpp
+ToolInfo info;
+info.name        = "format_disk";
+info.description = "Format a disk volume";
+info.policy      = ToolPolicy::DENY;
+info.callback    = /* ... */;
+agent.toolRegistry().registerTool(std::move(info));
+```
+
+When the LLM requests `format_disk`, the registry returns an error JSON without invoking the callback.
+
+### Example: require confirmation
+
+```cpp
+info.policy = ToolPolicy::CONFIRM;
+```
+
+See [Confirmation Callbacks](#confirmation-callbacks) below.
+
+---
+
+## Argument Validation
+
+The optional `validateArgs` field lets you sanitize or reject arguments before the tool callback runs (and before the user sees the confirmation prompt).
+
+```cpp
+// Returns sanitized args or throws std::invalid_argument to reject.
+using ToolValidateCallback =
+    std::function<json(const std::string& toolName, const json& args)>;
+```
+
+### Example: restrict file access to a safe directory
+
+```cpp
+#include <gaia/security.h>
+
+ToolInfo info;
+info.name = "read_file";
+info.validateArgs = [](const std::string&, const json& args) -> json {
+    std::string path = args.value("path", "");
+    if (!gaia::validatePath("/var/gaia/data", path)) {
+        throw std::invalid_argument("path escapes allowed directory");
+    }
+    return args; // args are safe; return unchanged
+};
+```
+
+Throwing `std::invalid_argument` causes `executeTool()` to return an error JSON. Any other exception propagates normally.
+
+---
+
+## Confirmation Callbacks
+
+When a tool's policy is `CONFIRM`, the registry calls a `ToolConfirmCallback` before executing:
+
+```cpp
+enum class ToolConfirmResult {
+    ALLOW_ONCE,    // Execute this one call; ask again next time
+    ALWAYS_ALLOW,  // Execute and remember the permission permanently
+    DENY,          // Reject this call; return an error to the LLM
+};
+
+using ToolConfirmCallback =
+    std::function<ToolConfirmResult(const std::string& toolName, const json& args)>;
+```
+
+### Zero-config terminal agents
+
+For agents running in a terminal (`silentMode = false`, which is the default), the `Agent` constructor **automatically installs a stdin/stderr confirm callback**. Setting `policy = ToolPolicy::CONFIRM` on a tool is all you need:
+
+```cpp
+// Registers a tool that auto-prompts in terminal agents — no extra setup required.
+toolRegistry().registerTool("flush_dns", "Clear DNS cache",
+    [](const json&) { /* ... */ return gaia::json{{"ok", true}}; },
+    {}, false, gaia::ToolPolicy::CONFIRM);
+```
+
+When the LLM calls `flush_dns`, the user sees:
+
+```
+  "flush_dns" requires confirmation. Allow this tool to run?
+  ============================================
+  [1] Allow once
+  [2] Always allow
+  [3] Deny
+  ============================================
+  Choice:
+```
+
+### Silent / headless agents
+
+Agents constructed with `config.silentMode = true` (e.g., unit tests, background automation) receive **no confirm callback**. Any tool with `CONFIRM` policy is denied automatically (fail-closed). This is correct by design — automated pipelines should not block on stdin.
+
+### Custom UI agents
+
+Call `setToolConfirmCallback()` after construction to replace the default with your own implementation (e.g., a GUI dialog or a remote approval flow):
+
+```cpp
+agent.setToolConfirmCallback([](const std::string& tool, const json& args) {
+    // show your own UI...
+    return gaia::ToolConfirmResult::ALLOW_ONCE;
+});
+```
+
+### Standalone ToolRegistry usage
+
+If you use `ToolRegistry` without an `Agent`, install the built-in callback yourself:
+
+```cpp
+#include <gaia/security.h>
+
+gaia::ToolRegistry registry;
+registry.setConfirmCallback(gaia::makeStdinConfirmCallback());
+```
+
+**Fail-closed:** if a tool's policy is `CONFIRM` and no callback is set, the tool is denied. This prevents accidental execution of sensitive tools.
+
+---
+
+## Persistent Permissions
+
+`ALWAYS_ALLOW` decisions are persisted to disk so the user is not asked again across sessions.
+
+**Storage location:**
+- POSIX: `~/.gaia/security/allowed_tools.json`
+- Windows: `%USERPROFILE%\.gaia\security\allowed_tools.json`
+
+The file format is:
+```json
+{
+  "version": 1,
+  "allowed_tools": ["read_file", "check_adapter"]
+}
+```
+
+The `Agent` constructor creates an `AllowedToolsStore` automatically. You can also manage it directly:
+
+```cpp
+#include <gaia/security.h>
+
+gaia::AllowedToolsStore store; // uses ~/.gaia/security/
+
+store.isAlwaysAllowed("read_file");              // check
+store.addAlwaysAllowed("read_file");             // add (persists)
+store.removeAlwaysAllowed("read_file");          // remove (persists)
+store.clearAll();                                // wipe all (persists)
+auto names = store.allAllowed();                 // list
+```
+
+The store is global — all GAIA agents on the machine share one allowed set.
+
+---
+
+## Default Tool Policy
+
+The framework default is `ToolPolicy::ALLOW` — all tools (local and MCP) run without prompting. Tools that need confirmation must be explicitly marked `ToolPolicy::CONFIRM`, or you can change the blanket default for an agent:
+
+```cpp
+// Mark an individual local tool as needing confirmation:
+toolRegistry().registerTool("flush_dns", "Clear DNS cache", callback,
+    {}, false, gaia::ToolPolicy::CONFIRM);
+
+// Or, for a high-security agent, change the blanket default:
+// Both local and MCP tools inherit CONFIRM unless explicitly overridden.
+agent.setDefaultPolicy(gaia::ToolPolicy::CONFIRM);
+
+// Explicit override restores ALLOW for a specific tool:
+toolRegistry().registerTool("get_status", "Read-only status", callback,
+    {}, false, gaia::ToolPolicy::ALLOW);
+
+// MCP tools also inherit the blanket default:
+agent.connectMcpServer("untrusted", {{"command", "npx"}, {"args", {"-y", "server"}}});
+```
+
+Call `setDefaultPolicy()` before registering tools or calling `connectMcpServer()`. Tools registered afterwards inherit the policy; tools already registered are unaffected.
+
+---
+
+## Path Validation
+
+`gaia::validatePath()` prevents path traversal by canonicalizing both paths before comparing:
+
+```cpp
+#include <gaia/security.h>
+
+// Returns true only if requestedPath is inside basePath
+bool ok = gaia::validatePath("/var/gaia/data", userSuppliedPath);
+if (!ok) {
+    // reject
+}
+```
+
+On POSIX this uses `realpath()`, which resolves symlinks and `..` components. On Windows it uses `GetFullPathName()`, which normalizes `..` components but does **not** follow symlinks. Returns `false` if either path cannot be resolved.
+
+---
+
+## Shell Argument Safety
+
+`gaia::isSafeShellArg()` returns `false` for strings containing shell metacharacters or whitespace:
+
+```cpp
+#include <gaia/security.h>
+
+std::string userArg = args.value("interface", "");
+if (!gaia::isSafeShellArg(userArg)) {
+    throw std::invalid_argument("unsafe shell argument: " + userArg);
+}
+// Safe to interpolate into a command string
+std::string cmd = "netsh interface show interface name=" + userArg;
+```
+
+Rejected characters include: spaces, tabs, newlines, `;`, `|`, `&`, `<`, `>`, `$`, `` ` ``, `"`, `'`, `!`, `{`, `}`, `(`, `)`, `[`, `]`, `~`, `*`, `?`, `#`, `^`, `%`, `=`.
+
+Backslash (`\`) is **not** rejected because it is a path separator on Windows. If you are building POSIX-only commands, add an explicit backslash check in your `validateArgs` callback.
+
+---
+
+## Recommendations
+
+1. **Call `setDefaultPolicy(ToolPolicy::CONFIRM)`** in production agents that connect to external MCP servers or want stricter blanket defaults.
+2. **Use `validateArgs` for every tool that touches the file system or executes shell commands.**
+3. **Combine `validatePath` + `isSafeShellArg`** for tools that build shell command strings from LLM-supplied arguments.
+4. **DENY any tool** that should never be called by the LLM, even if it is registered for internal use.
+5. **Review `~/.gaia/security/allowed_tools.json`** periodically to audit permanently-allowed tools.

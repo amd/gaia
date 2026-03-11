@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "gaia/agent.h"
+#include "gaia/security.h"
 
 #include <iostream>
 #include <regex>
@@ -49,8 +50,25 @@ Agent::Agent(const AgentConfig& config)
     // their constructor completes, or tools should be registered in the
     // subclass constructor.
 
+    // Create shared allowed-tools store and inject into the registry
+    allowedToolsStore_ = std::make_shared<AllowedToolsStore>();
+    tools_.setAllowedToolsStore(allowedToolsStore_);
+
+    // Auto-install terminal confirm callback for interactive agents
+    if (!config_.silentMode) {
+        tools_.setConfirmCallback(makeStdinConfirmCallback());
+    }
+
     // System prompt will be composed lazily
     systemPromptDirty_ = true;
+}
+
+void Agent::setToolConfirmCallback(ToolConfirmCallback cb) {
+    tools_.setConfirmCallback(std::move(cb));
+}
+
+void Agent::setDefaultPolicy(ToolPolicy policy) {
+    tools_.setDefaultPolicy(policy);
 }
 
 Agent::~Agent() {
@@ -289,6 +307,9 @@ bool Agent::connectMcpServer(const std::string& name, const json& config) {
         auto mcpTools = client->listTools();
         for (const auto& mcpTool : mcpTools) {
             ToolInfo toolInfo = mcpTool.toToolInfo(name);
+
+            // Bake the current default policy into the ToolInfo at registration time.
+            toolInfo.policy = tools_.defaultPolicy();
 
             // Capture server name and tool name; use callMcpTool for auto-reconnect
             std::string serverName = name;
