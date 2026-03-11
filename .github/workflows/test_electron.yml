@@ -88,6 +88,12 @@ jobs:
           # Run structure tests for all apps and framework integration
           npm test -- test_electron_jira_app.js test_electron_example_app.js test_electron_emr_dashboard.js test_electron_framework_integration.js
 
+      - name: Run Agent UI tests
+        run: |
+          cd tests/electron
+          # Agent UI service tests: process manager, notification service, UI structure
+          npm test -- test_agent_process_manager.js test_notification_service.js test_agent_ui_structure.js
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v6

@@ -49,6 +49,7 @@ class TunnelManager:
         self._started_at: Optional[str] = None
         self._error: Optional[str] = None
         self._public_ip: Optional[str] = None
+        self._start_lock = asyncio.Lock()
 
     @property
     def active(self) -> bool:
@@ -96,6 +97,11 @@ class TunnelManager:
         Raises:
             RuntimeError: If ngrok is not installed or tunnel fails to start.
         """
+        async with self._start_lock:
+            return await self._start_unlocked()
+
+    async def _start_unlocked(self) -> dict:
+        """Internal start implementation (caller must hold _start_lock)."""
         # Check if already running
         if self.active:
             logger.info("Tunnel already active at %s", self._url)
@@ -268,9 +274,10 @@ class TunnelManager:
             if self._process and self._process.poll() is not None:
                 stderr = ""
                 try:
-                    stderr = self._process.stderr.read().decode(
-                        "utf-8", errors="replace"
-                    )
+                    # Read only a limited amount to avoid blocking the
+                    # event loop if ngrok wrote a lot to stderr.
+                    raw = self._process.stderr.read(4096) or b""
+                    stderr = raw.decode("utf-8", errors="replace")
                 except Exception:
                     pass
                 logger.error("ngrok process exited unexpectedly: %s", stderr)

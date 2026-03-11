@@ -384,9 +384,19 @@ class RAGToolsMixin:
                 # Format chunks with context markers for better readability
                 formatted_chunks = []
                 for i, chunk in enumerate(top_chunks):
+                    # Resolve the source file path for this chunk
+                    source_path = ""
+                    if hasattr(self.rag, "chunk_to_file"):
+                        ci = chunk_indices[i] if i < len(chunk_indices) else -1
+                        if ci >= 0:
+                            raw = self.rag.chunk_to_file.get(ci, "")
+                            if raw:
+                                source_path = str(Path(raw).resolve())
+
                     formatted_chunks.append(
                         {
                             "chunk_id": i + 1,  # Sequential for display
+                            "source_file": source_path,
                             "page": extract_page_from_chunk(
                                 chunk,
                                 chunk_indices[i] if i < len(chunk_indices) else -1,
@@ -426,6 +436,15 @@ class RAGToolsMixin:
                         for c in formatted_chunks[:3]  # Show first 3 chunks
                     ]
 
+                # Collect unique source file paths from matched chunks only
+                matched_source_files = list(
+                    dict.fromkeys(
+                        c["source_file"]
+                        for c in formatted_chunks
+                        if c.get("source_file")
+                    )
+                )
+
                 # Return chunks for agent to use in answer generation
                 result = {
                     "status": "success",
@@ -433,19 +452,19 @@ class RAGToolsMixin:
                     "chunks": formatted_chunks,
                     "num_chunks": len(top_chunks),
                     "search_keys_used": search_keys,
-                    "source_files": (
-                        list(
-                            set(
-                                [
-                                    self.rag.chunk_to_file.get(i, "Unknown")
-                                    for i in range(len(self.rag.chunks))
-                                ]
-                            )
-                        )
-                        if hasattr(self.rag, "chunk_to_file")
-                        else []
+                    "source_files": matched_source_files,
+                    "instruction": (
+                        "Use the provided document chunks to answer the user's question.\n\n"
+                        "CRITICAL CITATION REQUIREMENT:\n"
+                        "When referencing a document, you MUST include its FULL ABSOLUTE FILE PATH "
+                        "from the 'source_file' field of each chunk. This allows the user to click "
+                        "and open the file directly.\n\n"
+                        "Format: 'According to <absolute_path> (page X):'\n"
+                        "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
+                        "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
+                        "IMPORTANT: Always use the full path exactly as given in source_file. "
+                        "Do NOT shorten it to just the filename."
                     ),
-                    "instruction": "Use the provided document chunks to answer the user's question.\n\nCRITICAL CITATION REQUIREMENT:\nYour answer MUST start with: 'According to [document name], page X:' where X is the page number from each chunk's 'page' field.\n\nExample: If chunk has 'page': 2, say 'According to document.pdf, page 2:'\nIf info from pages 2 and 5, say 'According to document.pdf, pages 2 and 5:'",
                 }
 
                 # Add debug info to result if debug mode is enabled

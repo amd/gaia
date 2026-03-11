@@ -343,7 +343,10 @@ class SSEOutputHandler(OutputHandler):
                         return
                     self._emit({"type": "chunk", "content": self._stream_buffer})
                     self._stream_buffer = ""
-                return
+                # If end_of_stream, fall through to the flush block below
+                # instead of returning (otherwise the buffer is never flushed).
+                if not end_of_stream:
+                    return
 
             # Case 2: Buffer has "tool" embedded after normal text (e.g., "I'll help.\n{"tool":...")
             # Split at the JSON start and emit the text portion, buffer the JSON portion.
@@ -515,6 +518,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
 def _tool_description(tool_name: str) -> str:
     """Return a human-readable description for known agent tools."""
     descriptions = {
+        "query_documents": "Searching indexed documents for relevant content",
+        "query_specific_file": "Searching a specific document for relevant content",
+        "search_indexed_chunks": "Searching document chunks by keyword",
         "search_documents": "Searching indexed documents for relevant content",
         "search_file": "Searching for files matching a pattern",
         "read_file": "Reading file contents",
@@ -523,6 +529,8 @@ def _tool_description(tool_name: str) -> str:
         "write_file": "Writing to a file",
         "create_file": "Creating a new file",
         "get_file_preview": "Previewing file contents",
+        "index_document": "Indexing a document for retrieval",
+        "evaluate_retrieval": "Evaluating document retrieval quality",
     }
     return descriptions.get(tool_name, "")
 

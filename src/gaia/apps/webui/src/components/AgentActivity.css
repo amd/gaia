@@ -329,16 +329,29 @@
 
 /* Arguments display */
 .step-detail-args {
-    padding: 8px 10px;
+    padding: 8px 10px 10px;
     border-radius: 8px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-light);
+    max-height: 180px;
+    overflow-y: auto;
+}
+
+.step-detail-args::-webkit-scrollbar {
+    width: 4px;
+}
+.step-detail-args::-webkit-scrollbar-track {
+    background: transparent;
+}
+.step-detail-args::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 2px;
 }
 
 .detail-args-content {
     font-size: 12px;
     color: var(--text-secondary);
-    line-height: 1.5;
+    line-height: 1.6;
 }
 
 .args-grid {
@@ -371,14 +384,28 @@
     font-size: 11px;
     color: var(--text-primary);
     word-break: break-word;
+    line-height: 1.6;
 }
 
 /* Result display */
 .step-detail-result {
-    padding: 8px 10px;
+    padding: 8px 10px 10px;
     border-radius: 8px;
     font-size: 12px;
-    line-height: 1.5;
+    line-height: 1.6;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.step-detail-result::-webkit-scrollbar {
+    width: 4px;
+}
+.step-detail-result::-webkit-scrollbar-track {
+    background: transparent;
+}
+.step-detail-result::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 2px;
 }
 
 .step-detail-result.result-success {
@@ -407,6 +434,7 @@
     color: var(--text-primary);
     white-space: pre-wrap;
     word-break: break-word;
+    line-height: 1.6;
 }
 
 .tool-result-path {

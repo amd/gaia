@@ -92,6 +92,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
+    const sendMessageRef = useRef<(text?: string) => void>(() => {});
 
     // ── Streaming chunk buffer ──────────────────────────────────────
     // Buffer SSE chunks in a ref and flush to the store via rAF.
@@ -169,12 +170,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
             if (prompt) {
                 log.chat.info(`Received gaia:send-prompt event: "${prompt.slice(0, 60)}"`);
                 setInput(prompt);
-                setTimeout(() => sendMessage(prompt), 50);
+                // Use ref to always invoke the latest sendMessage (avoids
+                // stale closure since this effect only re-runs on sessionId change).
+                setTimeout(() => sendMessageRef.current(prompt), 50);
             }
         };
         window.addEventListener('gaia:send-prompt', handler);
         return () => window.removeEventListener('gaia:send-prompt', handler);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [sessionId]);
 
     // Auto-scroll (debounced to avoid excessive DOM mutations during streaming)
@@ -320,7 +322,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onChunk: (event) => {
                 const content = event.content || '';
                 if (content) {
-                    fullContent += content;
+                    // 'answer' events carry the full final text (not a delta),
+                    // so replace rather than append to avoid doubling content.
+                    if (event.type === 'answer') {
+                        fullContent = content;
+                    } else {
+                        fullContent += content;
+                    }
                     // Filter raw tool-call JSON that LLMs sometimes emit as text.
                     // This is a frontend safety net (backend also filters these).
                     // Uses [^}]* for inner args to avoid over-matching.
@@ -534,6 +542,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         abortRef.current = controller;
     }, [input, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps]);
+
+    // Keep ref in sync so event listeners always call the latest sendMessage
+    sendMessageRef.current = sendMessage;
 
     // Delete a single message
     const handleDeleteMessage = useCallback(async (messageId: number) => {

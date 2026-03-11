@@ -669,17 +669,20 @@ def create_app(db_path: str = None) -> FastAPI:
         if not file_path or "\x00" in file_path:
             raise HTTPException(status_code=400, detail="Invalid path")
 
-        resolved = Path(file_path).resolve(strict=False)
+        raw_path = Path(file_path)
         reveal = request.get("reveal", True)
 
-        if not resolved.exists():
-            raise HTTPException(status_code=404, detail="Path not found")
-
-        # Security: don't follow symlinks
-        if resolved.is_symlink():
+        # Security: reject symlinks BEFORE resolving so resolve() can't
+        # silently redirect to an unintended target.
+        if raw_path.is_symlink():
             raise HTTPException(
                 status_code=400, detail="Symbolic links are not supported"
             )
+
+        resolved = raw_path.resolve(strict=False)
+
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="Path not found")
 
         try:
             if platform.system() == "Windows":
@@ -1564,12 +1567,23 @@ async def _get_chat_response(
         result = agent.process_query(request.message)
         if isinstance(result, dict):
             # process_query returns {"result": "...", "status": "...", ...}
-            return result.get("result", "") or result.get("answer", "")
+            # Use explicit None check so an intentional empty string isn't
+            # overridden by fallback to "answer".
+            val = result.get("result")
+            return val if val is not None else result.get("answer", "")
         return str(result) if result else ""
 
     try:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _do_chat)
+        # Apply a 120-second timeout to prevent indefinite hangs when the
+        # LLM gets stuck in a tool loop or Lemonade becomes unresponsive
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, _do_chat),
+            timeout=120.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error("Chat response timed out after 120 seconds")
+        return "Error: Response timed out after 120 seconds. The query may be too complex — try breaking it into simpler questions."
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
         return "Error: Could not get response from LLM. Is Lemonade Server running? Check server logs for details."
@@ -1580,7 +1594,7 @@ def _find_last_tool_step(steps: list) -> dict | None:
     for i in range(len(steps) - 1, -1, -1):
         if steps[i].get("type") == "tool":
             return steps[i]
-    return steps[-1] if steps else None
+    return None
 
 
 async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):
@@ -1596,16 +1610,14 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     from gaia.ui.sse_handler import SSEOutputHandler
 
     try:
-        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+        # Create SSE handler first and emit immediate feedback BEFORE the
+        # slow ChatAgent construction (RAG indexing, LLM connection can take 10-30s)
+        sse_handler = SSEOutputHandler()
 
-        # Build conversation history for agent context
+        # Build conversation history
         messages = db.get_messages(request.session_id, limit=20)
         history_pairs = _build_history_pairs(messages)
 
-        # Create SSE output handler to capture agent events
-        sse_handler = SSEOutputHandler()
-
-        # Create ChatAgent with SSE handler
         # Resolve document IDs to file paths (falls back to all indexed docs)
         document_ids = session.get("document_ids", [])
         rag_file_paths = _resolve_rag_paths(db, document_ids)
@@ -1616,36 +1628,92 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             )
 
         allowed = _compute_allowed_paths(rag_file_paths)
-        config = ChatAgentConfig(
-            model_id=session.get("model"),
-            max_steps=10,
-            streaming=True,  # Stream LLM text via SSE (handler filters raw tool JSON)
-            silent_mode=False,
-            debug=False,
-            rag_documents=rag_file_paths,
-            allowed_paths=allowed,
-        )
-        agent = ChatAgent(config)
-        agent.console = sse_handler  # Replace console with SSE handler
+        model_id = session.get("model")
 
-        # Restore conversation history
-        for user_msg, assistant_msg in history_pairs[-4:]:
-            if hasattr(agent, "conversation_history"):
-                agent.conversation_history.append({"role": "user", "content": user_msg})
-                agent.conversation_history.append(
-                    {"role": "assistant", "content": assistant_msg}
-                )
+        # Emit immediate thinking event so the frontend shows activity right away
+        model_label = model_id or "local LLM"
+        init_msg = f"Connecting to {model_label}"
+        if rag_file_paths:
+            init_msg += f" with {len(rag_file_paths)} document(s)"
+        init_msg += "..."
+        sse_handler._emit({"type": "thinking", "content": init_msg})
 
-        # Run agent in background thread
+        # Move ALL slow work (ChatAgent constructor + process_query) into the
+        # background thread so the SSE generator can yield the thinking event
+        # immediately instead of blocking for 10-30s during initialization
         result_holder = {"answer": "", "error": None}
 
         def _run_agent():
             try:
+                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+                # Report: configuring agent
+                sse_handler._emit(
+                    {"type": "thinking", "content": "Configuring agent..."}
+                )
+
+                config = ChatAgentConfig(
+                    model_id=model_id,
+                    max_steps=10,
+                    streaming=True,
+                    silent_mode=False,
+                    debug=False,
+                    rag_documents=rag_file_paths,
+                    allowed_paths=allowed,
+                )
+
+                # Report: initializing (RAG indexing + LLM connection)
+                if rag_file_paths:
+                    doc_names = [
+                        Path(p).name for p in rag_file_paths
+                    ]
+                    sse_handler._emit(
+                        {
+                            "type": "thinking",
+                            "content": f"Indexing {len(rag_file_paths)} document(s): {', '.join(doc_names[:3])}"
+                            + (f" +{len(doc_names) - 3} more" if len(doc_names) > 3 else ""),
+                        }
+                    )
+                else:
+                    sse_handler._emit(
+                        {"type": "thinking", "content": "Initializing agent..."}
+                    )
+
+                agent = ChatAgent(config)
+                agent.console = sse_handler
+
+                # Report: ready, restoring history
+                if history_pairs:
+                    sse_handler._emit(
+                        {
+                            "type": "thinking",
+                            "content": f"Restoring {len(history_pairs[-4:])} previous message(s)...",
+                        }
+                    )
+
+                # Restore conversation history
+                for user_msg, assistant_msg in history_pairs[-4:]:
+                    if hasattr(agent, "conversation_history"):
+                        agent.conversation_history.append(
+                            {"role": "user", "content": user_msg}
+                        )
+                        agent.conversation_history.append(
+                            {"role": "assistant", "content": assistant_msg}
+                        )
+
+                # Report: sending query to LLM
+                sse_handler._emit(
+                    {
+                        "type": "thinking",
+                        "content": f"Sending query to {model_label}...",
+                    }
+                )
+
                 result = agent.process_query(request.message)
                 if isinstance(result, dict):
-                    # process_query returns {"result": "...", "status": "...", ...}
-                    result_holder["answer"] = result.get("result", "") or result.get(
-                        "answer", ""
+                    val = result.get("result")
+                    result_holder["answer"] = (
+                        val if val is not None else result.get("answer", "")
                     )
                 else:
                     result_holder["answer"] = str(result) if result else ""

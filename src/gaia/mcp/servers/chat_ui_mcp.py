@@ -250,7 +250,7 @@ def create_chat_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
     def index_document(filepath: str) -> Dict[str, Any]:
         """Index a document file for RAG (supports PDF, TXT, CSV, XLSX, etc.)."""
         return _api(
-            backend_url, "post", "/documents/upload", json={"filepath": filepath}
+            backend_url, "post", "/documents/upload-path", json={"filepath": filepath}
         )
 
     @mcp.tool()

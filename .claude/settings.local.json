@@ -8,6 +8,6 @@
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "playwright",
-    "agent-ui"
+    "claudia"
   ]
 }

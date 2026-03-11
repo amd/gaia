@@ -1059,9 +1059,9 @@ describe('Chat App Integration', () => {
       expect(chatContent).toContain('handleSuggestionClick');
     });
 
-    it('should show loading spinner during message fetch', () => {
+    it('should show loading skeleton during message fetch', () => {
       expect(chatContent).toContain('isLoadingMessages');
-      expect(chatContent).toContain('loading-spinner');
+      expect(chatContent).toContain('skeleton-messages');
     });
 
     it('should have drag-and-drop with visual overlay', () => {

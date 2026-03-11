@@ -471,12 +471,37 @@ You must respond ONLY in valid JSON. No text before { or after }.
         if '"tool"' not in response:
             return None
 
+        # Build a set of character ranges inside code fences (```...```)
+        # so we don't accidentally extract example JSON from markdown.
+        _code_ranges: list[tuple[int, int]] = []
+        _fence_start = 0
+        _search_from = 0
+        while True:
+            _open = response.find("```", _search_from)
+            if _open == -1:
+                break
+            _close = response.find("```", _open + 3)
+            if _close == -1:
+                # Unclosed fence — treat rest as code
+                _code_ranges.append((_open, len(response)))
+                break
+            _code_ranges.append((_open, _close + 3))
+            _search_from = _close + 3
+
+        def _inside_code_fence(pos: int) -> bool:
+            return any(start <= pos < end for start, end in _code_ranges)
+
         # Walk through looking for { that starts a JSON-like block with "tool"
         idx = 0
         while idx < len(response):
             brace_pos = response.find("{", idx)
             if brace_pos == -1:
                 break
+
+            # Skip JSON inside markdown code fences (example/documentation)
+            if _inside_code_fence(brace_pos):
+                idx = brace_pos + 1
+                continue
 
             # Look ahead for "tool" near this brace (within 200 chars)
             look_ahead = response[brace_pos : brace_pos + 200]
