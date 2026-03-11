@@ -16,7 +16,7 @@ import os
 import platform
 from collections import Counter
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
@@ -37,12 +37,20 @@ class FileSearchToolsMixin:
         file_list = []
         for i, fpath in enumerate(file_paths, 1):
             p = Path(fpath)
+            name = p.name
+            parent = str(p.parent)
+            # On Linux, Path won't split Windows backslash paths properly.
+            # Fall back to PureWindowsPath when the name still has backslashes.
+            if "\\" in name:
+                wp = PureWindowsPath(fpath)
+                name = wp.name
+                parent = str(wp.parent)
             file_list.append(
                 {
                     "number": i,
-                    "name": p.name,
+                    "name": name,
                     "path": str(fpath),
-                    "directory": str(p.parent),
+                    "directory": parent,
                 }
             )
         return file_list
