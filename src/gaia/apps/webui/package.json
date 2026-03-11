@@ -35,6 +35,9 @@
     "bin/",
     "dist/",
     "main.cjs",
+    "preload.cjs",
+    "services/",
+    "assets/",
     "app.config.json",
     "README.md",
     "LICENSE"

@@ -32,6 +32,8 @@ module.exports = {
         name: 'GAIA Agent UI',
         executableName: 'gaia-ui',
         icon: './assets/icon',
+        // Only dist needs to be an extraResource (loaded via process.resourcesPath).
+        // services/, preload.cjs, and assets/ are included in the asar via package.json "files".
         extraResource: ['./dist'],
         appVersion: semverVersion,
     },
