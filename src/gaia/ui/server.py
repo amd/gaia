@@ -293,4 +293,11 @@ def main():
 
 
 if __name__ == "__main__":
+    # When run via `python -m gaia.ui.server`, the module is __main__ not
+    # gaia.ui.server.  Register it under its canonical name so that
+    # sys.modules["gaia.ui.server"] lookups (used by router modules for
+    # test-patchable function resolution) succeed.
+    import sys as _sys
+
+    _sys.modules.setdefault("gaia.ui.server", _sys.modules[__name__])
     main()
