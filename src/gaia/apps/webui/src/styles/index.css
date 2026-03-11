@@ -1,7 +1,8 @@
 /* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
 /* GAIA Agent UI - Global Styles
- * Design inspired by modern dark-mode developer tools with AMD brand accents.
+ * Design: retro terminal / mission control aesthetic with AMD brand accents.
+ * Monospace-first, sharp edges, high contrast, legible.
  */
 
 :root {
@@ -9,10 +10,15 @@
     --amd-red-dark: #C42A30;
     --amd-red-light: #E86266;
 
+    /* Terminal green accent for active/success states */
+    --terminal-green: #00ff9f;
+    --terminal-green-dim: #00cc7f;
+    --terminal-glow: 0 0 6px rgba(0, 255, 159, 0.15);
+
     /* Accent colors for status indicators */
-    --accent-green: #22c55e;
-    --accent-yellow: #f59e0b;
-    --accent-blue: #3b82f6;
+    --accent-green: #00ff9f;
+    --accent-yellow: #f5c842;
+    --accent-blue: #3b9eff;
 
     --bg-primary: #ffffff;
     --bg-secondary: #f8f9fa;
@@ -41,47 +47,47 @@
     --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
     --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.12);
 
-    --radius-sm: 8px;
-    --radius-md: 12px;
-    --radius-lg: 16px;
-    --radius-xl: 24px;
-    --radius-full: 9999px;
+    --radius-sm: 3px;
+    --radius-md: 4px;
+    --radius-lg: 4px;
+    --radius-xl: 4px;
+    --radius-full: 3px;
 
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Roboto, Helvetica, Arial, sans-serif;
     --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
 
     --sidebar-w: 300px;
-    --ease: cubic-bezier(0.4, 0, 0.2, 1);
-    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-    --duration: 200ms;
-    --duration-fast: 150ms;
+    --ease: cubic-bezier(0.16, 0, 0.84, 1);
+    --ease-spring: cubic-bezier(0.16, 0, 0.84, 1);
+    --duration: 150ms;
+    --duration-fast: 100ms;
 }
 
 [data-theme="dark"] {
-    --bg-primary: #111113;
-    --bg-secondary: #18181b;
-    --bg-tertiary: #1f1f23;
-    --bg-sidebar: #0e0e11;
-    --bg-input: #151518;
-    --bg-hover: #232328;
-    --bg-active: #2b2b30;
-    --bg-code: #0c0c0e;
-    --bg-user-msg: #151518;
-    --bg-modal-overlay: rgba(0, 0, 0, 0.7);
+    --bg-primary: #0a0c0b;
+    --bg-secondary: #0f1210;
+    --bg-tertiary: #141916;
+    --bg-sidebar: #080a09;
+    --bg-input: #0c0f0d;
+    --bg-hover: #1a1f1c;
+    --bg-active: #222824;
+    --bg-code: #070907;
+    --bg-user-msg: #0e120f;
+    --bg-modal-overlay: rgba(0, 0, 0, 0.8);
 
-    --text-primary: #e4e4e7;
-    --text-secondary: #a1a1aa;
-    --text-muted: #71717a;
+    --text-primary: #d0d4d2;
+    --text-secondary: #8a9190;
+    --text-muted: #5a6462;
 
-    --border: #27272a;
-    --border-light: #1c1c20;
+    --border: #1e2422;
+    --border-light: #161c19;
 
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
-    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.55);
+    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.65);
 
-    --tint-subtle: rgba(255, 255, 255, 0.04);
-    --tint-hover: rgba(255, 255, 255, 0.06);
+    --tint-subtle: rgba(0, 255, 159, 0.02);
+    --tint-hover: rgba(0, 255, 159, 0.04);
 }
 
 /* Reset */
@@ -90,12 +96,29 @@
 html, body, #root {
     height: 100%;
     overflow: hidden;
-    font-family: var(--font-sans);
+    font-family: var(--font-mono);
     font-size: 14px;
     color: var(--text-primary);
     background: var(--bg-primary);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle scanline overlay -- very low opacity, barely perceptible */
+#root::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 0, 0, 0.03) 2px,
+        rgba(0, 0, 0, 0.03) 4px
+    );
+    mix-blend-mode: multiply;
 }
 
 button { cursor: pointer; border: none; background: none; font: inherit; color: inherit; }
@@ -107,23 +130,23 @@ a:hover { text-decoration: underline; }
 .app { display: flex; height: 100vh; height: 100dvh; position: relative; }
 .main-content { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; }
 
-/* Focus indicators for keyboard accessibility */
+/* Focus indicators for keyboard accessibility -- terminal green */
 :focus-visible {
-    outline: 2px solid var(--amd-red);
+    outline: 2px solid var(--terminal-green);
     outline-offset: 2px;
 }
 
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
-    outline: 2px solid var(--amd-red);
+    outline: 2px solid var(--terminal-green);
     outline-offset: 2px;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* Scrollbar -- thin, terminal-style */
+::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 0; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── Shared Button Utilities ──────────────────────────────────────── */
@@ -132,14 +155,16 @@ textarea:focus-visible {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 10px 24px;
     background: var(--amd-red); color: white;
-    border-radius: var(--radius-full);
+    border-radius: var(--radius-sm);
     font-weight: 600; font-size: 14px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
     transition: all var(--duration) var(--ease);
 }
 .btn-primary:hover {
     background: var(--amd-red-dark);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(226, 60, 64, 0.2);
+    box-shadow: 0 0 12px rgba(226, 60, 64, 0.25);
 }
 .btn-primary:active {
     transform: translateY(0);
@@ -150,6 +175,7 @@ textarea:focus-visible {
     padding: 7px 16px;
     border: 1px solid var(--border); border-radius: var(--radius-sm);
     font-weight: 500; font-size: 13px;
+    font-family: var(--font-mono);
     transition: all var(--duration) var(--ease);
 }
 .btn-secondary:hover {
@@ -163,6 +189,7 @@ textarea:focus-visible {
     padding: 7px 16px;
     border: 1px solid var(--amd-red); border-radius: var(--radius-sm);
     color: var(--amd-red); font-weight: 500; font-size: 13px;
+    font-family: var(--font-mono);
     transition: all var(--duration) var(--ease);
 }
 .btn-danger:hover { background: var(--amd-red); color: white; }
@@ -177,7 +204,7 @@ textarea:focus-visible {
 
 .btn-icon-sm {
     display: flex; align-items: center; justify-content: center;
-    width: 28px; height: 28px; border-radius: 6px;
+    width: 28px; height: 28px; border-radius: 3px;
     color: var(--text-secondary);
     transition: all var(--duration) var(--ease);
 }
@@ -199,11 +226,11 @@ textarea:focus-visible {
     width: 560px; max-width: 92%; max-height: 85vh;
     background: var(--bg-primary);
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-md);
     box-shadow: var(--shadow-lg);
     display: flex; flex-direction: column;
     overflow: hidden;
-    animation: slideUp 200ms var(--ease);
+    animation: slideUp 150ms var(--ease);
 }
 
 .modal-header {
@@ -211,7 +238,7 @@ textarea:focus-visible {
     padding: 16px 20px; border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
-.modal-header h3 { font-size: 16px; font-weight: 600; }
+.modal-header h3 { font-size: 15px; font-weight: 600; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.5px; }
 
 .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
 
@@ -262,7 +289,7 @@ textarea:focus-visible {
     content: '';
     width: 24px;
     height: 24px;
-    border: 3px solid var(--border);
+    border: 2px solid var(--border);
     border-top-color: var(--amd-red);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -280,11 +307,12 @@ textarea:focus-visible {
     background: var(--bg-tertiary);
     color: var(--text-primary);
     border: 1px solid var(--border);
-    border-radius: var(--radius-full);
+    border-radius: var(--radius-sm);
     font-size: 13px;
     font-weight: 500;
+    font-family: var(--font-mono);
     box-shadow: var(--shadow-md);
-    animation: toastIn 200ms var(--ease), toastOut 200ms var(--ease) 2.5s forwards;
+    animation: toastIn 150ms var(--ease), toastOut 150ms var(--ease) 2.5s forwards;
     pointer-events: none;
 }
 
@@ -306,17 +334,22 @@ textarea:focus-visible {
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 @keyframes toastOut { from { opacity: 1; } to { opacity: 0; } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 @keyframes bounce {
     0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-5px); }
+    50% { transform: translateY(-3px); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes glow {
-    0%, 100% { box-shadow: 0 0 4px rgba(226, 60, 64, 0.15); }
-    50% { box-shadow: 0 0 12px rgba(226, 60, 64, 0.3); }
+    0%, 100% { box-shadow: 0 0 4px rgba(0, 255, 159, 0.1); }
+    50% { box-shadow: 0 0 10px rgba(0, 255, 159, 0.2); }
+}
+/* Terminal cursor blink -- block style */
+@keyframes cursorBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
 }
 
 /* ── Responsive: Tablet (<= 900px) ─────────────────────────────── */
@@ -345,7 +378,7 @@ textarea:focus-visible {
         box-shadow: var(--shadow-lg);
     }
 
-    /* On mobile, sidebar is never collapsed — use slide-out instead */
+    /* On mobile, sidebar is never collapsed -- use slide-out instead */
     .sidebar.collapsed {
         width: var(--sidebar-w) !important;
         min-width: var(--sidebar-w) !important;

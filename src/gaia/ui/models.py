@@ -293,3 +293,17 @@ class FilePreviewResponse(BaseModel):
     columns: Optional[List[str]] = None
     row_count: Optional[int] = None
     encoding: Optional[str] = None
+
+
+# ── File Upload ──────────────────────────────────────────────────────────
+
+
+class FileUploadResponse(BaseModel):
+    """Response from a file upload."""
+
+    filename: str
+    original_name: str
+    url: str
+    size: int
+    content_type: str
+    is_image: bool

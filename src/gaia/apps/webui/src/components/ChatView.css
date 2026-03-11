@@ -1,6 +1,6 @@
 /* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
-/* Chat View - Main conversation interface */
+/* Chat View - Terminal-style conversation interface */
 
 .chat-view {
     flex: 1;
@@ -19,37 +19,41 @@
     outline-offset: -4px;
 }
 
-/* ── Header ──────────────────────────────────────────────────────── */
+/* ── Header -- status bar style ─────────────────────────────────── */
 
 .chat-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 24px;
-    border-bottom: 1px solid var(--border-light);
-    min-height: 50px;
+    padding: 8px 24px;
+    border-bottom: 1px solid var(--border);
+    min-height: 44px;
     flex-shrink: 0;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    background: var(--bg-secondary);
+    font-family: var(--font-mono);
 }
 
 .chat-header-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .chat-header-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
 .chat-title {
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 600;
+    font-family: var(--font-mono);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
 }
 
 .title-edit {
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 600;
+    font-family: var(--font-mono);
     padding: 2px 8px;
     border: 1px solid var(--amd-red);
-    border-radius: 6px;
+    border-radius: 2px;
     outline: none;
     width: 280px;
     max-width: 100%;
@@ -57,18 +61,21 @@
 }
 
 .title-edit:focus {
-    box-shadow: 0 0 0 3px rgba(226, 60, 64, 0.12);
+    box-shadow: 0 0 0 2px rgba(226, 60, 64, 0.15);
 }
 
 .model-badge {
-    font-size: 11px;
-    padding: 3px 10px;
-    border-radius: var(--radius-full);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 2px;
     background: var(--bg-tertiary);
-    color: var(--text-secondary);
+    color: var(--text-muted);
     font-weight: 500;
+    font-family: var(--font-mono);
     white-space: nowrap;
     border: 1px solid var(--border);
+    text-transform: lowercase;
+    letter-spacing: 0.2px;
 }
 
 /* ── Indexed documents context bar ───────────────────────────────── */
@@ -77,9 +84,10 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 24px;
-    border-bottom: 1px solid var(--border-light);
+    padding: 5px 24px;
+    border-bottom: 1px solid var(--border);
     font-size: 11px;
+    font-family: var(--font-mono);
     color: var(--text-secondary);
     background: var(--bg-secondary);
     cursor: pointer;
@@ -99,6 +107,9 @@
     font-weight: 600;
     white-space: nowrap;
     color: var(--text-secondary);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.3px;
 }
 .doc-context-pills {
     display: flex;
@@ -112,11 +123,12 @@
     display: inline-flex;
     align-items: center;
     gap: 3px;
-    padding: 1px 8px;
-    border-radius: var(--radius-full);
+    padding: 1px 6px;
+    border-radius: 2px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
     font-size: 10px;
+    font-family: var(--font-mono);
     color: var(--text-secondary);
     white-space: nowrap;
     max-width: 150px;
@@ -144,7 +156,7 @@
     scroll-behavior: smooth;
 }
 
-/* ── Empty chat state ────────────────────────────────────────────── */
+/* ── Empty chat state -- terminal welcome ────────────────────────── */
 
 .empty-chat {
     display: flex;
@@ -155,34 +167,37 @@
     padding: 60px 24px;
     height: 100%;
     min-height: 300px;
-    animation: emptyFadeIn 400ms var(--ease);
+    animation: emptyFadeIn 300ms var(--ease);
 }
 
 @keyframes emptyFadeIn {
-    from { opacity: 0; transform: translateY(12px); }
+    from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
 .empty-chat-icon {
     color: var(--text-muted);
     margin-bottom: 16px;
-    opacity: 0.5;
+    opacity: 0.4;
 }
 
 .empty-chat-title {
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 700;
+    font-family: var(--font-mono);
     margin-bottom: 8px;
     color: var(--text-primary);
-    letter-spacing: -0.3px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
 }
 
 .empty-chat-desc {
-    font-size: 14px;
-    color: var(--text-secondary);
+    font-size: 13px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
     margin-bottom: 28px;
     line-height: 1.6;
-    max-width: 400px;
+    max-width: 440px;
 }
 
 .empty-chat-suggestions {
@@ -190,14 +205,15 @@
     flex-wrap: wrap;
     gap: 8px;
     justify-content: center;
-    max-width: 480px;
+    max-width: 520px;
 }
 
 .empty-chat-chip {
-    padding: 8px 18px;
+    padding: 7px 14px;
     border: 1px solid var(--border);
-    border-radius: var(--radius-full);
-    font-size: 13px;
+    border-radius: 2px;
+    font-size: 12px;
+    font-family: var(--font-mono);
     color: var(--text-secondary);
     background: var(--bg-input);
     transition: all var(--duration) var(--ease);
@@ -206,8 +222,7 @@
     border-color: var(--amd-red);
     color: var(--amd-red);
     background: rgba(226, 60, 64, 0.04);
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-sm);
+    box-shadow: 0 0 8px rgba(226, 60, 64, 0.1);
 }
 
 /* ── Skeleton loading state ──────────────────────────────────────── */
@@ -235,7 +250,7 @@
 .skeleton-avatar {
     width: 24px;
     height: 24px;
-    border-radius: 50%;
+    border-radius: 2px;
     background: var(--bg-tertiary);
     animation: skeletonPulse 1.5s ease-in-out infinite;
 }
@@ -243,7 +258,7 @@
 .skeleton-role {
     width: 48px;
     height: 10px;
-    border-radius: 4px;
+    border-radius: 2px;
     background: var(--bg-tertiary);
     animation: skeletonPulse 1.5s ease-in-out infinite;
     animation-delay: 50ms;
@@ -258,7 +273,7 @@
 
 .skeleton-line {
     height: 12px;
-    border-radius: 4px;
+    border-radius: 2px;
     background: var(--bg-tertiary);
     animation: skeletonPulse 1.5s ease-in-out infinite;
 }
@@ -285,17 +300,20 @@
     gap: 10px;
     background: rgba(226, 60, 64, 0.04);
     border: 2px dashed var(--amd-red);
-    border-radius: var(--radius-md);
+    border-radius: 2px;
     margin: 8px;
     color: var(--amd-red);
     font-weight: 600;
-    font-size: 15px;
+    font-size: 14px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
     pointer-events: none;
-    animation: fadeIn 150ms var(--ease);
+    animation: fadeIn 100ms var(--ease);
     backdrop-filter: blur(2px);
 }
 
-/* ── Typing indicator ────────────────────────────────────────────── */
+/* ── Typing indicator -- terminal cursor style ───────────────────── */
 
 .typing-row {
     padding: 16px 24px;
@@ -305,9 +323,10 @@
 }
 
 .typing-label {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
-    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     display: block;
@@ -316,25 +335,27 @@
 
 .typing-dots {
     display: flex;
-    gap: 5px;
+    gap: 3px;
+    align-items: center;
 }
 .typing-dots span {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
+    width: 8px;
+    height: 14px;
+    border-radius: 0;
     background: var(--amd-red);
-    opacity: 0.6;
-    animation: bounce 1.4s infinite;
+    opacity: 0.7;
+    animation: cursorBlink 1s infinite;
 }
-.typing-dots span:nth-child(2) { animation-delay: 0.2s; }
-.typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+.typing-dots span:nth-child(2) { animation-delay: 0.33s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.66s; }
 
-/* ── Input Area ──────────────────────────────────────────────────── */
+/* ── Input Area -- terminal prompt style ─────────────────────────── */
 
 .input-area {
     padding: 12px 24px 10px;
     flex-shrink: 0;
     background: var(--bg-primary);
+    border-top: 1px solid var(--border);
 }
 
 .input-box {
@@ -343,15 +364,16 @@
     display: flex;
     align-items: flex-end;
     gap: 8px;
-    padding: 8px 10px 8px 16px;
-    border: 1px solid var(--border-light);
-    border-radius: 16px;
+    padding: 6px 10px 6px 14px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
     background: var(--bg-input, var(--bg-secondary));
     transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
 }
 
 .input-box:focus-within {
-    border-color: rgba(226, 60, 64, 0.35);
+    border-color: rgba(0, 255, 159, 0.3);
+    box-shadow: 0 0 8px rgba(0, 255, 159, 0.06);
 }
 
 .msg-input {
@@ -364,11 +386,12 @@
     max-height: 200px;
     line-height: 1.5;
     font-size: 14px;
+    font-family: var(--font-mono);
     color: var(--text-primary);
     transition: height 100ms var(--ease);
 }
 .msg-input:focus-visible { outline: none; }
-.msg-input::placeholder { color: var(--text-muted); opacity: 0.6; }
+.msg-input::placeholder { color: var(--text-muted); opacity: 0.5; font-family: var(--font-mono); }
 .msg-input:disabled { opacity: 0.5; }
 
 .input-btns {
@@ -390,25 +413,24 @@
     color: var(--text-primary);
 }
 
-/* Send button */
+/* Send button -- square, terminal-style */
 .send-btn {
     display: flex;
     align-items: center;
     justify-content: center;
     width: 32px;
     height: 32px;
-    border-radius: var(--radius-full);
+    border-radius: 3px;
     background: var(--amd-red);
     color: white;
     transition: all var(--duration) var(--ease);
 }
 .send-btn:hover {
     background: var(--amd-red-dark);
-    transform: scale(1.08);
-    box-shadow: 0 2px 8px rgba(226, 60, 64, 0.3);
+    box-shadow: 0 0 10px rgba(226, 60, 64, 0.3);
 }
 .send-btn:active {
-    transform: scale(0.95);
+    transform: scale(0.96);
 }
 .send-btn:disabled {
     background: var(--bg-tertiary);
@@ -426,7 +448,7 @@
     justify-content: center;
     width: 32px;
     height: 32px;
-    border-radius: var(--radius-full);
+    border-radius: 3px;
     border: 1.5px solid var(--border);
     color: var(--text-secondary);
     background: var(--bg-input);
@@ -445,9 +467,9 @@
     bottom: 100px;
     left: 50%;
     transform: translateX(-50%);
-    width: 36px;
-    height: 36px;
-    border-radius: var(--radius-full);
+    width: 32px;
+    height: 32px;
+    border-radius: 3px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
     color: var(--text-secondary);
@@ -457,14 +479,14 @@
     box-shadow: var(--shadow-md);
     transition: all var(--duration) var(--ease);
     z-index: 5;
-    animation: fadeIn 150ms var(--ease);
+    animation: fadeIn 100ms var(--ease);
 }
 .scroll-bottom-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
-    border-color: var(--amd-red);
+    border-color: var(--terminal-green-dim);
     transform: translateX(-50%) translateY(-2px);
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--terminal-glow);
 }
 
 .input-footer {
@@ -473,7 +495,8 @@
     justify-content: center;
     gap: 14px;
     margin-top: 8px;
-    font-size: 11px;
+    font-size: 10px;
+    font-family: var(--font-mono);
     color: var(--text-muted);
 }
 
@@ -493,7 +516,7 @@
     font-family: var(--font-mono);
     font-size: 10px;
     padding: 1px 4px;
-    border-radius: 3px;
+    border-radius: 2px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
     color: var(--text-muted);

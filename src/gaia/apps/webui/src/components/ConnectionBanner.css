@@ -1,18 +1,21 @@
 /* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
-/* Connection status banner */
+/* Connection status banner -- terminal alert style */
 
 .connection-banner {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 10px 20px;
-    font-size: 13px;
-    font-weight: 500;
+    padding: 8px 20px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: var(--font-mono);
     line-height: 1.4;
     flex-shrink: 0;
-    animation: slideDown 200ms var(--ease);
+    animation: slideDown 150ms var(--ease);
     z-index: 40;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
 }
 
 .connection-banner--error {
@@ -28,15 +31,15 @@
 }
 
 [data-theme="dark"] .connection-banner--error {
-    background: #1c0a0a;
+    background: #120808;
     color: #fca5a5;
-    border-bottom: 1px solid #3b1111;
+    border-bottom: 1px solid #2a0e0e;
 }
 
 [data-theme="dark"] .connection-banner--warning {
-    background: #1a1207;
+    background: #120e05;
     color: #fcd34d;
-    border-bottom: 1px solid #3b2907;
+    border-bottom: 1px solid #2a1e08;
 }
 
 .connection-banner__icon {
@@ -48,12 +51,26 @@
 .connection-banner__text {
     flex: 1;
     min-width: 0;
+    text-transform: none;
+    letter-spacing: 0;
 }
 
 .connection-banner__hint {
     font-weight: 400;
     opacity: 0.8;
-    font-size: 12px;
+    font-size: 11px;
+}
+
+.connection-banner__hint code {
+    font-family: var(--font-mono);
+    padding: 1px 5px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.08);
+    font-size: 11px;
+}
+
+[data-theme="dark"] .connection-banner__hint code {
+    background: rgba(255, 255, 255, 0.08);
 }
 
 .connection-banner__dismiss {
@@ -63,7 +80,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
+    border-radius: 2px;
     opacity: 0.6;
     transition: opacity var(--duration-fast) var(--ease);
 }
@@ -74,9 +91,12 @@
 .connection-banner__retry {
     flex-shrink: 0;
     padding: 4px 12px;
-    border-radius: var(--radius-full);
-    font-size: 12px;
+    border-radius: 2px;
+    font-size: 11px;
     font-weight: 600;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
     transition: all var(--duration) var(--ease);
 }
 
@@ -98,11 +118,11 @@
 
 [data-theme="dark"] .connection-banner--error .connection-banner__retry {
     background: #fca5a5;
-    color: #1c0a0a;
+    color: #120808;
 }
 [data-theme="dark"] .connection-banner--warning .connection-banner__retry {
     background: #fcd34d;
-    color: #1a1207;
+    color: #120e05;
 }
 
 @keyframes slideDown {
@@ -114,6 +134,6 @@
     .connection-banner {
         padding: 8px 16px;
         padding-left: 52px;
-        font-size: 12px;
+        font-size: 11px;
     }
 }

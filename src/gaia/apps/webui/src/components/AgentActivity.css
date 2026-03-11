@@ -1,4 +1,4 @@
-/* Agent Activity - flow layout with thinking + inline tool cards */
+/* Agent Activity - terminal-style flow layout with thinking + inline tool cards */
 
 .agent-activity {
     max-width: 900px;
@@ -7,20 +7,23 @@
     padding: 0 24px;
 }
 
-/* ── Summary bar ──────────────────────────────────────────────── */
+/* ── Summary bar -- sharp, terminal panel ────────────────────── */
 .agent-summary-bar {
     display: flex;
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    padding: 8px 12px;
-    border-radius: 10px;
+    padding: 7px 12px;
+    border-radius: 3px;
     background: var(--bg-tertiary);
-    border: 1px solid var(--border-light);
-    font-size: 12px;
+    border: 1px solid var(--border);
+    font-size: 11px;
+    font-family: var(--font-mono);
     color: var(--text-secondary);
     transition: all var(--duration) var(--ease);
     cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
 }
 .agent-summary-bar:hover {
     background: var(--bg-hover);
@@ -41,7 +44,7 @@
 }
 
 .agent-summary-text {
-    font-weight: 500;
+    font-weight: 600;
 }
 
 .agent-icon-done { color: var(--text-muted); }
@@ -65,13 +68,12 @@
 
 /* Active state */
 .agent-activity.active .agent-summary-bar {
-    border-color: rgba(226, 60, 64, 0.2);
+    border-color: rgba(226, 60, 64, 0.25);
     background: rgba(226, 60, 64, 0.03);
-    box-shadow: 0 0 0 1px rgba(226, 60, 64, 0.05);
 }
 [data-theme="dark"] .agent-activity.active .agent-summary-bar {
-    background: rgba(226, 60, 64, 0.06);
-    box-shadow: 0 0 12px rgba(226, 60, 64, 0.06);
+    background: rgba(226, 60, 64, 0.05);
+    box-shadow: 0 0 8px rgba(226, 60, 64, 0.06);
 }
 
 /* Summary variant (post-completion) */
@@ -83,7 +85,7 @@
     background: transparent;
     border-color: transparent;
     padding: 5px 0;
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-muted);
 }
 .agent-activity.summary .agent-summary-bar:hover {
@@ -95,17 +97,17 @@
 .agent-flow {
     margin-top: 6px;
     padding: 8px 12px;
-    border-radius: 10px;
+    border-radius: 3px;
     background: var(--bg-secondary);
-    border: 1px solid var(--border-light);
+    border: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: flowSlideDown 200ms var(--ease);
+    animation: flowSlideDown 150ms var(--ease);
 }
 
 @keyframes flowSlideDown {
-    from { opacity: 0; transform: translateY(-4px); }
+    from { opacity: 0; transform: translateY(-3px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
@@ -115,10 +117,11 @@
     align-items: flex-start;
     gap: 6px;
     padding: 3px 0;
-    font-size: 12px;
+    font-size: 11px;
+    font-family: var(--font-mono);
     color: var(--text-muted);
     line-height: 1.5;
-    animation: fadeIn 150ms var(--ease);
+    animation: fadeIn 100ms var(--ease);
 }
 
 .flow-thought.active {
@@ -144,16 +147,15 @@
 
 /* ── Flow: Tool Card ─────────────────────────────────────────── */
 .flow-tool {
-    border-radius: 8px;
+    border-radius: 3px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-light);
     transition: border-color var(--duration-fast) var(--ease);
-    animation: fadeIn 150ms var(--ease);
+    animation: fadeIn 100ms var(--ease);
 }
 
 .flow-tool.active {
     border-color: rgba(226, 60, 64, 0.25);
-    box-shadow: 0 0 0 1px rgba(226, 60, 64, 0.05);
 }
 
 .flow-tool.error {
@@ -165,8 +167,9 @@
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    padding: 6px 10px;
-    font-size: 12px;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-family: var(--font-mono);
     color: var(--text-secondary);
     transition: background var(--duration-fast) var(--ease);
     cursor: pointer;
@@ -199,21 +202,23 @@
     overflow: hidden;
     text-overflow: ellipsis;
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: 11px;
+    font-family: var(--font-mono);
 }
 
-/* Tool badge pill */
+/* Tool badge -- monospace, sharp */
 .flow-tool-badge {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 9px;
     padding: 1px 6px;
-    border-radius: 4px;
+    border-radius: 2px;
     background: color-mix(in srgb, var(--badge-color, #3b82f6) 8%, transparent);
     color: var(--badge-color, #3b82f6);
     white-space: nowrap;
     border: 1px solid color-mix(in srgb, var(--badge-color, #3b82f6) 15%, transparent);
-    font-weight: 500;
-    letter-spacing: -0.01em;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
 }
 
 @supports not (background: color-mix(in srgb, red 50%, blue)) {
@@ -241,17 +246,17 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: fadeIn 150ms var(--ease);
+    animation: fadeIn 100ms var(--ease);
     border-top: 1px solid var(--border-light);
 }
 
 /* ── Flow: Plan ──────────────────────────────────────────────── */
 .flow-plan {
     padding: 6px 8px;
-    border-radius: 6px;
+    border-radius: 3px;
     background: rgba(245, 158, 11, 0.04);
     border: 1px solid rgba(245, 158, 11, 0.12);
-    animation: fadeIn 150ms var(--ease);
+    animation: fadeIn 100ms var(--ease);
 }
 
 [data-theme="dark"] .flow-plan {
@@ -265,8 +270,9 @@
     gap: 5px;
     font-size: 10px;
     font-weight: 600;
+    font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.5px;
     color: var(--accent-yellow);
     margin-bottom: 4px;
 }
@@ -274,7 +280,8 @@
 .flow-plan-list {
     margin: 0 0 0 16px;
     padding: 0;
-    font-size: 11.5px;
+    font-size: 11px;
+    font-family: var(--font-mono);
     color: var(--text-secondary);
 }
 .flow-plan-item {
@@ -288,25 +295,27 @@
     align-items: flex-start;
     gap: 6px;
     padding: 6px 8px;
-    border-radius: 6px;
-    background: rgba(239, 68, 68, 0.05);
+    border-radius: 3px;
+    background: rgba(239, 68, 68, 0.04);
     border: 1px solid rgba(239, 68, 68, 0.15);
-    font-size: 12px;
+    font-size: 11px;
+    font-family: var(--font-mono);
     color: var(--amd-red);
-    animation: fadeIn 150ms var(--ease);
+    animation: fadeIn 100ms var(--ease);
 }
 
 [data-theme="dark"] .flow-error {
-    background: rgba(239, 68, 68, 0.08);
+    background: rgba(239, 68, 68, 0.06);
 }
 
 /* ── Shared detail styles (reused from tool detail) ──────────── */
 .detail-section-label {
     display: block;
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 600;
+    font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.8px;
     color: var(--text-muted);
     margin-bottom: 4px;
     margin-top: 6px;
@@ -315,13 +324,14 @@
 /* Arguments display */
 .step-detail-args {
     padding: 8px 10px 10px;
-    border-radius: 8px;
+    border-radius: 3px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-light);
 }
 
 .detail-args-content {
-    font-size: 12px;
+    font-size: 11px;
+    font-family: var(--font-mono);
     color: var(--text-secondary);
     line-height: 1.6;
 }
@@ -362,14 +372,14 @@
 /* Result display */
 .step-detail-result {
     padding: 8px 10px 10px;
-    border-radius: 8px;
-    font-size: 12px;
+    border-radius: 3px;
+    font-size: 11px;
     line-height: 1.6;
 }
 
 .step-detail-result.result-success {
-    background: rgba(34, 197, 94, 0.04);
-    border: 1px solid rgba(34, 197, 94, 0.12);
+    background: rgba(0, 255, 159, 0.03);
+    border: 1px solid rgba(0, 255, 159, 0.1);
 }
 
 .step-detail-result.result-error {
@@ -378,8 +388,8 @@
 }
 
 [data-theme="dark"] .step-detail-result.result-success {
-    background: rgba(34, 197, 94, 0.06);
-    border-color: rgba(34, 197, 94, 0.15);
+    background: rgba(0, 255, 159, 0.04);
+    border-color: rgba(0, 255, 159, 0.12);
 }
 
 [data-theme="dark"] .step-detail-result.result-error {
@@ -400,15 +410,18 @@
     display: inline-flex;
     align-items: center;
     gap: 3px;
-    color: var(--amd-red);
+    color: var(--terminal-green-dim);
     cursor: pointer;
-    border-radius: 3px;
+    border-radius: 0;
     padding: 0 2px;
-    transition: background 150ms var(--ease);
+    transition: background 100ms var(--ease);
+    text-decoration: underline;
+    text-decoration-style: dashed;
 }
 .tool-result-path:hover {
-    background: rgba(226, 60, 64, 0.1);
-    text-decoration: underline;
+    background: rgba(0, 255, 159, 0.06);
+    color: var(--terminal-green);
+    text-decoration-style: solid;
 }
 
 /* ── Retrieval Chunks View ────────────────────────────────────── */
@@ -423,7 +436,7 @@
 }
 
 .chunk-card {
-    border-radius: 6px;
+    border-radius: 3px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-light);
     overflow: hidden;
@@ -440,7 +453,8 @@
     justify-content: space-between;
     width: 100%;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: 10px;
+    font-family: var(--font-mono);
     color: var(--text-secondary);
     cursor: pointer;
     transition: background var(--duration-fast) var(--ease);
@@ -458,7 +472,7 @@
 
 .chunk-source {
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: 10px;
     font-weight: 600;
     color: var(--text-primary);
     white-space: nowrap;
@@ -469,20 +483,20 @@
 
 .chunk-page {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 9px;
     color: var(--text-muted);
     padding: 0 4px;
-    border-radius: 3px;
+    border-radius: 2px;
     background: var(--bg-tertiary);
     white-space: nowrap;
 }
 
 .chunk-score {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 9px;
     color: #06b6d4;
     padding: 0 4px;
-    border-radius: 3px;
+    border-radius: 2px;
     background: rgba(6, 182, 212, 0.08);
     border: 1px solid rgba(6, 182, 212, 0.15);
     white-space: nowrap;
@@ -515,7 +529,8 @@
 
 .chunk-preview {
     padding: 3px 8px 5px;
-    font-size: 11px;
+    font-size: 10px;
+    font-family: var(--font-mono);
     color: var(--text-muted);
     font-style: italic;
     white-space: nowrap;
@@ -541,24 +556,24 @@
 }
 
 .chunk-body.show::-webkit-scrollbar {
-    width: 5px;
+    width: 4px;
 }
 .chunk-body.show::-webkit-scrollbar-track {
     background: transparent;
 }
 .chunk-body.show::-webkit-scrollbar-thumb {
     background: var(--tint-hover);
-    border-radius: 3px;
+    border-radius: 0;
 }
 
 /* ── Command Output (Terminal View) ───────────────────────────── */
 .cmd-output {
-    border-radius: 8px;
+    border-radius: 3px;
     overflow: hidden;
     border: 1px solid var(--border);
     background: var(--bg-code, #1e1e1e);
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: 11px;
     line-height: 1.55;
     margin-top: 6px;
 }
@@ -571,7 +586,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 5px 10px;
+    padding: 4px 10px;
     background: var(--tint-subtle);
     border-bottom: 1px solid var(--border-light);
 }
@@ -587,15 +602,15 @@
 }
 
 .cmd-header-title {
-    font-size: 10.5px;
+    font-size: 10px;
     font-weight: 600;
     color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.5px;
 }
 
 .cmd-cwd {
-    font-size: 10px;
+    font-size: 9px;
     color: var(--text-muted);
     max-width: 200px;
     overflow: hidden;
@@ -610,16 +625,16 @@
 }
 
 .cmd-duration {
-    font-size: 10px;
+    font-size: 9px;
     color: var(--text-muted);
 }
 
 .cmd-exit-code {
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 600;
     color: var(--amd-red);
     padding: 0 4px;
-    border-radius: 3px;
+    border-radius: 2px;
     background: rgba(239, 68, 68, 0.1);
 }
 
@@ -627,9 +642,9 @@
     display: flex;
     align-items: center;
     padding: 2px 4px;
-    border-radius: 4px;
+    border-radius: 2px;
     color: var(--text-muted);
-    transition: all 120ms var(--ease);
+    transition: all 100ms var(--ease);
     cursor: pointer;
 }
 .cmd-copy:hover {
@@ -671,14 +686,14 @@
 }
 
 .cmd-stdout::-webkit-scrollbar {
-    width: 5px;
+    width: 4px;
 }
 .cmd-stdout::-webkit-scrollbar-track {
     background: transparent;
 }
 .cmd-stdout::-webkit-scrollbar-thumb {
     background: var(--tint-hover);
-    border-radius: 3px;
+    border-radius: 0;
 }
 .cmd-stdout::-webkit-scrollbar-thumb:hover {
     background: var(--text-muted);
