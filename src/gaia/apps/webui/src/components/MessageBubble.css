@@ -107,13 +107,13 @@
 }
 .msg-action-btn:hover,
 .msg-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
-.msg-copy.copied { color: #22c55e; }
+.msg-copy.copied { color: var(--accent-green); }
 
 /* Delete button */
-.msg-delete:hover { color: #ef4444; }
+.msg-delete:hover { color: var(--amd-red); }
 .msg-delete.confirm {
-    color: #ef4444;
-    background: rgba(239, 68, 68, 0.1);
+    color: var(--amd-red);
+    background: rgba(226, 60, 64, 0.1);
     opacity: 1;
 }
 
@@ -128,7 +128,7 @@
 /* ── Error message styling ────────────────────────────────────── */
 .msg-error {
     background: rgba(239, 68, 68, 0.06);
-    border-left: 3px solid #ef4444;
+    border-left: 3px solid var(--amd-red);
 }
 
 [data-theme="dark"] .msg-error {
@@ -143,7 +143,7 @@
     margin-bottom: 8px;
     border-radius: 6px;
     background: rgba(239, 68, 68, 0.1);
-    color: #ef4444;
+    color: var(--amd-red);
     font-size: 12px;
     font-weight: 600;
 }
@@ -379,7 +379,7 @@
 .code-lang {
     font-size: 11px;
     font-family: var(--font-mono);
-    color: #888;
+    color: var(--text-muted);
     text-transform: lowercase;
 }
 
@@ -390,14 +390,14 @@
     padding: 2px 8px;
     border-radius: 4px;
     font-size: 11px;
-    color: #888;
+    color: var(--text-muted);
     transition: all var(--duration) var(--ease);
 }
-.code-copy:hover { background: rgba(255, 255, 255, 0.1); color: #ccc; }
+.code-copy:hover { background: rgba(255, 255, 255, 0.1); color: var(--text-secondary); }
 
 /* Copy feedback */
 .code-copy.copied {
-    color: #22c55e;
+    color: var(--accent-green);
     background: rgba(34, 197, 94, 0.1);
 }
 
@@ -411,7 +411,7 @@
     font-family: var(--font-mono);
     font-size: 13px;
     line-height: 1.6;
-    color: #d4d4d4;
+    color: var(--text-primary);
     background: none;
     padding: 0;
 }

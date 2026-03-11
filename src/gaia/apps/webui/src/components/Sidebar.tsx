@@ -191,7 +191,9 @@ export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle
         }
     }, [handleSelect]);
 
-    // Drag-to-resize handler
+    // Drag-to-resize handler — store cleanup ref to prevent listener leak on unmount
+    const resizeCleanupRef = useRef<(() => void) | null>(null);
+
     const handleResizeStart = useCallback((e: React.MouseEvent) => {
         e.preventDefault();
         setIsResizing(true);
@@ -205,20 +207,29 @@ export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle
             setSidebarWidth(startWidth + delta);
         };
 
-        const onMouseUp = () => {
+        const cleanup = () => {
             setIsResizing(false);
             document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
+            document.removeEventListener('mouseup', cleanup);
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
+            resizeCleanupRef.current = null;
             log.ui.debug('Sidebar resize ended');
         };
 
+        resizeCleanupRef.current = cleanup;
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
         document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
+        document.addEventListener('mouseup', cleanup);
     }, [sidebarWidth, setSidebarWidth]);
+
+    // Clean up resize listeners if component unmounts mid-drag
+    useEffect(() => {
+        return () => {
+            if (resizeCleanupRef.current) resizeCleanupRef.current();
+        };
+    }, []);
 
     const formatTime = (iso: string) => {
         const d = new Date(iso);
@@ -256,7 +267,6 @@ export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle
                     </div>
                     <div className="brand-text">
                         <span className="brand-name">GAIA</span>
-                        <span className="brand-label">Chat</span>
                         <span className="brand-version">v{__APP_VERSION__}</span>
                     </div>
                 </div>

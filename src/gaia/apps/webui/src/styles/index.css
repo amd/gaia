@@ -221,7 +221,7 @@ textarea:focus-visible {
     display: none;
     position: fixed;
     inset: 0;
-    z-index: 49;
+    z-index: 50;
     background: rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(2px);
     -webkit-backdrop-filter: blur(2px);

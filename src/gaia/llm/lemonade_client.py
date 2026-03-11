@@ -1330,6 +1330,21 @@ class LemonadeClient:
             timeout=timeout,
         )
 
+        # Separate OpenAI-standard params from llama.cpp-specific params.
+        # The OpenAI client validates parameters strictly, so non-standard
+        # ones (repeat_penalty, repeat_last_n, etc.) must go via extra_body.
+        _OPENAI_STANDARD = {
+            "frequency_penalty", "presence_penalty", "top_p", "n",
+            "seed", "user", "response_format", "logit_bias",
+        }
+        extra_body = {}
+        standard_kwargs = {}
+        for k, v in kwargs.items():
+            if k in _OPENAI_STANDARD:
+                standard_kwargs[k] = v
+            else:
+                extra_body[k] = v
+
         # Create request parameters
         request_params = {
             "model": model,
@@ -1337,8 +1352,11 @@ class LemonadeClient:
             "temperature": temperature,
             "max_completion_tokens": max_completion_tokens,
             "stream": True,
-            **kwargs,
+            **standard_kwargs,
         }
+
+        if extra_body:
+            request_params["extra_body"] = extra_body
 
         if stop:
             request_params["stop"] = stop

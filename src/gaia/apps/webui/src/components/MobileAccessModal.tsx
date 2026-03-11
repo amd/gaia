@@ -91,14 +91,23 @@ export function MobileAccessModal({ isOpen, onClose, error }: MobileAccessModalP
     }, [status?.active, status?.url, status?.token]);
 
     // Copy URL to clipboard
+    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const copyUrl = useCallback(() => {
         if (!status?.url || !status?.token) return;
         const mobileUrl = `${status.url}/?token=${status.token}`;
         navigator.clipboard.writeText(mobileUrl).then(() => {
             setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+            copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
         });
     }, [status]);
+
+    // Clean up copy timer on unmount
+    useEffect(() => {
+        return () => {
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+        };
+    }, []);
 
     if (!isOpen) return null;
 

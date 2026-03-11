@@ -16,13 +16,19 @@ import argparse
 import json
 import logging
 import os
-import re
 import sys
 import tempfile
 import webbrowser
 from typing import Any, Dict
 
 import requests
+
+from gaia.ui.sse_handler import (
+    _THINK_TAG_SUB_RE,
+    _THOUGHT_JSON_SUB_RE,
+    _TOOL_CALL_JSON_SUB_RE,
+    _TRAILING_CODE_FENCE_RE,
+)
 from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
@@ -134,23 +140,13 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
             if msg:
                 event_log.append(f"[status] {msg}")
 
-    # Clean LLM noise from content
-    # 1. Remove raw tool-call JSON
-    full_content = re.sub(
-        r'\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}',
-        "",
-        full_content,
-    )
-    # 2. Remove thought/goal JSON blocks
-    full_content = re.sub(
-        r'\s*\{\s*"thought"\s*:\s*"[^"]*"[^}]*\}\s*',
-        "",
-        full_content,
-    )
-    # 3. Remove trailing unclosed code fences
-    full_content = re.sub(r"\n?```\s*$", "", full_content)
-    # 4. Remove <think> tags
-    full_content = re.sub(r"<think>[\s\S]*?</think>", "", full_content)
+    # Clean LLM noise from content using shared patterns from sse_handler.
+    # The SSE handler already filters these during streaming, but the MCP
+    # server reads the raw SSE stream so it needs to clean up as well.
+    full_content = _TOOL_CALL_JSON_SUB_RE.sub("", full_content)
+    full_content = _THOUGHT_JSON_SUB_RE.sub("", full_content)
+    full_content = _TRAILING_CODE_FENCE_RE.sub("", full_content)
+    full_content = _THINK_TAG_SUB_RE.sub("", full_content)
     full_content = full_content.strip()
 
     return {
@@ -282,7 +278,7 @@ def create_chat_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
         payload: Dict[str, Any] = {"query": query, "max_results": max_results}
         if file_types:
             payload["file_types"] = file_types
-        return _api(backend_url, "post", "/files/search", json=payload)
+        return _api(backend_url, "get", "/files/search", params=payload)
 
     @mcp.tool()
     def preview_file(filepath: str) -> Dict[str, Any]:

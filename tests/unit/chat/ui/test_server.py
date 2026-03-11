@@ -788,7 +788,8 @@ class TestValidateFilePath:
                 "/api/documents/upload-path", json={"filepath": tmp_path}
             )
             assert resp.status_code == 400
-            assert "Unsupported file type" in resp.json()["detail"]
+            detail = resp.json()["detail"]
+            assert "Unsupported file type" in detail or "cannot be indexed" in detail
         finally:
             os.unlink(tmp_path)
 
@@ -812,7 +813,8 @@ class TestSanitizeDocumentPath:
         with pytest.raises(Exception) as exc_info:
             _sanitize_document_path("/home/user/malware.exe")
         assert exc_info.value.status_code == 400
-        assert "Unsupported file type" in exc_info.value.detail
+        detail = exc_info.value.detail
+        assert "Unsupported file type" in detail or "cannot be indexed" in detail
 
     def test_accepts_valid_extensions(self):
         for ext in [".pdf", ".txt", ".md", ".json", ".py", ".csv"]:

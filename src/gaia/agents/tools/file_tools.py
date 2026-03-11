@@ -445,6 +445,17 @@ class FileSearchToolsMixin:
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
+                # Guard against reading very large files into memory
+                file_size = os.path.getsize(file_path)
+                if file_size > 10_000_000:  # 10 MB
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"File too large ({file_size:,} bytes). "
+                            "Use search_file_content for large files."
+                        ),
+                    }
+
                 # Read file content
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:

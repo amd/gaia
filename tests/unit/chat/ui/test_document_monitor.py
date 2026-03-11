@@ -13,7 +13,6 @@ import pytest
 from gaia.ui.database import ChatDatabase
 from gaia.ui.document_monitor import DocumentMonitor, _compute_file_hash, _get_file_info
 
-
 # ── Helper fixtures ──────────────────────────────────────────────────────────
 
 
@@ -28,9 +27,7 @@ def db():
 @pytest.fixture
 def temp_file():
     """Create a temporary file for testing."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         f.write("Hello, World!")
         f.flush()
         path = f.name
@@ -189,9 +186,7 @@ class TestDocumentMonitor:
             index_called.set()
             return 10
 
-        monitor = DocumentMonitor(
-            db=db, index_fn=tracking_index, interval=0.5
-        )
+        monitor = DocumentMonitor(db=db, index_fn=tracking_index, interval=0.5)
 
         await monitor.start()
         try:
@@ -227,9 +222,7 @@ class TestDocumentMonitor:
             call_count[0] += 1
             return 10
 
-        monitor = DocumentMonitor(
-            db=db, index_fn=tracking_index, interval=0.5
-        )
+        monitor = DocumentMonitor(db=db, index_fn=tracking_index, interval=0.5)
 
         await monitor.start()
         try:
@@ -252,9 +245,7 @@ class TestDocumentMonitor:
             file_mtime=1000.0,
         )
 
-        monitor = DocumentMonitor(
-            db=db, index_fn=_dummy_index, interval=0.5
-        )
+        monitor = DocumentMonitor(db=db, index_fn=_dummy_index, interval=0.5)
 
         await monitor.start()
         try:

@@ -7,6 +7,7 @@ import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep } from '../types';
 import './ChatView.css';
 
@@ -16,6 +17,16 @@ const EMPTY_SUGGESTIONS = [
     'Explain a concept simply',
     'Help me brainstorm ideas',
 ];
+
+/**
+ * Safety-net regex to strip raw tool-call JSON from streaming content.
+ *
+ * Primary filtering happens server-side in sse_handler.py (see _TOOL_CALL_JSON_RE).
+ * This frontend regex is a secondary safety net in case any tool-call JSON leaks
+ * through the SSE stream. The canonical pattern is defined in sse_handler.py;
+ * keep this in sync if the server-side pattern changes.
+ */
+const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}/g;
 
 /** Map an SSE agent event to an AgentStep for the UI. */
 function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<number>): AgentStep | null {
@@ -221,7 +232,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, []);
 
-    // Stop streaming
+    // Stop streaming — reads fresh state from store to avoid stale closures
     const handleStop = useCallback(() => {
         log.stream.warn('User stopped generation');
         if (abortRef.current) {
@@ -234,9 +245,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
             rafRef.current = null;
         }
         // Use the buffer (most up-to-date) or fall back to store content
-        const content = streamBufferRef.current || streamingContent;
+        const storeState = useChatStore.getState();
+        const content = streamBufferRef.current || storeState.streamingContent;
         if (content) {
             log.stream.info(`Saving partial response (${content.length} chars)`);
+            const currentSteps = storeState.agentSteps;
             const assistantMsg: Message = {
                 id: Date.now() + 1,
                 session_id: sessionId,
@@ -244,7 +257,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 content,
                 created_at: new Date().toISOString(),
                 rag_sources: null,
-                agentSteps: agentSteps.length > 0 ? [...agentSteps] : undefined,
+                agentSteps: currentSteps.length > 0 ? [...currentSteps] : undefined,
             };
             addMessage(assistantMsg);
         }
@@ -253,7 +266,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         clearStreamContent();
         setCompletedSteps([]);
         clearAgentSteps();
-    }, [sessionId, streamingContent, agentSteps, addMessage, setStreaming, clearStreamContent, clearAgentSteps]);
+    }, [sessionId, addMessage, setStreaming, clearStreamContent, clearAgentSteps]);
 
     // Global keyboard shortcuts: Escape → stop streaming, Ctrl+K → focus sidebar search
     useEffect(() => {
@@ -329,13 +342,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     } else {
                         fullContent += content;
                     }
-                    // Filter raw tool-call JSON that LLMs sometimes emit as text.
-                    // This is a frontend safety net (backend also filters these).
-                    // Uses [^}]* for inner args to avoid over-matching.
-                    const cleaned = fullContent.replace(
-                        /\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}/g,
-                        ''
-                    ).trim();
+                    // Safety net: strip any tool-call JSON that leaked past the
+                    // backend SSE filter (see sse_handler.py _TOOL_CALL_JSON_RE).
+                    const cleaned = fullContent.replace(TOOL_CALL_JSON_SAFETY_RE, '').trim();
                     // Buffer chunks and flush to store at most once per frame (~60fps)
                     // instead of triggering a React re-render on every single SSE chunk
                     streamBufferRef.current = cleaned;
@@ -368,6 +377,18 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             durationSeconds: event.command_output.duration_seconds,
                             truncated: event.command_output.truncated,
                         };
+                    }
+                    // Pass through retrieval chunks if available
+                    if (event.result_data?.chunks && event.result_data.chunks.length > 0) {
+                        updates.retrievalChunks = event.result_data.chunks.map((c) => ({
+                            id: c.id,
+                            source: c.source,
+                            sourcePath: c.sourcePath,
+                            page: c.page,
+                            score: c.score,
+                            preview: c.preview,
+                            content: c.content,
+                        }));
                     }
                     updateLastToolStep(updates);
                     return;
@@ -507,23 +528,31 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
                 log.chat.error(`Chat error for session=${sessionId}`, err);
                 // Provide a user-friendly error message based on the error type
+                // Each error includes a GitHub link for reporting issues
                 let errorContent: string;
                 const msg = err.message || '';
+                const issueFooter = '\n\n---\n*Unexpected error?* '
+                    + `[Report it on GitHub](${bugReportUrl(msg.slice(0, 80))})`;
+
                 if (msg.includes('Lemonade') || msg.includes('LLM') || msg.includes('Could not get response')) {
                     errorContent =
                         'Could not reach the LLM server. Make sure Lemonade Server is running:\n\n' +
                         '```\nlemonade-server serve\n```\n\n' +
-                        'Then try sending your message again.';
+                        'Then try sending your message again.' + issueFooter;
                 } else if (err instanceof TypeError || msg.includes('fetch') || msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
                     errorContent =
                         'Cannot connect to the GAIA Agent UI server. Make sure the backend is running:\n\n' +
-                        '```\ngaia chat --ui\n```';
+                        '```\ngaia chat --ui\n```' + issueFooter;
                 } else if (msg.includes('500')) {
                     errorContent =
                         'The server encountered an error. This usually means Lemonade Server is not running or the model failed to load.\n\n' +
-                        'Start Lemonade Server with:\n```\nlemonade-server serve\n```';
+                        'Start Lemonade Server with:\n```\nlemonade-server serve\n```' + issueFooter;
+                } else if (msg.includes('timed out') || msg.includes('timeout') || msg.includes('Timeout')) {
+                    errorContent =
+                        'The request timed out. The query may be too complex — try breaking it into simpler questions.\n\n' +
+                        'If Lemonade Server is running but responses are slow, the model may need more resources.' + issueFooter;
                 } else {
-                    errorContent = `Error: ${msg}`;
+                    errorContent = `Error: ${msg}` + issueFooter;
                 }
                 const errMsg: Message = {
                     id: Date.now() + 2,

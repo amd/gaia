@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useRef, useState, useEffect } from 'react';
+import React, { useCallback, useRef, useState, useEffect } from 'react';
 import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -40,10 +40,12 @@ function isErrorContent(content: string): boolean {
 }
 
 /**
- * Regex to detect raw tool-call JSON that LLMs sometimes output as text.
- * Matches {"tool": "name", "tool_args": {...}} anywhere in the content
- * (not just as the entire content — the LLM often prefixes it with text).
- * Uses [^}]* for the inner args to avoid matching past the closing braces.
+ * Safety-net regex to strip raw tool-call JSON from rendered message content.
+ *
+ * Primary filtering happens server-side in sse_handler.py (see _TOOL_CALL_JSON_RE
+ * and _TOOL_CALL_JSON_SUB_RE). This frontend regex is a secondary safety net for
+ * messages that were persisted before the backend filter was in place, or in case
+ * any tool-call JSON leaks through. Keep in sync with the server-side pattern.
  */
 const TOOL_CALL_JSON_RE = /\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}/g;
 
@@ -54,12 +56,15 @@ const TOOL_CALL_JSON_RE = /\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*
  * thinking tags, or JSON thought blocks. This function cleans all of that.
  */
 /**
- * Find and remove/extract {"thought":...} JSON blocks from LLM output.
+ * Find and remove/extract LLM JSON blocks from output.
+ * Detects {"thought":...}, {"answer":...}, {"tool":...} patterns.
  * Blocks with "tool"/"tool_args" are removed entirely.
  * Blocks with "answer" have the answer text extracted and kept.
+ * Blocks with "thought" only are removed (shown in agent activity).
  */
-function cleanThoughtBlocks(text: string): string {
-    const marker = '"thought"';
+function cleanLLMJsonBlocks(text: string): string {
+    // Markers that indicate an LLM JSON block we should process
+    const MARKERS = ['"thought"', '"answer"', '"tool"'];
     let result = '';
     let i = 0;
 
@@ -67,15 +72,16 @@ function cleanThoughtBlocks(text: string): string {
         const braceIdx = text.indexOf('{', i);
         if (braceIdx === -1) { result += text.slice(i); break; }
 
-        // Check if this brace starts a thought block (look ahead for "thought")
-        const lookAhead = text.slice(braceIdx, braceIdx + 40);
-        if (!lookAhead.includes(marker)) {
+        // Check if this brace starts an LLM JSON block
+        const lookAhead = text.slice(braceIdx, braceIdx + 50);
+        const isLLMBlock = MARKERS.some((m) => lookAhead.includes(m));
+        if (!isLLMBlock) {
             result += text.slice(i, braceIdx + 1);
             i = braceIdx + 1;
             continue;
         }
 
-        // Found a potential thought block — find matching closing brace
+        // Found a potential LLM JSON block — find matching closing brace
         result += text.slice(i, braceIdx);
         let depth = 0;
         let j = braceIdx;
@@ -92,7 +98,7 @@ function cleanThoughtBlocks(text: string): string {
                 // Extract the answer content — this is the useful text
                 result += parsed.answer;
             }
-            // tool/tool_args blocks are dropped silently
+            // thought-only and tool/tool_args blocks are dropped silently
         } catch {
             // Not valid JSON — keep original text
             result += block;
@@ -113,10 +119,10 @@ function cleanToolCallContent(content: string): string {
     // LLMs sometimes end responses with ``` or ```\n
     cleaned = cleaned.replace(/\n?```\s*$/, '');
 
-    // Remove/extract thinking/thought JSON blocks the LLM sometimes outputs.
+    // Remove/extract LLM JSON blocks (thought, answer, tool) from output.
     // These have nested braces so we use a brace-depth parser instead of regex.
-    // Blocks with "answer" have their answer text extracted; "tool" blocks are removed.
-    cleaned = cleanThoughtBlocks(cleaned);
+    // Blocks with "answer" have their answer text extracted; others are removed.
+    cleaned = cleanLLMJsonBlocks(cleaned);
 
     // Remove <think>...</think> tags that some models output
     cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '');
@@ -373,6 +379,17 @@ function linkifyFilePaths(text: string): React.ReactNode {
     return <>{parts}</>;
 }
 
+/**
+ * Recursively process React children, replacing string children with
+ * linkified file paths. This is needed because react-markdown v9 does
+ * not support a `text` component override.
+ */
+function linkifyChildren(children: React.ReactNode): React.ReactNode {
+    return React.Children.map(children, (child) =>
+        typeof child === 'string' ? linkifyFilePaths(child) : child
+    );
+}
+
 function RenderedContent({ content }: { content: string }) {
     if (!content) return null;
 
@@ -427,19 +444,19 @@ function RenderedContent({ content }: { content: string }) {
                             </a>
                         );
                     },
-                    // Paragraphs
+                    // Paragraphs — linkify file paths in text children
                     p({ children }) {
-                        return <p className="md-p">{children}</p>;
+                        return <p className="md-p">{linkifyChildren(children)}</p>;
                     },
                     // Headers
                     h1({ children }) {
-                        return <h2 className="md-h2">{children}</h2>;
+                        return <h2 className="md-h2">{linkifyChildren(children)}</h2>;
                     },
                     h2({ children }) {
-                        return <h3 className="md-h3">{children}</h3>;
+                        return <h3 className="md-h3">{linkifyChildren(children)}</h3>;
                     },
                     h3({ children }) {
-                        return <h4 className="md-h4">{children}</h4>;
+                        return <h4 className="md-h4">{linkifyChildren(children)}</h4>;
                     },
                     // Lists
                     ul({ children }) {
@@ -449,22 +466,22 @@ function RenderedContent({ content }: { content: string }) {
                         return <ol className="md-ol">{children}</ol>;
                     },
                     li({ children }) {
-                        return <li className="md-li">{children}</li>;
+                        return <li className="md-li">{linkifyChildren(children)}</li>;
                     },
                     // Blockquote
                     blockquote({ children }) {
-                        return <blockquote className="md-blockquote">{children}</blockquote>;
+                        return <blockquote className="md-blockquote">{linkifyChildren(children)}</blockquote>;
                     },
                     // Horizontal rule
                     hr() {
                         return <hr className="md-hr" />;
                     },
-                    // Custom text renderer to linkify file paths
-                    text({ children }) {
-                        if (typeof children === 'string') {
-                            return <>{linkifyFilePaths(children)}</>;
-                        }
-                        return <>{children}</>;
+                    // Table cells
+                    td({ children }) {
+                        return <td>{linkifyChildren(children)}</td>;
+                    },
+                    th({ children }) {
+                        return <th>{linkifyChildren(children)}</th>;
                     },
                 }}
             >

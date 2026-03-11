@@ -13,11 +13,17 @@ import logging
 import queue
 import re
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
 
 logger = logging.getLogger(__name__)
+
+# ── Shared LLM output cleaning patterns ─────────────────────────────────
+# These regexes are the canonical definitions for filtering LLM noise.
+# Other consumers (MCP server, frontend safety nets) should import from here
+# rather than duplicating the patterns.
 
 # Regex to detect raw tool-call JSON that LLMs sometimes emit as text content.
 # Matches patterns like: {"tool": "search_file", "tool_args": {...}}
@@ -25,6 +31,25 @@ _TOOL_CALL_JSON_RE = re.compile(
     r'^\s*\{["\s]*tool["\s]*:\s*"[^"]+"\s*,\s*["\s]*tool_args["\s]*:\s*\{.*\}\s*\}\s*$',
     re.DOTALL,
 )
+
+# Regex for use with re.sub() to strip tool-call JSON from mixed content.
+# Unlike _TOOL_CALL_JSON_RE (which matches whole strings), this variant
+# matches tool-call JSON embedded anywhere within larger text and uses
+# [^}]* for inner args to avoid over-matching past the closing braces.
+_TOOL_CALL_JSON_SUB_RE = re.compile(
+    r'\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}'
+)
+
+# Regex to remove {"thought": "..."} JSON blocks from LLM output.
+_THOUGHT_JSON_SUB_RE = re.compile(
+    r'\s*\{\s*"thought"\s*:\s*"[^"]*"[^}]*\}\s*'
+)
+
+# Regex to remove <think>...</think> tags that some models output.
+_THINK_TAG_SUB_RE = re.compile(r"<think>[\s\S]*?</think>")
+
+# Regex to remove trailing unclosed code fences (``` at end of response).
+_TRAILING_CODE_FENCE_RE = re.compile(r"\n?```\s*$")
 
 
 class SSEOutputHandler(OutputHandler):
@@ -205,15 +230,34 @@ class SSEOutputHandler(OutputHandler):
                     "total": data.get("count", len(files)),
                 }
 
-        # For search results with chunks, include preview
+        # For search results with chunks, include structured chunk data
+        # so the frontend can render expandable chunk cards
         if isinstance(data, dict) and "chunks" in data:
             chunks = data.get("chunks", [])
             if isinstance(chunks, list):
+                structured_chunks = []
+                for c in chunks[:8]:  # Limit to 8 chunks max
+                    if isinstance(c, dict):
+                        structured_chunks.append({
+                            "id": c.get("chunk_id", 0),
+                            "source": Path(c["source_file"]).name if c.get("source_file") else None,
+                            "sourcePath": c.get("source_file", ""),
+                            "page": c.get("page"),
+                            "score": round(c.get("relevance_score", 0), 2) if c.get("relevance_score") else None,
+                            "preview": (c.get("content", "") or "")[:150],
+                            "content": (c.get("content", "") or "")[:800],
+                        })
+                    else:
+                        structured_chunks.append({
+                            "id": len(structured_chunks) + 1,
+                            "preview": str(c)[:150],
+                            "content": str(c)[:800],
+                        })
                 event["result_data"] = {
                     "type": "search_results",
                     "count": len(chunks),
-                    "scores": data.get("scores", []),
-                    "previews": [str(c)[:200] for c in chunks[:5]],
+                    "source_files": data.get("source_files", []),
+                    "chunks": structured_chunks,
                 }
 
         self._emit(event)

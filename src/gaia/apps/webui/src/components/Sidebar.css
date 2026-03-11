@@ -280,7 +280,7 @@
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: #22c55e;
+    background: var(--accent-green);
     animation: pulse 2s infinite;
     flex-shrink: 0;
 }
@@ -301,7 +301,7 @@
 }
 
 .mobile-toggle-btn.active {
-    color: #22c55e;
+    color: var(--accent-green);
 }
 
 .mobile-toggle-btn.active::after {
@@ -312,7 +312,7 @@
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: #22c55e;
+    background: var(--accent-green);
     box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
     animation: pulse 2s infinite;
 }

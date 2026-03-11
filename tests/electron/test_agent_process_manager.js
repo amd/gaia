@@ -146,6 +146,7 @@ function createManager(options = {}) {
   spawn.mockClear();
 
   const manager = new AgentProcessManager(mainWindow);
+  _activeManagers.push(manager);
   return { manager, mainWindow };
 }
 
@@ -164,6 +165,10 @@ async function startMockAgent(manager, agentId = "test-agent") {
 
   return { mockChild, result };
 }
+
+// Track all managers created during tests so we can clean up health-check intervals
+let _activeManagers = [];
+const _origCreateManager = null; // placeholder, we wrap createManager below
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
@@ -184,10 +189,25 @@ describe("AgentProcessManager", () => {
     spawn.mockImplementation(() => {
       return mockSpawnHolder.returnValue || mockCreateChildProcess();
     });
+
+    _activeManagers = [];
   });
 
   afterEach(() => {
+    // Clean up real setInterval handles (health-check timers) from any started agents
+    for (const mgr of _activeManagers) {
+      if (mgr.processes) {
+        for (const [, entry] of Object.entries(mgr.processes)) {
+          if (entry && entry.healthTimer) {
+            clearInterval(entry.healthTimer);
+            entry.healthTimer = null;
+          }
+        }
+      }
+    }
+    _activeManagers = [];
     jest.clearAllTimers();
+    jest.useRealTimers();
   });
 
   // ── 1. Initialization ──────────────────────────────────────────────────
@@ -705,7 +725,11 @@ describe("AgentProcessManager", () => {
       const { manager } = createManager();
       const { mockChild } = await startMockAgent(manager);
 
-      // Delete the entry
+      // Clean up health timer before deleting the entry
+      const entry = manager.processes["test-agent"];
+      if (entry && entry.healthTimer) {
+        clearInterval(entry.healthTimer);
+      }
       delete manager.processes["test-agent"];
 
       // Should not throw
@@ -776,6 +800,11 @@ describe("AgentProcessManager", () => {
       const { manager } = createManager();
       const { mockChild } = await startMockAgent(manager);
 
+      // Clean up health timer before deleting the entry
+      const entry = manager.processes["test-agent"];
+      if (entry && entry.healthTimer) {
+        clearInterval(entry.healthTimer);
+      }
       delete manager.processes["test-agent"];
 
       // Should not throw
@@ -1621,6 +1650,9 @@ describe("AgentProcessManager", () => {
       const result = await waitPromise;
       expect(result).toBe(false);
 
+      // Clean up: clear any remaining health-check intervals before restoring real timers
+      jest.clearAllTimers();
+      manager._cleanupProcess("test-agent");
       jest.useRealTimers();
     });
 

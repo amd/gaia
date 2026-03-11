@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
     X, Search, Folder, FileText, Home, Download, Monitor, ChevronRight,
     File, FolderOpen, ArrowUp, Check, Brain, Upload, HardDrive,
@@ -10,8 +10,10 @@ import {
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { UploadErrorToast, isExtensionSupported, getUnsupportedCategory } from './UnsupportedFeature';
 import type { FileEntry, BrowseResponse, QuickLink } from '../types';
 import './FileBrowser.css';
+import './UnsupportedFeature.css';
 
 // File type icons mapping
 function getFileIcon(entry: FileEntry) {
@@ -105,11 +107,10 @@ export function FileBrowser() {
     // Indexing state
     const [indexingFiles, setIndexingFiles] = useState<Set<string>>(new Set());
     const [indexStatus, setIndexStatus] = useState<string | null>(null);
+    const indexStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Load initial directory
-    useEffect(() => {
-        loadDirectory();
-    }, []);
+    // Upload error toast state
+    const [indexError, setIndexError] = useState<{ filename: string; error: string } | null>(null);
 
     const loadDirectory = useCallback(async (path?: string) => {
         setLoading(true);
@@ -130,6 +131,18 @@ export function FileBrowser() {
         } finally {
             setLoading(false);
         }
+    }, []);
+
+    // Load initial directory
+    useEffect(() => {
+        loadDirectory();
+    }, [loadDirectory]);
+
+    // Clean up index status timer on unmount
+    useEffect(() => {
+        return () => {
+            if (indexStatusTimerRef.current) clearTimeout(indexStatusTimerRef.current);
+        };
     }, []);
 
     const handleSearch = useCallback(async () => {
@@ -192,28 +205,76 @@ export function FileBrowser() {
     const handleIndexSelected = useCallback(async () => {
         if (selectedFiles.size === 0) return;
         const files = Array.from(selectedFiles);
-        setIndexingFiles(new Set(files));
-        setIndexStatus(`Indexing ${files.length} file(s)...`);
+        setIndexError(null);
+
+        // Pre-check: filter out unsupported file types and warn the user
+        const supportedFiles: string[] = [];
+        const unsupportedFiles: string[] = [];
+        for (const filepath of files) {
+            const ext = filepath.includes('.') ? '.' + filepath.split('.').pop()?.toLowerCase() : '';
+            if (ext && !isExtensionSupported(ext)) {
+                unsupportedFiles.push(filepath);
+            } else {
+                supportedFiles.push(filepath);
+            }
+        }
+
+        if (unsupportedFiles.length > 0 && supportedFiles.length === 0) {
+            // All selected files are unsupported
+            const firstFile = unsupportedFiles[0];
+            const ext = '.' + firstFile.split('.').pop()?.toLowerCase();
+            const category = getUnsupportedCategory(ext);
+            setIndexError({
+                filename: unsupportedFiles.length === 1
+                    ? firstFile.split(/[\\/]/).pop() || firstFile
+                    : `${unsupportedFiles.length} files`,
+                error: category
+                    ? category.message
+                    : `File type "${ext}" is not supported for indexing.`,
+            });
+            return;
+        }
+
+        if (unsupportedFiles.length > 0) {
+            // Some files are unsupported — warn but continue with supported ones
+            log.doc.warn(`Skipping ${unsupportedFiles.length} unsupported file(s)`);
+            setIndexStatus(`Skipping ${unsupportedFiles.length} unsupported file(s)...`);
+        }
+
+        if (supportedFiles.length === 0) return;
+
+        setIndexingFiles(new Set(supportedFiles));
+        setIndexStatus(`Indexing ${supportedFiles.length} file(s)...`);
 
         let success = 0;
         let failed = 0;
-        for (const filepath of files) {
+        let lastError = '';
+        for (const filepath of supportedFiles) {
             try {
                 await api.uploadDocumentByPath(filepath);
                 success++;
-                setIndexStatus(`Indexed ${success}/${files.length}...`);
-            } catch {
+                setIndexStatus(`Indexed ${success}/${supportedFiles.length}...`);
+            } catch (err) {
                 failed++;
+                lastError = err instanceof Error ? err.message : 'Unknown error';
             }
         }
 
         setIndexingFiles(new Set());
-        setIndexStatus(
-            failed > 0
-                ? `Done: ${success} indexed, ${failed} failed`
-                : `Successfully indexed ${success} file(s)`
-        );
-        setTimeout(() => setIndexStatus(null), 3000);
+        if (failed > 0) {
+            setIndexStatus(`Done: ${success} indexed, ${failed} failed`);
+            setIndexError({
+                filename: `${failed} file(s)`,
+                error: lastError || 'Indexing failed for some files',
+            });
+        } else {
+            const skippedNote = unsupportedFiles.length > 0
+                ? ` (${unsupportedFiles.length} skipped — unsupported type)`
+                : '';
+            setIndexStatus(`Successfully indexed ${success} file(s)${skippedNote}`);
+        }
+        if (indexStatusTimerRef.current) clearTimeout(indexStatusTimerRef.current);
+        indexStatusTimerRef.current = setTimeout(() => setIndexStatus(null), 5000);
         setSelectedFiles(new Set());
     }, [selectedFiles]);
 
@@ -378,12 +439,18 @@ export function FileBrowser() {
                                 </div>
                             )}
 
-                            {!loading && displayItems.map((entry) => (
+                            {!loading && displayItems.map((entry) => {
+                                const ext = entry.extension || (entry.name.includes('.') ? '.' + entry.name.split('.').pop()?.toLowerCase() : '');
+                                const fileUnsupported = entry.type === 'file' && ext && !isExtensionSupported(ext);
+                                const unsupportedCat = fileUnsupported ? getUnsupportedCategory(ext) : null;
+
+                                return (
                                 <div
                                     key={entry.path}
-                                    className={`fb-entry ${entry.type} ${selectedFiles.has(entry.path) ? 'selected' : ''}`}
+                                    className={`fb-entry ${entry.type} ${selectedFiles.has(entry.path) ? 'selected' : ''} ${fileUnsupported ? 'unsupported' : ''}`}
                                     onClick={() => entry.type === 'folder' ? handleEntryClick(entry) : handleFilePreview(entry.path)}
                                     onDoubleClick={() => entry.type === 'folder' ? handleEntryClick(entry) : undefined}
+                                    title={fileUnsupported ? `${unsupportedCat?.label || 'This'} file type cannot be indexed` : entry.path}
                                 >
                                     {entry.type === 'file' && (
                                         <label
@@ -403,10 +470,16 @@ export function FileBrowser() {
                                     )}
                                     <span className="fb-entry-icon">{getFileIcon(entry)}</span>
                                     <span className="fb-entry-name" title={entry.path}>{entry.name}</span>
+                                    {fileUnsupported && (
+                                        <span className="fb-unsupported-badge">
+                                            Not indexable
+                                        </span>
+                                    )}
                                     <span className="fb-entry-size">{entry.type === 'file' ? formatSize(entry.size) : ''}</span>
                                     <span className="fb-entry-date">{formatDate(entry.modified)}</span>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
 
                         {/* Preview Panel */}
@@ -441,6 +514,15 @@ export function FileBrowser() {
                             </div>
                         )}
                     </div>
+
+                    {/* Index error toast */}
+                    {indexError && (
+                        <UploadErrorToast
+                            filename={indexError.filename}
+                            error={indexError.error}
+                            onDismiss={() => setIndexError(null)}
+                        />
+                    )}
 
                     {/* Action Bar */}
                     <div className="fb-actions">

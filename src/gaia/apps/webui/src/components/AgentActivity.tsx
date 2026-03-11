@@ -25,7 +25,7 @@ import {
     Check,
     type LucideIcon,
 } from 'lucide-react';
-import type { AgentStep, CommandOutput } from '../types';
+import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
 import * as api from '../services/api';
 import './AgentActivity.css';
 
@@ -143,23 +143,10 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     const errorSteps = displaySteps.filter((s) => s.type === 'error');
     const hasErrors = errorSteps.length > 0;
 
-    // Auto-expand tool cards when they appear; auto-collapse after 3s when done
-    useEffect(() => {
-        if (displaySteps.length > prevStepCountRef.current && isActive) {
-            const newStep = displaySteps[displaySteps.length - 1];
-            if (newStep && newStep.type === 'tool') {
-                // Expand the new tool
-                setExpandedTools((prev) => new Set(prev).add(newStep.id));
-            }
-        }
-        prevStepCountRef.current = displaySteps.length;
-    }, [displaySteps, isActive]);
-
     // Keep all tools expanded — auto-collapse is disabled for now to
     // let users observe all activity. Will add adaptive collapse later.
-    // (Auto-collapse timer logic preserved in comments for future use)
     useEffect(() => {
-        // Auto-expand all tool steps
+        prevStepCountRef.current = displaySteps.length;
         const toolIds = displaySteps
             .filter((s) => s.type === 'tool')
             .map((s) => s.id);
@@ -307,7 +294,8 @@ function linkifyPaths(text: string): React.ReactNode {
         if (match.index > lastIndex) {
             parts.push(text.slice(lastIndex, match.index));
         }
-        const filePath = match[0].replace(/[)}\]]+$/, ''); // trim trailing brackets
+        const rawMatch = match[0];
+        const filePath = rawMatch.replace(/[)}\]]+$/, ''); // trim trailing brackets
         const handleClick = () => {
             api.openFileOrFolder(filePath).catch((err) => console.error('Failed to open:', err));
         };
@@ -325,7 +313,12 @@ function linkifyPaths(text: string): React.ReactNode {
                 {filePath}
             </span>
         );
+        // Use raw match length so stripped trailing brackets are preserved in output
         lastIndex = match.index + filePath.length;
+        // Push any trailing brackets that were trimmed from the path
+        if (filePath.length < rawMatch.length) {
+            parts.push(rawMatch.slice(filePath.length));
+        }
     }
 
     if (parts.length === 0) return text;
@@ -405,6 +398,10 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
                             <div className="detail-result-content">{linkifyPaths(step.result)}</div>
                         </div>
                     )}
+                    {/* Retrieved document chunks */}
+                    {step.retrievalChunks && step.retrievalChunks.length > 0 && (
+                        <ChunksView chunks={step.retrievalChunks} />
+                    )}
                 </div>
             )}
         </div>
@@ -438,6 +435,65 @@ function FlowError({ step }: { step: AgentStep }) {
         <div className="flow-error">
             <AlertCircle size={13} />
             <span>{step.detail || step.label || 'An error occurred'}</span>
+        </div>
+    );
+}
+
+// ── Retrieval Chunks View ──────────────────────────────────────────────
+
+function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
+    const [expandedChunks, setExpandedChunks] = useState<Set<number>>(new Set());
+
+    const toggleChunk = (id: number) => {
+        setExpandedChunks((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+
+    return (
+        <div className="chunks-view">
+            <span className="detail-section-label">
+                Retrieved Chunks ({chunks.length})
+            </span>
+            <div className="chunks-list">
+                {chunks.map((chunk) => {
+                    const isExpanded = expandedChunks.has(chunk.id);
+                    return (
+                        <div key={chunk.id} className={`chunk-card ${isExpanded ? 'expanded' : ''}`}>
+                            <button
+                                className="chunk-header"
+                                onClick={() => toggleChunk(chunk.id)}
+                            >
+                                <div className="chunk-header-left">
+                                    <BookOpen size={11} style={{ color: '#06b6d4', flexShrink: 0 }} />
+                                    {chunk.source && (
+                                        <span className="chunk-source">{chunk.source}</span>
+                                    )}
+                                    {chunk.page != null && (
+                                        <span className="chunk-page">p.{chunk.page}</span>
+                                    )}
+                                    {chunk.score != null && chunk.score > 0 && (
+                                        <span className="chunk-score">{chunk.score.toFixed(2)}</span>
+                                    )}
+                                </div>
+                                <span className={`chunk-chevron ${isExpanded ? 'expanded' : ''}`}>
+                                    <ChevronRight size={11} />
+                                </span>
+                            </button>
+                            <div className={`chunk-body ${isExpanded ? 'show' : ''}`}>
+                                {isExpanded ? (
+                                    <pre className="chunk-content">{chunk.content}</pre>
+                                ) : (
+                                    <div className="chunk-preview">{chunk.preview}</div>
+                                )}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
         </div>
     );
 }

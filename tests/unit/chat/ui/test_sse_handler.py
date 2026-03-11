@@ -20,7 +20,6 @@ from gaia.ui.sse_handler import (
     _tool_description,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -511,7 +510,7 @@ class TestPrettyPrintJsonToolResults:
 
     def test_chunks_result_data(self, handler):
         chunks = ["chunk1 text", "chunk2 text", "chunk3 text"]
-        data = {"chunks": chunks, "scores": [0.9, 0.8, 0.7]}
+        data = {"chunks": chunks, "source_files": ["doc.pdf"]}
         handler.pretty_print_json(data, title="Result")
         events = _drain(handler)
         event = events[0]
@@ -519,24 +518,29 @@ class TestPrettyPrintJsonToolResults:
         rd = event["result_data"]
         assert rd["type"] == "search_results"
         assert rd["count"] == 3
-        assert rd["scores"] == [0.9, 0.8, 0.7]
-        assert len(rd["previews"]) == 3
+        assert rd["source_files"] == ["doc.pdf"]
+        assert len(rd["chunks"]) == 3
+        # Each string chunk is wrapped in a structured object with preview/content
+        assert "preview" in rd["chunks"][0]
 
-    def test_chunks_previews_truncated_to_200_chars(self, handler):
+    def test_chunks_previews_truncated_to_150_chars(self, handler):
         long_chunk = "x" * 300
         data = {"chunks": [long_chunk]}
         handler.pretty_print_json(data, title="Result")
         events = _drain(handler)
         rd = events[0]["result_data"]
-        assert len(rd["previews"][0]) == 200
+        # String chunks get a preview truncated to 150 chars
+        assert len(rd["chunks"][0]["preview"]) == 150
 
-    def test_chunks_previews_limited_to_5(self, handler):
-        chunks = [f"chunk{i}" for i in range(10)]
+    def test_chunks_limited_to_8(self, handler):
+        chunks = [f"chunk{i}" for i in range(15)]
         data = {"chunks": chunks}
         handler.pretty_print_json(data, title="Result")
         events = _drain(handler)
         rd = events[0]["result_data"]
-        assert len(rd["previews"]) == 5
+        # Count reflects total chunks, but structured list limited to 8
+        assert rd["count"] == 15
+        assert len(rd["chunks"]) == 8
 
     def test_no_title(self, handler):
         handler.pretty_print_json({"key": "val"})
@@ -953,9 +957,7 @@ class TestSignalDone:
         assert events[1] is None
 
     def test_filters_tool_json_buffer_on_done(self, handler):
-        handler._stream_buffer = (
-            '{"tool": "search_file", "tool_args": {"query": "x"}}'
-        )
+        handler._stream_buffer = '{"tool": "search_file", "tool_args": {"query": "x"}}'
         handler.signal_done()
         events = _drain(handler)
         # Tool JSON filtered, only sentinel emitted
@@ -1378,7 +1380,9 @@ class TestToolDescription:
     """Tests for the _tool_description helper function."""
 
     def test_known_tool_returns_description(self):
-        assert _tool_description("search_file") == "Searching for files matching a pattern"
+        assert (
+            _tool_description("search_file") == "Searching for files matching a pattern"
+        )
 
     def test_read_file(self):
         assert _tool_description("read_file") == "Reading file contents"
@@ -1426,9 +1430,7 @@ class TestEventSequences:
         handler.print_thought("I need to search for information")
         handler.print_tool_usage("search_file")
         handler.pretty_print_json({"query": "Python"}, title="Arguments")
-        handler.pretty_print_json(
-            {"files": ["docs.txt"], "count": 1}, title="Result"
-        )
+        handler.pretty_print_json({"files": ["docs.txt"], "count": 1}, title="Result")
         handler.print_tool_complete()
         handler.print_final_answer("Python is a programming language.")
         handler.print_completion(1, 5)
@@ -1439,16 +1441,16 @@ class TestEventSequences:
         # Verify event types in order
         event_types = [e["type"] if e is not None else None for e in events]
         assert event_types == [
-            "thinking",     # processing_start
-            "step",         # step_header
-            "thinking",     # thought
-            "tool_start",   # tool_usage
-            "tool_args",    # pretty_print_json Arguments
+            "thinking",  # processing_start
+            "step",  # step_header
+            "thinking",  # thought
+            "tool_start",  # tool_usage
+            "tool_args",  # pretty_print_json Arguments
             "tool_result",  # pretty_print_json Result
-            "tool_end",     # tool_complete
-            "answer",       # final_answer
-            "status",       # completion
-            None,           # signal_done sentinel
+            "tool_end",  # tool_complete
+            "answer",  # final_answer
+            "status",  # completion
+            None,  # signal_done sentinel
         ]
 
     def test_error_recovery_sequence(self, handler):

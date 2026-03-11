@@ -45,7 +45,7 @@
 }
 
 .agent-icon-done { color: var(--text-muted); }
-.agent-icon-error { color: #ef4444; }
+.agent-icon-error { color: var(--amd-red); }
 
 /* Spinner */
 .agent-spinner-wrap {
@@ -102,20 +102,6 @@
     flex-direction: column;
     gap: 6px;
     animation: flowSlideDown 200ms var(--ease);
-    max-height: 500px;
-    overflow-y: auto;
-}
-
-/* Subtle scrollbar for flow container */
-.agent-flow::-webkit-scrollbar {
-    width: 4px;
-}
-.agent-flow::-webkit-scrollbar-track {
-    background: transparent;
-}
-.agent-flow::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 2px;
 }
 
 @keyframes flowSlideDown {
@@ -161,7 +147,6 @@
     border-radius: 8px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-light);
-    overflow: hidden;
     transition: border-color var(--duration-fast) var(--ease);
     animation: fadeIn 150ms var(--ease);
 }
@@ -282,7 +267,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.4px;
-    color: #f59e0b;
+    color: var(--accent-yellow);
     margin-bottom: 4px;
 }
 
@@ -307,7 +292,7 @@
     background: rgba(239, 68, 68, 0.05);
     border: 1px solid rgba(239, 68, 68, 0.15);
     font-size: 12px;
-    color: #ef4444;
+    color: var(--amd-red);
     animation: fadeIn 150ms var(--ease);
 }
 
@@ -333,19 +318,6 @@
     border-radius: 8px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-light);
-    max-height: 180px;
-    overflow-y: auto;
-}
-
-.step-detail-args::-webkit-scrollbar {
-    width: 4px;
-}
-.step-detail-args::-webkit-scrollbar-track {
-    background: transparent;
-}
-.step-detail-args::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 2px;
 }
 
 .detail-args-content {
@@ -393,19 +365,6 @@
     border-radius: 8px;
     font-size: 12px;
     line-height: 1.6;
-    max-height: 220px;
-    overflow-y: auto;
-}
-
-.step-detail-result::-webkit-scrollbar {
-    width: 4px;
-}
-.step-detail-result::-webkit-scrollbar-track {
-    background: transparent;
-}
-.step-detail-result::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 2px;
 }
 
 .step-detail-result.result-success {
@@ -452,6 +411,146 @@
     text-decoration: underline;
 }
 
+/* ── Retrieval Chunks View ────────────────────────────────────── */
+.chunks-view {
+    margin-top: 2px;
+}
+
+.chunks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.chunk-card {
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    overflow: hidden;
+    transition: border-color var(--duration-fast) var(--ease);
+}
+
+.chunk-card.expanded {
+    border-color: rgba(6, 182, 212, 0.25);
+}
+
+.chunk-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease);
+}
+.chunk-header:hover {
+    background: var(--bg-hover);
+}
+
+.chunk-header-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.chunk-source {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+}
+
+.chunk-page {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    padding: 0 4px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+    white-space: nowrap;
+}
+
+.chunk-score {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: #06b6d4;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: rgba(6, 182, 212, 0.08);
+    border: 1px solid rgba(6, 182, 212, 0.15);
+    white-space: nowrap;
+}
+
+.chunk-chevron {
+    display: flex;
+    align-items: center;
+    color: var(--text-muted);
+    transition: transform var(--duration-fast) var(--ease);
+    flex-shrink: 0;
+}
+.chunk-chevron.expanded {
+    transform: rotate(90deg);
+}
+
+.chunk-body {
+    overflow: hidden;
+}
+
+.chunk-body:not(.show) {
+    max-height: 0;
+    padding: 0;
+}
+
+.chunk-body.show {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.chunk-preview {
+    padding: 3px 8px 5px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chunk-content {
+    margin: 0;
+    padding: 6px 10px 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: rgba(6, 182, 212, 0.03);
+    border-top: 1px solid rgba(6, 182, 212, 0.1);
+}
+
+[data-theme="dark"] .chunk-content {
+    background: rgba(6, 182, 212, 0.05);
+}
+
+.chunk-body.show::-webkit-scrollbar {
+    width: 5px;
+}
+.chunk-body.show::-webkit-scrollbar-track {
+    background: transparent;
+}
+.chunk-body.show::-webkit-scrollbar-thumb {
+    background: var(--tint-hover);
+    border-radius: 3px;
+}
+
 /* ── Command Output (Terminal View) ───────────────────────────── */
 .cmd-output {
     border-radius: 8px;
@@ -473,8 +572,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 5px 10px;
-    background: rgba(255, 255, 255, 0.03);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--tint-subtle);
+    border-bottom: 1px solid var(--border-light);
 }
 
 .cmd-header-left {
@@ -484,20 +583,20 @@
 }
 
 .cmd-header-icon {
-    color: #6e7681;
+    color: var(--text-muted);
 }
 
 .cmd-header-title {
     font-size: 10.5px;
     font-weight: 600;
-    color: #8b949e;
+    color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.3px;
 }
 
 .cmd-cwd {
     font-size: 10px;
-    color: #6e7681;
+    color: var(--text-muted);
     max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -512,13 +611,13 @@
 
 .cmd-duration {
     font-size: 10px;
-    color: #6e7681;
+    color: var(--text-muted);
 }
 
 .cmd-exit-code {
     font-size: 10px;
     font-weight: 600;
-    color: #ef4444;
+    color: var(--amd-red);
     padding: 0 4px;
     border-radius: 3px;
     background: rgba(239, 68, 68, 0.1);
@@ -529,16 +628,16 @@
     align-items: center;
     padding: 2px 4px;
     border-radius: 4px;
-    color: #6e7681;
+    color: var(--text-muted);
     transition: all 120ms var(--ease);
     cursor: pointer;
 }
 .cmd-copy:hover {
-    background: rgba(255, 255, 255, 0.08);
-    color: #8b949e;
+    background: var(--tint-hover);
+    color: var(--text-secondary);
 }
 .cmd-copy.copied {
-    color: #22c55e;
+    color: var(--accent-green);
 }
 
 .cmd-line {
@@ -546,25 +645,25 @@
     align-items: flex-start;
     gap: 6px;
     padding: 8px 10px 4px;
-    color: #e6edf3;
+    color: var(--text-primary);
 }
 
 .cmd-prompt {
-    color: #22c55e;
+    color: var(--accent-green);
     font-weight: 700;
     flex-shrink: 0;
     user-select: none;
 }
 
 .cmd-text {
-    color: #e6edf3;
+    color: var(--text-primary);
     word-break: break-all;
 }
 
 .cmd-stdout {
     padding: 4px 10px 8px 22px;
     margin: 0;
-    color: #d4d4d4;
+    color: var(--text-secondary);
     white-space: pre-wrap;
     word-break: break-word;
     max-height: 300px;
@@ -578,17 +677,17 @@
     background: transparent;
 }
 .cmd-stdout::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.12);
+    background: var(--tint-hover);
     border-radius: 3px;
 }
 .cmd-stdout::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: var(--text-muted);
 }
 
 .cmd-stderr {
     padding: 4px 10px 8px 22px;
     margin: 0;
-    color: #f87171;
+    color: var(--amd-red);
     white-space: pre-wrap;
     word-break: break-word;
     max-height: 200px;
@@ -600,7 +699,7 @@
 .cmd-truncated {
     padding: 4px 10px;
     font-size: 10px;
-    color: #f59e0b;
+    color: var(--accent-yellow);
     text-align: center;
     background: rgba(245, 158, 11, 0.05);
     border-top: 1px solid rgba(245, 158, 11, 0.1);
@@ -608,7 +707,7 @@
 
 .cmd-empty {
     padding: 6px 10px 8px 22px;
-    color: #6e7681;
+    color: var(--text-muted);
     font-style: italic;
 }
 
