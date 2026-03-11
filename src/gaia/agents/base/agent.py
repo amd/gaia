@@ -16,7 +16,7 @@ import subprocess
 import uuid
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.base.console import AgentConsole, SilentConsole
+from gaia.agents.base.console import AgentConsole, MinimalConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
@@ -76,6 +76,7 @@ class Agent(abc.ABC):
         show_stats: bool = False,
         silent_mode: bool = False,
         debug: bool = False,
+        verbose: bool = False,
         output_handler=None,
         max_plan_iterations: int = 3,
         max_consecutive_repeats: int = 4,
@@ -99,7 +100,9 @@ class Agent(abc.ABC):
             show_stats: If True, displays LLM performance stats after each response (default: False)
             silent_mode: If True, suppresses all console output for JSON-only usage (default: False)
             debug: If True, enables debug output for troubleshooting (default: False)
-            output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
+            verbose: If True, uses the full AgentConsole with detailed step-by-step output.
+                     If False (default), uses MinimalConsole with clean, minimal output.
+            output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on mode flags)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
             max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4)
             min_context_size: Minimum context size required for this agent (default: 32768).
@@ -120,6 +123,7 @@ class Agent(abc.ABC):
         self.show_stats = show_stats
         self.silent_mode = silent_mode
         self.debug = debug
+        self.verbose = verbose
         self.last_result = None  # Store the most recent result
         self.max_plan_iterations = max_plan_iterations
         self.max_consecutive_repeats = max_consecutive_repeats
@@ -348,7 +352,12 @@ You must respond ONLY in valid JSON. No text before { or after }.
     def _create_console(self):
         """
         Create and return a console output handler.
-        Returns SilentConsole if in silent_mode, otherwise AgentConsole.
+
+        Priority:
+        1. SilentConsole if silent_mode (JSON-only, no output)
+        2. AgentConsole if verbose (full step-by-step debug output)
+        3. MinimalConsole (default — clean, minimal user experience)
+
         Subclasses can override this to provide domain-specific console output.
         """
         if self.silent_mode:
@@ -356,7 +365,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
             # This would be true for JSON-only output or when output_dir is set
             silence_final_answer = getattr(self, "output_dir", None) is not None
             return SilentConsole(silence_final_answer=silence_final_answer)
-        return AgentConsole()
+        if self.verbose:
+            return AgentConsole()
+        return MinimalConsole()
 
     @abc.abstractmethod
     def _register_tools(self):

@@ -1971,6 +1971,360 @@ class AgentConsole(OutputHandler):
         )
 
 
+class MinimalConsole(OutputHandler):
+    """
+    A clean, minimal console for a fast and snappy user experience.
+
+    Shows:
+    - LLM answers (streamed as markdown)
+    - Tool calls (one-line with spinner)
+    - Brief tool output (key results, not raw JSON)
+    - Errors and warnings (inline, no panels)
+    - File operations (one-line status)
+
+    Suppresses:
+    - Agent internals (thought, goal, plan, step numbers)
+    - Full JSON dumps of tool arguments/results
+    - Emoji, decorative panels, separators
+
+    Use --verbose to switch back to the full AgentConsole output.
+    """
+
+    # Map tool names to short, human-readable action descriptions
+    TOOL_ACTIONS = {
+        # RAG tools
+        "list_indexed_documents": "Checking indexed documents",
+        "query_documents": "Searching documents",
+        "query_specific_file": "Searching file",
+        "search_indexed_chunks": "Searching chunks",
+        "index_document": "Indexing document",
+        "index_directory": "Indexing directory",
+        "dump_document": "Exporting document",
+        "summarize_document": "Summarizing document",
+        "rag_status": "Checking RAG status",
+        # File tools
+        "search_file": "Searching for files",
+        "search_directory": "Searching directories",
+        "search_file_content": "Searching file content",
+        "read_file": "Reading file",
+        "write_file": "Writing file",
+        "add_watch_directory": "Watching directory",
+        # Shell tools
+        "run_shell_command": "Running command",
+        # Code tools
+        "generate_code": "Generating code",
+        "run_python_file": "Running Python",
+        "run_pytest": "Running tests",
+        "edit_python_file": "Editing file",
+        "edit_file": "Editing file",
+        "format_code": "Formatting code",
+        "validate_syntax": "Validating syntax",
+        # Project tools
+        "create_project": "Creating project",
+        "list_files": "Listing files",
+        "install_dependencies": "Installing dependencies",
+    }
+
+    def __init__(self):
+        self.streaming_buffer = ""
+        self.progress = ProgressIndicator()
+        self._console = Console(highlight=False) if RICH_AVAILABLE else None
+        self.file_preview_live = None  # Compatibility with AgentConsole
+
+    @property
+    def console(self):
+        """Expose Rich Console for compatibility with code that accesses self.console.console."""
+        return self._console
+
+    # === Core: suppress agent internals ===
+
+    def print_processing_start(self, query: str, max_steps: int, model_id: str = None):
+        """No visible output -- the user already typed the query."""
+
+    def print_step_header(self, step_num: int, step_limit: int):
+        """Suppressed."""
+
+    def print_state_info(self, state_message: str):
+        """Suppressed."""
+
+    def print_thought(self, thought: str):
+        """Suppressed."""
+
+    def print_goal(self, goal: str):
+        """Suppressed."""
+
+    def print_plan(self, plan: List[Any], current_step: int = None):
+        """Suppressed."""
+
+    def print_step_paused(self, description: str):
+        """Suppressed."""
+
+    def print_command_executing(self, command: str):
+        """Suppressed."""
+
+    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
+        """Suppressed."""
+
+    # === Tool calls: spinner + brief result ===
+
+    def print_tool_usage(self, tool_name: str):
+        """Start a spinner with a short action description."""
+        action = self.TOOL_ACTIONS.get(tool_name, tool_name.replace("_", " ").capitalize())
+        self.start_progress(action)
+
+    def print_tool_complete(self):
+        """Stop the spinner."""
+        self.stop_progress()
+
+    def pretty_print_json(self, data: Dict[str, Any], title: str = None):
+        """Show a brief summary of tool results, not raw JSON.
+
+        Extracts the most useful information from tool output and displays
+        it as a compact one-liner or short block.
+        """
+        if not data or not isinstance(data, dict):
+            return
+
+        # Extract meaningful summary from common result patterns
+        summary = self._summarize_tool_result(data)
+        if summary:
+            if RICH_AVAILABLE and self._console:
+                self._console.print(f"  [dim]{summary}[/dim]")
+            else:
+                print(f"  {summary}")
+
+    def _summarize_tool_result(self, data: Dict[str, Any]) -> Optional[str]:
+        """Extract a brief human-readable summary from tool result data."""
+        # Skip tool args (title="Tool Arguments") — only show results
+        # Results have useful content; args are implementation details
+
+        # Common patterns in tool results:
+        if "error" in data:
+            return None  # Errors are handled by print_error
+
+        if "results" in data and isinstance(data["results"], list):
+            count = len(data["results"])
+            return f"Found {count} result{'s' if count != 1 else ''}"
+
+        if "chunks" in data and isinstance(data["chunks"], list):
+            count = len(data["chunks"])
+            return f"Found {count} chunk{'s' if count != 1 else ''}"
+
+        if "files" in data and isinstance(data["files"], list):
+            count = len(data["files"])
+            return f"Found {count} file{'s' if count != 1 else ''}"
+
+        if "documents" in data and isinstance(data["documents"], list):
+            count = len(data["documents"])
+            return f"{count} document{'s' if count != 1 else ''} indexed"
+
+        if "output" in data and isinstance(data["output"], str):
+            output = data["output"].strip()
+            if output:
+                # Show first line of command output, truncated
+                first_line = output.split("\n")[0][:120]
+                lines = output.count("\n") + 1
+                if lines > 1:
+                    return f"{first_line} (+{lines - 1} more lines)"
+                return first_line
+
+        if "content" in data and isinstance(data["content"], str):
+            content = data["content"].strip()
+            if content:
+                lines = content.count("\n") + 1
+                chars = len(content)
+                return f"{lines} line{'s' if lines != 1 else ''}, {chars} chars"
+
+        if "success" in data:
+            if data["success"]:
+                msg = data.get("message", "Done")
+                return str(msg)[:120] if isinstance(msg, str) else "Done"
+            else:
+                msg = data.get("message", data.get("error", "Failed"))
+                return str(msg)[:120] if isinstance(msg, str) else "Failed"
+
+        if "status" in data:
+            return str(data["status"])[:120]
+
+        return None
+
+    # === Progress ===
+
+    def start_progress(self, message: str, show_timer: bool = False):
+        self.progress.start(message, show_timer=show_timer)
+
+    def stop_progress(self):
+        self.progress.stop()
+
+    # === Status messages: inline, no panels ===
+
+    def print_error(self, error_message: str):
+        if error_message is None:
+            error_message = "Unknown error"
+        self.stop_progress()
+        if RICH_AVAILABLE and self._console:
+            self._console.print(f"[bold red]Error:[/bold red] {error_message}")
+        else:
+            print(f"Error: {error_message}")
+
+    def print_warning(self, warning_message: str):
+        if RICH_AVAILABLE and self._console:
+            self._console.print(f"[yellow]Warning:[/yellow] {warning_message}")
+        else:
+            print(f"Warning: {warning_message}")
+
+    def print_info(self, message: str):
+        if RICH_AVAILABLE and self._console:
+            self._console.print(f"[dim]{message}[/dim]")
+        else:
+            print(message)
+
+    def print_success(self, message: str):
+        if RICH_AVAILABLE and self._console:
+            self._console.print(f"[green]{message}[/green]")
+        else:
+            print(message)
+
+    # === Streaming: pass through directly ===
+
+    def print_streaming_text(self, text_chunk: str, end_of_stream: bool = False):
+        self.streaming_buffer += text_chunk
+        print(text_chunk, end="", flush=True)
+        if end_of_stream:
+            print()
+
+    def get_streaming_buffer(self) -> str:
+        result = self.streaming_buffer
+        self.streaming_buffer = ""
+        return result
+
+    # === Final answer: rendered markdown, no box ===
+
+    def print_final_answer(self, answer: str, streaming: bool = True):
+        if RICH_AVAILABLE and self._console:
+            from rich.markdown import Markdown as RichMarkdown
+
+            self._console.print()
+            self._console.print(RichMarkdown(answer))
+            self._console.print()
+        else:
+            print(f"\n{answer}\n")
+
+    def print_repeated_tool_warning(self):
+        self.print_warning("Agent is repeating the same action. Stopping.")
+
+    def print_completion(self, steps_taken: int, steps_limit: int):
+        if steps_taken >= steps_limit:
+            self.print_warning(f"Stopped after {steps_taken}/{steps_limit} steps")
+
+    # === Stats: show if explicitly requested ===
+
+    def display_stats(self, stats: Dict[str, Any]):
+        if not stats:
+            return
+        if RICH_AVAILABLE:
+            from rich.table import Table
+
+            table = Table(show_header=True, header_style="bold")
+            table.add_column("Metric", style="dim")
+            table.add_column("Value", justify="right")
+            for key, value in stats.items():
+                if value is not None:
+                    if isinstance(value, float):
+                        table.add_row(key, f"{value:.2f}")
+                    else:
+                        table.add_row(key, str(value))
+            if self._console:
+                self._console.print(table)
+        else:
+            for key, value in stats.items():
+                if value is not None:
+                    print(f"  {key}: {value}")
+
+    # === File operations: brief one-liners ===
+
+    def print_file_created(self, filename: str, size: int = 0, extension: str = ""):
+        self.print_info(f"Created {filename}")
+
+    def print_file_modified(self, filename: str, size: int = 0):
+        self.print_info(f"Modified {filename}")
+
+    def print_file_deleted(self, filename: str):
+        self.print_info(f"Deleted {filename}")
+
+    def print_file_moved(self, src_filename: str, dest_filename: str):
+        self.print_info(f"Moved {src_filename} -> {dest_filename}")
+
+    # === Model status ===
+
+    def print_model_loading(self, model_name: str):
+        self.start_progress(f"Loading {model_name}")
+
+    def print_model_ready(self, model_name: str, already_loaded: bool = False):
+        self.stop_progress()
+
+    # === File preview (CodeAgent): suppressed in minimal mode ===
+
+    def start_file_preview(self, filename: str, max_lines: int = 15):
+        """Suppressed -- file previews are verbose debug output."""
+
+    def update_file_preview(self, content_chunk: str):
+        """Suppressed."""
+
+    def stop_file_preview(self):
+        """Suppressed."""
+
+    def print_diff(self, diff: str, filename: str = ""):
+        """Show diff filename only, not the full diff content."""
+        if filename:
+            self.print_info(f"Changed {filename}")
+
+    # === Remaining methods ===
+
+    def print_extraction_start(self, image_num: int, page_num: int, mime_type: str):
+        """Suppressed."""
+
+    def print_extraction_complete(self, chars: int, image_num: int, elapsed_seconds: float, size_kb: float):
+        """Suppressed."""
+
+    def print_ready_for_input(self):
+        """Suppressed."""
+
+    def print_processing_step(self, step_num: int, total_steps: int, step_name: str, status: str = "running"):
+        """Suppressed."""
+
+    def print_processing_pipeline_start(self, filename: str, total_steps: int):
+        self.start_progress(f"Processing {filename}")
+
+    def print_processing_pipeline_complete(self, filename: str, success: bool, elapsed_seconds: float, patient_name: str = None, is_duplicate: bool = False):
+        self.stop_progress()
+        if success:
+            self.print_info(f"Processed {filename} ({elapsed_seconds:.1f}s)")
+        else:
+            self.print_warning(f"Failed to process {filename}")
+
+    def print_checklist(self, items: List[Any], current_idx: int):
+        """Suppressed."""
+
+    def print_checklist_reasoning(self, reasoning: str):
+        """Suppressed."""
+
+    def print_download_progress(self, model_id: str, downloaded: int, total: int, speed: float = 0):
+        """Show download progress inline."""
+        if total > 0:
+            pct = downloaded / total * 100
+            downloaded_mb = downloaded / (1024 * 1024)
+            total_mb = total / (1024 * 1024)
+            print(f"\r  Downloading {model_id}: {pct:.0f}% ({downloaded_mb:.0f}/{total_mb:.0f} MB)", end="", flush=True)
+
+    def print(self, *args, **kwargs):
+        """Direct print pass-through."""
+        if RICH_AVAILABLE and self._console:
+            self._console.print(*args, **kwargs)
+        else:
+            print(*args, **kwargs)
+
+
 class SilentConsole(OutputHandler):
     """
     A silent console that suppresses all output for JSON-only mode.

@@ -48,6 +48,7 @@ class ChatAgentConfig:
     show_prompts: bool = False
     show_stats: bool = False
     silent_mode: bool = False
+    verbose: bool = False  # Use --verbose for full AgentConsole output
     output_dir: Optional[str] = None
 
     # RAG settings
@@ -169,6 +170,7 @@ class ChatAgent(
             show_stats=config.show_stats,
             silent_mode=config.silent_mode,
             debug=config.debug,
+            verbose=config.verbose,
         )
 
         # Index initial documents (only if RAG is available)
@@ -364,14 +366,19 @@ When user asks to "index my data folder" or similar:
         return prompt
 
     def _create_console(self):
-        """Create console for chat agent."""
-        from gaia.agents.base.console import SilentConsole
+        """Create console for chat agent.
+
+        Overrides base to ensure final answer is always shown even in silent mode.
+        """
+        from gaia.agents.base.console import MinimalConsole, SilentConsole
 
         if self.silent_mode:
             # For chat agent, we ALWAYS want to show the final answer
             # Even in silent mode, the user needs to see the response
             return SilentConsole(silence_final_answer=False)
-        return AgentConsole()
+        if self.verbose:
+            return AgentConsole()
+        return MinimalConsole()
 
     def _generate_search_keys(self, query: str) -> List[str]:
         """

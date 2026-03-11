@@ -238,16 +238,6 @@ RULES:
 
         return prompt
 
-    def _create_console(self):
-        """Create console for Jira agent output.
-
-        Returns:
-            AgentConsole or SilentConsole: Console instance based on silent_mode setting
-        """
-        if self.silent_mode:
-            return SilentConsole()
-        return AgentConsole()
-
     def initialize(self) -> Dict[str, Any]:
         """
         Discover and cache Jira instance configuration.

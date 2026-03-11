@@ -150,12 +150,6 @@ Step 3: Build with build_image
 - Include proper copyright header in Dockerfile
 - Use save_dockerfile to write the Dockerfile you generated"""
 
-    def _create_console(self):
-        """Create console for Docker agent output."""
-        if self.silent_mode:
-            return SilentConsole()
-        return AgentConsole()
-
     def _register_tools(self):
         """Register Docker-specific tools."""
 

@@ -172,16 +172,6 @@ class CodeAgent(
         """
         return get_system_prompt(language=self.language, project_type=self.project_type)
 
-    def _create_console(self):
-        """Create console for Code agent output.
-
-        Returns:
-            AgentConsole or SilentConsole: Console instance
-        """
-        if self.silent_mode:
-            return SilentConsole()
-        return AgentConsole()
-
     def _register_tools(self) -> None:
         """Register Code-specific tools from mixins."""
         # Register all tools from consolidated mixins

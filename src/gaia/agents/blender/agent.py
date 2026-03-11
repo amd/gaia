@@ -65,15 +65,6 @@ class BlenderAgent(Agent):
         # Register Blender-specific tools
         self._register_tools()
 
-    def _create_console(self) -> AgentConsole:
-        """
-        Create and return a Agent-specific console output handler.
-
-        Returns:
-            A AgentConsole instance
-        """
-        return AgentConsole()
-
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Blender agent."""
         # Get formatted tools from registry
