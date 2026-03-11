@@ -29,6 +29,7 @@ setup(
         "gaia.audio",
         "gaia.chat",
         "gaia.ui",
+        "gaia.ui.routers",
         "gaia.database",
         "gaia.talk",
         "gaia.testing",
