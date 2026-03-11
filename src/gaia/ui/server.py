@@ -20,7 +20,7 @@ Endpoint implementations are split into router modules under
 
 import asyncio
 import logging
-import shutil  # noqa: F401 -- re-exported for test patches on gaia.ui.server.shutil
+import shutil  # noqa: F401  # pylint: disable=unused-import
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -30,6 +30,19 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
+# ── Backward-compatible re-exports ──────────────────────────────────────────
+# Tests use @patch("gaia.ui.server._get_chat_response") etc., so we must
+# expose these names at module level.  The canonical implementations live
+# in ``_chat_helpers`` (shared by both server.py and the router modules).
+# pylint: disable=unused-import
+from ._chat_helpers import _build_history_pairs  # noqa: F401
+from ._chat_helpers import _compute_allowed_paths  # noqa: F401
+from ._chat_helpers import _get_chat_response  # noqa: F401
+from ._chat_helpers import _index_document  # noqa: F401
+from ._chat_helpers import _resolve_rag_paths  # noqa: F401
+from ._chat_helpers import _stream_chat_response  # noqa: F401
+
+# pylint: enable=unused-import
 from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
 from .routers import chat as chat_router_mod
@@ -39,22 +52,11 @@ from .routers import sessions as sessions_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
 from .tunnel import TunnelManager
+from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
+from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
 from .utils import sanitize_document_path as _sanitize_document_path  # noqa: F401
 from .utils import sanitize_static_path as _sanitize_static_path  # noqa: F401
 from .utils import validate_file_path as _validate_file_path  # noqa: F401
-from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
-from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
-
-# ── Backward-compatible re-exports ──────────────────────────────────────────
-# Tests use @patch("gaia.ui.server._get_chat_response") etc., so we must
-# expose these names at module level.  The canonical implementations live
-# in ``_chat_helpers`` (shared by both server.py and the router modules).
-from ._chat_helpers import _get_chat_response  # noqa: F401
-from ._chat_helpers import _stream_chat_response  # noqa: F401
-from ._chat_helpers import _build_history_pairs  # noqa: F401
-from ._chat_helpers import _resolve_rag_paths  # noqa: F401
-from ._chat_helpers import _compute_allowed_paths  # noqa: F401
-from ._chat_helpers import _index_document  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

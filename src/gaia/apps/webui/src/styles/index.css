@@ -68,30 +68,32 @@
 }
 
 [data-theme="dark"] {
-    --bg-primary: #0a0c0b;
-    --bg-secondary: #0f1210;
-    --bg-tertiary: #141916;
-    --bg-sidebar: #080a09;
-    --bg-input: #0c0f0d;
-    --bg-hover: #1a1f1c;
-    --bg-active: #222824;
-    --bg-code: #070907;
-    --bg-user-msg: #0e120f;
-    --bg-modal-overlay: rgba(0, 0, 0, 0.8);
+    /* AMD Adrenalin-inspired palette: neutral charcoal/graphite with red accents.
+     * Strong contrast between regions for clear visual hierarchy. */
+    --bg-primary: #1c1c1c;       /* Main content — neutral charcoal */
+    --bg-secondary: #151515;     /* Header, input area — darker */
+    --bg-tertiary: #262626;      /* Cards, badges, tool panels — lifted */
+    --bg-sidebar: #0e0e0e;       /* Sidebar — near-black, strong separation */
+    --bg-input: #1c1c1c;         /* Input field — matches primary */
+    --bg-hover: #2e2e2e;         /* Hover states — clear lift */
+    --bg-active: #383838;        /* Active/selected — obvious highlight */
+    --bg-code: #111111;          /* Code blocks — near-black */
+    --bg-user-msg: #201a1a;      /* User messages — slight warm/red tint */
+    --bg-modal-overlay: rgba(0, 0, 0, 0.85);
 
-    --text-primary: #d0d4d2;
-    --text-secondary: #8a9190;
-    --text-muted: #5a6462;
+    --text-primary: #e8e6e3;     /* Warm white text */
+    --text-secondary: #9a9894;   /* Clear secondary */
+    --text-muted: #5c5a58;       /* Muted but readable */
 
-    --border: #1e2422;
-    --border-light: #161c19;
+    --border: #3a3836;           /* Strong visible borders — warm gray */
+    --border-light: #2a2928;     /* Subtle dividers — still distinguishable */
 
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.55);
-    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.65);
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.6);
+    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.7);
 
-    --tint-subtle: rgba(0, 255, 159, 0.02);
-    --tint-hover: rgba(0, 255, 159, 0.04);
+    --tint-subtle: rgba(226, 60, 64, 0.03);
+    --tint-hover: rgba(226, 60, 64, 0.06);
 
     /* Dark mode background image -- slightly higher opacity for atmosphere */
     --bg-image: none;

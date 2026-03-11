@@ -13,26 +13,28 @@
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* User messages -- subtle green/amber left border, light tint */
+/* User messages -- colored left border + light tint */
 .msg-user {
     background: var(--bg-user-msg);
-    border-left: 2px solid transparent;
+    border-left: 2px solid var(--amd-red-light);
+    border-bottom: 1px solid var(--border);
 }
 
 [data-theme="dark"] .msg-user {
-    border-left-color: rgba(0, 255, 159, 0.15);
-    background: rgba(0, 255, 159, 0.02);
+    border-left-color: var(--amd-red);
+    background: var(--bg-user-msg);
 }
 
-/* Assistant messages -- clean, no background tint */
+/* Assistant messages -- visible separator + left accent */
 .msg-assistant {
     background: transparent;
-    border-bottom: 1px solid var(--border-light);
-    border-left: 2px solid transparent;
+    border-bottom: 1px solid var(--border);
+    border-left: 2px solid var(--border);
 }
 
 [data-theme="dark"] .msg-assistant {
-    border-left-color: rgba(90, 100, 98, 0.2);
+    border-left-color: var(--border);
+    background: rgba(38, 38, 38, 0.3);
 }
 
 .msg-inner { max-width: 100%; }

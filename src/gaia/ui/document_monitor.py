@@ -13,7 +13,7 @@ import logging
 import os
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Callable, Awaitable, Dict, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, Optional, Set
 
 from .database import ChatDatabase
 
@@ -91,9 +91,7 @@ class DocumentMonitor:
         """Start the monitor loop."""
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run_loop())
-        logger.info(
-            "Document monitor started (interval=%ds)", self._interval
-        )
+        logger.info("Document monitor started (interval=%ds)", self._interval)
 
     async def stop(self) -> None:
         """Stop the monitor loop gracefully."""
@@ -135,9 +133,7 @@ class DocumentMonitor:
 
             # Wait for interval or until stopped
             try:
-                await asyncio.wait_for(
-                    self._stop_event.wait(), timeout=self._interval
-                )
+                await asyncio.wait_for(self._stop_event.wait(), timeout=self._interval)
                 break  # stop_event was set
             except asyncio.TimeoutError:
                 pass  # Normal timeout, continue loop
@@ -167,9 +163,7 @@ class DocumentMonitor:
             stored_hash = doc.get("file_hash")
 
             # Check file existence and mtime (non-blocking via executor)
-            file_info = await loop.run_in_executor(
-                None, _get_file_info, filepath
-            )
+            file_info = await loop.run_in_executor(None, _get_file_info, filepath)
 
             if file_info is None:
                 # File deleted or inaccessible
@@ -193,17 +187,13 @@ class DocumentMonitor:
                     None, _compute_file_hash, Path(filepath)
                 )
             except Exception as e:
-                logger.warning(
-                    "Failed to hash file %s: %s", filepath, e
-                )
+                logger.warning("Failed to hash file %s: %s", filepath, e)
                 continue
 
             if new_hash == stored_hash:
                 # Mtime changed but content identical (e.g., file was touched)
                 # Update stored mtime to avoid re-checking next cycle
-                logger.debug(
-                    "File touched (mtime changed, hash same): %s", filepath
-                )
+                logger.debug("File touched (mtime changed, hash same): %s", filepath)
                 self._db.update_document_mtime(doc_id, current_mtime)
                 continue
 
@@ -213,9 +203,7 @@ class DocumentMonitor:
                 filepath,
                 doc_id,
             )
-            await self._reindex_document(
-                doc, new_hash, current_mtime, current_size
-            )
+            await self._reindex_document(doc, new_hash, current_mtime, current_size)
 
     async def _reindex_document(
         self,
@@ -232,9 +220,7 @@ class DocumentMonitor:
 
         try:
             chunk_count = await self._index_fn(Path(filepath))
-            self._db.reindex_document(
-                doc_id, new_hash, mtime, chunk_count, size
-            )
+            self._db.reindex_document(doc_id, new_hash, mtime, chunk_count, size)
             self._reindex_count += 1
             logger.info(
                 "Re-indexed %s: %d chunks (doc_id=%s)",

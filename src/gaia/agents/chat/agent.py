@@ -52,7 +52,9 @@ class ChatAgentConfig:
 
     # RAG settings
     rag_documents: List[str] = field(default_factory=list)
-    library_documents: List[str] = field(default_factory=list)  # Available but not auto-indexed
+    library_documents: List[str] = field(
+        default_factory=list
+    )  # Available but not auto-indexed
     watch_directories: List[str] = field(default_factory=list)
     chunk_size: int = 500
     chunk_overlap: int = 100
@@ -99,7 +101,9 @@ class ChatAgent(
         # Now use config for all initialization
         # Store RAG configuration from config
         self.rag_documents = config.rag_documents
-        self.library_documents = config.library_documents  # Available but not auto-indexed
+        self.library_documents = (
+            config.library_documents
+        )  # Available but not auto-indexed
         self.watch_directories = config.watch_directories
         self.chunk_size = config.chunk_size
         self.max_chunks = config.max_chunks
@@ -296,7 +300,10 @@ Always format your responses using Markdown for readability:
 """
 
         # Add indexed documents section
-        prompt = base_prompt + indexed_docs_section + """
+        prompt = (
+            base_prompt
+            + indexed_docs_section
+            + """
 **WHEN TO USE TOOLS VS DIRECT ANSWERS:**
 
 Use Format 1 (answer) for:
@@ -515,6 +522,7 @@ When user tries to index files with unsupported extensions:
 
 IMPORTANT: Always include the GitHub issue link when reporting unsupported features.
 The link format is: https://github.com/amd/gaia/issues/new?template=feature_request.md&title=[Feature]%20<URL-encoded-short-title>"""
+        )
 
         return prompt
 

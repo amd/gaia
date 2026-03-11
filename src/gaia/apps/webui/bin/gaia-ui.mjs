@@ -229,8 +229,10 @@ async function serveFrontend(port) {
     const candidate = resolve(distDir, "." + urlPath);
     const resolvedDistDir = resolve(distDir);
 
-    // Verify the resolved path is within the dist directory
-    if (!candidate.startsWith(resolvedDistDir + "/") && candidate !== resolvedDistDir) {
+    // Verify the resolved path is within the dist directory.
+    // Use path.sep for cross-platform safety (Windows uses "\", Unix uses "/").
+    const sep = resolvedDistDir.includes("\\") ? "\\" : "/";
+    if (!candidate.startsWith(resolvedDistDir + sep) && candidate !== resolvedDistDir) {
       return indexPath;
     }
 

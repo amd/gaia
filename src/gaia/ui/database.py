@@ -139,9 +139,7 @@ class ChatDatabase:
                 for row in self._conn.execute("PRAGMA table_info(documents)").fetchall()
             ]
             if "file_mtime" not in doc_cols:
-                self._conn.execute(
-                    "ALTER TABLE documents ADD COLUMN file_mtime REAL"
-                )
+                self._conn.execute("ALTER TABLE documents ADD COLUMN file_mtime REAL")
                 self._conn.commit()
                 logger.info("Migrated documents table: added file_mtime column")
         except Exception as e:

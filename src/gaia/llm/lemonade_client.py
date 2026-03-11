@@ -1334,8 +1334,14 @@ class LemonadeClient:
         # The OpenAI client validates parameters strictly, so non-standard
         # ones (repeat_penalty, repeat_last_n, etc.) must go via extra_body.
         _OPENAI_STANDARD = {
-            "frequency_penalty", "presence_penalty", "top_p", "n",
-            "seed", "user", "response_format", "logit_bias",
+            "frequency_penalty",
+            "presence_penalty",
+            "top_p",
+            "n",
+            "seed",
+            "user",
+            "response_format",
+            "logit_bias",
         }
         extra_body = {}
         standard_kwargs = {}

@@ -39,7 +39,8 @@ PYLINT_CONFIG = ".pylintrc"
 # R0401: Cyclic import
 # E0401: Import error (handled separately)
 # W0718: Broad exception
-DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
+# W0212: Protected access (common in intra-package imports of _helper functions)
+DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718,W0212"
 EXCLUDE_DIRS = (
     ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
 )

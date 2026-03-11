@@ -119,9 +119,7 @@ async def upload_file(file: UploadFile = File(...)):
         dest_path.write_bytes(content)
     except OSError as e:
         logger.error("Failed to save uploaded file %s: %s", unique_name, e)
-        raise HTTPException(
-            status_code=500, detail="Failed to save uploaded file"
-        )
+        raise HTTPException(status_code=500, detail="Failed to save uploaded file")
 
     # Determine content type
     content_type = file.content_type or "application/octet-stream"
@@ -184,19 +182,22 @@ async def browse_files(path: Optional[str] = None):
 
     raw_path = Path(path)
 
-    # Do not follow symlinks (must check before resolve)
-    if raw_path.is_symlink():
-        raise HTTPException(
-            status_code=400, detail="Symbolic links are not supported"
-        )
-
     resolved = raw_path.resolve(strict=False)
+
+    # Security: restrict browsing to user's home directory FIRST, before
+    # ANY filesystem operations (is_symlink/is_dir can throw PermissionError
+    # on protected OS paths).
+    ensure_within_home(resolved)
+
+    # Check symlink after home restriction
+    try:
+        if raw_path.is_symlink():
+            raise HTTPException(status_code=400, detail="Symbolic links are not supported")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     if not resolved.is_dir():
         raise HTTPException(status_code=404, detail="Directory not found")
-
-    # Security: restrict browsing to user's home directory
-    ensure_within_home(resolved)
 
     # Determine parent path (clamped to home directory)
     home = Path.home()
@@ -292,20 +293,11 @@ async def open_file_or_folder(request: OpenFileRequest):
     raw_path = Path(file_path)
     reveal = request.reveal
 
-    # Security: reject symlinks BEFORE resolving so resolve() can't
-    # silently redirect to an unintended target.
-    if raw_path.is_symlink():
-        raise HTTPException(
-            status_code=400, detail="Symbolic links are not supported"
-        )
-
     resolved = raw_path.resolve(strict=False)
 
-    if not resolved.exists():
-        raise HTTPException(status_code=404, detail="Path not found")
-
-    # Security: restrict to user's home directory to prevent opening
-    # arbitrary system files (especially important when tunnel is active)
+    # Security: restrict to user's home directory FIRST, before ANY
+    # filesystem operations (is_symlink/exists can throw PermissionError
+    # on protected OS paths).
     home = Path.home()
     try:
         resolved.relative_to(home)
@@ -314,6 +306,16 @@ async def open_file_or_folder(request: OpenFileRequest):
             status_code=403,
             detail="Access restricted to files under user home directory",
         )
+
+    # Check symlink after home restriction
+    try:
+        if raw_path.is_symlink():
+            raise HTTPException(status_code=400, detail="Symbolic links are not supported")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail="Path not found")
 
     try:
         if platform.system() == "Windows":
@@ -336,7 +338,11 @@ async def open_file_or_folder(request: OpenFileRequest):
 
         return {"status": "ok", "path": str(resolved)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to open file/folder %s: %s", resolved, e)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to open file or folder. Check server logs for details.",
+        )
 
 
 # ── File Search ──────────────────────────────────────────────────────────────
@@ -375,9 +381,7 @@ async def search_files(
     extensions = None
     if file_types:
         extensions = {
-            f".{ext.strip().lower()}"
-            for ext in file_types.split(",")
-            if ext.strip()
+            f".{ext.strip().lower()}" for ext in file_types.split(",") if ext.strip()
         }
 
     def _do_search() -> tuple:
@@ -395,9 +399,7 @@ async def search_files(
                 return file_path.suffix.lower() in extensions
             return True
 
-        def _scan(
-            directory: Path, max_depth: int = 5, depth: int = 0
-        ):
+        def _scan(directory: Path, max_depth: int = 5, depth: int = 0):
             if depth > max_depth or len(matching_files) >= max_results:
                 return
             if not directory.exists() or not directory.is_dir():
@@ -480,9 +482,7 @@ async def search_files(
 
     # Run blocking scan in a thread to avoid blocking the event loop
     loop = asyncio.get_running_loop()
-    matching_files, searched_locations = await loop.run_in_executor(
-        None, _do_search
-    )
+    matching_files, searched_locations = await loop.run_in_executor(None, _do_search)
 
     return FileSearchResponse(
         results=[FileSearchResult(**f) for f in matching_files],
@@ -515,20 +515,26 @@ async def preview_file(path: str, lines: int = 50):
 
     raw_path = Path(path)
 
-    # Check symlink before resolve (resolve follows symlinks)
-    if raw_path.is_symlink():
-        raise HTTPException(status_code=400, detail="Symbolic links not supported")
-
+    # Resolve without strict mode (doesn't require the path to exist)
     resolved = raw_path.resolve(strict=False)
+
+    # Security: restrict previews to user's home directory FIRST, before
+    # ANY filesystem operations (is_symlink/exists/is_file can all throw
+    # PermissionError on protected OS paths like C:\Windows\System32\...).
+    ensure_within_home(resolved)
+
+    # Check symlink before other filesystem operations
+    try:
+        if raw_path.is_symlink():
+            raise HTTPException(status_code=400, detail="Symbolic links not supported")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     if not resolved.exists():
         raise HTTPException(status_code=404, detail="File not found")
 
     if not resolved.is_file():
         raise HTTPException(status_code=400, detail="Path is not a file")
-
-    # Security: restrict previews to user's home directory
-    ensure_within_home(resolved)
 
     lines = min(max(lines, 1), 200)
     stat = resolved.stat()

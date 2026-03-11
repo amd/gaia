@@ -22,6 +22,7 @@ import webbrowser
 from typing import Any, Dict
 
 import requests
+from mcp.server.fastmcp import FastMCP
 
 from gaia.ui.sse_handler import (
     _THINK_TAG_SUB_RE,
@@ -29,7 +30,6 @@ from gaia.ui.sse_handler import (
     _TOOL_CALL_JSON_SUB_RE,
     _TRAILING_CODE_FENCE_RE,
 )
-from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 

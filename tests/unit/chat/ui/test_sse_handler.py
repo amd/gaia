@@ -140,19 +140,22 @@ class TestPrintProcessingStart:
         handler.print_processing_start("hello", 10)
         assert handler._tool_count == 0
 
-    def test_emits_thinking_event_with_model_id(self, handler):
+    def test_suppresses_thinking_event(self, handler):
+        """print_processing_start no longer emits a thinking event.
+
+        The "Sending to <model>..." message was suppressed because the
+        streaming chat flow in _chat_helpers already emits its own
+        "Connecting to ..." thinking event, so the duplicate added noise.
+        """
         handler.print_processing_start("hello", 10, model_id="qwen")
         events = _drain(handler)
-        assert len(events) == 1
-        assert events[0]["type"] == "thinking"
-        assert events[0]["content"] == "Sending to qwen..."
+        assert len(events) == 0
 
-    def test_emits_thinking_event_default_model_label(self, handler):
+    def test_suppresses_thinking_event_no_model(self, handler):
+        """Same suppression applies when no model_id is provided."""
         handler.print_processing_start("hello", 10)
         events = _drain(handler)
-        assert len(events) == 1
-        assert events[0]["type"] == "thinking"
-        assert events[0]["content"] == "Sending to local LLM..."
+        assert len(events) == 0
 
 
 # ===========================================================================
@@ -1439,9 +1442,10 @@ class TestEventSequences:
         events = _drain(handler)
 
         # Verify event types in order
+        # Note: print_processing_start no longer emits a thinking event
+        # (it was suppressed to reduce noise since _chat_helpers emits its own)
         event_types = [e["type"] if e is not None else None for e in events]
         assert event_types == [
-            "thinking",  # processing_start
             "step",  # step_header
             "thinking",  # thought
             "tool_start",  # tool_usage

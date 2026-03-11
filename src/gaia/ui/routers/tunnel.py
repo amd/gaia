@@ -26,9 +26,11 @@ async def start_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
         status = await tunnel.start()
         return status
     except Exception as e:
-        error_msg = str(e)
-        logger.error("Failed to start tunnel: %s", error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
+        logger.error("Failed to start tunnel: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to start tunnel. Check server logs for details.",
+        )
 
 
 @router.post("/api/tunnel/stop")
@@ -39,9 +41,11 @@ async def stop_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
         await tunnel.stop()
         return {"active": False}
     except Exception as e:
-        error_msg = str(e)
-        logger.error("Failed to stop tunnel: %s", error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
+        logger.error("Failed to stop tunnel: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to stop tunnel. Check server logs for details.",
+        )
 
 
 @router.get("/api/tunnel/status")

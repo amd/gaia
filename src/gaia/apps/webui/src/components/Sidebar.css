@@ -152,7 +152,7 @@
     font-family: var(--font-mono);
     transition: border-color var(--duration) var(--ease);
 }
-.sidebar-search input:focus { border-color: var(--terminal-green-dim); box-shadow: 0 0 6px rgba(0, 255, 159, 0.06); }
+.sidebar-search input:focus { border-color: rgba(226, 60, 64, 0.4); box-shadow: 0 0 6px rgba(226, 60, 64, 0.08); }
 .sidebar-search input::placeholder { color: var(--text-muted); font-family: var(--font-mono); }
 
 /* Session list */
@@ -198,12 +198,12 @@
 .session-item.active {
     background: var(--bg-active);
     font-weight: 500;
-    border-left: 2px solid var(--terminal-green-dim);
+    border-left: 2px solid var(--amd-red);
     padding-left: 8px;
 }
 
 [data-theme="dark"] .session-item.active {
-    box-shadow: inset 0 0 12px rgba(0, 255, 159, 0.03);
+    box-shadow: inset 0 0 12px rgba(226, 60, 64, 0.06);
 }
 
 .session-item:focus-visible {

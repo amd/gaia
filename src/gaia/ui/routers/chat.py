@@ -120,12 +120,8 @@ async def send_message(
                 )
             else:
                 # Non-streaming response
-                response_text = await srv._get_chat_response(
-                    db, session, request
-                )
-                msg_id = db.add_message(
-                    request.session_id, "assistant", response_text
-                )
+                response_text = await srv._get_chat_response(db, session, request)
+                msg_id = db.add_message(request.session_id, "assistant", response_text)
                 return ChatResponse(
                     message_id=msg_id,
                     content=response_text,

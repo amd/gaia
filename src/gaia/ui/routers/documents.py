@@ -33,6 +33,7 @@ from ..utils import (
     LARGE_FILE_THRESHOLD,
     compute_file_hash,
     doc_to_response,
+    ensure_within_home,
     sanitize_document_path,
 )
 
@@ -126,9 +127,7 @@ async def upload_by_path(
             chunk_count = await _index_document(filepath)
             # Check if task was cancelled while we were indexing
             if doc_id in indexing_tasks:
-                db.update_document_status(
-                    doc_id, "complete", chunk_count=chunk_count
-                )
+                db.update_document_status(doc_id, "complete", chunk_count=chunk_count)
                 logger.info(
                     "Background indexing complete for %s: %d chunks",
                     filepath.name,
@@ -216,9 +215,7 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
 
 
 @router.post("/api/documents/index-folder", response_model=IndexFolderResponse)
-async def index_folder(
-    request: IndexFolderRequest, db: ChatDatabase = Depends(get_db)
-):
+async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(get_db)):
     """Index all supported documents in a folder.
 
     Scans the given folder for files with extensions in
@@ -236,12 +233,20 @@ async def index_folder(
         raise HTTPException(status_code=400, detail="Invalid folder path")
 
     raw_folder = Path(folder_path)
-    if raw_folder.is_symlink():
-        raise HTTPException(
-            status_code=400, detail="Symbolic links are not supported"
-        )
 
     resolved = raw_folder.resolve(strict=False)
+
+    # Security: restrict folder indexing to user's home directory FIRST,
+    # before ANY filesystem operations (is_symlink/exists/is_dir can throw
+    # PermissionError on protected OS paths).
+    ensure_within_home(resolved)
+
+    # Check symlink after home restriction
+    try:
+        if raw_folder.is_symlink():
+            raise HTTPException(status_code=400, detail="Symbolic links are not supported")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     if not resolved.exists():
         raise HTTPException(status_code=404, detail="Folder not found")
@@ -252,9 +257,7 @@ async def index_folder(
     # Collect all candidate files
     candidate_files: List[Path] = []
     try:
-        pattern_iter = (
-            resolved.rglob("*") if request.recursive else resolved.iterdir()
-        )
+        pattern_iter = resolved.rglob("*") if request.recursive else resolved.iterdir()
         for item in pattern_iter:
             if item.is_symlink():
                 continue

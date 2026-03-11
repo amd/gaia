@@ -14,16 +14,13 @@ Tests cover:
 
 import csv
 import fnmatch
-import os
 import types
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
-
 
 # ---------------------------------------------------------------------------
 # Fixture: minimal mixin instance with helpers extracted
@@ -359,28 +356,16 @@ class TestRelativeTime:
         assert result == old_dt.strftime("%Y-%m-%d")
 
     def test_plural_vs_singular_minutes(self, helpers):
-        assert "minute " in helpers.relative_time(
-            datetime.now() - timedelta(minutes=1)
-        )
-        assert "minutes" in helpers.relative_time(
-            datetime.now() - timedelta(minutes=2)
-        )
+        assert "minute " in helpers.relative_time(datetime.now() - timedelta(minutes=1))
+        assert "minutes" in helpers.relative_time(datetime.now() - timedelta(minutes=2))
 
     def test_plural_vs_singular_hours(self, helpers):
-        assert "hour " in helpers.relative_time(
-            datetime.now() - timedelta(hours=1)
-        )
-        assert "hours" in helpers.relative_time(
-            datetime.now() - timedelta(hours=2)
-        )
+        assert "hour " in helpers.relative_time(datetime.now() - timedelta(hours=1))
+        assert "hours" in helpers.relative_time(datetime.now() - timedelta(hours=2))
 
     def test_plural_vs_singular_weeks(self, helpers):
-        assert "week " in helpers.relative_time(
-            datetime.now() - timedelta(weeks=1)
-        )
-        assert "weeks" in helpers.relative_time(
-            datetime.now() - timedelta(weeks=2)
-        )
+        assert "week " in helpers.relative_time(datetime.now() - timedelta(weeks=1))
+        assert "weeks" in helpers.relative_time(datetime.now() - timedelta(weeks=2))
 
     def test_edge_59_seconds(self, helpers):
         """59 seconds should still be 'just now'."""
@@ -455,7 +440,9 @@ class TestReadTabularFile:
 
     def test_valid_csv(self, tmp_path):
         csv_file = tmp_path / "data.csv"
-        csv_file.write_text("name,age,city\nAlice,30,NYC\nBob,25,LA\n", encoding="utf-8")
+        csv_file.write_text(
+            "name,age,city\nAlice,30,NYC\nBob,25,LA\n", encoding="utf-8"
+        )
 
         rows, columns, error = self._read_csv(str(csv_file))
         assert error is None
@@ -520,7 +507,7 @@ class TestReadTabularFile:
         assert error is None
         assert len(rows) == 1
         assert rows[0]["name"] == "O'Brien"
-        assert 'quotes' in rows[0]["description"]
+        assert "quotes" in rows[0]["description"]
 
     def test_csv_with_utf8_bom(self, tmp_path):
         """UTF-8 BOM: the encoding loop tries utf-8 first, which succeeds

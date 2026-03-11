@@ -7,8 +7,6 @@ Tests the pure functions in gaia.agents.chat.tools.rag_tools that were
 modified in the Agent UI PR to improve nil-RAG handling and page extraction.
 """
 
-import pytest
-
 from gaia.agents.chat.tools.rag_tools import extract_page_from_chunk
 
 
@@ -49,9 +47,7 @@ class TestExtractPageFromChunk:
             "Content without page marker",
             "More content without page marker",
         ]
-        result = extract_page_from_chunk(
-            chunks[3], chunk_index=3, all_chunks=chunks
-        )
+        result = extract_page_from_chunk(chunks[3], chunk_index=3, all_chunks=chunks)
         assert result == 2
 
     def test_backward_search_limited_to_5_chunks(self):
@@ -68,9 +64,7 @@ class TestExtractPageFromChunk:
         ]
         # chunk_index=7, looks back at indices 6,5,4,3 (max 5 back)
         # [Page 1] is at index 0, which is > 5 chunks back from index 7
-        result = extract_page_from_chunk(
-            chunks[7], chunk_index=7, all_chunks=chunks
-        )
+        result = extract_page_from_chunk(chunks[7], chunk_index=7, all_chunks=chunks)
         assert result is None
 
     def test_backward_search_finds_closest_page(self):
@@ -80,9 +74,7 @@ class TestExtractPageFromChunk:
             "[Page 5] Fifth",
             "No marker here",
         ]
-        result = extract_page_from_chunk(
-            chunks[2], chunk_index=2, all_chunks=chunks
-        )
+        result = extract_page_from_chunk(chunks[2], chunk_index=2, all_chunks=chunks)
         assert result == 5
 
     # -- No page found --
@@ -118,9 +110,7 @@ class TestExtractPageFromChunk:
 
     def test_backward_search_with_none_all_chunks(self):
         """Backward search with all_chunks=None does nothing."""
-        result = extract_page_from_chunk(
-            "No marker", chunk_index=5, all_chunks=None
-        )
+        result = extract_page_from_chunk("No marker", chunk_index=5, all_chunks=None)
         assert result is None
 
     def test_page_zero(self):

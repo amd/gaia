@@ -204,9 +204,7 @@ def sanitize_document_path(user_path: str) -> Path:
 
     # Check symlink before resolve (resolve follows symlinks silently)
     if Path(user_path).is_symlink():
-        raise HTTPException(
-            status_code=400, detail="Symbolic links are not supported"
-        )
+        raise HTTPException(status_code=400, detail="Symbolic links are not supported")
 
     # Resolve to absolute canonical path (eliminates .., etc.)
     resolved = Path(user_path).resolve()
@@ -221,7 +219,18 @@ def sanitize_document_path(user_path: str) -> Path:
         # Provide categorized feedback for common unsupported types
         _UNSUPPORTED_CATEGORIES = {
             "image": (
-                {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp", ".ico", ".heic", ".heif"},
+                {
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".gif",
+                    ".bmp",
+                    ".tiff",
+                    ".webp",
+                    ".ico",
+                    ".heic",
+                    ".heif",
+                },
                 "Image files cannot be indexed for text search. "
                 "Tip: If your images contain text, convert them to PDF first — GAIA can extract text from PDFs.",
             ),

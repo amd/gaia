@@ -63,7 +63,7 @@ async def create_session(
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to create session: {e}",
+            detail="Failed to create session. Check server logs for details.",
         )
 
 
@@ -102,9 +102,7 @@ async def delete_session(session_id: str, db: ChatDatabase = Depends(get_db)):
 # ── Messages ─────────────────────────────────────────────────────────────────
 
 
-@router.get(
-    "/api/sessions/{session_id}/messages", response_model=MessageListResponse
-)
+@router.get("/api/sessions/{session_id}/messages", response_model=MessageListResponse)
 async def get_messages(
     session_id: str,
     limit: int = 100,

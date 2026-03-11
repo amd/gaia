@@ -12,10 +12,10 @@ import type { Message, StreamEvent, AgentStep, Attachment } from '../types';
 import './ChatView.css';
 
 const EMPTY_SUGGESTIONS = [
-    'Summarize a document for me',
-    'Write a Python script',
-    'Explain a concept simply',
-    'Help me brainstorm ideas',
+    'Summarize a document',
+    'Find a file on my computer',
+    'Analyze a spreadsheet',
+    'Show my recent files',
 ];
 
 /**
@@ -904,9 +904,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         <div className="empty-chat-icon">
                             <MessageSquare size={36} strokeWidth={1.2} />
                         </div>
-                        <h4 className="empty-chat-title">Start the conversation</h4>
+                        <h4 className="empty-chat-title">What can I help you with?</h4>
                         <p className="empty-chat-desc">
-                            Ask anything &mdash; your data stays on this device.
+                            Ask about your documents, search files, or analyze data &mdash; powered by local AI.
                         </p>
                         <div className="empty-chat-suggestions">
                             {EMPTY_SUGGESTIONS.map((s) => (

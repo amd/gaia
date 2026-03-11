@@ -865,7 +865,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
             # patterns that indicate a structured response is buried in the text
             embedded_json = self._extract_embedded_tool_call(response)
             if embedded_json:
-                logger.debug(f"[PARSE] Found embedded tool call in text response")
+                logger.debug("[PARSE] Found embedded tool call in text response")
                 return embedded_json
             logger.debug(
                 f"[PARSE] Plain text conversational response (length: {len(response)})"

@@ -372,8 +372,8 @@
 }
 
 .input-box:focus-within {
-    border-color: rgba(0, 255, 159, 0.3);
-    box-shadow: 0 0 8px rgba(0, 255, 159, 0.06);
+    border-color: rgba(226, 60, 64, 0.4);
+    box-shadow: 0 0 8px rgba(226, 60, 64, 0.08);
 }
 
 .msg-input {
@@ -484,9 +484,9 @@
 .scroll-bottom-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
-    border-color: var(--terminal-green-dim);
+    border-color: var(--amd-red);
     transform: translateX(-50%) translateY(-2px);
-    box-shadow: var(--terminal-glow);
+    box-shadow: 0 0 8px rgba(226, 60, 64, 0.15);
 }
 
 .input-footer {

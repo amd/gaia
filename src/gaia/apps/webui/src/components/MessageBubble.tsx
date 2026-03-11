@@ -143,10 +143,8 @@ function cleanToolCallContent(content: string): string {
     // Remove leading/trailing whitespace
     cleaned = cleaned.trim();
 
-    // If the result is empty after cleaning, show a minimal response
-    if (!cleaned) {
-        cleaned = '*(Response processed — see agent activity above for details)*';
-    }
+    // If the result is empty after cleaning, return empty —
+    // the agent activity panel already shows what happened.
 
     return cleaned;
 }

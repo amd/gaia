@@ -41,9 +41,7 @@ _TOOL_CALL_JSON_SUB_RE = re.compile(
 )
 
 # Regex to remove {"thought": "..."} JSON blocks from LLM output.
-_THOUGHT_JSON_SUB_RE = re.compile(
-    r'\s*\{\s*"thought"\s*:\s*"[^"]*"[^}]*\}\s*'
-)
+_THOUGHT_JSON_SUB_RE = re.compile(r'\s*\{\s*"thought"\s*:\s*"[^"]*"[^}]*\}\s*')
 
 # Regex to remove <think>...</think> tags that some models output.
 _THINK_TAG_SUB_RE = re.compile(r"<think>[\s\S]*?</think>")
@@ -83,13 +81,8 @@ class SSEOutputHandler(OutputHandler):
         self._start_time = time.time()
         self._step_count = 0
         self._tool_count = 0
-        model_label = model_id or "local LLM"
-        self._emit(
-            {
-                "type": "thinking",
-                "content": f"Sending to {model_label}...",
-            }
-        )
+        # Suppress "Sending to <model>..." — the agent always does this
+        # and it adds noise without informing the user of anything new.
 
     def print_step_header(self, step_num: int, step_limit: int):
         self._step_count = step_num
@@ -238,21 +231,33 @@ class SSEOutputHandler(OutputHandler):
                 structured_chunks = []
                 for c in chunks[:8]:  # Limit to 8 chunks max
                     if isinstance(c, dict):
-                        structured_chunks.append({
-                            "id": c.get("chunk_id", 0),
-                            "source": Path(c["source_file"]).name if c.get("source_file") else None,
-                            "sourcePath": c.get("source_file", ""),
-                            "page": c.get("page"),
-                            "score": round(c.get("relevance_score", 0), 2) if c.get("relevance_score") else None,
-                            "preview": (c.get("content", "") or "")[:150],
-                            "content": (c.get("content", "") or "")[:800],
-                        })
+                        structured_chunks.append(
+                            {
+                                "id": c.get("chunk_id", 0),
+                                "source": (
+                                    Path(c["source_file"]).name
+                                    if c.get("source_file")
+                                    else None
+                                ),
+                                "sourcePath": c.get("source_file", ""),
+                                "page": c.get("page"),
+                                "score": (
+                                    round(c.get("relevance_score", 0), 2)
+                                    if c.get("relevance_score")
+                                    else None
+                                ),
+                                "preview": (c.get("content", "") or "")[:150],
+                                "content": (c.get("content", "") or "")[:800],
+                            }
+                        )
                     else:
-                        structured_chunks.append({
-                            "id": len(structured_chunks) + 1,
-                            "preview": str(c)[:150],
-                            "content": str(c)[:800],
-                        })
+                        structured_chunks.append(
+                            {
+                                "id": len(structured_chunks) + 1,
+                                "preview": str(c)[:150],
+                                "content": str(c)[:800],
+                            }
+                        )
                 event["result_data"] = {
                     "type": "search_results",
                     "count": len(chunks),

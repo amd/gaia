@@ -189,9 +189,6 @@ class FileSearchToolsMixin:
 
                 logger.debug("Phase 1: Searching common document locations...")
 
-                # Use a set to deduplicate (CWD may overlap with common locations)
-                seen_paths = set(matching_files)
-
                 common_locations = [
                     home / "Documents",
                     home / "Downloads",
@@ -201,7 +198,6 @@ class FileSearchToolsMixin:
                     home / "Dropbox",
                 ]
 
-                pre_count = len(matching_files)
                 for location in common_locations:
                     if len(matching_files) >= 20:
                         break

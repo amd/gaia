@@ -142,7 +142,8 @@ async def _get_chat_response(
         if all_doc_paths:
             logger.info(
                 "Chat: %d auto-index doc(s), %d library doc(s)",
-                len(rag_file_paths), len(library_paths),
+                len(rag_file_paths),
+                len(library_paths),
             )
 
         allowed = _compute_allowed_paths(all_doc_paths)
@@ -167,9 +168,7 @@ async def _get_chat_response(
                 if len(assistant_msg) > _MAX_CHARS:
                     a += "... (truncated)"
                 agent.conversation_history.append({"role": "user", "content": u})
-                agent.conversation_history.append(
-                    {"role": "assistant", "content": a}
-                )
+                agent.conversation_history.append({"role": "assistant", "content": a})
 
         result = agent.process_query(request.message)
         if isinstance(result, dict):
@@ -230,7 +229,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         if all_doc_paths:
             logger.info(
                 "Streaming chat: %d auto-index doc(s), %d library doc(s)",
-                len(rag_file_paths), len(library_paths),
+                len(rag_file_paths),
+                len(library_paths),
             )
 
         allowed = _compute_allowed_paths(all_doc_paths)
@@ -259,8 +259,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
                 # -- Phase 1: Configure --
                 sse_handler._emit(
-                    {"type": "status", "status": "info",
-                     "message": "Configuring agent..."}
+                    {
+                        "type": "status",
+                        "status": "info",
+                        "message": "Configuring agent...",
+                    }
                 )
 
                 # Build config: session-specific docs auto-index,
@@ -278,8 +281,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
                 # -- Phase 2: LLM connection --
                 sse_handler._emit(
-                    {"type": "thinking",
-                     "content": f"Connecting to {model_label}..."}
+                    {"type": "thinking", "content": f"Connecting to {model_label}..."}
                 )
 
                 agent = ChatAgent(config)
@@ -287,8 +289,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
                 elapsed_init = round(_time.time() - agent_start, 1)
                 sse_handler._emit(
-                    {"type": "status", "status": "info",
-                     "message": f"Agent ready ({elapsed_init}s)"}
+                    {
+                        "type": "status",
+                        "status": "info",
+                        "message": f"Agent ready ({elapsed_init}s)",
+                    }
                 )
 
                 # -- Phase 3: RAG indexing (session-specific docs only) --
@@ -297,8 +302,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 # them on demand based on the user's query.
                 if rag_file_paths and agent.rag:
                     sse_handler._emit(
-                        {"type": "tool_start", "tool": "index_documents",
-                         "detail": f"Indexing {len(rag_file_paths)} document(s) for RAG"}
+                        {
+                            "type": "tool_start",
+                            "tool": "index_documents",
+                            "detail": f"Indexing {len(rag_file_paths)} document(s) for RAG",
+                        }
                     )
                     idx_start = _time.time()
                     doc_stats = []
@@ -306,8 +314,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     for i, fpath in enumerate(rag_file_paths, 1):
                         doc_name = Path(fpath).name
                         sse_handler._emit(
-                            {"type": "status", "status": "info",
-                             "message": f"Indexing [{i}/{len(rag_file_paths)}]: {doc_name}"}
+                            {
+                                "type": "status",
+                                "status": "info",
+                                "message": f"Indexing [{i}/{len(rag_file_paths)}]: {doc_name}",
+                            }
                         )
                         try:
                             result = agent.rag.index_document(fpath)
@@ -317,8 +328,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                 logger.warning("RAG error for %s: %s", fpath, error)
                                 doc_stats.append(f"  {doc_name} — ERROR: {error}")
                                 sse_handler._emit(
-                                    {"type": "status", "status": "warning",
-                                     "message": f"Error indexing {doc_name}: {error}"}
+                                    {
+                                        "type": "status",
+                                        "status": "warning",
+                                        "message": f"Error indexing {doc_name}: {error}",
+                                    }
                                 )
                             else:
                                 agent.indexed_files.add(fpath)
@@ -341,8 +355,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             logger.warning("Failed to index %s: %s", fpath, idx_err)
                             doc_stats.append(f"  {doc_name} — FAILED: {idx_err}")
                             sse_handler._emit(
-                                {"type": "status", "status": "warning",
-                                 "message": f"Failed to index {doc_name}: {idx_err}"}
+                                {
+                                    "type": "status",
+                                    "status": "warning",
+                                    "message": f"Failed to index {doc_name}: {idx_err}",
+                                }
                             )
                     idx_elapsed = round(_time.time() - idx_start, 1)
                     summary_lines = [
@@ -351,10 +368,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         "",
                     ] + doc_stats
                     sse_handler._emit(
-                        {"type": "tool_result",
-                         "title": "Index Documents",
-                         "summary": "\n".join(summary_lines),
-                         "success": True}
+                        {
+                            "type": "tool_result",
+                            "title": "Index Documents",
+                            "summary": "\n".join(summary_lines),
+                            "success": True,
+                        }
                     )
 
                 # -- Phase 4: Conversation history --
@@ -367,8 +386,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 if history_pairs:
                     recent = history_pairs[-_MAX_HISTORY_PAIRS:]
                     sse_handler._emit(
-                        {"type": "status", "status": "info",
-                         "message": f"Restoring {len(recent)} previous message(s)"}
+                        {
+                            "type": "status",
+                            "status": "info",
+                            "message": f"Restoring {len(recent)} previous message(s)",
+                        }
                     )
                     for user_msg, assistant_msg in recent:
                         if hasattr(agent, "conversation_history"):
@@ -386,8 +408,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
                 # -- Phase 5: Query processing --
                 sse_handler._emit(
-                    {"type": "thinking",
-                     "content": f"Sending query to {model_label}..."}
+                    {
+                        "type": "thinking",
+                        "content": f"Sending query to {model_label}...",
+                    }
                 )
 
                 result = agent.process_query(request.message)
@@ -422,9 +446,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             if _loop_time.time() - _stream_start > _STREAM_TIMEOUT:
                 logger.error("Streaming response timed out after %ds", _STREAM_TIMEOUT)
                 timeout_event = json.dumps(
-                    {"type": "agent_error",
-                     "content": f"Response timed out after {_STREAM_TIMEOUT}s. "
-                                "Try a simpler query or break it into smaller questions."}
+                    {
+                        "type": "agent_error",
+                        "content": f"Response timed out after {_STREAM_TIMEOUT}s. "
+                        "Try a simpler query or break it into smaller questions.",
+                    }
                 )
                 yield f"data: {timeout_event}\n\n"
                 break
