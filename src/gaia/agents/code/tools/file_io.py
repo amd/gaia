@@ -501,6 +501,8 @@ class FileIOToolsMixin:
             """Write content to any file (TypeScript, JavaScript, JSON, etc.) without syntax validation.
 
             Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
+            Includes security guardrails: path validation, blocked directory enforcement,
+            sensitive file protection, size limits, backup creation, and audit logging.
 
             Args:
                 file_path: Path where to write the file
@@ -520,6 +522,24 @@ class FileIOToolsMixin:
                     if not path.is_absolute():
                         path = base / path
                 path = path.resolve()
+                content_size = len(content.encode("utf-8"))
+
+                # Security: validate write access
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    is_allowed, reason = path_validator.validate_write(
+                        str(path), content_size=content_size
+                    )
+                    if not is_allowed:
+                        path_validator.audit_write(
+                            "write", str(path), content_size, "denied", reason
+                        )
+                        return {"status": "error", "error": reason}
+
+                    # Backup existing file before overwrite
+                    backup_path = None
+                    if path.exists():
+                        backup_path = path_validator.create_backup(str(path))
 
                 # Create parent directories if requested
                 if create_dirs and not path.parent.exists():
@@ -540,13 +560,30 @@ class FileIOToolsMixin:
                             f"write_file: {path} was created but no content was written."
                         )
 
-                return {
+                # Audit successful write
+                if path_validator is not None:
+                    detail = ""
+                    if backup_path:
+                        detail = f"backup={backup_path}"
+                    path_validator.audit_write(
+                        "write", str(path), content_size, "success", detail
+                    )
+
+                result = {
                     "status": "success",
                     "file_path": str(path),
-                    "size_bytes": len(content),
+                    "size_bytes": content_size,
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
                 }
+                if path_validator is not None and backup_path:
+                    result["backup_path"] = backup_path
+                return result
             except Exception as e:
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write(
+                        "write", file_path, 0, "error", str(e)
+                    )
                 return {"status": "error", "error": str(e)}
 
         @tool
@@ -559,6 +596,8 @@ class FileIOToolsMixin:
             """Edit any file by replacing old content with new content (no syntax validation).
 
             Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
+            Includes security guardrails: path validation, blocked directory enforcement,
+            sensitive file protection, backup creation, and audit logging.
 
             Args:
                 file_path: Path to the file to edit
@@ -579,6 +618,25 @@ class FileIOToolsMixin:
                         path = base / path
                 path = path.resolve()
 
+                # Security: validate write access
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    # Check blocklist (no overwrite prompt needed for edit)
+                    is_blocked, reason = path_validator.is_write_blocked(str(path))
+                    if is_blocked:
+                        path_validator.audit_write(
+                            "edit", str(path), 0, "denied", reason
+                        )
+                        return {"status": "error", "error": reason}
+
+                    # Check allowlist
+                    if not path_validator.is_path_allowed(str(path)):
+                        reason = f"Access denied: {path} is not in allowed paths"
+                        path_validator.audit_write(
+                            "edit", str(path), 0, "denied", reason
+                        )
+                        return {"status": "error", "error": reason}
+
                 if not path.exists():
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
@@ -591,6 +649,11 @@ class FileIOToolsMixin:
                         "status": "error",
                         "error": f"Content to replace not found in {file_path}",
                     }
+
+                # Backup before editing
+                backup_path = None
+                if path_validator is not None:
+                    backup_path = path_validator.create_backup(str(path))
 
                 # Replace content
                 updated_content = current_content.replace(old_content, new_content, 1)
@@ -616,7 +679,20 @@ class FileIOToolsMixin:
                     else:
                         console.print_info(f"edit_file: No changes were made to {path}")
 
-                return {
+                # Audit successful edit
+                if path_validator is not None:
+                    detail = f"replaced {len(old_content)} chars with {len(new_content)} chars"
+                    if backup_path:
+                        detail += f", backup={backup_path}"
+                    path_validator.audit_write(
+                        "edit",
+                        str(path),
+                        len(updated_content),
+                        "success",
+                        detail,
+                    )
+
+                result = {
                     "status": "success",
                     "file_path": str(path),
                     "old_size": len(current_content),
@@ -624,7 +700,15 @@ class FileIOToolsMixin:
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
                     "diff": diff,
                 }
+                if backup_path:
+                    result["backup_path"] = backup_path
+                return result
             except Exception as e:
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write(
+                        "edit", file_path, 0, "error", str(e)
+                    )
                 return {"status": "error", "error": str(e)}
 
         @tool
