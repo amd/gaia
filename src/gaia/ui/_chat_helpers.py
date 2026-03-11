@@ -54,32 +54,38 @@ def _build_history_pairs(messages: list) -> list:
     return pairs
 
 
-def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> list:
+def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
     """Resolve document IDs to file paths for RAG.
 
     If the session has specific documents attached (document_ids non-empty),
-    resolves those IDs to file paths.  Otherwise falls back to ALL indexed
-    documents in the global library so that newly-indexed files are
-    immediately available to the agent without manual attachment.
+    resolves those IDs to file paths for auto-indexing.  Otherwise returns
+    them as library documents (available but not auto-indexed) so the agent
+    can index on demand based on the user's request.
 
     Returns:
-        List of file-path strings suitable for ChatAgentConfig.rag_documents.
+        Tuple of (rag_file_paths, library_file_paths).
+        - rag_file_paths: Docs to auto-index (session-specific attachments).
+        - library_file_paths: Docs available for on-demand indexing (entire library).
     """
-    rag_file_paths = []
     if document_ids:
+        # Session has specific documents attached -- auto-index these
+        rag_file_paths = []
         for doc_id in document_ids:
             doc = db.get_document(doc_id)
             if doc and doc.get("filepath"):
                 rag_file_paths.append(doc["filepath"])
             else:
                 logger.warning("Document %s not found in database, skipping", doc_id)
+        return rag_file_paths, []
     else:
-        # No specific docs attached -- use entire library
+        # No specific docs attached -- make entire library available
+        # but do NOT auto-index (let the agent decide based on user's query)
+        library_paths = []
         all_docs = db.list_documents()
         for doc in all_docs:
             if doc.get("filepath"):
-                rag_file_paths.append(doc["filepath"])
-    return rag_file_paths
+                library_paths.append(doc["filepath"])
+        return [], library_paths
 
 
 def _compute_allowed_paths(rag_file_paths: list) -> list:
@@ -127,22 +133,26 @@ async def _get_chat_response(
         history_pairs = _build_history_pairs(messages)
 
         # Resolve document IDs to file paths.
-        # If the session has specific documents attached, use those.
-        # Otherwise, use ALL documents from the global library so newly
-        # indexed documents are immediately available to the agent.
+        # Session-specific docs get auto-indexed; library docs are available
+        # for on-demand indexing by the agent based on user's query.
         document_ids = session.get("document_ids", [])
-        rag_file_paths = _resolve_rag_paths(db, document_ids)
+        rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
 
-        if rag_file_paths:
-            logger.info("Chat using %d document(s) for RAG", len(rag_file_paths))
+        all_doc_paths = rag_file_paths + library_paths
+        if all_doc_paths:
+            logger.info(
+                "Chat: %d auto-index doc(s), %d library doc(s)",
+                len(rag_file_paths), len(library_paths),
+            )
 
-        allowed = _compute_allowed_paths(rag_file_paths)
+        allowed = _compute_allowed_paths(all_doc_paths)
         config = ChatAgentConfig(
             model_id=session.get("model"),
             max_steps=10,
             silent_mode=True,
             debug=False,
             rag_documents=rag_file_paths,
+            library_documents=library_paths,
             allowed_paths=allowed,
         )
         agent = ChatAgent(config)
@@ -210,16 +220,20 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         messages = db.get_messages(request.session_id, limit=20)
         history_pairs = _build_history_pairs(messages)
 
-        # Resolve document IDs to file paths (falls back to all indexed docs)
+        # Resolve document IDs to file paths.
+        # Session-specific docs get auto-indexed; library docs are available
+        # for on-demand indexing by the agent based on user's query.
         document_ids = session.get("document_ids", [])
-        rag_file_paths = _resolve_rag_paths(db, document_ids)
+        rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
 
-        if rag_file_paths:
+        all_doc_paths = rag_file_paths + library_paths
+        if all_doc_paths:
             logger.info(
-                "Streaming chat using %d document(s) for RAG", len(rag_file_paths)
+                "Streaming chat: %d auto-index doc(s), %d library doc(s)",
+                len(rag_file_paths), len(library_paths),
             )
 
-        allowed = _compute_allowed_paths(rag_file_paths)
+        allowed = _compute_allowed_paths(all_doc_paths)
         model_id = session.get("model")
 
         # Emit immediate thinking event so the frontend shows activity right away
@@ -249,15 +263,16 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                      "message": "Configuring agent..."}
                 )
 
-                # Build config WITHOUT rag_documents -- we'll index
-                # separately so we can report per-document progress.
+                # Build config: session-specific docs auto-index,
+                # library docs passed as metadata for on-demand indexing.
                 config = ChatAgentConfig(
                     model_id=model_id,
                     max_steps=10,
                     streaming=True,
                     silent_mode=False,
                     debug=False,
-                    rag_documents=[],  # Index manually below
+                    rag_documents=[],  # Index manually below (session docs only)
+                    library_documents=library_paths,  # Available for on-demand indexing
                     allowed_paths=allowed,
                 )
 
@@ -276,7 +291,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                      "message": f"Agent ready ({elapsed_init}s)"}
                 )
 
-                # -- Phase 3: RAG indexing (per-document progress) --
+                # -- Phase 3: RAG indexing (session-specific docs only) --
+                # Only auto-index documents explicitly attached to the session.
+                # Library documents are NOT auto-indexed; the agent indexes
+                # them on demand based on the user's query.
                 if rag_file_paths and agent.rag:
                     sse_handler._emit(
                         {"type": "tool_start", "tool": "index_documents",
@@ -293,20 +311,32 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         )
                         try:
                             result = agent.rag.index_document(fpath)
-                            agent.indexed_files.add(fpath)
                             n_chunks = result.get("num_chunks", 0)
-                            total_chunks += n_chunks
-                            # Collect per-doc stats
-                            size_mb = result.get("file_size_mb", 0)
-                            size_str = (
-                                f"{size_mb:.1f} MB" if size_mb and size_mb >= 1
-                                else f"{int((size_mb or 0) * 1024)} KB"
-                            )
-                            cached = result.get("from_cache", False)
-                            doc_stats.append(
-                                f"  {doc_name} — {n_chunks} chunks, {size_str}"
-                                + (" (cached)" if cached else "")
-                            )
+                            error = result.get("error")
+                            if error:
+                                logger.warning("RAG error for %s: %s", fpath, error)
+                                doc_stats.append(f"  {doc_name} — ERROR: {error}")
+                                sse_handler._emit(
+                                    {"type": "status", "status": "warning",
+                                     "message": f"Error indexing {doc_name}: {error}"}
+                                )
+                            else:
+                                agent.indexed_files.add(fpath)
+                                total_chunks += n_chunks
+                                # Collect per-doc stats
+                                size_mb = result.get("file_size_mb", 0) or 0
+                                file_size_bytes = int(size_mb * 1024 * 1024)
+                                if size_mb >= 1:
+                                    size_str = f"{size_mb:.1f} MB"
+                                elif file_size_bytes >= 1024:
+                                    size_str = f"{file_size_bytes // 1024} KB"
+                                else:
+                                    size_str = f"{file_size_bytes} B"
+                                cached = result.get("from_cache", False)
+                                doc_stats.append(
+                                    f"  {doc_name} — {n_chunks} chunks, {size_str}"
+                                    + (" (cached)" if cached else "")
+                                )
                         except Exception as idx_err:
                             logger.warning("Failed to index %s: %s", fpath, idx_err)
                             doc_stats.append(f"  {doc_name} — FAILED: {idx_err}")

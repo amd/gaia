@@ -298,6 +298,38 @@ export async function openFileOrFolder(path: string, reveal: boolean = true): Pr
     return apiFetch('POST', '/files/open', { path, reveal });
 }
 
+/** Upload a file (image/document) to the server. */
+export async function uploadFile(file: File): Promise<{
+    filename: string;
+    original_name: string;
+    url: string;
+    size: number;
+    content_type: string;
+    is_image: boolean;
+}> {
+    const url = `${API_BASE}/files/upload`;
+    const t = log.api.time();
+    log.api.info(`POST ${url}`, { fileName: file.name, size: file.size });
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res = await fetch(url, {
+        method: 'POST',
+        body: formData,
+    });
+
+    if (!res.ok) {
+        const errorText = await res.text().catch(() => 'Upload failed');
+        log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
+        throw new Error(`Upload failed: ${errorText}`);
+    }
+
+    const data = await res.json();
+    log.api.timed(`POST ${url} -> ${res.status}`, t, data);
+    return data;
+}
+
 // -- File Search & Preview ----------------------------------------------------------
 
 export async function searchFiles(query: string, fileTypes?: string, maxResults?: number): Promise<{

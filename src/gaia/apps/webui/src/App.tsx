@@ -152,14 +152,14 @@ function App() {
         return () => window.removeEventListener('resize', handleResize);
     }, [setSidebarOpen]);
 
-    // Create new chat
+    // Create new task
     const [createError, setCreateError] = useState<string | null>(null);
 
-    const handleNewChat = useCallback(async () => {
-        log.chat.info('Creating new chat session...');
+    const handleNewTask = useCallback(async () => {
+        log.chat.info('Creating new task session...');
         setCreateError(null);
         try {
-            const session = await api.createSession({ title: 'New Chat' });
+            const session = await api.createSession({ title: 'New Task' });
             log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
             addSession(session);
             setCurrentSession(session.id);
@@ -170,23 +170,23 @@ function App() {
             log.chat.error('Failed to create session', err);
             // Trigger a status recheck to update the banner
             checkSystemStatus();
-            setCreateError('Failed to create chat session. Is the server running?');
+            setCreateError('Failed to create task. Is the server running?');
             // Auto-clear error after a few seconds
             setTimeout(() => setCreateError(null), 6000);
         }
     }, [addSession, setCurrentSession, setMessages, setSidebarOpen, checkSystemStatus]);
 
-    // Create chat with a pre-filled prompt
-    const handleNewChatWithPrompt = useCallback(async (prompt: string) => {
-        log.chat.info(`New chat with prompt: "${prompt.slice(0, 60)}..."`);
-        await handleNewChat();
+    // Create task with a pre-filled prompt
+    const handleNewTaskWithPrompt = useCallback(async (prompt: string) => {
+        log.chat.info(`New task with prompt: "${prompt.slice(0, 60)}..."`);
+        await handleNewTask();
         // Defer the event dispatch to allow React to re-render and mount
         // ChatView (which registers the event listener in useEffect).
         // Without this delay, the event fires before ChatView exists.
         setTimeout(() => {
             window.dispatchEvent(new CustomEvent('gaia:send-prompt', { detail: { prompt } }));
         }, 100);
-    }, [handleNewChat]);
+    }, [handleNewTask]);
 
     // Mobile gateway toggle
     const handleMobileToggle = useCallback(async () => {
@@ -264,7 +264,7 @@ function App() {
             />
 
             <Sidebar
-                onNewChat={handleNewChat}
+                onNewTask={handleNewTask}
                 tunnelActive={tunnelActive}
                 tunnelLoading={tunnelLoading}
                 onMobileToggle={handleMobileToggle}
@@ -278,8 +278,8 @@ function App() {
                     <ChatView key={currentSessionId} sessionId={currentSessionId} />
                 ) : (
                     <WelcomeScreen
-                        onNewChat={handleNewChat}
-                        onSendPrompt={handleNewChatWithPrompt}
+                        onNewTask={handleNewTask}
+                        onSendPrompt={handleNewTaskWithPrompt}
                     />
                 )}
             </div>

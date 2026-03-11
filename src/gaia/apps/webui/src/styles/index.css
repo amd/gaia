@@ -31,6 +31,10 @@
     --bg-user-msg: transparent;
     --bg-modal-overlay: rgba(0, 0, 0, 0.5);
 
+    /* Background image (set via App.tsx or inline style) */
+    --bg-image: none;
+    --bg-image-opacity: 0;
+
     /* Theme-aware overlay tints (visible on light backgrounds) */
     --tint-subtle: rgba(0, 0, 0, 0.03);
     --tint-hover: rgba(0, 0, 0, 0.05);
@@ -88,6 +92,10 @@
 
     --tint-subtle: rgba(0, 255, 159, 0.02);
     --tint-hover: rgba(0, 255, 159, 0.04);
+
+    /* Dark mode background image -- slightly higher opacity for atmosphere */
+    --bg-image: none;
+    --bg-image-opacity: 0;
 }
 
 /* Reset */
@@ -104,8 +112,26 @@ html, body, #root {
     -moz-osx-font-smoothing: grayscale;
 }
 
-/* Subtle scanline overlay -- very low opacity, barely perceptible */
-#root::after {
+/* Background image overlay -- uses CSS custom property set via theme.
+ * Place background images in src/assets/bg/ and import in App.tsx,
+ * or use absolute URLs. The image is applied to #root::before so it
+ * sits behind all content. Opacity is kept very low so text stays legible.
+ */
+#root::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: -1;
+    background-image: var(--bg-image, none);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    opacity: var(--bg-image-opacity, 0);
+}
+
+/* Subtle scanline overlay -- dark mode only for CRT feel */
+[data-theme="dark"] #root::after {
     content: '';
     position: fixed;
     inset: 0;
@@ -115,8 +141,8 @@ html, body, #root {
         0deg,
         transparent,
         transparent 2px,
-        rgba(0, 0, 0, 0.03) 2px,
-        rgba(0, 0, 0, 0.03) 4px
+        rgba(0, 0, 0, 0.06) 2px,
+        rgba(0, 0, 0, 0.06) 4px
     );
     mix-blend-mode: multiply;
 }
@@ -388,7 +414,7 @@ textarea:focus-visible {
     .sidebar.collapsed .session-list,
     .sidebar.collapsed .privacy-badge span:not(.privacy-dot),
     .sidebar.collapsed .version-badge,
-    .sidebar.collapsed .new-chat-btn {
+    .sidebar.collapsed .new-task-btn {
         display: revert;
     }
     .sidebar.collapsed .sidebar-top { padding: 16px 16px 12px; justify-content: space-between; }

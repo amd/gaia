@@ -11,7 +11,7 @@ import type { Session } from '../types';
 import './Sidebar.css';
 
 interface SidebarProps {
-    onNewChat: () => void;
+    onNewTask: () => void;
     tunnelActive?: boolean;
     tunnelLoading?: boolean;
     onMobileToggle?: () => void;
@@ -34,7 +34,7 @@ function SessionItem({ session: s, isActive, isPendingDelete, onSelect, onKeyDow
             onKeyDown={(e) => onKeyDown(e, s.id)}
             role="button"
             tabIndex={0}
-            aria-label={`Open chat: ${s.title}`}
+            aria-label={`Open task: ${s.title}`}
             aria-current={isActive ? 'true' : undefined}
         >
             <span className="session-title">{s.title}</span>
@@ -65,7 +65,7 @@ function SessionItem({ session: s, isActive, isPendingDelete, onSelect, onKeyDow
     );
 }
 
-export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
+export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
     const {
         sessions, currentSessionId, setCurrentSession, removeSession,
         setMessages, theme, toggleTheme, setShowDocLibrary, setShowFileBrowser, setShowSettings,
@@ -258,7 +258,7 @@ export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle
             className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''} ${isResizing ? 'resizing' : ''}`}
             style={sidebarStyle}
             role="complementary"
-            aria-label="Chat sidebar"
+            aria-label="Task sidebar"
         >
             <div className="sidebar-top">
                 <div className="sidebar-brand">
@@ -271,7 +271,7 @@ export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle
                     </div>
                 </div>
                 <div className="sidebar-top-actions">
-                    <button className="new-chat-btn" onClick={onNewChat} title="New Chat" aria-label="New Chat">
+                    <button className="new-task-btn" onClick={onNewTask} title="New Task" aria-label="New Task">
                         <Plus size={18} />
                     </button>
                     <button
@@ -293,14 +293,14 @@ export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle
                     placeholder="Search... (Ctrl+K)"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    aria-label="Search conversations"
+                    aria-label="Search tasks"
                 />
             </div>
 
-            <nav className="session-list" aria-label="Chat sessions">
+            <nav className="session-list" aria-label="Task sessions">
                 {filtered.length === 0 && (
                     <div className="empty-hint">
-                        {search ? 'No results' : 'No conversations yet'}
+                        {search ? 'No results' : 'No tasks yet'}
                     </div>
                 )}
                 {groupedSessions ? (

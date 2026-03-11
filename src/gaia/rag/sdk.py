@@ -198,7 +198,8 @@ class RAGSDK:
             IOError: If file cannot be opened
         """
         # Security check: Validate path against allowed directories
-        if not self.path_validator.is_path_allowed(file_path):
+        # Use prompt_user=False to prevent blocking on input() in server contexts
+        if not self.path_validator.is_path_allowed(file_path, prompt_user=False):
             raise PermissionError(f"Access denied: {file_path} is not in allowed paths")
 
         import stat
@@ -1897,7 +1898,10 @@ These positions indicate where to split the text."""
         except Exception as e:
             if self.config.show_stats:
                 print(f"❌ Failed to index {Path(file_path).name}: {e}")
-            self.log.error(f"Failed to index {file_path}: {e}")
+            self.log.error(
+                f"Failed to index {file_path}: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
             stats["error"] = str(e)
             return stats
 

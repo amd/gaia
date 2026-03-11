@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2 } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
-import type { Message, StreamEvent, AgentStep } from '../types';
+import type { Message, StreamEvent, AgentStep, Attachment } from '../types';
 import './ChatView.css';
 
 const EMPTY_SUGGESTIONS = [
@@ -98,6 +98,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [showScrollBtn, setShowScrollBtn] = useState(false);
     // Store agent steps snapshot for completed messages
     const [completedSteps, setCompletedSteps] = useState<AgentStep[]>([]);
+    const [attachments, setAttachments] = useState<Attachment[]>([]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -292,26 +293,152 @@ export function ChatView({ sessionId }: ChatViewProps) {
         el.style.height = Math.min(el.scrollHeight, 200) + 'px';
     };
 
+    // Handle clipboard paste (screenshots)
+    const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+
+        const imageItems: DataTransferItem[] = [];
+        for (const item of Array.from(items)) {
+            if (item.type.startsWith('image/')) {
+                imageItems.push(item);
+            }
+        }
+
+        if (imageItems.length === 0) return; // Let normal text paste happen
+
+        e.preventDefault(); // Prevent pasting image as text
+
+        for (const item of imageItems) {
+            const file = item.getAsFile();
+            if (!file) continue;
+
+            const id = `attach-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const previewUrl = URL.createObjectURL(file);
+            const attachment: Attachment = {
+                id,
+                file,
+                name: file.name || `screenshot-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.png`,
+                url: previewUrl,
+                uploading: true,
+                uploaded: false,
+                isImage: true,
+            };
+
+            setAttachments(prev => [...prev, attachment]);
+            log.chat.info(`Pasted image: ${attachment.name} (${file.size} bytes)`);
+
+            // Upload in background
+            try {
+                const result = await api.uploadFile(file);
+                setAttachments(prev => prev.map(a =>
+                    a.id === id ? { ...a, uploading: false, uploaded: true, serverUrl: result.url } : a
+                ));
+                log.chat.info(`Upload complete: ${attachment.name} -> ${result.url}`);
+            } catch (err) {
+                log.chat.error(`Upload failed: ${attachment.name}`, err);
+                setAttachments(prev => prev.map(a =>
+                    a.id === id ? { ...a, uploading: false, error: 'Upload failed' } : a
+                ));
+            }
+        }
+    }, []);
+
+    // Handle file drop on input area
+    const handleInputDrop = useCallback(async (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(false);
+
+        const files = e.dataTransfer?.files;
+        if (!files || files.length === 0) return;
+
+        for (const file of Array.from(files)) {
+            const isImage = file.type.startsWith('image/');
+            const id = `attach-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const previewUrl = isImage ? URL.createObjectURL(file) : '';
+
+            const attachment: Attachment = {
+                id,
+                file,
+                name: file.name,
+                url: previewUrl,
+                uploading: true,
+                uploaded: false,
+                isImage,
+            };
+
+            setAttachments(prev => [...prev, attachment]);
+            log.chat.info(`Dropped file: ${file.name} (${file.size} bytes, image=${isImage})`);
+
+            // Upload in background
+            try {
+                const result = await api.uploadFile(file);
+                setAttachments(prev => prev.map(a =>
+                    a.id === id ? { ...a, uploading: false, uploaded: true, serverUrl: result.url } : a
+                ));
+                log.chat.info(`Upload complete: ${file.name} -> ${result.url}`);
+            } catch (err) {
+                log.chat.error(`Upload failed: ${file.name}`, err);
+                setAttachments(prev => prev.map(a =>
+                    a.id === id ? { ...a, uploading: false, error: 'Upload failed' } : a
+                ));
+            }
+        }
+    }, []);
+
+    // Remove an attachment
+    const removeAttachment = useCallback((id: string) => {
+        setAttachments(prev => {
+            const attachment = prev.find(a => a.id === id);
+            if (attachment?.url) URL.revokeObjectURL(attachment.url);
+            return prev.filter(a => a.id !== id);
+        });
+    }, []);
+
     // Send message
     const sendMessage = useCallback(async (overrideText?: string) => {
         const text = (overrideText || input).trim();
-        if (!text || isStreaming) {
-            if (!text) log.chat.debug('Send blocked: empty message');
+        const hasAttachments = attachments.length > 0 && attachments.some(a => a.uploaded);
+
+        if ((!text && !hasAttachments) || isStreaming) {
+            if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
             return;
         }
 
-        log.chat.info(`Sending message to session=${sessionId}`, { length: text.length, preview: text.slice(0, 80) });
+        // Build message text with attachment references
+        let messageText = text;
+        const uploadedAttachments = attachments.filter(a => a.uploaded && a.serverUrl);
+        if (uploadedAttachments.length > 0) {
+            const attachmentLines = uploadedAttachments.map(a => {
+                if (a.isImage) {
+                    return `![${a.name}](${a.serverUrl})`;
+                }
+                return `[${a.name}](${a.serverUrl})`;
+            }).join('\n');
+            messageText = messageText
+                ? `${messageText}\n\n${attachmentLines}`
+                : attachmentLines;
+        }
+
+        log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
 
         setInput('');
         if (inputRef.current) inputRef.current.style.height = 'auto';
+
+        // Clear attachments
+        setAttachments(prev => {
+            prev.forEach(a => { if (a.url) URL.revokeObjectURL(a.url); });
+            return [];
+        });
 
         // Optimistic user message
         const userMsg: Message = {
             id: Date.now(),
             session_id: sessionId,
             role: 'user',
-            content: text,
+            content: messageText,
             created_at: new Date().toISOString(),
             rag_sources: null,
         };
@@ -331,7 +458,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         let doneHandled = false;
         streamBufferRef.current = '';
 
-        const controller = api.sendMessageStream(sessionId, text, {
+        const controller = api.sendMessageStream(sessionId, messageText, {
             onChunk: (event) => {
                 const content = event.content || '';
                 if (content) {
@@ -511,7 +638,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }, 300);
 
                 // Auto-title on first message
-                if (session && session.title === 'New Chat') {
+                if (session && session.title === 'New Task') {
                     const autoTitle = text.slice(0, 50) + (text.length > 50 ? '...' : '');
                     api.updateSession(sessionId, { title: autoTitle })
                         .then(() => updateSessionInList(sessionId, { title: autoTitle }))
@@ -570,7 +697,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         });
 
         abortRef.current = controller;
-    }, [input, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
@@ -842,18 +969,54 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
             {/* Input */}
             <div className="input-area">
-                <div className="input-box">
-                    <textarea
-                        ref={inputRef}
-                        className="msg-input"
-                        value={input}
-                        onChange={handleInputChange}
-                        onKeyDown={handleKeyDown}
-                        placeholder="Type a message... (Shift+Enter for new line)"
-                        rows={1}
-                        disabled={isStreaming}
-                        aria-label="Message input"
-                    />
+                <div
+                    className={`input-box ${attachments.length > 0 ? 'has-attachments' : ''}`}
+                    onDrop={handleInputDrop}
+                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                >
+                    <div className="input-content">
+                        {/* Attachment previews */}
+                        {attachments.length > 0 && (
+                            <div className="attachment-strip">
+                                {attachments.map(a => (
+                                    <div key={a.id} className={`attachment-preview ${a.error ? 'attachment-error' : ''}`}>
+                                        {a.isImage && a.url ? (
+                                            <img src={a.url} alt={a.name} className="attachment-thumb" />
+                                        ) : (
+                                            <div className="attachment-file-icon">
+                                                <FileText size={16} />
+                                            </div>
+                                        )}
+                                        <span className="attachment-name" title={a.name}>
+                                            {a.name.length > 20 ? a.name.slice(0, 17) + '...' : a.name}
+                                        </span>
+                                        {a.uploading && <span className="attachment-spinner" />}
+                                        {a.error && <span className="attachment-error-text">{a.error}</span>}
+                                        <button
+                                            className="attachment-remove"
+                                            onClick={() => removeAttachment(a.id)}
+                                            title="Remove"
+                                            aria-label={`Remove ${a.name}`}
+                                        >
+                                            <X size={12} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <textarea
+                            ref={inputRef}
+                            className="msg-input"
+                            value={input}
+                            onChange={handleInputChange}
+                            onKeyDown={handleKeyDown}
+                            onPaste={handlePaste}
+                            placeholder="Type a message or paste an image... (Shift+Enter for new line)"
+                            rows={1}
+                            disabled={isStreaming}
+                            aria-label="Message input"
+                        />
+                    </div>
                     <div className="input-btns">
                         <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">
                             <Upload size={15} />
@@ -874,7 +1037,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             <button
                                 className="send-btn"
                                 onClick={() => sendMessage()}
-                                disabled={!input.trim()}
+                                disabled={!input.trim() && !attachments.some(a => a.uploaded)}
                                 title="Send (Enter)"
                                 aria-label="Send message"
                             >
@@ -907,6 +1070,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <span className="input-footer-item">
                         <kbd className="kbd-hint">Ctrl+K</kbd>
                         <span>search</span>
+                    </span>
+                    <span className="input-footer-item">
+                        <kbd className="kbd-hint">Ctrl+V</kbd>
+                        <span>paste image</span>
                     </span>
                 </div>
             </div>

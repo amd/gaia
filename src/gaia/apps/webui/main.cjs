@@ -318,8 +318,8 @@ function setupJumpList() {
         items: [
           {
             type: "task",
-            title: "New Chat",
-            description: "Open a new chat conversation",
+            title: "New Task",
+            description: "Start a new agent task",
             program: process.execPath,
             args: "",
             iconPath: process.execPath,

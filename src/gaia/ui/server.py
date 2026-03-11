@@ -211,6 +211,16 @@ def create_app(db_path: str = None) -> FastAPI:
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)
 
+    # ── Serve Uploaded Files ─────────────────────────────────────────────
+    # Mount the uploads directory so uploaded files can be served by URL.
+    _uploads_dir = Path.home() / ".gaia" / "chat" / "uploads"
+    _uploads_dir.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/api/files/uploads",
+        StaticFiles(directory=str(_uploads_dir)),
+        name="uploaded-files",
+    )
+
     # ── Serve Frontend Static Files ──────────────────────────────────────
     # Look for built frontend assets in the webui dist directory
     _webui_dist = Path(__file__).resolve().parent.parent / "apps" / "webui" / "dist"

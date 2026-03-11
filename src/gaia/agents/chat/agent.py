@@ -52,6 +52,7 @@ class ChatAgentConfig:
 
     # RAG settings
     rag_documents: List[str] = field(default_factory=list)
+    library_documents: List[str] = field(default_factory=list)  # Available but not auto-indexed
     watch_directories: List[str] = field(default_factory=list)
     chunk_size: int = 500
     chunk_overlap: int = 100
@@ -98,6 +99,7 @@ class ChatAgent(
         # Now use config for all initialization
         # Store RAG configuration from config
         self.rag_documents = config.rag_documents
+        self.library_documents = config.library_documents  # Available but not auto-indexed
         self.watch_directories = config.watch_directories
         self.chunk_size = config.chunk_size
         self.max_chunks = config.max_chunks
@@ -222,7 +224,10 @@ class ChatAgent(
         """Generate the system prompt for the Chat Agent."""
         # Get list of indexed documents
         indexed_docs_section = ""
-        if hasattr(self, "rag") and self.rag and self.rag.indexed_files:
+        has_indexed = hasattr(self, "rag") and self.rag and self.rag.indexed_files
+        has_library = hasattr(self, "library_documents") and self.library_documents
+
+        if has_indexed:
             doc_names = []
             for file_path in self.rag.indexed_files:
                 doc_names.append(Path(file_path).name)
@@ -234,6 +239,26 @@ You have {len(doc_names)} document(s) already indexed and ready to search:
 
 When the user asks a question about content, you can DIRECTLY search these documents using query_documents or query_specific_file.
 You do NOT need to check what's indexed first - this list is always up-to-date.
+"""
+        elif has_library:
+            # Documents are in the library but NOT yet indexed.
+            # The agent should NOT auto-index them; let the user choose.
+            lib_entries = []
+            for fp in sorted(self.library_documents, key=lambda p: Path(p).name):
+                lib_entries.append(f"- {Path(fp).name} (path: {fp})")
+            indexed_docs_section = f"""
+**DOCUMENT LIBRARY (not yet indexed):**
+The user has {len(self.library_documents)} document(s) available in their library:
+{chr(10).join(lib_entries)}
+
+These documents are NOT yet loaded into the search index. To search a document, you must first index it using the index_document tool with the file path above.
+
+**CRITICAL RULES:**
+- Do NOT automatically index all documents. Only index what the user specifically asks about.
+- When the user asks a vague question like "summarize a document" or "what does the document say", ALWAYS ask which document they want by listing the available documents above.
+- When the user asks about a SPECIFIC document by name, index ONLY that document and then answer.
+- When the user asks "what documents do you have?" or "what's indexed?", simply list the documents above. Do NOT trigger indexing.
+- For general questions (greetings, knowledge questions), answer normally without indexing anything.
 """
         else:
             indexed_docs_section = """
@@ -322,10 +347,12 @@ You: {"answer": "According to the Project Plan, the total budget is $2.5M..."}
 **CONTEXT INFERENCE RULE:**
 
 When user asks a question without specifying which document:
-1. Check the "CURRENTLY INDEXED DOCUMENTS" section above - you already know what's indexed!
-2. If EXACTLY 1 document indexed → **IMMEDIATELY search it**: {"tool": "query_documents", "tool_args": {"query": "..."}}
-3. If 0 documents → Use Smart Discovery workflow to find and index relevant files
-4. If multiple documents → Search all with query_documents OR ask which specific one: {"answer": "Which document? You have: [list]"}
+1. Check the "CURRENTLY INDEXED DOCUMENTS" or "DOCUMENT LIBRARY" section above.
+2. If EXACTLY 1 document available → index it (if needed) and search it directly.
+3. If 0 documents → Use Smart Discovery workflow to find and index relevant files.
+4. If multiple documents and user's request is SPECIFIC (e.g., "what does the financial report say?") → index and search that specific document.
+5. If multiple documents and user's request is VAGUE (e.g., "summarize a document", "what does the doc say?") → **ALWAYS ask which document first**: {"answer": "Which document would you like me to work with?\n\n1. document_a.pdf\n2. document_b.txt\n..."}
+6. If user asks "what documents do you have?" or "what's indexed?" → just list them, do NOT index anything.
 
 **AVAILABLE TOOLS:**
 The complete list of available tools with their descriptions is provided below in the AVAILABLE TOOLS section.

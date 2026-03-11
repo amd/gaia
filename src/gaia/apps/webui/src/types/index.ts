@@ -45,6 +45,19 @@ export interface Document {
     indexing_status?: 'pending' | 'indexing' | 'complete' | 'failed' | 'cancelled' | 'missing';
 }
 
+/** A file attached to a message before sending. */
+export interface Attachment {
+    id: string;
+    file: File;
+    name: string;
+    url: string;       // Object URL for preview, replaced with server URL after upload
+    uploading: boolean;
+    uploaded: boolean;
+    serverUrl?: string; // Server URL after upload completes
+    isImage: boolean;
+    error?: string;
+}
+
 export interface SystemStatus {
     lemonade_running: boolean;
     model_loaded: string | null;

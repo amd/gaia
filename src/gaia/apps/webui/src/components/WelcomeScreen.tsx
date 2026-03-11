@@ -5,7 +5,7 @@ import { Lock, Zap, FileText, DollarSign } from 'lucide-react';
 import './WelcomeScreen.css';
 
 interface WelcomeScreenProps {
-    onNewChat: () => void;
+    onNewTask: () => void;
     onSendPrompt: (prompt: string) => void;
 }
 
@@ -16,7 +16,7 @@ const SUGGESTIONS = [
     'What are the key features of AMD Ryzen AI?',
 ];
 
-export function WelcomeScreen({ onNewChat, onSendPrompt }: WelcomeScreenProps) {
+export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
     return (
         <main className="welcome">
             <div className="welcome-inner">
@@ -33,8 +33,8 @@ export function WelcomeScreen({ onNewChat, onSendPrompt }: WelcomeScreenProps) {
                     <Feature icon={<DollarSign size={22} />} title="Free" desc="No subscriptions" />
                 </div>
 
-                <button className="btn-primary start-btn" onClick={onNewChat}>
-                    Start a New Chat
+                <button className="btn-primary start-btn" onClick={onNewTask}>
+                    Start a New Task
                 </button>
 
                 <div className="suggestions">

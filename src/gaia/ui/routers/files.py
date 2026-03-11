@@ -14,10 +14,11 @@ import asyncio
 import datetime
 import logging
 import platform
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from ..models import (
     BrowseResponse,
@@ -25,6 +26,7 @@ from ..models import (
     FilePreviewResponse,
     FileSearchResponse,
     FileSearchResult,
+    FileUploadResponse,
     OpenFileRequest,
 )
 from ..utils import (
@@ -38,7 +40,110 @@ from ..utils import (
 
 logger = logging.getLogger(__name__)
 
+# Maximum upload file size: 20 MB
+MAX_UPLOAD_SIZE = 20 * 1024 * 1024
+
+# Image extensions recognized for the is_image flag
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+
+# All extensions allowed for upload (document types + image types)
+UPLOAD_ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS | IMAGE_EXTENSIONS
+
+# Directory where uploaded files are stored
+UPLOADS_DIR = Path.home() / ".gaia" / "chat" / "uploads"
+
 router = APIRouter(tags=["files"])
+
+
+# ── Upload ───────────────────────────────────────────────────────────────────
+
+
+@router.post("/api/files/upload", response_model=FileUploadResponse)
+async def upload_file(file: UploadFile = File(...)):
+    """Upload a file to the server.
+
+    Accepts multipart form data with a ``file`` field.  The file is saved
+    to ``~/.gaia/chat/uploads/`` with a UUID-based filename to prevent
+    collisions.  The original extension is preserved.
+
+    Constraints:
+    - Maximum file size: 20 MB
+    - Allowed types: common images (png, jpg, jpeg, gif, webp, bmp, svg)
+      and document types from ALLOWED_EXTENSIONS.
+
+    Returns:
+        FileUploadResponse with the saved filename, URL, size, and metadata.
+    """
+    # Validate that a file was provided
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    # Validate extension
+    original_name = file.filename
+    ext = Path(original_name).suffix.lower()
+    if ext not in UPLOAD_ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"File type '{ext}' is not allowed. "
+                f"Supported types: images (png, jpg, jpeg, gif, webp, bmp, svg) "
+                f"and documents (pdf, txt, md, csv, json, docx, xlsx, etc.)."
+            ),
+        )
+
+    # Read file content and validate size
+    content = await file.read()
+    file_size = len(content)
+
+    if file_size == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    if file_size > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"File too large ({file_size / (1024 * 1024):.1f} MB). "
+                f"Maximum allowed size is {MAX_UPLOAD_SIZE / (1024 * 1024):.0f} MB."
+            ),
+        )
+
+    # Ensure uploads directory exists
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Generate unique filename preserving original extension
+    unique_name = f"{uuid.uuid4()}{ext}"
+    dest_path = UPLOADS_DIR / unique_name
+
+    # Write file to disk
+    try:
+        dest_path.write_bytes(content)
+    except OSError as e:
+        logger.error("Failed to save uploaded file %s: %s", unique_name, e)
+        raise HTTPException(
+            status_code=500, detail="Failed to save uploaded file"
+        )
+
+    # Determine content type
+    content_type = file.content_type or "application/octet-stream"
+    is_image = ext in IMAGE_EXTENSIONS
+
+    logger.info(
+        "File uploaded: %s -> %s (%d bytes, type=%s, image=%s)",
+        original_name,
+        unique_name,
+        file_size,
+        content_type,
+        is_image,
+    )
+
+    return FileUploadResponse(
+        filename=unique_name,
+        original_name=original_name,
+        url=f"/api/files/uploads/{unique_name}",
+        size=file_size,
+        content_type=content_type,
+        is_image=is_image,
+    )
 
 
 # ── Browse ───────────────────────────────────────────────────────────────────

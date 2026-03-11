@@ -90,7 +90,7 @@
     margin-left: 2px;
 }
 
-/* Top actions (new chat + collapse) */
+/* Top actions (new task + collapse) */
 .sidebar-top-actions {
     display: flex;
     align-items: center;
@@ -98,7 +98,7 @@
     flex-shrink: 0;
 }
 
-.new-chat-btn {
+.new-task-btn {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -108,7 +108,7 @@
     border: 1px solid var(--border);
     transition: all var(--duration) var(--ease);
 }
-.new-chat-btn:hover {
+.new-task-btn:hover {
     background: var(--bg-hover);
     border-color: var(--amd-red);
     color: var(--amd-red);
@@ -385,7 +385,7 @@
 .sidebar.collapsed .session-list,
 .sidebar.collapsed .privacy-badge span:not(.privacy-dot),
 .sidebar.collapsed .version-badge,
-.sidebar.collapsed .new-chat-btn {
+.sidebar.collapsed .new-task-btn {
     display: none;
 }
 
