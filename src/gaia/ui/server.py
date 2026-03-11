@@ -1161,9 +1161,14 @@ _ALLOWED_EXTENSIONS = frozenset(
 def _sanitize_document_path(user_path: str) -> Path:
     """Sanitize a user-provided file path for document upload.
 
-    Resolves the path, validates it is absolute, checks for null bytes,
-    and enforces an extension allowlist. Returns a safe Path object
-    that has been fully validated.
+    Resolves the path relative to a configured documents root directory,
+    checks for null bytes, enforces that the path stays within the root,
+    and applies an extension allowlist. Returns a safe Path object that
+    has been fully validated.
+
+    The base documents directory can be configured via the
+    GAIA_DOCUMENT_LIBRARY_ROOT environment variable. If unset, a default
+    location under the user's home directory is used.
 
     Args:
         user_path: Raw file path string from user input.
@@ -1172,29 +1177,40 @@ def _sanitize_document_path(user_path: str) -> Path:
         A resolved, validated Path object safe for filesystem operations.
 
     Raises:
-        HTTPException: If the path is invalid, contains traversal, or
-            has a disallowed extension.
+        HTTPException: If the path is invalid, attempts to escape the
+            documents root, or has a disallowed extension.
     """
     # Reject null bytes early (before any path operations)
     if "\x00" in user_path:
         raise HTTPException(status_code=400, detail="Invalid file path")
 
-    # Resolve to absolute canonical path (eliminates .., symlinks, etc.)
-    resolved = Path(user_path).resolve()
+    # Determine the base documents root directory
+    env_root = os.getenv("GAIA_DOCUMENT_LIBRARY_ROOT")
+    if env_root:
+        base_dir = Path(env_root).expanduser().resolve()
+    else:
+        # Default to a per-user documents directory under home
+        base_dir = (Path.home() / ".gaia" / "documents").resolve()
 
-    # Verify the path is absolute
-    if not resolved.is_absolute():
+    # Build and resolve the candidate path under the base directory.
+    # Using resolve() here also normalizes any ".." segments.
+    candidate = (base_dir / user_path).expanduser().resolve()
+
+    # Ensure the resolved candidate path is within the base directory.
+    try:
+        candidate.relative_to(base_dir)
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid file path")
 
     # Check file extension against allowlist
-    ext = resolved.suffix.lower()
+    ext = candidate.suffix.lower()
     if ext not in _ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file type: {ext}",
         )
 
-    return resolved
+    return candidate
 
 
 def _sanitize_static_path(base_dir: Path, user_path: str) -> Optional[Path]:
