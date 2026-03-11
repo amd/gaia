@@ -244,7 +244,9 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     # Check symlink after home restriction
     try:
         if raw_folder.is_symlink():
-            raise HTTPException(status_code=400, detail="Symbolic links are not supported")
+            raise HTTPException(
+                status_code=400, detail="Symbolic links are not supported"
+            )
     except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied")
 

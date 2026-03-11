@@ -192,7 +192,9 @@ async def browse_files(path: Optional[str] = None):
     # Check symlink after home restriction
     try:
         if raw_path.is_symlink():
-            raise HTTPException(status_code=400, detail="Symbolic links are not supported")
+            raise HTTPException(
+                status_code=400, detail="Symbolic links are not supported"
+            )
     except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied")
 
@@ -310,7 +312,9 @@ async def open_file_or_folder(request: OpenFileRequest):
     # Check symlink after home restriction
     try:
         if raw_path.is_symlink():
-            raise HTTPException(status_code=400, detail="Symbolic links are not supported")
+            raise HTTPException(
+                status_code=400, detail="Symbolic links are not supported"
+            )
     except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied")
 
