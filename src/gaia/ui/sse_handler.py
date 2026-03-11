@@ -350,8 +350,6 @@ class SSEOutputHandler(OutputHandler):
             # Split at the JSON start and emit the text portion, buffer the JSON portion.
             if '"tool"' in stripped and '{"tool"' in self._stream_buffer:
                 json_idx = self._stream_buffer.find('{"tool"')
-                if json_idx < 0:
-                    json_idx = self._stream_buffer.find('{"tool"')
                 if json_idx > 0:
                     # Emit the text before the JSON
                     text_before = self._stream_buffer[:json_idx]

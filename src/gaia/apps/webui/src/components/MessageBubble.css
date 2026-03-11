@@ -5,12 +5,22 @@
     margin: 0 auto;
     width: 100%;
     position: relative;
+    animation: msgSlideIn 200ms var(--ease);
 }
 
-.msg-user { background: var(--bg-user-msg); }
+@keyframes msgSlideIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.msg-user {
+    background: var(--bg-user-msg);
+    border-left: 3px solid transparent;
+}
 .msg-assistant {
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-light);
+    border-left: 3px solid transparent;
 }
 
 .msg-inner { max-width: 100%; }
@@ -22,14 +32,59 @@
     margin-bottom: 6px;
 }
 
-.msg-role {
+.msg-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Avatar */
+.msg-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     font-size: 11px;
     font-weight: 700;
+    flex-shrink: 0;
+    letter-spacing: 0;
+}
+.msg-avatar-user {
+    background: var(--amd-red);
+    color: white;
+}
+.msg-avatar-assistant {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    overflow: hidden;
+}
+.msg-avatar-assistant img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.msg-role {
+    font-size: 12px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.6px;
+    letter-spacing: 0.5px;
     color: var(--text-secondary);
 }
 .role-user { color: var(--amd-red); }
+
+/* Timestamp (visible on hover) */
+.msg-timestamp {
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 150ms var(--ease);
+    white-space: nowrap;
+}
+.msg:hover .msg-timestamp { opacity: 1; }
 
 .msg-actions {
     display: flex;
@@ -67,6 +122,7 @@
     line-height: 1.75;
     word-wrap: break-word;
     overflow-wrap: break-word;
+    padding-left: 32px;
 }
 
 /* ── Error message styling ────────────────────────────────────── */
@@ -197,12 +253,36 @@
     border-bottom-color: var(--amd-red);
 }
 
+/* ── File Path Links ─────────────────────────────────────────── */
+.file-path-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--amd-red);
+    cursor: pointer;
+    border-bottom: 1px dashed transparent;
+    transition: border-color 150ms var(--ease), background 150ms var(--ease);
+    border-radius: 3px;
+    padding: 0 2px;
+}
+.file-path-link:hover {
+    border-bottom-color: var(--amd-red);
+    background: rgba(226, 60, 64, 0.06);
+}
+.file-path-icon {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+.file-path-link:hover .file-path-icon {
+    opacity: 1;
+}
+
 /* ── Blockquotes ──────────────────────────────────────────────── */
 .md-blockquote {
     margin: 12px 0;
     padding: 8px 16px;
     border-left: 3px solid var(--amd-red);
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--tint-subtle);
     border-radius: 0 6px 6px 0;
     color: var(--text-secondary);
 }
@@ -241,7 +321,7 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--text-secondary);
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--tint-subtle);
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
 }
@@ -254,7 +334,7 @@
     border-bottom: none;
 }
 .md-table tr:hover td {
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--tint-subtle);
 }
 
 /* Right-align numeric columns (convention: last column in financial data) */
@@ -351,6 +431,9 @@
 @media (max-width: 768px) {
     .msg {
         padding: 12px 16px;
+    }
+    .msg-body {
+        padding-left: 0;
     }
     .md-table-wrap {
         margin: 8px -8px;

@@ -176,6 +176,12 @@ class TunnelManager:
             except Exception as e:
                 logger.warning("Error stopping ngrok: %s", e)
             finally:
+                for pipe in (self._process.stdout, self._process.stderr):
+                    if pipe:
+                        try:
+                            pipe.close()
+                        except Exception:
+                            pass
                 self._process = None
 
         self._url = None

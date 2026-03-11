@@ -409,6 +409,21 @@
     word-break: break-word;
 }
 
+.tool-result-path {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--amd-red);
+    cursor: pointer;
+    border-radius: 3px;
+    padding: 0 2px;
+    transition: background 150ms var(--ease);
+}
+.tool-result-path:hover {
+    background: rgba(226, 60, 64, 0.1);
+    text-decoration: underline;
+}
+
 /* ── Command Output (Terminal View) ───────────────────────────── */
 .cmd-output {
     border-radius: 8px;

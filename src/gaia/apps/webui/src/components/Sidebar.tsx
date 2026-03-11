@@ -1,12 +1,13 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Plus, Search, FileText, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, FolderSearch } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import gaiaRobot from '../assets/gaia-robot.png';
+import type { Session } from '../types';
 import './Sidebar.css';
 
 interface SidebarProps {
@@ -14,6 +15,54 @@ interface SidebarProps {
     tunnelActive?: boolean;
     tunnelLoading?: boolean;
     onMobileToggle?: () => void;
+}
+
+/** Extracted session row to share between grouped and flat rendering. */
+function SessionItem({ session: s, isActive, isPendingDelete, onSelect, onKeyDown, onDelete, formatTime }: {
+    session: Session;
+    isActive: boolean;
+    isPendingDelete: boolean;
+    onSelect: (id: string) => void;
+    onKeyDown: (e: React.KeyboardEvent, id: string) => void;
+    onDelete: (e: React.MouseEvent | React.KeyboardEvent, id: string) => void;
+    formatTime: (iso: string) => string;
+}) {
+    return (
+        <div
+            className={`session-item ${isActive ? 'active' : ''}`}
+            onClick={() => onSelect(s.id)}
+            onKeyDown={(e) => onKeyDown(e, s.id)}
+            role="button"
+            tabIndex={0}
+            aria-label={`Open chat: ${s.title}`}
+            aria-current={isActive ? 'true' : undefined}
+        >
+            <span className="session-title">{s.title}</span>
+            <span className="session-time">{formatTime(s.updated_at)}</span>
+            {isPendingDelete ? (
+                <button
+                    className="session-delete confirm"
+                    onClick={(e) => onDelete(e, s.id)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onDelete(e, s.id); }}
+                    title="Click to confirm delete"
+                    aria-label={`Confirm delete: ${s.title}`}
+                >
+                    <Trash2 size={12} />
+                    <span className="confirm-label">Delete?</span>
+                </button>
+            ) : (
+                <button
+                    className="session-delete"
+                    onClick={(e) => onDelete(e, s.id)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onDelete(e, s.id); }}
+                    title="Delete"
+                    aria-label={`Delete: ${s.title}`}
+                >
+                    <Trash2 size={13} />
+                </button>
+            )}
+        </div>
+    );
 }
 
 export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
@@ -29,10 +78,52 @@ export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
     const [isResizing, setIsResizing] = useState(false);
     const sidebarRef = useRef<HTMLElement>(null);
+    const searchInputRef = useRef<HTMLInputElement>(null);
+
+    // Listen for Ctrl+K focus-search event from ChatView
+    useEffect(() => {
+        const handler = () => {
+            if (sidebarCollapsed) {
+                toggleSidebarCollapsed();
+                // Delay focus until after React re-renders the search input
+                requestAnimationFrame(() => searchInputRef.current?.focus());
+            } else {
+                searchInputRef.current?.focus();
+            }
+        };
+        window.addEventListener('gaia:focus-search', handler);
+        return () => window.removeEventListener('gaia:focus-search', handler);
+    }, [sidebarCollapsed, toggleSidebarCollapsed]);
 
     const filtered = search
         ? sessions.filter((s) => s.title.toLowerCase().includes(search.toLowerCase()))
         : sessions;
+
+    // Group sessions by time period (Today, Yesterday, Previous 7 Days, Older)
+    const groupedSessions = useMemo(() => {
+        if (search) return null; // Don't group when searching
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const yesterdayStart = todayStart - 86400000;
+        const weekStart = todayStart - 7 * 86400000;
+
+        const groups: { label: string; sessions: typeof filtered }[] = [
+            { label: 'Today', sessions: [] },
+            { label: 'Yesterday', sessions: [] },
+            { label: 'Previous 7 Days', sessions: [] },
+            { label: 'Older', sessions: [] },
+        ];
+
+        for (const s of filtered) {
+            const t = new Date(s.updated_at).getTime();
+            if (t >= todayStart) groups[0].sessions.push(s);
+            else if (t >= yesterdayStart) groups[1].sessions.push(s);
+            else if (t >= weekStart) groups[2].sessions.push(s);
+            else groups[3].sessions.push(s);
+        }
+
+        return groups.filter((g) => g.sessions.length > 0);
+    }, [filtered, search]);
 
     const handleSelect = useCallback(async (id: string) => {
         if (id === currentSessionId) return;
@@ -187,8 +278,9 @@ export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle
             <div className="sidebar-search">
                 <Search size={14} className="search-icon" aria-hidden="true" />
                 <input
+                    ref={searchInputRef}
                     type="text"
-                    placeholder="Search..."
+                    placeholder="Search... (Ctrl+K)"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     aria-label="Search conversations"
@@ -201,43 +293,40 @@ export function Sidebar({ onNewChat, tunnelActive, tunnelLoading, onMobileToggle
                         {search ? 'No results' : 'No conversations yet'}
                     </div>
                 )}
-                {filtered.map((s) => (
-                    <div
-                        key={s.id}
-                        className={`session-item ${s.id === currentSessionId ? 'active' : ''}`}
-                        onClick={() => handleSelect(s.id)}
-                        onKeyDown={(e) => handleSessionKeyDown(e, s.id)}
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Open chat: ${s.title}`}
-                        aria-current={s.id === currentSessionId ? 'true' : undefined}
-                    >
-                        <span className="session-title">{s.title}</span>
-                        <span className="session-time">{formatTime(s.updated_at)}</span>
-                        {pendingDeleteId === s.id ? (
-                            <button
-                                className="session-delete confirm"
-                                onClick={(e) => handleDelete(e, s.id)}
-                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDelete(e, s.id); }}
-                                title="Click to confirm delete"
-                                aria-label={`Confirm delete: ${s.title}`}
-                            >
-                                <Trash2 size={12} />
-                                <span className="confirm-label">Delete?</span>
-                            </button>
-                        ) : (
-                            <button
-                                className="session-delete"
-                                onClick={(e) => handleDelete(e, s.id)}
-                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDelete(e, s.id); }}
-                                title="Delete"
-                                aria-label={`Delete: ${s.title}`}
-                            >
-                                <Trash2 size={13} />
-                            </button>
-                        )}
-                    </div>
-                ))}
+                {groupedSessions ? (
+                    /* Render grouped sessions (Today, Yesterday, etc.) */
+                    groupedSessions.map((group) => (
+                        <div key={group.label}>
+                            <div className="session-group-label">{group.label}</div>
+                            {group.sessions.map((s) => (
+                                <SessionItem
+                                    key={s.id}
+                                    session={s}
+                                    isActive={s.id === currentSessionId}
+                                    isPendingDelete={pendingDeleteId === s.id}
+                                    onSelect={handleSelect}
+                                    onKeyDown={handleSessionKeyDown}
+                                    onDelete={handleDelete}
+                                    formatTime={formatTime}
+                                />
+                            ))}
+                        </div>
+                    ))
+                ) : (
+                    /* Flat list when searching */
+                    filtered.map((s) => (
+                        <SessionItem
+                            key={s.id}
+                            session={s}
+                            isActive={s.id === currentSessionId}
+                            isPendingDelete={pendingDeleteId === s.id}
+                            onSelect={handleSelect}
+                            onKeyDown={handleSessionKeyDown}
+                            onDelete={handleDelete}
+                            formatTime={formatTime}
+                        />
+                    ))
+                )}
             </nav>
 
             <div className="sidebar-bottom">

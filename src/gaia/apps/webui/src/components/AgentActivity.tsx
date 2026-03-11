@@ -26,6 +26,7 @@ import {
     type LucideIcon,
 } from 'lucide-react';
 import type { AgentStep, CommandOutput } from '../types';
+import * as api from '../services/api';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -278,14 +279,58 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
 
 function FlowThought({ step }: { step: AgentStep }) {
     const text = step.detail || step.label || '';
-    if (!text || text === 'Thinking') return null;
+    if (!text) return null;
+
+    // Show a friendly label when the raw text is just "Thinking"
+    const displayText = text === 'Thinking' ? 'Analyzing your request...' : text;
 
     return (
         <div className={`flow-thought ${step.active ? 'active' : ''}`}>
             {step.active && <Loader2 size={11} className="flow-thought-spinner" />}
-            <span className="flow-thought-text">{text}</span>
+            <span className="flow-thought-text">{displayText}</span>
         </div>
     );
+}
+
+// ── Path Linkification (for tool results) ────────────────────────────────
+
+/** Detect Windows absolute paths in text and make them clickable. */
+function linkifyPaths(text: string): React.ReactNode {
+    // Match Windows absolute paths: C:\...\file.ext or C:\...\folder\
+    // Also match paths in parentheses: (C:\Users\...)
+    const pathRe = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]]+[\\\/])*[^\s*?"<>|,;)}\]]*/gi;
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = pathRe.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+            parts.push(text.slice(lastIndex, match.index));
+        }
+        const filePath = match[0].replace(/[)}\]]+$/, ''); // trim trailing brackets
+        const handleClick = () => {
+            api.openFileOrFolder(filePath).catch((err) => console.error('Failed to open:', err));
+        };
+        parts.push(
+            <span
+                key={match.index}
+                className="tool-result-path"
+                onClick={handleClick}
+                title={`Open: ${filePath}`}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleClick(); }}
+            >
+                <FolderOpen size={10} style={{ flexShrink: 0, opacity: 0.7 }} />
+                {filePath}
+            </span>
+        );
+        lastIndex = match.index + filePath.length;
+    }
+
+    if (parts.length === 0) return text;
+    if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+    return <>{parts}</>;
 }
 
 // ── Flow: Tool Card ──────────────────────────────────────────────────────
@@ -357,7 +402,7 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
                             <span className="detail-section-label">
                                 {step.success === false ? 'Error' : 'Result'}
                             </span>
-                            <div className="detail-result-content">{step.result}</div>
+                            <div className="detail-result-content">{linkifyPaths(step.result)}</div>
                         </div>
                     )}
                 </div>

@@ -140,9 +140,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
                     return { agentSteps: steps };
                 }
             }
-            // Fallback: update the last step if no tool step found
-            steps[steps.length - 1] = { ...steps[steps.length - 1], ...updates };
-            return { agentSteps: steps };
+            // No tool step found — don't corrupt non-tool steps
+            return state;
         }),
     clearAgentSteps: () => set({ agentSteps: [] }),
 

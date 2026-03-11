@@ -454,6 +454,88 @@ You must respond ONLY in valid JSON. No text before { or after }.
         """Get a list of registered tools for the agent."""
         return list(_TOOL_REGISTRY.values())
 
+    def _extract_embedded_tool_call(self, response: str) -> Optional[Dict[str, Any]]:
+        """
+        Detect and extract a tool call JSON embedded in a text response.
+
+        LLMs sometimes output narrative text followed by a JSON tool call, e.g.:
+        "Let me search for that.\n{"thought": "...", "tool": "query_documents",
+         "tool_args": {"query": "..."}}"
+
+        This method finds the JSON block using brace-depth matching and returns
+        the parsed tool call if it contains a "tool" key.  Returns None if no
+        embedded tool call is found, allowing the caller to treat the response
+        as plain text.
+        """
+        # Quick check: must contain "tool" to be worth scanning
+        if '"tool"' not in response:
+            return None
+
+        # Walk through looking for { that starts a JSON-like block with "tool"
+        idx = 0
+        while idx < len(response):
+            brace_pos = response.find("{", idx)
+            if brace_pos == -1:
+                break
+
+            # Look ahead for "tool" near this brace (within 200 chars)
+            look_ahead = response[brace_pos : brace_pos + 200]
+            if '"tool"' not in look_ahead and '"thought"' not in look_ahead:
+                idx = brace_pos + 1
+                continue
+
+            # Use brace-depth matching to find the complete JSON object
+            depth = 0
+            in_str = False
+            escape = False
+            end_pos = brace_pos
+            for j in range(brace_pos, len(response)):
+                ch = response[j]
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"' and not escape:
+                    in_str = not in_str
+                if not in_str:
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end_pos = j
+                            break
+
+            if depth != 0:
+                # Unclosed braces — skip
+                idx = brace_pos + 1
+                continue
+
+            candidate = response[brace_pos : end_pos + 1]
+            try:
+                # Fix common trailing comma issues
+                fixed = re.sub(r",\s*}", "}", candidate)
+                fixed = re.sub(r",\s*]", "]", fixed)
+                parsed = json.loads(fixed)
+
+                # Only accept if it has a "tool" key (it's a tool call)
+                if isinstance(parsed, dict) and "tool" in parsed:
+                    if "tool_args" not in parsed:
+                        parsed["tool_args"] = {}
+                    logger.debug(
+                        f"[PARSE] Extracted embedded tool call: "
+                        f"{parsed.get('tool')}"
+                    )
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+            idx = brace_pos + 1
+
+        return None
+
     def _extract_json_from_response(self, response: str) -> Optional[Dict[str, Any]]:
         """
         Apply multiple extraction strategies to find valid JSON in the response.
@@ -749,9 +831,17 @@ You must respond ONLY in valid JSON. No text before { or after }.
             logger.debug(f"📥 LLM Response: {response}")
 
         # STEP 1: Fast path - detect plain text conversational responses
-        # If response doesn't start with '{', it's likely plain text
-        # Accept it immediately without logging errors
+        # If response doesn't start with '{', it's likely plain text.
+        # However, LLMs sometimes prefix a tool call JSON with narrative text
+        # like "Let me search for that.\n{"tool": "query_documents", ...}".
+        # Detect and extract embedded tool calls before treating as plain text.
         if not response.startswith("{"):
+            # Check for embedded tool call JSON: look for {"tool" or {"thought"
+            # patterns that indicate a structured response is buried in the text
+            embedded_json = self._extract_embedded_tool_call(response)
+            if embedded_json:
+                logger.debug(f"[PARSE] Found embedded tool call in text response")
+                return embedded_json
             logger.debug(
                 f"[PARSE] Plain text conversational response (length: {len(response)})"
             )
@@ -784,15 +874,10 @@ You must respond ONLY in valid JSON. No text before { or after }.
         answer_match = re.search(r'"answer":\s*"([^"]*)"', response)
         plan_match = re.search(r'"plan":\s*(\[.*?\])', response, re.DOTALL)
 
-        if answer_match:
-            result = {
-                "thought": thought_match.group(1) if thought_match else "",
-                "goal": "what was achieved",
-                "answer": answer_match.group(1),
-            }
-            logger.debug(f"Extracted answer using regex: {result}")
-            return result
-
+        # Check for tool calls FIRST — if a response has both "tool" and
+        # "answer", the tool should be executed because the "answer" is
+        # often just the LLM narrating what it plans to do, not the final
+        # response.  The real answer will come after the tool executes.
         if tool_match:
             tool_args = {}
 
@@ -849,6 +934,16 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     self.error_history.append(error_msg)
 
             logger.debug(f"Extracted tool call using regex: {result}")
+            return result
+
+        # Fall back to answer extraction (only reached if no tool was found)
+        if answer_match:
+            result = {
+                "thought": thought_match.group(1) if thought_match else "",
+                "goal": "what was achieved",
+                "answer": answer_match.group(1),
+            }
+            logger.debug(f"Extracted answer using regex: {result}")
             return result
 
         # Try to match simple key-value patterns for object names (like ': "my_cube"')

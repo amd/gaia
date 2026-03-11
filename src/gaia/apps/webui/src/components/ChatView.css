@@ -76,11 +76,11 @@
 .doc-context-bar {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 5px 24px;
+    gap: 8px;
+    padding: 6px 24px;
     border-bottom: 1px solid var(--border-light);
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     background: var(--bg-secondary);
     cursor: pointer;
     transition: all var(--duration) var(--ease);
@@ -89,23 +89,50 @@
     text-align: left;
 }
 .doc-context-bar:hover {
-    color: var(--text-secondary);
     background: var(--bg-hover);
 }
 .doc-context-icon {
     flex-shrink: 0;
-    opacity: 0.6;
+    color: var(--accent-green);
 }
 .doc-context-label {
     font-weight: 600;
     white-space: nowrap;
+    color: var(--text-secondary);
 }
-.doc-context-names {
+.doc-context-pills {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+    flex: 1;
+    min-width: 0;
+}
+.doc-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 8px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    max-width: 150px;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex-shrink: 0;
+}
+.doc-pill-icon {
+    flex-shrink: 0;
+    color: var(--accent-green);
+}
+.doc-pill-more {
+    font-size: 10px;
+    color: var(--text-muted);
     white-space: nowrap;
-    opacity: 0.7;
-    font-style: italic;
+    flex-shrink: 0;
 }
 
 /* ── Messages area ───────────────────────────────────────────────── */
@@ -128,6 +155,12 @@
     padding: 60px 24px;
     height: 100%;
     min-height: 300px;
+    animation: emptyFadeIn 400ms var(--ease);
+}
+
+@keyframes emptyFadeIn {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .empty-chat-icon {
@@ -175,6 +208,68 @@
     background: rgba(226, 60, 64, 0.04);
     transform: translateY(-1px);
     box-shadow: var(--shadow-sm);
+}
+
+/* ── Skeleton loading state ──────────────────────────────────────── */
+
+.skeleton-messages {
+    padding: 16px 0;
+    max-width: 900px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.skeleton-msg {
+    padding: 16px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.skeleton-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.skeleton-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--bg-tertiary);
+    animation: skeletonPulse 1.5s ease-in-out infinite;
+}
+
+.skeleton-role {
+    width: 48px;
+    height: 10px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    animation: skeletonPulse 1.5s ease-in-out infinite;
+    animation-delay: 50ms;
+}
+
+.skeleton-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-left: 32px;
+}
+
+.skeleton-line {
+    height: 12px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    animation: skeletonPulse 1.5s ease-in-out infinite;
+}
+
+.skeleton-line:nth-child(1) { width: 85%; animation-delay: 100ms; }
+.skeleton-line:nth-child(2) { width: 65%; animation-delay: 200ms; }
+.skeleton-line:nth-child(3) { width: 40%; animation-delay: 300ms; }
+
+@keyframes skeletonPulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.8; }
 }
 
 /* ── Drag overlay ────────────────────────────────────────────────── */
@@ -256,8 +351,8 @@
 }
 
 .input-box:focus-within {
-    border-color: var(--text-muted);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+    border-color: rgba(226, 60, 64, 0.35);
+    box-shadow: 0 0 0 1px rgba(226, 60, 64, 0.08);
 }
 
 .msg-input {
@@ -271,6 +366,7 @@
     line-height: 1.5;
     font-size: 14px;
     color: var(--text-primary);
+    transition: height 100ms var(--ease);
 }
 .msg-input::placeholder { color: var(--text-muted); opacity: 0.6; }
 .msg-input:disabled { opacity: 0.5; }
@@ -285,12 +381,13 @@
 /* Icon buttons in input area (upload, browse) */
 .input-btns .icon-btn,
 .input-btns button:not(.send-btn):not(.stop-btn) {
-    opacity: 0.4;
-    transition: opacity var(--duration) var(--ease);
+    opacity: 0.5;
+    transition: opacity var(--duration) var(--ease), color var(--duration) var(--ease);
 }
 .input-btns .icon-btn:hover,
 .input-btns button:not(.send-btn):not(.stop-btn):hover {
-    opacity: 0.7;
+    opacity: 1;
+    color: var(--text-primary);
 }
 
 /* Send button */
@@ -301,15 +398,14 @@
     width: 32px;
     height: 32px;
     border-radius: var(--radius-full);
-    background: var(--text-muted);
-    color: var(--bg-primary);
+    background: var(--amd-red);
+    color: white;
     transition: all var(--duration) var(--ease);
-    opacity: 0.5;
 }
 .send-btn:hover {
-    background: var(--text-primary);
-    opacity: 1;
-    transform: scale(1.05);
+    background: var(--amd-red-dark);
+    transform: scale(1.08);
+    box-shadow: 0 2px 8px rgba(226, 60, 64, 0.3);
 }
 .send-btn:active {
     transform: scale(0.95);
@@ -319,7 +415,7 @@
     color: var(--text-muted);
     transform: none;
     cursor: not-allowed;
-    opacity: 0.2;
+    opacity: 0.3;
     box-shadow: none;
 }
 
@@ -375,9 +471,31 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
+    gap: 14px;
     margin-top: 8px;
     font-size: 11px;
+    color: var(--text-muted);
+}
+
+.input-footer-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.input-footer-sep {
+    width: 1px;
+    height: 10px;
+    background: var(--border);
+}
+
+.kbd-hint {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
     color: var(--text-muted);
 }
 
@@ -406,5 +524,17 @@
     .stop-btn {
         width: 44px;
         height: 44px;
+    }
+
+    .skeleton-msg {
+        padding: 12px 16px;
+    }
+    .skeleton-lines {
+        padding-left: 0;
+    }
+
+    .input-footer {
+        gap: 8px;
+        flex-wrap: wrap;
     }
 }

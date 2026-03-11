@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2 } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
@@ -253,6 +253,22 @@ export function ChatView({ sessionId }: ChatViewProps) {
         clearAgentSteps();
     }, [sessionId, streamingContent, agentSteps, addMessage, setStreaming, clearStreamContent, clearAgentSteps]);
 
+    // Global keyboard shortcuts: Escape → stop streaming, Ctrl+K → focus sidebar search
+    useEffect(() => {
+        const handler = (e: KeyboardEvent) => {
+            if (e.key === 'Escape' && isStreaming) {
+                e.preventDefault();
+                handleStop();
+            }
+            if (e.key === 'k' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                window.dispatchEvent(new CustomEvent('gaia:focus-search'));
+            }
+        };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+    }, [isStreaming, handleStop]);
+
     // Auto-resize textarea
     const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         setInput(e.target.value);
@@ -448,6 +464,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 clearStreamContent();
                 clearAgentSteps();
 
+                // Refresh messages from DB to replace optimistic IDs with real
+                // DB IDs.  Without this, delete/resend on user messages fails
+                // because the optimistic Date.now() ID doesn't match the DB's
+                // auto-increment ID.
+                setTimeout(() => {
+                    api.getMessages(sessionId)
+                        .then((data) => {
+                            const msgs = (data.messages || []).map((m: any) => ({
+                                ...m,
+                                agentSteps: m.agentSteps || m.agent_steps || undefined,
+                            }));
+                            setMessages(msgs);
+                            lastMsgCountRef.current = msgs.length;
+                        })
+                        .catch(() => {});
+                }, 300);
+
                 // Auto-title on first message
                 if (session && session.title === 'New Chat') {
                     const autoTitle = text.slice(0, 50) + (text.length > 50 ? '...' : '');
@@ -500,7 +533,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         });
 
         abortRef.current = controller;
-    }, [input, isStreaming, sessionId, session, addMessage, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps]);
+    }, [input, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps]);
 
     // Delete a single message
     const handleDeleteMessage = useCallback(async (messageId: number) => {
@@ -661,21 +694,42 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     title="Click to manage documents"
                     aria-label={`${documents.length} indexed document${documents.length !== 1 ? 's' : ''}`}
                 >
-                    <FileText size={12} className="doc-context-icon" />
+                    <CheckCircle2 size={12} className="doc-context-icon" />
                     <span className="doc-context-label">
-                        {documents.length} document{documents.length !== 1 ? 's' : ''} indexed
+                        {documents.length} indexed
                     </span>
-                    <span className="doc-context-names">
-                        {documents.slice(0, 3).map((d) => d.filename).join(', ')}
-                        {documents.length > 3 && ` +${documents.length - 3} more`}
-                    </span>
+                    <div className="doc-context-pills">
+                        {documents.slice(0, 3).map((d) => (
+                            <span key={d.id} className="doc-pill">
+                                <FileText size={9} className="doc-pill-icon" />
+                                {d.filename}
+                            </span>
+                        ))}
+                        {documents.length > 3 && (
+                            <span className="doc-pill-more">+{documents.length - 3} more</span>
+                        )}
+                    </div>
                 </button>
             )}
 
             {/* Messages */}
             <div className="messages-scroll" ref={messagesScrollRef} onScroll={handleScroll}>
                 {isLoadingMessages && (
-                    <div className="loading-spinner" aria-label="Loading messages" />
+                    <div className="skeleton-messages" aria-label="Loading messages">
+                        {[0, 1, 2].map((i) => (
+                            <div key={i} className="skeleton-msg">
+                                <div className="skeleton-header">
+                                    <div className="skeleton-avatar" />
+                                    <div className="skeleton-role" />
+                                </div>
+                                <div className="skeleton-lines">
+                                    <div className="skeleton-line" />
+                                    <div className="skeleton-line" />
+                                    {i !== 2 && <div className="skeleton-line" />}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 )}
 
                 {showEmptyState && (
@@ -790,8 +844,30 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     </div>
                 </div>
                 <div className="input-footer">
-                    <Lock size={10} />
-                    <span>Your data never leaves this device</span>
+                    <span className="input-footer-item">
+                        <Lock size={10} />
+                        <span>100% local &amp; private</span>
+                    </span>
+                    <span className="input-footer-sep" />
+                    <span className="input-footer-item">
+                        <kbd className="kbd-hint">Enter</kbd>
+                        <span>send</span>
+                    </span>
+                    <span className="input-footer-item">
+                        <kbd className="kbd-hint">Shift+Enter</kbd>
+                        <span>new line</span>
+                    </span>
+                    {isStreaming && (
+                        <span className="input-footer-item">
+                            <kbd className="kbd-hint">Esc</kbd>
+                            <span>stop</span>
+                        </span>
+                    )}
+                    <span className="input-footer-sep" />
+                    <span className="input-footer-item">
+                        <kbd className="kbd-hint">Ctrl+K</kbd>
+                        <span>search</span>
+                    </span>
                 </div>
             </div>
         </main>

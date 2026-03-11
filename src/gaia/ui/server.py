@@ -652,6 +652,58 @@ def create_app(db_path: str = None) -> FastAPI:
             quick_links=quick_links,
         )
 
+    # ── Open File/Folder Endpoint ────────────────────────────────────────
+
+    @app.post("/api/files/open")
+    async def open_file_or_folder(request: dict):
+        """Open a file or its containing folder in the system file explorer.
+
+        Args:
+            request.path: Absolute path to the file or folder.
+            request.reveal: If true, reveal the file in its parent folder
+                           (default: true for files, ignored for folders).
+        """
+        import subprocess
+
+        file_path = request.get("path", "")
+        if not file_path or "\x00" in file_path:
+            raise HTTPException(status_code=400, detail="Invalid path")
+
+        resolved = Path(file_path).resolve(strict=False)
+        reveal = request.get("reveal", True)
+
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="Path not found")
+
+        # Security: don't follow symlinks
+        if resolved.is_symlink():
+            raise HTTPException(
+                status_code=400, detail="Symbolic links are not supported"
+            )
+
+        try:
+            if platform.system() == "Windows":
+                if resolved.is_file() and reveal:
+                    # Reveal file in Explorer (selects it)
+                    subprocess.Popen(["explorer", "/select,", str(resolved)])
+                else:
+                    # Open folder directly
+                    target = resolved if resolved.is_dir() else resolved.parent
+                    subprocess.Popen(["explorer", str(target)])
+            elif platform.system() == "Darwin":
+                if resolved.is_file() and reveal:
+                    subprocess.Popen(["open", "-R", str(resolved)])
+                else:
+                    target = resolved if resolved.is_dir() else resolved.parent
+                    subprocess.Popen(["open", str(target)])
+            else:
+                target = resolved if resolved.is_dir() else resolved.parent
+                subprocess.Popen(["xdg-open", str(target)])
+
+            return {"status": "ok", "path": str(resolved)}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
     # ── File Search Endpoint ──────────────────────────────────────────────
 
     @app.get("/api/files/search", response_model=FileSearchResponse)

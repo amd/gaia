@@ -514,9 +514,12 @@ class RAGToolsMixin:
                     else None
                 )
 
-                # Find the file in indexed files
+                # Find the file in indexed files (normalize slashes for cross-platform matching)
+                norm_path = str(Path(file_path))
                 matching_files = [
-                    f for f in self.rag.indexed_files if file_path in str(f)
+                    f
+                    for f in self.rag.indexed_files
+                    if norm_path in str(f) or file_path in str(f)
                 ]
 
                 if not matching_files:
@@ -1225,9 +1228,12 @@ class RAGToolsMixin:
             """
             try:
 
-                # Find the file in indexed files
+                # Find the file in indexed files (normalize slashes for cross-platform matching)
+                norm_path = str(Path(file_path))
                 matching_files = [
-                    f for f in self.rag.indexed_files if file_path in str(f)
+                    f
+                    for f in self.rag.indexed_files
+                    if norm_path in str(f) or file_path in str(f)
                 ]
 
                 if not matching_files:
@@ -1554,9 +1560,16 @@ Use the {summary_type} style. Ensure page references from section summaries are 
             """
             try:
 
-                # Find the file in indexed files
+                # Find the file in indexed files (normalize slashes for cross-platform matching)
+                norm_name = (
+                    str(Path(file_name))
+                    if ("/" in file_name or "\\" in file_name)
+                    else file_name
+                )
                 matching_files = [
-                    f for f in self.rag.indexed_files if file_name in str(f)
+                    f
+                    for f in self.rag.indexed_files
+                    if norm_name in str(f) or file_name in str(f)
                 ]
 
                 if not matching_files:

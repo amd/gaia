@@ -25,6 +25,10 @@
     --bg-user-msg: transparent;
     --bg-modal-overlay: rgba(0, 0, 0, 0.5);
 
+    /* Theme-aware overlay tints (visible on light backgrounds) */
+    --tint-subtle: rgba(0, 0, 0, 0.03);
+    --tint-hover: rgba(0, 0, 0, 0.05);
+
     --text-primary: #111827;
     --text-secondary: #6b7280;
     --text-muted: #9ca3af;
@@ -75,6 +79,9 @@
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
     --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
+
+    --tint-subtle: rgba(255, 255, 255, 0.04);
+    --tint-hover: rgba(255, 255, 255, 0.06);
 }
 
 /* Reset */

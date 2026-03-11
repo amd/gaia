@@ -294,6 +294,10 @@ export async function indexFolder(folderPath: string, recursive: boolean = true)
     return apiFetch('POST', '/documents/index-folder', { folder_path: folderPath, recursive });
 }
 
+export async function openFileOrFolder(path: string, reveal: boolean = true): Promise<{ status: string; path: string }> {
+    return apiFetch('POST', '/files/open', { path, reveal });
+}
+
 // -- File Search & Preview ----------------------------------------------------------
 
 export async function searchFiles(query: string, fileTypes?: string, maxResults?: number): Promise<{

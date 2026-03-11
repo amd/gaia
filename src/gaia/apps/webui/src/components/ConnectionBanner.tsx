@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { AlertTriangle, WifiOff, X } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useChatStore } from '../stores/chatStore';
 import './ConnectionBanner.css';
 
@@ -13,6 +13,20 @@ import './ConnectionBanner.css';
 export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
     const { backendConnected, systemStatus } = useChatStore();
     const [dismissed, setDismissed] = useState(false);
+
+    // Reset dismissed state when the underlying status changes so the
+    // banner reappears if Lemonade stops again after being dismissed.
+    const prevLemonadeRef = useRef(systemStatus?.lemonade_running);
+    useEffect(() => {
+        const current = systemStatus?.lemonade_running;
+        if (prevLemonadeRef.current !== current) {
+            prevLemonadeRef.current = current;
+            // Only reset if it changed to a warning-worthy state
+            if (current === false) {
+                setDismissed(false);
+            }
+        }
+    }, [systemStatus]);
 
     // Nothing to show
     if (dismissed) return null;

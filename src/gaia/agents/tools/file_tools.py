@@ -110,14 +110,22 @@ class FileSearchToolsMixin:
                 # Detect if the pattern is a glob (contains * or ?)
                 is_glob = "*" in file_pattern or "?" in file_pattern
 
+                # For multi-word queries, split into individual words
+                # so "operations manual" matches "Operations-Manual" in filenames
+                query_words = pattern_lower.split() if not is_glob else []
+
                 def matches_pattern_and_type(file_path: Path) -> bool:
                     """Check if file matches pattern and is a document type."""
                     name_lower = file_path.name.lower()
                     if is_glob:
                         # Use fnmatch for glob patterns like *.pdf, report*.docx
                         name_match = fnmatch.fnmatch(name_lower, pattern_lower)
+                    elif len(query_words) > 1:
+                        # Multi-word query: all words must appear in filename
+                        # (handles hyphens, underscores, camelCase separators)
+                        name_match = all(w in name_lower for w in query_words)
                     else:
-                        # Substring match for plain text queries like 'oil', 'manual'
+                        # Single word: simple substring match
                         name_match = pattern_lower in name_lower
                     type_match = file_path.suffix.lower() in doc_extensions
                     return name_match and type_match
@@ -199,7 +207,9 @@ class FileSearchToolsMixin:
                         break
                     # Skip if already searched as part of CWD
                     try:
-                        if location.resolve() == cwd.resolve() or str(location.resolve()).startswith(str(cwd.resolve())):
+                        if location.resolve() == cwd.resolve() or str(
+                            location.resolve()
+                        ).startswith(str(cwd.resolve())):
                             continue
                     except (OSError, ValueError):
                         pass

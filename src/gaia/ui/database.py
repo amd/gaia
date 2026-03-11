@@ -581,7 +581,7 @@ class ChatDatabase:
         Returns:
             True if the document was found and updated.
         """
-        with self._lock:
+        with self._transaction():
             parts = ["indexing_status = ?"]
             params: list = [status]
             if chunk_count is not None:
@@ -594,7 +594,6 @@ class ChatDatabase:
                 f"UPDATE documents SET {', '.join(parts)} WHERE id = ?",
                 params,
             )
-            self._conn.commit()
             return cursor.rowcount > 0
 
     # ── Stats ───────────────────────────────────────────────────────────

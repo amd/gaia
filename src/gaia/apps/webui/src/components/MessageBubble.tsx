@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useRef, useState, useEffect } from 'react';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentActivity } from './AgentActivity';
+import * as api from '../services/api';
+import gaiaRobot from '../assets/gaia-robot.png';
 import type { Message, AgentStep } from '../types';
 import './MessageBubble.css';
 
@@ -51,6 +53,55 @@ const TOOL_CALL_JSON_RE = /\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*
  * intercepts it. They also sometimes output trailing code fences,
  * thinking tags, or JSON thought blocks. This function cleans all of that.
  */
+/**
+ * Find and remove/extract {"thought":...} JSON blocks from LLM output.
+ * Blocks with "tool"/"tool_args" are removed entirely.
+ * Blocks with "answer" have the answer text extracted and kept.
+ */
+function cleanThoughtBlocks(text: string): string {
+    const marker = '"thought"';
+    let result = '';
+    let i = 0;
+
+    while (i < text.length) {
+        const braceIdx = text.indexOf('{', i);
+        if (braceIdx === -1) { result += text.slice(i); break; }
+
+        // Check if this brace starts a thought block (look ahead for "thought")
+        const lookAhead = text.slice(braceIdx, braceIdx + 40);
+        if (!lookAhead.includes(marker)) {
+            result += text.slice(i, braceIdx + 1);
+            i = braceIdx + 1;
+            continue;
+        }
+
+        // Found a potential thought block — find matching closing brace
+        result += text.slice(i, braceIdx);
+        let depth = 0;
+        let j = braceIdx;
+        for (; j < text.length; j++) {
+            if (text[j] === '{') depth++;
+            else if (text[j] === '}') { depth--; if (depth === 0) break; }
+        }
+        if (depth !== 0) { result += text.slice(braceIdx); break; } // unclosed
+
+        const block = text.slice(braceIdx, j + 1);
+        try {
+            const parsed = JSON.parse(block);
+            if (parsed.answer) {
+                // Extract the answer content — this is the useful text
+                result += parsed.answer;
+            }
+            // tool/tool_args blocks are dropped silently
+        } catch {
+            // Not valid JSON — keep original text
+            result += block;
+        }
+        i = j + 1;
+    }
+    return result;
+}
+
 function cleanToolCallContent(content: string): string {
     if (!content) return content;
     let cleaned = content;
@@ -62,12 +113,10 @@ function cleanToolCallContent(content: string): string {
     // LLMs sometimes end responses with ``` or ```\n
     cleaned = cleaned.replace(/\n?```\s*$/, '');
 
-    // Remove thinking/thought JSON blocks the LLM sometimes outputs
-    // e.g. {"thought": "...", "goal": "...", "tool": "...", "tool_args": {...}}
-    cleaned = cleaned.replace(
-        /\s*\{\s*"thought"\s*:\s*"[^"]*"[^}]*\}\s*/g,
-        ''
-    );
+    // Remove/extract thinking/thought JSON blocks the LLM sometimes outputs.
+    // These have nested braces so we use a brace-depth parser instead of regex.
+    // Blocks with "answer" have their answer text extracted; "tool" blocks are removed.
+    cleaned = cleanThoughtBlocks(cleaned);
 
     // Remove <think>...</think> tags that some models output
     cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '');
@@ -94,6 +143,20 @@ function cleanToolCallContent(content: string): string {
     }
 
     return cleaned;
+}
+
+/** Format a timestamp as relative time ("2m ago") or absolute for older messages. */
+function formatMsgTime(iso: string): string {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const now = new Date();
+    const diff = now.getTime() - d.getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, onDelete, onResend }: MessageBubbleProps) {
@@ -141,8 +204,20 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         <div className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}>
             <div className="msg-inner">
                 <div className="msg-header">
-                    <div className={`msg-role ${message.role === 'user' ? 'role-user' : 'role-assistant'}`}>
-                        {message.role === 'user' ? 'You' : 'GAIA'}
+                    <div className="msg-header-left">
+                        {message.role === 'user' ? (
+                            <div className="msg-avatar msg-avatar-user" aria-hidden="true">Y</div>
+                        ) : (
+                            <div className="msg-avatar msg-avatar-assistant" aria-hidden="true">
+                                <img src={gaiaRobot} alt="" />
+                            </div>
+                        )}
+                        <div className={`msg-role ${message.role === 'user' ? 'role-user' : 'role-assistant'}`}>
+                            {message.role === 'user' ? 'You' : 'GAIA'}
+                        </div>
+                        {message.created_at && (
+                            <span className="msg-timestamp">{formatMsgTime(message.created_at)}</span>
+                        )}
                     </div>
                     {!isStreaming && (
                         <div className="msg-actions">
@@ -242,6 +317,62 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 }
 
 /** Markdown renderer using react-markdown with GFM support. */
+// ── File Path Linkification ──────────────────────────────────────────────
+
+/** Regex to detect Windows file paths like C:\Users\... or C:/Users/... */
+const WIN_PATH_RE = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]]+[\\\/])*[^\s*?"<>|,;)}\]]*\.\w{1,5}/gi;
+/** Regex to detect Windows directory paths like C:\Users\...\folder\ */
+const WIN_DIR_RE = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]]+[\\\/])+/gi;
+
+function FilePathLink({ path }: { path: string }) {
+    const handleClick = (e: React.MouseEvent) => {
+        e.preventDefault();
+        api.openFileOrFolder(path).catch((err) => {
+            console.error('Failed to open path:', err);
+        });
+    };
+    return (
+        <span
+            className="file-path-link"
+            onClick={handleClick}
+            title={`Open in file explorer: ${path}`}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleClick(e as unknown as React.MouseEvent); }}
+        >
+            <FolderOpen size={12} className="file-path-icon" />
+            {path}
+        </span>
+    );
+}
+
+/** Split text into segments, replacing file paths with clickable links. */
+function linkifyFilePaths(text: string): React.ReactNode {
+    // Combine both regexes: match files first, then directories
+    const combined = new RegExp(`(${WIN_PATH_RE.source}|${WIN_DIR_RE.source})`, 'gi');
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = combined.exec(text)) !== null) {
+        // Add text before the match
+        if (match.index > lastIndex) {
+            parts.push(text.slice(lastIndex, match.index));
+        }
+        parts.push(<FilePathLink key={match.index} path={match[0]} />);
+        lastIndex = combined.lastIndex;
+    }
+
+    // No paths found — return original text
+    if (parts.length === 0) return text;
+
+    // Add remaining text
+    if (lastIndex < text.length) {
+        parts.push(text.slice(lastIndex));
+    }
+    return <>{parts}</>;
+}
+
 function RenderedContent({ content }: { content: string }) {
     if (!content) return null;
 
@@ -327,6 +458,13 @@ function RenderedContent({ content }: { content: string }) {
                     // Horizontal rule
                     hr() {
                         return <hr className="md-hr" />;
+                    },
+                    // Custom text renderer to linkify file paths
+                    text({ children }) {
+                        if (typeof children === 'string') {
+                            return <>{linkifyFilePaths(children)}</>;
+                        }
+                        return <>{children}</>;
                     },
                 }}
             >

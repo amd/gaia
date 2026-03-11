@@ -153,6 +153,24 @@
     padding: 2px 8px;
 }
 
+/* Session group headers (Today, Yesterday, etc.) */
+.session-group-label {
+    padding: 8px 10px 4px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    user-select: none;
+}
+/* Add separator border above non-first group wrappers.
+   Each group is a <div> wrapping label+items inside <nav>. */
+.session-list > div + div > .session-group-label {
+    margin-top: 4px;
+    border-top: 1px solid var(--border-light);
+    padding-top: 10px;
+}
+
 .session-item {
     display: flex;
     align-items: center;
@@ -165,7 +183,12 @@
     outline: none;
 }
 .session-item:hover { background: var(--bg-hover); }
-.session-item.active { background: var(--bg-active); font-weight: 500; }
+.session-item.active {
+    background: var(--bg-active);
+    font-weight: 500;
+    border-left: 3px solid var(--amd-red);
+    padding-left: 7px;
+}
 .session-item:focus-visible {
     outline: 2px solid var(--amd-red);
     outline-offset: -2px;
