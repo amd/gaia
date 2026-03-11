@@ -505,10 +505,71 @@ class AttachDocumentRequest(BaseModel):
     ```
 
     **Streaming response** (SSE events):
+
+    When `stream: true`, the server returns a `text/event-stream` response. Each line follows the SSE format `data: <JSON>`. The `SSEOutputHandler` ([`src/gaia/ui/sse_handler.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/sse_handler.py)) bridges agent console events to the following typed events:
+
+    **Thinking and Progress**
+
+    | Event type | Fields | Description |
+    |------------|--------|-------------|
+    | `thinking` | `content` (string) | Agent reasoning or progress message. Emitted when the agent starts processing, thinks through a problem, or begins a long-running operation. |
+    | `step` | `step` (int), `total` (int), `status` (string) | Agent step progress. `step` is the current step number, `total` is the step limit, and `status` is `"started"`. |
+    | `status` | `status` (string), `message` (string) | General status update. `status` is one of `"working"`, `"complete"`, `"warning"`, or `"info"`. May also include `steps` (int) and `elapsed` (number) when `status` is `"complete"`. |
+    | `plan` | `steps` (string[]), `current_step` (int or null) | Agent execution plan. Each entry in `steps` is a human-readable description of a planned action. |
+
+    **Tool Execution**
+
+    | Event type | Fields | Description |
+    |------------|--------|-------------|
+    | `tool_start` | `tool` (string), `detail` (string) | Tool invocation started. `tool` is the tool function name (e.g., `"query_documents"`, `"search_file"`). `detail` is a human-readable description of the operation. |
+    | `tool_args` | `tool` (string), `args` (object), `detail` (string) | Tool arguments. `args` is the raw arguments dict passed to the tool. `detail` is a formatted human-readable summary of the arguments. |
+    | `tool_end` | `success` (boolean) | Tool invocation completed. |
+    | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `result_data` (object or null), `command_output` (object or null) | Tool result with structured data. `summary` is a human-readable result. `result_data` contains typed results (see below). `command_output` contains shell command output (see below). |
+
+    `result_data` variants in `tool_result`:
+    - **File list:** `{"type": "file_list", "files": [...], "total": int}` -- up to 20 file entries
+    - **Search results:** `{"type": "search_results", "count": int, "scores": float[], "previews": string[]}` -- top 5 chunk previews (200 chars each)
+
+    `command_output` shape in `tool_result`:
+    ```json
+    {
+      "command": "ls -la",
+      "stdout": "total 42\n...",
+      "stderr": "",
+      "return_code": 0,
+      "cwd": "/home/user/project",
+      "duration_seconds": 0.15,
+      "truncated": false
+    }
     ```
+
+    **Response Content**
+
+    | Event type | Fields | Description |
+    |------------|--------|-------------|
+    | `chunk` | `content` (string) | Incremental text fragment of the response, streamed as the LLM generates tokens. Raw tool-call JSON is automatically filtered out. |
+    | `answer` | `content` (string), `elapsed` (number), `steps` (int), `tools_used` (int) | Final complete answer from the agent. `elapsed` is wall-clock seconds. `steps` and `tools_used` are execution totals. Double-escaped newlines/tabs from LLM output are automatically corrected. |
+    | `agent_error` | `content` (string) | Error message from the agent. |
+
+    **Stream Termination**
+
+    | Event type | Fields | Description |
+    |------------|--------|-------------|
+    | `done` | `message_id` (int), `content` (string) | Signals the end of the stream. `message_id` is the database ID of the saved assistant message. `content` is the full response text. |
+
+    **Example stream** showing a typical multi-step interaction:
+    ```
+    data: {"type": "thinking", "content": "Sending to Qwen3-Coder-30B..."}
+    data: {"type": "step", "step": 1, "total": 10, "status": "started"}
+    data: {"type": "tool_start", "tool": "query_documents", "detail": "Searching indexed documents for relevant content"}
+    data: {"type": "tool_args", "tool": "query_documents", "args": {"query": "database init"}, "detail": "query: database init"}
+    data: {"type": "tool_result", "title": "Result", "summary": "Found 3 relevant chunk(s) (best score: 0.87)", "success": true, "result_data": {"type": "search_results", "count": 3, "scores": [0.87, 0.72, 0.65], "previews": ["def init_db()..."]}}
+    data: {"type": "tool_end", "success": true}
     data: {"type": "chunk", "content": "This function"}
     data: {"type": "chunk", "content": " initializes"}
     data: {"type": "chunk", "content": " the database..."}
+    data: {"type": "answer", "content": "This function initializes the database...", "elapsed": 3.45, "steps": 1, "tools_used": 1}
+    data: {"type": "status", "status": "complete", "message": "Completed in 1 steps", "steps": 1, "elapsed": 3.45}
     data: {"type": "done", "message_id": 42, "content": "This function initializes the database..."}
     ```
 
@@ -582,6 +643,43 @@ class AttachDocumentRequest(BaseModel):
 
   <Accordion title="DELETE /api/sessions/{session_id}/documents/{doc_id}">
     Detach a document from a session (does not delete the document).
+  </Accordion>
+</AccordionGroup>
+
+### Files
+
+<AccordionGroup>
+  <Accordion title="POST /api/files/open">
+    Open a file or folder in the system file explorer. On Windows this launches Explorer, on macOS it uses `open`, and on Linux it uses `xdg-open`. Symbolic links are rejected for security.
+
+    **Request:**
+    ```json
+    {
+      "path": "/home/user/docs/report.pdf",
+      "reveal": true
+    }
+    ```
+
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `path` | string | Absolute path to the file or folder to open. |
+    | `reveal` | boolean | If `true` (default), reveal the file selected in its parent folder. If `false`, open the containing folder directly. Ignored when `path` is a directory. |
+
+    **Response:**
+    ```json
+    {
+      "status": "ok",
+      "path": "/home/user/docs/report.pdf"
+    }
+    ```
+
+    **Error responses:**
+
+    | Status | Condition |
+    |--------|-----------|
+    | `400` | Invalid path (empty or contains null bytes), or path is a symbolic link |
+    | `404` | Path does not exist |
+    | `500` | Failed to launch the system file explorer |
   </Accordion>
 </AccordionGroup>
 
