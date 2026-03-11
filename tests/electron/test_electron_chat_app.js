@@ -440,7 +440,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should handle new chat creation', () => {
-      expect(appContent).toContain('handleNewChat');
+      expect(appContent).toContain('handleNewTask');
       expect(appContent).toContain('createSession');
     });
 
@@ -633,8 +633,8 @@ describe('Chat App Integration', () => {
       appContent = fs.readFileSync(appPath, 'utf8');
     });
 
-    it('should have handleNewChatWithPrompt for quick-start prompts', () => {
-      expect(appContent).toContain('handleNewChatWithPrompt');
+    it('should have handleNewTaskWithPrompt for quick-start prompts', () => {
+      expect(appContent).toContain('handleNewTaskWithPrompt');
     });
 
     it('should dispatch custom event for initial prompts', () => {
@@ -900,13 +900,13 @@ describe('Chat App Integration', () => {
     });
 
     it('should have ARIA labels on sidebar buttons', () => {
-      expect(sidebarContent).toContain('aria-label="New Chat"');
+      expect(sidebarContent).toContain('aria-label="New Task"');
       expect(sidebarContent).toContain('aria-label="Document Library"');
       expect(sidebarContent).toContain('aria-label="Settings"');
     });
 
     it('should have ARIA labels on sessions', () => {
-      expect(sidebarContent).toContain('aria-label={`Open chat:');
+      expect(sidebarContent).toContain('aria-label={`Open task:');
     });
 
     it('should have aria-current on active session', () => {
@@ -934,7 +934,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have search with aria-label', () => {
-      expect(sidebarContent).toContain('aria-label="Search conversations"');
+      expect(sidebarContent).toContain('aria-label="Search tasks"');
     });
 
     it('should have version badge', () => {
@@ -1051,7 +1051,7 @@ describe('Chat App Integration', () => {
 
     it('should have empty chat onboarding suggestions', () => {
       expect(chatContent).toContain('EMPTY_SUGGESTIONS');
-      expect(chatContent).toContain('Start the conversation');
+      expect(chatContent).toContain('What can I help you with?');
     });
 
     it('should have empty chat suggestion chips', () => {
@@ -1179,7 +1179,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have red left border for errors', () => {
-      expect(msgCss).toContain('border-left: 3px solid #ef4444');
+      expect(msgCss).toContain('border-left: 2px solid var(--amd-red)');
     });
 
     it('should have error background tint', () => {
@@ -1188,7 +1188,7 @@ describe('Chat App Integration', () => {
 
     it('should have copy feedback green style', () => {
       expect(msgCss).toContain('.code-copy.copied');
-      expect(msgCss).toContain('#22c55e');
+      expect(msgCss).toContain('var(--accent-green)');
     });
 
     it('should have responsive message padding', () => {

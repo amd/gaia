@@ -428,8 +428,20 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       const apiPath = path.join(CHAT_APP_PATH, 'src/services/api.ts');
       const apiContent = fs.readFileSync(apiPath, 'utf8');
 
-      const serverPath = path.join(BACKEND_PATH, 'server.py');
-      const serverContent = fs.readFileSync(serverPath, 'utf8');
+      // After modular router refactoring, routes live in router modules
+      // Read all router files + server.py to build backend content
+      const routerDir = path.join(BACKEND_PATH, 'routers');
+      const backendFiles = [
+        path.join(BACKEND_PATH, 'server.py'),
+      ];
+      if (fs.existsSync(routerDir)) {
+        fs.readdirSync(routerDir)
+          .filter(f => f.endsWith('.py'))
+          .forEach(f => backendFiles.push(path.join(routerDir, f)));
+      }
+      const serverContent = backendFiles
+        .map(f => fs.readFileSync(f, 'utf8'))
+        .join('\n');
 
       // Verify key endpoints exist in both frontend and backend
       const endpoints = [
