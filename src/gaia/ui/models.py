@@ -159,7 +159,7 @@ class DocumentResponse(BaseModel):
     last_accessed_at: Optional[str] = None
     sessions_using: int = 0
     indexing_status: str = (
-        "complete"  # pending | indexing | complete | failed | cancelled
+        "complete"  # pending | indexing | complete | failed | cancelled | missing
     )
 
 
@@ -269,6 +269,13 @@ class FileSearchResponse(BaseModel):
     total: int
     query: str
     searched_locations: List[str] = Field(default_factory=list)
+
+
+class OpenFileRequest(BaseModel):
+    """Request to open a file or folder in the system file explorer."""
+
+    path: str
+    reveal: bool = True
 
 
 class FilePreviewResponse(BaseModel):

@@ -132,6 +132,21 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for indexing_status: %s", e)
 
+        # Add file_mtime column for tracking file modification times
+        try:
+            doc_cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(documents)").fetchall()
+            ]
+            if "file_mtime" not in doc_cols:
+                self._conn.execute(
+                    "ALTER TABLE documents ADD COLUMN file_mtime REAL"
+                )
+                self._conn.commit()
+                logger.info("Migrated documents table: added file_mtime column")
+        except Exception as e:
+            logger.debug("Migration check for file_mtime: %s", e)
+
     def close(self):
         """Close database connection."""
         if self._conn:
@@ -431,6 +446,7 @@ class ChatDatabase:
         file_hash: str,
         file_size: int = 0,
         chunk_count: int = 0,
+        file_mtime: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Add a document to the library. Returns existing doc if hash matches.
 
@@ -452,8 +468,8 @@ class ChatDatabase:
                 # count is higher, e.g. fixing a previous 0-chunk bug)
                 new_chunk_count = max(chunk_count, doc.get("chunk_count", 0))
                 self._conn.execute(
-                    "UPDATE documents SET last_accessed_at = ?, chunk_count = ? WHERE id = ?",
-                    (now, new_chunk_count, doc["id"]),
+                    "UPDATE documents SET last_accessed_at = ?, chunk_count = ?, file_mtime = ? WHERE id = ?",
+                    (now, new_chunk_count, file_mtime, doc["id"]),
                 )
                 self._conn.commit()
                 doc["chunk_count"] = new_chunk_count
@@ -464,8 +480,8 @@ class ChatDatabase:
                 self._conn.execute(
                     """INSERT INTO documents
                        (id, filename, filepath, file_hash, file_size, chunk_count,
-                        indexed_at, last_accessed_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        indexed_at, last_accessed_at, file_mtime)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         doc_id,
                         filename,
@@ -475,6 +491,7 @@ class ChatDatabase:
                         chunk_count,
                         now,
                         now,
+                        file_mtime,
                     ),
                 )
                 self._conn.commit()
@@ -593,6 +610,68 @@ class ChatDatabase:
             cursor = self._conn.execute(
                 f"UPDATE documents SET {', '.join(parts)} WHERE id = ?",
                 params,
+            )
+            return cursor.rowcount > 0
+
+    def reindex_document(
+        self,
+        doc_id: str,
+        file_hash: str,
+        file_mtime: float,
+        chunk_count: int = 0,
+        file_size: int = 0,
+    ) -> bool:
+        """Update a document after re-indexing due to file change.
+
+        Updates the hash, mtime, chunk count, file size, and resets
+        indexed_at to the current time.
+
+        Args:
+            doc_id: Document ID.
+            file_hash: New SHA-256 hash of the file contents.
+            file_mtime: New file modification time (Unix epoch float).
+            chunk_count: New chunk count from re-indexing.
+            file_size: New file size in bytes.
+
+        Returns:
+            True if the document was found and updated.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                """UPDATE documents
+                   SET file_hash = ?, file_mtime = ?, chunk_count = ?,
+                       file_size = ?, indexed_at = ?, indexing_status = 'complete',
+                       last_accessed_at = ?
+                   WHERE id = ?""",
+                (
+                    file_hash,
+                    file_mtime,
+                    chunk_count,
+                    file_size,
+                    self._now(),
+                    self._now(),
+                    doc_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def update_document_mtime(self, doc_id: str, file_mtime: float) -> bool:
+        """Update only the stored file mtime (when content unchanged).
+
+        Used when the file's mtime changed but the hash is identical
+        (e.g., the file was touched without content modification).
+
+        Args:
+            doc_id: Document ID.
+            file_mtime: New file modification time (Unix epoch float).
+
+        Returns:
+            True if the document was found and updated.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                "UPDATE documents SET file_mtime = ? WHERE id = ?",
+                (file_mtime, doc_id),
             )
             return cursor.rowcount > 0
 

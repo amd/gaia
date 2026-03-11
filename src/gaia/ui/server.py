@@ -19,15 +19,18 @@ import os
 import platform
 import shutil
 import string
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .database import ChatDatabase
+from .document_monitor import DocumentMonitor
 from .models import (
     AttachDocumentRequest,
     BrowseResponse,
@@ -45,6 +48,7 @@ from .models import (
     IndexFolderResponse,
     MessageListResponse,
     MessageResponse,
+    OpenFileRequest,
     QuickLink,
     SessionListResponse,
     SessionResponse,
@@ -60,6 +64,60 @@ logger = logging.getLogger(__name__)
 # Default port for chat UI server
 DEFAULT_PORT = 4200
 
+# Localhost addresses that bypass tunnel authentication (Electron app)
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+# API paths that bypass tunnel authentication (monitoring / preflight)
+_AUTH_EXEMPT_PATHS = {"/api/health"}
+
+
+class TunnelAuthMiddleware(BaseHTTPMiddleware):
+    """Validate Bearer token on API requests arriving through the ngrok tunnel.
+
+    When the tunnel is active, every ``/api/*`` request whose source is
+    *not* localhost must carry a valid ``Authorization: Bearer <token>``
+    header.  Local requests (from the Electron desktop app) and the
+    ``/api/health`` monitoring endpoint are always allowed through.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        # Only gate /api/* routes
+        if not path.startswith("/api/"):
+            return await call_next(request)
+
+        # Always allow exempt paths (health check, etc.)
+        if path in _AUTH_EXEMPT_PATHS:
+            return await call_next(request)
+
+        # Check whether the tunnel is active
+        tunnel: TunnelManager = getattr(request.app.state, "tunnel", None)
+        if tunnel is None or not tunnel.active:
+            return await call_next(request)
+
+        # Allow requests originating from localhost (Electron app)
+        client_host = request.client.host if request.client else None
+        if client_host in _LOCAL_HOSTS:
+            return await call_next(request)
+
+        # ── Remote request through tunnel -- require Bearer token ────────
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.lower().startswith("bearer "):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Missing or invalid Authorization header"},
+            )
+
+        token = auth_header[len("bearer ") :].strip()  # noqa: E203
+        if not tunnel.validate_token(token):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid tunnel authentication token"},
+            )
+
+        return await call_next(request)
+
 
 def create_app(db_path: str = None) -> FastAPI:
     """Create and configure the FastAPI application.
@@ -70,10 +128,48 @@ def create_app(db_path: str = None) -> FastAPI:
     Returns:
         Configured FastAPI application.
     """
+    # Initialize database early so lifespan can access it
+    db = ChatDatabase(db_path)
+
+    # Background indexing: track running tasks by document ID
+    # so we can report status and cancel them.
+    _indexing_tasks: dict = {}  # doc_id -> asyncio.Task
+    _LARGE_FILE_THRESHOLD = 5 * 1024 * 1024  # 5 MB
+
+    # ── Concurrency control for /api/chat/send ──────────────────────────
+    # ChatAgent is expensive (LLM connection, RAG indexing), so we limit
+    # the number of concurrent chat requests to avoid resource exhaustion.
+    _chat_semaphore = asyncio.Semaphore(2)  # max 2 concurrent chat requests
+
+    # Per-session locks prevent the same session from having multiple
+    # concurrent requests, which would corrupt conversation state.
+    _session_locks: dict = {}  # session_id -> asyncio.Lock
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Manage startup/shutdown lifecycle for background services."""
+        # Start document file monitor for auto re-indexing
+        monitor = DocumentMonitor(
+            db=db,
+            index_fn=_index_document,
+            interval=30.0,
+            active_tasks=_indexing_tasks,
+        )
+        app.state.document_monitor = monitor
+        await monitor.start()
+        logger.info("Document file monitor started (30s polling interval)")
+
+        yield
+
+        # Shutdown
+        await monitor.stop()
+        logger.info("Document file monitor stopped")
+
     app = FastAPI(
         title="GAIA Agent UI API",
         description="Privacy-first local chat application API",
         version="0.1.0",
+        lifespan=lifespan,
     )
 
     # CORS - allow local origins and tunnel URLs for mobile access
@@ -87,14 +183,11 @@ def create_app(db_path: str = None) -> FastAPI:
             "http://localhost:5173",
             "http://127.0.0.1:5173",
         ],
-        allow_origin_regex=r"https://.*\.ngrok.*\.app",  # Allow ngrok tunnel origins
+        allow_origin_regex=r"https://[a-zA-Z0-9-]+\.ngrok-free\.app",  # Allow ngrok tunnel origins
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    # Initialize database
-    db = ChatDatabase(db_path)
 
     # Store db on app state so it's accessible
     app.state.db = db
@@ -103,10 +196,10 @@ def create_app(db_path: str = None) -> FastAPI:
     tunnel = TunnelManager(port=DEFAULT_PORT)
     app.state.tunnel = tunnel
 
-    # Background indexing: track running tasks by document ID
-    # so we can report status and cancel them.
-    _indexing_tasks: dict = {}  # doc_id -> asyncio.Task
-    _LARGE_FILE_THRESHOLD = 5 * 1024 * 1024  # 5 MB
+    # Tunnel authentication -- reject unauthenticated remote requests when
+    # the ngrok tunnel is active.  Must be added *after* CORSMiddleware so
+    # that CORS preflight (OPTIONS) responses are handled first.
+    app.add_middleware(TunnelAuthMiddleware)
 
     # ── System Endpoints ────────────────────────────────────────────────
 
@@ -391,8 +484,10 @@ def create_app(db_path: str = None) -> FastAPI:
         if not safe_filepath.is_file():
             raise HTTPException(status_code=400, detail="Path is not a file")
 
+        file_stat = safe_filepath.stat()
         file_hash = _compute_file_hash(safe_filepath)
-        file_size = safe_filepath.stat().st_size
+        file_size = file_stat.st_size
+        file_mtime = file_stat.st_mtime
 
         if file_size <= _LARGE_FILE_THRESHOLD:
             # Small file: index synchronously (fast)
@@ -403,6 +498,7 @@ def create_app(db_path: str = None) -> FastAPI:
                 file_hash=file_hash,
                 file_size=file_size,
                 chunk_count=chunk_count,
+                file_mtime=file_mtime,
             )
             return _doc_to_response(doc)
 
@@ -413,6 +509,7 @@ def create_app(db_path: str = None) -> FastAPI:
             file_hash=file_hash,
             file_size=file_size,
             chunk_count=0,
+            file_mtime=file_mtime,
         )
         doc_id = doc["id"]
         db.update_document_status(doc_id, "indexing")
@@ -454,6 +551,18 @@ def create_app(db_path: str = None) -> FastAPI:
         # Return immediately with indexing_status='indexing'
         doc["indexing_status"] = "indexing"
         return _doc_to_response(doc)
+
+    @app.get("/api/documents/monitor/status")
+    async def monitor_status():
+        """Get status of the document file monitor."""
+        monitor = getattr(app.state, "document_monitor", None)
+        if not monitor:
+            return {"running": False, "interval_seconds": 0, "reindexing": []}
+        return {
+            "running": monitor.is_running,
+            "interval_seconds": monitor._interval,
+            "reindexing": list(monitor.reindexing_docs),
+        }
 
     @app.get("/api/documents/{doc_id}/status")
     async def get_document_status(doc_id: str):
@@ -578,24 +687,35 @@ def create_app(db_path: str = None) -> FastAPI:
         if "\x00" in path:
             raise HTTPException(status_code=400, detail="Invalid path")
 
-        resolved = Path(path).resolve(strict=False)
+        raw_path = Path(path)
 
-        # Do not follow symlinks
-        if resolved.is_symlink():
+        # Do not follow symlinks (must check before resolve)
+        if raw_path.is_symlink():
             raise HTTPException(
                 status_code=400, detail="Symbolic links are not supported"
             )
 
+        resolved = raw_path.resolve(strict=False)
+
         if not resolved.is_dir():
             raise HTTPException(status_code=404, detail="Directory not found")
 
-        # Determine parent path
+        # Security: restrict browsing to user's home directory
+        _ensure_within_home(resolved)
+
+        # Determine parent path (clamped to home directory)
+        home = Path.home()
         parent_path: Optional[str] = None
-        if resolved.parent != resolved:
-            parent_path = str(resolved.parent)
-        elif platform.system() == "Windows":
-            # At a drive root (e.g. C:\) — go back to drive listing
-            parent_path = "/"
+        if resolved == home:
+            # At home directory — no parent to navigate to
+            parent_path = None
+        elif resolved.parent != resolved:
+            # Check if parent is still within home; if not, clamp to home
+            try:
+                resolved.parent.relative_to(home)
+                parent_path = str(resolved.parent)
+            except ValueError:
+                parent_path = str(home)
 
         entries: List[FileEntry] = []
         try:
@@ -655,7 +775,7 @@ def create_app(db_path: str = None) -> FastAPI:
     # ── Open File/Folder Endpoint ────────────────────────────────────────
 
     @app.post("/api/files/open")
-    async def open_file_or_folder(request: dict):
+    async def open_file_or_folder(request: OpenFileRequest):
         """Open a file or its containing folder in the system file explorer.
 
         Args:
@@ -665,12 +785,12 @@ def create_app(db_path: str = None) -> FastAPI:
         """
         import subprocess
 
-        file_path = request.get("path", "")
+        file_path = request.path
         if not file_path or "\x00" in file_path:
             raise HTTPException(status_code=400, detail="Invalid path")
 
         raw_path = Path(file_path)
-        reveal = request.get("reveal", True)
+        reveal = request.reveal
 
         # Security: reject symlinks BEFORE resolving so resolve() can't
         # silently redirect to an unintended target.
@@ -683,6 +803,17 @@ def create_app(db_path: str = None) -> FastAPI:
 
         if not resolved.exists():
             raise HTTPException(status_code=404, detail="Path not found")
+
+        # Security: restrict to user's home directory to prevent opening
+        # arbitrary system files (especially important when tunnel is active)
+        home = Path.home()
+        try:
+            resolved.relative_to(home)
+        except ValueError:
+            raise HTTPException(
+                status_code=403,
+                detail="Access restricted to files under user home directory",
+            )
 
         try:
             if platform.system() == "Windows":
@@ -747,112 +878,115 @@ def create_app(db_path: str = None) -> FastAPI:
                 if ext.strip()
             }
 
-        matching_files: list = []
-        seen_paths: set = set()
-        searched_locations: list = []
-        start_time = _time.monotonic()
+        def _do_search() -> tuple:
+            """Blocking filesystem scan — runs in a thread."""
+            matching_files: list = []
+            seen_paths: set = set()
+            searched_locations: list = []
+            start_time = _time.monotonic()
 
-        def matches(file_path: Path) -> bool:
-            """Check if file matches the search criteria."""
-            name_match = query_lower in file_path.name.lower()
-            if not name_match:
-                return False
-            if extensions:
-                return file_path.suffix.lower() in extensions
-            return True
+            def _matches(file_path: Path) -> bool:
+                name_match = query_lower in file_path.name.lower()
+                if not name_match:
+                    return False
+                if extensions:
+                    return file_path.suffix.lower() in extensions
+                return True
 
-        def scan_directory(directory: Path, max_depth: int = 5, depth: int = 0):
-            """Recursively scan a directory for matching files."""
-            if depth > max_depth or len(matching_files) >= max_results:
-                return
-            if not directory.exists() or not directory.is_dir():
-                return
+            def _scan(
+                directory: Path, max_depth: int = 5, depth: int = 0
+            ):
+                if depth > max_depth or len(matching_files) >= max_results:
+                    return
+                if not directory.exists() or not directory.is_dir():
+                    return
 
-            searched_locations.append(str(directory))
+                searched_locations.append(str(directory))
 
-            try:
-                for item in directory.iterdir():
-                    if len(matching_files) >= max_results:
-                        return
-                    # Skip hidden/system directories
-                    if item.name.startswith((".", "$", "__")):
-                        continue
-                    if item.name in (
-                        "node_modules",
-                        ".git",
-                        "Windows",
-                        "Program Files",
-                        "Program Files (x86)",
-                        "ProgramData",
-                        "AppData",
-                    ):
-                        continue
-                    try:
-                        if item.is_symlink():
+                try:
+                    for item in directory.iterdir():
+                        if len(matching_files) >= max_results:
+                            return
+                        if item.name.startswith((".", "$", "__")):
                             continue
-                        if item.is_file() and matches(item):
-                            resolved_str = str(item.resolve())
-                            if resolved_str in seen_paths:
+                        if item.name in (
+                            "node_modules",
+                            ".git",
+                            "Windows",
+                            "Program Files",
+                            "Program Files (x86)",
+                            "ProgramData",
+                            "AppData",
+                        ):
+                            continue
+                        try:
+                            if item.is_symlink():
                                 continue
-                            seen_paths.add(resolved_str)
-                            stat = item.stat()
-                            size = stat.st_size
-                            matching_files.append(
-                                {
-                                    "name": item.name,
-                                    "path": str(item),
-                                    "size": size,
-                                    "size_display": _format_size(size),
-                                    "extension": item.suffix.lower(),
-                                    "modified": datetime.datetime.fromtimestamp(
-                                        stat.st_mtime
-                                    ).isoformat(),
-                                    "directory": str(item.parent),
-                                }
-                            )
-                        elif item.is_dir() and depth < max_depth:
-                            scan_directory(item, max_depth, depth + 1)
-                    except (PermissionError, OSError):
-                        continue
-            except (PermissionError, OSError):
-                pass
+                            if item.is_file() and _matches(item):
+                                resolved_str = str(item.resolve())
+                                if resolved_str in seen_paths:
+                                    continue
+                                seen_paths.add(resolved_str)
+                                st = item.stat()
+                                size = st.st_size
+                                matching_files.append(
+                                    {
+                                        "name": item.name,
+                                        "path": str(item),
+                                        "size": size,
+                                        "size_display": _format_size(size),
+                                        "extension": item.suffix.lower(),
+                                        "modified": datetime.datetime.fromtimestamp(
+                                            st.st_mtime
+                                        ).isoformat(),
+                                        "directory": str(item.parent),
+                                    }
+                                )
+                            elif item.is_dir() and depth < max_depth:
+                                _scan(item, max_depth, depth + 1)
+                        except (PermissionError, OSError):
+                            continue
+                except (PermissionError, OSError):
+                    pass
 
-        # Search common locations first
-        home = Path.home()
-        priority_locations = [
-            home / "Documents",
-            home / "Downloads",
-            home / "Desktop",
-            home / "OneDrive",
-        ]
+            home = Path.home()
+            for loc in [
+                home / "Documents",
+                home / "Downloads",
+                home / "Desktop",
+                home / "OneDrive",
+            ]:
+                if len(matching_files) >= max_results:
+                    break
+                _scan(loc, max_depth=4)
 
-        for loc in priority_locations:
-            if len(matching_files) >= max_results:
-                break
-            scan_directory(loc, max_depth=4)
+            if len(matching_files) < max_results:
+                _scan(home, max_depth=3)
 
-        # If not enough results, search home directory more broadly
-        if len(matching_files) < max_results:
-            scan_directory(home, max_depth=3)
+            matching_files.sort(key=lambda f: f["modified"], reverse=True)
+            matching_files = matching_files[:max_results]
 
-        # Sort by modification date (most recent first)
-        matching_files.sort(key=lambda f: f["modified"], reverse=True)
-        matching_files = matching_files[:max_results]
+            elapsed_sec = _time.monotonic() - start_time
+            logger.info(
+                "File search for '%s': %d results in %.2fs (%d locations)",
+                query,
+                len(matching_files),
+                elapsed_sec,
+                len(searched_locations),
+            )
+            return matching_files, searched_locations
 
-        elapsed = _time.monotonic() - start_time
-        logger.info(
-            "File search for '%s': %d results in %.2fs (%d locations)",
-            query,
-            len(matching_files),
-            elapsed,
-            len(searched_locations),
+        # Run blocking scan in a thread to avoid blocking the event loop
+        loop = asyncio.get_running_loop()
+        matching_files, searched_locations = await loop.run_in_executor(
+            None, _do_search
         )
 
         return FileSearchResponse(
             results=[FileSearchResult(**f) for f in matching_files],
             total=len(matching_files),
             query=query,
-            searched_locations=searched_locations[:10],  # Limit for response size
+            searched_locations=searched_locations[:10],
         )
 
     # ── File Preview Endpoint ─────────────────────────────────────────────
@@ -875,7 +1009,13 @@ def create_app(db_path: str = None) -> FastAPI:
         if "\x00" in path:
             raise HTTPException(status_code=400, detail="Invalid file path")
 
-        resolved = Path(path).resolve(strict=False)
+        raw_path = Path(path)
+
+        # Check symlink before resolve (resolve follows symlinks)
+        if raw_path.is_symlink():
+            raise HTTPException(status_code=400, detail="Symbolic links not supported")
+
+        resolved = raw_path.resolve(strict=False)
 
         if not resolved.exists():
             raise HTTPException(status_code=404, detail="File not found")
@@ -883,8 +1023,8 @@ def create_app(db_path: str = None) -> FastAPI:
         if not resolved.is_file():
             raise HTTPException(status_code=400, detail="Path is not a file")
 
-        if resolved.is_symlink():
-            raise HTTPException(status_code=400, detail="Symbolic links not supported")
+        # Security: restrict previews to user's home directory
+        _ensure_within_home(resolved)
 
         lines = min(max(lines, 1), 200)
         stat = resolved.stat()
@@ -940,14 +1080,22 @@ def create_app(db_path: str = None) -> FastAPI:
         if ext in text_extensions or stat.st_size < 1_000_000:  # Try text for < 1MB
             for encoding in ("utf-8", "latin-1", "cp1252"):
                 try:
+                    import itertools
+
+                    preview = []
+                    total_lines = 0
                     with open(resolved, "r", encoding=encoding) as f:
-                        all_lines = f.readlines()
+                        # Read only the first N lines for preview
+                        for line in itertools.islice(f, lines):
+                            preview.append(line.rstrip("\n\r")[:500])
+                        # Count remaining lines without loading into memory
+                        total_lines = len(preview)
+                        for _ in f:
+                            total_lines += 1
                     result["is_text"] = True
                     result["encoding"] = encoding
-                    result["total_lines"] = len(all_lines)
-                    result["preview_lines"] = [
-                        line.rstrip("\n\r")[:500] for line in all_lines[:lines]
-                    ]
+                    result["total_lines"] = total_lines
+                    result["preview_lines"] = preview
 
                     # CSV/TSV specific info
                     if ext in (".csv", ".tsv"):
@@ -990,7 +1138,13 @@ def create_app(db_path: str = None) -> FastAPI:
         if "\x00" in folder_path:
             raise HTTPException(status_code=400, detail="Invalid folder path")
 
-        resolved = Path(folder_path).resolve(strict=False)
+        raw_folder = Path(folder_path)
+        if raw_folder.is_symlink():
+            raise HTTPException(
+                status_code=400, detail="Symbolic links are not supported"
+            )
+
+        resolved = raw_folder.resolve(strict=False)
 
         if not resolved.exists():
             raise HTTPException(status_code=404, detail="Folder not found")
@@ -1033,7 +1187,9 @@ def create_app(db_path: str = None) -> FastAPI:
                 file_hash = await asyncio.get_running_loop().run_in_executor(
                     None, _compute_file_hash, filepath
                 )
-                file_size = filepath.stat().st_size
+                file_stat = filepath.stat()
+                file_size = file_stat.st_size
+                file_mtime = file_stat.st_mtime
 
                 chunk_count = await _index_document(filepath)
 
@@ -1043,6 +1199,7 @@ def create_app(db_path: str = None) -> FastAPI:
                     file_hash=file_hash,
                     file_size=file_size,
                     chunk_count=chunk_count,
+                    file_mtime=file_mtime,
                 )
                 indexed_docs.append(_doc_to_response(doc))
             except Exception as e:
@@ -1190,6 +1347,7 @@ _ALLOWED_EXTENSIONS = frozenset(
         ".html",
         ".htm",
         ".xml",
+        ".svg",
         ".yaml",
         ".yml",
         ".py",
@@ -1260,10 +1418,57 @@ def _sanitize_document_path(user_path: str) -> Path:
     # Check file extension against allowlist
     ext = candidate.suffix.lower()
     if ext not in _ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type: {ext}",
+        # Provide categorized feedback for common unsupported types
+        _UNSUPPORTED_CATEGORIES = {
+            "image": (
+                {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp", ".ico", ".heic", ".heif"},
+                "Image files cannot be indexed for text search. "
+                "Tip: If your images contain text, convert them to PDF first — GAIA can extract text from PDFs.",
+            ),
+            "video": (
+                {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
+                "Video files are not supported for indexing.",
+            ),
+            "audio": (
+                {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a", ".opus"},
+                "Audio files are not supported for indexing. "
+                "Tip: GAIA has a separate voice/talk mode — try `gaia talk` from the CLI.",
+            ),
+            "archive": (
+                {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz"},
+                "Archive files must be extracted first. "
+                "Extract the archive and then index the individual files inside.",
+            ),
+            "executable": (
+                {".exe", ".msi", ".dll", ".so", ".app", ".dmg", ".bin", ".com"},
+                "Executable and binary files cannot be indexed.",
+            ),
+            "database": (
+                {".sqlite", ".db", ".mdb", ".accdb", ".dbf"},
+                "Database files are not supported for direct indexing. "
+                "Tip: Export your data to CSV or JSON format, then index those files.",
+            ),
+        }
+
+        hint = ""
+        category = ""
+        for cat, (exts, msg) in _UNSUPPORTED_CATEGORIES.items():
+            if ext in exts:
+                hint = msg
+                category = cat
+                break
+
+        if not hint:
+            hint = f"The file type '{ext}' is not supported for indexing."
+
+        detail = (
+            f"{hint} "
+            f"Supported formats: PDF, TXT, MD, CSV, JSON, Office docs (DOC/DOCX, PPT/PPTX, XLS/XLSX), "
+            f"HTML, XML, YAML, and 30+ code file formats. "
+            f"Want support for {category + ' files' if category else 'this file type'}? "
+            f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"
         )
+        raise HTTPException(status_code=400, detail=detail)
 
     return candidate
 
@@ -1326,6 +1531,22 @@ def _validate_file_path(filepath: Path) -> None:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file type: {ext}",
+        )
+
+
+def _ensure_within_home(resolved: Path) -> None:
+    """Raise HTTP 403 if *resolved* is not inside the user's home directory.
+
+    This helper is used by file-browsing, preview, and search endpoints to
+    prevent access to arbitrary filesystem locations.
+    """
+    home = Path.home()
+    try:
+        resolved.relative_to(home)
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail="Access restricted to files under user home directory",
         )
 
 
@@ -1556,12 +1777,18 @@ async def _get_chat_response(
         )
         agent = ChatAgent(config)
 
-        # Restore conversation history
-        for user_msg, assistant_msg in history_pairs[-4:]:
+        # Restore conversation history (limited to prevent context overflow)
+        _MAX_PAIRS = 2
+        _MAX_CHARS = 500
+        for user_msg, assistant_msg in history_pairs[-_MAX_PAIRS:]:
             if hasattr(agent, "conversation_history"):
-                agent.conversation_history.append({"role": "user", "content": user_msg})
+                u = user_msg[:_MAX_CHARS]
+                a = assistant_msg[:_MAX_CHARS]
+                if len(assistant_msg) > _MAX_CHARS:
+                    a += "... (truncated)"
+                agent.conversation_history.append({"role": "user", "content": u})
                 agent.conversation_history.append(
-                    {"role": "assistant", "content": assistant_msg}
+                    {"role": "assistant", "content": a}
                 )
 
         result = agent.process_query(request.message)
@@ -1644,69 +1871,128 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         result_holder = {"answer": "", "error": None}
 
         def _run_agent():
+            import time as _time
+
             try:
                 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
-                # Report: configuring agent
+                agent_start = _time.time()
+
+                # ── Phase 1: Configure ───────────────────────────────
                 sse_handler._emit(
-                    {"type": "thinking", "content": "Configuring agent..."}
+                    {"type": "status", "status": "info",
+                     "message": "Configuring agent..."}
                 )
 
+                # Build config WITHOUT rag_documents — we'll index
+                # separately so we can report per-document progress.
                 config = ChatAgentConfig(
                     model_id=model_id,
                     max_steps=10,
                     streaming=True,
                     silent_mode=False,
                     debug=False,
-                    rag_documents=rag_file_paths,
+                    rag_documents=[],  # Index manually below
                     allowed_paths=allowed,
                 )
 
-                # Report: initializing (RAG indexing + LLM connection)
-                if rag_file_paths:
-                    doc_names = [
-                        Path(p).name for p in rag_file_paths
-                    ]
-                    sse_handler._emit(
-                        {
-                            "type": "thinking",
-                            "content": f"Indexing {len(rag_file_paths)} document(s): {', '.join(doc_names[:3])}"
-                            + (f" +{len(doc_names) - 3} more" if len(doc_names) > 3 else ""),
-                        }
-                    )
-                else:
-                    sse_handler._emit(
-                        {"type": "thinking", "content": "Initializing agent..."}
-                    )
+                # ── Phase 2: LLM connection ──────────────────────────
+                sse_handler._emit(
+                    {"type": "thinking",
+                     "content": f"Connecting to {model_label}..."}
+                )
 
                 agent = ChatAgent(config)
-                agent.console = sse_handler
+                agent.console = sse_handler  # Assign early so tool events flow
 
-                # Report: ready, restoring history
-                if history_pairs:
+                elapsed_init = round(_time.time() - agent_start, 1)
+                sse_handler._emit(
+                    {"type": "status", "status": "info",
+                     "message": f"Agent ready ({elapsed_init}s)"}
+                )
+
+                # ── Phase 3: RAG indexing (per-document progress) ────
+                if rag_file_paths and agent.rag:
                     sse_handler._emit(
-                        {
-                            "type": "thinking",
-                            "content": f"Restoring {len(history_pairs[-4:])} previous message(s)...",
-                        }
+                        {"type": "tool_start", "tool": "index_documents",
+                         "detail": f"Indexing {len(rag_file_paths)} document(s) for RAG"}
+                    )
+                    idx_start = _time.time()
+                    doc_stats = []
+                    total_chunks = 0
+                    for i, fpath in enumerate(rag_file_paths, 1):
+                        doc_name = Path(fpath).name
+                        sse_handler._emit(
+                            {"type": "status", "status": "info",
+                             "message": f"Indexing [{i}/{len(rag_file_paths)}]: {doc_name}"}
+                        )
+                        try:
+                            result = agent.rag.index_document(fpath)
+                            agent.indexed_files.add(fpath)
+                            n_chunks = result.get("num_chunks", 0)
+                            total_chunks += n_chunks
+                            # Collect per-doc stats
+                            size_mb = result.get("file_size_mb", 0)
+                            size_str = (
+                                f"{size_mb:.1f} MB" if size_mb and size_mb >= 1
+                                else f"{int((size_mb or 0) * 1024)} KB"
+                            )
+                            cached = result.get("from_cache", False)
+                            doc_stats.append(
+                                f"  {doc_name} — {n_chunks} chunks, {size_str}"
+                                + (" (cached)" if cached else "")
+                            )
+                        except Exception as idx_err:
+                            logger.warning("Failed to index %s: %s", fpath, idx_err)
+                            doc_stats.append(f"  {doc_name} — FAILED: {idx_err}")
+                            sse_handler._emit(
+                                {"type": "status", "status": "warning",
+                                 "message": f"Failed to index {doc_name}: {idx_err}"}
+                            )
+                    idx_elapsed = round(_time.time() - idx_start, 1)
+                    summary_lines = [
+                        f"Indexed {len(rag_file_paths)} document(s) in {idx_elapsed}s",
+                        f"Total: {total_chunks} chunks in index",
+                        "",
+                    ] + doc_stats
+                    sse_handler._emit(
+                        {"type": "tool_result",
+                         "title": "Index Documents",
+                         "summary": "\n".join(summary_lines),
+                         "success": True}
                     )
 
-                # Restore conversation history
-                for user_msg, assistant_msg in history_pairs[-4:]:
-                    if hasattr(agent, "conversation_history"):
-                        agent.conversation_history.append(
-                            {"role": "user", "content": user_msg}
-                        )
-                        agent.conversation_history.append(
-                            {"role": "assistant", "content": assistant_msg}
-                        )
+                # ── Phase 4: Conversation history ────────────────────
+                # Limit history to prevent context window overflow.
+                # With RAG chunks + tools + system prompt, the 32K context
+                # fills fast.  Keep only the last 2 exchanges and truncate
+                # long assistant messages to ~500 chars each.
+                _MAX_HISTORY_PAIRS = 2
+                _MAX_MSG_CHARS = 500
+                if history_pairs:
+                    recent = history_pairs[-_MAX_HISTORY_PAIRS:]
+                    sse_handler._emit(
+                        {"type": "status", "status": "info",
+                         "message": f"Restoring {len(recent)} previous message(s)"}
+                    )
+                    for user_msg, assistant_msg in recent:
+                        if hasattr(agent, "conversation_history"):
+                            # Truncate to keep context manageable
+                            u = user_msg[:_MAX_MSG_CHARS]
+                            a = assistant_msg[:_MAX_MSG_CHARS]
+                            if len(assistant_msg) > _MAX_MSG_CHARS:
+                                a += "... (truncated)"
+                            agent.conversation_history.append(
+                                {"role": "user", "content": u}
+                            )
+                            agent.conversation_history.append(
+                                {"role": "assistant", "content": a}
+                            )
 
-                # Report: sending query to LLM
+                # ── Phase 5: Query processing ────────────────────────
                 sse_handler._emit(
-                    {
-                        "type": "thinking",
-                        "content": f"Sending query to {model_label}...",
-                    }
+                    {"type": "thinking",
+                     "content": f"Sending query to {model_label}..."}
                 )
 
                 result = agent.process_query(request.message)
@@ -1732,7 +2018,21 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         captured_steps = []  # Collect agent steps for DB persistence
         step_id = 0
         idle_cycles = 0
+        import time as _loop_time
+
+        _stream_start = _loop_time.time()
+        _STREAM_TIMEOUT = 180  # 3 minutes max for entire streaming response
         while True:
+            # Guard: total timeout for the streaming response
+            if _loop_time.time() - _stream_start > _STREAM_TIMEOUT:
+                logger.error("Streaming response timed out after %ds", _STREAM_TIMEOUT)
+                timeout_event = json.dumps(
+                    {"type": "agent_error",
+                     "content": f"Response timed out after {_STREAM_TIMEOUT}s. "
+                                "Try a simpler query or break it into smaller questions."}
+                )
+                yield f"data: {timeout_event}\n\n"
+                break
             try:
                 event = await asyncio.get_running_loop().run_in_executor(
                     None, lambda: sse_handler.event_queue.get(timeout=0.2)

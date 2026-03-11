@@ -42,7 +42,7 @@ export interface Document {
     indexed_at: string;
     last_accessed_at: string | null;
     sessions_using: number;
-    indexing_status?: 'pending' | 'indexing' | 'complete' | 'failed' | 'cancelled';
+    indexing_status?: 'pending' | 'indexing' | 'complete' | 'failed' | 'cancelled' | 'missing';
 }
 
 export interface SystemStatus {
@@ -115,6 +115,17 @@ export interface CommandOutput {
     truncated?: boolean;
 }
 
+/** A single retrieval chunk from RAG document search. */
+export interface RetrievalChunk {
+    id: number;
+    source?: string;
+    sourcePath?: string;
+    page?: number | null;
+    score?: number | null;
+    preview: string;
+    content: string;
+}
+
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
@@ -137,6 +148,8 @@ export interface AgentStep {
     timestamp: number;
     /** Structured command output (for run_shell_command). */
     commandOutput?: CommandOutput;
+    /** Retrieved document chunks (for RAG query tools). */
+    retrievalChunks?: RetrievalChunk[];
 }
 
 /** Extended SSE event types for agent communication. */
@@ -184,5 +197,22 @@ export interface StreamEvent {
         cwd?: string;
         duration_seconds?: number;
         truncated?: boolean;
+    };
+    /** Structured result data (for tool_result with search results, file lists, etc.). */
+    result_data?: {
+        type: string;
+        count?: number;
+        source_files?: string[];
+        chunks?: Array<{
+            id: number;
+            source?: string;
+            sourcePath?: string;
+            page?: number | null;
+            score?: number | null;
+            preview: string;
+            content: string;
+        }>;
+        files?: Array<Record<string, unknown>>;
+        total?: number;
     };
 }

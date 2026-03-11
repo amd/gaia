@@ -92,6 +92,36 @@
 }
 .doc-meta { font-size: 12px; color: var(--text-muted); }
 
+/* Indexed timestamp */
+.doc-timestamp {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 6px;
+    padding-left: 6px;
+    border-left: 1px solid var(--border-light);
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: default;
+}
+.doc-timestamp svg {
+    opacity: 0.6;
+    flex-shrink: 0;
+}
+
+/* Status badges */
+.doc-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    padding: 1px 6px;
+    border-radius: 4px;
+}
+.doc-status-failed { color: #dc3545; background: rgba(220, 53, 69, 0.08); }
+.doc-status-cancelled { color: var(--text-muted); background: rgba(128, 128, 128, 0.08); }
+.doc-status-missing { color: #e67e22; background: rgba(230, 126, 34, 0.08); }
+
 .doc-delete { color: var(--text-muted); }
 .doc-delete:hover { color: var(--amd-red); }
 
