@@ -1,6 +1,6 @@
 ---
-title: "System Analyst Agent"
-description: "Build a system analyst agent in C++ that explains running processes, detects suspicious files, and lets you stop, restart, or quarantine items — all with local LLM inference"
+title: "Process Analyst Agent"
+description: "Build a process analyst agent in C++ that explains running processes, detects suspicious files, and lets you stop, restart, or quarantine items — all with local LLM inference"
 icon: "microchip"
 ---
 
@@ -18,7 +18,7 @@ icon: "microchip"
 
 ## What This Agent Does
 
-The System Analyst is an AI agent that makes sense of what's running on your PC. On startup it scans every process and service, classifies them by resource use and behavior, and shows you a plain-English summary. You can ask it to explain any task — what it is, what it does, and whether there's reason to be concerned — or take action directly.
+The Process Analyst is an AI agent that makes sense of what's running on your PC. On startup it scans every process and service, classifies them by resource use and behavior, and shows you a plain-English summary. You can ask it to explain any task — what it is, what it does, and whether there's reason to be concerned — or take action directly.
 
 Here's what makes it interesting:
 
@@ -184,7 +184,7 @@ public:
 
 protected:
     std::string getSystemPrompt() const override {
-        return R"(You are an expert Windows system analyst...
+        return R"(You are an expert Windows process analyst...
             // A/B/C classification protocol, action behavior, quarantine protocol
         )";
     }
@@ -380,7 +380,7 @@ Diagnostic nodes (dark) gather data. Red nodes are destructive actions requiring
 
 ```
   ========================================================================================
-   System Analyst  |  GAIA C++ Agent Framework  |  Local Inference
+   Process Analyst  |  GAIA C++ Agent Framework  |  Local Inference
   ========================================================================================
 
   Select inference backend:

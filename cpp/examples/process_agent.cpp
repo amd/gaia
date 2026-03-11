@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
-// System Analyst — PC Narrator & Process Intelligence (GAIA C++ Agent)
+// Process Analyst — PC Narrator & Process Intelligence (GAIA C++ Agent)
 // Two-phase workflow:
 //   DETECT: Auto-analyzes system on startup (processes, services, anomalies)
 //   ACT:    User takes action referencing labeled findings (A1, B2, C1)
@@ -850,7 +850,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// ProcessAgent — System Analyst
+// ProcessAgent — Process Analyst
 // ---------------------------------------------------------------------------
 class ProcessAgent : public gaia::Agent {
 public:
@@ -868,7 +868,7 @@ public:
 
 protected:
     std::string getSystemPrompt() const override {
-        return R"(You are an expert System Analyst running locally on AMD hardware via the GAIA framework. You make every process, service, and network connection on this PC understandable in plain English. You detect problems, explain what is normal vs. suspicious, and take targeted action.
+        return R"(You are an expert Process Analyst running locally on AMD hardware via the GAIA framework. You make every process, service, and network connection on this PC understandable in plain English. You detect problems, explain what is normal vs. suspicious, and take targeted action.
 
 ## ANALYSIS CRITERIA
 
@@ -2578,7 +2578,7 @@ int main(int argc, char* argv[]) {
                   << "  ========================================================================================"
                   << color::RESET << std::endl;
         std::cout << color::CYAN << color::BOLD
-                  << "   System Analyst  |  GAIA C++ Agent Framework  |  Local Inference"
+                  << "   Process Analyst  |  GAIA C++ Agent Framework  |  Local Inference"
                   << color::RESET << std::endl;
         std::cout << color::CYAN << color::BOLD
                   << "  ========================================================================================"
