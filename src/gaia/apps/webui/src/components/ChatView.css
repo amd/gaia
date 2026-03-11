@@ -352,7 +352,6 @@
 
 .input-box:focus-within {
     border-color: rgba(226, 60, 64, 0.35);
-    box-shadow: 0 0 0 1px rgba(226, 60, 64, 0.08);
 }
 
 .msg-input {
@@ -368,6 +367,7 @@
     color: var(--text-primary);
     transition: height 100ms var(--ease);
 }
+.msg-input:focus-visible { outline: none; }
 .msg-input::placeholder { color: var(--text-muted); opacity: 0.6; }
 .msg-input:disabled { opacity: 0.5; }
 

@@ -1619,7 +1619,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         config = ChatAgentConfig(
             model_id=session.get("model"),
             max_steps=10,
-            streaming=False,  # Keep False so raw LLM JSON isn't streamed to frontend
+            streaming=True,  # Stream LLM text via SSE (handler filters raw tool JSON)
             silent_mode=False,
             debug=False,
             rag_documents=rag_file_paths,

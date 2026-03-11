@@ -198,7 +198,7 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
         if (activeStep.type === 'tool' && activeStep.tool) {
             summaryText = getToolMeta(activeStep.tool).activeLabel;
         } else if (activeStep.type === 'thinking') {
-            summaryText = 'Thinking...';
+            summaryText = activeStep.detail || activeStep.label || 'Thinking...';
         } else {
             summaryText = activeStep.label || 'Working...';
         }
@@ -281,8 +281,8 @@ function FlowThought({ step }: { step: AgentStep }) {
     const text = step.detail || step.label || '';
     if (!text) return null;
 
-    // Show a friendly label when the raw text is just "Thinking"
-    const displayText = text === 'Thinking' ? 'Analyzing your request...' : text;
+    // Show the actual thinking text — never replace with generic labels
+    const displayText = text;
 
     return (
         <div className={`flow-thought ${step.active ? 'active' : ''}`}>

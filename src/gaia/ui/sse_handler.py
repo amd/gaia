@@ -58,12 +58,11 @@ class SSEOutputHandler(OutputHandler):
         self._start_time = time.time()
         self._step_count = 0
         self._tool_count = 0
-        # Emit as "thinking" so the frontend immediately shows a visible
-        # spinner when the agent starts processing.
+        model_label = model_id or "local LLM"
         self._emit(
             {
                 "type": "thinking",
-                "content": "Processing your request...",
+                "content": f"Sending to {model_label}...",
             }
         )
 
@@ -141,6 +140,7 @@ class SSEOutputHandler(OutputHandler):
             {
                 "type": "tool_start",
                 "tool": tool_name,
+                "detail": _tool_description(tool_name),
             }
         )
 
@@ -253,12 +253,11 @@ class SSEOutputHandler(OutputHandler):
         # these just echo the tool name which the frontend already shows.
         if message and message.lower().startswith("executing "):
             return
-        # Emit as "thinking" so the frontend shows a visible spinner
-        # while the LLM is working.
+        # Emit as thinking so the user can see what the agent is doing
         self._emit(
             {
                 "type": "thinking",
-                "content": message,
+                "content": message or "Working",
             }
         )
 
@@ -511,6 +510,21 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
     # Generic fallback - show more useful info
     keys = list(data.keys())[:6]
     return f"Result with keys: {', '.join(keys)}"
+
+
+def _tool_description(tool_name: str) -> str:
+    """Return a human-readable description for known agent tools."""
+    descriptions = {
+        "search_documents": "Searching indexed documents for relevant content",
+        "search_file": "Searching for files matching a pattern",
+        "read_file": "Reading file contents",
+        "list_directory": "Listing directory contents",
+        "run_shell_command": "Executing a shell command",
+        "write_file": "Writing to a file",
+        "create_file": "Creating a new file",
+        "get_file_preview": "Previewing file contents",
+    }
+    return descriptions.get(tool_name, "")
 
 
 def _fix_double_escaped(text: str) -> str:
