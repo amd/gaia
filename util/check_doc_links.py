@@ -55,6 +55,7 @@ SKIP_DOMAINS = {
     "your-server",
     "your-domain",
     "grafana.internal",
+    "marketplace.visualstudio.com",  # Blocks automated requests with 404
 }
 
 # URL patterns to skip
