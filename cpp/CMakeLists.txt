@@ -177,8 +177,8 @@ if(GAIA_BUILD_EXAMPLES AND WIN32)
 endif()
 
 if(GAIA_BUILD_EXAMPLES)
-    add_executable(secure_agent examples/secure_agent.cpp)
-    target_link_libraries(secure_agent PRIVATE gaia::gaia_core)
+    add_executable(security_demo examples/security_demo.cpp)
+    target_link_libraries(security_demo PRIVATE gaia::gaia_core)
 endif()
 
 # ---------------------------------------------------------------------------
