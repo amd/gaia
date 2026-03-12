@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentActivity } from './AgentActivity';
 import * as api from '../services/api';
+import { log } from '../utils/logger';
 import gaiaRobot from '../assets/gaia-robot.png';
 import type { Message, AgentStep } from '../types';
 import './MessageBubble.css';
@@ -330,7 +331,7 @@ function FilePathLink({ path }: { path: string }) {
     const handleClick = (e: React.MouseEvent) => {
         e.preventDefault();
         api.openFileOrFolder(path).catch((err) => {
-            console.error('Failed to open path:', err);
+            log.ui.error('Failed to open path', err);
         });
     };
     return (

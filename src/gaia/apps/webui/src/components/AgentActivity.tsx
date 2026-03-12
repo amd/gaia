@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
 import * as api from '../services/api';
+import { log } from '../utils/logger';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -297,7 +298,7 @@ function linkifyPaths(text: string): React.ReactNode {
         const rawMatch = match[0];
         const filePath = rawMatch.replace(/[)}\]]+$/, ''); // trim trailing brackets
         const handleClick = () => {
-            api.openFileOrFolder(filePath).catch((err) => console.error('Failed to open:', err));
+            api.openFileOrFolder(filePath).catch((err) => log.ui.error('Failed to open path', err));
         };
         parts.push(
             <span
