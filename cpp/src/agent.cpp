@@ -148,31 +148,6 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
     try {
         json responseJson = json::parse(responseBody);
 
-        // Lemonade returns HTTP 200 even for server-side errors -- check before
-        // treating the body as a chat completion.
-        if (responseJson.contains("error")) {
-            std::string errMsg = "LLM server error";
-            try {
-                const auto& inner = responseJson["error"]["details"]["response"]["error"];
-                std::string msg = inner.value("message", "");
-                if (msg.find("exceeds the available context size") != std::string::npos) {
-                    int nCtx    = inner.value("n_ctx", 0);
-                    int nPrompt = inner.value("n_prompt_tokens", 0);
-                    errMsg =
-                        "Server context window too small: prompt is " +
-                        std::to_string(nPrompt) + " tokens but server n_ctx=" +
-                        std::to_string(nCtx) + ".\n" +
-                        "  Restart Lemonade with a larger context:\n" +
-                        "    lemonade-server serve --ctx-size 32768\n" +
-                        "  or via the helper script:\n" +
-                        "    .\\scripts\\start-lemonade.ps1 -CtxSize 32768";
-                } else if (!msg.empty()) {
-                    errMsg = msg;
-                }
-            } catch (...) {}
-            throw std::runtime_error(errMsg);
-        }
-
         if (responseJson.contains("choices") && !responseJson["choices"].empty()) {
             auto& choice = responseJson["choices"][0];
             if (choice.contains("message") && choice["message"].contains("content")) {
@@ -580,25 +555,6 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
         {"steps_taken", stepsTaken},
         {"steps_limit", stepsLimit}
     };
-}
-
-std::vector<Decision> Agent::detectPendingDecisions(const std::string& answer) const {
-    // Scan the tail of the answer for yes/no prompt patterns
-    size_t tailStart = answer.size() > 300 ? answer.size() - 300 : 0;
-    std::string tail = answer.substr(tailStart);
-    for (auto& c : tail)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
-    if (tail.find("yes / no") != std::string::npos ||
-        tail.find("yes/no")   != std::string::npos ||
-        tail.find("(y/n)")    != std::string::npos ||
-        tail.find("yes or no") != std::string::npos) {
-        return {
-            {"Yes", "yes", "Confirm and proceed"},
-            {"No",  "no",  "Cancel"}
-        };
-    }
-    return {};
 }
 
 } // namespace gaia

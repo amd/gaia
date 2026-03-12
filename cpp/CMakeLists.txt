@@ -175,10 +175,6 @@ if(GAIA_BUILD_EXAMPLES AND WIN32)
 
     add_executable(process_agent examples/process_agent.cpp)
     target_link_libraries(process_agent PRIVATE gaia::gaia_core psapi advapi32 version shell32 ole32)
-
-    # Unsigned test binary for process agent suspicious-item detection
-    add_executable(svc_helper examples/svc_helper.cpp)
-    target_link_libraries(svc_helper PRIVATE)
 endif()
 
 # ---------------------------------------------------------------------------

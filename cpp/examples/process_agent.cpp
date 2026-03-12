@@ -2642,6 +2642,22 @@ int main(int argc, char* argv[]) {
         // History is preserved across actions so the LLM retains analysis context.
         // clearHistory() is called ONLY on reanalyze.
         // =====================================================================
+
+        // Scan the tail of an LLM answer for yes/no confirmation prompts.
+        auto detectPendingDecisions = [](const std::string& answer) -> std::vector<gaia::Decision> {
+            size_t tailStart = answer.size() > 300 ? answer.size() - 300 : 0;
+            std::string tail = answer.substr(tailStart);
+            for (auto& c : tail)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (tail.find("yes / no") != std::string::npos ||
+                tail.find("yes/no")   != std::string::npos ||
+                tail.find("(y/n)")    != std::string::npos ||
+                tail.find("yes or no") != std::string::npos) {
+                return {{"Yes", "yes", "Confirm and proceed"}, {"No", "no", "Cancel"}};
+            }
+            return {};
+        };
+
         std::string userInput;
         std::vector<gaia::Decision> decisions;  // non-empty when LLM awaits yes/no
         while (true) {
@@ -2860,7 +2876,7 @@ int main(int argc, char* argv[]) {
 
             auto r = agent.processQuery(query);
             std::string answer = r.value("result", "");
-            decisions = agent.detectPendingDecisions(answer);
+            decisions = detectPendingDecisions(answer);
         }
 
         // Clean shutdown of background monitor

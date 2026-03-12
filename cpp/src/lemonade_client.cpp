@@ -401,7 +401,42 @@ std::pair<bool, std::string> LemonadeClient::validateContextSize(int tokens) {
 // ---------------------------------------------------------------------------
 
 std::string LemonadeClient::chatCompletions(const json& requestBody, int timeoutSec) {
-    return httpPost("/chat/completions", requestBody.dump(), timeoutSec);
+    std::string responseBody = httpPost("/chat/completions", requestBody.dump(), timeoutSec);
+
+    // Lemonade returns HTTP 200 even for server-side errors -- check the body
+    // before returning so all callers get a proper exception instead of a
+    // malformed response.
+    try {
+        json responseJson = json::parse(responseBody);
+        if (responseJson.contains("error")) {
+            std::string errMsg = "LLM server error";
+            try {
+                const auto& inner = responseJson["error"]["details"]["response"]["error"];
+                std::string msg = inner.value("message", "");
+                if (msg.find("exceeds the available context size") != std::string::npos) {
+                    int nCtx    = inner.value("n_ctx", 0);
+                    int nPrompt = inner.value("n_prompt_tokens", 0);
+                    errMsg =
+                        "Server context window too small: prompt is " +
+                        std::to_string(nPrompt) + " tokens but server n_ctx=" +
+                        std::to_string(nCtx) + ".\n" +
+                        "  Restart Lemonade with a larger context:\n" +
+                        "    lemonade-server serve --ctx-size 32768\n" +
+                        "  or via the helper script:\n" +
+                        "    .\\scripts\\start-lemonade.ps1 -CtxSize 32768";
+                } else if (!msg.empty()) {
+                    errMsg = msg;
+                }
+            } catch (...) {}
+            throw std::runtime_error(errMsg);
+        }
+    } catch (const std::runtime_error&) {
+        throw;
+    } catch (...) {
+        // JSON parse failed — return raw body and let the caller handle it
+    }
+
+    return responseBody;
 }
 
 } // namespace gaia
