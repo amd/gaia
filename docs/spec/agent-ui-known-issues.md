@@ -114,9 +114,9 @@ bug but a design consistency issue.
 
 ---
 
-## 7. Chat SDK Integration Test Flaky on LLM Memory Recall
+## 7. Agent SDK Integration Test Flaky on LLM Memory Recall
 
-**File:** `tests/test_chat_sdk.py` (line 340)
+**File:** `tests/test_agent_sdk.py` (line 340)
 
 `test_convenience_functions_integration` asserts the LLM recalls "Max"
 from a prior message in the same conversation. The small local model

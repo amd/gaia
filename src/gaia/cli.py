@@ -838,11 +838,11 @@ def main():
         help="Allowed directory paths for file operations (default: current directory)",
     )
 
-    # Chat Web UI
+    # Agent UI
     chat_parser.add_argument(
         "--ui",
         action="store_true",
-        help="Launch the Chat Web UI (browser-based chat interface)",
+        help="Launch the Agent UI (browser-based chat interface)",
     )
     chat_parser.add_argument(
         "--ui-port",

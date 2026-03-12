@@ -206,7 +206,7 @@
           {
             "group": "SDKs",
             "pages": [
-              "spec/chat-sdk",
+              "spec/agent-sdk",
               "spec/agent-ui-server",
               "spec/rag-sdk",
               "spec/talk-sdk",

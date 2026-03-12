@@ -1,11 +1,11 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# This workflow tests the Chat SDK functionality with Lemonade server integration
-# Tests include: Chat SDK API, conversation handling, and Lemonade integration
+# This workflow tests the Agent SDK functionality with Lemonade server integration
+# Tests include: Agent SDK API, conversation handling, and Lemonade integration
 # Platform: Windows (with Lemonade server support)
 
-name: Chat SDK Tests (Windows)
+name: Agent SDK Tests (Windows)
 
 on:
   push:
@@ -33,8 +33,8 @@ permissions:
   contents: read
 
 jobs:
-  test-chat-sdk-windows:
-    name: Test Chat SDK on Windows (Lemonade Integration)
+  test-agent-sdk-windows:
+    name: Test Agent SDK on Windows (Lemonade Integration)
     runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
@@ -125,14 +125,14 @@ jobs:
 
 
 
-      - name: Run Chat SDK Integration Tests with Lemonade
+      - name: Run Agent SDK Integration Tests with Lemonade
         shell: cmd
         run: |
           REM Activate virtual environment
           call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
 
           echo ================================================================
-          echo           CHAT SDK INTEGRATION TESTS WITH LEMONADE SERVER
+          echo           AGENT SDK INTEGRATION TESTS WITH LEMONADE SERVER
           echo ================================================================
           echo Testing real LLM integration with running Lemonade server
           echo.
@@ -145,16 +145,16 @@ jobs:
 
           REM Run the comprehensive integration test suite
           set PYTHONIOENCODING=utf-8
-          python tests\test_chat_sdk.py
+          python tests\test_agent_sdk.py
           set integration_exit=%ERRORLEVEL%
 
           echo.
           echo ----------------------------------------------------------------
           echo Integration tests completed at %TIME% with exit code: %integration_exit%
           if %integration_exit% equ 0 (
-              echo [SUCCESS] Chat SDK integration tests passed
+              echo [SUCCESS] Agent SDK integration tests passed
           ) else (
-              echo [FAILURE] Chat SDK integration tests failed with exit code %integration_exit%
+              echo [FAILURE] Agent SDK integration tests failed with exit code %integration_exit%
               echo Full error output displayed above - no truncation
           )
           echo ----------------------------------------------------------------
@@ -163,11 +163,11 @@ jobs:
               exit /b 1
           )
 
-      - name: Debug Chat SDK Logs on Failure
+      - name: Debug Agent SDK Logs on Failure
         if: failure()
         shell: cmd
         run: |
-          echo === Debugging Chat SDK test failure ===
+          echo === Debugging Agent SDK test failure ===
 
           echo === Check for GAIA log files ===
           if exist "gaia.cli.log" (

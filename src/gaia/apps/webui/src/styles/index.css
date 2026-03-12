@@ -6,17 +6,17 @@
  */
 
 :root {
-    --amd-red: #E23C40;
-    --amd-red-dark: #C42A30;
-    --amd-red-light: #E86266;
+    --amd-red: #ED1C24;
+    --amd-red-dark: #c41820;
+    --amd-red-light: #f04048;
 
     /* Terminal green accent for active/success states */
-    --terminal-green: #00ff9f;
-    --terminal-green-dim: #00cc7f;
-    --terminal-glow: 0 0 6px rgba(0, 255, 159, 0.15);
+    --terminal-green: #4ec932;
+    --terminal-green-dim: #3da826;
+    --terminal-glow: 0 0 6px rgba(78, 201, 50, 0.15);
 
     /* Accent colors for status indicators */
-    --accent-green: #00ff9f;
+    --accent-green: #4ec932;
     --accent-yellow: #f5c842;
     --accent-blue: #3b9eff;
 
@@ -68,25 +68,25 @@
 }
 
 [data-theme="dark"] {
-    /* AMD Adrenalin-inspired palette: neutral charcoal/graphite with red accents.
-     * Strong contrast between regions for clear visual hierarchy. */
-    --bg-primary: #1c1c1c;       /* Main content — neutral charcoal */
-    --bg-secondary: #151515;     /* Header, input area — darker */
-    --bg-tertiary: #262626;      /* Cards, badges, tool panels — lifted */
-    --bg-sidebar: #0e0e0e;       /* Sidebar — near-black, strong separation */
-    --bg-input: #1c1c1c;         /* Input field — matches primary */
-    --bg-hover: #2e2e2e;         /* Hover states — clear lift */
-    --bg-active: #383838;        /* Active/selected — obvious highlight */
+    /* AMD Terminal palette: neutral charcoal with AMD red accents.
+     * Inspired by the 06C Linux Terminal demo — clean, sharp, branded. */
+    --bg-primary: #1e1e1e;       /* Main content — neutral charcoal */
+    --bg-secondary: #171717;     /* Header, input area — darker */
+    --bg-tertiary: #282828;      /* Cards, badges, tool panels — lifted */
+    --bg-sidebar: #111111;       /* Sidebar — near-black, strong separation */
+    --bg-input: #1e1e1e;         /* Input field — matches primary */
+    --bg-hover: #333333;         /* Hover states — clear lift */
+    --bg-active: #3c3c3c;        /* Active/selected — obvious highlight */
     --bg-code: #111111;          /* Code blocks — near-black */
-    --bg-user-msg: #201a1a;      /* User messages — slight warm/red tint */
+    --bg-user-msg: rgba(237, 28, 36, 0.03); /* User messages — slight red tint */
     --bg-modal-overlay: rgba(0, 0, 0, 0.85);
 
-    --text-primary: #e8e6e3;     /* Warm white text */
-    --text-secondary: #9a9894;   /* Clear secondary */
-    --text-muted: #5c5a58;       /* Muted but readable */
+    --text-primary: #d4d4d4;     /* Terminal white text */
+    --text-secondary: #999999;   /* Clear secondary */
+    --text-muted: #666666;       /* Muted but readable */
 
-    --border: #3a3836;           /* Strong visible borders — warm gray */
-    --border-light: #2a2928;     /* Subtle dividers — still distinguishable */
+    --border: #444444;           /* Strong visible borders — neutral gray */
+    --border-light: #2a2a2a;     /* Subtle dividers — still distinguishable */
 
     --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
     --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.6);

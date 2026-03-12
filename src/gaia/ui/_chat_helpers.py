@@ -429,7 +429,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
                 # Capture answer content for DB storage
                 if event_type == "answer":
-                    full_response = event.get("content", "")
+                    # Only use the answer event if no chunks were streamed,
+                    # otherwise the accumulated chunks are the full response.
+                    answer_content = event.get("content", "")
+                    if not full_response:
+                        full_response = answer_content
                 elif event_type == "chunk":
                     full_response += event.get("content", "")
 
@@ -528,6 +532,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 if idle_cycles % 25 == 0:
                     yield ": keepalive\n\n"
                 continue
+
+        # Wait for the producer thread to finish (with timeout to avoid hanging)
+        producer.join(timeout=5.0)
+        if producer.is_alive():
+            logger.warning("Producer thread still running after stream ended")
 
         # Finalize all captured steps (mark as inactive)
         for s in captured_steps:

@@ -145,7 +145,7 @@ export function featureRequestUrl(title: string, context?: string): string {
     const params = new URLSearchParams({
         title: `[Feature] ${title}`,
         body,
-        labels: 'enhancement,chat-ui',
+        labels: 'enhancement,agent-ui',
     });
     return `${GITHUB_NEW_ISSUE_URL}?${params.toString()}`;
 }
@@ -180,7 +180,7 @@ export function bugReportUrl(title: string, errorDetail?: string): string {
     const params = new URLSearchParams({
         title: `[Bug] ${title}`,
         body,
-        labels: 'bug,chat-ui',
+        labels: 'bug,agent-ui',
     });
     return `${GITHUB_NEW_ISSUE_URL}?${params.toString()}`;
 }

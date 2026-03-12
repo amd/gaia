@@ -461,7 +461,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
         log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
 
         setInput('');
-        if (inputRef.current) inputRef.current.style.height = 'auto';
+        if (inputRef.current) {
+            inputRef.current.style.height = 'auto';
+            inputRef.current.focus();
+        }
 
         // Clear attachments
         setAttachments(prev => {
@@ -656,6 +659,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 clearStreamContent();
                 clearAgentSteps();
 
+                // Refocus input so user can immediately type the next message
+                if (inputRef.current) inputRef.current.focus();
+
                 // Refresh messages from DB to replace optimistic IDs with real
                 // DB IDs.  Without this, delete/resend on user messages fails
                 // because the optimistic Date.now() ID doesn't match the DB's
@@ -737,6 +743,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
+
+    // Refocus input when streaming ends (textarea is disabled during streaming,
+    // which causes the browser to drop focus — restore it so the user can
+    // immediately type the next message without clicking).
+    useEffect(() => {
+        if (!isStreaming && inputRef.current) {
+            inputRef.current.focus();
+        }
+    }, [isStreaming]);
 
     // Delete a single message
     const handleDeleteMessage = useCallback(async (messageId: number) => {
@@ -1109,6 +1124,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             aria-label="Message input"
                         />
                     </div>
+                    {!isStreaming && <span className="input-cursor" aria-hidden="true" />}
                     <div className="input-btns">
                         <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">
                             <Upload size={15} />

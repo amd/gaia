@@ -450,6 +450,19 @@
 .msg-input::placeholder { color: var(--text-muted); opacity: 0.5; font-family: var(--font-mono); }
 .msg-input:disabled { opacity: 0.5; }
 
+/* Blinking block cursor — AMD red, terminal feel */
+.input-cursor {
+    display: inline-block;
+    width: 8px;
+    height: 17px;
+    background: var(--amd-red);
+    animation: cursorBlink 1s step-end infinite;
+    align-self: center;
+    flex-shrink: 0;
+    border-radius: 1px;
+    margin-right: 4px;
+}
+
 .input-btns {
     display: flex;
     gap: 2px;
