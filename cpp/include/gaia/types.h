@@ -125,23 +125,6 @@ using ToolValidateCallback = std::function<json(const std::string& toolName, con
 // Returns ALLOW_ONCE, ALWAYS_ALLOW, or DENY.
 using ToolConfirmCallback = std::function<ToolConfirmResult(const std::string& toolName, const json& args)>;
 
-inline std::string toolPolicyToString(ToolPolicy p) {
-    switch (p) {
-        case ToolPolicy::ALLOW:   return "ALLOW";
-        case ToolPolicy::CONFIRM: return "CONFIRM";
-        case ToolPolicy::DENY:    return "DENY";
-    }
-    return "UNKNOWN";
-}
-
-inline std::string toolConfirmResultToString(ToolConfirmResult r) {
-    switch (r) {
-        case ToolConfirmResult::ALLOW_ONCE:    return "ALLOW_ONCE";
-        case ToolConfirmResult::ALWAYS_ALLOW:  return "ALWAYS_ALLOW";
-        case ToolConfirmResult::DENY:          return "DENY";
-    }
-    return "UNKNOWN";
-}
 
 struct ToolInfo {
     std::string name;

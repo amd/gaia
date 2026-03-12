@@ -126,7 +126,7 @@ When the LLM calls `flush_dns`, the user sees:
 
 ### Silent / headless agents
 
-Agents constructed with `config.silentMode = true` (e.g., unit tests, background automation) receive **no confirm callback**. Any tool with `CONFIRM` policy is denied automatically (fail-closed). This is correct by design — automated pipelines should not block on stdin.
+Agents constructed with `config.silentMode = true` (e.g., unit tests, background automation) receive **no confirm callback**. Any tool with `CONFIRM` policy is denied automatically (fail-closed).
 
 ### Custom UI agents
 

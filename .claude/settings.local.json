@@ -87,7 +87,9 @@
       "WebFetch",
       "WebFetch(domain:code.claude.com)",
       "WebFetch(domain:lemonade-server.ai)",
-      "WebSearch"
+      "WebSearch",
+      "mcp__MCP_DOCKER__mcp-add",
+      "mcp__MCP_DOCKER__mcp-exec"
     ],
     "deny": []
   },
