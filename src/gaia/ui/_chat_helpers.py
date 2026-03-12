@@ -407,13 +407,6 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             )
 
                 # -- Phase 5: Query processing --
-                sse_handler._emit(
-                    {
-                        "type": "thinking",
-                        "content": f"Sending query to {model_label}...",
-                    }
-                )
-
                 result = agent.process_query(request.message)
                 if isinstance(result, dict):
                     val = result.get("result")
