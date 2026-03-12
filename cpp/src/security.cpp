@@ -60,6 +60,10 @@ std::string canonicalize(const std::string& path) {
     if (::GetFullPathNameA(path.c_str(), MAX_PATH, buf, nullptr) == 0) {
         return "";
     }
+    // Require existence to match realpath() semantics on POSIX.
+    if (::GetFileAttributesA(buf) == INVALID_FILE_ATTRIBUTES) {
+        return "";
+    }
     return std::string(buf);
 #else
     char buf[PATH_MAX];
