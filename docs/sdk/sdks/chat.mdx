@@ -25,7 +25,7 @@ Configure your chat session:
 ```python
 @dataclass
 class AgentConfig:
-    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"  # Default validated model
+    model: str = "Qwen3-0.6B-GGUF"  # Default validated model (DEFAULT_MODEL_NAME)
     max_tokens: int = 512
     temperature: Optional[float] = None
     system_prompt: Optional[str] = None

@@ -162,7 +162,7 @@ class MinimalAgent(Agent):
 # Create and use
 agent = MinimalAgent()
 result = agent.process_query("Hello! What can you help me with?")
-print(result["answer"])
+print(result["result"])
 ```
 
 **What happens when you run this:**
@@ -218,7 +218,7 @@ class TimeAgent(Agent):
 # Test it
 agent = TimeAgent()
 result = agent.process_query("What time is it?")
-print(result["answer"])  # "It's 2:30 PM on Thursday, January 9, 2025"
+print(result["result"])  # "It's 2:30 PM on Thursday, January 9, 2025"
 ```
 
 **What happens now:**
@@ -326,11 +326,11 @@ class WeatherAgent(Agent):
 # Usage
 agent = WeatherAgent()
 result = agent.process_query("What's the weather like in Seattle?")
-print(result["answer"])
+print(result["result"])
 
 # Multi-turn conversation works too
 result = agent.process_query("How about in Miami?")
-print(result["answer"])
+print(result["result"])
 ```
 
 **Key patterns demonstrated:**
@@ -761,7 +761,7 @@ class FileExplorerAgent(Agent):
 # Usage
 agent = FileExplorerAgent(allowed_path="./my_project")
 result = agent.process_query("What Python files are in the src folder?")
-print(result["answer"])
+print(result["result"])
 ```
 
 **Why this solution works:**
@@ -821,10 +821,10 @@ def process_query(self, user_input, max_steps=None):  # defaults to self.max_ste
                 "role": "assistant",
                 "content": response
             })
-            return {"answer": response, "steps": step + 1}
+            return {"status": "success", "result": response, "steps_taken": step + 1}
 
     # 9. Max steps reached
-    return {"answer": "I couldn't complete the task", "steps": max_steps}
+    return {"status": "incomplete", "result": "I couldn't complete the task", "steps_taken": max_steps}
 ```
 
 **Key insight:** The conversation history grows with each tool call, giving the LLM more context for its next decision.

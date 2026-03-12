@@ -699,7 +699,9 @@ CREATE TABLE documents (
     file_size INTEGER DEFAULT 0,
     chunk_count INTEGER DEFAULT 0,
     indexed_at TEXT,
-    last_accessed_at TEXT
+    last_accessed_at TEXT,
+    indexing_status TEXT DEFAULT 'complete',  -- pending | indexing | complete | failed | cancelled
+    file_mtime REAL                          -- file modification time (Unix epoch)
 );
 
 -- Sessions (conversations)
@@ -728,12 +730,17 @@ CREATE TABLE messages (
     content TEXT NOT NULL,
     created_at TEXT,
     rag_sources TEXT,          -- JSON array of source citations
+    agent_steps TEXT,          -- JSON array of agent execution steps
     tokens_prompt INTEGER,
     tokens_completion INTEGER
 );
 ```
 
 **SQLite settings:** Foreign keys enabled, WAL journal mode for concurrent reads.
+
+<Note>
+The `indexing_status`, `file_mtime`, and `agent_steps` columns are added via migrations for databases created before these columns existed. New databases include them in the initial schema.
+</Note>
 
 ---
 

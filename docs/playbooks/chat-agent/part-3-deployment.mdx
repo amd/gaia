@@ -234,7 +234,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
   <Tab title="Server">
     ```python title="api_server.py"
     from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-    from gaia.api.openai_server import create_app
+    from gaia.api.openai_server import app
     from gaia.api.agent_registry import registry
     import uvicorn
 
@@ -246,10 +246,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
 
     agent = ChatAgent(config)
 
-    # Create OpenAI-compatible API
-    app = create_app()
-
-    # Register agent
+    # Register agent with the OpenAI-compatible API server
     registry.register("doc-qa", lambda: agent)
 
     # Run server
