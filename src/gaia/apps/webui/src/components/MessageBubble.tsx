@@ -209,16 +209,14 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             <div className="msg-inner">
                 <div className="msg-header">
                     <div className="msg-header-left">
-                        {message.role === 'user' ? (
-                            <div className="msg-avatar msg-avatar-user" aria-hidden="true">Y</div>
-                        ) : (
-                            <div className="msg-avatar msg-avatar-assistant" aria-hidden="true">
-                                <img src={gaiaRobot} alt="" />
-                            </div>
+                        {message.role === 'assistant' && (
+                            <>
+                                <div className="msg-avatar msg-avatar-assistant" aria-hidden="true">
+                                    <img src={gaiaRobot} alt="" />
+                                </div>
+                                <div className="msg-role role-assistant">GAIA</div>
+                            </>
                         )}
-                        <div className={`msg-role ${message.role === 'user' ? 'role-user' : 'role-assistant'}`}>
-                            {message.role === 'user' ? 'You' : 'GAIA'}
-                        </div>
                         {message.created_at && (
                             <span className="msg-timestamp">{formatMsgTime(message.created_at)}</span>
                         )}

@@ -99,6 +99,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Store agent steps snapshot for completed messages
     const [completedSteps, setCompletedSteps] = useState<AgentStep[]>([]);
     const [attachments, setAttachments] = useState<Attachment[]>([]);
+    const [docsExpanded, setDocsExpanded] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -114,6 +115,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const streamBufferRef = useRef('');
     const rafRef = useRef<number | null>(null);
     const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    /** Timestamp of the last auto-scroll (used for throttling). */
+    const lastScrollRef = useRef(0);
+    /** True when the user is at (or near) the bottom of the messages list.
+     *  Auto-scroll only fires when this is true, so scrolling up to read
+     *  earlier messages won't be interrupted by new streaming content. */
+    const isNearBottomRef = useRef(true);
 
     const flushStreamBuffer = useCallback(() => {
         rafRef.current = null;
@@ -191,12 +198,29 @@ export function ChatView({ sessionId }: ChatViewProps) {
         return () => window.removeEventListener('gaia:send-prompt', handler);
     }, [sessionId]);
 
-    // Auto-scroll (debounced to avoid excessive DOM mutations during streaming)
+    // Auto-scroll (throttled) — scrolls at most once per 100ms while
+    // streaming, and also schedules a trailing scroll so the final chunk
+    // is never missed.  Only fires when the user hasn't scrolled away.
     useEffect(() => {
-        if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
-        scrollTimerRef.current = setTimeout(() => {
+        if (!isNearBottomRef.current) return;
+
+        const now = Date.now();
+        const elapsed = now - lastScrollRef.current;
+        const THROTTLE_MS = 100;
+
+        const doScroll = () => {
+            lastScrollRef.current = Date.now();
             messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-        }, 80);
+        };
+
+        if (elapsed >= THROTTLE_MS) {
+            // Enough time passed — scroll immediately
+            doScroll();
+        }
+
+        // Always schedule a trailing scroll so the very last update is caught
+        if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+        scrollTimerRef.current = setTimeout(doScroll, THROTTLE_MS);
     }, [messages, streamingContent, agentSteps]);
 
     // Focus input
@@ -221,15 +245,18 @@ export function ChatView({ sessionId }: ChatViewProps) {
         };
     }, [sessionId]);
 
-    // Track scroll position for scroll-to-bottom button
+    // Track scroll position — drives both the scroll-to-bottom button and
+    // the isNearBottom flag that gates auto-scroll during streaming.
     const handleScroll = useCallback(() => {
         const el = messagesScrollRef.current;
         if (!el) return;
         const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        isNearBottomRef.current = distFromBottom <= 80;
         setShowScrollBtn(distFromBottom > 200);
     }, []);
 
     const scrollToBottom = useCallback(() => {
+        isNearBottomRef.current = true;
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, []);
 
@@ -400,6 +427,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const sendMessage = useCallback(async (overrideText?: string) => {
         const text = (overrideText || input).trim();
         const hasAttachments = attachments.length > 0 && attachments.some(a => a.uploaded);
+
+        // User just sent a message — re-pin scroll to the bottom so the
+        // new message and streaming response are visible.
+        isNearBottomRef.current = true;
 
         if ((!text && !hasAttachments) || isStreaming) {
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
@@ -782,6 +813,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     };
 
+    /** Remove a document from the index directly from the context bar. */
+    const handleRemoveDocument = useCallback(async (e: React.MouseEvent, docId: string) => {
+        e.stopPropagation(); // Don't trigger the context bar click
+        const doc = documents.find((d) => d.id === docId);
+        log.doc.info(`Removing document from context bar: ${doc?.filename || docId}`);
+        try {
+            await api.deleteDocument(docId);
+            const remaining = documents.filter((d) => d.id !== docId);
+            setDocuments(remaining);
+            // Auto-collapse when 3 or fewer docs remain
+            if (remaining.length <= 3) setDocsExpanded(false);
+            log.doc.info(`Removed document: ${doc?.filename || docId}`);
+        } catch (err) {
+            log.doc.error(`Failed to remove document: ${doc?.filename || docId}`, err);
+        }
+    }, [documents, setDocuments]);
+
     // Drag & drop
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
@@ -854,30 +902,69 @@ export function ChatView({ sessionId }: ChatViewProps) {
             </header>
 
             {/* Indexed documents context bar */}
-            {documents.length > 0 && (
-                <button
-                    className="doc-context-bar"
-                    onClick={() => setShowDocLibrary(true)}
-                    title="Click to manage documents"
-                    aria-label={`${documents.length} indexed document${documents.length !== 1 ? 's' : ''}`}
-                >
-                    <CheckCircle2 size={12} className="doc-context-icon" />
-                    <span className="doc-context-label">
-                        {documents.length} indexed
-                    </span>
-                    <div className="doc-context-pills">
-                        {documents.slice(0, 3).map((d) => (
-                            <span key={d.id} className="doc-pill">
-                                <FileText size={9} className="doc-pill-icon" />
-                                {d.filename}
-                            </span>
-                        ))}
-                        {documents.length > 3 && (
-                            <span className="doc-pill-more">+{documents.length - 3} more</span>
-                        )}
+            {documents.length > 0 && (() => {
+                // Sort by most recently accessed (last_accessed_at), falling back to indexed_at
+                const sorted = [...documents].sort((a, b) => {
+                    const aTime = a.last_accessed_at || a.indexed_at || '';
+                    const bTime = b.last_accessed_at || b.indexed_at || '';
+                    return bTime.localeCompare(aTime);
+                });
+                const visibleDocs = docsExpanded ? sorted : sorted.slice(0, 3);
+                const hiddenCount = sorted.length - 3;
+                return (
+                    <div
+                        className={`doc-context-bar${docsExpanded ? ' doc-context-expanded' : ''}`}
+                        aria-label={`${documents.length} indexed document${documents.length !== 1 ? 's' : ''}`}
+                    >
+                        <CheckCircle2 size={12} className="doc-context-icon" />
+                        <span
+                            className="doc-context-label"
+                            onClick={() => setShowDocLibrary(true)}
+                            title="Click to manage documents"
+                            role="button"
+                            tabIndex={0}
+                        >
+                            {documents.length} indexed
+                        </span>
+                        <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
+                            {visibleDocs.map((d) => (
+                                <span key={d.id} className="doc-pill" title={d.filepath || d.filename}>
+                                    <FileText size={9} className="doc-pill-icon" />
+                                    <span className="doc-pill-name">{d.filename}</span>
+                                    <button
+                                        className="doc-pill-remove"
+                                        onClick={(e) => handleRemoveDocument(e, d.id)}
+                                        title={`Remove ${d.filename} from index`}
+                                        aria-label={`Remove ${d.filename}`}
+                                    >
+                                        <X size={10} />
+                                    </button>
+                                </span>
+                            ))}
+                            {!docsExpanded && hiddenCount > 0 && (
+                                <button
+                                    className="doc-pill-more"
+                                    onClick={(e) => { e.stopPropagation(); setDocsExpanded(true); }}
+                                    title="Show all indexed files"
+                                    aria-label={`Show ${hiddenCount} more files`}
+                                >
+                                    +{hiddenCount} more
+                                </button>
+                            )}
+                            {docsExpanded && hiddenCount > 0 && (
+                                <button
+                                    className="doc-pill-collapse"
+                                    onClick={(e) => { e.stopPropagation(); setDocsExpanded(false); }}
+                                    title="Show fewer files"
+                                    aria-label="Collapse file list"
+                                >
+                                    show less
+                                </button>
+                            )}
+                        </div>
                     </div>
-                </button>
-            )}
+                );
+            })()}
 
             {/* Messages */}
             <div className="messages-scroll" ref={messagesScrollRef} onScroll={handleScroll}>
@@ -953,7 +1040,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             </div>
 
             {/* Scroll to bottom */}
-            {showScrollBtn && !isStreaming && (
+            {showScrollBtn && (
                 <button className="scroll-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom" aria-label="Scroll to bottom">
                     <ArrowDown size={16} />
                 </button>

@@ -13,28 +13,43 @@
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* User messages -- colored left border + light tint */
+/* User messages -- minimal, right-aligned, no accent */
 .msg-user {
-    background: var(--bg-user-msg);
-    border-left: 2px solid var(--amd-red-light);
+    background: transparent;
+    border-left: 2px solid transparent;
     border-bottom: 1px solid var(--border);
+}
+.msg-user .msg-inner {
+    text-align: right;
+}
+.msg-user .msg-header {
+    justify-content: flex-end;
+}
+.msg-user .msg-header-left {
+    order: 1;
+}
+.msg-user .msg-actions {
+    order: 0;
+}
+.msg-user .msg-body {
+    padding-left: 0;
+    text-align: right;
 }
 
 [data-theme="dark"] .msg-user {
-    border-left-color: var(--amd-red);
-    background: var(--bg-user-msg);
+    background: transparent;
 }
 
-/* Assistant messages -- visible separator + left accent */
+/* Assistant messages -- red left accent, highlighted */
 .msg-assistant {
-    background: transparent;
+    background: var(--bg-user-msg);
     border-bottom: 1px solid var(--border);
-    border-left: 2px solid var(--border);
+    border-left: 2px solid var(--amd-red-light);
 }
 
 [data-theme="dark"] .msg-assistant {
-    border-left-color: var(--border);
-    background: rgba(38, 38, 38, 0.3);
+    border-left-color: var(--amd-red);
+    background: var(--bg-user-msg);
 }
 
 .msg-inner { max-width: 100%; }
@@ -90,7 +105,7 @@
     letter-spacing: 0.8px;
     color: var(--text-muted);
 }
-.role-user { color: var(--amd-red); }
+.role-assistant { color: var(--amd-red); }
 
 /* Timestamp (visible on hover) -- monospace */
 .msg-timestamp {
@@ -149,10 +164,20 @@
     font-family: var(--font-sans);
 }
 
-/* User message body: monospace for terminal feel */
+/* User message body: monospace, right-aligned, muted color */
 .msg-user .msg-body {
     font-family: var(--font-mono);
     font-size: 13px;
+    color: var(--text-secondary);
+}
+.msg-user .md-content {
+    color: var(--text-secondary);
+}
+/* Right-align markdown elements in user messages */
+.msg-user .md-p,
+.msg-user .md-ul,
+.msg-user .md-ol {
+    text-align: right;
 }
 
 /* ── Error message styling ────────────────────────────────────── */

@@ -28,7 +28,7 @@
     --bg-hover: #f0f0f0;
     --bg-active: #e5e7eb;
     --bg-code: #1e1e1e;
-    --bg-user-msg: transparent;
+    --bg-user-msg: rgba(226, 60, 64, 0.03);
     --bg-modal-overlay: rgba(0, 0, 0, 0.5);
 
     /* Background image (set via App.tsx or inline style) */
