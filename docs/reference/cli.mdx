@@ -82,7 +82,7 @@ gaia init [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--profile, -p` | string | chat | Profile to initialize (minimal, chat, code, rag, vlm, all) |
+| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, mcp, vlm, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
@@ -97,9 +97,11 @@ gaia init [OPTIONS]
 | Profile | Models | Description | Approx Size |
 |---------|--------|-------------|-------------|
 | `minimal` | Qwen3-0.6B | Fast setup with lightweight model | ~400 MB |
+| `sd` | SD-Turbo | Image generation with Stable Diffusion | ~8 GB |
 | `chat` | Qwen3-Coder-30B, nomic-embed, Qwen3-VL-4B | Interactive chat with RAG and vision | ~25 GB |
 | `code` | Qwen3-Coder-30B | Autonomous coding assistant | ~18 GB |
 | `rag` | Qwen3-Coder-30B, nomic-embed, Qwen3-VL-4B | Document Q&A with retrieval and vision | ~25 GB |
+| `mcp` | Qwen3-Coder-30B | MCP bridge server for external integrations | ~18 GB |
 | `vlm` | Qwen3-VL-4B | Vision pipeline for document and image extraction | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
@@ -356,7 +358,6 @@ gaia chat [MESSAGE] [OPTIONS]
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
 | `--model` | string | Qwen3-Coder-30B-A3B-Instruct-GGUF | Model name to use |
-| `--max-steps` | integer | 10 | Maximum conversation steps |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
 | `--chunk-size` | integer | 500 | Document chunk size for RAG |
