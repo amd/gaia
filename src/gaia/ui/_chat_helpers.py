@@ -247,8 +247,6 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             try:
                 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
-                agent_start = _time.time()
-
                 # -- Phase 1: Configure --
                 # Build config: session-specific docs auto-index,
                 # library docs passed as metadata for on-demand indexing.

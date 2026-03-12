@@ -45,9 +45,7 @@ _THOUGHT_JSON_SUB_RE = re.compile(r'\s*\{\s*"thought"\s*:\s*"[^"]*"[^}]*\}\s*')
 
 # Regex to detect {"answer": "..."} JSON blocks from LLM output.
 # These duplicate the already-streamed text content and should be stripped.
-_ANSWER_JSON_RE = re.compile(
-    r'\s*\{\s*"answer"\s*:\s*"', re.DOTALL
-)
+_ANSWER_JSON_RE = re.compile(r'\s*\{\s*"answer"\s*:\s*"', re.DOTALL)
 
 # Regex to remove <think>...</think> tags that some models output.
 _THINK_TAG_SUB_RE = re.compile(r"<think>[\s\S]*?</think>")
@@ -427,7 +425,9 @@ class SSEOutputHandler(OutputHandler):
                     json_part = self._stream_buffer[json_idx:]
                     json_stripped = json_part.strip()
                     if json_stripped.endswith("}"):
-                        logger.debug("Filtered embedded answer JSON: %s", json_stripped[:100])
+                        logger.debug(
+                            "Filtered embedded answer JSON: %s", json_stripped[:100]
+                        )
                         self._stream_buffer = ""
                     else:
                         self._stream_buffer = json_part  # Keep buffering
@@ -464,7 +464,9 @@ class SSEOutputHandler(OutputHandler):
         if end_of_stream and self._stream_buffer:
             # Flush any remaining buffer at end of stream
             stripped = self._stream_buffer.strip()
-            if not _TOOL_CALL_JSON_RE.match(stripped) and not _ANSWER_JSON_RE.search(stripped):
+            if not _TOOL_CALL_JSON_RE.match(stripped) and not _ANSWER_JSON_RE.search(
+                stripped
+            ):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
 
@@ -473,7 +475,9 @@ class SSEOutputHandler(OutputHandler):
         # Flush any remaining stream buffer before signaling done
         if self._stream_buffer:
             stripped = self._stream_buffer.strip()
-            if not _TOOL_CALL_JSON_RE.match(stripped) and not _ANSWER_JSON_RE.search(stripped):
+            if not _TOOL_CALL_JSON_RE.match(stripped) and not _ANSWER_JSON_RE.search(
+                stripped
+            ):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
         self._emit(None)  # Sentinel value
