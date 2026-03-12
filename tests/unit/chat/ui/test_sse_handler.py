@@ -188,17 +188,17 @@ class TestPrintStepHeader:
 
 
 class TestPrintStateInfo:
-    """Tests for SSEOutputHandler.print_state_info."""
+    """Tests for SSEOutputHandler.print_state_info.
 
-    def test_emits_status_working(self, handler):
+    print_state_info is intentionally suppressed (no-op) because the
+    internal agent state labels (PLANNING, DIRECT EXECUTION, etc.)
+    duplicate the thinking step that immediately follows.
+    """
+
+    def test_suppressed_no_events(self, handler):
         handler.print_state_info("Analyzing document...")
         events = _drain(handler)
-        assert len(events) == 1
-        assert events[0] == {
-            "type": "status",
-            "status": "working",
-            "message": "Analyzing document...",
-        }
+        assert len(events) == 0
 
 
 # ===========================================================================
