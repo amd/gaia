@@ -111,3 +111,23 @@ bug but a design consistency issue.
 
 **Suggested fix:** Replace with CSS custom properties (e.g.
 `var(--tool-color-search)`) defined in the theme.
+
+---
+
+## 7. Electron Agent UI Tests Expect Unimplemented Components
+
+**File:** `tests/electron/test_agent_ui_structure.js`
+
+This test was added on the `kalin/chat-ui` branch and validates the
+existence and structure of multi-agent desktop UI components (AgentCard,
+AgentManager, AgentChat, PermissionManager, etc.). These components are
+planned but not yet implemented.
+
+The test fails in CI because the expected files don't exist.
+
+**Impact:** CI failure on the "Test Electron Framework and Apps" workflow.
+Does not affect the Chat UI functionality.
+
+**Suggested fix:** Either implement the missing components, move the test
+to a separate branch, or skip it with `describe.skip()` until the full
+agent UI is ready.
