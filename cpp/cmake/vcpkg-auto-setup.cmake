@@ -3,7 +3,7 @@
 #
 # vcpkg-auto-setup.cmake
 # ----------------------
-# Locate vcpkg so that find_package(OpenSSL) works when GAIA_ENABLE_SSL=ON.
+# Locate vcpkg so that find_package(OpenSSL) works for optional HTTPS support.
 # Include this file BEFORE project() in CMakeLists.txt.
 #
 # Priority order:

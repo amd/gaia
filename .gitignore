@@ -202,6 +202,9 @@ version.txt
 # vcpkg manifest-mode installed packages
 cpp/vcpkg_installed/
 
+# CMake build artifacts (generated files, not source)
+CMakeFiles/
+
 # SD test results and artifacts
 sd_model_sweep_results/
 quick_test_results/
