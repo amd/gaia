@@ -7,6 +7,5 @@
     "python.testing.pytestArgs": [
         "tests/unit"
     ],
-    "notebook.output.wordWrap": true,
-    "cmake.sourceDirectory": "/Users/tomasz/src/amd/gaia/01/cpp"
+    "notebook.output.wordWrap": true
 }
