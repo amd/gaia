@@ -79,6 +79,7 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
     const [isResizing, setIsResizing] = useState(false);
     const sidebarRef = useRef<HTMLElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
+    const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Listen for Ctrl+K focus-search event from ChatView
     useEffect(() => {
@@ -173,7 +174,8 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
         log.chat.debug(`Delete pending confirmation for: "${title}" (${id})`);
         setPendingDeleteId(id);
         // Auto-cancel after 3s
-        setTimeout(() => setPendingDeleteId((prev) => (prev === id ? null : prev)), 3000);
+        if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+        deleteTimerRef.current = setTimeout(() => setPendingDeleteId((prev) => (prev === id ? null : prev)), 3000);
     }, [pendingDeleteId, sessions, removeSession]);
 
     // Cancel pending delete on outside click
@@ -224,10 +226,11 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
         document.addEventListener('mouseup', cleanup);
     }, [sidebarWidth, setSidebarWidth]);
 
-    // Clean up resize listeners if component unmounts mid-drag
+    // Clean up resize listeners and delete timer if component unmounts
     useEffect(() => {
         return () => {
             if (resizeCleanupRef.current) resizeCleanupRef.current();
+            if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
         };
     }, []);
 

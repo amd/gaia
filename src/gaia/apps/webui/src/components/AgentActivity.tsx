@@ -313,12 +313,11 @@ function linkifyPaths(text: string): React.ReactNode {
                 {filePath}
             </span>
         );
-        // Use raw match length so stripped trailing brackets are preserved in output
-        lastIndex = match.index + filePath.length;
-        // Push any trailing brackets that were trimmed from the path
+        // Advance past the full raw match; push trimmed trailing brackets as plain text
         if (filePath.length < rawMatch.length) {
             parts.push(rawMatch.slice(filePath.length));
         }
+        lastIndex = match.index + rawMatch.length;
     }
 
     if (parts.length === 0) return text;

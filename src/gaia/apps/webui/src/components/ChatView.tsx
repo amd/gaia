@@ -226,7 +226,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Focus input
     useEffect(() => { inputRef.current?.focus(); }, [sessionId]);
 
-    // Abort active stream and clean up timers when component unmounts
+    // Abort active stream and clean up timers when component unmounts / session changes
     useEffect(() => {
         return () => {
             if (abortRef.current) {
@@ -242,6 +242,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 scrollTimerRef.current = null;
             }
             streamBufferRef.current = '';
+            // Revoke any attachment blob URLs to prevent memory leaks
+            setAttachments(prev => {
+                prev.forEach(a => { if (a.url) URL.revokeObjectURL(a.url); });
+                return [];
+            });
         };
     }, [sessionId]);
 
