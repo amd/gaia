@@ -1,6 +1,7 @@
 ---
 title: Roadmap
 description: Upcoming priorities for GAIA
+icon: "map"
 ---
 
 # Roadmap
@@ -41,6 +42,7 @@ graph TD
         F("MCP Docs Server<br/><i>AI assistant context</i>")
         G("AI PC Agents Hub<br/><i>Discover & compete</i>")
         V("Vision SDK<br/><i>Document processing pipeline</i>")
+        CPP("C++ Framework<br/><i>Production readiness</i>")
     end
 
     subgraph Q3["Q3 2026"]
@@ -53,6 +55,7 @@ graph TD
     C --> C2
     C2 --> D
     D --> F
+    D --> CPP
     F --> V
     V --> G
     G --> H
@@ -66,6 +69,7 @@ graph TD
     style V fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style F fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style G fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style CPP fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style H fill:#2d2d2d,stroke:#555,stroke-width:2px,color:#fff
 
     style Q1 fill:transparent,stroke:#F4484D,stroke-width:2px,stroke-dasharray: 5 5,color:#F4484D
@@ -115,7 +119,8 @@ Key capabilities:
 An MCP Client Mixin that enables GAIA agents to connect to external MCP servers, transforming them into Computer Use Agents (CUA):
 
 ```python
-from gaia.agents.base import Agent, MCPClientMixin
+from gaia.agents.base import Agent
+from gaia.mcp import MCPClientMixin
 
 class DesktopAgent(MCPClientMixin, Agent):
     def __init__(self):
@@ -255,6 +260,38 @@ Key capabilities:
 
 → [View detailed plan](/plans/vision-sdk) • [Vote with 👍 on GitHub](https://github.com/amd/gaia/issues/325)
 
+### Q2 2026: C++ Framework Production Readiness
+
+**Make the native C++ agent framework ready for third-party integration**
+
+The [C++ Agent Framework](/cpp) shipped in Q1 2026 as a native C++17 port of the base agent — same agent loop, tool registry, and MCP support, compiled to a standalone binary with no Python runtime. The next phase focuses on production readiness:
+
+```cpp
+// Cancellation support
+gaia::CancellationToken token;
+std::thread([&] { agent.processQuery("diagnose network", 20, token); }).detach();
+token.cancel();  // graceful stop from UI thread
+
+// Structured event callbacks for GUI integration
+agent.addEventListener(std::make_shared<MyUIEventHandler>());
+
+// Tool security policies
+toolRegistry().registerTool("restart_service", desc, callback, params,
+                            gaia::ToolPolicy::CONFIRM);
+```
+
+Key deliverables:
+- **Cancellation & timeout** — `CancellationToken` for graceful abort, configurable HTTP timeouts
+- **Event callback system** — typed `AgentEvent` structs for embedding in desktop applications (WPF, Qt, Electron)
+- **Tool security** — per-tool allow/confirm/deny policies, argument validation callbacks, path traversal utilities
+- **API versioning** — semantic versioning, stability guarantees, deprecation lifecycle
+- **Performance benchmarks** — binary size tracking, loop latency, memory footprint, CI regression detection
+- **Pluggable logging** — `Logger` interface for ETW, syslog, or custom telemetry
+- **Streaming responses** — SSE parsing, token-by-token callbacks for responsive UIs
+- **Runtime configuration** — JSON config files, environment variables, dynamic model switching
+
+→ [View C++ framework docs](/cpp) • [View milestone on GitHub](https://github.com/amd/gaia/milestone/10)
+
 ### Q2 2026: MCP Docs Server
 
 **AI assistant context for GAIA development**
@@ -354,4 +391,4 @@ The more votes an issue gets, the higher priority it becomes. Your input directl
 
 ---
 
-*Updated: January 26, 2026*
+*Updated: February 27, 2026*

@@ -1,0 +1,160 @@
+---
+title: "Quickstart"
+description: "Build and run GAIA C++ agents — full agent loop and MCP integration"
+icon: "rocket"
+---
+
+**The GAIA C++ agent framework.** Drop AI agent capabilities into any C++ project — three lines of CMake, zero manual dependencies, any OpenAI-compatible LLM backend.
+
+- **Native performance** — compiled binary, no interpreter overhead
+- **Easy integration** — add to any CMake project via FetchContent, git submodule, or find_package ([Integration Guide](/cpp/integration))
+- **Any LLM backend** — works with [Lemonade](https://lemonade-server.ai), llama.cpp, Ollama, vLLM, OpenAI, or any OpenAI-compatible server ([details](/cpp/integration#using-alternative-llm-backends))
+- **Full MCP support** — connects to any MCP server via stdio transport
+- **Full agent loop** — planning, tool execution, error recovery, multi-step plans
+
+<Info>
+**Source Code:** [`cpp/`](https://github.com/amd/gaia/tree/main/cpp) in the GAIA repository. The C++ framework focuses on the core agent loop and tool execution. Specialized agents (Code, Docker, Jira, Blender), the REST API server, RAG, and audio are available in the [Python SDK](/quickstart).
+</Info>
+
+---
+
+<Info>
+  **First time here?** Complete the [C++ Setup](/cpp/setup) guide first to install CMake, a C++17 compiler, and [Lemonade Server](https://lemonade-server.ai).
+</Info>
+
+## Build
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/amd/gaia.git
+    cd gaia/cpp
+    ```
+  </Step>
+
+  <Step title="Configure and build">
+    <Tabs>
+      <Tab title="Windows (MSVC)">
+        ```bat
+        cmake -B build -G "Visual Studio 17 2022" -A x64
+        ```
+        ```bat
+        cmake --build build --config Release
+        ```
+        Binaries land in `build\Release\`.
+      </Tab>
+      <Tab title="Windows (Ninja)">
+        ```bat
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        ```
+        ```bat
+        cmake --build build
+        ```
+      </Tab>
+      <Tab title="Linux">
+        ```bash
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+        ```
+        ```bash
+        cmake --build build
+        ```
+        Binaries land in `build/`.
+      </Tab>
+    </Tabs>
+
+    All dependencies (nlohmann/json, cpp-httplib, Google Test) are fetched automatically by CMake — no manual installs required.
+  </Step>
+
+  <Step title="Start an LLM server">
+    The agent connects to any OpenAI-compatible LLM server at `http://localhost:8000/api/v1` by default. The recommended backend is [Lemonade Server](https://lemonade-server.ai) (optimized for AMD hardware):
+
+    ```bash
+    lemonade-server serve
+    ```
+
+    <Note>
+    **Not using Lemonade?** Any OpenAI-compatible server works — llama.cpp, Ollama, vLLM, or a cloud endpoint. Just set `AgentConfig::baseUrl` and `AgentConfig::modelId`. See the [Integration Guide](/cpp/integration#using-alternative-llm-backends) for configuration examples.
+    </Note>
+  </Step>
+
+  <Step title="Run a demo agent">
+    Both demo agents are Windows-only (they use PowerShell for system interaction).
+
+    **[Windows System Health Agent](/cpp/health-agent)** (requires `uvx` for the MCP server):
+    ```bat
+    build\Release\health_agent.exe
+    ```
+    The agent connects to the Windows MCP server, gathers CPU/memory/disk/GPU metrics via PowerShell, and presents results in the console or writes a full report to Notepad.
+
+    **[Wi-Fi Troubleshooter](/cpp/wifi-agent)** (no extra dependencies, run as admin for fix tools):
+    ```bat
+    build\Release\wifi_agent.exe
+    ```
+    Select GPU or NPU backend, then try "Full network diagnostic" or ask a specific question. The agent reasons about each result and adapts its approach in real-time.
+
+    Type `quit` to exit.
+  </Step>
+</Steps>
+
+## Running Tests
+
+Verify your build with the unit test suite (no LLM server required):
+
+<Tabs>
+  <Tab title="Windows">
+    ```bat
+    build\Release\tests_mock.exe --gtest_color=yes
+    ```
+  </Tab>
+  <Tab title="Linux">
+    ```bash
+    ./build/tests_mock --gtest_color=yes
+    ```
+  </Tab>
+</Tabs>
+
+See the [Testing Guide](/cpp/testing) for the full test suite — unit tests (8 modules), integration tests (LLM, MCP, Wi-Fi, Health), CI pipeline, and how to add new tests.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="System Health Agent" icon="desktop" href="/cpp/health-agent">
+    MCP-based system diagnostics — CPU, memory, disk, GPU via PowerShell
+  </Card>
+
+  <Card title="Wi-Fi Troubleshooter" icon="wifi" href="/cpp/wifi-agent">
+    Full network diagnostic and auto-fix using registered C++ tools
+  </Card>
+
+  <Card title="Framework Overview" icon="book" href="/cpp/overview">
+    Architecture, agent execution flow, how tools work, and project structure
+  </Card>
+
+  <Card title="Integration Guide" icon="puzzle-piece" href="/cpp/integration">
+    Add gaia_core to your own CMake project via FetchContent, find_package, or shared library
+  </Card>
+
+  <Card title="Testing Guide" icon="flask-vial" href="/cpp/testing">
+    Unit tests, integration tests, CI pipeline, and adding new tests
+  </Card>
+
+  <Card title="API Reference" icon="book-open" href="/cpp/api-reference">
+    Error handling, thread safety, security, deployment, and complete class API
+  </Card>
+
+  <Card title="Custom Agent" icon="sliders" href="/cpp/custom-agent">
+    Custom prompts, typed tools, MCP servers, output capture, and AgentConfig tuning
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

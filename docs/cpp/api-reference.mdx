@@ -1,0 +1,391 @@
+---
+title: "API Reference"
+description: "Error handling, thread safety, security, deployment, and complete API for the C++ agent framework"
+icon: "book-open"
+---
+
+<Info>
+  **Source Code:** [`cpp/`](https://github.com/amd/gaia/tree/main/cpp) in the GAIA repository.
+</Info>
+
+<Note>
+**See also:** [Overview](/cpp/overview) for architecture, execution flow, and getting started.
+</Note>
+
+---
+
+## Error Handling & Recovery
+
+The framework handles failures at every layer — LLM connection, JSON parsing, and tool execution — so your agent doesn't crash on transient errors.
+
+### LLM Connection Failures
+
+If the LLM server is unreachable or returns an error, the agent **retries once automatically**, then exits gracefully:
+
+```
+Call LLM → fails → retry once → fails again → return error result
+```
+
+The return value on LLM failure:
+```json
+{
+  "result": "Unable to complete task due to LLM error: Connection refused",
+  "steps_taken": 1,
+  "steps_limit": 20
+}
+```
+
+Your application should check the `result` field — there is no exception to catch. HTTP timeouts: 30s connection, 120s read.
+
+### Malformed JSON Recovery
+
+Local LLMs often return imperfect JSON. The parser applies **six extraction strategies** in sequence:
+
+1. Direct JSON parse
+2. Extract from markdown code blocks (`` ```json ... ``` ``)
+3. Bracket-matching — find first complete `{...}` in mixed text
+4. Fix common syntax errors (trailing commas, single quotes, missing brackets)
+5. Regex extraction of individual fields (`"thought"`, `"tool"`, `"answer"`)
+6. Treat entire response as a plain-text conversational answer
+
+This means the agent recovers from most LLM formatting errors without any intervention.
+
+### Tool Execution Errors
+
+When a tool callback throws an exception or returns `{"status": "error", ...}`, the agent enters **error recovery mode**:
+
+1. The error is captured (exceptions are caught, not propagated)
+2. The error context is sent back to the LLM: *"Tool execution failed. Please try an alternative approach."*
+3. The LLM reasons about the error and may try a different tool or strategy
+4. If the LLM cannot recover within `maxSteps`, the agent returns the last error as the result
+
+Tool errors never crash the agent. The error flow:
+
+```cpp
+try {
+    result = tool->callback(args);
+} catch (const std::exception& e) {
+    result = {{"status", "error"}, {"error", "Tool execution failed: " + e.what()}};
+}
+// → error context sent to LLM → LLM adapts → loop continues
+```
+
+### MCP Auto-Reconnect
+
+If an MCP server disconnects mid-session (process crash, timeout), the agent **reconnects automatically**:
+
+```
+MCP tool call → fails → reconnect to server → retry tool call → success or return error
+```
+
+The subprocess is re-launched and re-initialized. If reconnection fails, the tool call returns an error and the LLM is notified.
+
+### Loop Detection
+
+The agent detects **infinite tool call loops** — when the LLM calls the same tool with the same arguments 4+ times in a row. When detected, the agent stops and returns:
+
+```
+"Task stopped due to repeated tool call loop."
+```
+
+---
+
+## Thread Safety
+
+### Blocking Semantics
+
+**`processQuery()` is fully blocking.** It runs the complete agent loop (LLM calls, tool executions, history management) on the calling thread and returns only when a final answer is produced or the step limit is reached.
+
+This means:
+- Do **not** call `processQuery()` from a UI thread — it will freeze the UI for the duration of the agent run
+- Use a background thread or async wrapper for GUI integration
+
+### Concurrent Agent Instances
+
+**Different `Agent` instances are fully independent** and can run in parallel on separate threads. Each agent owns its own conversation history, tool registry, MCP connections, and output handler.
+
+```cpp
+// SAFE — separate instances on separate threads
+Agent agent1(config1);
+Agent agent2(config2);
+
+std::thread t1([&] { agent1.processQuery("query 1"); });
+std::thread t2([&] { agent2.processQuery("query 2"); });
+t1.join();
+t2.join();
+```
+
+### Single-Agent Rules
+
+**Do NOT call `processQuery()` concurrently on the same agent instance.** There are no internal locks — concurrent calls will corrupt conversation history and produce undefined behavior.
+
+```cpp
+// NOT SAFE — same instance, two threads
+Agent agent(config);
+std::thread t1([&] { agent.processQuery("query 1"); });  // race condition
+std::thread t2([&] { agent.processQuery("query 2"); });  // race condition
+```
+
+Similarly, do not call `connectMcpServer()` or `disconnectMcpServer()` while `processQuery()` is running.
+
+---
+
+## Security Model
+
+### Tool Registration Is Explicit
+
+Only tools registered via `registerTool()` or discovered from a connected MCP server are available. There is no reflection, auto-discovery, or dynamic code execution. The LLM can only call tools that your code has explicitly registered.
+
+### Tool Callback Responsibility
+
+The framework **does not validate tool arguments** before passing them to your callback. Each tool is responsible for:
+
+- Validating its input parameters (types, ranges, formats)
+- Sanitizing paths and shell arguments
+- Rejecting unexpected or dangerous inputs
+
+Example — a safe file-reading tool:
+
+```cpp
+toolRegistry().registerTool("read_file", "Read a text file",
+    [](const gaia::json& args) -> gaia::json {
+        std::string path = args.value("path", "");
+
+        // Validate: reject path traversal
+        if (path.find("..") != std::string::npos) {
+            return {{"status", "error"}, {"error", "Path traversal not allowed"}};
+        }
+
+        // Validate: restrict to allowed directory
+        if (path.find("/allowed/dir/") != 0) {
+            return {{"status", "error"}, {"error", "Access denied"}};
+        }
+
+        // Safe to read
+        std::ifstream f(path);
+        std::string content((std::istreambuf_iterator<char>(f)),
+                             std::istreambuf_iterator<char>());
+        return {{"content", content}};
+    },
+    {{"path", gaia::ToolParamType::STRING, true, "File path to read"}}
+);
+```
+
+### MCP Server Trust
+
+MCP servers are **trusted implicitly** — all tools they expose are registered without review. Only connect to MCP servers you control. In production, audit the tool list returned by each server before deployment.
+
+### Prompt Injection
+
+The LLM decides which tool to call based on user input and conversation history. A malicious user could craft input that causes the LLM to misuse a tool. Mitigations:
+
+- **Validate in the tool callback** — don't trust the LLM's argument choices blindly
+- **Use restrictive tool descriptions** — describe exactly what the tool does and what arguments it accepts
+- **Limit tool scope** — register only the tools needed for your use case
+- **Consider confirmation flows** — for destructive operations, require user confirmation before executing
+
+### Conversation History
+
+Conversation history persists between `processQuery()` calls on the same agent. Previous queries and tool results are visible to subsequent LLM calls. For multi-user scenarios, create a new `Agent` instance per user session to prevent data leakage.
+
+---
+
+## Production Deployment
+
+### Binary Sizes
+
+Measured with MSVC 2022 Release build (x64):
+
+| Artifact | Size | Notes |
+|----------|------|-------|
+| `gaia_core.lib` (static) | ~18 MB | Includes statically linked nlohmann_json and cpp-httplib |
+| Example executable | ~400-440 KB | Linked against static library |
+| Shared library (DLL) | Smaller | Build with `-DBUILD_SHARED_LIBS=ON` — ships only framework code |
+
+The static library is large because it bundles all dependencies. When building as a shared library (DLL), the binary is significantly smaller since dependencies are linked dynamically.
+
+### DLL / Shared Library
+
+The framework supports both static and shared library builds. DLL export macros (`GAIA_API`) are already applied to all public classes:
+
+```bash
+# Build as shared library (DLL on Windows, .so on Linux)
+cmake -B build -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+```
+
+When consuming the DLL, the `GAIA_API` macro automatically switches from `__declspec(dllexport)` to `__declspec(dllimport)`.
+
+### Install Targets
+
+The CMake install target produces a complete SDK package:
+
+```bash
+cmake --install build --prefix /path/to/install
+```
+
+This creates:
+```
+/path/to/install/
+  include/gaia/          # All public headers
+  lib/gaia_core.lib      # Library (static or import lib)
+  lib/cmake/gaia_core/   # CMake config for find_package()
+  bin/gaia_core.dll      # DLL (shared builds only)
+```
+
+Consumers use `find_package(gaia_core)` to link against the installed SDK.
+
+### Runtime Configuration
+
+The LLM endpoint can be configured at runtime via environment variable — no recompilation needed:
+
+```bash
+# Override the default LLM server URL
+set LEMONADE_BASE_URL=http://my-server:8080/api/v1
+my_agent.exe
+```
+
+All other `AgentConfig` fields are set at construction time. For dynamic configuration, read from a config file or registry in your `makeConfig()` function.
+
+### HTTPS Support
+
+HTTPS is supported via OpenSSL (enabled by default with `GAIA_ENABLE_SSL=ON`). For local-only deployments where the LLM runs on `localhost`, you can disable SSL to remove the OpenSSL dependency:
+
+```bash
+cmake -B build -DGAIA_ENABLE_SSL=OFF
+```
+
+---
+
+## API Quick Reference
+
+### Agent
+
+```cpp
+class Agent {
+public:
+    explicit Agent(const AgentConfig& config = {});
+    virtual ~Agent();
+
+    // Main execution — blocking, returns {"result": "...", "steps_taken": N}
+    json processQuery(const std::string& userInput, int maxSteps = 0);
+
+    // MCP server management
+    bool connectMcpServer(const std::string& name, const json& config);
+    void disconnectMcpServer(const std::string& name);
+    void disconnectAllMcp();
+
+    // Output handler (for custom UI integration)
+    OutputHandler& console();
+    void setOutputHandler(std::unique_ptr<OutputHandler> handler);
+
+    // Tool registry access
+    const ToolRegistry& tools() const;
+    ToolRegistry& toolRegistry();
+
+    // System prompt
+    std::string systemPrompt() const;
+    void rebuildSystemPrompt();  // call after adding tools dynamically
+
+protected:
+    virtual void registerTools() {}           // override to register domain tools
+    virtual std::string getSystemPrompt() const;  // override for agent-specific instructions
+    void init();  // call at end of subclass constructor
+};
+```
+
+### ToolRegistry
+
+```cpp
+class ToolRegistry {
+public:
+    void registerTool(const std::string& name, const std::string& description,
+                      ToolCallback callback, std::vector<ToolParameter> params = {},
+                      bool atomic = false);
+
+    json executeTool(const std::string& name, const json& args) const;
+
+    const ToolInfo* findTool(const std::string& name) const;
+    bool hasTool(const std::string& name) const;
+    bool removeTool(const std::string& name);
+    size_t size() const;
+    void clear();
+};
+```
+
+### OutputHandler
+
+Subclass to integrate agent output with your own UI. All methods are virtual:
+
+```cpp
+class OutputHandler {
+public:
+    virtual void printProcessingStart(const std::string& query, int maxSteps,
+                                      const std::string& modelId = "") = 0;
+    virtual void printStepHeader(int stepNum, int stepLimit) = 0;
+    virtual void printThought(const std::string& thought) = 0;
+    virtual void printGoal(const std::string& goal) = 0;
+    virtual void printToolUsage(const std::string& toolName) = 0;
+    virtual void printToolComplete() = 0;
+    virtual void prettyPrintJson(const json& data, const std::string& title = "") = 0;
+    virtual void printError(const std::string& message) = 0;
+    virtual void printWarning(const std::string& message) = 0;
+    virtual void printInfo(const std::string& message) = 0;
+    virtual void printFinalAnswer(const std::string& answer) = 0;
+    virtual void printCompletion(int stepsTaken, int stepsLimit) = 0;
+    // ... plus progress indicators, debug methods
+};
+```
+
+See the [Custom Agent](/cpp/custom-agent) guide for full OutputHandler examples including headless/embedded usage.
+
+### MCPClient
+
+```cpp
+class MCPClient {
+public:
+    static MCPClient fromConfig(const std::string& name, const json& config,
+                                int timeout = 30, bool debug = false);
+
+    bool connect();
+    void disconnect();
+    bool isConnected() const;
+
+    std::vector<MCPToolSchema> listTools(bool refresh = false);
+    json callTool(const std::string& toolName, const json& arguments);
+};
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Overview" icon="eye" href="/cpp/overview">
+    Architecture, execution flow, and getting started
+  </Card>
+
+  <Card title="Custom Agent" icon="sliders" href="/cpp/custom-agent">
+    Custom prompts, typed tools, MCP servers, and output capture
+  </Card>
+
+  <Card title="Integration Guide" icon="puzzle-piece" href="/cpp/integration">
+    Consume gaia_core in your own CMake project
+  </Card>
+
+  <Card title="Quickstart" icon="rocket" href="/cpp/quickstart">
+    Prerequisites, build steps, and running your first demo
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
