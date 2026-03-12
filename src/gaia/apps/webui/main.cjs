@@ -287,7 +287,7 @@ function initializeServices() {
   agentProcessManager = new AgentProcessManager(mainWindow);
 
   // T1: Tray Manager (system tray icon + context menu)
-  trayManager = new TrayManager(mainWindow, agentProcessManager);
+  trayManager = new TrayManager(mainWindow, { backendPort: BACKEND_PORT });
   trayManager.create();
 
   // T5: Notification Service (routes agent notifications to OS + renderer)
@@ -296,12 +296,6 @@ function initializeServices() {
     agentProcessManager,
     trayManager
   );
-
-  // Update tray context menu when agent statuses change
-  agentProcessManager.on("status-change", () => {
-    trayManager.refresh();
-    trayManager.updateIconAnimation();
-  });
 
   console.log("[main] Services initialized");
 }
