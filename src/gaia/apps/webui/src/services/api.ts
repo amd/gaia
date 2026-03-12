@@ -135,8 +135,8 @@ export function sendMessageStream(
         callbacks = {
             onChunk: onChunkOrCallbacks,
             onAgentEvent: () => {},  // no-op if using old API
-            onDone: onDone!,
-            onError: onError!,
+            onDone: onDone || (() => {}),
+            onError: onError || ((err) => { log.stream.error('Unhandled stream error', err); }),
         };
     } else {
         callbacks = onChunkOrCallbacks;
@@ -181,53 +181,58 @@ export function sendMessageStream(
             let buffer = '';
             let doneReceived = false;
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) {
-                    log.stream.debug('SSE reader done (stream ended)');
-                    break;
-                }
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        log.stream.debug('SSE reader done (stream ended)');
+                        break;
+                    }
 
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop() || '';
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
 
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const raw = line.slice(6).trim();
-                        if (!raw) continue;
-                        try {
-                            const event: StreamEvent = JSON.parse(raw);
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const raw = line.slice(6).trim();
+                            if (!raw) continue;
+                            try {
+                                const event: StreamEvent = JSON.parse(raw);
 
-                            if (event.type === 'chunk') {
-                                chunkCount++;
-                                totalChars += (event.content || '').length;
-                                if (chunkCount <= 3 || chunkCount % 50 === 0) {
-                                    log.stream.debug(`Chunk #${chunkCount} (+${(event.content || '').length} chars)`);
+                                if (event.type === 'chunk') {
+                                    chunkCount++;
+                                    totalChars += (event.content || '').length;
+                                    if (chunkCount <= 3 || chunkCount % 50 === 0) {
+                                        log.stream.debug(`Chunk #${chunkCount} (+${(event.content || '').length} chars)`);
+                                    }
+                                    callbacks.onChunk(event);
+                                } else if (event.type === 'answer') {
+                                    // Agent final answer - treat as content
+                                    callbacks.onChunk(event);
+                                } else if (event.type === 'done') {
+                                    doneReceived = true;
+                                    log.stream.timed(`Stream complete: ${chunkCount} chunks, ${totalChars} chars, ${agentEventCount} agent events`, t);
+                                    callbacks.onDone(event);
+                                } else if (event.type === 'error') {
+                                    log.stream.error(`Stream error event:`, event.content);
+                                    callbacks.onError(new Error(event.content || 'Unknown error'));
+                                } else if (AGENT_EVENT_TYPES.has(event.type)) {
+                                    agentEventCount++;
+                                    log.stream.debug(`Agent event: ${event.type}`, event);
+                                    callbacks.onAgentEvent(event);
+                                } else {
+                                    log.stream.warn(`Unknown SSE event type: ${event.type}`, event);
                                 }
-                                callbacks.onChunk(event);
-                            } else if (event.type === 'answer') {
-                                // Agent final answer - treat as content
-                                callbacks.onChunk(event);
-                            } else if (event.type === 'done') {
-                                doneReceived = true;
-                                log.stream.timed(`Stream complete: ${chunkCount} chunks, ${totalChars} chars, ${agentEventCount} agent events`, t);
-                                callbacks.onDone(event);
-                            } else if (event.type === 'error') {
-                                log.stream.error(`Stream error event:`, event.content);
-                                callbacks.onError(new Error(event.content || 'Unknown error'));
-                            } else if (AGENT_EVENT_TYPES.has(event.type)) {
-                                agentEventCount++;
-                                log.stream.debug(`Agent event: ${event.type}`, event);
-                                callbacks.onAgentEvent(event);
-                            } else {
-                                log.stream.warn(`Unknown SSE event type: ${event.type}`, event);
+                            } catch (parseErr) {
+                                log.stream.warn(`Malformed SSE data, skipping`, { raw: raw.slice(0, 100) });
                             }
-                        } catch (parseErr) {
-                            log.stream.warn(`Malformed SSE data, skipping`, { raw: raw.slice(0, 100) });
                         }
                     }
                 }
+            } finally {
+                // Release the reader to free the underlying connection
+                reader.releaseLock();
             }
 
             // Only signal completion if no explicit done event was received during the stream
