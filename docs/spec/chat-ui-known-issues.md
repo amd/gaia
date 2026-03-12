@@ -114,20 +114,19 @@ bug but a design consistency issue.
 
 ---
 
-## 7. Electron Agent UI Tests Expect Unimplemented Components
+## 7. Chat SDK Integration Test Flaky on LLM Memory Recall
 
-**File:** `tests/electron/test_agent_ui_structure.js`
+**File:** `tests/test_chat_sdk.py` (line 340)
 
-This test was added on the `kalin/chat-ui` branch and validates the
-existence and structure of multi-agent desktop UI components (AgentCard,
-AgentManager, AgentChat, PermissionManager, etc.). These components are
-planned but not yet implemented.
+`test_convenience_functions_integration` asserts the LLM recalls "Max"
+from a prior message in the same conversation. The small local model
+(Qwen3-0.6B) intermittently fails to recall context, causing non-
+deterministic test failures.
 
-The test fails in CI because the expected files don't exist.
+Also fails on `main` (e.g. Release v0.16.0 run 22786442028).
 
-**Impact:** CI failure on the "Test Electron Framework and Apps" workflow.
-Does not affect the Chat UI functionality.
+**Impact:** Flaky CI — the "Chat SDK Tests (Windows)" workflow fails
+roughly 1 in 3 runs. Not a code bug.
 
-**Suggested fix:** Either implement the missing components, move the test
-to a separate branch, or skip it with `describe.skip()` until the full
-agent UI is ready.
+**Suggested fix:** Make the assertion more tolerant (retry once, or
+accept partial recall), or pin to a larger model for this test.

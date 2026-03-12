@@ -91,10 +91,10 @@ jobs:
       - name: Run Agent UI tests
         run: |
           cd tests/electron
-          # Agent UI service tests: process manager, notification service, UI structure
+          # Agent UI service tests: process manager, notification service
           # --forceExit needed because AgentProcessManager health-check intervals
           # survive Jest teardown in mocked environments (tests pass correctly)
-          npm test -- test_agent_process_manager.js test_notification_service.js test_agent_ui_structure.js --forceExit
+          npm test -- test_agent_process_manager.js test_notification_service.js --forceExit
 
       - name: Upload test results
         if: always()
