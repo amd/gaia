@@ -77,10 +77,12 @@ class TrayManager {
     this._animateState = false;
 
     /** @type {Electron.NativeImage} */
-    this._iconNormal = this._loadIcon("icon.png");
+    // Use the same app icon as the window/installer (icon.ico on Windows, icon.png elsewhere)
+    const trayIconFile = process.platform === "win32" ? "icon.ico" : "icon.png";
+    this._iconNormal = this._loadIcon(trayIconFile);
 
     /** @type {Electron.NativeImage} */
-    this._iconActive = this._loadIcon("icon.png"); // same until active icon assets arrive
+    this._iconActive = this._loadIcon(trayIconFile);
 
     /** @type {number} */
     this._unreadNotificationCount = 0;

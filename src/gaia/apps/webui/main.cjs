@@ -19,9 +19,9 @@ const fs = require("fs");
 const { spawn } = require("child_process");
 
 // Services (loaded after app.whenReady)
-const TrayManager = require("./services/tray-manager");
-const AgentProcessManager = require("./services/agent-process-manager");
-const NotificationService = require("./services/notification-service");
+const TrayManager = require("./services/tray-manager.cjs");
+const AgentProcessManager = require("./services/agent-process-manager.cjs");
+const NotificationService = require("./services/notification-service.cjs");
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -195,7 +195,7 @@ function createWindow() {
     minWidth: windowConfig.minWidth,
     minHeight: windowConfig.minHeight,
     title: APP_NAME,
-    icon: path.join(__dirname, "assets", "icon.png"),
+    icon: path.join(__dirname, "assets", process.platform === "win32" ? "icon.ico" : "icon.png"),
     show: false, // Don't show until ready (prevents flash)
     webPreferences: {
       nodeIntegration: false,
