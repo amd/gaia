@@ -58,21 +58,46 @@ The agent auto-runs a full system scan on startup, then waits for your input. Yo
         ```bat
         cmake -B build -G "Visual Studio 17 2022" -A x64
         ```
+
+        <Note>
+        If CMake reports a generator or platform mismatch, a stale `build\` directory from a previous run is causing the conflict. Delete it and reconfigure:
+        ```powershell
+        Remove-Item -Recurse -Force build
+        cmake -B build -G "Visual Studio 17 2022" -A x64
+        ```
+        </Note>
+
         ```bat
         cmake --build build --config Release --target process_agent
         ```
-        Binary: `cpp\build\Release\process_agent.exe`
+        Binary: `build\Release\process_agent.exe`
       </Tab>
       <Tab title="Windows (Ninja)">
+        <Warning>
+        Ninja requires two prerequisites before running these commands:
+        1. **Ninja installed** — `winget install Ninja-build.Ninja` (then restart your terminal)
+        2. **MSVC compiler in PATH** — Ninja does not locate `cl.exe` automatically the way the Visual Studio generator does. Open an [x64 Native Tools Command Prompt for VS 2022](https://learn.microsoft.com/en-us/visualstudio/ide/reference/command-prompt-powershell) — this puts `cl.exe` in PATH automatically. Do not use a plain PowerShell or CMD window.
+        </Warning>
+
         ```bat
         cd cpp
         ```
         ```bat
         cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
         ```
+
+        <Note>
+        If CMake reports a generator mismatch, a stale `build\` directory from a previous run is causing the conflict. Delete it and reconfigure:
+        ```powershell
+        Remove-Item -Recurse -Force build
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        ```
+        </Note>
+
         ```bat
         cmake --build build --target process_agent
         ```
+        Binary: `build\process_agent.exe`
       </Tab>
     </Tabs>
   </Step>
@@ -85,9 +110,18 @@ The agent auto-runs a full system scan on startup, then waits for your input. Yo
   </Step>
 
   <Step title="Run the agent">
-    ```bat
-    cpp\build\Release\process_agent.exe
-    ```
+    <Tabs>
+      <Tab title="Windows (MSVC)">
+        ```bat
+        build\Release\process_agent.exe
+        ```
+      </Tab>
+      <Tab title="Windows (Ninja)">
+        ```bat
+        build\process_agent.exe
+        ```
+      </Tab>
+    </Tabs>
 
     The agent auto-analyzes on startup. After the scan completes, you'll see a summary followed by an action menu:
 
