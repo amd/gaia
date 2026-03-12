@@ -8,7 +8,7 @@
  * Lines come from IPC: agent:stdout (JSON-RPC) and agent:stderr (log text).
  * Uses Record<string, T> for Zustand devtools compatibility (Fix S4).
  *
- * See spec: docs/spec/tray-app-integration.md — Issue T4.
+ * See spec: docs/spec/agent-ui-server.mdx
  */
 
 import { create } from 'zustand';

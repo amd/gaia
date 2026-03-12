@@ -6,7 +6,7 @@
  *
  * Separate from chatStore.ts (which handles the main ChatView HTTP SSE chat).
  * AgentChat uses IPC → JSON-RPC transport, not HTTP SSE.
- * See spec: docs/spec/tray-app-integration.md — Issue T6, Fix S3.
+ * See spec: docs/spec/agent-ui-server.mdx
  *
  * Uses Record<string, T> for Zustand devtools compatibility (Fix S4).
  */

@@ -1,6 +1,6 @@
 # Agent UI Agent Capabilities Plan
 
-> **Branch:** `kalin/chat-ui`
+> **Branch:** `kalin/agent-ui`
 > **Date:** 2026-03-06
 >
 > **Two Milestones:**
@@ -1035,7 +1035,7 @@ Steps to deploy the GAIA application to production.
 ### Milestone A — Agent UI: Wire Existing SDK (Weeks 1-6)
 
 ```
-IMMEDIATE (This branch — kalin/chat-ui)
+IMMEDIATE (This branch — kalin/agent-ui)
   ├── ✅ Windows shell compatibility fix (done)
   ├── ✅ Sidebar minimize + resize (done)
   └── ✅ Milestone + issues created (#438-#442)

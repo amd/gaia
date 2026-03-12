@@ -63,10 +63,10 @@ Conversations initiated via MCP appear in the browser UI in real time, so you ca
   <Step title="Add the MCP server to Claude Code">
     ```bash
     # Project-scoped (recommended — only available in this project)
-    claude mcp add gaia-agent-ui -s project -- uv run python -m gaia.mcp.servers.chat_ui_mcp --stdio
+    claude mcp add gaia-agent-ui -s project -- uv run python -m gaia.mcp.servers.agent_ui_mcp --stdio
 
     # Or user-scoped (available in all projects)
-    claude mcp add gaia-agent-ui -s user -- uv run python -m gaia.mcp.servers.chat_ui_mcp --stdio
+    claude mcp add gaia-agent-ui -s user -- uv run python -m gaia.mcp.servers.agent_ui_mcp --stdio
     ```
 
     The `--stdio` flag tells the MCP server to use stdio transport, which is what Claude Code expects.
@@ -89,10 +89,10 @@ The MCP server also supports **Streamable HTTP** transport for clients that conn
 
 ```bash
 # Start as an HTTP MCP server (default port 8765)
-uv run python -m gaia.mcp.servers.chat_ui_mcp
+uv run python -m gaia.mcp.servers.agent_ui_mcp
 
 # Custom port
-uv run python -m gaia.mcp.servers.chat_ui_mcp --port 9000
+uv run python -m gaia.mcp.servers.agent_ui_mcp --port 9000
 ```
 
 Connect your MCP client to `http://localhost:8765/mcp`.

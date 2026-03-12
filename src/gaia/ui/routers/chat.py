@@ -90,36 +90,39 @@ async def send_message(
     srv = _server_mod()
 
     try:
+        # Save user message inside the lock so ordering is preserved
         async with session_lock:
-            # Save user message (inside lock so ordering is preserved)
             db.add_message(request.session_id, "user", request.message)
 
-            if request.stream:
-                # For streaming, we must release the semaphore when the
-                # stream finishes, not when we return the StreamingResponse.
-                # Wrap the generator to release on completion.
-                async def _guarded_stream():
-                    try:
+        if request.stream:
+            # For streaming, the session lock must be held for the entire
+            # duration of the stream, not just the setup.  The generator
+            # acquires the lock and releases it (along with the semaphore)
+            # when the stream finishes or errors out.
+            async def _guarded_stream():
+                try:
+                    async with session_lock:
                         async for chunk in srv._stream_chat_response(
                             db, session, request
                         ):
                             yield chunk
-                    finally:
-                        chat_semaphore.release()
+                finally:
+                    chat_semaphore.release()
 
-                # Transfer semaphore ownership to the streaming generator
-                sem_released = True
-                return StreamingResponse(
-                    _guarded_stream(),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no",
-                    },
-                )
-            else:
-                # Non-streaming response
+            # Transfer semaphore ownership to the streaming generator
+            sem_released = True
+            return StreamingResponse(
+                _guarded_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        else:
+            # Non-streaming: hold the lock for the entire response
+            async with session_lock:
                 response_text = await srv._get_chat_response(db, session, request)
                 msg_id = db.add_message(request.session_id, "assistant", response_text)
                 return ChatResponse(

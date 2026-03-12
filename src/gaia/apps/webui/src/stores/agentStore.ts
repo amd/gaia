@@ -5,7 +5,7 @@
  * Zustand store for OS agent management state.
  *
  * Uses Record<string, T> (not Map) for Zustand devtools/persist compatibility.
- * See spec: docs/spec/tray-app-integration.md — Issue T3, Fix S4.
+ * See spec: docs/spec/agent-ui-server.mdx
  */
 
 import { create } from 'zustand';

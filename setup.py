@@ -108,6 +108,7 @@ setup(
         "ui": [
             "fastapi>=0.115.0",
             "uvicorn>=0.32.0",
+            "python-multipart>=0.0.9",
             "httpx>=0.27.0",
             "psutil>=5.9.0",
         ],

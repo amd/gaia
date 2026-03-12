@@ -8,8 +8,8 @@ through the same backend that powers the webapp, so conversations and tool
 activity are visible in the browser UI in real time.
 
 Usage:
-    uv run python -m gaia.mcp.servers.chat_ui_mcp
-    uv run python -m gaia.mcp.servers.chat_ui_mcp --port 8765
+    uv run python -m gaia.mcp.servers.agent_ui_mcp
+    uv run python -m gaia.mcp.servers.agent_ui_mcp --port 8765
 """
 
 import argparse
@@ -156,7 +156,7 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     }
 
 
-def create_chat_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
+def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
     """Create the MCP server with tools for interacting with GAIA Agent UI."""
 
     mcp = FastMCP(name="GAIA Agent UI")
@@ -468,7 +468,7 @@ def main():
     )
     args = parser.parse_args()
 
-    mcp = create_chat_ui_mcp(backend_url=args.backend)
+    mcp = create_agent_ui_mcp(backend_url=args.backend)
 
     if args.stdio:
         print("Starting GAIA Agent UI MCP Server (stdio mode)...", file=sys.stderr)
