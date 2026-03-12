@@ -13,6 +13,11 @@ def configure_console_encoding():
     """Configure console encoding to support Unicode characters on Windows."""
     if sys.platform.startswith("win"):
         try:
+            # Skip when running under pytest — replacing sys.stdout/stderr
+            # closes pytest's captured file handles and crashes fd-level capture
+            if "pytest" in sys.modules or "_pytest" in sys.modules:
+                return
+
             # Get the original stdout/stderr
             original_stdout = sys.stdout
             original_stderr = sys.stderr
