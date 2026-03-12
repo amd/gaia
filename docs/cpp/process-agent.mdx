@@ -5,7 +5,7 @@ icon: "microchip"
 ---
 
 <Info>
-  **Source Code:** [`cpp/examples/process_agent.cpp`](https://github.com/amd/gaia/blob/main/cpp/examples/process_agent.cpp) — single-file, self-contained agent (~2,100 lines including 7 tools, action menu, and decision support).
+  **Source Code:** [`cpp/examples/process_agent.cpp`](https://github.com/amd/gaia/blob/main/cpp/examples/process_agent.cpp) — single-file, self-contained agent (~2,900 lines including 7 tools, action menu, and decision support).
 </Info>
 
 <Note>
@@ -32,9 +32,15 @@ Here's what makes it interesting:
 
 ## See It In Action
 
-<Note>
-Video coming soon.
-</Note>
+<video
+  controls
+  autoPlay
+  loop
+  muted
+  playsInline
+  style={{ minHeight: '775px', objectFit: 'cover' }}
+  src="https://assets.amd-gaia.ai/videos/process-analyzer-demo-01.webm"
+/>
 
 The agent auto-runs a full system scan on startup, then waits for your input. You can ask about any item in plain English — or use the action menu to stop, restart, or quarantine it.
 
@@ -122,7 +128,7 @@ The agent auto-runs a full system scan on startup, then waits for your input. Yo
     | `2 A1` | Stop msedge.exe |
     | `4 C1` | Quarantine unknown_app.exe |
     | `5` | Reanalyze the system |
-    | `6` | Toggle background monitor (default 2 min interval) |
+    | `6` | Toggle background monitor (default 5 min interval) |
     | `6 5` | Toggle monitor with 5-minute interval |
     | `What is svchost.exe?` | Ask a free-form question |
 
@@ -174,27 +180,17 @@ The entire agent is a single `.cpp` file with six sections. Let's walk through e
 The agent subclasses `gaia::Agent` with three pieces: a config, registered tools, and a system prompt.
 
 ```cpp
-class ProcessAnalystAgent : public gaia::Agent {
+class ProcessAgent : public gaia::Agent {
 public:
-    explicit ProcessAnalystAgent(const std::string& modelId)
+    explicit ProcessAgent(const std::string& modelId)
         : Agent(makeConfig(modelId)) {
         setOutputHandler(std::make_unique<ProcessConsole>());  // custom TUI
         init();  // calls registerTools() + composes system prompt
     }
 
 protected:
-    std::string getSystemPrompt() const override {
-        return R"(You are an expert Windows process analyst...
-            // A/B/C classification protocol, action behavior, quarantine protocol
-        )";
-    }
-
-    void registerTools() override {
-        // 7 tools: 3 read-only + 4 destructive (see Tool Reference below)
-        toolRegistry().registerTool("system_snapshot", ...);
-        toolRegistry().registerTool("kill_process", ...);
-        // ...
-    }
+    std::string getSystemPrompt() const override { /* ... */ }
+    void registerTools() override { /* ... */ }
 
 private:
     static gaia::AgentConfig makeConfig(const std::string& modelId) {
@@ -206,7 +202,107 @@ private:
 };
 ```
 
-Each tool is a C++ lambda using Win32 APIs or PowerShell and returns a structured result:
+---
+
+### 1. The Shell Helper: Bridging C++ and PowerShell
+
+The `runShell()` function wraps PowerShell execution, building a command string and reading output through a pipe:
+
+```cpp
+static std::string runShell(const std::string& command) {
+    std::string fullCmd = "powershell -NoProfile -NonInteractive -Command \"& { "
+                          + command + " }\" 2>&1";
+    FILE* pipe = _popen(fullCmd.c_str(), "r");
+    if (!pipe) return R"({"error": "Failed to execute command"})";
+    // ... code redacted for simplicity ...
+    return result.empty()
+        ? R"json({"status": "completed", "output": "(no output)"})json"
+        : result;
+}
+```
+
+The agent also includes a dedicated path validator for quarantine operations:
+
+```cpp
+static bool isSafePath(const std::string& path) {
+    if (path.size() < 3) return false;
+    if (!std::isalpha(static_cast<unsigned char>(path[0])) ||
+        path[1] != ':' || path[2] != '\\') return false;
+    const std::string dangerous = "\"`;|&{}<>$";
+    for (char c : path) {
+        if (dangerous.find(c) != std::string::npos) return false;
+    }
+    return true;
+}
+```
+
+**Why a separate path validator?** File paths need drive-letter validation and a different dangerous character set than shell arguments. `isSafeShellArg()` rejects single quotes (valid in Windows paths), while `isSafePath()` requires the `X:\` prefix and allows single quotes but blocks shell metacharacters. Two validators, two threat models.
+
+---
+
+### 2. Win32 Process Intelligence
+
+Rather than relying on PowerShell for everything, the Process Analyst uses native Win32 APIs for its hot path — process enumeration and memory measurement. The core of `getTopProcesses()` takes a snapshot, groups processes by exe name, then enriches each entry with version info and factual flags:
+
+```cpp
+static gaia::json getTopProcesses(int topN = 20) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    // ... enumerate processes, measure memory via K32GetProcessMemoryInfo ...
+    // ... group by exe name, accumulate total memory and instance count ...
+
+    for (auto& g : sorted) {
+        // ... enrich with version info (company, description) via GetFileVersionInfoW ...
+
+        // Factual flags for LLM classification
+        gaia::json flags = gaia::json::array();
+        if (company.empty()) flags.push_back("unknown_company");
+        if (lowerPath.find("\\Downloads\\") != std::string::npos)
+            flags.push_back("temp_path");
+        entry["flags"] = flags;
+    }
+    return result;
+}
+```
+
+Three design choices worth understanding:
+
+- **Performance** — `CreateToolhelp32Snapshot` + `K32GetProcessMemoryInfo` returns data in ~20ms for 200+ processes. `Get-Process | ConvertTo-Json` takes 2-3 seconds for the same data. When the agent needs to scan on every startup, that difference matters.
+- **Process grouping** — Instead of listing 45 separate `chrome.exe` entries, the agent groups by exe name with instance count and total memory. The LLM sees "chrome.exe x45 -- 3.2 GB" which is far more actionable than 45 lines of individual PIDs.
+- **Factual flags** — `unknown_company`, `unknown_description`, `temp_path` are computed as structured metadata from Win32 `GetFileVersionInfoW` and path analysis. The LLM uses these as input to classification, not as final verdicts.
+
+---
+
+### 3. Tool Registration: Teaching the Agent What It Can Do
+
+Tools are registered with a name, description, callback, and typed parameter list. The framework automatically includes registered tools in the system prompt sent to the LLM.
+
+Here's `system_snapshot`, which demonstrates the hybrid Win32 + PowerShell approach:
+
+```cpp
+toolRegistry().registerTool(
+    "system_snapshot",
+    "System overview: CPU load, memory, disk, uptime, top processes by memory "
+    "(with company, description, path, and factual flags), problematic services, "
+    "and network connection count. Use first during analysis.",
+    [](const gaia::json& /*args*/) -> gaia::json {
+        gaia::json result;
+        result["tool"]          = "system_snapshot";
+        result["disk"]          = getDiskUsageInfo();     // Win32: GetDiskFreeSpaceExW
+        result["memory"]        = getMemoryInfo();        // Win32: GlobalMemoryStatusEx
+        result["top_processes"] = getTopProcesses(30);    // Win32: CreateToolhelp32Snapshot
+
+        // PowerShell: CPU load, uptime, services, connections
+        std::string psCmd = "$o=@{}; $c=Get-CimInstance Win32_Processor; ...";
+        // ... merge PowerShell results into result ...
+
+        result["command"] = "Win32 API: memory, disk, processes + PowerShell: CPU, services, connections";
+        return result;
+    },
+    {}  // no parameters
+);
+```
+
+And `kill_process`, which shows parameter validation and the `command` + `output` contract:
 
 ```cpp
 toolRegistry().registerTool(
@@ -217,22 +313,136 @@ toolRegistry().registerTool(
         if (name.empty())
             return {{"error", "Process name is required"}};
 
+        // Validate: only alphanumeric + . - _
+        // ... code redacted for simplicity ...
+
         KillResult kr = killProcessesByName(name);
         return {
-            {"tool",               "kill_process"},
-            {"terminated",         kr.terminated},
-            {"memory_freed_human", formatBytes(kr.memoryFreed)},
-            {"command",            "Win32 API: TerminateProcess(" + name + ")"},
-            {"output",             "Found N instances, terminated N, freed X MB"}
+            {"tool", "kill_process"},
+            {"terminated", kr.terminated},
+            {"command", "Win32 API: TerminateProcess(" + name + ")"},
+            {"output", "Found N instances, terminated N, freed X MB"}
         };
     },
     {{"name", gaia::ToolParamType::STRING, true, "Process name (e.g., 'chrome.exe')"}}
 );
 ```
 
-<Note>
-All arguments from the LLM are validated before use — process names allow only alphanumeric characters plus `.`, `-`, and `_`. File paths for quarantine operations are validated separately for drive-letter format and shell metacharacters.
-</Note>
+**Why `command` + `output` keys?** Every tool returns both a `command` string and an `output` string. The `ProcessConsole` uses these for its TUI display — the `command` appears in the tool header, and `output` appears in the preview box. This consistent contract means the output handler doesn't need to understand tool-specific JSON structures.
+
+---
+
+### 4. The System Prompt: Classification Protocol
+
+The system prompt teaches the LLM how to classify processes into three labeled sections and how to respond to user actions. Here are the core classification criteria:
+
+```
+### A. Processes (resource consumers)
+Select the most significant resource consumers. Consider:
+- Memory usage relative to total system RAM
+- Instance count (many instances = noteworthy)
+- Whether the resource usage is expected for that application type
+Tag each: [NORMAL] expected, [HIGH] unexpectedly high, [SUSPICIOUS]
+
+### B. Services (problematic)
+Report services with Status not "OK" or Memory > 200 MB.
+If none: "All services running normally"
+
+### C. Suspicious Items
+The flags array provides factual signals — use as INPUT, not verdicts:
+- unknown_company + unknown_description = STRONG signal
+- temp_path = STRONG signal for non-installers
+- EXCEPTIONS: svchost.exe, csrss.exe, smss.exe may show empty company — NORMAL
+```
+
+The system prompt also defines the action behavior protocol, including the multi-step quarantine confirmation:
+
+```
+## ACTION BEHAVIOR
+
+Users reference items by group letter + number (e.g., "Explain A3", "Stop B1").
+
+- **Quarantine**: Before calling quarantine_item, you MUST:
+  1. Call explain_item to get full details
+  2. Present confirmation in Key: Value format
+  3. Ask: Kill [name] and move it to quarantine? (yes / no)
+  4. Wait for response. If NO, abort. If YES, call quarantine_item.
+```
+
+**Why A/B/C labels?** They create a shared vocabulary between the LLM and the user. "Explain A3" unambiguously maps to the third process in the resource consumers section — no re-scanning required.
+
+**Why explicit quarantine protocol?** Quarantine is irreversible — it kills the process AND moves the executable file. The multi-step protocol (explain, confirm, wait for yes/no) prevents accidental data loss from an LLM hallucination.
+
+---
+
+### 5. ProcessConsole: Section-Aware Formatting
+
+The `ProcessConsole` overrides `CleanConsole::printFinalAnswer()` to render the LLM's structured A/B/C output with visual hierarchy. It applies six line detection rules in order (first match wins):
+
+1. **Blank line** — suppresses consecutive blanks to keep output tight
+2. **Section header** — "A. Processes", "B. Services", "C. Suspicious Items" — rendered as bold white label with a gray description line underneath
+3. **Item reference** — `A4: cpptools-srv.exe` — bold cyan tag, bold white name
+4. **Key: Value** — first colon within 20 chars with alpha key — bold white key, normal value
+5. **Numbered item** — `1. chrome.exe ...` — normal rendering with markdown bold support
+6. **Default paragraph** — everything else — gray (dimmed) prose
+
+Here's how Rule 3 handles item reference lines:
+
+```cpp
+// Rule 3: Item reference title (A4: cpptools-srv.exe)
+if (line.size() >= 4 && line[0] >= 'A' && line[0] <= 'C' &&
+    std::isdigit(static_cast<unsigned char>(line[1]))) {
+    auto colon = line.find(": ");
+    if (colon != std::string::npos && colon <= 4) {
+        std::string tag  = line.substr(0, colon);
+        std::string rest = line.substr(colon + 2);
+        std::cout << color::BOLD << color::CYAN << tag << color::RESET
+                  << "  " << color::BOLD << color::WHITE << rest << color::RESET;
+    }
+}
+```
+
+**Why override `printFinalAnswer()`?** The LLM outputs structured sections that need visual hierarchy. Default `CleanConsole` treats all text equally — `ProcessConsole` adds section headers with descriptions, color-coded item tags, and Key: Value formatting that makes the output scannable at a glance.
+
+---
+
+### 6. Monitor Mode: Background Health Watcher
+
+<video
+  controls
+  autoPlay
+  loop
+  muted
+  playsInline
+  style={{ minHeight: '800px', objectFit: 'cover' }}
+  src="https://assets.amd-gaia.ai/videos/process-analyzer-demo-02.webm"
+/>
+
+The monitor is a background thread that periodically re-scans the system and compares consecutive snapshots to detect changes. It runs alongside the interactive agent — you can keep explaining, stopping, or restarting processes while the monitor watches for anomalies.
+
+**Starting and stopping.** Monitor is a toggle on `[6]`. Press it once to start, again to stop. You can also specify an interval: `6 5` starts monitoring every 5 minutes. Typing `monitor` or `monitor N` at the prompt does the same thing. The default interval is 5 minutes.
+
+**How it works internally.** When started, the agent spawns a second `ProcessAgent` on a dedicated thread. This background agent uses a `SilentConsole` — it runs the same `system_snapshot` and `list_processes` tools but produces no visible output. After each scan it builds a `MonitorSnapshot` (memory usage, top process list, suspicious items, health status) and diffs it against the previous snapshot. Any meaningful changes become alerts.
+
+**Alert types and thresholds:**
+
+| Alert | Trigger | Severity |
+|-------|---------|----------|
+| Memory spike | System memory use jumps >10 percentage points | WARNING (CRITICAL if >90%) |
+| Per-process memory surge | A single process grows by >500 MB | WARNING |
+| New process in top-20 | A process appears that was not in the previous top-20 | INFO |
+| Process left top-20 | A process drops out of the previous top-20 | INFO |
+| New suspicious item | LLM flags a new item in section C | CRITICAL |
+| Health status change | Overall health classification changes | WARNING or CRITICAL |
+
+**Alert delivery.** Pending alerts are displayed before the next menu prompt, so you see them naturally between actions. For CRITICAL and NEW_SUSPICIOUS alerts, the agent also sends a Windows notification so you get alerted even if the terminal is in the background.
+
+**Design choices:**
+- **Separate agent instance** — the monitor's `ProcessAgent` has its own conversation history and LLM connection. This avoids corrupting the interactive agent's context with monitoring chatter.
+- **SilentConsole** — suppresses all tool output and conclusions from the background scan. Only the diff-based alerts reach the user.
+- **Deterministic scans** — the monitor agent uses `temperature=0` for consistent health classifications across consecutive scans when system state hasn't changed.
+- **Toggle, not a mode** — the interactive menu stays fully functional while the monitor runs. There is no "monitor mode" to enter or exit.
+- **NPU-friendly** — background monitoring is an ideal workload for AMD Ryzen AI NPU inference. The monitor runs periodic scans without tying up the CPU or GPU, leaving them free for your other work.
 
 ---
 
@@ -260,36 +470,6 @@ These modify the system. The system prompt mandates user approval before the LLM
 | `restart_process` | `TerminateProcess` + `CreateProcessW` | `name` (required) | Restart a hung application from the same exe path |
 | `restart_service` | PowerShell `Restart-Service` | `name` (required) | Restart a degraded Windows service |
 | `quarantine_item` | `killProcessesByPath` + `MoveFileExW` | `path` (required) | Move suspicious exe to `C:\ProgramData\GAIA\quarantine\` |
-
----
-
-## Monitor Mode: Background Health Watcher
-
-The monitor is a background thread that periodically re-scans the system and compares consecutive snapshots to detect changes. It runs alongside the interactive agent — you can keep explaining, stopping, or restarting processes while the monitor watches for anomalies.
-
-**Starting and stopping.** Monitor is a toggle on `[6]`. Press it once to start, again to stop. You can also specify an interval: `6 5` starts monitoring every 5 minutes. Typing `monitor` or `monitor N` at the prompt does the same thing. The default interval is 2 minutes.
-
-**How it works internally.** When started, the agent spawns a second `ProcessAgent` on a dedicated thread. This background agent uses a `SilentConsole` — it runs the same `system_snapshot` and `list_processes` tools but produces no visible output. After each scan it builds a `MonitorSnapshot` (memory usage, top process list, suspicious items, health status) and diffs it against the previous snapshot. Any meaningful changes become alerts.
-
-**Alert types and thresholds:**
-
-| Alert | Trigger | Severity |
-|-------|---------|----------|
-| Memory spike | System memory use jumps >10 percentage points | WARNING (CRITICAL if >90%) |
-| Per-process memory surge | A single process grows by >500 MB | WARNING |
-| New process in top-20 | A process appears that was not in the previous top-20 | INFO |
-| Process left top-20 | A process drops out of the previous top-20 | INFO |
-| New suspicious item | LLM flags a new item in section C | CRITICAL |
-| Health status change | Overall health classification changes | WARNING or CRITICAL |
-
-**Alert delivery.** Pending alerts are displayed before the next menu prompt, so you see them naturally between actions. For CRITICAL and NEW_SUSPICIOUS alerts, the agent also sends a Windows notification so you get alerted even if the terminal is in the background.
-
-**Design choices:**
-- **Separate agent instance** — the monitor's `ProcessAgent` has its own conversation history and LLM connection. This avoids corrupting the interactive agent's context with monitoring chatter.
-- **SilentConsole** — suppresses all tool output and conclusions from the background scan. Only the diff-based alerts reach the user.
-- **Deterministic scans** — the monitor agent uses `temperature=0` for consistent health classifications across consecutive scans when system state hasn't changed.
-- **Toggle, not a mode** — the interactive menu stays fully functional while the monitor runs. There is no "monitor mode" to enter or exit.
-- **NPU-friendly** — background monitoring is an ideal workload for AMD Ryzen AI NPU inference. The monitor runs periodic scans without tying up the CPU or GPU, leaving them free for your other work.
 
 ---
 
