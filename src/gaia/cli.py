@@ -514,6 +514,9 @@ async def async_main(action, **kwargs):
             "stream",
             "no_lemonade_check",
             "list_tools",
+            "verbose",
+            "trace",
+            "max_steps",
         }
         excluded_params = cli_params | audio_params | llm_provider_params
         client_params = {k: v for k, v in kwargs.items() if k not in excluded_params}
@@ -4713,8 +4716,6 @@ def handle_jira_command(args):
 
         # Pass the arguments directly to the Jira app
         # The app expects certain arguments, so we need to ensure they're set
-        if not hasattr(args, "verbose"):
-            args.verbose = False
         if not hasattr(args, "debug"):
             args.debug = False
         if not hasattr(args, "model"):
@@ -4762,8 +4763,6 @@ def handle_docker_command(args):
 
         # Pass the arguments directly to the Docker app
         # The app expects certain arguments, so we need to ensure they're set
-        if not hasattr(args, "verbose"):
-            args.verbose = False
         if not hasattr(args, "debug"):
             args.debug = False
         if not hasattr(args, "model"):
@@ -5322,6 +5321,8 @@ def handle_blender_command(args):
         base_url = getattr(args, "base_url", None)
 
         # Create the BlenderAgent
+        debug_mode = getattr(args, "debug", False)
+        verbose_mode = getattr(args, "verbose", False) or debug_mode
         agent = BlenderAgent(
             mcp=mcp_client,
             model_id=args.model,
@@ -5331,6 +5332,8 @@ def handle_blender_command(args):
             streaming=args.stream,
             show_stats=args.show_stats,
             debug_prompts=args.debug_prompts,
+            verbose=verbose_mode,
+            debug=debug_mode,
         )
 
         # Run in interactive mode if specified

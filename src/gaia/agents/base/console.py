@@ -1257,6 +1257,8 @@ class AgentConsole(OutputHandler):
         Args:
             warning_message: Warning message to display
         """
+        if warning_message is None:
+            warning_message = "Unknown warning"
         if self.rich_available:
             self.console.print()  # Add newline before
             self.console.print(
@@ -1280,6 +1282,8 @@ class AgentConsole(OutputHandler):
             end_of_stream: Whether this is the last chunk
         """
         # Accumulate text in the buffer
+        if text_chunk is None:
+            text_chunk = ""
         self.streaming_buffer += text_chunk
 
         # Print the chunk directly to console
@@ -2168,6 +2172,8 @@ class MinimalConsole(OutputHandler):
             print(f"Error: {error_message}")
 
     def print_warning(self, warning_message: str):
+        if warning_message is None:
+            warning_message = "Unknown warning"
         if RICH_AVAILABLE and self._console:
             self._console.print(f"[yellow]Warning:[/yellow] {warning_message}")
         else:
@@ -2188,6 +2194,8 @@ class MinimalConsole(OutputHandler):
     # === Streaming: pass through directly ===
 
     def print_streaming_text(self, text_chunk: str, end_of_stream: bool = False):
+        if text_chunk is None:
+            text_chunk = ""
         self.streaming_buffer += text_chunk
         print(text_chunk, end="", flush=True)
         if end_of_stream:
@@ -2246,7 +2254,7 @@ class MinimalConsole(OutputHandler):
     def print_file_created(self, filename: str, size: int = 0, extension: str = ""):
         self.print_info(f"Created {filename}")
 
-    def print_file_modified(self, filename: str, size: int = 0):
+    def print_file_modified(self, filename: str):
         self.print_info(f"Modified {filename}")
 
     def print_file_deleted(self, filename: str):
@@ -2265,7 +2273,7 @@ class MinimalConsole(OutputHandler):
 
     # === File preview (CodeAgent): suppressed in minimal mode ===
 
-    def start_file_preview(self, filename: str, max_lines: int = 15):
+    def start_file_preview(self, filename: str, max_lines: int = 15, title_prefix: str = ""):
         """Suppressed -- file previews are verbose debug output."""
 
     def update_file_preview(self, content_chunk: str):
@@ -2309,13 +2317,53 @@ class MinimalConsole(OutputHandler):
     def print_checklist_reasoning(self, reasoning: str):
         """Suppressed."""
 
-    def print_download_progress(self, model_id: str, downloaded: int, total: int, speed: float = 0):
+    # === Download methods ===
+
+    def print_download_start(self, model_name: str) -> None:
+        """Show download starting."""
+        self.print_info(f"Downloading {model_name}...")
+
+    def print_download_progress(
+        self,
+        percent: int,
+        bytes_downloaded: int,
+        bytes_total: int,
+        speed_mbps: float = 0.0,
+    ) -> None:
         """Show download progress inline."""
-        if total > 0:
-            pct = downloaded / total * 100
-            downloaded_mb = downloaded / (1024 * 1024)
-            total_mb = total / (1024 * 1024)
-            print(f"\r  Downloading {model_id}: {pct:.0f}% ({downloaded_mb:.0f}/{total_mb:.0f} MB)", end="", flush=True)
+        import sys as _sys
+
+        if bytes_total > 1024**3:
+            dl_str = f"{bytes_downloaded / 1024**3:.2f} GB"
+            total_str = f"{bytes_total / 1024**3:.2f} GB"
+        elif bytes_total > 1024**2:
+            dl_str = f"{bytes_downloaded / 1024**2:.0f} MB"
+            total_str = f"{bytes_total / 1024**2:.0f} MB"
+        else:
+            dl_str = f"{bytes_downloaded / 1024:.0f} KB"
+            total_str = f"{bytes_total / 1024:.0f} KB"
+
+        progress_line = f"  {percent:3d}%  {dl_str} / {total_str}"
+        if speed_mbps > 0.1:
+            progress_line += f" @ {speed_mbps:.0f} MB/s"
+        _sys.stdout.write(f"\r{progress_line:<60}")
+        _sys.stdout.flush()
+
+    def print_download_complete(self, model_name: str = None) -> None:
+        """Show download complete."""
+        print()  # Newline after progress bar
+        msg = f"Downloaded {model_name}" if model_name else "Download complete"
+        self.print_info(msg)
+
+    def print_download_error(self, error_message: str, model_name: str = None) -> None:
+        """Show download error."""
+        print()  # Newline after progress bar
+        msg = f"Download failed for {model_name}: {error_message}" if model_name else f"Download failed: {error_message}"
+        self.print_error(msg)
+
+    def print_download_skipped(self, model_name: str, reason: str = "already downloaded") -> None:
+        """Show download skipped."""
+        self.print_info(f"{model_name} ({reason})")
 
     def print(self, *args, **kwargs):
         """Direct print pass-through."""
@@ -2495,7 +2543,7 @@ class SilentConsole(OutputHandler):
     def print_file_created(self, filename: str, size: int = 0, extension: str = ""):
         """No-op implementation."""
 
-    def print_file_modified(self, filename: str, size: int = 0):
+    def print_file_modified(self, filename: str):
         """No-op implementation."""
 
     def print_file_deleted(self, filename: str):

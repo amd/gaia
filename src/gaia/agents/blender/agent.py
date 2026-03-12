@@ -8,7 +8,6 @@ import logging
 from typing import Any, Dict, Optional
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import tool
 from gaia.agents.blender.core.scene import generate_scene_diagnosis_code
 from gaia.mcp.blender_mcp_client import MCPClient
@@ -34,6 +33,9 @@ class BlenderAgent(Agent):
         output_dir: str = None,
         streaming: bool = False,
         show_stats: bool = True,
+        verbose: bool = False,
+        silent_mode: bool = False,
+        debug: bool = False,
     ):
         """
         Initialize the BlenderAgent with MCP client and LLM client.
@@ -47,6 +49,9 @@ class BlenderAgent(Agent):
             output_dir: Directory for storing JSON output files (default: current directory)
             streaming: If True, enables real-time streaming of LLM responses (default: False)
             show_stats: If True, displays LLM performance stats after each response (default: True)
+            verbose: If True, uses full AgentConsole output (default: False)
+            silent_mode: If True, suppresses all console output (default: False)
+            debug: If True, enables debug output (default: False)
         """
         # Initialize the MCP client for Blender communication
         self.mcp = mcp if mcp else MCPClient()
@@ -60,6 +65,9 @@ class BlenderAgent(Agent):
             output_dir=output_dir,
             streaming=streaming,
             show_stats=show_stats,
+            verbose=verbose,
+            silent_mode=silent_mode,
+            debug=debug,
         )
 
         # Register Blender-specific tools
