@@ -21,7 +21,7 @@ from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
-from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.chat.sdk import AgentConfig, AgentSDK
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -195,12 +195,12 @@ You must respond ONLY in valid JSON. No text before { or after }.
 3. After tool results, provide an "answer" summarizing them
 """
 
-        # Initialize ChatSDK with proper configuration
+        # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
         # Note: Context size is configured when starting Lemonade server, not here
         # Use Qwen3-Coder-30B by default for better reasoning and JSON formatting
         # The 0.5B model is too small for complex agent tasks
-        chat_config = ChatConfig(
+        chat_config = AgentConfig(
             model=model_id or "Qwen3-Coder-30B-A3B-Instruct-GGUF",
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
@@ -210,7 +210,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
             max_history_length=20,  # Keep more history for agent conversations
             max_tokens=4096,  # Increased for complex code generation
         )
-        self.chat = ChatSDK(chat_config)
+        self.chat = AgentSDK(chat_config)
         self.model_id = model_id
 
         # Print system prompt if show_prompts is enabled
@@ -1900,7 +1900,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                             prompt, f"Prompt (Step {steps_taken})"
                         )
 
-                # Get streaming response from ChatSDK with proper conversation history
+                # Get streaming response from AgentSDK with proper conversation history
                 try:
                     response_stream = self.chat.send_messages_stream(
                         messages=messages, system_prompt=self.system_prompt
@@ -1981,7 +1981,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                             f"[DEBUG] Current step: {self.current_step}/{self.total_plan_steps}"
                         )
 
-                # Get complete response from ChatSDK
+                # Get complete response from AgentSDK
                 try:
                     chat_response = self.chat.send_messages(
                         messages=messages, system_prompt=self.system_prompt
@@ -2091,7 +2091,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     # Add plan request to messages
                     messages.append({"role": "user", "content": plan_prompt})
 
-                    # Use ChatSDK for streaming plan response
+                    # Use AgentSDK for streaming plan response
                     stream_gen = self.chat.send_messages_stream(
                         messages=messages, system_prompt=self.system_prompt
                     )
@@ -2128,7 +2128,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     # Add plan request to messages
                     messages.append({"role": "user", "content": plan_prompt})
 
-                    # Use ChatSDK for non-streaming plan response
+                    # Use AgentSDK for non-streaming plan response
                     chat_response = self.chat.send_messages(
                         messages=messages, system_prompt=self.system_prompt
                     )

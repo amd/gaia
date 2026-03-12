@@ -432,7 +432,7 @@ class GaiaCliClient:
     ):
         """Chat interface using the new ChatApp - interactive if no message, single message if message provided"""
         try:
-            from gaia.chat.sdk import ChatConfig, ChatSDK
+            from gaia.chat.sdk import AgentConfig, AgentSDK
 
             # Interactive mode if no message provided, single message mode if message provided
             use_interactive = message is None
@@ -448,14 +448,14 @@ class GaiaCliClient:
                 config_kwargs["model"] = model
 
             if use_interactive:
-                # Interactive mode using ChatSDK
-                config = ChatConfig(**config_kwargs)
-                chat = ChatSDK(config)
+                # Interactive mode using AgentSDK
+                config = AgentConfig(**config_kwargs)
+                chat = AgentSDK(config)
                 asyncio.run(chat.start_interactive_session())
             else:
                 # Single message mode with streaming
-                config = ChatConfig(**config_kwargs)
-                chat = ChatSDK(config)
+                config = AgentConfig(**config_kwargs)
+                chat = AgentSDK(config)
                 full_response = ""
                 for chunk in chat.send_stream(message):
                     if not chunk.is_complete:
@@ -848,7 +848,7 @@ def main():
         "--ui-port",
         type=int,
         default=4200,
-        help="Port for the Chat UI server (default: 4200)",
+        help="Port for the Agent UI server (default: 4200)",
     )
 
     talk_parser = subparsers.add_parser(

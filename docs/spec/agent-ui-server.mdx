@@ -1,17 +1,17 @@
 ---
-title: "Chat UI Server"
-description: "Technical specification for the GAIA Chat UI FastAPI backend, SQLite database, and REST API"
+title: "Agent UI Server"
+description: "Technical specification for the GAIA Agent UI FastAPI backend, SQLite database, and REST API"
 icon: "server"
 ---
 
 <Note>
 **You are viewing:** API Specification - Complete technical reference
 
-**See also:** [User Guide](/guides/chat-ui) | [SDK Reference](/sdk/sdks/chat-ui)
+**See also:** [User Guide](/guides/agent-ui) | [SDK Reference](/sdk/sdks/agent-ui)
 </Note>
 
 <Note>
-- **Component:** Chat UI Server - FastAPI backend for the desktop chat application
+- **Component:** Agent UI Server - FastAPI backend for the desktop chat application
 - **Module:** `gaia.ui`
 - **Import:** `from gaia.ui.server import create_app`
 - **Source:** [`src/gaia/ui/`](https://github.com/amd/gaia/blob/main/src/gaia/ui/)
@@ -21,7 +21,7 @@ icon: "server"
 
 ## Overview
 
-The Chat UI Server is a FastAPI-based backend that powers the GAIA Chat desktop application. It provides REST API endpoints for session management, real-time chat with SSE streaming, document library management, and system health monitoring.
+The Agent UI Server is a FastAPI-based backend that powers the GAIA Chat desktop application. It provides REST API endpoints for session management, real-time chat with SSE streaming, document library management, and system health monitoring.
 
 **Key Design Decisions:**
 - **SQLite** for zero-configuration persistence (WAL mode for concurrent reads)
@@ -70,7 +70,7 @@ All endpoints are registered as closures within `create_app()`, sharing the `db`
 
 Chat streaming uses a thread-based producer/consumer pattern:
 
-1. A background thread calls `ChatSDK.send_stream()` synchronously
+1. A background thread calls `AgentSDK.send_stream()` synchronously
 2. Chunks are placed into a `queue.Queue`
 3. The async generator polls the queue and yields SSE events
 4. On completion, the full response is saved to the database
@@ -183,7 +183,7 @@ All 14 Pydantic models:
 | Package | Purpose |
 |---------|---------|
 | `psutil` | Memory availability check in system status |
-| `gaia.chat.sdk` | LLM communication (ChatSDK) |
+| `gaia.chat.sdk` | LLM communication (AgentSDK) |
 | `gaia.rag.sdk` | Document indexing (RAGSDK) |
 
 ---

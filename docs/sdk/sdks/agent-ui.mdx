@@ -1,5 +1,5 @@
 ---
-title: "Chat UI SDK"
+title: "Agent UI SDK"
 description: "Python backend SDK for the GAIA Chat desktop application - FastAPI server, SQLite database, and Pydantic models"
 icon: "desktop"
 ---
@@ -17,13 +17,13 @@ from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentR
 ```
 </Note>
 
-**See also:** [User Guide](/guides/chat-ui) | [Chat SDK](/sdk/sdks/chat) | [API Specification](/spec/chat-ui-server)
+**See also:** [User Guide](/guides/agent-ui) | [Chat SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server)
 
 ---
 
 ## Overview
 
-The Chat UI SDK is the Python backend that powers GAIA Chat Desktop. It provides:
+The Agent UI SDK is the Python backend that powers GAIA Chat Desktop. It provides:
 
 - **FastAPI REST server** with session, chat, and document endpoints
 - **SQLite database** for persistent sessions, messages, and document metadata
@@ -98,7 +98,7 @@ db.close()
 
 ### ChatDatabase
 
-The persistence layer for all Chat UI data. Uses SQLite with WAL mode for concurrent read access.
+The persistence layer for all Agent UI data. Uses SQLite with WAL mode for concurrent read access.
 
 ```python
 from gaia.ui.database import ChatDatabase, DEFAULT_DB_PATH
@@ -389,7 +389,7 @@ class AttachDocumentRequest(BaseModel):
 
 <AccordionGroup>
   <Accordion title="GET /api/system/status">
-    Check system readiness for the chat UI.
+    Check system readiness for the agent UI.
 
     **Response:**
     ```json
@@ -687,7 +687,7 @@ class AttachDocumentRequest(BaseModel):
 
 ## Database Schema
 
-The Chat UI uses SQLite with four tables:
+The Agent UI uses SQLite with four tables:
 
 ```sql
 -- Global document library
@@ -828,17 +828,17 @@ def test_message_ordering():
 
 ## Integration with Chat SDK
 
-The Chat UI server delegates to the core [Chat SDK](/sdk/sdks/chat) for LLM communication:
+The Agent UI server delegates to the core [Chat SDK](/sdk/sdks/chat) for LLM communication:
 
 ```python
-from gaia.chat.sdk import ChatSDK, ChatConfig
+from gaia.chat.sdk import AgentSDK, AgentConfig
 
-# The server creates a ChatSDK instance per request
-config = ChatConfig(
+# The server creates an AgentSDK instance per request
+config = AgentConfig(
     model=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
     system_prompt=session.get("system_prompt"),
 )
-chat = ChatSDK(config)
+chat = AgentSDK(config)
 
 # Non-streaming
 response = chat.send(message)
@@ -909,7 +909,7 @@ Tags matching `v*` trigger the automated npm publish workflow.
 
 ## Related
 
-- **[User Guide](/guides/chat-ui)** -- Desktop app usage, features, and troubleshooting
+- **[User Guide](/guides/agent-ui)** -- Desktop app usage, features, and troubleshooting
 - **[Chat SDK](/sdk/sdks/chat)** -- Core conversation SDK with memory and RAG
 - **[RAG SDK](/sdk/sdks/rag)** -- Document indexing and retrieval
 - **[Desktop App Installation](/deployment/ui)** -- Download and install instructions

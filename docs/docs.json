@@ -59,7 +59,7 @@
                   "guides/index",
                   "guides/hardware-advisor",
                   "guides/chat",
-                  "guides/chat-ui",
+                  "guides/agent-ui",
                   "guides/talk",
                   "guides/code",
                   "guides/sd",
@@ -131,7 +131,7 @@
                     "group": "SDKs",
                     "pages": [
                       "sdk/sdks/chat",
-                      "sdk/sdks/chat-ui",
+                      "sdk/sdks/agent-ui",
                       "sdk/sdks/rag",
                       "sdk/sdks/mcp",
                       "sdk/sdks/llm",
@@ -207,7 +207,7 @@
             "group": "SDKs",
             "pages": [
               "spec/chat-sdk",
-              "spec/chat-ui-server",
+              "spec/agent-ui-server",
               "spec/rag-sdk",
               "spec/talk-sdk",
               "spec/mcp-client",
@@ -349,7 +349,7 @@
             "pages": [
               "plans/agent-hub",
               "plans/installer",
-              "plans/chat-ui",
+              "plans/agent-ui",
               "plans/mcp-client",
               "plans/cua",
               "plans/docker-containers",

@@ -1,11 +1,11 @@
-# Chat UI Agent Capabilities Plan
+# Agent UI Agent Capabilities Plan
 
 > **Branch:** `kalin/chat-ui`
 > **Date:** 2026-03-06
 >
 > **Two Milestones:**
-> - **Milestone A** — [Chat UI: Wire Existing SDK Capabilities (#15)](https://github.com/amd/gaia/milestone/15)
->   *Expose existing GAIA SDK features to the Chat UI. No new SDK code — just wiring,
+> - **Milestone A** — [Agent UI: Wire Existing SDK Capabilities (#15)](https://github.com/amd/gaia/milestone/15)
+>   *Expose existing GAIA SDK features to the Agent UI. No new SDK code — just wiring,
 >   MCP integration, and UI work.*
 > - **Milestone B** — GAIA Agent SDK: New Capabilities (TBD)
 >   *Enhance the core GAIA Agent SDK with capabilities that don't exist yet:
@@ -15,7 +15,7 @@
 
 ## Milestone Scope Summary
 
-### Milestone A — Chat UI: Wire Existing SDK Capabilities
+### Milestone A — Agent UI: Wire Existing SDK Capabilities
 **Goal:** Make ChatAgent as capable as possible using what the SDK already has.
 
 | Category | What to Do | New SDK Code? |
@@ -40,9 +40,9 @@
 | **Guardrails** | Tool execution confirmation framework (#438) | New SDK framework — OutputHandler, SSE, threading.Event, UI modal |
 | **Cancellation** | Cooperative execution cancellation (#439) | New SDK framework — cancel tokens, cleanup |
 | **Screenshot** | `ScreenshotToolsMixin` — cross-platform screen capture | New mixin (PIL.ImageGrab, mss) |
-| **VLM for Chat** | Wire VLMToolsMixin into ChatAgent + Chat UI image display | Integration + UI |
+| **VLM for Chat** | Wire VLMToolsMixin into ChatAgent + Agent UI image display | Integration + UI |
 | **Computer Use** | Desktop automation (mouse, keyboard, window mgmt) | New mixin (pyautogui, pywinauto) |
-| **Voice** | Wire ASR/TTS into Chat UI (MediaRecorder, audio playback) | Integration + UI |
+| **Voice** | Wire ASR/TTS into Agent UI (MediaRecorder, audio playback) | Integration + UI |
 | **Tool categories** | Lazy loading, per-session tool selection | SDK architecture change |
 | **Cross-platform** | Windows/Linux/macOS shell compat (#442) | SDK enhancement |
 | **Image generation** | Wire SDToolsMixin into ChatAgent | Integration |
@@ -67,7 +67,7 @@
 | **RoutingAgent** | `RoutingAgent` | `agents/routing/agent.py` | Intelligent agent selection |
 | **SummarizerAgent** | `SummarizerAgent(Agent)` | `agents/summarize/agent.py` | Document summarization |
 
-### 1.2 ChatAgent Tools (Current — What the Chat UI Uses)
+### 1.2 ChatAgent Tools (Current — What the Agent UI Uses)
 
 | Tool | Mixin | Description |
 |------|-------|-------------|
@@ -85,7 +85,7 @@
 | `dump_document` | `RAGToolsMixin` | Dump raw document content |
 | *(FileSearchToolsMixin)* | `FileSearchToolsMixin` | Shared file search utilities |
 
-### 1.3 CodeAgent Tools (Available in SDK, NOT in Chat UI)
+### 1.3 CodeAgent Tools (Available in SDK, NOT in Agent UI)
 
 | Tool | Mixin | Description |
 |------|-------|-------------|
@@ -126,7 +126,7 @@
 
 ---
 
-## 2. Gap Analysis: Chat UI Agent vs. Modern PC Agent Expectations
+## 2. Gap Analysis: Agent UI Agent vs. Modern PC Agent Expectations
 
 ### 2.1 Capabilities Users Expect Today
 
@@ -136,8 +136,8 @@ Based on the current landscape (Claude Computer Use, OpenAI Operator, Windows Co
 |----------|-----------|--------|----------|
 | **File System** | Read/write/edit files | MISSING (ChatAgent only has read-only shell + RAG) | P0 |
 | **File System** | Create directories, move/copy/rename files | MISSING | P0 |
-| **File System** | File search (name, content, regex) | PARTIAL (FileSearchToolsMixin exists, limited) | P1 |
-| **Shell** | Run shell commands | EXISTS (but broken on Windows — fixed) | P0 |
+| **File System** | File search (name, content, regex) | EXISTS via FileSearchToolsMixin | P1 |
+| **Shell** | Run shell commands | EXISTS | P0 |
 | **Shell** | Background process management | MISSING in ChatAgent (exists in CodeAgent) | P1 |
 | **Web** | Browse URLs, fetch web content | MISSING | P1 |
 | **Web** | Search the web | MISSING in ChatAgent (exists in CodeAgent via Perplexity) | P1 |
@@ -149,8 +149,8 @@ Based on the current landscape (Claude Computer Use, OpenAI Operator, Windows Co
 | **Computer Use** | Window management (focus, resize, list) | MISSING | P2 |
 | **Code** | Read/write/edit code files | MISSING in ChatAgent (exists in CodeAgent) | P1 |
 | **Code** | Run Python scripts | MISSING in ChatAgent (exists in CodeAgent) | P1 |
-| **Audio** | Voice input (speech-to-text) | MISSING in Chat UI (SDK exists) | P2 |
-| **Audio** | Voice output (text-to-speech) | MISSING in Chat UI (SDK exists) | P2 |
+| **Audio** | Voice input (speech-to-text) | MISSING in Agent UI (SDK exists) | P2 |
+| **Audio** | Voice output (text-to-speech) | MISSING in Agent UI (SDK exists) | P2 |
 | **Image Gen** | Generate images from prompts | MISSING in ChatAgent (exists in SDAgent) | P2 |
 | **Clipboard** | Read/write clipboard | MISSING | P2 |
 | **System** | Get system info (OS, CPU, GPU, memory) | PARTIAL (shell commands) | P2 |
@@ -189,8 +189,8 @@ These capabilities don't exist anywhere in GAIA and need to be built:
 | **Desktop/window control** | Computer Use | **High** | `pyautogui` / `pywinauto` for Windows. Complex, needs careful security. |
 | **Mouse/keyboard control** | Computer Use | **High** | `pyautogui`. Very powerful, very dangerous. Requires guardrails (#438). |
 | **Window listing/management** | Computer Use | **Medium** | `pywinauto` on Windows, `wmctrl` on Linux. |
-| **Voice input (ASR)** | Audio | **Medium** | Wire existing `whisper_asr.py` SDK into Chat UI. WebSocket or MediaRecorder API. |
-| **Voice output (TTS)** | Audio | **Medium** | Wire existing `kokoro_tts.py` SDK into Chat UI. Audio playback. |
+| **Voice input (ASR)** | Audio | **Medium** | Wire existing `whisper_asr.py` SDK into Agent UI. WebSocket or MediaRecorder API. |
+| **Voice output (TTS)** | Audio | **Medium** | Wire existing `kokoro_tts.py` SDK into Agent UI. Audio playback. |
 | **Desktop notifications** | System | **Low** | `plyer` or `win10toast` on Windows. |
 | **App launch/control** | System | **Medium** | `subprocess.Popen` for launch, `psutil` for control. Security-sensitive. |
 | **Task scheduling** | System | **Medium** | Windows Task Scheduler or `APScheduler`. Persistent. |
@@ -235,7 +235,7 @@ Add image analysis, screenshot capture, and image generation.
 | 2a | Image analysis (VLM) | Add `VLMToolsMixin`, load VLM model alongside main LLM | Medium — needs VLM model (Qwen3-VL-4B) |
 | 2b | Screenshot capture | New `ScreenshotToolsMixin` using `PIL.ImageGrab` + `mss` | Medium — cross-platform |
 | 2c | Image generation (SD) | Add `SDToolsMixin`, requires Lemonade SD model | Medium — optional, SD model may not be loaded |
-| 2d | Image display in Chat UI | Frontend: render images inline in chat messages | Medium — base64 or file URL serving |
+| 2d | Image display in Agent UI | Frontend: render images inline in chat messages | Medium — base64 or file URL serving |
 
 ### Phase 3: Web & System (2-3 weeks)
 
@@ -265,7 +265,7 @@ Full desktop automation. This is the most complex and security-sensitive phase.
 
 ### Phase 5: Audio/Voice (2-3 weeks)
 
-Wire existing Whisper ASR and Kokoro TTS into Chat UI.
+Wire existing Whisper ASR and Kokoro TTS into Agent UI.
 
 | # | Feature | Implementation | Risk |
 |---|---------|---------------|------|
@@ -328,7 +328,7 @@ All capabilities MUST work on Windows, Linux, and macOS:
 | P1 | Add TestingMixin to ChatAgent (Python execution) | P1 |
 | P2 | Add VLMToolsMixin to ChatAgent (image analysis) | P1 |
 | P2 | Screenshot capture tool mixin | P1 |
-| P2 | Image display in Chat UI messages | P1 |
+| P2 | Image display in Agent UI messages | P1 |
 | P2 | Add SDToolsMixin to ChatAgent (image generation) | P2 |
 | P3 | Web browsing / URL fetch tool mixin | P1 |
 | P3 | Clipboard read/write tool | P2 |
@@ -338,8 +338,8 @@ All capabilities MUST work on Windows, Linux, and macOS:
 | P4 | Window listing and management tool mixin | P2 |
 | P4 | Mouse/keyboard control tool mixin (computer use) | P2 |
 | P4 | Browser automation via Playwright | P2 |
-| P5 | Voice input (ASR) in Chat UI | P2 |
-| P5 | Voice output (TTS) in Chat UI | P2 |
+| P5 | Voice input (ASR) in Agent UI | P2 |
+| P5 | Voice output (TTS) in Agent UI | P2 |
 
 ---
 
@@ -356,13 +356,13 @@ GAIA already has a robust MCP client infrastructure:
 - **MCP Bridge** — `gaia/mcp/mcp_bridge.py` exposes GAIA as an MCP server to external tools
 - **Existing integrations** — Docker MCP, Blender MCP already implemented
 
-**Gap:** The Chat UI has NO way to manage MCP servers. Users can't add, remove, enable/disable, or configure MCP servers from the UI.
+**Gap:** The Agent UI has NO way to manage MCP servers. Users can't add, remove, enable/disable, or configure MCP servers from the UI.
 
 ### 7.2 Most Popular MCP Servers (2026 Ecosystem)
 
 Based on real usage data from [FastMCP](https://fastmcp.me/blog/top-10-most-popular-mcp-servers) (1,864+ servers tracked) and [mcpservers.org](https://mcpservers.org/):
 
-#### Tier 1 — Essential (High demand, directly useful for Chat UI)
+#### Tier 1 — Essential (High demand, directly useful for Agent UI)
 
 | Server | Package | Description | Category |
 |--------|---------|-------------|----------|
@@ -404,11 +404,11 @@ Based on real usage data from [FastMCP](https://fastmcp.me/blog/top-10-most-popu
 | **Azure DevOps MCP** | [Microsoft Learn](https://learn.microsoft.com/en-us/azure/devops/mcp-server/mcp-server-overview) | Work items, PRs, builds, test plans |
 | **Windows On-Device Agent Registry** | [Microsoft Learn](https://learn.microsoft.com/en-us/windows/ai/mcp/overview) | Secure discovery of local MCP servers on Windows |
 
-### 7.3 Chat UI MCP Integration Design
+### 7.3 Agent UI MCP Integration Design
 
 #### A) MCP Server Manager Panel (Settings)
 
-The Chat UI Settings modal gets an "MCP Servers" tab where users can:
+The Agent UI Settings modal gets an "MCP Servers" tab where users can:
 
 1. **Browse/add popular servers** from a curated list (Tier 1-2 above)
 2. **Add custom servers** by providing command + args + env config
@@ -442,7 +442,7 @@ class ChatAgent(
 ):
 ```
 
-When the Chat UI enables an MCP server, the backend:
+When the Agent UI enables an MCP server, the backend:
 1. Calls `agent.connect_mcp_server(name, config)`
 2. Tools from the MCP server are auto-registered in the agent's tool registry
 3. The agent can now use those tools in its planning/execution
@@ -956,7 +956,7 @@ Agent: [installs via npx, prompts for OAuth/credentials, connects]
 | **Capability-to-MCP Mapper** | Map user intent ("email", "calendar", "spotify") to known MCP server packages | **A** (config/catalog, curated list) |
 | **Auto-Install Flow** | `npx -y <package>` with user confirmation, credential prompting, connection test | **B** (new SDK) |
 | **Fallback Search** | If curated catalog doesn't match, search npm/GitHub for `mcp-server-*` packages | **B** (new SDK) |
-| **UI: Install Prompt** | Chat UI shows "Install MCP server?" card with description, permissions, confirm button | **A** (UI) |
+| **UI: Install Prompt** | Agent UI shows "Install MCP server?" card with description, permissions, confirm button | **A** (UI) |
 
 **Curated Capability Map** (ships with GAIA):
 ```json
@@ -996,7 +996,7 @@ should persist and be reusable.
 | **Skill Writer** | Tool: `save_skill(name, content)` — agent can persist learned workflows | **B** |
 | **Skill Search** | Tool: `search_skills(query)` — find relevant skills for current task | **B** |
 | **Skill Format** | Follow Anthropic's SKILL.md format: title, description, steps, prerequisites | **B** |
-| **Skill UI** | Skills panel in Chat UI Settings — view, edit, delete, import/export skills | **A** (UI) |
+| **Skill UI** | Skills panel in Agent UI Settings — view, edit, delete, import/export skills | **A** (UI) |
 | **Skill Sharing** | Export skills as `.md` files, import from community/team repositories | **B** |
 
 **SKILL.md Format (Anthropic-compatible):**
@@ -1032,7 +1032,7 @@ Steps to deploy the GAIA application to production.
 
 ## 14. Summary: Recommended Priority Order (Revised, Split by Milestone)
 
-### Milestone A — Chat UI: Wire Existing SDK (Weeks 1-6)
+### Milestone A — Agent UI: Wire Existing SDK (Weeks 1-6)
 
 ```
 IMMEDIATE (This branch — kalin/chat-ui)
@@ -1081,7 +1081,7 @@ WEEK 3-5: Guardrails + Safety (PARALLEL with Milestone A)
 WEEK 5-7: Vision & Media
   ├── ScreenshotToolsMixin — cross-platform (PIL.ImageGrab, mss)
   ├── Wire VLMToolsMixin into ChatAgent (image analysis)
-  ├── Image display in Chat UI (base64/file URL)
+  ├── Image display in Agent UI (base64/file URL)
   ├── Screenshot → VLM → describe workflow
   └── Wire SDToolsMixin (image generation, optional)
 
@@ -1100,8 +1100,8 @@ WEEK 9-12: Computer Use (CUA)
   └── CUA demo workflows (open apps, fill forms)
 
 LATER: Audio/Voice
-  ├── Voice input (Whisper ASR in Chat UI)
-  ├── Voice output (Kokoro TTS in Chat UI)
+  ├── Voice input (Whisper ASR in Agent UI)
+  ├── Voice output (Kokoro TTS in Agent UI)
   └── Continuous voice conversation mode
 ```
 

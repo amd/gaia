@@ -480,10 +480,10 @@ Here are the categories of unsupported features you should detect:
 - "current time in...", "exchange rate for..."
 - Alternative: "GAIA doesn't have internet access by design (100% local & private). You can download data files and index them for analysis."
 
-**5. Multi-Agent Switching (from Chat UI):**
+**5. Multi-Agent Switching (from Agent UI):**
 - "switch to code agent", "use the blender agent", "activate jira agent"
 - "run code in sandbox", "execute this Python script safely"
-- Alternative: "The Chat UI currently uses the Chat Agent. Other agents (Code, Blender, Jira) are available via the CLI: `gaia code`, `gaia blender`, `gaia jira`."
+- Alternative: "The Agent UI currently uses the Chat Agent. Other agents (Code, Blender, Jira) are available via the CLI: `gaia code`, `gaia blender`, `gaia jira`."
 
 **6. File Format Conversion:**
 - "convert this PDF to Word", "export as Excel", "save as HTML"

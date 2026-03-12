@@ -118,7 +118,7 @@ async def _get_chat_response(
 ) -> str:
     """Get a non-streaming chat response from the ChatAgent.
 
-    Uses the full ChatAgent (with tools) instead of plain ChatSDK
+    Uses the full ChatAgent (with tools) instead of plain AgentSDK
     so non-streaming mode also has agentic capabilities.
 
     Runs the synchronous agent in a thread pool executor

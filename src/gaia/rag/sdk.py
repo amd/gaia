@@ -36,7 +36,7 @@ try:
 except ImportError:
     faiss = None
 
-from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
 from gaia.security import PathValidator
 
@@ -149,13 +149,13 @@ class RAGSDK:
         os.makedirs(self.config.cache_dir, exist_ok=True)
 
         # Initialize chat SDK for LLM responses
-        chat_config = ChatConfig(
+        chat_config = AgentConfig(
             model=self.config.model,
             max_tokens=self.config.max_tokens,
             show_stats=self.config.show_stats,
             use_local_llm=self.config.use_local_llm,
         )
-        self.chat = ChatSDK(chat_config)
+        self.chat = AgentSDK(chat_config)
 
         # Initialize path validator
         self.path_validator = PathValidator(self.config.allowed_paths)

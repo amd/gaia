@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""MCP server that wraps the GAIA Chat UI REST API.
+"""MCP server that wraps the GAIA Agent UI REST API.
 
 Allows MCP clients (like Claude Code) to interact with the GAIA Chat Agent
 through the same backend that powers the webapp, so conversations and tool
@@ -33,14 +33,14 @@ from gaia.ui.sse_handler import (
 
 logger = logging.getLogger(__name__)
 
-# Default GAIA Chat UI backend URL
+# Default GAIA Agent UI backend URL
 DEFAULT_BACKEND = "http://localhost:4200"
 MCP_DEFAULT_PORT = 8765
 MCP_DEFAULT_HOST = "localhost"
 
 
 def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
-    """Make an API request to the GAIA Chat UI backend."""
+    """Make an API request to the GAIA Agent UI backend."""
     url = f"{base_url}/api{path}"
     try:
         r = getattr(requests, method)(url, timeout=120, **kwargs)
@@ -157,7 +157,7 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
 
 
 def create_chat_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
-    """Create the MCP server with tools for interacting with GAIA Chat UI."""
+    """Create the MCP server with tools for interacting with GAIA Agent UI."""
 
     mcp = FastMCP(name="GAIA Agent UI")
 
@@ -444,7 +444,7 @@ def create_chat_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="GAIA Chat UI MCP Server")
+    parser = argparse.ArgumentParser(description="GAIA Agent UI MCP Server")
     parser.add_argument(
         "--port",
         type=int,
@@ -459,7 +459,7 @@ def main():
     parser.add_argument(
         "--backend",
         default=DEFAULT_BACKEND,
-        help=f"GAIA Chat UI backend URL (default: {DEFAULT_BACKEND})",
+        help=f"GAIA Agent UI backend URL (default: {DEFAULT_BACKEND})",
     )
     parser.add_argument(
         "--stdio",
@@ -471,12 +471,12 @@ def main():
     mcp = create_chat_ui_mcp(backend_url=args.backend)
 
     if args.stdio:
-        print("Starting GAIA Chat UI MCP Server (stdio mode)...", file=sys.stderr)
+        print("Starting GAIA Agent UI MCP Server (stdio mode)...", file=sys.stderr)
         mcp.run(transport="stdio")
     else:
         mcp.settings.host = args.host
         mcp.settings.port = args.port
-        print("\n🚀 GAIA Chat UI MCP Server")
+        print("\n🚀 GAIA Agent UI MCP Server")
         print(f"   Backend: {args.backend}")
         print(f"   MCP: http://{args.host}:{args.port}/mcp")
         tool_count = len(mcp._tool_manager._tools)  # pylint: disable=protected-access

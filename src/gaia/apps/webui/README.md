@@ -75,8 +75,8 @@ For a native desktop experience, download the installer from
 
 ## Documentation
 
-- [Chat UI Guide](https://amd-gaia.ai/guides/chat-ui) — Full setup and usage guide
-- [Chat UI SDK Reference](https://amd-gaia.ai/sdk/sdks/chat-ui) — Backend API, models, endpoints
+- [Agent UI Guide](https://amd-gaia.ai/guides/agent-ui) — Full setup and usage guide
+- [Agent UI SDK Reference](https://amd-gaia.ai/sdk/sdks/agent-ui) — Backend API, models, endpoints
 - [GAIA Documentation](https://amd-gaia.ai) — Complete GAIA framework docs
 
 ## Development

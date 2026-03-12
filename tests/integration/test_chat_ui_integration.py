@@ -1400,13 +1400,13 @@ class TestMessagePagination:
 class TestStreamingGeneratorEdgeCases:
     """Test the actual streaming SSE event format through the API.
 
-    While we can't test the real ChatSDK streaming without a running
+    While we can't test the real AgentSDK streaming without a running
     Lemonade server, these tests exercise the error/fallback paths of
     _stream_chat_response that produce SSE events.
     """
 
     def test_streaming_import_error_yields_error_event(self, client, session_id):
-        """When ChatSDK import fails, the stream yields an error SSE event."""
+        """When AgentSDK import fails, the stream yields an error SSE event."""
         with patch("gaia.ui.server._stream_chat_response") as mock_stream:
 
             async def error_stream(*args, **kwargs):

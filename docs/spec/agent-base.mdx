@@ -31,7 +31,7 @@ The `Agent` class is the foundational base class for all GAIA agents. It provide
 - Provides error recovery and retry logic
 - Manages conversation history and state
 - Supports streaming and non-streaming responses
-- Integrates with ChatSDK for LLM communication
+- Integrates with AgentSDK for LLM communication
 
 **Why use it:**
 - Foundation for building any AI agent
@@ -62,7 +62,7 @@ The `Agent` class is the foundational base class for all GAIA agents. It provide
 
 ### When NOT to Use
 
-- Simple single-turn LLM queries (use `ChatSDK` directly)
+- Simple single-turn LLM queries (use `AgentSDK` directly)
 - Applications without tools (use `LLMClient` directly)
 - Stateless request/response patterns (use `quick_chat()`)
 
@@ -624,7 +624,7 @@ from typing import Any, Dict, List, Optional
 # GAIA packages
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.chat.sdk import AgentConfig, AgentSDK
 ```
 
 ### External Dependencies
@@ -632,7 +632,7 @@ from gaia.chat.sdk import ChatConfig, ChatSDK
 ```toml
 [project]
 dependencies = [
-    # Required by ChatSDK
+    # Required by AgentSDK
 ]
 ```
 
@@ -642,7 +642,7 @@ dependencies = [
 
 ### Memory Management
 
-- Conversation history limited by `max_history_length` in ChatConfig
+- Conversation history limited by `max_history_length` in AgentConfig
 - Error history stored but not automatically pruned
 - Consider clearing history for long-running agents
 

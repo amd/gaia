@@ -19,7 +19,7 @@ You are a GAIA RAG specialist focusing on retrieval-augmented generation and age
 # SPDX-License-Identifier: MIT
 
 from gaia.rag.sdk import RAGSDK, RAGConfig
-from gaia.chat.sdk import ChatSDK, ChatConfig
+from gaia.chat.sdk import AgentSDK, AgentConfig
 
 # RAG configuration
 config = RAGConfig(

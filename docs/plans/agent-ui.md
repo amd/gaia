@@ -1,4 +1,4 @@
-# GAIA Chat UI - Implementation Plan
+# GAIA Agent UI - Implementation Plan
 
 **Date:** 2025-01-11
 **Status:** Draft
@@ -402,7 +402,7 @@ DEFAULT_DOCS_PATH = Path.home() / ".gaia" / "chat" / "documents"
 │   ┌─────────────────────────────────────────────────────────────┐│
 │   │                    GAIA Core Layer                          ││
 │   │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   ││
-│   │  │ ChatSDK     │ │ RAGSDK      │ │ LemonadeClient      │   ││
+│   │  │ AgentSDK    │ │ RAGSDK      │ │ LemonadeClient      │   ││
 │   │  └─────────────┘ └─────────────┘ └─────────────────────┘   ││
 │   │  ┌─────────────┐ ┌─────────────┐                           ││
 │   │  │ SQLite DB   │ │ FAISS Index │                           ││

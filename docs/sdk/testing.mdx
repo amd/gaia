@@ -55,7 +55,7 @@ from unittest.mock import Mock, patch
 
 def test_with_mocked_llm():
     """Test agent with mocked LLM."""
-    with patch('gaia.chat.sdk.ChatSDK') as mock_chat:
+    with patch('gaia.chat.sdk.AgentSDK') as mock_chat:
         # Configure mock
         mock_chat.return_value.complete.return_value = {
             "tool": "my_tool",

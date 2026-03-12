@@ -1,4 +1,4 @@
-# Chat UI — Known Issues (Complex / High-Risk)
+# Agent UI — Known Issues (Complex / High-Risk)
 
 These issues were identified during code review but are too complex or risky
 to fix as part of the current PR. They should be addressed in dedicated
@@ -14,7 +14,7 @@ The `@tool` decorator uses a module-level `_TOOL_REGISTRY` dict.  When
 multiple agent instances run concurrently (e.g. two chat sessions), tool
 registrations from one agent can leak into another.
 
-**Impact:** Low probability in the Chat UI (single-agent), but a latent bug
+**Impact:** Low probability in the Agent UI (single-agent), but a latent bug
 for multi-agent scenarios.
 
 **Suggested fix:** Scope the registry per-agent instance (e.g. store tools
@@ -91,7 +91,7 @@ These stores (19 calls total) use raw `console.log`/`console.error`/
 
 **Impact:** Inconsistent logging output; no log level filtering in
 production.  These stores are part of the multi-agent desktop UI, not the
-current Chat UI PR scope.
+current Agent UI PR scope.
 
 **Suggested fix:** Import and use `log` from `../utils/logger` in each
 store, matching the pattern used in components and services.

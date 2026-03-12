@@ -118,7 +118,7 @@ function getEnvironmentInfo(): string {
     const version = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'unknown';
     const ua = navigator.userAgent;
     const platform = navigator.platform || 'unknown';
-    return `**Environment:**\n- GAIA Version: ${version}\n- Platform: ${platform}\n- User Agent: ${ua}\n- Interface: Chat UI (Web)`;
+    return `**Environment:**\n- GAIA Version: ${version}\n- Platform: ${platform}\n- User Agent: ${ua}\n- Interface: Agent UI (Web)`;
 }
 
 /** Create a GitHub feature request URL with pre-filled title and body. */
@@ -139,7 +139,7 @@ export function featureRequestUrl(title: string, context?: string): string {
         '---',
         getEnvironmentInfo(),
         '',
-        '_Submitted from GAIA Chat UI_',
+        '_Submitted from GAIA Agent UI_',
     ].join('\n');
 
     const params = new URLSearchParams({
@@ -159,7 +159,7 @@ export function bugReportUrl(title: string, errorDetail?: string): string {
         '',
         '## Steps to Reproduce',
         '',
-        '1. Open GAIA Chat UI',
+        '1. Open GAIA Agent UI',
         '2. _Describe what you did:_',
         '3. ',
         '',
@@ -174,7 +174,7 @@ export function bugReportUrl(title: string, errorDetail?: string): string {
         '---',
         getEnvironmentInfo(),
         '',
-        '_Submitted from GAIA Chat UI_',
+        '_Submitted from GAIA Agent UI_',
     ].join('\n');
 
     const params = new URLSearchParams({

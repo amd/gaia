@@ -60,7 +60,7 @@ from .utils import validate_file_path as _validate_file_path  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
-# Default port for chat UI server
+# Default port for agent UI server
 DEFAULT_PORT = 4200
 
 # Localhost addresses that bypass tunnel authentication (Electron app)
@@ -270,7 +270,7 @@ def create_app(db_path: str = None) -> FastAPI:
 
 
 def main():
-    """Run the Chat UI server."""
+    """Run the Agent UI server."""
     import argparse
 
     import uvicorn

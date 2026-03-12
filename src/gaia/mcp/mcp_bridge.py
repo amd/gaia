@@ -333,13 +333,13 @@ class GAIAMCPBridge:
     def _execute_chat(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute chat interaction with conversation context."""
         try:
-            from gaia.chat.sdk import ChatConfig, ChatSDK
+            from gaia.chat.sdk import AgentConfig, AgentSDK
 
             # Initialize chat SDK if not already done
             if self.chat_sdk is None:
-                # ChatSDK uses the global LLM configuration, not a base_url
-                config = ChatConfig()
-                self.chat_sdk = ChatSDK(config=config)
+                # AgentSDK uses the global LLM configuration, not a base_url
+                config = AgentConfig()
+                self.chat_sdk = AgentSDK(config=config)
 
             # Get the query
             query = args.get("query", "")

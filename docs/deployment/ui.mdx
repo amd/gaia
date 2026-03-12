@@ -17,10 +17,10 @@ GAIA provides two desktop interfaces:
 | **GAIA UI (RAUX)** | Full-featured AI platform interface | OpenWebUI + Electron | Stable |
 
 <CardGroup cols={2}>
-  <Card title="GAIA Chat Desktop" icon="comments" href="/guides/chat-ui">
+  <Card title="GAIA Chat Desktop" icon="comments" href="/guides/agent-ui">
     Lightweight, privacy-first chat with document Q&A. Drag-and-drop files, session management, and streaming responses.
   </Card>
-  <Card title="GAIA Chat SDK" icon="code" href="/sdk/sdks/chat-ui">
+  <Card title="GAIA Agent SDK" icon="code" href="/sdk/sdks/agent-ui">
     Python backend API: FastAPI server, SQLite database, Pydantic models, and SSE streaming.
   </Card>
 </CardGroup>
@@ -84,7 +84,7 @@ GAIA Chat Desktop
     |
     v
   GAIA Core SDKs
-    - ChatSDK, RAGSDK, LemonadeClient
+    - AgentSDK, RAGSDK, LemonadeClient
     |
     v
   Lemonade Server (port 8000)
@@ -96,16 +96,16 @@ GAIA Chat Desktop
 # 1. Start Lemonade Server
 lemonade-server serve
 
-# 2. Start Chat UI backend
+# 2. Start Agent UI backend
 python -m gaia.ui.server
 
 # 3. Open http://localhost:4200 in your browser
 ```
 
 For full documentation, see:
-- [GAIA Chat Desktop Guide](/guides/chat-ui) -- User guide with features and troubleshooting
-- [Chat UI SDK Reference](/sdk/sdks/chat-ui) -- Python backend API documentation
-- [Chat UI Server Spec](/spec/chat-ui-server) -- Technical specification
+- [GAIA Chat Desktop Guide](/guides/agent-ui) -- User guide with features and troubleshooting
+- [Agent UI SDK Reference](/sdk/sdks/agent-ui) -- Python backend API documentation
+- [Agent UI Server Spec](/spec/agent-ui-server) -- Technical specification
 
 ---
 

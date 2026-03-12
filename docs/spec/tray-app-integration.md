@@ -2,7 +2,7 @@
 
 > **Branch:** `kalin/chat-ui`
 > **Date:** 2026-03-10
-> **Prerequisite:** [Chat UI Agent Capabilities Plan](chat-ui-agent-capabilities-plan.md)
+> **Prerequisite:** [Agent UI Agent Capabilities Plan](agent-ui-agent-capabilities-plan.md)
 > **Supersedes:** `gaia5/docs/spec/os-agents-tray-app-milestone.md` (.NET WinForms approach)
 
 ---
@@ -25,7 +25,7 @@ Integrate **system tray functionality** directly into the existing **GAIA Agent 
 | Codebase reuse | None — new codebase | Full — reuse React components, stores, styles |
 | MCP client | Must rebuild in C# | Already exists (`@amd-gaia/electron` MCPClient) |
 | Subprocess mgmt | Must rebuild in C# | Already exists (`main.cjs` backend spawning) |
-| Chat UI | Must rebuild in WinForms | Already exists (ChatView, MessageBubble, etc.) |
+| Agent UI | Must rebuild in WinForms | Already exists (ChatView, MessageBubble, etc.) |
 | Cross-platform | Windows only | Windows + macOS + Linux |
 | Memory footprint | ~15-30 MB | ~80-120 MB (Chromium) but only ONE app instead of TWO |
 | Development velocity | Slower (new stack, new team skills) | Faster (existing codebase, existing skills) |
@@ -164,7 +164,7 @@ src/gaia/apps/webui/
 │  │  Communication:                                            │   │
 │  │  ├── stdout → JSON-RPC 2.0 (MCP protocol + GAIA exts)    │   │
 │  │  ├── stderr → Structured logs → Terminal View              │   │
-│  │  └── HTTP → FastAPI backend (port 4200) for Chat UI       │   │
+│  │  └── HTTP → FastAPI backend (port 4200) for Agent UI      │   │
 │  └───────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -1285,7 +1285,7 @@ Config files (all under ~/.gaia/):
 
 | Spec | Relationship |
 |------|-------------|
-| [Chat UI Agent Capabilities Plan](chat-ui-agent-capabilities-plan.md) | This spec adds "Agents" panel to the UI built in that plan |
+| [Agent UI Agent Capabilities Plan](agent-ui-agent-capabilities-plan.md) | This spec adds "Agents" panel to the UI built in that plan |
 | `gaia5/os-agents-mcp-milestone.md` | OS agents (C++/.NET) are what this tray app manages |
 | `gaia5/os-agents-tray-app-milestone.md` | **Superseded** — that spec proposed .NET WinForms; this spec integrates into Electron instead |
 | [electron-integration.mdx](electron-integration.mdx) | This spec extends the existing Electron framework documented there |

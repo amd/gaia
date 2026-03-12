@@ -9,11 +9,11 @@ icon: "file-lines"
 </Info>
 
 <Note>
-  **Prefer a desktop app?** See [GAIA Chat Desktop](/guides/chat-ui) for the privacy-first GUI with drag-and-drop document Q&A.
+  **Prefer a desktop app?** See [GAIA Chat Desktop](/guides/agent-ui) for the privacy-first GUI with drag-and-drop document Q&A.
 </Note>
 
 <Note>
-  **Looking for the API?** See the [Chat SDK Reference](/sdk/sdks/chat) for classes, methods, and code examples.
+  **Looking for the API?** See the [Agent SDK Reference](/sdk/sdks/chat) for classes, methods, and code examples.
 </Note>
 
 ## Quick Start
@@ -43,13 +43,13 @@ icon: "file-lines"
 
   <Step title="Use the full SDK">
     ```python title="full_chat.py"
-    from gaia.chat.sdk import ChatSDK, ChatConfig
+    from gaia.chat.sdk import AgentSDK, AgentConfig
 
-    config = ChatConfig(
+    config = AgentConfig(
         show_stats=True,
         max_history_length=6
     )
-    chat = ChatSDK(config)
+    chat = AgentSDK(config)
 
     response = chat.send("Hello! My name is Alex.")
     print(response.text)
@@ -293,11 +293,11 @@ print(f"Debug trace saved to: {result['output_file']}")
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="GAIA Chat Desktop" icon="desktop" href="/guides/chat-ui">
+  <Card title="GAIA Chat Desktop" icon="desktop" href="/guides/agent-ui">
     Privacy-first desktop app with drag-and-drop document Q&A
   </Card>
 
-  <Card title="Chat SDK Reference" icon="code" href="/sdk/sdks/chat">
+  <Card title="Agent SDK Reference" icon="code" href="/sdk/sdks/chat">
     Classes, methods, and code examples
   </Card>
 
@@ -309,7 +309,7 @@ print(f"Debug trace saved to: {result['output_file']}")
     Explore all command-line options
   </Card>
 
-  <Card title="Chat UI SDK Reference" icon="server" href="/sdk/sdks/chat-ui">
+  <Card title="Agent UI SDK Reference" icon="server" href="/sdk/sdks/agent-ui">
     Python backend API for the desktop chat application
   </Card>
 

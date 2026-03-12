@@ -1,5 +1,5 @@
 ---
-title: "Chat SDK"
+title: "Agent SDK"
 description: "SDK for conversation management with memory and multi-turn dialogue support"
 icon: "messages"
 ---
@@ -11,9 +11,9 @@ icon: "messages"
 </Note>
 
 <Note>
-- **Component:** ChatSDK - Unified text chat with conversation history
+- **Component:** AgentSDK - Unified text chat with conversation history
 - **Module:** `gaia.chat.sdk`
-- **Import:** `from gaia.chat.sdk import ChatSDK, ChatConfig, ChatResponse, SimpleChat, quick_chat`
+- **Import:** `from gaia.chat.sdk import AgentSDK, AgentConfig, AgentResponse, SimpleChat, quick_chat`
 - **Source:** [`src/gaia/chat/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/sdk.py)
 </Note>
 
@@ -21,7 +21,7 @@ icon: "messages"
 
 ## Overview
 
-ChatSDK provides a unified interface for text-based chat interactions with automatic conversation history management. It supports local LLMs (via Lemonade Server), Claude API, and ChatGPT/OpenAI API, with model-specific prompt formatting through the Prompts class.
+AgentSDK provides a unified interface for text-based chat interactions with automatic conversation history management. It supports local LLMs (via Lemonade Server), Claude API, and ChatGPT/OpenAI API, with model-specific prompt formatting through the Prompts class.
 
 **Key Features:**
 - Automatic conversation history tracking
@@ -32,7 +32,7 @@ ChatSDK provides a unified interface for text-based chat interactions with autom
 - Performance statistics
 - Simple and advanced interfaces
 
-**Most Used SDK:** ChatSDK is the most frequently used SDK in GAIA, powering:
+**Most Used SDK:** AgentSDK is the most frequently used SDK in GAIA, powering:
 - Interactive chat commands
 - Agent communication
 - Code generation
@@ -42,12 +42,12 @@ ChatSDK provides a unified interface for text-based chat interactions with autom
 
 ## API Specification
 
-### ChatConfig
+### AgentConfig
 
 ```python
 @dataclass
-class ChatConfig:
-    """Configuration for ChatSDK."""
+class AgentConfig:
+    """Configuration for AgentSDK."""
 
     model: str = DEFAULT_MODEL_NAME
     max_tokens: int = 512
@@ -63,11 +63,11 @@ class ChatConfig:
     assistant_name: str = "gaia"  # Name to use for assistant in conversations
 ```
 
-### ChatResponse
+### AgentResponse
 
 ```python
 @dataclass
-class ChatResponse:
+class AgentResponse:
     """Response from chat operations."""
 
     text: str
@@ -76,22 +76,22 @@ class ChatResponse:
     is_complete: bool = True
 ```
 
-### ChatSDK
+### AgentSDK
 
 ```python
-class ChatSDK:
+class AgentSDK:
     """
-    Gaia Chat SDK - Unified text chat integration with conversation history.
+    Gaia Agent SDK - Unified text chat integration with conversation history.
 
     Provides a simple interface for integrating GAIA's text chat
     capabilities with conversation memory into applications.
     """
 
-    def __init__(self, config: Optional[ChatConfig] = None):
-        """Initialize the ChatSDK."""
+    def __init__(self, config: Optional[AgentConfig] = None):
+        """Initialize the AgentSDK."""
         ...
 
-    def send(self, message: str, **kwargs) -> ChatResponse:
+    def send(self, message: str, **kwargs) -> AgentResponse:
         """
         Send a message and get a complete response with conversation history.
 
@@ -100,7 +100,7 @@ class ChatSDK:
             **kwargs: Additional arguments for LLM generation
 
         Returns:
-            ChatResponse with the complete response and updated history
+            AgentResponse with the complete response and updated history
         """
         ...
 
@@ -113,7 +113,7 @@ class ChatSDK:
             **kwargs: Additional arguments for LLM generation
 
         Yields:
-            ChatResponse chunks as they arrive
+            AgentResponse chunks as they arrive
         """
         ...
 
@@ -122,7 +122,7 @@ class ChatSDK:
         messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         **kwargs,
-    ) -> ChatResponse:
+    ) -> AgentResponse:
         """
         Send a full conversation history and get a response.
 
@@ -132,7 +132,7 @@ class ChatSDK:
             **kwargs: Additional arguments for LLM generation
 
         Returns:
-            ChatResponse with the complete response
+            AgentResponse with the complete response
         """
         ...
 
@@ -146,7 +146,7 @@ class ChatSDK:
         Send a full conversation history and get a streaming response.
 
         Yields:
-            ChatResponse chunks as they arrive
+            AgentResponse chunks as they arrive
         """
         ...
 
@@ -286,15 +286,15 @@ def quick_chat_with_memory(
 ### Example 1: Basic Chat
 
 ```python
-from gaia.chat.sdk import ChatSDK, ChatConfig
+from gaia.chat.sdk import AgentSDK, AgentConfig
 
 # Create SDK instance
-config = ChatConfig(
+config = AgentConfig(
     model="Qwen3-0.6B-GGUF",
     max_tokens=512,
     show_stats=True
 )
-chat = ChatSDK(config)
+chat = AgentSDK(config)
 
 # Single message
 response = chat.send("Hello, how are you?")
@@ -337,10 +337,10 @@ chat.add_document("updates.pdf")
 ## Testing Requirements
 
 ```python
-def test_chat_sdk_basic():
+def test_agent_sdk_basic():
     """Test basic chat functionality."""
-    config = ChatConfig(model="test-model")
-    chat = ChatSDK(config)
+    config = AgentConfig(model="test-model")
+    chat = AgentSDK(config)
 
     response = chat.send("Hello")
     assert response.text
@@ -348,7 +348,7 @@ def test_chat_sdk_basic():
 
 def test_conversation_history():
     """Test conversation history tracking."""
-    chat = ChatSDK()
+    chat = AgentSDK()
 
     chat.send("My name is Alice")
     chat.send("What's my name?")
@@ -359,7 +359,7 @@ def test_conversation_history():
 
 def test_rag_integration():
     """Test RAG functionality."""
-    chat = ChatSDK()
+    chat = AgentSDK()
 
     # Enable RAG
     result = chat.enable_rag(documents=["test.pdf"])
@@ -387,7 +387,7 @@ rag = ["gaia.rag.sdk"]
 
 ---
 
-*ChatSDK Technical Specification*
+*AgentSDK Technical Specification*
 
 ---
 

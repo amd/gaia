@@ -9,7 +9,7 @@ icon: "desktop"
 </Info>
 
 <Note>
-  **Looking for the API?** See the [Chat UI SDK Reference](/sdk/sdks/chat-ui) for the Python backend classes, REST endpoints, and code examples.
+  **Looking for the API?** See the [Agent UI SDK Reference](/sdk/sdks/agent-ui) for the Python backend classes, REST endpoints, and code examples.
 </Note>
 
 ## Overview
@@ -105,7 +105,7 @@ gaia-ui --help       # Show all options
 
 ## Quick Start (Developer)
 
-If you have GAIA installed from source, launch the Chat UI server directly:
+If you have GAIA installed from source, launch the Agent UI server directly:
 
 <Steps>
   <Step title="Start Lemonade Server">
@@ -114,7 +114,7 @@ If you have GAIA installed from source, launch the Chat UI server directly:
     ```
   </Step>
 
-  <Step title="Start the Chat UI server">
+  <Step title="Start the Agent UI server">
     ```bash
     python -m gaia.ui.server
     ```
@@ -222,7 +222,7 @@ FastAPI Backend (Python)      <-- port 4200
         |
         v
 GAIA Core SDKs
-  - ChatSDK (conversation)
+  - AgentSDK (conversation)
   - RAGSDK (document indexing)
   - LemonadeClient (LLM inference)
         |
@@ -257,7 +257,7 @@ db = ChatDatabase()  # ~/.gaia/chat/gaia_chat.db
 
 ## REST API
 
-The Chat UI exposes a full REST API on port 4200. For complete endpoint documentation, see the [Chat UI SDK Reference](/sdk/sdks/chat-ui).
+The Agent UI exposes a full REST API on port 4200. For complete endpoint documentation, see the [Agent UI SDK Reference](/sdk/sdks/agent-ui).
 
 ### Quick Reference
 
@@ -316,7 +316,7 @@ The settings panel shows:
 
 <AccordionGroup>
   <Accordion title="Lemonade Server not running">
-    The chat UI requires Lemonade Server to be running for LLM inference.
+    The agent UI requires Lemonade Server to be running for LLM inference.
 
     ```bash
     # Start Lemonade Server
@@ -347,7 +347,7 @@ The settings panel shows:
   </Accordion>
 
   <Accordion title="Database locked error">
-    This can happen if multiple processes access the database simultaneously. The Chat UI uses WAL mode for concurrent reads, but only one writer at a time is supported. Close any other GAIA Chat instances.
+    This can happen if multiple processes access the database simultaneously. The Agent UI uses WAL mode for concurrent reads, but only one writer at a time is supported. Close any other GAIA Chat instances.
   </Accordion>
 
   <Accordion title="Document indexing fails">
@@ -366,12 +366,12 @@ The settings panel shows:
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="Chat UI SDK Reference" icon="code" href="/sdk/sdks/chat-ui">
+  <Card title="Agent UI SDK Reference" icon="code" href="/sdk/sdks/agent-ui">
     Python backend API, database schema, and Pydantic models
   </Card>
 
-  <Card title="Chat SDK Reference" icon="comments" href="/sdk/sdks/chat">
-    Core Chat SDK for conversation memory and RAG
+  <Card title="Agent SDK Reference" icon="comments" href="/sdk/sdks/chat">
+    Core Agent SDK for conversation memory and RAG
   </Card>
 
   <Card title="Document Q&A Guide" icon="file-lines" href="/guides/chat">
