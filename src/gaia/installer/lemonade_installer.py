@@ -254,7 +254,9 @@ class LemonadeInstaller:
         elif self.system == "linux":
             # Linux DEB - filename includes version (no minimal variant yet)
             # Note: v10.0.0+ changed naming from lemonade_ to lemonade-server_
-            return f"{GITHUB_RELEASE_BASE}/v{version}/lemonade-server_{version}_amd64.deb"
+            return (
+                f"{GITHUB_RELEASE_BASE}/v{version}/lemonade-server_{version}_amd64.deb"
+            )
         else:
             raise RuntimeError(
                 f"Platform '{self.system}' is not supported. "
