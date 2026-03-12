@@ -154,7 +154,7 @@ static const char* kMockWindowsUpdatesJson = R"([
 
 static const char* kMockInstalledSoftwareJson = R"([
     {"DisplayName":"AMD Settings","DisplayVersion":"2026.0217.0826.2089","Publisher":"Advanced Micro Devices, Inc.","InstallDate":"20260227"},
-    {"DisplayName":"Lemonade Server","DisplayVersion":"9.3.0","Publisher":"AMD","InstallDate":"20260206"}
+    {"DisplayName":"Lemonade Server","DisplayVersion":"10.0.0","Publisher":"AMD","InstallDate":"20260206"}
 ])";
 
 // ===================================================================

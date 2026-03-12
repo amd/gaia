@@ -13,7 +13,7 @@
 **GAIA** is AMD's open-source framework for building intelligent AI agents that run **100% locally** on AMD Ryzen AI hardware. Keep your data private, eliminate cloud costs, and deploy in air-gapped environments—all with hardware-accelerated performance.
 
 <p align="center">
-  <a href="https://amd-gaia.ai/quickstart"><strong>Get Started →</strong></a>
+  <a href="https://amd-gaia.ai/docs/quickstart"><strong>Get Started →</strong></a>
 </p>
 
 ---
@@ -52,7 +52,7 @@ result = agent.process_query("What's the weather in Austin?")
 print(result)
 ```
 
-**[See the full quickstart guide →](https://amd-gaia.ai/quickstart)**
+**[See the full quickstart guide →](https://amd-gaia.ai/docs/quickstart)**
 
 ---
 
@@ -92,7 +92,7 @@ protected:
 pip install amd-gaia
 ```
 
-For complete setup instructions including Lemonade Server, see the **[Quickstart Guide](https://amd-gaia.ai/quickstart)**.
+For complete setup instructions including Lemonade Server, see the **[Quickstart Guide](https://amd-gaia.ai/docs/quickstart)**.
 
 ---
 
@@ -108,10 +108,10 @@ For complete setup instructions including Lemonade Server, see the **[Quickstart
 
 ## Documentation
 
-- **[Quickstart](https://amd-gaia.ai/quickstart)** — Build your first agent in 10 minutes
-- **[SDK Reference](https://amd-gaia.ai/sdk)** — Complete API documentation
-- **[Guides](https://amd-gaia.ai/guides/chat)** — Chat, Voice, RAG, and more
-- **[FAQ](https://amd-gaia.ai/reference/faq)** — Frequently asked questions
+- **[Quickstart](https://amd-gaia.ai/docs/quickstart)** — Build your first agent in 10 minutes
+- **[SDK Reference](https://amd-gaia.ai/docs/sdk)** — Complete API documentation
+- **[Guides](https://amd-gaia.ai/docs/guides)** — Chat, Voice, RAG, and more
+- **[FAQ](https://amd-gaia.ai/docs/reference/faq)** — Frequently asked questions
 
 ---
 
