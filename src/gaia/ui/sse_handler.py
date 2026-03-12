@@ -43,6 +43,12 @@ _TOOL_CALL_JSON_SUB_RE = re.compile(
 # Regex to remove {"thought": "..."} JSON blocks from LLM output.
 _THOUGHT_JSON_SUB_RE = re.compile(r'\s*\{\s*"thought"\s*:\s*"[^"]*"[^}]*\}\s*')
 
+# Regex to detect {"answer": "..."} JSON blocks from LLM output.
+# These duplicate the already-streamed text content and should be stripped.
+_ANSWER_JSON_RE = re.compile(
+    r'\s*\{\s*"answer"\s*:\s*"', re.DOTALL
+)
+
 # Regex to remove <think>...</think> tags that some models output.
 _THINK_TAG_SUB_RE = re.compile(r"<think>[\s\S]*?</think>")
 
@@ -96,13 +102,9 @@ class SSEOutputHandler(OutputHandler):
         )
 
     def print_state_info(self, state_message: str):
-        self._emit(
-            {
-                "type": "status",
-                "status": "working",
-                "message": state_message,
-            }
-        )
+        # Suppress internal agent state labels (PLANNING, DIRECT EXECUTION, etc.)
+        # — they duplicate the thinking step that immediately follows.
+        pass
 
     def print_thought(self, thought: str):
         self._emit(
@@ -397,7 +399,41 @@ class SSEOutputHandler(OutputHandler):
                 if not end_of_stream:
                     return
 
-            # Case 2: Buffer has "tool" embedded after normal text (e.g., "I'll help.\n{"tool":...")
+            # Case 1b: Buffer starts with "{" and has "answer" — raw JSON answer
+            # The LLM sometimes emits {"answer": "..."} which duplicates the
+            # already-streamed text.  Accumulate until complete, then discard.
+            if stripped.startswith("{") and '"answer"' in stripped:
+                if stripped.endswith("}"):
+                    logger.debug("Filtered answer JSON: %s", stripped[:100])
+                    self._stream_buffer = ""
+                    return
+                if len(self._stream_buffer) > 4096:
+                    # Safety: don't buffer forever
+                    self._stream_buffer = ""
+                    return
+                if not end_of_stream:
+                    return
+
+            # Case 2: Buffer has "answer" embedded after normal text
+            # e.g., "...some text. {"answer": "duplicated text..."}"
+            # Strip the JSON portion, emit only the text before it.
+            if '"answer"' in stripped and '{"answer"' in self._stream_buffer:
+                json_idx = self._stream_buffer.find('{"answer"')
+                if json_idx >= 0:
+                    text_before = self._stream_buffer[:json_idx].rstrip()
+                    if text_before:
+                        self._emit({"type": "chunk", "content": text_before})
+                    # Buffer the JSON part — discard when complete
+                    json_part = self._stream_buffer[json_idx:]
+                    json_stripped = json_part.strip()
+                    if json_stripped.endswith("}"):
+                        logger.debug("Filtered embedded answer JSON: %s", json_stripped[:100])
+                        self._stream_buffer = ""
+                    else:
+                        self._stream_buffer = json_part  # Keep buffering
+                    return
+
+            # Case 3: Buffer has "tool" embedded after normal text (e.g., "I'll help.\n{"tool":...")
             # Split at the JSON start and emit the text portion, buffer the JSON portion.
             if '"tool"' in stripped and '{"tool"' in self._stream_buffer:
                 json_idx = self._stream_buffer.find('{"tool"')
@@ -428,7 +464,7 @@ class SSEOutputHandler(OutputHandler):
         if end_of_stream and self._stream_buffer:
             # Flush any remaining buffer at end of stream
             stripped = self._stream_buffer.strip()
-            if not _TOOL_CALL_JSON_RE.match(stripped):
+            if not _TOOL_CALL_JSON_RE.match(stripped) and not _ANSWER_JSON_RE.search(stripped):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
 
@@ -437,7 +473,7 @@ class SSEOutputHandler(OutputHandler):
         # Flush any remaining stream buffer before signaling done
         if self._stream_buffer:
             stripped = self._stream_buffer.strip()
-            if not _TOOL_CALL_JSON_RE.match(stripped):
+            if not _TOOL_CALL_JSON_RE.match(stripped) and not _ANSWER_JSON_RE.search(stripped):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
         self._emit(None)  # Sentinel value

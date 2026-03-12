@@ -236,14 +236,6 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         allowed = _compute_allowed_paths(all_doc_paths)
         model_id = session.get("model")
 
-        # Emit immediate thinking event so the frontend shows activity right away
-        model_label = model_id or "local LLM"
-        init_msg = f"Connecting to {model_label}"
-        if rag_file_paths:
-            init_msg += f" with {len(rag_file_paths)} document(s)"
-        init_msg += "..."
-        sse_handler._emit({"type": "thinking", "content": init_msg})
-
         # Move ALL slow work (ChatAgent constructor + process_query) into the
         # background thread so the SSE generator can yield the thinking event
         # immediately instead of blocking for 10-30s during initialization
@@ -258,14 +250,6 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 agent_start = _time.time()
 
                 # -- Phase 1: Configure --
-                sse_handler._emit(
-                    {
-                        "type": "status",
-                        "status": "info",
-                        "message": "Configuring agent...",
-                    }
-                )
-
                 # Build config: session-specific docs auto-index,
                 # library docs passed as metadata for on-demand indexing.
                 config = ChatAgentConfig(
@@ -280,21 +264,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 )
 
                 # -- Phase 2: LLM connection --
-                sse_handler._emit(
-                    {"type": "thinking", "content": f"Connecting to {model_label}..."}
-                )
-
                 agent = ChatAgent(config)
                 agent.console = sse_handler  # Assign early so tool events flow
-
-                elapsed_init = round(_time.time() - agent_start, 1)
-                sse_handler._emit(
-                    {
-                        "type": "status",
-                        "status": "info",
-                        "message": f"Agent ready ({elapsed_init}s)",
-                    }
-                )
 
                 # -- Phase 3: RAG indexing (session-specific docs only) --
                 # Only auto-index documents explicitly attached to the session.

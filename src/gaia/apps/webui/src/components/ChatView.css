@@ -90,14 +90,13 @@
     font-family: var(--font-mono);
     color: var(--text-secondary);
     background: var(--bg-secondary);
-    cursor: pointer;
     transition: all var(--duration) var(--ease);
     flex-shrink: 0;
     width: 100%;
     text-align: left;
 }
-.doc-context-bar:hover {
-    background: var(--bg-hover);
+.doc-context-expanded {
+    flex-wrap: wrap;
 }
 .doc-context-icon {
     flex-shrink: 0;
@@ -110,6 +109,14 @@
     text-transform: uppercase;
     font-size: 10px;
     letter-spacing: 0.3px;
+    cursor: pointer;
+    border-radius: 2px;
+    padding: 1px 4px;
+    transition: background var(--duration) var(--ease);
+}
+.doc-context-label:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
 }
 .doc-context-pills {
     display: flex;
@@ -118,6 +125,10 @@
     overflow: hidden;
     flex: 1;
     min-width: 0;
+}
+.doc-context-pills-expanded {
+    flex-wrap: wrap;
+    overflow: visible;
 }
 .doc-pill {
     display: inline-flex;
@@ -131,20 +142,65 @@
     font-family: var(--font-mono);
     color: var(--text-secondary);
     white-space: nowrap;
-    max-width: 150px;
+    max-width: 180px;
+    flex-shrink: 0;
+    position: relative;
+    transition: border-color var(--duration) var(--ease);
+}
+.doc-pill:hover {
+    border-color: var(--text-muted);
+}
+.doc-pill-name {
     overflow: hidden;
     text-overflow: ellipsis;
-    flex-shrink: 0;
 }
 .doc-pill-icon {
     flex-shrink: 0;
     color: var(--accent-green);
 }
-.doc-pill-more {
+/* Remove button - hidden by default, shown on pill hover */
+.doc-pill-remove {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    margin-left: 1px;
+    border: none;
+    border-radius: 2px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all var(--duration) var(--ease);
+}
+.doc-pill:hover .doc-pill-remove {
+    display: inline-flex;
+}
+.doc-pill-remove:hover {
+    background: var(--accent-red, #e53935);
+    color: var(--bg-primary);
+}
+.doc-pill-more,
+.doc-pill-collapse {
     font-size: 10px;
+    font-family: var(--font-mono);
     color: var(--text-muted);
     white-space: nowrap;
     flex-shrink: 0;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    padding: 1px 6px;
+    cursor: pointer;
+    transition: all var(--duration) var(--ease);
+}
+.doc-pill-more:hover,
+.doc-pill-collapse:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    border-color: var(--border);
 }
 
 /* ── Messages area ───────────────────────────────────────────────── */
