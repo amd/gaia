@@ -88,8 +88,15 @@ bool validatePath(const std::string& basePath, const std::string& requestedPath)
         return false;
     }
 
+#ifdef _WIN32
+    // GetFullPathNameA returns backslashes; normalize to forward slash so the
+    // prefix comparison below works regardless of which separator appears.
+    std::replace(base.begin(), base.end(), '\\', '/');
+    std::replace(req.begin(),  req.end(),  '\\', '/');
+#endif
+
     // Ensure base ends with separator for prefix comparison
-    if (base.back() != '/' && base.back() != '\\') {
+    if (base.back() != '/') {
         base += '/';
     }
 
