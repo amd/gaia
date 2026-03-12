@@ -55,7 +55,7 @@ class WindowsSystemHealthAgent(Agent, MCPClientMixin):
             **kwargs: Additional arguments passed to Agent
         """
         # Initialize Agent
-        Agent.__init__(self, max_steps=55, **kwargs)
+        Agent.__init__(self, max_steps=55)
 
         # Initialize MCPClientMixin (creates _mcp_manager)
         MCPClientMixin.__init__(self, auto_load_config=False)
