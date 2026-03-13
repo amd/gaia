@@ -682,7 +682,7 @@ class InitCommand:
         # Wait for MSI to fully release before installing new version
         if not self.installer.wait_for_msi_mutex(timeout=30):
             self._print_warning(
-                "Another MSI operation still running — proceeding anyway..."
+                "Another MSI operation still running after 30s — proceeding anyway..."
             )
 
         # Install new version

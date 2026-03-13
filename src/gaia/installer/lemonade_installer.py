@@ -413,7 +413,8 @@ class LemonadeInstaller:
                 )
                 time.sleep(2)
                 waited += 2
-            except Exception:
+            except Exception as e:
+                log.debug(f"Could not check for msiexec processes: {e}")
                 return True  # Can't check, proceed anyway
         return False
 

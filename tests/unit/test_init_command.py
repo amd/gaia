@@ -545,6 +545,51 @@ class TestFindProductCode(unittest.TestCase):
         installer = LemonadeInstaller()
         self.assertIsNone(installer.find_product_code())
 
+    @patch("platform.system")
+    def test_finds_product_code_in_registry(self, mock_system):
+        """Test registry lookup returns valid ProductCode GUID."""
+        mock_system.return_value = "Windows"
+        installer = LemonadeInstaller()
+
+        product_code = "{12345678-1234-1234-1234-123456789012}"
+        mock_winreg = MagicMock()
+        mock_winreg.HKEY_LOCAL_MACHINE = 0x80000002
+        mock_winreg.HKEY_CURRENT_USER = 0x80000001
+        mock_winreg.QueryInfoKey.return_value = (1, 0, 0)
+        mock_winreg.EnumKey.return_value = product_code
+        mock_winreg.QueryValueEx.return_value = ("Lemonade Server", 1)
+
+        mock_key = MagicMock()
+        mock_key.__enter__ = MagicMock(return_value=mock_key)
+        mock_key.__exit__ = MagicMock(return_value=False)
+        mock_winreg.OpenKey.return_value = mock_key
+
+        with patch.dict("sys.modules", {"winreg": mock_winreg}):
+            result = installer.find_product_code()
+        self.assertEqual(result, product_code)
+
+    @patch("platform.system")
+    def test_skips_non_guid_subkeys(self, mock_system):
+        """Test that non-GUID subkeys are skipped."""
+        mock_system.return_value = "Windows"
+        installer = LemonadeInstaller()
+
+        mock_winreg = MagicMock()
+        mock_winreg.HKEY_LOCAL_MACHINE = 0x80000002
+        mock_winreg.HKEY_CURRENT_USER = 0x80000001
+        mock_winreg.QueryInfoKey.return_value = (1, 0, 0)
+        mock_winreg.EnumKey.return_value = "NotAGuid"
+        mock_winreg.QueryValueEx.return_value = ("Lemonade Server", 1)
+
+        mock_key = MagicMock()
+        mock_key.__enter__ = MagicMock(return_value=mock_key)
+        mock_key.__exit__ = MagicMock(return_value=False)
+        mock_winreg.OpenKey.return_value = mock_key
+
+        with patch.dict("sys.modules", {"winreg": mock_winreg}):
+            result = installer.find_product_code()
+        self.assertIsNone(result)
+
 
 if __name__ == "__main__":
     unittest.main()
