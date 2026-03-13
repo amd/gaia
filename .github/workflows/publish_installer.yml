@@ -17,7 +17,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.tag.outputs.TAG_NAME }}
-      tag_version: ${{ steps.tag.outputs.TAG_VERSION }}
     steps:
       - uses: actions/checkout@v6
 
@@ -25,10 +24,8 @@ jobs:
         id: tag
         run: |
           TAG_NAME="${GITHUB_REF_NAME}"
-          TAG_VERSION="${TAG_NAME#v}"
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
-          echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
-          echo "Tag: $TAG_NAME (version: $TAG_VERSION)"
+          echo "Tag: $TAG_NAME"
 
       - name: Validate release notes exist
         env:
@@ -53,8 +50,9 @@ jobs:
 
       - name: Validate version.py matches tag
         env:
-          TAG_VERSION: ${{ steps.tag.outputs.TAG_VERSION }}
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
         run: |
+          TAG_VERSION="${TAG_NAME#v}"
           VERSION_PY=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/gaia/version.py)
           echo "version.py: $VERSION_PY"
           echo "Tag:        $TAG_VERSION"
@@ -72,50 +70,46 @@ jobs:
         env:
           TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
         run: |
-          ERRORS=0
+          python3 << 'PYEOF'
+          import json, os, sys
 
-          # Check releases page entry exists in docs.json
-          if ! python3 -c "
-          import json, sys
-          tag = '$TAG_NAME'
-          with open('docs/docs.json') as f:
+          tag = os.environ["TAG_NAME"]
+          errors = []
+
+          with open("docs/docs.json") as f:
               docs = json.load(f)
-          for tab in docs['navigation']['tabs']:
-              if tab.get('tab') == 'Releases':
-                  for group in tab['groups']:
-                      if group.get('group') == 'Release Notes':
-                          if f'releases/{tag}' in group['pages']:
-                              sys.exit(0)
-          sys.exit(1)
-          "; then
-            echo "❌ ERROR: docs/docs.json is missing 'releases/$TAG_NAME' in the Releases tab"
-            ERRORS=1
-          else
-            echo "✅ docs.json has release entry for $TAG_NAME"
-          fi
 
-          # Check navbar version label references this version
-          if ! python3 -c "
-          import json, sys
-          tag = '$TAG_NAME'
-          with open('docs/docs.json') as f:
-              docs = json.load(f)
-          for link in docs.get('navbar', {}).get('links', []):
-              if tag in link.get('label', ''):
-                  sys.exit(0)
-          sys.exit(1)
-          "; then
-            echo "❌ ERROR: docs/docs.json navbar version label does not reference $TAG_NAME"
-            ERRORS=1
-          else
-            echo "✅ docs.json navbar references $TAG_NAME"
-          fi
+          # Check releases page entry
+          release_page = f"releases/{tag}"
+          found_page = False
+          for tab in docs["navigation"]["tabs"]:
+              if tab.get("tab") == "Releases":
+                  for group in tab["groups"]:
+                      if group.get("group") == "Release Notes":
+                          if release_page in group["pages"]:
+                              found_page = True
+          if found_page:
+              print(f"✅ docs.json has release entry for {tag}")
+          else:
+              errors.append(f"docs/docs.json is missing '{release_page}' in the Releases tab")
 
-          if [ "$ERRORS" -ne 0 ]; then
-            echo ""
-            echo "Update docs/docs.json before tagging. See the most recent release PR for reference."
-            exit 1
-          fi
+          # Check navbar version label
+          found_navbar = False
+          for link in docs.get("navbar", {}).get("links", []):
+              if tag in link.get("label", ""):
+                  found_navbar = True
+          if found_navbar:
+              print(f"✅ docs.json navbar references {tag}")
+          else:
+              errors.append(f"docs/docs.json navbar version label does not reference {tag}")
+
+          if errors:
+              for e in errors:
+                  print(f"❌ ERROR: {e}")
+              print()
+              print("Update docs/docs.json before tagging. See the most recent release PR for reference.")
+              sys.exit(1)
+          PYEOF
 
       - name: Validate release notes structure
         env:
