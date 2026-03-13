@@ -369,12 +369,17 @@ class JaxWebUIRenderer {
 
     // Add user message to chat
     const chatMessages = document.getElementById('chat-messages');
-    chatMessages.innerHTML += `
-      <div class="chat-message user-message">
-        <div class="message-avatar">👤</div>
-        <div class="message-content">${message}</div>
-      </div>
-    `;
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'chat-message user-message';
+    const avatarDiv = document.createElement('div');
+    avatarDiv.className = 'message-avatar';
+    avatarDiv.textContent = '\uD83D\uDC64';
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+    contentDiv.textContent = message;
+    msgDiv.appendChild(avatarDiv);
+    msgDiv.appendChild(contentDiv);
+    chatMessages.appendChild(msgDiv);
 
     chatInput.value = '';
     chatMessages.scrollTop = chatMessages.scrollHeight;

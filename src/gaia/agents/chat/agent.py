@@ -18,7 +18,9 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
-from gaia.agents.tools import FileSearchToolsMixin  # Shared file search tools
+from gaia.agents.tools import BrowserToolsMixin  # Web browsing and search
+from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
+from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.logger import get_logger
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.security import PathValidator
@@ -64,16 +66,38 @@ class ChatAgentConfig:
     # Security
     allowed_paths: Optional[List[str]] = None
 
+    # File System settings
+    enable_filesystem: bool = True  # Enable enhanced file system tools
+    enable_scratchpad: bool = True  # Enable data scratchpad for analysis
+    filesystem_index_path: str = "~/.gaia/file_index.db"
+    filesystem_scan_depth: int = 3  # Default scan depth (conservative)
+    filesystem_exclude_patterns: List[str] = field(default_factory=list)
+
+    # Browser settings
+    enable_browser: bool = True  # Enable web browsing tools
+    browser_timeout: int = 30  # HTTP request timeout in seconds
+    browser_max_download_size: int = 100 * 1024 * 1024  # 100 MB max download
+    browser_rate_limit: float = 1.0  # Seconds between requests per domain
+
 
 class ChatAgent(
-    Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin
+    Agent,
+    RAGToolsMixin,
+    FileToolsMixin,
+    ShellToolsMixin,
+    FileSystemToolsMixin,
+    ScratchpadToolsMixin,
+    BrowserToolsMixin,
 ):
     """
-    Chat Agent with RAG, file operations, and shell command capabilities.
+    Chat Agent with RAG, file system navigation, data analysis, web browsing,
+    and shell capabilities.
 
     This agent provides:
     - Document Q&A using RAG
-    - File search and operations
+    - File system browsing, search, and navigation
+    - Structured data analysis via SQLite scratchpad
+    - Web browsing, search, and file download
     - Shell command execution
     - Auto-indexing when files change
     - Interactive chat interface
@@ -152,6 +176,48 @@ class ChatAgent(
         self.observers = []
         self.file_handlers = []  # Track FileChangeHandler instances for telemetry
         self.indexed_files = set()
+
+        # Initialize file system index service (optional)
+        self._fs_index = None
+        self._path_validator = self.path_validator
+        if config.enable_filesystem:
+            try:
+                from gaia.filesystem.index import FileSystemIndexService
+
+                self._fs_index = FileSystemIndexService(
+                    db_path=config.filesystem_index_path
+                )
+                logger.info("File system index service initialized")
+            except Exception as e:
+                logger.debug(f"File system index not available: {e}")
+
+        # Initialize scratchpad service (optional)
+        self._scratchpad = None
+        if config.enable_scratchpad:
+            try:
+                from gaia.scratchpad.service import ScratchpadService
+
+                self._scratchpad = ScratchpadService(
+                    db_path=config.filesystem_index_path
+                )
+                logger.info("Scratchpad service initialized")
+            except Exception as e:
+                logger.debug(f"Scratchpad service not available: {e}")
+
+        # Initialize web client for browser tools (optional)
+        self._web_client = None
+        if config.enable_browser:
+            try:
+                from gaia.web.client import WebClient
+
+                self._web_client = WebClient(
+                    timeout=config.browser_timeout,
+                    max_download_size=config.browser_max_download_size,
+                    rate_limit=config.browser_rate_limit,
+                )
+                logger.info("Web client initialized for browser tools")
+            except Exception as e:
+                logger.debug(f"Web client not available: {e}")
 
         # Session management
         self.session_manager = SessionManager()
@@ -324,6 +390,7 @@ Use Format 2 (tool) ONLY when:
 - "find the project manual" → {"tool": "search_file", "tool_args": {"file_pattern": "project manual"}}
 - "index my data folder" → {"tool": "search_directory", "tool_args": {"directory_name": "data"}}
 - "index files in /path/to/dir" → {"tool": "index_directory", "tool_args": {"directory_path": "/path/to/dir"}}
+- "analyze my spending" → Use find_files + read_file + create_table + insert_data + query_data workflow
 
 **CRITICAL: NEVER make up or guess user data. Always use tools.**
 
@@ -365,27 +432,50 @@ When user asks a question without specifying which document:
 The complete list of available tools with their descriptions is provided below in the AVAILABLE TOOLS section.
 Tools are grouped by category: RAG tools, File System tools, Shell tools, etc.
 
+**FILE SYSTEM TOOLS:**
+You have powerful file system tools. Use them when the user asks about files, folders, or their PC:
+- **browse_directory**: List folder contents with sizes and dates
+- **tree**: Show visual tree of a directory structure
+- **file_info**: Get detailed info about a file (size, type, pages, lines)
+- **find_files**: Search for files by name, content, or metadata (size, date, type)
+- **read_file**: Read file contents with smart formatting (text, CSV, JSON, PDF)
+- **bookmark**: Save/list/remove bookmarks for quick access to important locations
+
 **FILE SEARCH AND AUTO-INDEX WORKFLOW:**
 When user asks "find the X manual" or "find X document on my drive":
-1. Use search_file (automatically searches all drives intelligently):
-   - Phase 1: Searches common locations (Documents, Downloads, Desktop) - FAST
-   - Phase 2: If not found, deep search entire drive(s) - THOROUGH
-   - Filters by document file types (.pdf, .docx, .txt, etc.)
+1. Use find_files (automatically searches intelligently):
+   - Searches current directory, then common locations, then everywhere
+   - Supports name patterns, content search, size/date filters
 2. Handle results:
-   - **If 1 file found**: Automatically index it
-   - **If multiple files found**: Display numbered list, ask user to select
+   - **If 1 file found**: Automatically index it for RAG
+   - **If multiple files found**: Display the list, ask user to select
    - **If none found**: Inform user
 3. After indexing, confirm and let user know they can ask questions
 
-**IMPORTANT: Always show tool results with display_message!**
-Tools like search_file return a 'display_message' field - ALWAYS show this to the user:
+Example:
+User: "Can you find the oil and gas manual on my drive?"
+You: {"tool": "find_files", "tool_args": {"query": "oil gas manual", "file_types": "pdf,docx"}}
+Result: "Found 1 result(s):\n  1. C:/Users/user/Documents/Oil-Gas-Manual.pdf (2.1 MB)"
+You: {"tool": "index_document", "tool_args": {"file_path": "C:/Users/user/Documents/Oil-Gas-Manual.pdf"}}
+You: {"answer": "Found and indexed Oil-Gas-Manual.pdf (150 chunks). You can now ask me questions about it!"}
+
+**DATA ANALYSIS WORKFLOW (Scratchpad):**
+For multi-document analysis (spending, tax, research), use the scratchpad tools:
+1. **find_files** to locate documents (e.g., credit card statements)
+2. **create_table** to set up a structured workspace
+3. **read_file** + **insert_data** for each document (extract data, store in table)
+4. **query_data** to analyze with SQL (SUM, AVG, GROUP BY, etc.)
+5. **drop_table** to clean up when done
 
 Example:
 Tool result: {"display_message": "Found 2 file(s) in current directory", "file_list": [...]}
 You must say: {"answer": "Found 2 file(s):\n1. README.md\n2. setup.py"}
 
-NOTE: Progress indicators (spinners) are shown automatically by the tool while searching.
-You don't need to say "searching..." - the tool displays it live!
+**DIRECTORY BROWSING WORKFLOW:**
+When user asks "what's in my Documents?" or "show me the project structure":
+1. Use browse_directory to list contents, or tree for visual hierarchy
+2. Use file_info for details about specific files
+3. Use bookmark to save frequently accessed locations
 
 Example (Single file):
 User: "Can you find the project report on my drive?"
@@ -746,13 +836,17 @@ The link format is: https://github.com/amd/gaia/issues/new?template=feature_requ
         self.register_rag_tools()
         self.register_file_tools()
         self.register_shell_tools()
-        self.register_file_search_tools()  # Shared file search tools
+        self.register_filesystem_tools()  # File system navigation & search
+        self.register_scratchpad_tools()  # Structured data analysis
+        self.register_browser_tools()  # Web browsing, search, download
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools
     # - FileToolsMixin (file_tools.py): Directory monitoring
     # - ShellToolsMixin (shell_tools.py): Shell command execution
-    # - FileSearchToolsMixin (shared): File and directory search across drives
+    # - FileSystemToolsMixin (shared): File system browsing, search, tree, bookmarks
+    # - ScratchpadToolsMixin (shared): SQLite working memory for data analysis
+    # - BrowserToolsMixin (shared): Web browsing, content extraction, download
 
     def _index_documents(self, documents: List[str]) -> None:
         """Index initial documents."""
@@ -956,3 +1050,8 @@ The link format is: https://github.com/amd/gaia/issues/new?template=feature_requ
             self.stop_watching()
         except Exception as e:
             logger.error(f"Error stopping file watchers during cleanup: {e}")
+        try:
+            if self._web_client:
+                self._web_client.close()
+        except Exception as e:
+            logger.error(f"Error closing web client during cleanup: {e}")

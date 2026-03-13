@@ -73,6 +73,9 @@ setup(
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
+        "gaia.filesystem",
+        "gaia.scratchpad",
+        "gaia.web",
     ],
     package_data={
         "gaia.eval": [
@@ -143,6 +146,7 @@ setup(
             "bandit",
             "responses",
             "requests",
+            "beautifulsoup4",
         ],
         "eval": [
             "anthropic",

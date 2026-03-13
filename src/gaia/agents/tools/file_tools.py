@@ -704,7 +704,7 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
             name="write_file",
-            description="Write content to any file. Creates parent directories if needed.",
+            description="Write content to any file with security guardrails. Creates parent directories if needed. Validates path access, blocks writes to system directories and sensitive files.",
             parameters={
                 "file_path": {
                     "type": "str",
@@ -727,29 +727,91 @@ class FileSearchToolsMixin:
             file_path: str, content: str, create_dirs: bool = True
         ) -> Dict[str, Any]:
             """
-            Write content to a file.
+            Write content to a file with full security guardrails.
 
-            Generic file writer for any file type.
+            Security checks performed:
+            1. Path allowlist validation (PathValidator)
+            2. Blocked directory enforcement (system dirs, .ssh, etc.)
+            3. Sensitive file protection (.env, credentials, keys)
+            4. Content size limit (10 MB max)
+            5. Overwrite confirmation for existing files
+            6. Backup creation before overwrite
+            7. Audit logging of all write operations
             """
             try:
-                file_path = Path(file_path)
+                resolved_path = Path(file_path).resolve()
+                content_size = len(content.encode("utf-8"))
+
+                # Get the PathValidator from the agent (if available)
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is None:
+                    path_validator = getattr(self, "_path_validator", None)
+
+                backup_path = None
+
+                if path_validator is not None:
+                    # Full write validation: allowlist + blocklist + size + overwrite
+                    is_allowed, reason = path_validator.validate_write(
+                        str(resolved_path), content_size=content_size
+                    )
+                    if not is_allowed:
+                        path_validator.audit_write(
+                            "write", str(resolved_path), content_size, "denied", reason
+                        )
+                        logger.warning(f"Write denied: {reason}")
+                        return {
+                            "status": "error",
+                            "error": reason,
+                            "operation": "write_file",
+                        }
+
+                    # Create backup of existing file before overwriting
+                    if resolved_path.exists():
+                        backup_path = path_validator.create_backup(str(resolved_path))
+                else:
+                    logger.warning(
+                        "No PathValidator available — write_file proceeding without "
+                        "security checks for: %s",
+                        resolved_path,
+                    )
 
                 # Create parent directories if needed
-                if create_dirs and file_path.parent:
-                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                if create_dirs and resolved_path.parent:
+                    resolved_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Write the file
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(resolved_path, "w", encoding="utf-8") as f:
                     f.write(content)
 
-                return {
+                # Audit the successful write
+                if path_validator is not None:
+                    detail = ""
+                    if backup_path:
+                        detail = f"backup={backup_path}"
+                    path_validator.audit_write(
+                        "write", str(resolved_path), content_size, "success", detail
+                    )
+
+                logger.info(f"File written: {resolved_path} ({content_size} bytes)")
+
+                result = {
                     "status": "success",
-                    "file_path": str(file_path),
-                    "bytes_written": len(content.encode("utf-8")),
+                    "file_path": str(resolved_path),
+                    "bytes_written": content_size,
                     "line_count": len(content.splitlines()),
                 }
+                if backup_path:
+                    result["backup_path"] = backup_path
+                return result
+
             except Exception as e:
                 logger.error(f"Error writing file: {e}")
+                # Audit the failed write
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is None:
+                    path_validator = getattr(self, "_path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {
                     "status": "error",
                     "error": str(e),

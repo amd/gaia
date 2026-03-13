@@ -21,7 +21,7 @@ export class ChatUI {
 
         // Handle different content types
         if (typeof content === 'string') {
-            contentEl.innerHTML = this.formatMessage(content);
+            contentEl.innerHTML = this.sanitizeHTML(this.formatMessage(content));
         } else if (content instanceof HTMLElement) {
             contentEl.appendChild(content);
         } else {
@@ -44,6 +44,23 @@ export class ChatUI {
             .replace(/`(.*?)`/g, '<code>$1</code>')
             .replace(/\n/g, '<br>')
             .replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
+    }
+
+    sanitizeHTML(html) {
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        // Remove dangerous elements
+        const dangerous = div.querySelectorAll('script,iframe,object,embed,form,input,textarea,link,style,meta,base');
+        dangerous.forEach(el => el.remove());
+        // Remove event handlers and javascript: URLs
+        div.querySelectorAll('*').forEach(el => {
+            [...el.attributes].forEach(attr => {
+                if (attr.name.startsWith('on') || (attr.name === 'href' && attr.value.trimStart().toLowerCase().startsWith('javascript:'))) {
+                    el.removeAttribute(attr.name);
+                }
+            });
+        });
+        return div.innerHTML;
     }
 
     clearMessages() {
