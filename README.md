@@ -121,17 +121,21 @@ See the full [Release Notes](https://amd-gaia.ai/docs/releases) on the documenta
 
 ### Release Process
 
-To publish a new release:
+To publish a new release (e.g. `v0.17.0`), create a release PR that updates these 3 files:
 
-1. Create a release PR that:
-   - Sets `__version__` in `src/gaia/version.py` to the new version
-   - Adds `docs/releases/v{version}.mdx` with release notes
-   - Adds `releases/v{version}` to the Releases tab in `docs/docs.json`
-   - Updates the navbar version label in `docs/docs.json`
-2. Merge the PR to `main`
-3. Tag and push: `git tag v{version} && git push origin v{version}`
+| # | File | What to change |
+|---|------|----------------|
+| 1 | `src/gaia/version.py` | Set `__version__ = "0.17.0"` |
+| 2 | `docs/releases/v0.17.0.mdx` | Create release notes (see [format guide](https://amd-gaia.ai/docs/releases)) |
+| 3 | `docs/docs.json` | **(a)** Add `"releases/v0.17.0"` to the Releases tab pages array, **(b)** update the navbar label to `"v0.17.0 · Lemonade X.Y.Z"` |
 
-The CI pipeline validates that all version references are consistent and the release notes file exists before publishing. The release notes from `docs/releases/` are used as the GitHub release body.
+Then merge and tag:
+
+```bash
+git tag v0.17.0 && git push origin v0.17.0
+```
+
+CI validates all three files are consistent with the tag before publishing to [GitHub Releases](https://github.com/amd/gaia/releases) and [PyPI](https://pypi.org/project/amd-gaia/).
 
 ---
 
