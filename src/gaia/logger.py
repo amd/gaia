@@ -1,7 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-import io
 import logging
 import subprocess
 import sys
@@ -19,11 +18,7 @@ def configure_console_encoding():
             # capture mechanism (causes "I/O operation on closed file" errors).
             for stream_name in ("stdout", "stderr"):
                 stream = getattr(sys, stream_name)
-                if (
-                    stream
-                    and not stream.closed
-                    and hasattr(stream, "reconfigure")
-                ):
+                if stream and not stream.closed and hasattr(stream, "reconfigure"):
                     stream.reconfigure(encoding="utf-8", errors="replace")
 
             # Also try to set the console code page to UTF-8
