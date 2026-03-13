@@ -38,6 +38,7 @@
               "cpp/integration",
               "cpp/testing",
               "cpp/api-reference",
+              "cpp/security",
               {
                 "group": "User Guides",
                 "pages": [

@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <gaia/agent.h>
 #include <gaia/clean_console.h>
+#include <gaia/security.h>
 
 #include <sstream>
 
@@ -157,20 +158,6 @@ static const char* kMockInstalledSoftwareJson = R"([
     {"DisplayName":"Lemonade Server","DisplayVersion":"10.0.0","Publisher":"AMD","InstallDate":"20260206"}
 ])";
 
-// ===================================================================
-// isSafeShellArg — replicated here because the original is file-static
-// in wifi_agent.cpp and cannot be imported.
-// ===================================================================
-static bool isSafeShellArg(const std::string& arg) {
-    for (char c : arg) {
-        if (c == ';' || c == '|' || c == '&' || c == '`' || c == '$'
-            || c == '(' || c == ')' || c == '{' || c == '}' || c == '<'
-            || c == '>' || c == '"' || c == '\n' || c == '\r') {
-            return false;
-        }
-    }
-    return !arg.empty();
-}
 
 // ===================================================================
 // MockWiFiAgent — registers the same tool names/schemas as the real

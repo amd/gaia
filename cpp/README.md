@@ -7,7 +7,7 @@ The [GAIA](https://github.com/amd/gaia) C++ agent framework. Implements the core
 
 Included demos:
 
-- **`health_agent`** — Windows System Health Agent that connects to the [Windows MCP server](https://github.com/microsoft/windows-mcp), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.
+- **`health_agent`** — Windows System Health Agent that connects to the [Windows MCP server](https://pypi.org/project/windows-mcp/), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.
 - **`wifi_agent`** — Wi-Fi Troubleshooter that diagnoses and fixes network connectivity issues using registered PowerShell tools. Demonstrates adaptive reasoning: the agent decides which tools to run based on the query, interprets results, skips irrelevant steps, applies fixes, and verifies fixes worked — all driven by real LLM reasoning with no hard-coded sequences.
 
 ---
@@ -26,7 +26,7 @@ Included demos:
 
 ### 2. LLM Server (Lemonade)
 
-The agent connects to an OpenAI-compatible LLM server at `http://localhost:8000/api/v1` by default. The reference backend is [Lemonade Server](https://github.com/amd/lemonade), which runs models locally on AMD hardware.
+The agent connects to an OpenAI-compatible LLM server at `http://localhost:8000/api/v1` by default. The reference backend is [Lemonade Server](https://github.com/lemonade-sdk/lemonade), which runs models locally on AMD hardware.
 
 Download and install Lemonade Server v10.0.0, then start it:
 

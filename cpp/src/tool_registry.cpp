@@ -21,13 +21,15 @@ void ToolRegistry::registerTool(const std::string& name,
                                 const std::string& description,
                                 ToolCallback callback,
                                 std::vector<ToolParameter> params,
-                                bool atomic) {
+                                bool atomic,
+                                std::optional<ToolPolicy> policy) {
     ToolInfo info;
     info.name = name;
     info.description = description;
     info.callback = std::move(callback);
     info.parameters = std::move(params);
     info.atomic = atomic;
+    info.policy = policy.value_or(defaultPolicy_);
     registerTool(std::move(info));
 }
 
@@ -110,10 +112,9 @@ std::string ToolRegistry::formatForPrompt() const {
     return oss.str();
 }
 
-json ToolRegistry::executeTool(const std::string& name, const json& args) const {
+json ToolRegistry::executeTool(const std::string& name, const json& args) {
     const ToolInfo* tool = findTool(name);
     if (!tool) {
-        // Try resolving the name
         std::string resolved = resolveName(name);
         if (!resolved.empty()) {
             tool = findTool(resolved);
@@ -128,11 +129,68 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) const 
         return json{{"status", "error"}, {"error", "Tool '" + name + "' has no callback"}};
     }
 
+    const std::string& resolvedName = tool->name;
+
+    // 1. DENY check
+    if (tool->policy == ToolPolicy::DENY) {
+        return json{{"status", "error"}, {"error", "Tool '" + resolvedName + "' is denied by policy"}};
+    }
+
+    // 2. Argument validation (runs before confirmation so user sees clean args)
+    json effectiveArgs = args;
+    if (tool->validateArgs.has_value()) {
+        try {
+            effectiveArgs = (*tool->validateArgs)(resolvedName, args);
+        } catch (const std::invalid_argument& e) {
+            return json{{"status", "error"}, {"error", std::string("Argument validation failed: ") + e.what()}};
+        }
+    }
+
+    // 3. CONFIRM check
+    if (tool->policy == ToolPolicy::CONFIRM) {
+        // Fast path: already permanently allowed
+        if (allowedStore_ && allowedStore_->isAlwaysAllowed(resolvedName)) {
+            // proceed
+        } else {
+            // Fail-closed: no callback = deny
+            if (!confirmCallback_) {
+                return json{{"status", "error"}, {"error", "Tool '" + resolvedName + "' requires confirmation but no callback is set"}};
+            }
+
+            ToolConfirmResult decision = confirmCallback_(resolvedName, effectiveArgs);
+            if (decision == ToolConfirmResult::ALWAYS_ALLOW) {
+                if (allowedStore_) {
+                    allowedStore_->addAlwaysAllowed(resolvedName);
+                }
+            } else if (decision == ToolConfirmResult::DENY) {
+                return json{{"status", "error"}, {"error", "Tool '" + resolvedName + "' execution denied by user"}};
+            }
+            // ALLOW_ONCE falls through
+        }
+    }
+
+    // 4. Execute
     try {
-        return tool->callback(args);
+        return tool->callback(effectiveArgs);
     } catch (const std::exception& e) {
         return json{{"status", "error"}, {"error", std::string("Tool execution failed: ") + e.what()}};
     }
+}
+
+void ToolRegistry::setConfirmCallback(ToolConfirmCallback cb) {
+    confirmCallback_ = std::move(cb);
+}
+
+void ToolRegistry::setDefaultPolicy(ToolPolicy policy) {
+    defaultPolicy_ = policy;
+}
+
+ToolPolicy ToolRegistry::defaultPolicy() const {
+    return defaultPolicy_;
+}
+
+void ToolRegistry::setAllowedToolsStore(std::shared_ptr<AllowedToolsStore> store) {
+    allowedStore_ = std::move(store);
 }
 
 std::string ToolRegistry::toLower(const std::string& s) {

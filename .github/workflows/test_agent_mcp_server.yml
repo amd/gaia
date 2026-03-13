@@ -9,9 +9,21 @@ permissions:
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'src/gaia/agents/base/mcp_agent.py'
+      - 'src/gaia/mcp/**'
+      - 'tests/mcp/**'
+      - 'setup.py'
+      - '.github/workflows/test_agent_mcp_server.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/agents/base/mcp_agent.py'
+      - 'src/gaia/mcp/**'
+      - 'tests/mcp/**'
+      - 'setup.py'
+      - '.github/workflows/test_agent_mcp_server.yml'
   merge_group:
   workflow_dispatch:
 
