@@ -12,16 +12,12 @@ coexistence, and transaction atomicity.
 """
 
 import datetime
-import os
-import time
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from gaia.filesystem.index import FileSystemIndexService
 from gaia.scratchpad.service import ScratchpadService
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -154,9 +150,7 @@ class TestCheckIntegrity:
         db_path = str(tmp_path / "exc_test.db")
         service = FileSystemIndexService(db_path=db_path)
 
-        with patch.object(
-            service, "query", side_effect=RuntimeError("disk I/O error")
-        ):
+        with patch.object(service, "query", side_effect=RuntimeError("disk I/O error")):
             result = service._check_integrity()
 
         assert result is False
@@ -342,9 +336,7 @@ class TestGetStatisticsTopExtensions:
         # Counts should be non-increasing (descending).
         counts = [cnt for _, cnt in ext_items]
         for i in range(len(counts) - 1):
-            assert counts[i] >= counts[i + 1], (
-                f"top_extensions not sorted: {ext_items}"
-            )
+            assert counts[i] >= counts[i + 1], f"top_extensions not sorted: {ext_items}"
 
         # First entry should be 'py' with count 5.
         assert ext_items[0][0] == "py"
@@ -691,17 +683,13 @@ class TestInsertRowsTransactionAtomicity:
             scratchpad.insert_rows("atomic_test", data)
 
         # Only the original row should exist -- the entire batch was rolled back.
-        results = scratchpad.query_data(
-            "SELECT * FROM scratch_atomic_test ORDER BY id"
-        )
+        results = scratchpad.query_data("SELECT * FROM scratch_atomic_test ORDER BY id")
         assert len(results) == 1
         assert results[0]["name"] == "Alice"
 
     def test_duplicate_primary_key_rolls_back_batch(self, scratchpad):
         """Duplicate PK in batch causes full rollback."""
-        scratchpad.create_table(
-            "pk_test", "id INTEGER PRIMARY KEY, label TEXT"
-        )
+        scratchpad.create_table("pk_test", "id INTEGER PRIMARY KEY, label TEXT")
         scratchpad.insert_rows("pk_test", [{"id": 1, "label": "first"}])
 
         # Second batch includes a duplicate id=1.

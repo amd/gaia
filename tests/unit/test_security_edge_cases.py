@@ -17,12 +17,10 @@ Covers the following untested scenarios:
 All tests run without LLM or external services.
 """
 
-import logging
 import os
 import platform
-import shutil
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -33,7 +31,6 @@ from gaia.security import (
     _get_blocked_directories,
     audit_logger,
 )
-
 
 # ============================================================================
 # 1. is_write_blocked with symlink resolution
@@ -69,7 +66,10 @@ class TestIsWriteBlockedSymlink:
             is_blocked, reason = validator.is_write_blocked(str(fake_file))
 
         assert is_blocked is True
-        assert "protected system directory" in reason.lower() or "blocked" in reason.lower()
+        assert (
+            "protected system directory" in reason.lower()
+            or "blocked" in reason.lower()
+        )
 
     def test_symlink_to_safe_directory_not_blocked(self, validator, tmp_path):
         """A file (or symlink) resolving to a safe directory is not blocked."""
@@ -271,7 +271,12 @@ class TestPromptOverwrite:
 
         printed_lines = []
 
-        with patch("builtins.print", side_effect=lambda *a, **kw: printed_lines.append(" ".join(str(x) for x in a))):
+        with patch(
+            "builtins.print",
+            side_effect=lambda *a, **kw: printed_lines.append(
+                " ".join(str(x) for x in a)
+            ),
+        ):
             with patch("builtins.input", return_value="y"):
                 validator._prompt_overwrite(target, 2048)
 
@@ -388,9 +393,7 @@ class TestValidateWriteFileDeletedRace:
 class TestGetBlockedDirectoriesUserProfile:
     """Test _get_blocked_directories with empty/missing USERPROFILE."""
 
-    @pytest.mark.skipif(
-        platform.system() != "Windows", reason="Windows-specific test"
-    )
+    @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-specific test")
     def test_userprofile_empty_string(self):
         """Empty USERPROFILE should not produce empty-string blocked dirs."""
         with patch.dict(os.environ, {"USERPROFILE": ""}, clear=False):
@@ -400,9 +403,7 @@ class TestGetBlockedDirectoriesUserProfile:
         assert "" not in result
         assert os.path.normpath("") not in result
 
-    @pytest.mark.skipif(
-        platform.system() != "Windows", reason="Windows-specific test"
-    )
+    @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-specific test")
     def test_userprofile_missing(self):
         """Missing USERPROFILE env var should not crash."""
         env_copy = dict(os.environ)
@@ -416,22 +417,16 @@ class TestGetBlockedDirectoriesUserProfile:
         # Empty string paths should have been cleaned out
         assert "" not in result
 
-    @pytest.mark.skipif(
-        platform.system() != "Windows", reason="Windows-specific test"
-    )
+    @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-specific test")
     def test_userprofile_valid_produces_ssh_dir(self):
         """Valid USERPROFILE produces .ssh in blocked directories."""
-        with patch.dict(
-            os.environ, {"USERPROFILE": r"C:\Users\TestUser"}, clear=False
-        ):
+        with patch.dict(os.environ, {"USERPROFILE": r"C:\Users\TestUser"}, clear=False):
             result = _get_blocked_directories()
 
         expected_ssh = os.path.normpath(r"C:\Users\TestUser\.ssh")
         assert expected_ssh in result
 
-    @pytest.mark.skipif(
-        platform.system() == "Windows", reason="Unix-specific test"
-    )
+    @pytest.mark.skipif(platform.system() == "Windows", reason="Unix-specific test")
     def test_unix_blocked_dirs_independent_of_userprofile(self):
         """On Unix, USERPROFILE is irrelevant; blocked dirs come from Path.home()."""
         result = _get_blocked_directories()

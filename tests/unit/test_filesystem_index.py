@@ -4,14 +4,12 @@
 """Unit tests for FileSystemIndexService."""
 
 import os
-import sqlite3
 import time
 from pathlib import Path
 
 import pytest
 
 from gaia.filesystem.index import FileSystemIndexService
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -102,9 +100,9 @@ class TestInitialization:
             "file_categories",
         ]
         for table_name in expected_tables:
-            assert tmp_index.table_exists(table_name), (
-                f"Table '{table_name}' should exist after initialization"
-            )
+            assert tmp_index.table_exists(
+                table_name
+            ), f"Table '{table_name}' should exist after initialization"
 
     def test_init_creates_fts_table(self, tmp_index):
         """Verify that the FTS5 virtual table is created."""
@@ -147,9 +145,7 @@ class TestScanDirectory:
         stats = tmp_index.scan_directory(str(populated_dir))
 
         # Query all indexed files (non-directory entries)
-        files = tmp_index.query(
-            "SELECT * FROM files WHERE is_directory = 0"
-        )
+        files = tmp_index.query("SELECT * FROM files WHERE is_directory = 0")
         # We expect: readme.md, report.pdf, notes.txt, main.py, utils.py,
         #            data.csv, image.png = 7 files
         # .hidden/secret.txt should be excluded because .hidden is not in
@@ -204,9 +200,9 @@ class TestScanDirectory:
 
         stats2 = tmp_index.scan_directory(str(populated_dir))
 
-        assert stats2["files_added"] == 0, (
-            "Incremental scan should not re-add unchanged files"
-        )
+        assert (
+            stats2["files_added"] == 0
+        ), "Incremental scan should not re-add unchanged files"
         # On Windows NTFS, float→ISO conversion of mtime can differ between
         # calls due to sub-second precision, causing spurious updates.
         # We allow a small number of "updated" entries here.
@@ -230,9 +226,9 @@ class TestScanDirectory:
 
         stats2 = tmp_index.scan_directory(str(populated_dir))
 
-        assert stats2["files_updated"] > 0, (
-            "Incremental scan should detect changed file"
-        )
+        assert (
+            stats2["files_updated"] > 0
+        ), "Incremental scan should detect changed file"
 
     def test_scan_nonexistent_directory_raises(self, tmp_index):
         """Scanning a nonexistent directory should raise FileNotFoundError."""

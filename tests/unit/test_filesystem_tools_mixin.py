@@ -3,7 +3,6 @@
 
 """Comprehensive unit tests for FileSystemToolsMixin and module-level helpers."""
 
-import csv
 import datetime
 import json
 import os
@@ -19,7 +18,6 @@ from gaia.agents.tools.filesystem_tools import (
     _format_date,
     _format_size,
 )
-
 
 # =============================================================================
 # Test Helpers
@@ -76,7 +74,9 @@ def _populate_directory(base_path):
 
     (base / "file_a.txt").write_text("Hello World", encoding="utf-8")
     (base / "file_b.py").write_text("# Python file\nprint('hi')\n", encoding="utf-8")
-    (base / "data.csv").write_text("name,value\nalpha,100\nbeta,200\n", encoding="utf-8")
+    (base / "data.csv").write_text(
+        "name,value\nalpha,100\nbeta,200\n", encoding="utf-8"
+    )
     (base / "config.json").write_text(
         json.dumps({"key": "value", "count": 42}, indent=2), encoding="utf-8"
     )
@@ -340,7 +340,7 @@ class TestBrowseDirectory:
         result = self.browse(path=str(tmp_path), max_items=2)
         # There are more than 2 items total, so truncation message should appear
         # Note: count visible items in the formatted table
-        lines = [l for l in result.split("\n") if "[DIR]" in l or "[FIL]" in l]
+        lines = [ln for ln in result.split("\n") if "[DIR]" in ln or "[FIL]" in ln]
         assert len(lines) <= 2
 
     def test_browse_non_directory_error(self, tmp_path):
@@ -673,7 +673,11 @@ class TestFindFiles:
         """When _fs_index is available, uses index for name search."""
         mock_index = MagicMock()
         mock_index.query_files.return_value = [
-            {"path": str(tmp_path / "indexed.txt"), "size": 1024, "modified_at": "2026-01-01"}
+            {
+                "path": str(tmp_path / "indexed.txt"),
+                "size": 1024,
+                "modified_at": "2026-01-01",
+            }
         ]
         self.agent._fs_index = mock_index
 
@@ -762,7 +766,9 @@ class TestReadFile:
     def test_read_csv_tabular(self, tmp_path):
         """Read a CSV file shows tabular format."""
         f = tmp_path / "data.csv"
-        f.write_text("name,value,color\nalpha,100,red\nbeta,200,blue\n", encoding="utf-8")
+        f.write_text(
+            "name,value,color\nalpha,100,red\nbeta,200,blue\n", encoding="utf-8"
+        )
         result = self.read(file_path=str(f))
 
         assert "3 rows" in result
@@ -826,9 +832,33 @@ class TestReadFile:
         # Build data with >30% non-text bytes (0x00-0x06, 0x0B, 0x0E-0x1F)
         # to trigger binary detection. The source considers bytes in
         # {7,8,9,10,12,13,27} | range(0x20,0x100) as text.
-        non_text = bytes([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0E, 0x0F,
-                          0x10, 0x11, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A,
-                          0x1C, 0x1D, 0x1E, 0x1F, 0x0B])
+        non_text = bytes(
+            [
+                0x00,
+                0x01,
+                0x02,
+                0x03,
+                0x04,
+                0x05,
+                0x06,
+                0x0E,
+                0x0F,
+                0x10,
+                0x11,
+                0x14,
+                0x15,
+                0x16,
+                0x17,
+                0x18,
+                0x19,
+                0x1A,
+                0x1C,
+                0x1D,
+                0x1E,
+                0x1F,
+                0x0B,
+            ]
+        )
         # Repeat to make ~2000 bytes, ensuring >30% are non-text
         f.write_bytes(non_text * 100)
         result = self.read(file_path=str(f))
@@ -1182,7 +1212,9 @@ class TestSearchContentIndirect:
 
     def test_content_search_case_insensitive(self, tmp_path):
         """Content search is case-insensitive."""
-        (tmp_path / "readme.txt").write_text("Hello WORLD from GAIA\n", encoding="utf-8")
+        (tmp_path / "readme.txt").write_text(
+            "Hello WORLD from GAIA\n", encoding="utf-8"
+        )
         result = self.find(
             query="hello world", search_type="content", scope=str(tmp_path)
         )
@@ -1191,7 +1223,9 @@ class TestSearchContentIndirect:
     def test_content_search_with_type_filter(self, tmp_path):
         """Content search respects file_types filter."""
         (tmp_path / "script.py").write_text("target_string = True\n", encoding="utf-8")
-        (tmp_path / "notes.txt").write_text("target_string in notes\n", encoding="utf-8")
+        (tmp_path / "notes.txt").write_text(
+            "target_string in notes\n", encoding="utf-8"
+        )
 
         result = self.find(
             query="target_string",
@@ -1252,8 +1286,6 @@ class TestParseSizeRangeDirect:
 
         def patched_register(self_inner):
             # Call original but intercept the locals
-            import types
-
             # Instead of inspecting locals, we use a different approach:
             # The _parse_size_range is used by find_files. We can test it
             # by creating controlled inputs through find_files.
@@ -1265,9 +1297,6 @@ class TestParseSizeRangeDirect:
 
     def test_none_input(self):
         """Calling with None returns (None, None)."""
-        # Replicate the function logic for direct testing
-        from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
-
         # Since we cannot extract the nested function directly,
         # these tests verify the behavior through find_files (see above).
         # Here we test the edge case behavior is consistent.
@@ -1632,7 +1661,9 @@ class TestImageFileHandling:
         f.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
 
         with patch.dict("sys.modules", {"PIL": None, "PIL.Image": None}):
-            with patch("builtins.__import__", side_effect=_selective_import_error("PIL")):
+            with patch(
+                "builtins.__import__", side_effect=_selective_import_error("PIL")
+            ):
                 result = self.tools["file_info"](path=str(f))
         assert "File:" in result
         assert ".png" in result
@@ -1640,7 +1671,9 @@ class TestImageFileHandling:
 
 def _selective_import_error(blocked_module):
     """Create an import side_effect that only blocks a specific module."""
-    real_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+    real_import = (
+        __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+    )
 
     def _import(name, *args, **kwargs):
         if name == blocked_module or name.startswith(blocked_module + "."):

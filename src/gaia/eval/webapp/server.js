@@ -317,6 +317,13 @@ app.get('/api/test-data/:type/:filename', (req, res) => {
             }
         }
 
+        // Final validation: ensure the resolved filePath is within TEST_DATA_PATH
+        const resolvedBase = path.resolve(TEST_DATA_PATH);
+        const resolvedFilePath = path.resolve(filePath);
+        if (!resolvedFilePath.startsWith(resolvedBase + path.sep) && resolvedFilePath !== resolvedBase) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+
         // Check if file is PDF
         if (filename.endsWith('.pdf')) {
             // For PDFs, send file info and indicate it's a binary file

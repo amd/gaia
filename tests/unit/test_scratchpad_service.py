@@ -9,7 +9,6 @@ import pytest
 
 from gaia.scratchpad.service import ScratchpadService
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -42,9 +41,7 @@ class TestCreateTable:
 
     def test_create_table_returns_confirmation(self, scratchpad):
         """Check return message contains table name and columns."""
-        result = scratchpad.create_table(
-            "sales", "product TEXT, quantity INTEGER"
-        )
+        result = scratchpad.create_table("sales", "product TEXT, quantity INTEGER")
 
         assert isinstance(result, str)
         assert "sales" in result
@@ -52,9 +49,7 @@ class TestCreateTable:
 
     def test_create_table_sanitizes_name(self, scratchpad):
         """Name with special characters gets cleaned to alphanumeric + underscore."""
-        result = scratchpad.create_table(
-            "my-data!@#table", "value TEXT"
-        )
+        result = scratchpad.create_table("my-data!@#table", "value TEXT")
 
         # Special chars replaced with underscores
         assert "my_data___table" in result
@@ -185,9 +180,7 @@ class TestQueryData:
         )
 
         # COUNT
-        results = scratchpad.query_data(
-            "SELECT COUNT(*) AS cnt FROM scratch_sales"
-        )
+        results = scratchpad.query_data("SELECT COUNT(*) AS cnt FROM scratch_sales")
         assert results[0]["cnt"] == 3
 
         # SUM + GROUP BY
@@ -234,9 +227,7 @@ class TestQueryData:
         scratchpad.create_table("safe", "val TEXT")
 
         with pytest.raises(ValueError, match="disallowed keyword"):
-            scratchpad.query_data(
-                "SELECT * FROM scratch_safe; DROP TABLE scratch_safe"
-            )
+            scratchpad.query_data("SELECT * FROM scratch_safe; DROP TABLE scratch_safe")
 
     def test_query_data_rejects_alter(self, scratchpad):
         """ALTER statement raises ValueError."""

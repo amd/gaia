@@ -290,7 +290,9 @@ app.post('/auth/login', loginLimiter, (req, res) => {
     const parsed = url.parse(target || '');
     // Only redirect to relative paths (no host/protocol) to prevent open redirects
     if (!parsed.host && !parsed.protocol && parsed.pathname) {
-      res.redirect(303, parsed.pathname);
+      // Sanitize pathname to prevent protocol-relative URLs (e.g., //evil.com)
+      const safePath = parsed.pathname.startsWith('/') && !parsed.pathname.startsWith('//') ? parsed.pathname : '/';
+      res.redirect(303, safePath);
     } else {
       res.redirect(303, '/');
     }
@@ -316,6 +318,33 @@ app.get('/auth/logout', (req, res) => {
   res.clearCookie(COOKIE_NAME);
   res.redirect('/');
 });
+
+// Simple in-memory rate limiter for general requests (no external dependencies)
+const rateLimitStore = new Map();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX = 100; // max requests per window
+
+function rateLimiter(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress;
+  const now = Date.now();
+  const record = rateLimitStore.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+
+  if (now > record.resetAt) {
+    record.count = 0;
+    record.resetAt = now + RATE_LIMIT_WINDOW;
+  }
+
+  record.count++;
+  rateLimitStore.set(ip, record);
+
+  if (record.count > RATE_LIMIT_MAX) {
+    return res.status(429).send('Too Many Requests');
+  }
+  next();
+}
+
+// Apply rate limiter before auth middleware
+app.use(rateLimiter);
 
 // Apply auth middleware
 app.use(authMiddleware);

@@ -275,8 +275,18 @@ class PathValidator:
                     allowed_path_str = str(res_allowed)
                     norm_allowed_path = normalize_macos(allowed_path_str)
 
-                    # Robust check using string prefix on normalized paths
-                    if norm_real_path.startswith(norm_allowed_path):
+                    # Robust check using string prefix on normalized paths.
+                    # Append os.sep to prevent prefix attacks where
+                    # /home/user/project matches /home/user/project-secrets
+                    norm_allowed_with_sep = (
+                        norm_allowed_path
+                        if norm_allowed_path.endswith(os.sep)
+                        else norm_allowed_path + os.sep
+                    )
+                    if (
+                        norm_real_path == norm_allowed_path
+                        or norm_real_path.startswith(norm_allowed_with_sep)
+                    ):
                         return True
 
                     # Fallback to relative_to for safety
@@ -354,8 +364,14 @@ class PathValidator:
             # Check blocked directories (case-insensitive on Windows)
             for blocked_dir in BLOCKED_DIRECTORIES:
                 # Case-insensitive comparison on Windows, case-sensitive elsewhere
-                cmp_norm = norm_path.lower() if platform.system() == "Windows" else norm_path
-                cmp_blocked = blocked_dir.lower() if platform.system() == "Windows" else blocked_dir
+                cmp_norm = (
+                    norm_path.lower() if platform.system() == "Windows" else norm_path
+                )
+                cmp_blocked = (
+                    blocked_dir.lower()
+                    if platform.system() == "Windows"
+                    else blocked_dir
+                )
                 if cmp_norm.startswith(cmp_blocked + os.sep) or cmp_norm == cmp_blocked:
                     return (
                         True,
@@ -454,9 +470,7 @@ class PathValidator:
         print(f"\n⚠️  File already exists: {path} ({size_str})")
 
         while True:
-            response = (
-                input("Overwrite this file? [y]es / [n]o: ").lower().strip()
-            )
+            response = input("Overwrite this file? [y]es / [n]o: ").lower().strip()
             if response in ["y", "yes"]:
                 logger.info(f"User approved overwrite of: {path}")
                 return True

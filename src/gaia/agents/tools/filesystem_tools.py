@@ -1,5 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+# pylint: disable=protected-access
 
 """
 File System Navigation and Management Tools.
@@ -13,9 +14,7 @@ import json
 import logging
 import mimetypes
 import os
-import stat
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +107,7 @@ class FileSystemToolsMixin:
         """Register all file system navigation and management tools."""
         from gaia.agents.base.tools import tool
 
-        mixin = self  # Capture self for use in nested functions
+        mixin = self  # Capture self for nested functions
 
         @tool(atomic=True)
         def browse_directory(
@@ -582,9 +581,6 @@ class FileSystemToolsMixin:
                 sort_by: Sort order - relevance, name, size, modified (default: relevance)
             """
             try:
-                import fnmatch
-                import re as _re
-
                 results = []
 
                 # Parse file type filters
@@ -1002,8 +998,6 @@ class FileSystemToolsMixin:
             if not size_range:
                 return None, None
 
-            import re as _re
-
             def _parse_size_value(s: str) -> int:
                 s = s.strip().upper()
                 multipliers = {
@@ -1099,7 +1093,7 @@ class FileSystemToolsMixin:
 
         def _search_names(
             root,
-            query,
+            _query,
             query_lower,
             is_glob,
             results,
@@ -1193,8 +1187,8 @@ class FileSystemToolsMixin:
             type_filters,
             min_size,
             max_size,
-            min_date,
-            max_date,
+            _min_date,
+            _max_date,
         ):
             """Search inside file contents."""
             default_excludes = mixin._get_default_excludes()

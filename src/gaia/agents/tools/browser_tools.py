@@ -1,5 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+# pylint: disable=protected-access
 
 """
 Browser Tools for web content extraction and search.
@@ -11,7 +12,6 @@ search the web, and download files for local analysis.
 
 import json
 import logging
-from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 

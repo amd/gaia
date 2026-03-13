@@ -20,12 +20,11 @@ All tests run without LLM or external services.
 
 import os
 import tempfile
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from gaia.web.client import WebClient
-
 
 # ============================================================================
 # 1. parse_html: lxml fallback to html.parser

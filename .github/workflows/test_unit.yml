@@ -43,7 +43,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system pytest pytest-cov pytest-mock
+          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock
           uv pip install --system beautifulsoup4
           uv pip install --system -e ".[api]"
 

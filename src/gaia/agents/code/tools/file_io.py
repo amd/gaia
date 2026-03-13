@@ -476,7 +476,9 @@ class FileIOToolsMixin:
 
                 # Create parent directories if needed
                 if create_dirs:
-                    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                    dir_name = os.path.dirname(file_path)
+                    if dir_name:
+                        os.makedirs(dir_name, exist_ok=True)
 
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
@@ -581,9 +583,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
-                    path_validator.audit_write(
-                        "write", file_path, 0, "error", str(e)
-                    )
+                    path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
         @tool
@@ -706,9 +706,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
-                    path_validator.audit_write(
-                        "edit", file_path, 0, "error", str(e)
-                    )
+                    path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
         @tool
@@ -787,6 +785,9 @@ class FileIOToolsMixin:
                 content += "- Use Black formatter for consistent style\n"
                 content += "- Ensure proper error handling\n\n"
 
+                # Check existence BEFORE writing for accurate created/updated msg
+                is_new_file = not os.path.exists(gaia_path)
+
                 # Write the file
                 with open(gaia_path, "w", encoding="utf-8") as f:
                     f.write(content)
@@ -794,8 +795,8 @@ class FileIOToolsMixin:
                 return {
                     "status": "success",
                     "file_path": gaia_path,
-                    "created": not os.path.exists(gaia_path),
-                    "message": f"GAIA.md {'created' if not os.path.exists(gaia_path) else 'updated'} at {gaia_path}",
+                    "created": is_new_file,
+                    "message": f"GAIA.md {'created' if is_new_file else 'updated'} at {gaia_path}",
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
@@ -872,6 +873,7 @@ class FileIOToolsMixin:
                                 break
 
                 # Create backup if requested
+                backup_path = None
                 if backup:
                     backup_path = f"{file_path}.bak"
                     with open(backup_path, "w", encoding="utf-8") as f:

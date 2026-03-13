@@ -6,12 +6,11 @@
 import pytest
 
 from gaia.filesystem.categorizer import (
-    CATEGORY_MAP,
     _EXTENSION_TO_CATEGORY,
     _SUBCATEGORY_MAP,
+    CATEGORY_MAP,
     auto_categorize,
 )
-
 
 # ---------------------------------------------------------------------------
 # auto_categorize: known extensions
@@ -99,9 +98,9 @@ class TestCategoryMapCompleteness:
             for ext in extensions:
                 if ext not in _EXTENSION_TO_CATEGORY:
                     missing.append((ext, category))
-        assert missing == [], (
-            f"Extensions in CATEGORY_MAP but not in _EXTENSION_TO_CATEGORY: {missing}"
-        )
+        assert (
+            missing == []
+        ), f"Extensions in CATEGORY_MAP but not in _EXTENSION_TO_CATEGORY: {missing}"
 
 
 class TestSubcategoryMapConsistency:
@@ -112,16 +111,12 @@ class TestSubcategoryMapConsistency:
         mismatches = []
         for ext, (cat, _subcat) in _SUBCATEGORY_MAP.items():
             if cat not in CATEGORY_MAP:
-                mismatches.append(
-                    (ext, cat, "category not found in CATEGORY_MAP")
-                )
+                mismatches.append((ext, cat, "category not found in CATEGORY_MAP"))
             elif ext not in CATEGORY_MAP[cat]:
-                mismatches.append(
-                    (ext, cat, f"extension not in CATEGORY_MAP['{cat}']")
-                )
-        assert mismatches == [], (
-            f"_SUBCATEGORY_MAP entries inconsistent with CATEGORY_MAP: {mismatches}"
-        )
+                mismatches.append((ext, cat, f"extension not in CATEGORY_MAP['{cat}']"))
+        assert (
+            mismatches == []
+        ), f"_SUBCATEGORY_MAP entries inconsistent with CATEGORY_MAP: {mismatches}"
 
 
 class TestExtensionUniqueness:
@@ -137,9 +132,9 @@ class TestExtensionUniqueness:
                     duplicates.append((ext, seen[ext], category))
                 else:
                     seen[ext] = category
-        assert duplicates == [], (
-            f"Extensions appearing in multiple categories: {duplicates}"
-        )
+        assert (
+            duplicates == []
+        ), f"Extensions appearing in multiple categories: {duplicates}"
 
 
 # ---------------------------------------------------------------------------
@@ -156,9 +151,9 @@ class TestReverseLookupCorrectness:
         for ext, cat in _EXTENSION_TO_CATEGORY.items():
             if cat not in CATEGORY_MAP or ext not in CATEGORY_MAP[cat]:
                 wrong.append((ext, cat))
-        assert wrong == [], (
-            f"_EXTENSION_TO_CATEGORY entries not matching CATEGORY_MAP: {wrong}"
-        )
+        assert (
+            wrong == []
+        ), f"_EXTENSION_TO_CATEGORY entries not matching CATEGORY_MAP: {wrong}"
 
 
 if __name__ == "__main__":

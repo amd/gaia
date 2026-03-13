@@ -136,7 +136,7 @@ class WebClient:
         except socket.gaierror:
             raise ValueError(f"Cannot resolve hostname: {hostname}")
 
-        for family, _, _, _, sockaddr in results:
+        for _family, _, _, _, sockaddr in results:
             ip_str = sockaddr[0]
             try:
                 ip = ipaddress.ip_address(ip_str)

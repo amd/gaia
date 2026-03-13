@@ -9,7 +9,6 @@ import pytest
 
 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -87,13 +86,13 @@ class TestFileSystemIndexInit:
 
     def test_fs_index_graceful_import_error(self):
         """If FileSystemIndexService cannot be imported, _fs_index stays None."""
-        with patch(
-            "gaia.agents.chat.agent.RAGSDK"
-        ), patch(
-            "gaia.agents.chat.agent.RAGConfig"
-        ), patch.dict(
-            "sys.modules",
-            {"gaia.filesystem.index": None},
+        with (
+            patch("gaia.agents.chat.agent.RAGSDK"),
+            patch("gaia.agents.chat.agent.RAGConfig"),
+            patch.dict(
+                "sys.modules",
+                {"gaia.filesystem.index": None},
+            ),
         ):
             # The import inside __init__ will fail because the module is None
             config = ChatAgentConfig(
@@ -103,7 +102,11 @@ class TestFileSystemIndexInit:
                 enable_browser=False,
             )
             # Patch the import so it raises ImportError
-            original_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+            original_import = (
+                __builtins__.__import__
+                if hasattr(__builtins__, "__import__")
+                else __import__
+            )
 
             def _fake_import(name, *args, **kwargs):
                 if name == "gaia.filesystem.index":
@@ -144,7 +147,11 @@ class TestScratchpadInit:
 
     def test_scratchpad_graceful_import_error(self):
         """If ScratchpadService cannot be imported, _scratchpad stays None."""
-        original_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+        original_import = (
+            __builtins__.__import__
+            if hasattr(__builtins__, "__import__")
+            else __import__
+        )
 
         def _fake_import(name, *args, **kwargs):
             if name == "gaia.scratchpad.service":
@@ -157,8 +164,10 @@ class TestScratchpadInit:
             enable_scratchpad=True,
             enable_browser=False,
         )
-        with patch(_RAG_PATCHES[0]), patch(_RAG_PATCHES[1]), patch(
-            "builtins.__import__", side_effect=_fake_import
+        with (
+            patch(_RAG_PATCHES[0]),
+            patch(_RAG_PATCHES[1]),
+            patch("builtins.__import__", side_effect=_fake_import),
         ):
             agent = ChatAgent(config)
 
@@ -206,12 +215,14 @@ class TestToolRegistration:
             enable_scratchpad=False,
             enable_browser=False,
         )
-        with patch.object(agent, "register_rag_tools") as m_rag, \
-             patch.object(agent, "register_file_tools") as m_file, \
-             patch.object(agent, "register_shell_tools") as m_shell, \
-             patch.object(agent, "register_filesystem_tools") as m_fs, \
-             patch.object(agent, "register_scratchpad_tools") as m_sp, \
-             patch.object(agent, "register_browser_tools") as m_br:
+        with (
+            patch.object(agent, "register_rag_tools") as m_rag,
+            patch.object(agent, "register_file_tools") as m_file,
+            patch.object(agent, "register_shell_tools") as m_shell,
+            patch.object(agent, "register_filesystem_tools") as m_fs,
+            patch.object(agent, "register_scratchpad_tools") as m_sp,
+            patch.object(agent, "register_browser_tools") as m_br,
+        ):
             agent._register_tools()
 
         m_fs.assert_called_once()
@@ -235,7 +246,9 @@ class TestToolRegistration:
             "bookmark",
         ]
         for name in expected_fs_tools:
-            assert name in tool_names, f"Expected filesystem tool '{name}' not found in registered tools"
+            assert (
+                name in tool_names
+            ), f"Expected filesystem tool '{name}' not found in registered tools"
 
     def test_scratchpad_tool_names_registered(self):
         """After full init, scratchpad tool names should be in the tool registry."""
@@ -253,7 +266,9 @@ class TestToolRegistration:
             "drop_table",
         ]
         for name in expected_sp_tools:
-            assert name in tool_names, f"Expected scratchpad tool '{name}' not found in registered tools"
+            assert (
+                name in tool_names
+            ), f"Expected scratchpad tool '{name}' not found in registered tools"
 
 
 # ---------------------------------------------------------------------------

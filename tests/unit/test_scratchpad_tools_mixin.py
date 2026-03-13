@@ -10,7 +10,6 @@ import pytest
 
 from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin
 
-
 # ===== Helper: create a mock agent with captured tool functions =====
 
 
@@ -53,7 +52,13 @@ class TestScratchpadToolRegistration:
 
     def test_all_five_tools_registered(self):
         """All 5 scratchpad tools should be registered."""
-        expected = {"create_table", "insert_data", "query_data", "list_tables", "drop_table"}
+        expected = {
+            "create_table",
+            "insert_data",
+            "query_data",
+            "list_tables",
+            "drop_table",
+        }
         assert set(self.tools.keys()) == expected
 
     def test_exactly_five_tools(self):
@@ -170,10 +175,12 @@ class TestInsertData:
     def test_valid_json_string_parsed(self):
         """insert_data parses a valid JSON string and calls insert_rows."""
         self.agent._scratchpad.insert_rows.return_value = 2
-        data = json.dumps([
-            {"name": "Alice", "score": 95},
-            {"name": "Bob", "score": 87},
-        ])
+        data = json.dumps(
+            [
+                {"name": "Alice", "score": 95},
+                {"name": "Bob", "score": 87},
+            ]
+        )
         result = self.tools["insert_data"]("students", data)
         assert "Inserted 2 row(s) into 'students'" in result
         # Verify the parsed list was passed to insert_rows
@@ -257,9 +264,7 @@ class TestInsertData:
 
     def test_generic_exception_handling(self):
         """insert_data handles unexpected exceptions gracefully."""
-        self.agent._scratchpad.insert_rows.side_effect = RuntimeError(
-            "disk I/O error"
-        )
+        self.agent._scratchpad.insert_rows.side_effect = RuntimeError("disk I/O error")
         data = json.dumps([{"col": "val"}])
         result = self.tools["insert_data"]("test", data)
         assert "Error inserting data into 'test'" in result
@@ -379,7 +384,9 @@ class TestQueryData:
         self.agent._scratchpad.query_data.side_effect = ValueError(
             "Query contains disallowed keyword: DELETE"
         )
-        result = self.tools["query_data"]("SELECT * FROM scratch_t; DELETE FROM scratch_t")
+        result = self.tools["query_data"](
+            "SELECT * FROM scratch_t; DELETE FROM scratch_t"
+        )
         assert "Error:" in result
         assert "DELETE" in result
 
@@ -535,9 +542,9 @@ class TestQueryDataFormatting:
             pos = line.index(" | ")
             pipe_positions.append(pos)
         # All pipe separators should be at the same column position
-        assert len(set(pipe_positions)) == 1, (
-            f"Pipe positions not aligned: {pipe_positions}"
-        )
+        assert (
+            len(set(pipe_positions)) == 1
+        ), f"Pipe positions not aligned: {pipe_positions}"
 
 
 # ===== list_tables Tests =====

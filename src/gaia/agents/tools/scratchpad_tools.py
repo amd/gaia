@@ -1,5 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+# pylint: disable=protected-access
 
 """
 Data Scratchpad Tools for structured data analysis.
@@ -12,7 +13,6 @@ and research reviews.
 
 import json
 import logging
-from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 

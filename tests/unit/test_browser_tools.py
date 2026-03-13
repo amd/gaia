@@ -175,7 +175,7 @@ class TestWebClientHTMLExtraction:
     def check_bs4(self):
         """Skip if BeautifulSoup not available."""
         try:
-            from bs4 import BeautifulSoup
+            from bs4 import BeautifulSoup  # noqa: F401
         except ImportError:
             pytest.skip("beautifulsoup4 not installed")
 
@@ -282,7 +282,7 @@ class TestWebClientDuckDuckGo:
     @pytest.fixture(autouse=True)
     def check_bs4(self):
         try:
-            from bs4 import BeautifulSoup
+            from bs4 import BeautifulSoup  # noqa: F401
         except ImportError:
             pytest.skip("beautifulsoup4 not installed")
 

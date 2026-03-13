@@ -8,10 +8,11 @@ These tools are agent-agnostic and don't depend on specific agent functionality.
 """
 
 import ast
+import fnmatch
 import logging
 import os
 import platform
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -32,12 +33,20 @@ class FileSearchToolsMixin:
         file_list = []
         for i, fpath in enumerate(file_paths, 1):
             p = Path(fpath)
+            name = p.name
+            parent = str(p.parent)
+            # On Linux, Path won't split Windows backslash paths properly.
+            # Fall back to PureWindowsPath when the name still has backslashes.
+            if "\\" in name:
+                wp = PureWindowsPath(fpath)
+                name = wp.name
+                parent = str(wp.parent)
             file_list.append(
                 {
                     "number": i,
-                    "name": p.name,
+                    "name": name,
                     "path": str(fpath),
-                    "directory": str(p.parent),
+                    "directory": parent,
                 }
             )
         return file_list
@@ -102,9 +111,26 @@ class FileSearchToolsMixin:
                 pattern_lower = file_pattern.lower()
                 searched_locations = []
 
+                # Detect if the pattern is a glob (contains * or ?)
+                is_glob = "*" in file_pattern or "?" in file_pattern
+
+                # For multi-word queries, split into individual words
+                # so "operations manual" matches "Operations-Manual" in filenames
+                query_words = pattern_lower.split() if not is_glob else []
+
                 def matches_pattern_and_type(file_path: Path) -> bool:
                     """Check if file matches pattern and is a document type."""
-                    name_match = pattern_lower in file_path.name.lower()
+                    name_lower = file_path.name.lower()
+                    if is_glob:
+                        # Use fnmatch for glob patterns like *.pdf, report*.docx
+                        name_match = fnmatch.fnmatch(name_lower, pattern_lower)
+                    elif len(query_words) > 1:
+                        # Multi-word query: all words must appear in filename
+                        # (handles hyphens, underscores, camelCase separators)
+                        name_match = all(w in name_lower for w in query_words)
+                    else:
+                        # Single word: simple substring match
+                        name_match = pattern_lower in name_lower
                     type_match = file_path.suffix.lower() in doc_extensions
                     return name_match and type_match
 
@@ -139,7 +165,9 @@ class FileSearchToolsMixin:
 
                     search_recursive(location, 0)
 
-                # Phase 0: Search CURRENT WORKING DIRECTORY first and thoroughly
+                # Phase 0+1: Search CWD AND common locations together
+                # (always search both before returning, so Documents/Downloads
+                # files aren't missed just because CWD had some matches)
                 cwd = Path.cwd()
                 home = Path.home()
 
@@ -157,24 +185,7 @@ class FileSearchToolsMixin:
                 # Search current directory thoroughly (unlimited depth)
                 search_location(cwd, max_depth=999)
 
-                # If found in CWD, return immediately
-                if matching_files:
-                    if hasattr(self, "console") and hasattr(
-                        self.console, "stop_progress"
-                    ):
-                        self.console.stop_progress()
-
-                    # Add helpful context about where it was found
-                    return {
-                        "status": "success",
-                        "files": matching_files[:10],
-                        "file_list": self._format_file_list(matching_files[:10]),
-                        "count": len(matching_files),
-                        "search_context": "current_directory",
-                        "display_message": f"✓ Found {len(matching_files)} file(s) in current directory ({cwd.name})",
-                    }
-
-                # Phase 1: Search common locations
+                # Always also search common locations (Documents, Downloads, etc.)
                 if hasattr(self, "console") and hasattr(self.console, "start_progress"):
                     self.console.start_progress(
                         "🔍 Searching common folders (Documents, Downloads, Desktop)..."
@@ -192,11 +203,29 @@ class FileSearchToolsMixin:
                 ]
 
                 for location in common_locations:
-                    if len(matching_files) >= 10:
+                    if len(matching_files) >= 20:
                         break
+                    # Skip if already searched as part of CWD
+                    try:
+                        if location.resolve() == cwd.resolve() or str(
+                            location.resolve()
+                        ).startswith(str(cwd.resolve())):
+                            continue
+                    except (OSError, ValueError):
+                        pass
                     search_location(location, max_depth=5)
 
-                # If found in common locations, return
+                # Deduplicate results (CWD and common locations may overlap)
+                unique_files = []
+                unique_set = set()
+                for f in matching_files:
+                    resolved = str(Path(f).resolve())
+                    if resolved not in unique_set:
+                        unique_set.add(resolved)
+                        unique_files.append(f)
+                matching_files = unique_files
+
+                # If found in CWD + common locations, return
                 if matching_files:
                     if hasattr(self, "console") and hasattr(
                         self.console, "stop_progress"
@@ -210,7 +239,7 @@ class FileSearchToolsMixin:
                         "count": len(matching_files),
                         "total_locations_searched": len(searched_locations),
                         "search_context": "common_locations",
-                        "display_message": f"✓ Found {len(matching_files)} file(s) in common locations",
+                        "display_message": f"✓ Found {len(matching_files)} file(s)",
                     }
 
                 # Phase 2: Deep drive search if still not found
@@ -416,6 +445,17 @@ class FileSearchToolsMixin:
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
+                # Guard against reading very large files into memory
+                file_size = os.path.getsize(file_path)
+                if file_size > 10_000_000:  # 10 MB
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"File too large ({file_size:,} bytes). "
+                            "Use search_file_content for large files."
+                        ),
+                    }
+
                 # Read file content
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
@@ -550,8 +590,6 @@ class FileSearchToolsMixin:
             Searches actual file contents on disk, not RAG indexed documents.
             """
             try:
-                import fnmatch
-
                 directory = Path(directory).resolve()
 
                 if not directory.exists():
@@ -769,9 +807,7 @@ class FileSearchToolsMixin:
                 if path_validator is None:
                     path_validator = getattr(self, "_path_validator", None)
                 if path_validator is not None:
-                    path_validator.audit_write(
-                        "write", file_path, 0, "error", str(e)
-                    )
+                    path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {
                     "status": "error",
                     "error": str(e),
@@ -926,9 +962,7 @@ class FileSearchToolsMixin:
                 if path_validator is None:
                     path_validator = getattr(self, "_path_validator", None)
                 if path_validator is not None:
-                    path_validator.audit_write(
-                        "edit", file_path, 0, "error", str(e)
-                    )
+                    path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {
                     "status": "error",
                     "error": str(e),

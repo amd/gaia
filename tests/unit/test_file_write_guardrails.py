@@ -18,8 +18,6 @@ for all file mutation operations across agents. These tests verify:
 All tests are designed to run without LLM or external services.
 """
 
-import datetime
-import logging
 import os
 import platform
 from pathlib import Path
@@ -50,26 +48,20 @@ class TestBlockedDirectories:
         assert isinstance(BLOCKED_DIRECTORIES, set)
         assert len(BLOCKED_DIRECTORIES) > 0
 
-    @pytest.mark.skipif(
-        platform.system() != "Windows", reason="Windows-specific test"
-    )
+    @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-specific test")
     def test_windows_blocked_dirs_include_system(self):
         """Verify Windows system directories are blocked."""
         windir = os.environ.get("WINDIR", r"C:\Windows")
         assert os.path.normpath(windir) in BLOCKED_DIRECTORIES
         assert os.path.normpath(os.path.join(windir, "System32")) in BLOCKED_DIRECTORIES
 
-    @pytest.mark.skipif(
-        platform.system() != "Windows", reason="Windows-specific test"
-    )
+    @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-specific test")
     def test_windows_blocked_dirs_include_program_files(self):
         """Verify Program Files directories are blocked on Windows."""
         assert os.path.normpath(r"C:\Program Files") in BLOCKED_DIRECTORIES
         assert os.path.normpath(r"C:\Program Files (x86)") in BLOCKED_DIRECTORIES
 
-    @pytest.mark.skipif(
-        platform.system() != "Windows", reason="Windows-specific test"
-    )
+    @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-specific test")
     def test_windows_blocked_dirs_include_ssh(self):
         """Verify .ssh directory is blocked on Windows."""
         userprofile = os.environ.get("USERPROFILE", "")
@@ -77,17 +69,13 @@ class TestBlockedDirectories:
             ssh_dir = os.path.normpath(os.path.join(userprofile, ".ssh"))
             assert ssh_dir in BLOCKED_DIRECTORIES
 
-    @pytest.mark.skipif(
-        platform.system() == "Windows", reason="Unix-specific test"
-    )
+    @pytest.mark.skipif(platform.system() == "Windows", reason="Unix-specific test")
     def test_unix_blocked_dirs_include_system(self):
         """Verify Unix system directories are blocked."""
         for d in ["/bin", "/sbin", "/usr/bin", "/usr/sbin", "/etc", "/boot"]:
             assert d in BLOCKED_DIRECTORIES
 
-    @pytest.mark.skipif(
-        platform.system() == "Windows", reason="Unix-specific test"
-    )
+    @pytest.mark.skipif(platform.system() == "Windows", reason="Unix-specific test")
     def test_unix_blocked_dirs_include_ssh(self):
         """Verify .ssh and .gnupg directories are blocked on Unix."""
         home = str(Path.home())
@@ -260,20 +248,19 @@ class TestIsWriteBlocked:
         assert is_blocked is True
         assert ".p12" in reason
 
-    @pytest.mark.skipif(
-        platform.system() != "Windows", reason="Windows-specific test"
-    )
+    @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-specific test")
     def test_windows_system32_is_blocked(self, validator):
         """Verify Windows System32 is blocked."""
         windir = os.environ.get("WINDIR", r"C:\Windows")
         sys32_file = os.path.join(windir, "System32", "test.txt")
         is_blocked, reason = validator.is_write_blocked(sys32_file)
         assert is_blocked is True
-        assert "protected system directory" in reason.lower() or "blocked" in reason.lower()
+        assert (
+            "protected system directory" in reason.lower()
+            or "blocked" in reason.lower()
+        )
 
-    @pytest.mark.skipif(
-        platform.system() == "Windows", reason="Unix-specific test"
-    )
+    @pytest.mark.skipif(platform.system() == "Windows", reason="Unix-specific test")
     def test_unix_etc_is_blocked(self, validator):
         """Verify /etc is blocked on Unix."""
         is_blocked, reason = validator.is_write_blocked("/etc/test_file.conf")
@@ -716,7 +703,10 @@ class TestChatAgentWriteFileGuardrails:
         env_file = str(tmp_path / ".env")
         result = write_file_func(file_path=env_file, content="SECRET=key")
         assert result["status"] == "error"
-        assert "blocked" in result["error"].lower() or "sensitive" in result["error"].lower()
+        assert (
+            "blocked" in result["error"].lower()
+            or "sensitive" in result["error"].lower()
+        )
         # File should NOT have been created
         assert not os.path.exists(env_file)
 
@@ -741,12 +731,8 @@ class TestChatAgentWriteFileGuardrails:
         target.write_text("original content")
 
         # Mock overwrite prompt to auto-approve
-        with patch.object(
-            PathValidator, "_prompt_overwrite", return_value=True
-        ):
-            result = write_file_func(
-                file_path=str(target), content="new content"
-            )
+        with patch.object(PathValidator, "_prompt_overwrite", return_value=True):
+            result = write_file_func(file_path=str(target), content="new content")
 
         assert result["status"] == "success"
         assert "backup_path" in result
@@ -849,7 +835,10 @@ class TestChatAgentEditFileGuardrails:
             new_content="something",
         )
         assert result["status"] == "error"
-        assert "not found" in result["error"].lower() or "File not found" in result["error"]
+        assert (
+            "not found" in result["error"].lower()
+            or "File not found" in result["error"]
+        )
 
     def test_edit_content_not_found_returns_error(self, mixin_and_registry, tmp_path):
         """Verify editing with non-matching old_content returns an error."""
@@ -917,7 +906,10 @@ class TestCodeAgentWriteFileGuardrails:
         creds = str(tmp_path / "credentials.json")
         result = write_fn(file_path=creds, content='{"key": "secret"}')
         assert result["status"] == "error"
-        assert "blocked" in result["error"].lower() or "sensitive" in result["error"].lower()
+        assert (
+            "blocked" in result["error"].lower()
+            or "sensitive" in result["error"].lower()
+        )
 
     def test_write_sensitive_extension_blocked(self, mixin_and_registry, tmp_path):
         """Verify writing a .key file is blocked."""
@@ -1116,7 +1108,9 @@ class TestPathValidatorEdgeCases:
         with patch("os.path.realpath", side_effect=OSError("mocked error")):
             is_blocked, reason = validator.is_write_blocked("/some/path.txt")
         assert is_blocked is True
-        assert "unable to validate" in reason.lower() or "mocked error" in reason.lower()
+        assert (
+            "unable to validate" in reason.lower() or "mocked error" in reason.lower()
+        )
 
     def test_add_allowed_path(self, validator, tmp_path):
         """Verify add_allowed_path expands the allowlist."""
@@ -1198,7 +1192,9 @@ class TestNoPathValidatorFallback:
             _TOOL_REGISTRY.clear()
             _TOOL_REGISTRY.update(saved_registry)
 
-    def test_write_without_validator_writes_file_to_disk(self, write_fn_no_validator, tmp_path):
+    def test_write_without_validator_writes_file_to_disk(
+        self, write_fn_no_validator, tmp_path
+    ):
         """Verify write_file writes data to disk even when no validator is present.
 
         When no PathValidator is attached to the agent, the write proceeds with
