@@ -69,13 +69,14 @@ Full Changelog: [v0.16.1...v0.17.0](https://github.com/amd/gaia/compare/v0.16.1.
     "group": "Release Notes",
     "pages": [
       "releases/index",
-      "releases/v0.17.0",  // ← add here
-      "releases/v0.16.1",
-      ...
+      "releases/v0.17.0",
+      "releases/v0.16.1"
     ]
   }]
 }
 ```
+
+Add `"releases/v0.17.0"` as the **second entry** (after `"releases/index"`, before the previous release).
 
 **(b)** Update the **navbar version label**:
 
@@ -84,13 +85,15 @@ Full Changelog: [v0.16.1...v0.17.0](https://github.com/amd/gaia/compare/v0.16.1.
   "navbar": {
     "links": [
       {
-        "label": "v0.17.0 · Lemonade 10.0.0",  // ← update version
+        "label": "v0.17.0 · Lemonade 10.0.0",
         "href": "https://github.com/amd/gaia/releases"
       }
     ]
   }
 }
 ```
+
+Change the version in the `label` value to match the new release tag.
 
 ### Merge, tag, push
 

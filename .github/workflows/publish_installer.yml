@@ -23,6 +23,13 @@ jobs:
       - name: Extract tag info
         id: tag
         run: |
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "❌ ERROR: This workflow must be triggered from a tag, not a branch."
+            echo "   GITHUB_REF_NAME=$GITHUB_REF_NAME (type: $GITHUB_REF_TYPE)"
+            echo ""
+            echo "To release, push a tag: git tag v{version} && git push origin v{version}"
+            exit 1
+          fi
           TAG_NAME="${GITHUB_REF_NAME}"
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "Tag: $TAG_NAME"
@@ -118,7 +125,6 @@ jobs:
           python3 util/validate_release_notes.py "docs/releases/${TAG_NAME}.mdx" --tag "$TAG_NAME"
 
   build-electron-apps:
-    needs: [validate-release]
     uses: ./.github/workflows/build-electron-apps.yml
 
   publish-release:
@@ -137,8 +143,10 @@ jobs:
           echo "Reading release notes from $NOTES_FILE"
 
           # Strip MDX frontmatter (everything between first --- and second ---)
-          # and write the body to a file for the release action
-          awk 'BEGIN{fm=0} /^---$/{fm++; next} fm>=2{print}' "$NOTES_FILE" > RELEASE_BODY.md
+          # and write the body to a file for the release action.
+          # Only count the first two --- lines as frontmatter boundaries;
+          # preserve any --- horizontal rules in the body content.
+          awk 'BEGIN{fm=0} /^---$/ && fm<2 {fm++; next} fm>=2{print}' "$NOTES_FILE" > RELEASE_BODY.md
 
           # Append installation instructions
           cat >> RELEASE_BODY.md << 'INSTALL_EOF'
