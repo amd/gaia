@@ -102,9 +102,9 @@ TEST(IntegrationMCP, DiscoversShellTool) {
     });
     ASSERT_TRUE(connected);
 
-    // windows-mcp should expose at least Shell
-    EXPECT_TRUE(agent.tools().hasTool("mcp_windows_Shell"))
-        << "Expected mcp_windows_Shell tool to be discovered";
+    // windows-mcp should expose at least Shell (case may vary by version)
+    EXPECT_FALSE(agent.tools().resolveName("mcp_windows_Shell").empty())
+        << "Expected mcp_windows_Shell (or shell) tool to be discovered";
 }
 
 TEST(IntegrationMCP, DiscoversMultipleTools) {
@@ -128,7 +128,7 @@ TEST(IntegrationMCP, DisconnectAndReconnect) {
         {"args", {"windows-mcp"}}
     });
     ASSERT_TRUE(connected);
-    ASSERT_TRUE(agent.tools().hasTool("mcp_windows_Shell"));
+    ASSERT_FALSE(agent.tools().resolveName("mcp_windows_Shell").empty());
 
     // Disconnect
     agent.disconnectMcpServer("windows");
@@ -139,8 +139,8 @@ TEST(IntegrationMCP, DisconnectAndReconnect) {
         {"args", {"windows-mcp"}}
     });
     ASSERT_TRUE(reconnected) << "Failed to reconnect to Windows MCP server";
-    EXPECT_TRUE(agent.tools().hasTool("mcp_windows_Shell"))
-        << "Expected mcp_windows_Shell after reconnect";
+    EXPECT_FALSE(agent.tools().resolveName("mcp_windows_Shell").empty())
+        << "Expected mcp_windows_Shell (or shell) after reconnect";
 }
 
 TEST(IntegrationMCP, SystemPromptIncludesMcpTools) {
@@ -151,10 +151,13 @@ TEST(IntegrationMCP, SystemPromptIncludesMcpTools) {
     });
     ASSERT_TRUE(connected);
 
-    // After MCP connect, rebuildSystemPrompt should include MCP tool descriptions
+    // After MCP connect, rebuildSystemPrompt should include MCP tool descriptions.
+    // Resolve the actual registered name (case may vary by windows-mcp version).
     std::string prompt = agent.systemPrompt();
-    EXPECT_NE(prompt.find("mcp_windows_Shell"), std::string::npos)
-        << "Expected system prompt to contain mcp_windows_Shell tool description";
+    std::string resolvedShell = agent.tools().resolveName("mcp_windows_Shell");
+    ASSERT_FALSE(resolvedShell.empty()) << "Expected mcp_windows_Shell (or shell) to be registered";
+    EXPECT_NE(prompt.find(resolvedShell), std::string::npos)
+        << "Expected system prompt to contain " << resolvedShell << " tool description";
 }
 
 #endif // _WIN32
