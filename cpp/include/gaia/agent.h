@@ -19,6 +19,7 @@
 
 #include "console.h"
 #include "json_utils.h"
+#include "lemonade_client.h"
 #include "mcp_client.h"
 #include "security.h"
 #include "tool_registry.h"
@@ -43,6 +44,10 @@ public:
     // Non-copyable
     Agent(const Agent&) = delete;
     Agent& operator=(const Agent&) = delete;
+
+    // Movable (base-class only — derived subclasses must declare their own move ops)
+    Agent(Agent&&) = default;
+    Agent& operator=(Agent&&) = default;
 
     /// Process a user query through the agent loop.
     /// This is the main entry point — mirrors Python Agent.process_query().
@@ -89,8 +94,14 @@ public:
     /// Rebuild system prompt (call after adding tools dynamically).
     void rebuildSystemPrompt();
 
+    /// Clear conversation history (start a fresh topic).
+    void clearHistory() { conversationHistory_.clear(); }
+
     /// Get a mutable reference to the tool registry (for subclass tool registration).
     ToolRegistry& toolRegistry() { return tools_; }
+
+    /// Get the Lemonade client (for explicit model loading at startup).
+    LemonadeClient& lemonade() { return lemonade_; }
 
 protected:
     /// Initialize the agent after construction.
@@ -137,6 +148,8 @@ private:
     AgentConfig config_;
     ToolRegistry tools_;
     std::unique_ptr<OutputHandler> console_;
+    LemonadeClient lemonade_;
+    bool modelEnsured_ = false;
 
     AgentState executionState_ = AgentState::PLANNING;
     json currentPlan_;

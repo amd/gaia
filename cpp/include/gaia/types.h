@@ -102,6 +102,24 @@ inline std::string paramTypeToString(ToolParamType t) {
     return "unknown";
 }
 
+// Cross-platform environment variable helper.
+// On MSVC uses _dupenv_s (safe); on GCC/Clang (including MinGW) uses std::getenv.
+inline std::string getEnvVar(const char* name, const std::string& defaultValue = "") {
+#ifdef _MSC_VER
+    char* value = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&value, &len, name) == 0 && value) {
+        std::string result(value);
+        free(value);
+        return result;
+    }
+    return defaultValue;
+#else
+    const char* value = std::getenv(name);
+    return value ? std::string(value) : defaultValue;
+#endif
+}
+
 struct ToolParameter {
     std::string name;
     ToolParamType type = ToolParamType::UNKNOWN;
@@ -171,6 +189,15 @@ inline std::string defaultBaseUrl() {
 #endif
 }
 
+// ---- Decision Support ----
+
+/// A user-facing choice presented after an LLM yes/no confirmation prompt.
+struct Decision {
+    std::string label;       // display text: "Yes", "No"
+    std::string value;       // sent to LLM: "yes", "no"
+    std::string description; // hint: "Confirm and proceed"
+};
+
 struct AgentConfig {
     std::string baseUrl = defaultBaseUrl();
     std::string modelId = "Qwen3-4B-GGUF";
@@ -183,6 +210,7 @@ struct AgentConfig {
     bool showPrompts = false;
     bool streaming = false;
     bool silentMode = false;
+    double temperature = 0.7;  // LLM sampling temperature (0.0 = deterministic)
 };
 
 } // namespace gaia

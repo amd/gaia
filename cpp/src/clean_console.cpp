@@ -271,7 +271,7 @@ void CleanConsole::printFinalAnswer(const std::string& answer) {
                 trimmed.find("DECISION:") == 0 || trimmed.find("Decision:") == 0) {
                 continue;  // Skip reasoning lines
             }
-            if (trimmed.front() == '{' && trimmed.back() == '}') {
+            if (!trimmed.empty() && trimmed.front() == '{' && trimmed.back() == '}') {
                 continue;  // Skip raw JSON lines
             }
             if (!cleanAnswer.empty()) cleanAnswer += "\n";
@@ -324,6 +324,25 @@ void CleanConsole::printFinalAnswer(const std::string& answer) {
 void CleanConsole::printCompletion(int stepsTaken, int /*stepsLimit*/) {
     std::cout << color::GRAY << "  Completed in " << stepsTaken
               << " steps" << color::RESET << std::endl;
+}
+
+void CleanConsole::printDecisionMenu(const std::vector<Decision>& decisions) {
+    std::cout << color::CYAN
+              << "  ========================================================================================"
+              << color::RESET << std::endl;
+    for (size_t i = 0; i < decisions.size(); ++i) {
+        std::cout << color::YELLOW << "  [" << (i + 1) << "] "
+                  << color::RESET << color::WHITE << color::BOLD
+                  << decisions[i].label << color::RESET;
+        if (!decisions[i].description.empty())
+            std::cout << color::GRAY << "  \xe2\x80\x94 " << decisions[i].description
+                      << color::RESET;
+        std::cout << std::endl;
+    }
+    std::cout << color::CYAN
+              << "  ========================================================================================"
+              << color::RESET << std::endl;
+    std::cout << std::endl;
 }
 
 // ---------------------------------------------------------------------------

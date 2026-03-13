@@ -67,6 +67,7 @@ SKIP_PATTERNS = [
     r"\{[{%]",  # Template variables like {{ var }}
     r"^\$\{",  # JS template literals
     r"^url$",  # Placeholder "url" in markdown syntax examples
+    r"github\.com/amd/gaia/compare/",  # Release compare URLs (tags may not exist yet)
 ]
 
 
