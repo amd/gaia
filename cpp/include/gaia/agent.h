@@ -45,6 +45,10 @@ public:
     Agent(const Agent&) = delete;
     Agent& operator=(const Agent&) = delete;
 
+    // Movable (base-class only — derived subclasses must declare their own move ops)
+    Agent(Agent&&) = default;
+    Agent& operator=(Agent&&) = default;
+
     /// Process a user query through the agent loop.
     /// This is the main entry point — mirrors Python Agent.process_query().
     ///

@@ -271,7 +271,7 @@ void CleanConsole::printFinalAnswer(const std::string& answer) {
                 trimmed.find("DECISION:") == 0 || trimmed.find("Decision:") == 0) {
                 continue;  // Skip reasoning lines
             }
-            if (trimmed.front() == '{' && trimmed.back() == '}') {
+            if (!trimmed.empty() && trimmed.front() == '{' && trimmed.back() == '}') {
                 continue;  // Skip raw JSON lines
             }
             if (!cleanAnswer.empty()) cleanAnswer += "\n";

@@ -99,6 +99,10 @@ public:
     LemonadeClient(const LemonadeClient&) = delete;
     LemonadeClient& operator=(const LemonadeClient&) = delete;
 
+    // Movable
+    LemonadeClient(LemonadeClient&&) = default;
+    LemonadeClient& operator=(LemonadeClient&&) = default;
+
     // ---- Server status ----
 
     /// Return true if the server responds to GET /health.
@@ -230,7 +234,7 @@ private:
     std::string baseUrl_;
     std::string model_;
     int contextSize_ = 0;
-    bool debug_;
+    bool debug_ = false;
 };
 
 } // namespace gaia
