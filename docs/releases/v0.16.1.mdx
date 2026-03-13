@@ -1,0 +1,93 @@
+---
+title: "v0.16.1"
+description: "C++ tool security, gaia init reliability, CI improvements"
+---
+
+# GAIA v0.16.1 Release Notes
+
+**Patch release** with C++ tool security hardening, `gaia init` reliability fixes, Lemonade Server v10.0.0 update, and CI/CD improvements including a new doc link checker and scoped workflow triggers.
+
+**TL;DR:**
+- **New: C++ Tool Security** — Policy-based tool execution with confirmation prompts, allowlisting, and argument validation
+- **Fix: `gaia init` reliability** — Improved version checks and MSI installer reliability
+- **Update: Lemonade Server v10.0.0** — Updated to latest Lemonade Server release
+- **CI: Doc link checker** — Automated broken link detection across documentation
+- **CI: Scoped workflow triggers** — Workflows only run when relevant files change
+- **Fix: Linux CLI test** — Resolved hanging test in merge queue
+
+---
+
+## What's New
+
+### C++ Tool Security Framework
+
+New security layer for the C++ agent framework under `cpp/` providing policy-based control over tool execution (PR #496):
+
+- **Security policies** — `ToolSecurityPolicy` with `ALLOW_ALL`, `DENY_ALL`, `ALLOWLIST`, and `CONFIRMATION` modes
+- **Allowlist management** — Register specific tools as pre-approved for automatic execution
+- **Confirmation callbacks** — Interactive user confirmation before executing sensitive tools
+- **Argument validation** — Configurable validators to inspect and reject unsafe tool arguments (e.g., shell injection prevention)
+- **Security demo** — Full example application demonstrating all security features
+
+```cpp
+#include <gaia/security.h>
+
+gaia::ToolSecurityManager security;
+security.setPolicy(gaia::ToolSecurityPolicy::ALLOWLIST);
+security.addToAllowlist("mcp_windows_ReadFile");
+
+// Tools not on allowlist are blocked automatically
+```
+
+See the [C++ Security documentation](/cpp/security) for the full guide.
+
+---
+
+## Bug Fixes
+
+- **`gaia init` version checks** — Fixed version comparison logic and improved MSI installer reliability for Windows setup (PR #478)
+- **Linux CLI test hanging** — Resolved `test_gaia_cli_linux` hanging in merge queue by fixing process cleanup (PR #445)
+- **Broken documentation links** — Fixed broken links to amd-gaia.ai in README.md and across documentation (PR #497)
+
+---
+
+## Infrastructure
+
+### Lemonade Server v10.0.0
+
+Updated Lemonade Server dependency from v9.x to v10.0.0 (PR #498). The `LEMONADE_VERSION` constant in `src/gaia/version.py` and all CI workflows now reference v10.0.0.
+
+### CI/CD Improvements
+
+- **Doc link checker** — New `check_doc_links.yml` workflow with `util/check_doc_links.py` script that validates all internal documentation links (PR #499)
+- **Scoped workflow triggers** — All test workflows (`lint`, `test_unit`, `test_api`, `test_mcp`, etc.) now use path-based triggers so they only run when relevant source files change (PR #499)
+- **Fixed broken links** — 10+ broken links repaired across documentation pages (PR #499)
+
+---
+
+## Upgrade
+
+```bash
+# Install/upgrade GAIA (Python)
+pip install --upgrade amd-gaia
+
+# Build C++ framework
+cd cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+```
+
+---
+
+## Full Changelog
+
+**6 commits** since v0.16.0:
+
+- `e11e4a0` - Fix gaia init version checks and MSI reliability (#478)
+- `6693a0a` - ci: add doc link checker, scope workflow triggers, fix broken links (#499)
+- `b399e9e` - C++ framework: tool security — policies, confirmation, allowlisting, arg validation (#496)
+- `24c9e69` - Fix GAIA CLI Linux test hanging in merge queue (#445)
+- `aeaa8c5` - Update Lemonade Server to v10.0.0 (#498)
+- `e42a560` - Fixed broken links to amd-gaia.ai in README.md (#497)
+
+Full Changelog: [v0.16.0...v0.16.1](https://github.com/amd/gaia/compare/v0.16.0...v0.16.1)
