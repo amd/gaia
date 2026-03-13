@@ -178,6 +178,9 @@ config.ini
 src/gaia/apps/**/.env
 !src/gaia/apps/**/.env.development
 
+# Claude Code local settings (personal, not committed)
+.claude/settings.local.json
+
 # MCP Configuration and runtime files
 .env
 .env.*
@@ -186,6 +189,7 @@ mcp_server.log
 atlassian_config.json
 *.mcp.json
 .mcp.json
+!.devcontainer/.mcp.json
 
 # Local settings files (machine-specific, not for repo)
 *local.json
@@ -203,6 +207,13 @@ version.txt
 **/version.nsh
 **/.gaia_servers.json
 **/agent_output_*.json
+
+# vcpkg manifest-mode installed packages
+cpp/vcpkg_installed/
+
+# CMake build artifacts (generated files, not source)
+CMakeFiles/
+cpp/build_ssl/
 
 # SD test results and artifacts
 sd_model_sweep_results/
