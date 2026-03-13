@@ -38,6 +38,7 @@
               "cpp/integration",
               "cpp/testing",
               "cpp/api-reference",
+              "cpp/security",
               {
                 "group": "User Guides",
                 "pages": [
@@ -404,7 +405,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.16.0 · Lemonade 9.3.0",
+        "label": "v0.16.0 · Lemonade 10.0.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

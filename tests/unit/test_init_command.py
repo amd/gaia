@@ -96,7 +96,7 @@ class TestLemonadeInstaller(unittest.TestCase):
         mock_system.return_value = "Linux"
         installer = LemonadeInstaller(target_version="9.1.4")
         url = installer.get_download_url()
-        self.assertIn("v9.1.4/lemonade_9.1.4_amd64.deb", url)
+        self.assertIn("v9.1.4/lemonade-server_9.1.4_amd64.deb", url)
         self.assertIn("github.com", url)
 
     @patch("platform.system")
