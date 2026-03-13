@@ -542,8 +542,29 @@ jobs:
           echo "Tags available:"
           git tag -l | tail -10
 
-      - name: Generate release context
+      - name: Check if release notes already exist
         if: steps.tag.outputs.SKIP != 'true'
+        id: notes_check
+        env:
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
+        run: |
+          NOTES_FILE="docs/releases/${TAG_NAME}.mdx"
+          if [ -f "$NOTES_FILE" ]; then
+            echo "✅ Release notes already exist: $NOTES_FILE"
+            echo "Skipping Claude AI generation — using pre-written release notes."
+            echo "NOTES_EXIST=true" >> $GITHUB_OUTPUT
+
+            # Extract body (strip frontmatter) for GitHub release update
+            awk 'BEGIN{fm=0} /^---$/{fm++; next} fm>=2{print}' "$NOTES_FILE" > RELEASE_NOTES.md
+            echo "Extracted $(wc -l < RELEASE_NOTES.md) lines for GitHub release body"
+          else
+            echo "⚠️ Release notes not found: $NOTES_FILE"
+            echo "Will generate with Claude AI as fallback."
+            echo "NOTES_EXIST=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate release context
+        if: steps.tag.outputs.SKIP != 'true' && steps.notes_check.outputs.NOTES_EXIST != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CURRENT_TAG: ${{ steps.tag.outputs.TAG_NAME }}
@@ -642,7 +663,7 @@ jobs:
           ls -la release-diffs/ 2>/dev/null || echo "No diff files"
 
       - name: Generate release notes with Claude
-        if: steps.tag.outputs.SKIP != 'true'
+        if: steps.tag.outputs.SKIP != 'true' && steps.notes_check.outputs.NOTES_EXIST != 'true'
         id: generate-notes
         uses: anthropics/claude-code-action@beta
         with:
@@ -766,7 +787,7 @@ jobs:
             Do NOT skip this review step - always verify your output before completing.
 
       - name: Verify and validate release notes
-        if: steps.tag.outputs.SKIP != 'true'
+        if: steps.tag.outputs.SKIP != 'true' && steps.notes_check.outputs.NOTES_EXIST != 'true'
         env:
           TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
         run: |
@@ -788,7 +809,7 @@ jobs:
           python util/validate_release_notes.py "docs/releases/$TAG_NAME.mdx" --tag "$TAG_NAME"
 
       - name: Update docs.json with new release
-        if: steps.tag.outputs.SKIP != 'true'
+        if: steps.tag.outputs.SKIP != 'true' && steps.notes_check.outputs.NOTES_EXIST != 'true'
         env:
           TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
         run: |
@@ -850,7 +871,7 @@ jobs:
           EOF
 
       - name: Bump version.py to next patch version
-        if: steps.tag.outputs.SKIP != 'true'
+        if: steps.tag.outputs.SKIP != 'true' && steps.notes_check.outputs.NOTES_EXIST != 'true'
         env:
           TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
         run: |
@@ -883,7 +904,7 @@ jobs:
           echo "✅ version.py bumped to $NEXT_VERSION"
 
       - name: Commit release notes and version bump
-        if: steps.tag.outputs.SKIP != 'true'
+        if: steps.tag.outputs.SKIP != 'true' && steps.notes_check.outputs.NOTES_EXIST != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}

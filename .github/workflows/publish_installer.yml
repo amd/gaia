@@ -13,34 +13,158 @@ permissions:
   contents: write
 
 jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.tag.outputs.TAG_NAME }}
+      tag_version: ${{ steps.tag.outputs.TAG_VERSION }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract tag info
+        id: tag
+        run: |
+          TAG_NAME="${GITHUB_REF_NAME}"
+          TAG_VERSION="${TAG_NAME#v}"
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "Tag: $TAG_NAME (version: $TAG_VERSION)"
+
+      - name: Validate release notes exist
+        env:
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
+        run: |
+          NOTES_FILE="docs/releases/${TAG_NAME}.mdx"
+          if [ ! -f "$NOTES_FILE" ]; then
+            echo "❌ ERROR: Release notes file missing: $NOTES_FILE"
+            echo ""
+            echo "Before tagging a release, you must create the release notes file."
+            echo "See docs/releases/ for examples of the expected format."
+            echo ""
+            echo "Steps to fix:"
+            echo "  1. Create docs/releases/${TAG_NAME}.mdx with release notes"
+            echo "  2. Add 'releases/${TAG_NAME}' to docs/docs.json (Releases tab)"
+            echo "  3. Update the navbar version label in docs/docs.json"
+            echo "  4. Set __version__ in src/gaia/version.py to '${TAG_NAME#v}'"
+            echo "  5. Commit, push, and re-tag"
+            exit 1
+          fi
+          echo "✅ Release notes found: $NOTES_FILE"
+
+      - name: Validate version.py matches tag
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.TAG_VERSION }}
+        run: |
+          VERSION_PY=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/gaia/version.py)
+          echo "version.py: $VERSION_PY"
+          echo "Tag:        $TAG_VERSION"
+          if [ "$VERSION_PY" != "$TAG_VERSION" ]; then
+            echo "❌ ERROR: Version mismatch!"
+            echo "   src/gaia/version.py has version '$VERSION_PY'"
+            echo "   Git tag expects version '$TAG_VERSION'"
+            echo ""
+            echo "Update __version__ in src/gaia/version.py to '$TAG_VERSION', commit, and re-tag."
+            exit 1
+          fi
+          echo "✅ version.py matches tag"
+
+      - name: Validate docs.json references
+        env:
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
+        run: |
+          ERRORS=0
+
+          # Check releases page entry exists in docs.json
+          if ! python3 -c "
+          import json, sys
+          tag = '$TAG_NAME'
+          with open('docs/docs.json') as f:
+              docs = json.load(f)
+          for tab in docs['navigation']['tabs']:
+              if tab.get('tab') == 'Releases':
+                  for group in tab['groups']:
+                      if group.get('group') == 'Release Notes':
+                          if f'releases/{tag}' in group['pages']:
+                              sys.exit(0)
+          sys.exit(1)
+          "; then
+            echo "❌ ERROR: docs/docs.json is missing 'releases/$TAG_NAME' in the Releases tab"
+            ERRORS=1
+          else
+            echo "✅ docs.json has release entry for $TAG_NAME"
+          fi
+
+          # Check navbar version label references this version
+          if ! python3 -c "
+          import json, sys
+          tag = '$TAG_NAME'
+          with open('docs/docs.json') as f:
+              docs = json.load(f)
+          for link in docs.get('navbar', {}).get('links', []):
+              if tag in link.get('label', ''):
+                  sys.exit(0)
+          sys.exit(1)
+          "; then
+            echo "❌ ERROR: docs/docs.json navbar version label does not reference $TAG_NAME"
+            ERRORS=1
+          else
+            echo "✅ docs.json navbar references $TAG_NAME"
+          fi
+
+          if [ "$ERRORS" -ne 0 ]; then
+            echo ""
+            echo "Update docs/docs.json before tagging. See the most recent release PR for reference."
+            exit 1
+          fi
+
+      - name: Validate release notes structure
+        env:
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
+        run: |
+          python3 util/validate_release_notes.py "docs/releases/${TAG_NAME}.mdx" --tag "$TAG_NAME"
+
   build-electron-apps:
+    needs: [validate-release]
     uses: ./.github/workflows/build-electron-apps.yml
 
   publish-release:
     runs-on: ubuntu-latest
-    needs: [build-electron-apps]
-    if: always() && (needs.build-electron-apps.result == 'success' || needs.build-electron-apps.result == 'skipped')
+    needs: [validate-release, build-electron-apps]
+    if: always() && needs.validate-release.result == 'success' && (needs.build-electron-apps.result == 'success' || needs.build-electron-apps.result == 'skipped')
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0  # Fetch all history for release notes generation
 
-      - name: Generate Release Notes
-        id: release_notes
+      - name: Extract release notes from docs
+        id: release_body
+        env:
+          TAG_NAME: ${{ needs.validate-release.outputs.tag_name }}
         run: |
-          # Get the previous tag
-          previous_tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -n "$previous_tag" ]; then
-            # If previous tag exists, generate changelog from previous tag to current
-            changelog=$(git log --pretty=format:"* %s (%h)" "$previous_tag"..HEAD)
-          else
-            # If no previous tag, get all commits
-            changelog=$(git log --pretty=format:"* %s (%h)")
-          fi
-          # Save to output
-          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-          echo "$changelog" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          NOTES_FILE="docs/releases/${TAG_NAME}.mdx"
+          echo "Reading release notes from $NOTES_FILE"
+
+          # Strip MDX frontmatter (everything between first --- and second ---)
+          # and write the body to a file for the release action
+          awk 'BEGIN{fm=0} /^---$/{fm++; next} fm>=2{print}' "$NOTES_FILE" > RELEASE_BODY.md
+
+          # Append installation instructions
+          cat >> RELEASE_BODY.md << 'INSTALL_EOF'
+
+---
+
+## Installation
+
+Install GAIA using pip:
+```bash
+pip install amd-gaia
+```
+
+Or using uv:
+```bash
+uv pip install amd-gaia
+```
+INSTALL_EOF
+
+          echo "Release body generated: $(wc -l < RELEASE_BODY.md) lines"
 
       - name: Download Electron App Artifacts (Windows)
         if: needs.build-electron-apps.outputs.has_apps == 'true'
@@ -64,17 +188,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
-          body: |
-            ## What's Changed
-            ${{ steps.release_notes.outputs.CHANGELOG }}
-
-            ## Installation
-            Install GAIA using pip:
-            ```bash
-            pip install amd-gaia
-            ```
-
-            Or using uv:
-            ```bash
-            uv pip install amd-gaia
-            ```
+          body_path: RELEASE_BODY.md
