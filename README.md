@@ -115,6 +115,26 @@ For complete setup instructions including Lemonade Server, see the **[Quickstart
 
 ---
 
+## Releases
+
+See the full [Release Notes](https://amd-gaia.ai/docs/releases) on the documentation site, or browse [GitHub Releases](https://github.com/amd/gaia/releases).
+
+### Release Process
+
+To publish a new release:
+
+1. Create a release PR that:
+   - Sets `__version__` in `src/gaia/version.py` to the new version
+   - Adds `docs/releases/v{version}.mdx` with release notes
+   - Adds `releases/v{version}` to the Releases tab in `docs/docs.json`
+   - Updates the navbar version label in `docs/docs.json`
+2. Merge the PR to `main`
+3. Tag and push: `git tag v{version} && git push origin v{version}`
+
+The CI pipeline validates that all version references are consistent and the release notes file exists before publishing. The release notes from `docs/releases/` are used as the GitHub release body.
+
+---
+
 ## Contributing
 
 We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for details.

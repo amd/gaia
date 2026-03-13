@@ -363,6 +363,7 @@
           {
             "group": "Release Notes",
             "pages": [
+              "releases/index",
               "releases/v0.16.1",
               "releases/v0.16.0",
               "releases/v0.15.4.1",

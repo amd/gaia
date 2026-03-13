@@ -1,0 +1,74 @@
+---
+title: "Release Notes"
+description: "GAIA release history and upgrade guide"
+icon: "tag"
+---
+
+# Release Notes
+
+Browse the full release history for GAIA below. Each release includes a summary of new features, improvements, bug fixes, and upgrade instructions.
+
+Latest release: **[v0.16.1](/releases/v0.16.1)**
+
+---
+
+## Release Process
+
+GAIA follows a **release-notes-first** workflow. All release notes are written and reviewed as part of the release PR — before the tag is pushed.
+
+### Steps to publish a release
+
+1. **Create a release PR** with the following changes:
+   - Set `__version__` in `src/gaia/version.py` to the new version
+   - Create `docs/releases/v{version}.mdx` with release notes
+   - Add `releases/v{version}` to the Releases tab in `docs/docs.json`
+   - Update the navbar version label in `docs/docs.json`
+
+2. **Merge the PR** to `main`
+
+3. **Tag and push:**
+   ```bash
+   git tag v{version}
+   git push origin v{version}
+   ```
+
+### What happens on tag push
+
+The CI pipeline (`Publish GAIA Release` workflow) runs a `validate-release` job that **blocks the release** if any of these checks fail:
+
+| Check | What it validates |
+|-------|-------------------|
+| Release notes exist | `docs/releases/v{version}.mdx` is present |
+| Version consistency | `src/gaia/version.py` `__version__` matches the tag |
+| docs.json release entry | `releases/v{version}` is listed in the Releases tab |
+| docs.json navbar | Navbar version label references the tag |
+| Release notes structure | Frontmatter, required sections, and changelog link are valid |
+
+If all checks pass, the release notes from `docs/releases/` are used as the [GitHub release](https://github.com/amd/gaia/releases) body, and the package is published to [PyPI](https://pypi.org/project/amd-gaia/).
+
+### Release notes format
+
+Each release notes file uses MDX with Mintlify frontmatter:
+
+```mdx
+---
+title: "v0.16.1"
+description: "Short one-line summary"
+---
+
+# GAIA v0.16.1 Release Notes
+
+Summary paragraph.
+
+## What's New
+...
+
+## Bug Fixes
+...
+
+## Full Changelog
+
+Full Changelog: [v0.16.0...v0.16.1](https://github.com/amd/gaia/compare/v0.16.0...v0.16.1)
+```
+
+Required sections: `## What's New` (or `## Key Changes`) and `## Full Changelog`, plus a changelog comparison link.
