@@ -108,6 +108,12 @@ ENV/
 # IDE settings
 .idea/
 
+# Claude Code local settings
+.claude/settings.local.json
+
+# Local customizations
+util/custom/
+
 # macOS
 .DS_Store
 .AppleDouble

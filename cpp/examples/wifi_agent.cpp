@@ -31,6 +31,7 @@
 
 #include <gaia/agent.h>
 #include <gaia/clean_console.h>
+#include <gaia/security.h>
 #include <gaia/types.h>
 
 // Alias for convenience
@@ -81,19 +82,6 @@ static std::string runShell(const std::string& command) {
     return result.empty() ? "{\"status\": \"completed\", \"output\": \"(no output)\"}" : result;
 }
 
-// ---------------------------------------------------------------------------
-// Input validation — reject shell metacharacters from LLM-provided args
-// ---------------------------------------------------------------------------
-static bool isSafeShellArg(const std::string& arg) {
-    for (char c : arg) {
-        if (c == ';' || c == '|' || c == '&' || c == '`' || c == '$'
-            || c == '(' || c == ')' || c == '{' || c == '}' || c == '<'
-            || c == '>' || c == '"' || c == '\n' || c == '\r') {
-            return false;
-        }
-    }
-    return !arg.empty();
-}
 
 // ---------------------------------------------------------------------------
 // Wi-Fi Troubleshooter Agent
@@ -234,7 +222,7 @@ Always set a short `goal` field (3-6 words) describing your current objective.)"
             "Test DNS resolution by resolving a hostname to an IP address. Returns JSON with resolved addresses and response time.",
             [](const gaia::json& args) -> gaia::json {
                 std::string hostname = args.value("hostname", "google.com");
-                if (!isSafeShellArg(hostname)) {
+                if (!gaia::isSafeShellArg(hostname)) {
                     return {{"error", "Invalid hostname — contains disallowed characters"}};
                 }
                 std::string cmd = "Resolve-DnsName -Name " + hostname
@@ -371,7 +359,7 @@ $http.Dispose()
                 if (host.empty()) {
                     return {{"error", "host parameter is required"}};
                 }
-                if (!isSafeShellArg(host)) {
+                if (!gaia::isSafeShellArg(host)) {
                     return {{"error", "Invalid host — contains disallowed characters"}};
                 }
                 std::string cmd =
@@ -413,8 +401,8 @@ $http.Dispose()
                 if (adapter.empty() || primary.empty()) {
                     return {{"error", "adapter_name and primary_dns are required"}};
                 }
-                if (!isSafeShellArg(adapter) || !isSafeShellArg(primary) ||
-                    (!secondary.empty() && !isSafeShellArg(secondary))) {
+                if (!gaia::isSafeShellArg(adapter) || !gaia::isSafeShellArg(primary) ||
+                    (!secondary.empty() && !gaia::isSafeShellArg(secondary))) {
                     return {{"error", "Invalid parameter — contains disallowed characters"}};
                 }
 
@@ -466,7 +454,7 @@ $http.Dispose()
                 if (adapter.empty()) {
                     return {{"error", "adapter_name is required"}};
                 }
-                if (!isSafeShellArg(adapter)) {
+                if (!gaia::isSafeShellArg(adapter)) {
                     return {{"error", "Invalid adapter_name — contains disallowed characters"}};
                 }
 
@@ -498,7 +486,7 @@ $http.Dispose()
                 if (adapter.empty()) {
                     return {{"error", "adapter_name is required"}};
                 }
-                if (!isSafeShellArg(adapter)) {
+                if (!gaia::isSafeShellArg(adapter)) {
                     return {{"error", "Invalid adapter_name — contains disallowed characters"}};
                 }
                 std::string cmd = "Enable-NetAdapter -Name '" + adapter + "' -Confirm:$false";

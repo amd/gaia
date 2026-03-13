@@ -465,7 +465,11 @@ class InitCommand:
                 self._print("   Force reinstall requested.")
                 return self._install_lemonade()
 
-            self._print_success("Version is compatible")
+            # Only print "compatible" for exact match; mismatch cases
+            # already print their own status in _check_version_compatibility
+            if info.version_tuple == self._parse_version(LEMONADE_VERSION):
+                self._print_success("Version is compatible")
+
             return True
 
         elif info.installed:
@@ -516,6 +520,11 @@ class InitCommand:
         """
         Check if installed version is compatible and upgrade if needed.
 
+        Version policy:
+        - Newer or equal version: always accepted (no downgrade prompt)
+        - Older version >= profile minimum: accepted with optional upgrade offer
+        - Older version < profile minimum: upgrade required
+
         Args:
             info: Lemonade installation info
 
@@ -526,96 +535,119 @@ class InitCommand:
         target = self._parse_version(LEMONADE_VERSION)
 
         if not current or not target:
+            log.warning(
+                f"Could not parse version(s) for comparison: "
+                f"installed={info.version!r}, expected={LEMONADE_VERSION!r}"
+            )
             return True
 
-        # Check for version mismatch
-        if current != target:
-            current_ver = info.version
-            target_ver = LEMONADE_VERSION
+        current_ver = info.version
+        target_ver = LEMONADE_VERSION
 
+        # --- Newer or equal: always accept ---
+        if current >= target:
+            if current > target:
+                self._print_warning(
+                    f"Lemonade v{current_ver} is newer than expected v{target_ver}"
+                )
+                if RICH_AVAILABLE and self.console:
+                    self.console.print(
+                        "   [dim]This should work fine, but if you encounter issues, "
+                        f"consider installing v{target_ver}.[/dim]"
+                    )
+                else:
+                    self._print(
+                        "   This should work fine, but if you encounter issues, "
+                        f"consider installing v{target_ver}."
+                    )
+            return True
+
+        # --- Older version: check against profile minimum ---
+        profile_config = INIT_PROFILES[self.profile]
+        min_version_str = profile_config.get("min_lemonade_version", "9.0.0")
+        min_version = self._parse_version(min_version_str)
+
+        if min_version and current >= min_version:
+            # Older than target but meets profile minimum — acceptable
             self._print("")
-            self._print_warning("Version mismatch detected!")
+            self._print_warning("Older version detected")
             if RICH_AVAILABLE and self.console:
                 self.console.print(
-                    f"      [dim]Installed:[/dim] [red]v{current_ver}[/red]"
+                    f"      [dim]Installed:[/dim] [yellow]v{current_ver}[/yellow]"
                 )
                 self.console.print(
-                    f"      [dim]Expected:[/dim]  [green]v{target_ver}[/green]"
+                    f"      [dim]Latest:[/dim]    [green]v{target_ver}[/green]"
+                )
+                self.console.print("")
+                self.console.print(
+                    f"   [dim]Meets minimum v{min_version_str} for profile '{self.profile}'.[/dim]"
                 )
             else:
                 self._print(f"      Installed: v{current_ver}")
-                self._print(f"      Expected:  v{target_ver}")
+                self._print(f"      Latest:    v{target_ver}")
+                self._print("")
+                self._print(
+                    f"   Meets minimum v{min_version_str} for profile '{self.profile}'."
+                )
             self._print("")
 
-            if current < target:
-                if RICH_AVAILABLE and self.console:
-                    self.console.print(
-                        "   [dim]Your version is older than expected.[/dim]"
-                    )
-                    self.console.print(
-                        "   [dim]Some features may not work correctly.[/dim]"
-                    )
-                else:
-                    self._print("   Your version is older than expected.")
-                    self._print("   Some features may not work correctly.")
-            else:
-                if RICH_AVAILABLE and self.console:
-                    self.console.print(
-                        "   [dim]Your version is newer than expected.[/dim]"
-                    )
-                    self.console.print(
-                        "   [dim]This may cause compatibility issues.[/dim]"
-                    )
-                else:
-                    self._print("   Your version is newer than expected.")
-                    self._print("   This may cause compatibility issues.")
-            self._print("")
-
-            # Check if upgrade is required based on profile's minimum version
-            profile_config = INIT_PROFILES[self.profile]
-            min_version_required = profile_config.get("min_lemonade_version", "9.0.0")
-            from packaging import version as pkg_version
-
-            needs_upgrade = pkg_version.parse(current_ver) < pkg_version.parse(
-                min_version_required
-            )
-
-            # In CI mode (--yes), auto-upgrade if needed for this profile
+            # In CI mode, accept without prompting
             if self.yes and not self.force_reinstall:
-                if needs_upgrade:
-                    self._print("")
-                    if RICH_AVAILABLE and self.console:
-                        self.console.print(
-                            f"   [yellow]⚠️  Profile '{self.profile}' requires Lemonade v{min_version_required}+[/yellow]"
-                        )
-                        self.console.print(
-                            f"   [bold cyan]Upgrading:[/bold cyan] v{current_ver} → v{target_ver}"
-                        )
-                    else:
-                        self._print_warning(
-                            f"Profile '{self.profile}' requires Lemonade v{min_version_required}+"
-                        )
-                        self._print(
-                            f"   Upgrading from v{current_ver} to v{target_ver}..."
-                        )
-                    return self._upgrade_lemonade(current_ver)
-                else:
-                    self._print_success(
-                        f"Version v{current_ver} is sufficient for profile '{self.profile}'"
-                    )
-                    return True
+                self._print_success(
+                    f"Version v{current_ver} is sufficient for profile '{self.profile}'"
+                )
+                return True
 
-            # Prompt user to upgrade
+            # In interactive mode, offer optional upgrade (default: no)
             if not self._prompt_yes_no(
-                f"Upgrade to v{target_ver}? (will uninstall current version)",
-                default=False,  # Default to no for safety
+                f"Upgrade to v{target_ver}?",
+                default=False,
             ):
-                self._print_warning("Continuing with current version")
+                self._print_success(f"Continuing with v{current_ver}")
                 return True
 
             return self._upgrade_lemonade(current_ver)
 
-        return True
+        # --- Below profile minimum: upgrade required ---
+        self._print("")
+        self._print_warning("Version too old for this profile!")
+        if RICH_AVAILABLE and self.console:
+            self.console.print(f"      [dim]Installed:[/dim] [red]v{current_ver}[/red]")
+            self.console.print(
+                f"      [dim]Required:[/dim]  [green]v{min_version_str}+[/green] [dim](profile: {self.profile})[/dim]"
+            )
+            self.console.print("")
+            self.console.print(
+                "   [dim]Some features may not work correctly with this version.[/dim]"
+            )
+        else:
+            self._print(f"      Installed: v{current_ver}")
+            self._print(
+                f"      Required:  v{min_version_str}+ (profile: {self.profile})"
+            )
+            self._print("")
+            self._print("   Some features may not work correctly with this version.")
+        self._print("")
+
+        # In CI mode, auto-upgrade
+        if self.yes and not self.force_reinstall:
+            if RICH_AVAILABLE and self.console:
+                self.console.print(
+                    f"   [bold cyan]Upgrading:[/bold cyan] v{current_ver} → v{target_ver}"
+                )
+            else:
+                self._print(f"   Upgrading from v{current_ver} to v{target_ver}...")
+            return self._upgrade_lemonade(current_ver)
+
+        # Prompt user to upgrade (default: yes, since it's required)
+        if not self._prompt_yes_no(
+            f"Upgrade to v{target_ver}? (will uninstall current version)",
+            default=True,
+        ):
+            self._print_warning("Continuing with current version (may not work)")
+            return True
+
+        return self._upgrade_lemonade(current_ver)
 
     def _upgrade_lemonade(self, old_version: str) -> bool:
         """
@@ -646,6 +678,12 @@ class InitCommand:
         except Exception as e:
             self._print_error(f"Uninstall error: {e}")
             self._print_warning("Attempting to install new version anyway...")
+
+        # Wait for MSI to fully release before installing new version
+        if not self.installer.wait_for_msi_mutex(timeout=30):
+            self._print_warning(
+                "Another MSI operation still running after 30s — proceeding anyway..."
+            )
 
         # Install new version
         return self._install_lemonade()
@@ -704,23 +742,31 @@ class InitCommand:
                 return True
             else:
                 self._print_error(f"Installation failed: {result.error}")
-
-                if "Administrator" in str(result.error) or "sudo" in str(result.error):
-                    self._print("")
-                    if RICH_AVAILABLE and self.console:
-                        self.console.print(
-                            "   [yellow]Try running as Administrator (Windows) or with sudo (Linux)[/yellow]"
-                        )
-                    else:
-                        self._print(
-                            "   Try running as Administrator (Windows) or with sudo (Linux)"
-                        )
-
+                self._print_install_fallback_help()
                 return False
 
         except Exception as e:
             self._print_error(f"Failed to install: {e}")
+            self._print_install_fallback_help()
             return False
+
+    def _print_install_fallback_help(self):
+        """Print manual install instructions when automatic installation fails."""
+        self._print("")
+        if RICH_AVAILABLE and self.console:
+            self.console.print(
+                "   [bold]Please install Lemonade Server manually:[/bold]"
+            )
+            self.console.print("   [cyan]https://lemonade-server.ai[/cyan]")
+            self.console.print("")
+            self.console.print(
+                "   [dim]After installing, re-run:[/dim] [cyan]gaia init[/cyan]"
+            )
+        else:
+            self._print("   Please install Lemonade Server manually:")
+            self._print("   https://lemonade-server.ai")
+            self._print("")
+            self._print("   After installing, re-run: gaia init")
 
     def _find_lemonade_server(self) -> Optional[str]:
         """

@@ -4281,15 +4281,16 @@ Let me know your answer!
             # Check if already installed
             info = installer.check_installation()
             if info.installed and info.version:
-                installed_ver = info.version.lstrip("v")
-                target_ver = LEMONADE_VERSION.lstrip("v")
-
-                if installed_ver == target_ver:
-                    print(f"✅ Lemonade Server v{info.version} is already installed")
+                # Use needs_install (returns True if current < target)
+                if not installer.needs_install(info):
+                    print(
+                        f"✅ Lemonade Server v{info.version} is already installed"
+                        f" (>= v{LEMONADE_VERSION})"
+                    )
                     sys.exit(0)
                 else:
                     print(f"Lemonade Server v{info.version} is installed")
-                    print(f"GAIA requires v{LEMONADE_VERSION}")
+                    print(f"GAIA expects v{LEMONADE_VERSION}+")
                     print("")
                     print("To update, run:")
                     print("  gaia uninstall --lemonade")

@@ -11,9 +11,21 @@ on:
   workflow_call:
   push:
     branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - '.github/workflows/test_unit.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - '.github/workflows/test_unit.yml'
   merge_group:
   workflow_dispatch:
 

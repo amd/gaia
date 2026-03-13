@@ -91,6 +91,7 @@ add_library(gaia_core
     src/lemonade_client.cpp
     src/agent.cpp
     src/mcp_client.cpp
+    src/security.cpp
 )
 
 add_library(gaia::gaia_core ALIAS gaia_core)
@@ -177,6 +178,11 @@ if(GAIA_BUILD_EXAMPLES AND WIN32)
     target_link_libraries(process_agent PRIVATE gaia::gaia_core psapi advapi32 version shell32 ole32)
 endif()
 
+if(GAIA_BUILD_EXAMPLES)
+    add_executable(security_demo examples/security_demo.cpp)
+    target_link_libraries(security_demo PRIVATE gaia::gaia_core)
+endif()
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -194,6 +200,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_clean_console.cpp
         tests/test_tool_integration.cpp
         tests/test_decision.cpp
+        tests/test_security.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
