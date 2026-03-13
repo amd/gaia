@@ -145,6 +145,38 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for file_mtime: %s", e)
 
+        # Add scheduled_tasks and schedule_results tables for autonomous scheduling
+        try:
+            self._conn.executescript("""
+                CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                    id TEXT PRIMARY KEY,
+                    name TEXT UNIQUE NOT NULL,
+                    interval_seconds INTEGER NOT NULL,
+                    prompt TEXT NOT NULL,
+                    status TEXT DEFAULT 'active',
+                    created_at TEXT,
+                    last_run_at TEXT,
+                    next_run_at TEXT,
+                    last_result TEXT,
+                    run_count INTEGER DEFAULT 0,
+                    error_count INTEGER DEFAULT 0
+                );
+
+                CREATE TABLE IF NOT EXISTS schedule_results (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+                    executed_at TEXT NOT NULL,
+                    result TEXT,
+                    error TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_schedule_results_task
+                    ON schedule_results(task_id, executed_at DESC);
+                """)
+            logger.debug("Scheduled tasks tables ready")
+        except Exception as e:
+            logger.debug("Migration check for scheduled_tasks: %s", e)
+
     def close(self):
         """Close database connection."""
         if self._conn:

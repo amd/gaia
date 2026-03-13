@@ -48,9 +48,11 @@ from .document_monitor import DocumentMonitor
 from .routers import chat as chat_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
+from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
+from .scheduler import Scheduler
 from .tunnel import TunnelManager
 from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
 from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
@@ -154,9 +156,17 @@ def create_app(db_path: str = None) -> FastAPI:
         await monitor.start()
         logger.info("Document file monitor started (30s polling interval)")
 
+        # Start task scheduler for autonomous recurring tasks
+        scheduler = Scheduler(db=db)
+        app.state.scheduler = scheduler
+        await scheduler.start()
+        logger.info("Task scheduler started")
+
         yield
 
         # Shutdown
+        await scheduler.shutdown()
+        logger.info("Task scheduler stopped")
         await monitor.stop()
         logger.info("Document file monitor stopped")
         db.close()
@@ -214,6 +224,7 @@ def create_app(db_path: str = None) -> FastAPI:
     app.include_router(documents_router_mod.router)
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)
+    app.include_router(schedules_router_mod.router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.
