@@ -172,10 +172,9 @@ class MCPClientManager:
                     self._clients[name] = client
                     logger.debug(f"Loaded MCP server: {name}")
                 else:
-                    detail = f": {client.last_error}" if client.last_error else ""
-                    logger.warning(
-                        f"Failed to connect to configured server: {name}{detail}"
+                    logger.debug(
+                        f"Failed to connect to server '{name}': {client.last_error}"
                     )
 
             except Exception as e:
-                logger.error(f"Error loading server '{name}': {e}")
+                logger.debug(f"Error loading server '{name}': {e}")

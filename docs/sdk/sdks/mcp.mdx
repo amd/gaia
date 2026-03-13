@@ -172,7 +172,20 @@ response = agent.process_query("List files in /tmp, then create a GitHub issue")
 
 ## Load from Config
 
-A configuration file lets you manage MCP servers without changing agent code. GAIA searches for `mcp_servers.json` in two locations: first `./mcp_servers.json` (project-specific), then `~/.gaia/mcp_servers.json` (global default).
+A configuration file lets you manage MCP servers without changing agent code. On startup, GAIA automatically stacks two config files — one global default, one project-specific — so you never have to choose between them.
+
+### Config stacking
+
+GAIA loads configs in order of increasing priority:
+
+| Priority | File | Purpose |
+|----------|------|---------|
+| 1 (base) | `~/.gaia/mcp_servers.json` | Global defaults — shared across all agents |
+| 2 (override) | `./mcp_servers.json` | Project-specific — wins on any key conflict |
+
+Both files are merged at startup. Servers defined in the local file override same-named entries from the global file. Servers defined only in one file are always included.
+
+### Config file format
 
 ```json
 {
@@ -197,16 +210,27 @@ The config format follows the [MCP client configuration](https://modelcontextpro
 If you already have an MCP config from another client (e.g. Claude Desktop), you can copy it directly.
 </Tip>
 
+### Using config in your agent
+
+By default, `MCPClientMixin.__init__()` auto-loads both config files:
+
 ```python
 class ConfigAgent(Agent, MCPClientMixin):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        count = self.load_mcp_servers_from_config()
-        print(f"Loaded {count} MCP servers")
+        Agent.__init__(self, **kwargs)
+        MCPClientMixin.__init__(self)  # auto-loads global + local config
 
 agent = ConfigAgent()
 servers = agent.list_mcp_servers()
 ```
+
+To load a specific config file instead (skips stacking):
+
+```python
+MCPClientMixin.__init__(self, config_file="/path/to/mcp_servers.json")
+```
+
+When `config_file` is provided, only that file is loaded — global and local stacking are disabled. Loading is always triggered when `config_file` is set, regardless of the `auto_load_config` flag.
 
 ### Popular Servers
 
@@ -356,10 +380,21 @@ gaia mcp remove <name>           # Remove server
   </Accordion>
 
   <Accordion title="Config file not found">
-    `load_mcp_servers_from_config()` returns 0 servers. Verify the file exists:
+    `load_mcp_servers_from_config()` returns 0 servers. GAIA merges two config files at startup:
+
+    1. `~/.gaia/mcp_servers.json` — global config, always checked
+    2. `./mcp_servers.json` — local config, checked in the current working directory
+
+    Verify the files exist:
     ```bash
-    cat ./mcp_servers.json        # Project config
     cat ~/.gaia/mcp_servers.json  # Global config
+    cat ./mcp_servers.json        # Local config (CWD)
+    ```
+
+    To use a specific config file instead, pass it explicitly — this loads only
+    that file and skips the global and local configs entirely:
+    ```python
+    MCPClientMixin.__init__(self, config_file="/path/to/mcp_servers.json")
     ```
   </Accordion>
 
