@@ -26,6 +26,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Parse JSON bodies
 app.use(express.json());
 
+/**
+ * Resolve a user-provided path within a base directory, preventing path traversal.
+ * Returns the safe resolved path or null if the path escapes the base directory.
+ */
+function safePath(baseDir, userPath) {
+    const base = path.resolve(baseDir);
+    const resolved = path.resolve(base, path.normalize(userPath).replace(/^(\.\.[/\\])+/, ''));
+    if (resolved === base || resolved.startsWith(base + path.sep)) {
+        return resolved;
+    }
+    return null;
+}
+
 // Base paths for data files - use environment variables or defaults
 const EXPERIMENTS_PATH = process.env.EXPERIMENTS_PATH || path.join(__dirname, '../../../..', 'experiments');
 const EVALUATIONS_PATH = process.env.EVALUATIONS_PATH || path.join(__dirname, '../../../..', 'evaluation');
@@ -119,12 +132,9 @@ app.get('/api/files', (req, res) => {
 // API endpoint to load experiment data
 app.get('/api/experiment/:filename', (req, res) => {
     try {
-        // Use path.basename() to strip directory components (prevents path traversal)
-        const safeFilename = path.basename(req.params.filename);
-        const filePath = path.join(EXPERIMENTS_PATH, safeFilename);
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ error: 'File not found' });
-        }
+        const filePath = safePath(EXPERIMENTS_PATH, path.basename(req.params.filename));
+        if (!filePath) return res.status(400).json({ error: 'Invalid file path' });
+        if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
         const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
         res.json(data);
     } catch (error) {
@@ -135,16 +145,9 @@ app.get('/api/experiment/:filename', (req, res) => {
 // API endpoint to load evaluation data (supports subdirectories)
 app.get('/api/evaluation/*', (req, res) => {
     try {
-        const userPath = req.params[0];
-        // Resolve and validate path is within allowed directory (prevents path traversal)
-        const resolvedBase = path.resolve(EVALUATIONS_PATH);
-        const filePath = path.resolve(EVALUATIONS_PATH, userPath);
-        if (!filePath.startsWith(resolvedBase + path.sep) && filePath !== resolvedBase) {
-            return res.status(400).json({ error: 'Invalid file path' });
-        }
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ error: 'File not found' });
-        }
+        const filePath = safePath(EVALUATIONS_PATH, req.params[0]);
+        if (!filePath) return res.status(400).json({ error: 'Invalid file path' });
+        if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
         const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
         res.json(data);
     } catch (error) {
@@ -296,38 +299,20 @@ app.get('/api/test-data/:type/:filename', (req, res) => {
         const type = req.params.type;
         const filename = req.params.filename;
 
-        // Validate type doesn't contain path traversal
-        const resolvedTypeDir = path.resolve(TEST_DATA_PATH, type);
-        if (!resolvedTypeDir.startsWith(path.resolve(TEST_DATA_PATH) + path.sep)) {
-            return res.status(400).json({ error: 'Invalid type parameter' });
-        }
-
         // Try subdirectory first, then root level
-        let filePath = path.resolve(resolvedTypeDir, filename);
-        if (!filePath.startsWith(resolvedTypeDir + path.sep) && filePath !== resolvedTypeDir) {
-            return res.status(400).json({ error: 'Invalid file path' });
-        }
+        let filePath = safePath(TEST_DATA_PATH, path.join(type, filename));
+        if (!filePath) return res.status(400).json({ error: 'Invalid file path' });
 
         // If not found in subdirectory, try root level
         if (!fs.existsSync(filePath)) {
-            const rootPath = path.resolve(TEST_DATA_PATH, filename);
-            if (rootPath.startsWith(path.resolve(TEST_DATA_PATH) + path.sep) && fs.existsSync(rootPath)) {
-                filePath = rootPath;
-            } else {
+            filePath = safePath(TEST_DATA_PATH, filename);
+            if (!filePath || !fs.existsSync(filePath)) {
                 return res.status(404).json({ error: 'Test data file not found' });
             }
         }
 
-        // Final validation: ensure the resolved filePath is within TEST_DATA_PATH
-        const resolvedBase = path.resolve(TEST_DATA_PATH);
-        const resolvedFilePath = path.resolve(filePath);
-        if (!resolvedFilePath.startsWith(resolvedBase + path.sep) && resolvedFilePath !== resolvedBase) {
-            return res.status(400).json({ error: 'Invalid file path' });
-        }
-
         // Check if file is PDF
         if (filename.endsWith('.pdf')) {
-            // For PDFs, send file info and indicate it's a binary file
             const stats = fs.statSync(filePath);
             res.json({
                 filename: filename,
@@ -337,7 +322,6 @@ app.get('/api/test-data/:type/:filename', (req, res) => {
                 message: 'PDF file - preview not available. Please open the file directly to view contents.'
             });
         } else {
-            // For text files, send the content
             const content = fs.readFileSync(filePath, 'utf8');
             res.json({
                 filename: filename,
@@ -354,30 +338,17 @@ app.get('/api/test-data/:type/:filename', (req, res) => {
 app.get('/api/test-data/:type/metadata', (req, res) => {
     try {
         const type = req.params.type;
+        const typeDir = safePath(TEST_DATA_PATH, type);
+        if (!typeDir) return res.status(400).json({ error: 'Invalid type parameter' });
 
-        // Validate type directory
-        const resolvedTypeDir = path.resolve(TEST_DATA_PATH, type);
-        if (!resolvedTypeDir.startsWith(path.resolve(TEST_DATA_PATH) + path.sep)) {
-            return res.status(400).json({ error: 'Invalid type parameter' });
-        }
-
-        const metadataFiles = [
-            `${type}_metadata.json`,
-            'metadata.json'
-        ];
-
+        const metadataFiles = [`${type}_metadata.json`, 'metadata.json'];
         let metadataPath = null;
         for (const filename of metadataFiles) {
-            const potentialPath = path.resolve(resolvedTypeDir, filename);
-            if (potentialPath.startsWith(resolvedTypeDir + path.sep) && fs.existsSync(potentialPath)) {
-                metadataPath = potentialPath;
-                break;
-            }
+            const p = safePath(TEST_DATA_PATH, path.join(type, filename));
+            if (p && fs.existsSync(p)) { metadataPath = p; break; }
         }
 
-        if (!metadataPath) {
-            return res.status(404).json({ error: 'Metadata file not found' });
-        }
+        if (!metadataPath) return res.status(404).json({ error: 'Metadata file not found' });
 
         const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
         res.json(metadata);
@@ -427,16 +398,9 @@ app.get('/api/groundtruth', (req, res) => {
 // API endpoint to load groundtruth file content
 app.get('/api/groundtruth/:filename(*)', (req, res) => {
     try {
-        const userPath = req.params.filename;
-        // Resolve and validate path is within allowed directory (prevents path traversal)
-        const resolvedBase = path.resolve(GROUNDTRUTH_PATH);
-        const filePath = path.resolve(GROUNDTRUTH_PATH, userPath);
-        if (!filePath.startsWith(resolvedBase + path.sep) && filePath !== resolvedBase) {
-            return res.status(400).json({ error: 'Invalid file path' });
-        }
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ error: 'File not found' });
-        }
+        const filePath = safePath(GROUNDTRUTH_PATH, req.params.filename);
+        if (!filePath) return res.status(400).json({ error: 'Invalid file path' });
+        if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
         const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
         res.json(data);
     } catch (error) {

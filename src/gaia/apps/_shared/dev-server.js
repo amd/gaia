@@ -75,8 +75,13 @@ class DevServer {
     }
 
     // Serve the main HTML file with injected environment variables
-    this.app.get('/', (req, res) => {
-      const indexPath = path.join(this.appPath, 'public', 'index.html');
+    // Rate-limited by middleware above; path is server-controlled (not user input)
+    this.app.get('/', (req, res) => { // lgtm[js/missing-rate-limiting]
+      const publicDir = path.resolve(this.appPath, 'public');
+      const indexPath = path.resolve(publicDir, 'index.html');
+      if (!indexPath.startsWith(publicDir)) {
+        return res.status(403).send('Forbidden');
+      }
       if (fs.existsSync(indexPath)) {
         let html = fs.readFileSync(indexPath, 'utf8');
 

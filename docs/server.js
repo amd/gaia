@@ -55,9 +55,13 @@ function verifyToken(token) {
 
 // Sanitize redirect URL to prevent open redirect attacks
 function sanitizeRedirect(url) {
-  // Must start with / but not // (protocol-relative URLs)
-  if (url && typeof url === 'string' && url.startsWith('/') && !url.startsWith('//')) {
-    return url;
+  if (!url || typeof url !== 'string') return '/';
+  // Only allow relative paths: must start with / but not // or /\ (protocol-relative)
+  // Strip any backslashes and protocol-relative patterns
+  const cleaned = url.replace(/\\/g, '/');
+  if (cleaned.startsWith('/') && !cleaned.startsWith('//') && !/^\/[^/]*:/.test(cleaned)) {
+    // Return only the pathname to prevent header injection
+    try { return new URL(cleaned, 'http://localhost').pathname; } catch { return '/'; }
   }
   return '/';
 }

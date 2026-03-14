@@ -42,10 +42,8 @@ export class ChatUI {
      */
     renderFormattedMessage(container, text) {
         // Split text into segments: plain text, bold, italic, code, links, newlines
-        // Process in order: bold(**), italic(*), code(`), URLs, newlines
-        const escaped = this.escapeHTML(text);
-        // Tokenize into safe segments
-        const tokens = this.tokenize(escaped);
+        // Tokenize raw text — all output uses textContent (auto-escapes HTML)
+        const tokens = this.tokenize(text);
         for (const token of tokens) {
             if (token.type === 'bold') {
                 const el = document.createElement('strong');
@@ -75,19 +73,8 @@ export class ChatUI {
     }
 
     /**
-     * Escape HTML special characters to prevent injection.
-     */
-    escapeHTML(text) {
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    /**
      * Tokenize text into typed segments for safe DOM rendering.
+     * All output uses textContent which auto-escapes HTML.
      * Matches bold (**text**), italic (*text*), code (`text`), URLs, and newlines.
      */
     tokenize(text) {
@@ -99,45 +86,35 @@ export class ChatUI {
         while ((match = pattern.exec(text)) !== null) {
             // Add any plain text before this match
             if (match.index > lastIndex) {
-                tokens.push({ type: 'text', text: this.unescapeHTML(text.slice(lastIndex, match.index)) });
+                tokens.push({ type: 'text', text: (text.slice(lastIndex, match.index)) });
             }
             if (match[1]) {
                 // Bold: **text**
-                tokens.push({ type: 'bold', text: this.unescapeHTML(match[2]) });
+                tokens.push({ type: 'bold', text: (match[2]) });
             } else if (match[3]) {
                 // Italic: *text*
-                tokens.push({ type: 'italic', text: this.unescapeHTML(match[4]) });
+                tokens.push({ type: 'italic', text: (match[4]) });
             } else if (match[5]) {
                 // Code: `text`
-                tokens.push({ type: 'code', text: this.unescapeHTML(match[6]) });
+                tokens.push({ type: 'code', text: (match[6]) });
             } else if (match[7]) {
                 // Newline
                 tokens.push({ type: 'newline' });
             } else if (match[0].match(/^https?:\/\//)) {
                 // URL - only allow http/https schemes
-                const url = this.unescapeHTML(match[0]);
+                const url = (match[0]);
                 tokens.push({ type: 'link', text: url, url: url });
             }
             lastIndex = match.index + match[0].length;
         }
         // Add remaining plain text
         if (lastIndex < text.length) {
-            tokens.push({ type: 'text', text: this.unescapeHTML(text.slice(lastIndex)) });
+            tokens.push({ type: 'text', text: (text.slice(lastIndex)) });
         }
         return tokens;
     }
 
-    /**
-     * Reverse HTML escaping for display in textContent (which auto-escapes).
-     */
-    unescapeHTML(text) {
-        return text
-            .replace(/&amp;/g, '&')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'");
-    }
+
 
     clearMessages() {
         while (this.messagesContainer.firstChild) {
