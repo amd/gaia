@@ -43,7 +43,7 @@ flowchart TD
 
 1. **Vision Language Model (VLM)** - The Qwen3-VL-4B model "sees" the intake form image and extracts text using a carefully crafted prompt that guides it to identify specific fields (name, DOB, allergies, medications, etc.). Unlike traditional OCR, the VLM understands context—it knows that "DOB" means date of birth and can handle handwritten entries, checkboxes, and varied form layouts.
 
-2. **LLM Validation & Querying** - The Qwen3-Coder-30B model (a Mixture-of-Experts architecture that activates only 3B parameters per inference) validates extracted data, handles natural language queries, and generates SQL to search the patient database. When you ask "Which patients have penicillin allergies?", the LLM translates this to proper SQL.
+2. **LLM Validation & Querying** - The Qwen3.5-35B model (a Mixture-of-Experts architecture that activates only 3B parameters per inference) validates extracted data, handles natural language queries, and generates SQL to search the patient database. When you ask "Which patients have penicillin allergies?", the LLM translates this to proper SQL.
 
 3. **Embedding Model** - The nomic-embed model creates vector embeddings for semantic similarity search, enabling fuzzy matching when looking up returning patients or finding related records.
 
@@ -68,7 +68,7 @@ The EMR agent uses three models, downloaded automatically on first run via `gaia
 
 | Model | Size | Purpose |
 |-------|------|---------|
-| Qwen3-Coder-30B-A3B-Instruct-GGUF | 18.6 GB | LLM for chat queries and patient search |
+| Qwen3.5-35B-A3B-Instruct-GGUF | 18.6 GB | LLM for chat queries and patient search |
 | Qwen3-VL-4B-Instruct-GGUF | 3.3 GB | Vision language model for form extraction |
 | nomic-embed-text-v2-moe-GGUF | 522 MB | Embedding model for similarity search |
 
@@ -304,7 +304,7 @@ This command:
 - Checks Lemonade server is running and context size is configured
 - Downloads and loads all required models:
   - **VLM**: Qwen3-VL-4B-Instruct-GGUF (form extraction)
-  - **LLM**: Qwen3-Coder-30B-A3B-Instruct-GGUF (chat/query processing)
+  - **LLM**: Qwen3.5-35B-A3B-Instruct-GGUF (chat/query processing)
   - **Embedding**: nomic-embed-text-v2-moe-GGUF (similarity search)
 - Verifies all models are loaded and ready
 

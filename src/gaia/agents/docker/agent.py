@@ -21,7 +21,7 @@ from gaia.security import PathValidator
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+DEFAULT_MODEL = "Qwen3.5-35B-A3B-Instruct-GGUF"
 DEFAULT_MAX_STEPS = 10
 DEFAULT_PORT = 8080
 
@@ -46,7 +46,7 @@ class DockerAgent(MCPAgent):
         Args:
             **kwargs: Agent initialization parameters:
                 - max_steps: Maximum conversation steps (default: 10)
-                - model_id: LLM model to use (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)
+                - model_id: LLM model to use (default: Qwen3.5-35B-A3B-Instruct-GGUF)
                 - silent_mode: Suppress console output (default: False)
                 - debug: Enable debug logging (default: False)
                 - show_prompts: Display prompts sent to LLM (default: False)

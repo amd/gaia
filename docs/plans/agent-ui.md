@@ -287,7 +287,7 @@ CREATE INDEX idx_session_docs ON session_documents(session_id);
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │ 🏠 Running 100% locally on your device                   │  │
 │  │ 📡 Network: Offline OK | No data sent to cloud           │  │
-│  │ 🔐 Model: Qwen3-Coder-30B (local)                        │  │
+│  │ 🔐 Model: Qwen3.5-35B (local)                        │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                                                                 │
 ```

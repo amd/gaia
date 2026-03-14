@@ -136,11 +136,12 @@ app.get('/api/experiment/:filename', (req, res) => {
 app.get('/api/evaluation/*', (req, res) => {
     try {
         const userPath = req.params[0];
-        // Reject paths with directory traversal
-        if (userPath.includes('..')) {
+        // Resolve and validate path is within allowed directory (prevents path traversal)
+        const resolvedBase = path.resolve(EVALUATIONS_PATH);
+        const filePath = path.resolve(EVALUATIONS_PATH, userPath);
+        if (!filePath.startsWith(resolvedBase + path.sep) && filePath !== resolvedBase) {
             return res.status(400).json({ error: 'Invalid file path' });
         }
-        const filePath = path.join(EVALUATIONS_PATH, userPath);
         if (!fs.existsSync(filePath)) {
             return res.status(404).json({ error: 'File not found' });
         }
@@ -427,11 +428,12 @@ app.get('/api/groundtruth', (req, res) => {
 app.get('/api/groundtruth/:filename(*)', (req, res) => {
     try {
         const userPath = req.params.filename;
-        // Reject paths with directory traversal
-        if (userPath.includes('..')) {
+        // Resolve and validate path is within allowed directory (prevents path traversal)
+        const resolvedBase = path.resolve(GROUNDTRUTH_PATH);
+        const filePath = path.resolve(GROUNDTRUTH_PATH, userPath);
+        if (!filePath.startsWith(resolvedBase + path.sep) && filePath !== resolvedBase) {
             return res.status(400).json({ error: 'Invalid file path' });
         }
-        const filePath = path.join(GROUNDTRUTH_PATH, userPath);
         if (!fs.existsSync(filePath)) {
             return res.status(404).json({ error: 'File not found' });
         }

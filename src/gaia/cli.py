@@ -1612,7 +1612,7 @@ Examples:
   gaia eval fix-code src/gaia/eval/fix_code_testbench/off_by_one_bug/off_by_one_bug.py \\
       "Loop stops too early" \\
       output/off_by_one_bug_fixed.py \\
-      --model Qwen3-Coder-30B-A3B-Instruct-GGUF
+      --model Qwen3.5-35B-A3B-Instruct-GGUF
 
   # Run fix_code testbench and ask for edit_file tool output
   gaia eval fix-code src/app.ts "TS2322 type error" fixed.ts --use-edit-file

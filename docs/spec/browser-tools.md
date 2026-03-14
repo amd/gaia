@@ -345,7 +345,7 @@ After adding browser tools, the ChatAgent will have:
 | Shell | run_shell_command | 1 |
 | **Total** | | **22** |
 
-22 tools is manageable for Qwen3-Coder-30B. Tool names are intentionally distinct across categories to minimize selection confusion. Reduced from 4 to 3 browser tools by merging `extract_page_data` into `fetch_page(extract="tables")`.
+22 tools is manageable for Qwen3.5-35B. Tool names are intentionally distinct across categories to minimize selection confusion. Reduced from 4 to 3 browser tools by merging `extract_page_data` into `fetch_page(extract="tables")`.
 
 ---
 

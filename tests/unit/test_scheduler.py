@@ -44,7 +44,9 @@ class FakeDB:
                 next_run_at TEXT,
                 last_result TEXT,
                 run_count INTEGER DEFAULT 0,
-                error_count INTEGER DEFAULT 0
+                error_count INTEGER DEFAULT 0,
+                session_id TEXT,
+                schedule_config TEXT
             );
 
             CREATE TABLE IF NOT EXISTS schedule_results (
@@ -457,3 +459,44 @@ class TestSchedulerPersistence:
         internal = sched2._tasks.get("paused-persist")
         assert internal._timer_task is None
         await sched2.shutdown()
+
+
+# ── Extended parse_interval tests ───────────────────────────────────────────
+
+
+class TestParseIntervalExtended:
+    """Test newly added interval formats: weekly alias, day names, and week units."""
+
+    def test_weekly_alias(self):
+        """'weekly' alias should map to 7 days (604800 seconds)."""
+        assert parse_interval("weekly") == 604800
+
+    def test_every_monday(self):
+        """'every monday' should be treated as weekly (604800 seconds)."""
+        assert parse_interval("every monday") == 604800
+
+    def test_every_friday(self):
+        """'every friday' should be treated as weekly (604800 seconds)."""
+        assert parse_interval("every friday") == 604800
+
+    def test_every_2_weeks(self):
+        """'every 2 weeks' should be 2 * 604800 = 1209600 seconds."""
+        assert parse_interval("every 2 weeks") == 1209600
+
+    def test_every_2w(self):
+        """'every 2w' shorthand should be 1209600 seconds."""
+        assert parse_interval("every 2w") == 1209600
+
+    def test_bare_1w(self):
+        """Bare '1w' shorthand should be 604800 seconds."""
+        assert parse_interval("1w") == 604800
+
+    def test_invalid_day_name(self):
+        """'every someday' is not a valid day name and should raise ValueError."""
+        with pytest.raises(ValueError, match="Cannot parse interval"):
+            parse_interval("every someday")
+
+    def test_invalid_format(self):
+        """'every minute' (no number, not a day name) should raise ValueError."""
+        with pytest.raises(ValueError, match="Cannot parse interval"):
+            parse_interval("every minute")

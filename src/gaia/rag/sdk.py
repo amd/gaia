@@ -45,7 +45,7 @@ from gaia.security import PathValidator
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+    model: str = "Qwen3.5-35B-A3B-Instruct-GGUF"
     max_tokens: int = 1024
     chunk_size: int = 500
     chunk_overlap: int = 100  # Increased to 20% overlap for better context preservation

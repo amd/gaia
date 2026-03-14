@@ -1467,7 +1467,7 @@ A dedicated **Dashboard** tab showing the overall agent configuration and state:
 |                                                                    |
 |  AGENT STATUS                          SYSTEM INFO                 |
 |  +----------------------------+        +------------------------+  |
-|  | State: Idle                |        | Model: Qwen3-Coder-30B |  |
+|  | State: Idle                |        | Model: Qwen3.5-35B |  |
 |  | Session: 12 messages       |        | Backend: Lemonade      |  |
 |  | Steps used: 0/20          |        | Max Steps: 20          |  |
 |  | Tools registered: 16      |        | RAG: Active (5 docs)   |  |

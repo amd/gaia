@@ -294,3 +294,147 @@ class TestSharedStateResetSession:
 
         history = state.memory.get_conversation_history("s1")
         assert len(history) == 2
+
+
+# ── FTS5 sanitization tests ────────────────────────────────────────────────
+
+
+class TestFTSSanitization:
+    """Tests for _sanitize_fts5_query helper function."""
+
+    def test_sanitize_removes_special_chars(self):
+        """Special chars like &, (, ), *, : should be removed or replaced with spaces."""
+        from gaia.agents.base.shared_state import _sanitize_fts5_query
+
+        result = _sanitize_fts5_query("hello & world (test) * foo:bar")
+        assert result is not None
+        # Special chars should be gone; words should remain joined by AND
+        assert "&" not in result
+        assert "(" not in result
+        assert ")" not in result
+        assert "*" not in result
+        assert ":" not in result
+        # All original words should be present
+        for word in ("hello", "world", "test", "foo", "bar"):
+            assert word in result
+
+    def test_sanitize_preserves_words(self):
+        """Normal alphanumeric words pass through intact."""
+        from gaia.agents.base.shared_state import _sanitize_fts5_query
+
+        result = _sanitize_fts5_query("simple words here")
+        assert result is not None
+        assert "simple" in result
+        assert "words" in result
+        assert "here" in result
+
+    def test_sanitize_empty_string(self):
+        """Empty string input should return None (safe value)."""
+        from gaia.agents.base.shared_state import _sanitize_fts5_query
+
+        assert _sanitize_fts5_query("") is None
+        assert _sanitize_fts5_query("   ") is None
+
+
+# ── Word overlap tests ──────────────────────────────────────────────────────
+
+
+class TestWordOverlap:
+    """Tests for _word_overlap helper function (Szymkiewicz-Simpson coefficient)."""
+
+    def test_identical_strings(self):
+        """Two identical strings should have 100% overlap."""
+        from gaia.agents.base.shared_state import _word_overlap
+
+        assert _word_overlap("hello world", "hello world") == 1.0
+
+    def test_no_overlap(self):
+        """Two completely different strings should have 0% overlap."""
+        from gaia.agents.base.shared_state import _word_overlap
+
+        assert _word_overlap("alpha beta gamma", "delta epsilon zeta") == 0.0
+
+    def test_partial_overlap(self):
+        """'the quick brown fox' vs 'the quick red cat' should have ~50% overlap."""
+        from gaia.agents.base.shared_state import _word_overlap
+
+        result = _word_overlap("the quick brown fox", "the quick red cat")
+        # Overlap coefficient = |intersection| / min(|A|, |B|)
+        # intersection = {"the", "quick"} = 2, min(4, 4) = 4 -> 0.5
+        assert result == pytest.approx(0.5)
+
+    def test_empty_strings(self):
+        """Empty vs empty should return 0.0 without crashing."""
+        from gaia.agents.base.shared_state import _word_overlap
+
+        assert _word_overlap("", "") == 0.0
+        assert _word_overlap("hello", "") == 0.0
+        assert _word_overlap("", "world") == 0.0
+
+
+# ── KnowledgeDB credential tests ───────────────────────────────────────────
+
+
+class TestKnowledgeDBCredentials:
+    """Tests for KnowledgeDB credential table operations (store, get, list)."""
+
+    def test_store_and_get_credential(self, workspace):
+        """Store a credential and retrieve it back, verifying all fields."""
+        state = get_shared_state(workspace)
+        knowledge = state.knowledge
+
+        knowledge.store_credential(
+            credential_id="cred_github_token",
+            service="github",
+            credential_type="api_key",
+            encrypted_data="encrypted_abc123",
+            scopes=["repo", "read:org"],
+        )
+
+        cred = knowledge.get_credential("github")
+        assert cred is not None
+        assert cred["id"] == "cred_github_token"
+        assert cred["service"] == "github"
+        assert cred["credential_type"] == "api_key"
+        assert cred["encrypted_data"] == "encrypted_abc123"
+        assert cred["scopes"] == ["repo", "read:org"]
+        assert cred["expired"] is False
+
+    def test_get_nonexistent_credential(self, workspace):
+        """Getting a credential for an unknown service should return None."""
+        state = get_shared_state(workspace)
+        knowledge = state.knowledge
+
+        cred = knowledge.get_credential("nonexistent_service")
+        assert cred is None
+
+    def test_list_credentials_via_get(self, workspace):
+        """Store multiple credentials for different services, verify each is retrievable."""
+        state = get_shared_state(workspace)
+        knowledge = state.knowledge
+
+        services = [
+            ("cred_gmail", "gmail", "oauth2", "encrypted_gmail_token"),
+            ("cred_slack", "slack", "bearer_token", "encrypted_slack_token"),
+            ("cred_jira", "jira", "api_key", "encrypted_jira_key"),
+        ]
+
+        for cred_id, service, cred_type, data in services:
+            knowledge.store_credential(
+                credential_id=cred_id,
+                service=service,
+                credential_type=cred_type,
+                encrypted_data=data,
+            )
+
+        # Verify each credential is independently retrievable
+        for cred_id, service, cred_type, data in services:
+            cred = knowledge.get_credential(service)
+            assert cred is not None, f"Credential for '{service}' should exist"
+            assert cred["id"] == cred_id
+            assert cred["service"] == service
+            assert cred["credential_type"] == cred_type
+            assert cred["encrypted_data"] == data
+
+        # Verify unknown service still returns None
+        assert knowledge.get_credential("unknown") is None

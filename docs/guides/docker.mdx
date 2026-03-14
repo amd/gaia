@@ -28,12 +28,12 @@ The GAIA Docker Agent provides a natural language interface for containerizing a
    ```
 
 3. **Download Required Model**:
-   The Docker agent uses the `Qwen3-Coder-30B-A3B-Instruct-GGUF` model for reliable Dockerfile generation and application analysis.
+   The Docker agent uses the `Qwen3.5-35B-A3B-Instruct-GGUF` model for reliable Dockerfile generation and application analysis.
 
    Use the Lemonade server's model manager to download it:
    1. Start Lemonade server with extended context size: `lemonade-server serve --ctx-size 8192`
    2. Open the model manager in your browser (typically http://localhost:8000)
-   3. Search for and download: `Qwen3-Coder-30B-A3B-Instruct-GGUF`
+   3. Search for and download: `Qwen3.5-35B-A3B-Instruct-GGUF`
 
    Note: The model is over 17GB and can take a while to download depending on your internet connection. It provides excellent results for Dockerfile generation and application analysis.
    
@@ -200,7 +200,7 @@ For more details on the MCP bridge, see [MCP Documentation](/integrations/mcp).
 from gaia.agents.docker.agent import DockerAgent
 
 # Initialize and execute
-agent = DockerAgent(model_id="Qwen3-Coder-30B-A3B-Instruct-GGUF", silent_mode=True)
+agent = DockerAgent(model_id="Qwen3.5-35B-A3B-Instruct-GGUF", silent_mode=True)
 result = agent.process_query("create a Dockerfile for my Flask app in directory: ./app")
 
 if result['status'] == 'success':
@@ -305,7 +305,7 @@ The `command` is a natural language instruction that tells the agent what Docker
 | `-d`, `--directory` | string | `.` | Directory containing the application to containerize |
 | `-v`, `--verbose` | flag | - | Enable verbose output |
 | `--debug` | flag | - | Enable debug logging |
-| `--model` | string | `Qwen3-Coder-30B-A3B-Instruct-GGUF` | LLM model to use |
+| `--model` | string | `Qwen3.5-35B-A3B-Instruct-GGUF` | LLM model to use |
 
 ## Troubleshooting
 
@@ -348,7 +348,7 @@ If the agent doesn't generate a Dockerfile:
 Verify the Qwen3-Coder model is downloaded:
 
 1. Open Lemonade UI: http://localhost:8000
-2. Check Models section for Qwen3-Coder-30B-A3B-Instruct-GGUF
+2. Check Models section for Qwen3.5-35B-A3B-Instruct-GGUF
 
 #### MCP Integration Issues
 

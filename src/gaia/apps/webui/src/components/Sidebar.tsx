@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Plus, Search, FileText, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, FolderSearch } from 'lucide-react';
+import { Plus, Search, FileText, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, FolderSearch, Clock } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -37,7 +37,10 @@ function SessionItem({ session: s, isActive, isPendingDelete, onSelect, onKeyDow
             aria-label={`Open task: ${s.title}`}
             aria-current={isActive ? 'true' : undefined}
         >
-            <span className="session-title">{s.title}</span>
+            <span className="session-title">
+                {s.title.startsWith('Schedule: ') && <Clock size={12} className="session-schedule-icon" />}
+                {s.title}
+            </span>
             <span className="session-time">{formatTime(s.updated_at)}</span>
             {isPendingDelete ? (
                 <button
@@ -68,7 +71,7 @@ function SessionItem({ session: s, isActive, isPendingDelete, onSelect, onKeyDow
 export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
     const {
         sessions, currentSessionId, setCurrentSession, removeSession,
-        setMessages, theme, toggleTheme, setShowDocLibrary, setShowFileBrowser, setShowSettings,
+        setMessages, theme, toggleTheme, setShowDocLibrary, setShowFileBrowser, setShowSettings, setShowSchedules,
         sidebarOpen, setSidebarOpen, setLoadingMessages,
         sidebarCollapsed, toggleSidebarCollapsed,
         sidebarWidth, setSidebarWidth,
@@ -361,6 +364,9 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                             <Smartphone size={17} />
                         </button>
                     )}
+                    <button className="btn-icon" onClick={() => setShowSchedules(true)} title="Scheduled Tasks" aria-label="Scheduled Tasks">
+                        <Clock size={17} />
+                    </button>
                     <button className="btn-icon" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Document Library">
                         <FileText size={17} />
                     </button>

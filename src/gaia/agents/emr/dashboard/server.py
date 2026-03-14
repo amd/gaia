@@ -70,11 +70,12 @@ def _sanitize_response_text(text: str) -> str:
     that could expose internal implementation details to end users.
     """
     # Remove Python traceback blocks (Traceback ... File "..." lines)
+    # Match the header then all continuation lines (indented or blank) to avoid
+    # catastrophic backtracking from DOTALL with lazy quantifiers.
     text = re.sub(
-        r"Traceback \(most recent call last\):.*?(?=\n\S|\Z)",
+        r"Traceback \(most recent call last\):(?:\n(?:[ \t].*|[ \t]*))*",
         "[internal details removed]",
         text,
-        flags=re.DOTALL,
     )
     # Remove individual "File ..." lines from stack traces
     text = re.sub(r'^\s*File ".*?", line \d+.*$', "", text, flags=re.MULTILINE)
@@ -1229,7 +1230,7 @@ def create_app(
 
         # Required models for EMR agent
         vlm_model = "Qwen3-VL-4B-Instruct-GGUF"
-        llm_model = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        llm_model = "Qwen3.5-35B-A3B-Instruct-GGUF"
         embed_model = "nomic-embed-text-v2-moe-GGUF"
 
         try:
@@ -1385,7 +1386,7 @@ def create_app(
 
             # Required models for EMR agent
             vlm_model = "Qwen3-VL-4B-Instruct-GGUF"
-            llm_model = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+            llm_model = "Qwen3.5-35B-A3B-Instruct-GGUF"
             embed_model = "nomic-embed-text-v2-moe-GGUF"
 
             required_models = [

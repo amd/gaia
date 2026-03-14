@@ -170,8 +170,8 @@ What language/framework would you like to use for your backend project?
 The routing agent can be configured via environment variables:
 
 ```bash
-# Model used for routing analysis (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)
-export AGENT_ROUTING_MODEL=Qwen3-Coder-30B-A3B-Instruct-GGUF
+# Model used for routing analysis (default: Qwen3.5-35B-A3B-Instruct-GGUF)
+export AGENT_ROUTING_MODEL=Qwen3.5-35B-A3B-Instruct-GGUF
 
 # Lemonade server URL (default: http://localhost:8000/api/v1)
 export LEMONADE_BASE_URL=http://localhost:8000/api/v1
@@ -232,7 +232,7 @@ gaia-code "Create an Express API with SQLite"
 **Issue**: Even with specific frameworks, routing agent asks for clarification.
 
 **Solution**:
-- Check the routing model is loaded: `AGENT_ROUTING_MODEL=Qwen3-Coder-30B-A3B-Instruct-GGUF`
+- Check the routing model is loaded: `AGENT_ROUTING_MODEL=Qwen3.5-35B-A3B-Instruct-GGUF`
 - Verify Lemonade server has sufficient context size: `--ctx-size 32768`
 - Ensure the coding model is available in Lemonade's model list
 

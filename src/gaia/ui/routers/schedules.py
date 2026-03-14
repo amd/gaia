@@ -7,7 +7,7 @@ REST API for creating, managing, and monitoring recurring scheduled tasks.
 """
 
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -54,6 +54,8 @@ class ScheduleResponse(BaseModel):
     last_result: Optional[str] = None
     run_count: int = 0
     error_count: int = 0
+    session_id: Optional[str] = None
+    schedule_config: Optional[str] = None
 
 
 class ScheduleListResponse(BaseModel):
@@ -80,6 +82,25 @@ class ScheduleResultsResponse(BaseModel):
     total: int
 
 
+class ParseScheduleRequest(BaseModel):
+    """Request to parse a natural language schedule description."""
+
+    input: str = Field(..., description="Natural language schedule description")
+
+
+class ParseScheduleResponse(BaseModel):
+    """Parsed schedule configuration."""
+
+    interval_seconds: int
+    time_of_day: Optional[str] = None
+    start_hour: Optional[int] = None
+    end_hour: Optional[int] = None
+    days_of_week: Optional[List[int]] = None
+    description: str
+    next_run_at: Optional[str] = None
+    valid: bool  # True if the schedule could be parsed
+
+
 # ── Dependency ───────────────────────────────────────────────────────────────
 
 
@@ -95,6 +116,31 @@ def get_scheduler(request: Request) -> Scheduler:
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
+
+
+@router.post("/api/schedules/parse", response_model=ParseScheduleResponse)
+async def parse_schedule(request: ParseScheduleRequest):
+    """Parse a natural language schedule description into structured config."""
+    from datetime import datetime, timezone
+
+    from ..scheduler import ScheduleConfig, compute_next_run, parse_schedule_input
+
+    config = parse_schedule_input(request.input)
+    next_run = None
+    if config.interval_seconds > 0:
+        next_dt = compute_next_run(config)
+        next_run = next_dt.isoformat()
+
+    return ParseScheduleResponse(
+        interval_seconds=config.interval_seconds,
+        time_of_day=config.time_of_day,
+        start_hour=config.start_hour,
+        end_hour=config.end_hour,
+        days_of_week=config.days_of_week,
+        description=config.description,
+        next_run_at=next_run,
+        valid=config.interval_seconds > 0,
+    )
 
 
 @router.post("/api/schedules", response_model=ScheduleResponse)

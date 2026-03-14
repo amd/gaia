@@ -76,7 +76,7 @@ from gaia.ui.database import ChatDatabase
 db = ChatDatabase()  # Uses default path ~/.gaia/chat/gaia_chat.db
 
 # Create a session
-session = db.create_session(title="My Chat", model="Qwen3-Coder-30B-A3B-Instruct-GGUF")
+session = db.create_session(title="My Chat", model="Qwen3.5-35B-A3B-Instruct-GGUF")
 print(f"Session ID: {session['id']}")
 
 # Add messages
@@ -138,7 +138,7 @@ db = ChatDatabase()
 # Create session with attached documents
 session = db.create_session(
     title="Project Review",
-    model="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    model="Qwen3.5-35B-A3B-Instruct-GGUF",
     system_prompt="You are a code review assistant.",
     document_ids=["doc-abc123"],
 )
@@ -395,7 +395,7 @@ class AttachDocumentRequest(BaseModel):
     ```json
     {
       "lemonade_running": true,
-      "model_loaded": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+      "model_loaded": "Qwen3.5-35B-A3B-Instruct-GGUF",
       "embedding_model_loaded": false,
       "disk_space_gb": 128.5,
       "memory_available_gb": 12.3,
@@ -435,7 +435,7 @@ class AttachDocumentRequest(BaseModel):
     ```json
     {
       "title": "Code Review",
-      "model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+      "model": "Qwen3.5-35B-A3B-Instruct-GGUF",
       "system_prompt": "You are a code reviewer.",
       "document_ids": ["doc-abc123"]
     }
@@ -559,7 +559,7 @@ class AttachDocumentRequest(BaseModel):
 
     **Example stream** showing a typical multi-step interaction:
     ```
-    data: {"type": "thinking", "content": "Sending to Qwen3-Coder-30B..."}
+    data: {"type": "thinking", "content": "Sending to Qwen3.5-35B..."}
     data: {"type": "step", "step": 1, "total": 10, "status": "started"}
     data: {"type": "tool_start", "tool": "query_documents", "detail": "Searching indexed documents for relevant content"}
     data: {"type": "tool_args", "tool": "query_documents", "args": {"query": "database init"}, "detail": "query: database init"}
@@ -710,7 +710,7 @@ CREATE TABLE sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT,
     updated_at TEXT,
-    model TEXT NOT NULL DEFAULT 'Qwen3-Coder-30B-A3B-Instruct-GGUF',
+    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-Instruct-GGUF',
     system_prompt TEXT
 );
 
@@ -842,7 +842,7 @@ from gaia.chat.sdk import AgentSDK, AgentConfig
 
 # The server creates an AgentSDK instance per request
 config = AgentConfig(
-    model=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
+    model=session.get("model", "Qwen3.5-35B-A3B-Instruct-GGUF"),
     system_prompt=session.get("system_prompt"),
 )
 chat = AgentSDK(config)

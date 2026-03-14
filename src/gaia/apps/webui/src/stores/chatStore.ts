@@ -54,6 +54,7 @@ interface ChatState {
     showDocLibrary: boolean;
     showFileBrowser: boolean;
     showSettings: boolean;
+    showSchedules: boolean;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     sidebarWidth: number;
@@ -62,6 +63,7 @@ interface ChatState {
     setShowDocLibrary: (show: boolean) => void;
     setShowFileBrowser: (show: boolean) => void;
     setShowSettings: (show: boolean) => void;
+    setShowSchedules: (show: boolean) => void;
     toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebarCollapsed: () => void;
@@ -163,6 +165,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showDocLibrary: false,
     showFileBrowser: false,
     showSettings: false,
+    showSchedules: false,
     toggleTheme: () =>
         set((state) => {
             const next = state.theme === 'dark' ? 'light' : 'dark';
@@ -183,6 +186,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
     setShowSettings: (show) => set({ showSettings: show }),
+    setShowSchedules: (show) => set({ showSchedules: show }),
     toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>

@@ -13,6 +13,7 @@ Provides filesystem access for the document picker UI:
 import asyncio
 import datetime
 import logging
+import os
 import platform
 import uuid
 from pathlib import Path
@@ -33,7 +34,6 @@ from ..utils import (
     ALLOWED_EXTENSIONS,
     TEXT_EXTENSIONS,
     build_quick_links,
-    ensure_within_home,
     format_size,
     list_windows_drives,
 )
@@ -53,6 +53,64 @@ UPLOAD_ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS | IMAGE_EXTENSIONS
 UPLOADS_DIR = Path.home() / ".gaia" / "chat" / "uploads"
 
 router = APIRouter(tags=["files"])
+
+# Resolved home directory for path containment checks (computed once).
+_HOME_DIR: str = os.path.realpath(str(Path.home()))
+
+
+def _safe_resolve(user_path: str, *, allow_missing: bool = False) -> Path:
+    """Resolve and validate a user-provided path string.
+
+    Uses ``os.path.realpath`` to canonicalize the path, then verifies
+    the result falls within the user's home directory.  This two-step
+    pattern (realpath + startswith) is the canonical path-traversal
+    guard recognized by static-analysis tools such as CodeQL.
+
+    Args:
+        user_path: Raw path string from the request.
+        allow_missing: When *False* (default), raise 404 if the
+            resolved path does not exist on disk.
+
+    Returns:
+        A :class:`Path` whose string representation has been verified
+        to start with the home directory prefix.
+
+    Raises:
+        HTTPException 400: null bytes or symlink detected.
+        HTTPException 403: path escapes the home directory.
+        HTTPException 404: path does not exist (unless *allow_missing*).
+    """
+    if "\x00" in user_path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    real = os.path.realpath(user_path)
+
+    # Containment check: resolved path must be inside user's home.
+    # Use os.sep to ensure "C:\\Users\\foobar" does not match "C:\\Users\\foo".
+    if not (real == _HOME_DIR or real.startswith(_HOME_DIR + os.sep)):
+        raise HTTPException(
+            status_code=403,
+            detail="Access restricted to files under user home directory",
+        )
+
+    safe = Path(real)
+
+    # Symlink detection: if the real path differs from what the user
+    # supplied (after normalization) a symlink or traversal was involved.
+    if os.path.normpath(user_path) != real:
+        # Only flag if the original path actually is a symlink on disk.
+        try:
+            if Path(user_path).is_symlink():
+                raise HTTPException(
+                    status_code=400, detail="Symbolic links are not supported"
+                )
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    if not allow_missing and not safe.exists():
+        raise HTTPException(status_code=404, detail="Path not found")
+
+    return safe
 
 
 # ── Upload ───────────────────────────────────────────────────────────────────
@@ -176,27 +234,8 @@ async def browse_files(path: Optional[str] = None):
     if not path:
         path = str(Path.home())
 
-    # Security: reject null bytes
-    if "\x00" in path:
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    raw_path = Path(path)
-
-    resolved = raw_path.resolve(strict=False)
-
-    # Security: restrict browsing to user's home directory FIRST, before
-    # ANY filesystem operations (is_symlink/is_dir can throw PermissionError
-    # on protected OS paths).
-    ensure_within_home(resolved)
-
-    # Check symlink after home restriction
-    try:
-        if raw_path.is_symlink():
-            raise HTTPException(
-                status_code=400, detail="Symbolic links are not supported"
-            )
-    except PermissionError:
-        raise HTTPException(status_code=403, detail="Access denied")
+    # Resolve, validate containment in home dir, and reject symlinks.
+    resolved = _safe_resolve(path)
 
     if not resolved.is_dir():
         raise HTTPException(status_code=404, detail="Directory not found")
@@ -289,37 +328,13 @@ async def open_file_or_folder(request: OpenFileRequest):
     import subprocess
 
     file_path = request.path
-    if not file_path or "\x00" in file_path:
+    if not file_path:
         raise HTTPException(status_code=400, detail="Invalid path")
 
-    raw_path = Path(file_path)
     reveal = request.reveal
 
-    resolved = raw_path.resolve(strict=False)
-
-    # Security: restrict to user's home directory FIRST, before ANY
-    # filesystem operations (is_symlink/exists can throw PermissionError
-    # on protected OS paths).
-    home = Path.home()
-    try:
-        resolved.relative_to(home)
-    except ValueError:
-        raise HTTPException(
-            status_code=403,
-            detail="Access restricted to files under user home directory",
-        )
-
-    # Check symlink after home restriction
-    try:
-        if raw_path.is_symlink():
-            raise HTTPException(
-                status_code=400, detail="Symbolic links are not supported"
-            )
-    except PermissionError:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    if not resolved.exists():
-        raise HTTPException(status_code=404, detail="Path not found")
+    # Resolve, validate containment in home dir, and reject symlinks.
+    resolved = _safe_resolve(file_path)
 
     try:
         if platform.system() == "Windows":
@@ -514,28 +529,8 @@ async def preview_file(path: str, lines: int = 50):
     if not path:
         raise HTTPException(status_code=400, detail="File path is required")
 
-    if "\x00" in path:
-        raise HTTPException(status_code=400, detail="Invalid file path")
-
-    raw_path = Path(path)
-
-    # Resolve without strict mode (doesn't require the path to exist)
-    resolved = raw_path.resolve(strict=False)
-
-    # Security: restrict previews to user's home directory FIRST, before
-    # ANY filesystem operations (is_symlink/exists/is_file can all throw
-    # PermissionError on protected OS paths like C:\Windows\System32\...).
-    ensure_within_home(resolved)
-
-    # Check symlink before other filesystem operations
-    try:
-        if raw_path.is_symlink():
-            raise HTTPException(status_code=400, detail="Symbolic links not supported")
-    except PermissionError:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    if not resolved.exists():
-        raise HTTPException(status_code=404, detail="File not found")
+    # Resolve, validate containment in home dir, and reject symlinks.
+    resolved = _safe_resolve(path)
 
     if not resolved.is_file():
         raise HTTPException(status_code=400, detail="Path is not a file")

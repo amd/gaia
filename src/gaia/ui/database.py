@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
-    model TEXT NOT NULL DEFAULT 'Qwen3-Coder-30B-A3B-Instruct-GGUF',
+    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-Instruct-GGUF',
     system_prompt TEXT
 );
 
@@ -159,7 +159,8 @@ class ChatDatabase:
                     next_run_at TEXT,
                     last_result TEXT,
                     run_count INTEGER DEFAULT 0,
-                    error_count INTEGER DEFAULT 0
+                    error_count INTEGER DEFAULT 0,
+                    session_id TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS schedule_results (
@@ -176,6 +177,34 @@ class ChatDatabase:
             logger.debug("Scheduled tasks tables ready")
         except Exception as e:
             logger.debug("Migration check for scheduled_tasks: %s", e)
+
+        # Add session_id column to scheduled_tasks (for linking schedules to chat sessions)
+        try:
+            self._conn.execute(
+                "ALTER TABLE scheduled_tasks ADD COLUMN session_id TEXT"
+            )
+            logger.info("Migrated scheduled_tasks: added session_id column")
+        except Exception:
+            pass  # Column already exists
+
+        # Add schedule_config column to scheduled_tasks (for NL schedule parsing)
+        try:
+            sched_cols = [
+                row[1]
+                for row in self._conn.execute(
+                    "PRAGMA table_info(scheduled_tasks)"
+                ).fetchall()
+            ]
+            if "schedule_config" not in sched_cols:
+                self._conn.execute(
+                    "ALTER TABLE scheduled_tasks ADD COLUMN schedule_config TEXT"
+                )
+                self._conn.commit()
+                logger.info(
+                    "Migrated scheduled_tasks: added schedule_config column"
+                )
+        except Exception as e:
+            logger.debug("Migration check for schedule_config: %s", e)
 
     def close(self):
         """Close database connection."""
@@ -210,7 +239,7 @@ class ChatDatabase:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
-        model = model or "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        model = model or "Qwen3.5-35B-A3B-Instruct-GGUF"
         title = title or "New Chat"
 
         with self._transaction():

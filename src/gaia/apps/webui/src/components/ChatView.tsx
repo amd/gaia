@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
@@ -1031,12 +1031,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
                 {messages.map((msg) => (
                     <div key={msg.id}>
-                        <MessageBubble
-                            message={msg}
-                            agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
-                            onDelete={!isStreaming ? handleDeleteMessage : undefined}
-                            onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
-                        />
+                        {/* Schedule run divider */}
+                        {msg.role === 'system' && msg.content.startsWith('[schedule-run]') ? (
+                            <div className="schedule-run-divider">
+                                <span className="schedule-run-divider-line" />
+                                <span className="schedule-run-divider-label">
+                                    <Clock size={12} /> {msg.content.replace('[schedule-run] ', '')}
+                                </span>
+                                <span className="schedule-run-divider-line" />
+                            </div>
+                        ) : msg.role !== 'system' ? (
+                            <MessageBubble
+                                message={msg}
+                                agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
+                                onDelete={!isStreaming ? handleDeleteMessage : undefined}
+                                onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
+                            />
+                        ) : null}
                     </div>
                 ))}
 

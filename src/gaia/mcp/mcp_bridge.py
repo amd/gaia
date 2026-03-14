@@ -189,7 +189,7 @@ class GAIAMCPBridge:
                     "description": "Natural language Jira orchestration",
                     "capabilities": ["search", "create", "update", "bulk_operations"],
                     "init_params": {
-                        "model_id": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+                        "model_id": "Qwen3.5-35B-A3B-Instruct-GGUF",
                         "silent_mode": True,
                         "debug": False,
                     },

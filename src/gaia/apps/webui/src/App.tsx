@@ -9,6 +9,7 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { FileBrowser } from './components/FileBrowser';
 import { SettingsModal } from './components/SettingsModal';
+import { ScheduleManager } from './components/ScheduleManager';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { useChatStore } from './stores/chatStore';
@@ -25,6 +26,7 @@ function App() {
         showDocLibrary,
         showFileBrowser,
         showSettings,
+        showSchedules,
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
@@ -287,6 +289,7 @@ function App() {
             {showDocLibrary && <DocumentLibrary />}
             {showFileBrowser && <FileBrowser />}
             {showSettings && <SettingsModal />}
+            {showSchedules && <ScheduleManager />}
 
             {/* Mobile Access Modal */}
             {!isMobile && (

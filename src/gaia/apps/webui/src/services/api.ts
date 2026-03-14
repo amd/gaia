@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse } from '../types';
+import type { Session, Message, Document, SystemStatus, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, Schedule, ScheduleResult, ParsedSchedule } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -378,4 +378,34 @@ export async function stopTunnel(): Promise<{ active: boolean }> {
 
 export async function getTunnelStatus(): Promise<TunnelStatus> {
     return apiFetch('GET', '/tunnel/status');
+}
+
+// -- Schedules -----------------------------------------------------------------
+
+export async function listSchedules(): Promise<{ schedules: Schedule[]; total: number }> {
+    return apiFetch('GET', '/schedules');
+}
+
+export async function createSchedule(name: string, interval: string, prompt: string): Promise<Schedule> {
+    return apiFetch('POST', '/schedules', { name, interval, prompt });
+}
+
+export async function getSchedule(name: string): Promise<Schedule> {
+    return apiFetch('GET', `/schedules/${encodeURIComponent(name)}`);
+}
+
+export async function updateSchedule(name: string, status: string): Promise<Schedule> {
+    return apiFetch('PUT', `/schedules/${encodeURIComponent(name)}`, { status });
+}
+
+export async function deleteSchedule(name: string): Promise<void> {
+    return apiFetch('DELETE', `/schedules/${encodeURIComponent(name)}`);
+}
+
+export async function getScheduleResults(name: string, limit: number = 20): Promise<{ results: ScheduleResult[]; total: number }> {
+    return apiFetch('GET', `/schedules/${encodeURIComponent(name)}/results?limit=${limit}`);
+}
+
+export async function parseScheduleInput(input: string): Promise<ParsedSchedule> {
+    return apiFetch('POST', '/schedules/parse', { input });
 }

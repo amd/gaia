@@ -38,7 +38,7 @@ class ChatAgentConfig:
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: str = "http://localhost:8000/api/v1"
-    model_id: Optional[str] = None  # None = use default Qwen3-Coder-30B
+    model_id: Optional[str] = None  # None = use default Qwen3.5-35B
 
     # Execution settings
     max_steps: int = 10
@@ -139,8 +139,8 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use Qwen3-Coder-30B by default for better JSON parsing (same as Jira agent)
-        effective_model_id = config.model_id or "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        # Use Qwen3.5-35B by default for better JSON parsing (same as Jira agent)
+        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-Instruct-GGUF"
 
         # Debug logging for model selection
         logger.debug(

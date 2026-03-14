@@ -323,9 +323,10 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 // ── File Path Linkification ──────────────────────────────────────────────
 
 /** Regex to detect Windows file paths like C:\Users\... or C:/Users/... */
-const WIN_PATH_RE = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]]+[\\\/])*[^\s*?"<>|,;)}\]]*\.\w{1,5}/gi;
+// Character class excludes path separators (\ /) to prevent backtracking ambiguity
+const WIN_PATH_RE = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]\\/]+[\\\/])*[^\s*?"<>|,;)}\]\\/]*\.\w{1,5}/gi;
 /** Regex to detect Windows directory paths like C:\Users\...\folder\ */
-const WIN_DIR_RE = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]]+[\\\/])+/gi;
+const WIN_DIR_RE = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]\\/]+[\\\/])+/gi;
 
 function FilePathLink({ path }: { path: string }) {
     const handleClick = (e: React.MouseEvent) => {

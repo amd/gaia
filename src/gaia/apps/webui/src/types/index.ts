@@ -103,6 +103,45 @@ export interface IndexFolderResponse {
     errors: string[];
 }
 
+// ── Schedule Types ───────────────────────────────────────────────────────
+
+/** A scheduled recurring task. */
+export interface Schedule {
+    id: string;
+    name: string;
+    interval_seconds: number;
+    prompt: string;
+    status: 'active' | 'paused' | 'cancelled';
+    created_at: string | null;
+    last_run_at: string | null;
+    next_run_at: string | null;
+    last_result: string | null;
+    run_count: number;
+    error_count: number;
+    session_id: string | null;
+}
+
+/** A single execution result for a scheduled task. */
+export interface ScheduleResult {
+    id: string;
+    task_id: string;
+    executed_at: string;
+    result: string | null;
+    error: string | null;
+}
+
+/** Parsed result from natural language schedule input. */
+export interface ParsedSchedule {
+    interval_seconds: number;
+    time_of_day: string | null;
+    start_hour: number | null;
+    end_hour: number | null;
+    days_of_week: number[] | null;
+    description: string;
+    next_run_at: string | null;
+    valid: boolean;
+}
+
 // ── Mobile Access / Tunnel Types ─────────────────────────────────────────
 
 /** Status of the ngrok tunnel for mobile access. */

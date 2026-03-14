@@ -10,7 +10,7 @@ title: "JiraAgent"
 **Component:** JiraAgent - Natural Language Jira Interface
 **Module:** `gaia.agents.jira.agent`
 **Inherits:** Agent
-**Model:** Qwen3-Coder-30B-A3B-Instruct-GGUF (default)
+**Model:** Qwen3.5-35B-A3B-Instruct-GGUF (default)
 </Note>
 
 ---
@@ -70,7 +70,7 @@ class JiraAgent(Agent):
         self,
         jira_config: Dict[str, Any] = None,
         max_steps: int = 10,
-        model_id: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+        model_id: str = "Qwen3.5-35B-A3B-Instruct-GGUF",
         silent_mode: bool = False,
         **kwargs
     ):

@@ -218,6 +218,14 @@
     white-space: nowrap;
     font-size: 12px;
     font-family: var(--font-mono);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.session-schedule-icon {
+    flex-shrink: 0;
+    color: var(--text-muted);
 }
 
 .session-time {

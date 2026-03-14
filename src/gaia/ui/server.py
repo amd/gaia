@@ -157,7 +157,32 @@ def create_app(db_path: str = None) -> FastAPI:
         logger.info("Document file monitor started (30s polling interval)")
 
         # Start task scheduler for autonomous recurring tasks
-        scheduler = Scheduler(db=db)
+        async def _schedule_executor(prompt: str) -> str:
+            """Execute a scheduled task prompt through ChatAgent."""
+            import asyncio as _aio
+
+            def _run():
+                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+                config = ChatAgentConfig(
+                    max_steps=5,
+                    silent_mode=True,
+                    debug=False,
+                )
+                agent = ChatAgent(config)
+                result = agent.process_query(prompt)
+                if isinstance(result, dict):
+                    val = result.get("result")
+                    return val if val is not None else result.get("answer", "")
+                return str(result) if result else ""
+
+            loop = _aio.get_running_loop()
+            return await _aio.wait_for(
+                loop.run_in_executor(None, _run),
+                timeout=120.0,
+            )
+
+        scheduler = Scheduler(db=db, executor=_schedule_executor)
         app.state.scheduler = scheduler
         await scheduler.start()
         logger.info("Task scheduler started")

@@ -173,7 +173,7 @@ Get a working agent running to understand the basic flow.
     Based on your 32 GB RAM, you can safely run models up to ~22 GB.
 
     Agent: Great news! With 32 GB RAM and a 24 GB GPU, you can run:
-    - 30B parameter models (like Qwen3-Coder-30B)
+    - 30B parameter models (like Qwen3.5-35B)
     - Most 7B-14B models comfortably
     - NPU acceleration available for smaller models
     ```
@@ -240,12 +240,12 @@ Before we build step-by-step, let's understand what each piece does **under the 
 
   <Tab title="get_model_info()">
     ```python
-    model_info = client.get_model_info("Qwen3-Coder-30B-A3B-Instruct-GGUF")
+    model_info = client.get_model_info("Qwen3.5-35B-A3B-Instruct-GGUF")
 
     # Returns:
     {
-        "id": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
-        "name": "Qwen3 Coder 30B",
+        "id": "Qwen3.5-35B-A3B-Instruct-GGUF",
+        "name": "Qwen3.5 35B",
         "size_gb": 18.5,
         "downloaded": False
     }
@@ -711,7 +711,7 @@ You: What models are available?
 Agent: I found 15 models in the catalog:
 
 Large models:
-- Qwen3-Coder-30B (18.5 GB) [hot, coding] - Not downloaded
+- Qwen3.5-35B (18.5 GB) [hot, coding] - Not downloaded
 - Llama-3.1-8B (4.7 GB) [general] - Downloaded ✓
 
 Small models:
@@ -844,7 +844,7 @@ You: What size LLM can I run?
 Agent: With 32 GB RAM and 24 GB GPU, you can safely run models up to 22.4 GB!
 
 Top recommendations:
-1. Qwen3-Coder-30B (18.5 GB)
+1. Qwen3.5-35B (18.5 GB)
    - Estimated runtime: 24.1 GB
    - Fits in RAM: ✓
    - Fits in GPU: ✓ (21.6 GB available)

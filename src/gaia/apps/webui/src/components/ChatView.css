@@ -767,3 +767,34 @@
         flex-wrap: wrap;
     }
 }
+
+/* Schedule run divider */
+.schedule-run-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 16px 0;
+    padding: 0 16px;
+}
+
+.schedule-run-divider-line {
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+
+.schedule-run-divider-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    padding: 4px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+}
