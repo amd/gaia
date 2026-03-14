@@ -66,7 +66,7 @@ class RoutingAgent:
 
         # Model to use for routing analysis (configurable via env var)
         self.routing_model = os.getenv(
-            "AGENT_ROUTING_MODEL", "Qwen3.5-35B-A3B-Instruct-GGUF"
+            "AGENT_ROUTING_MODEL", "Qwen3.5-35B-A3B-GGUF"
         )
 
     def process_query(

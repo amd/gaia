@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
-    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-Instruct-GGUF',
+    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-GGUF',
     system_prompt TEXT
 );
 
@@ -180,9 +180,7 @@ class ChatDatabase:
 
         # Add session_id column to scheduled_tasks (for linking schedules to chat sessions)
         try:
-            self._conn.execute(
-                "ALTER TABLE scheduled_tasks ADD COLUMN session_id TEXT"
-            )
+            self._conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN session_id TEXT")
             logger.info("Migrated scheduled_tasks: added session_id column")
         except Exception:
             pass  # Column already exists
@@ -200,9 +198,7 @@ class ChatDatabase:
                     "ALTER TABLE scheduled_tasks ADD COLUMN schedule_config TEXT"
                 )
                 self._conn.commit()
-                logger.info(
-                    "Migrated scheduled_tasks: added schedule_config column"
-                )
+                logger.info("Migrated scheduled_tasks: added schedule_config column")
         except Exception as e:
             logger.debug("Migration check for schedule_config: %s", e)
 
@@ -239,7 +235,7 @@ class ChatDatabase:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
-        model = model or "Qwen3.5-35B-A3B-Instruct-GGUF"
+        model = model or "Qwen3.5-35B-A3B-GGUF"
         title = title or "New Chat"
 
         with self._transaction():

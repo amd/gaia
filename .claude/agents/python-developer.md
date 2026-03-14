@@ -222,7 +222,7 @@ from gaia.chat.sdk import AgentSDK, AgentConfig
 
 # Configuration
 config = AgentConfig(
-    model="Qwen3.5-35B-A3B-Instruct-GGUF",
+    model="Qwen3.5-35B-A3B-GGUF",
     max_tokens=512,
     show_stats=True,
     max_history_length=6,

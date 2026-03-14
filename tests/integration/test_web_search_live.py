@@ -274,9 +274,7 @@ class TestReadWebpageLocal:
         from gaia.agents.base.tools import _TOOL_REGISTRY
 
         read_tool = _TOOL_REGISTRY.get("read_webpage")
-        result = read_tool["function"](
-            url="http://127.0.0.1:1", extract="text"
-        )
+        result = read_tool["function"](url="http://127.0.0.1:1", extract="text")
         assert result["success"] is False
 
         host._shared_state.memory.close()
@@ -319,12 +317,12 @@ class TestWebSearchErrorPaths:
 
         from gaia.agents.base.tools import _TOOL_REGISTRY
 
-        assert "web_search" in _TOOL_REGISTRY, (
-            "web_search tool should be in _TOOL_REGISTRY after registration"
-        )
-        assert "read_webpage" in _TOOL_REGISTRY, (
-            "read_webpage tool should be in _TOOL_REGISTRY after registration"
-        )
+        assert (
+            "web_search" in _TOOL_REGISTRY
+        ), "web_search tool should be in _TOOL_REGISTRY after registration"
+        assert (
+            "read_webpage" in _TOOL_REGISTRY
+        ), "read_webpage tool should be in _TOOL_REGISTRY after registration"
 
         # Verify they are callable
         assert callable(_TOOL_REGISTRY["web_search"]["function"])

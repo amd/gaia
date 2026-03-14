@@ -23,12 +23,12 @@ The GAIA Jira Agent provides a natural language interface for interacting with A
    Follow the [Setup](/setup) guide to install GAIA. The base installation includes all dependencies needed for the Jira agent.
 
 2. **Download Required Model**:
-   The Jira agent uses the `Qwen3.5-35B-A3B-Instruct-GGUF` model for reliable JSON parsing and JQL generation.
+   The Jira agent uses the `Qwen3.5-35B-A3B-GGUF` model for reliable JSON parsing and JQL generation.
 
    Use the Lemonade server's model manager to download it:
    1. Start Lemonade server: `lemonade-server serve`
    2. Open the model manager in your browser (typically http://localhost:8000)
-   3. Search for and download: `Qwen3.5-35B-A3B-Instruct-GGUF`
+   3. Search for and download: `Qwen3.5-35B-A3B-GGUF`
 
    Note: The model is over 17GB and can take a while to download depending on your internet connection. Due to its size, it should be run on a Strix Halo device or similar high-performance hardware with sufficient memory. It provides the best results for complex Jira queries and will be automatically selected when you run Jira commands.
 
@@ -291,7 +291,7 @@ from gaia.agents.jira.agent import JiraAgent
 
 # Initialize the agent
 agent = JiraAgent(
-    model_id="Qwen3.5-35B-A3B-Instruct-GGUF",
+    model_id="Qwen3.5-35B-A3B-GGUF",
     silent_mode=True  # Suppress console output for API usage
 )
 

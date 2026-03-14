@@ -101,7 +101,7 @@ class CodeAgent(
             project_type: Project type ('frontend', 'backend', 'fullstack', or 'script', default: 'script')
             **kwargs: Agent initialization parameters:
                 - max_steps: Maximum conversation steps (default: 100)
-                - model_id: LLM model to use (default: Qwen3.5-35B-A3B-Instruct-GGUF)
+                - model_id: LLM model to use (default: Qwen3.5-35B-A3B-GGUF)
                 - silent_mode: Suppress console output (default: False)
                 - debug: Enable debug logging (default: False)
                 - show_prompts: Display prompts sent to LLM (default: False)
@@ -116,7 +116,7 @@ class CodeAgent(
             kwargs["max_steps"] = 100  # Increased for complex project generation
         # Use the coding model for better code understanding
         if "model_id" not in kwargs:
-            kwargs["model_id"] = "Qwen3.5-35B-A3B-Instruct-GGUF"
+            kwargs["model_id"] = "Qwen3.5-35B-A3B-GGUF"
         # Disable streaming by default (shows duplicate output)
         # Users can enable with --streaming flag if desired
         if "streaming" not in kwargs:

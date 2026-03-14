@@ -60,7 +60,7 @@ from pathlib import Path
 
 # Create Docker agent
 agent = DockerAgent(
-    model_id="Qwen3.5-35B-A3B-Instruct-GGUF",
+    model_id="Qwen3.5-35B-A3B-GGUF",
     max_steps=10,
     allowed_paths=["/home/user/projects"]  # Security: restrict access
 )
@@ -142,7 +142,7 @@ from gaia.agents.blender.agent import BlenderAgent
 
 # Create Blender agent
 agent = BlenderAgent(
-    model_id="Qwen3.5-35B-A3B-Instruct-GGUF"
+    model_id="Qwen3.5-35B-A3B-GGUF"
 )
 
 # Natural language 3D modeling

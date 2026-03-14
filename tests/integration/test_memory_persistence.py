@@ -135,7 +135,9 @@ class TestKnowledgePersistence:
         agent1._shared_state.knowledge.close()
 
         agent2 = _make_mixin(workspace)
-        assert agent2.knowledge.get_preference("brand_voice") == "technical but friendly"
+        assert (
+            agent2.knowledge.get_preference("brand_voice") == "technical but friendly"
+        )
         assert agent2.knowledge.get_preference("post_frequency") == "twice weekly"
 
         agent2._shared_state.memory.close()

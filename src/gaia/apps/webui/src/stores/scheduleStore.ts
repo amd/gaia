@@ -50,7 +50,10 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
     resultsLoading: false,
 
     loadSchedules: async () => {
-        set({ loading: true, error: null });
+        // Only show loading spinner on initial load, not poll refreshes
+        const isInitial = get().schedules.length === 0 && !get().error;
+        if (isInitial) set({ loading: true });
+        set({ error: null });
         try {
             const data = await api.listSchedules();
             set({ schedules: data.schedules || [], loading: false });

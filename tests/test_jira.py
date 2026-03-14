@@ -400,7 +400,7 @@ class JiraIntegrationTests:
         elif self.use_chatgpt:
             llm_info = "OpenAI API (gpt-4o)"
         else:
-            llm_info = self.model or "Default (Qwen3.5-35B-A3B-Instruct-GGUF)"
+            llm_info = self.model or "Default (Qwen3.5-35B-A3B-GGUF)"
 
         config = {
             "Test Environment": f"{platform.system()} {platform.release()}",
@@ -3084,7 +3084,7 @@ async def main():
     parser.add_argument(
         "--model",
         "-m",
-        help="Specify LLM model to use (e.g., Qwen3.5-35B-A3B-Instruct-GGUF)",
+        help="Specify LLM model to use (e.g., Qwen3.5-35B-A3B-GGUF)",
     )
     parser.add_argument(
         "--debug",

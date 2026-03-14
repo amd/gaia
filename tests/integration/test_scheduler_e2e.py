@@ -109,6 +109,7 @@ class TestSchedulerExecution:
     @pytest.mark.asyncio
     async def test_scheduler_executes_prompt(self, fake_db):
         """Scheduled task runs and stores result in schedule_results."""
+
         async def executor(prompt):
             return f"Executed: {prompt}"
 
@@ -254,6 +255,7 @@ class TestSchedulerRestart:
     @pytest.mark.asyncio
     async def test_results_persist_across_restart(self, fake_db):
         """Execution results are available after restart."""
+
         async def executor(prompt):
             return "Result data"
 
@@ -304,7 +306,9 @@ class TestSchedulerAPILifecycle:
         await scheduler.start()
 
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
             # Create
             resp = await client.post(
                 "/api/schedules",
@@ -344,7 +348,9 @@ class TestSchedulerAPILifecycle:
         await scheduler.start()
 
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
             # Create
             await client.post(
                 "/api/schedules",
@@ -357,7 +363,9 @@ class TestSchedulerAPILifecycle:
             assert count_before_pause >= 1
 
             # Pause
-            resp = await client.put("/api/schedules/pausable", json={"status": "paused"})
+            resp = await client.put(
+                "/api/schedules/pausable", json={"status": "paused"}
+            )
             assert resp.status_code == 200
             assert resp.json()["status"] == "paused"
 
@@ -366,7 +374,9 @@ class TestSchedulerAPILifecycle:
             assert len(results) == count_before_pause
 
             # Resume
-            resp = await client.put("/api/schedules/pausable", json={"status": "active"})
+            resp = await client.put(
+                "/api/schedules/pausable", json={"status": "active"}
+            )
             assert resp.status_code == 200
 
             # Wait — should fire again
@@ -388,7 +398,9 @@ class TestSchedulerAPILifecycle:
         await scheduler.start()
 
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
             await client.post(
                 "/api/schedules",
                 json={"name": "deletable", "interval": "every 1s", "prompt": "D"},
@@ -421,6 +433,7 @@ class TestSchedulerShutdownIntegration:
     @pytest.mark.asyncio
     async def test_shutdown_with_running_tasks(self, fake_db):
         """Shutdown while tasks are actively running completes cleanly."""
+
         async def slow_executor(prompt):
             await asyncio.sleep(0.5)
             return "Slow done"
@@ -469,6 +482,7 @@ class TestServerSchedulerWiring:
         from contextlib import asynccontextmanager
 
         from asgi_lifespan import LifespanManager
+
         from gaia.ui.server import create_app
 
         app = create_app(db_path=":memory:")
@@ -477,9 +491,9 @@ class TestServerSchedulerWiring:
         async with LifespanManager(app) as manager:
             scheduler = app.state.scheduler
             assert scheduler is not None, "Scheduler not attached to app.state"
-            assert scheduler._executor is not None, (
-                "Scheduler has no executor — scheduled tasks will run in dry-run mode"
-            )
+            assert (
+                scheduler._executor is not None
+            ), "Scheduler has no executor — scheduled tasks will run in dry-run mode"
 
     @pytest.mark.asyncio
     async def test_server_scheduler_fires_with_executor(self):
@@ -487,6 +501,7 @@ class TestServerSchedulerWiring:
         from unittest.mock import AsyncMock
 
         from asgi_lifespan import LifespanManager
+
         from gaia.ui.server import create_app
 
         app = create_app(db_path=":memory:")
@@ -499,11 +514,17 @@ class TestServerSchedulerWiring:
             scheduler._executor = mock_executor
 
             transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
                 # Create a short-interval task via the API
                 resp = await client.post(
                     "/api/schedules",
-                    json={"name": "wiring-test", "interval": "every 1s", "prompt": "Hello"},
+                    json={
+                        "name": "wiring-test",
+                        "interval": "every 1s",
+                        "prompt": "Hello",
+                    },
                 )
                 assert resp.status_code == 200
 

@@ -95,17 +95,15 @@ def _safe_resolve(user_path: str, *, allow_missing: bool = False) -> Path:
 
     safe = Path(real)
 
-    # Symlink detection: if the real path differs from what the user
-    # supplied (after normalization) a symlink or traversal was involved.
-    if os.path.normpath(user_path) != real:
-        # Only flag if the original path actually is a symlink on disk.
-        try:
-            if Path(user_path).is_symlink():
-                raise HTTPException(
-                    status_code=400, detail="Symbolic links are not supported"
-                )
-        except PermissionError:
-            raise HTTPException(status_code=403, detail="Access denied")
+    # Symlink / traversal detection: os.path.realpath resolves symlinks
+    # and ``..`` components.  If the canonical result differs from the
+    # user-supplied path (after normalisation), the input contained a
+    # symlink or a traversal sequence.  We compare using os.path.normcase
+    # to handle Windows case-insensitivity.
+    normalised_input = os.path.normcase(os.path.normpath(user_path))
+    normalised_real = os.path.normcase(real)
+    if normalised_input != normalised_real:
+        raise HTTPException(status_code=400, detail="Symbolic links are not supported")
 
     if not allow_missing and not safe.exists():
         raise HTTPException(status_code=404, detail="Path not found")

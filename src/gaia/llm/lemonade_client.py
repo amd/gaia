@@ -152,7 +152,7 @@ MODELS = {
     # LLM Models
     "qwen3.5-35b": ModelRequirement(
         model_type=ModelType.LLM,
-        model_id="Qwen3.5-35B-A3B-Instruct-GGUF",
+        model_id="Qwen3.5-35B-A3B-GGUF",
         display_name="Qwen3.5 35B",
         min_ctx_size=32768,
     ),
@@ -2883,7 +2883,7 @@ class LemonadeClient:
             agent: Agent name or "all" for all unique models
 
         Returns:
-            List of model IDs (e.g., ["Qwen3.5-35B-A3B-Instruct-GGUF", ...])
+            List of model IDs (e.g., ["Qwen3.5-35B-A3B-GGUF", ...])
         """
         model_ids = set()
 

@@ -2,7 +2,7 @@
 
 > **Branch:** `kalin/chat-ui`
 > **Date:** 2026-03-10
-> **Prerequisite:** [Agent UI Agent Capabilities Plan](agent-ui-agent-capabilities-plan.md)
+> **Prerequisite:** [Agent UI Agent Capabilities Plan](../plans/agent-ui-agent-capabilities-plan.md)
 > **Supersedes:** `gaia5/docs/spec/os-agents-tray-app-milestone.md` (.NET WinForms approach)
 
 ---
@@ -1285,7 +1285,7 @@ Config files (all under ~/.gaia/):
 
 | Spec | Relationship |
 |------|-------------|
-| [Agent UI Agent Capabilities Plan](agent-ui-agent-capabilities-plan.md) | This spec adds "Agents" panel to the UI built in that plan |
+| [Agent UI Agent Capabilities Plan](../plans/agent-ui-agent-capabilities-plan.md) | This spec adds "Agents" panel to the UI built in that plan |
 | `gaia5/os-agents-mcp-milestone.md` | OS agents (C++/.NET) are what this tray app manages |
 | `gaia5/os-agents-tray-app-milestone.md` | **Superseded** — that spec proposed .NET WinForms; this spec integrates into Electron instead |
 | [electron-integration.mdx](electron-integration.mdx) | This spec extends the existing Electron framework documented there |

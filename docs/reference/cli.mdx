@@ -357,7 +357,7 @@ gaia chat [MESSAGE] [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
-| `--model` | string | Qwen3.5-35B-A3B-Instruct-GGUF | Model name to use |
+| `--model` | string | Qwen3.5-35B-A3B-GGUF | Model name to use |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
 | `--chunk-size` | integer | 500 | Document chunk size for RAG |
@@ -395,7 +395,7 @@ gaia chat --index report.pdf --query "Summarize the report"
 
 ```bash Custom Settings
 gaia chat \
-  --model Qwen3.5-35B-A3B-Instruct-GGUF \
+  --model Qwen3.5-35B-A3B-GGUF \
   --streaming \
   --show-stats
 ```
@@ -957,7 +957,7 @@ gaia download --agent code
 ```
 📥 Downloading 3 model(s) for 'chat'...
 
-📥 Qwen3.5-35B-A3B-Instruct-GGUF
+📥 Qwen3.5-35B-A3B-GGUF
    ⏳ [1/31] Qwen3.5-35B-A3B-Q4_K_M.gguf: 3.5 GB/17.7 GB (20%)
    ...
    ✅ Download complete

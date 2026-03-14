@@ -197,9 +197,7 @@ class TestLearnAndReplay:
 
         replay_result = agent._replay_workflow_impl(
             skill_name="Fill test form",
-            parameters_json=json.dumps(
-                {"title": "My Title", "content": "My Content"}
-            ),
+            parameters_json=json.dumps({"title": "My Title", "content": "My Content"}),
             headless=True,
         )
 

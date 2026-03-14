@@ -68,7 +68,7 @@ The EMR agent uses three models, downloaded automatically on first run via `gaia
 
 | Model | Size | Purpose |
 |-------|------|---------|
-| Qwen3.5-35B-A3B-Instruct-GGUF | 18.6 GB | LLM for chat queries and patient search |
+| Qwen3.5-35B-A3B-GGUF | 18.6 GB | LLM for chat queries and patient search |
 | Qwen3-VL-4B-Instruct-GGUF | 3.3 GB | Vision language model for form extraction |
 | nomic-embed-text-v2-moe-GGUF | 522 MB | Embedding model for similarity search |
 
@@ -304,7 +304,7 @@ This command:
 - Checks Lemonade server is running and context size is configured
 - Downloads and loads all required models:
   - **VLM**: Qwen3-VL-4B-Instruct-GGUF (form extraction)
-  - **LLM**: Qwen3.5-35B-A3B-Instruct-GGUF (chat/query processing)
+  - **LLM**: Qwen3.5-35B-A3B-GGUF (chat/query processing)
   - **Embedding**: nomic-embed-text-v2-moe-GGUF (similarity search)
 - Verifies all models are loaded and ready
 

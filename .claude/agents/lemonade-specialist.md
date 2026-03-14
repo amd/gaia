@@ -67,7 +67,7 @@ In GAIA, Lemonade Server is the primary LLM backend:
 
 ### Model Selection in GAIA
 - **General**: Qwen3-0.6B-GGUF
-- **Coding**: Qwen3.5-35B-A3B-Instruct-GGUF
+- **Coding**: Qwen3.5-35B-A3B-GGUF
 - **Jira/JSON**: Qwen3-Coder for reliable parsing
 - **Voice**: Whisper ASR + Kokoro TTS
 

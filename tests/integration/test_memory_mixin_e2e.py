@@ -12,12 +12,11 @@ Tests:
 import pytest
 
 from gaia.agents.base.memory_mixin import (
-    MemoryMixin,
     _PREFERENCE_PATTERNS,
     _USER_FACT_PATTERNS,
+    MemoryMixin,
 )
 from gaia.agents.base.shared_state import SharedAgentState
-
 
 # -- Fixtures ------------------------------------------------------------------
 
@@ -179,12 +178,16 @@ class TestAutoExtraction:
         # Technology pattern
         tech_pattern = _USER_FACT_PATTERNS[2][0]  # "(?:we|I) use/prefer/work with..."
         match = tech_pattern.search("I use TensorFlow for model training")
-        assert match is not None, "Technology pattern should match 'I use TensorFlow...'"
+        assert (
+            match is not None
+        ), "Technology pattern should match 'I use TensorFlow...'"
 
         # Product pattern
         product_pattern = _USER_FACT_PATTERNS[1][0]  # "our product is called..."
         match = product_pattern.search("Our product is called GAIA Agent")
-        assert match is not None, "Product pattern should match 'Our product is called...'"
+        assert (
+            match is not None
+        ), "Product pattern should match 'Our product is called...'"
 
         # Preference pattern
         pref_pattern = _PREFERENCE_PATTERNS[0][0]  # "prefer X over Y"
@@ -217,9 +220,9 @@ class TestKnowledgeDedup:
         )
 
         # Dedup should return the same ID (updated the existing insight)
-        assert id1 == id2, (
-            "Insights with >80% word overlap should be deduplicated (same ID returned)"
-        )
+        assert (
+            id1 == id2
+        ), "Insights with >80% word overlap should be deduplicated (same ID returned)"
 
         # Verify only one insight exists for this query
         results = host.knowledge.recall(query="GAIA AMD Ryzen NPU")
@@ -288,9 +291,9 @@ class TestFTSSanitization:
         ]:
             results = host.knowledge.recall(query=query)
             # Should return a list (possibly empty), not raise
-            assert isinstance(results, list), (
-                f"recall with query {query!r} should return a list"
-            )
+            assert isinstance(
+                results, list
+            ), f"recall with query {query!r} should return a list"
 
         host._shared_state.memory.close()
         host._shared_state.knowledge.close()

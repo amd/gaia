@@ -140,7 +140,7 @@ class ChatAgent(
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
         # Use Qwen3.5-35B by default for better JSON parsing (same as Jira agent)
-        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-Instruct-GGUF"
+        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-GGUF"
 
         # Debug logging for model selection
         logger.debug(

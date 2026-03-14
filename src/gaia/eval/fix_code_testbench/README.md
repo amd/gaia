@@ -30,7 +30,7 @@ gaia eval fix-code \
     examples/average-calc.py \
     "NameError: name 'number' is not defined" \
     examples/average-calc-fixed.py \
-    --model Qwen3.5-35B-A3B-Instruct-GGUF
+    --model Qwen3.5-35B-A3B-GGUF
 ```
 
 All of the script flags (`--use-claude`, `--use-edit-file`, `--context`, `--start-line`, etc.) are available with identical semantics when invoked via `gaia eval fix-code`.
@@ -273,7 +273,7 @@ This demonstrates how the testbench enables experimentation with different promp
 
 ### Common Options
 
-- `--model MODEL`: Local model identifier (default: `Qwen3.5-35B-A3B-Instruct-GGUF`)
+- `--model MODEL`: Local model identifier (default: `Qwen3.5-35B-A3B-GGUF`)
 - `--use-claude`: Use Claude Sonnet 4.5 instead of local endpoint
 - `--language LANG`: Override language detection (python/typescript/etc.)
 - `--context TEXT`: Add additional context to the prompt

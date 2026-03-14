@@ -35,7 +35,7 @@ class TestRAGConfig:
 
         config = RAGConfig()
 
-        assert config.model == "Qwen3.5-35B-A3B-Instruct-GGUF"
+        assert config.model == "Qwen3.5-35B-A3B-GGUF"
         assert config.max_tokens == 1024
         assert config.chunk_size == 500
         assert config.chunk_overlap == 100

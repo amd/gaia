@@ -345,7 +345,9 @@ def parse_schedule_input(text: str) -> ScheduleConfig:
         s = re.sub(r"\bon\s+weekends?\b", "", s)
         s = re.sub(r"\bweekends?\b", "", s)
     # "mon-fri" style ranges
-    elif re.search(r"\b(mon|tue|wed|thu|fri|sat|sun)-(mon|tue|wed|thu|fri|sat|sun)\b", s):
+    elif re.search(
+        r"\b(mon|tue|wed|thu|fri|sat|sun)-(mon|tue|wed|thu|fri|sat|sun)\b", s
+    ):
         range_match = re.search(
             r"\b(mon|tue|wed|thu|fri|sat|sun)-(mon|tue|wed|thu|fri|sat|sun)\b", s
         )
@@ -415,7 +417,11 @@ def parse_schedule_input(text: str) -> ScheduleConfig:
         config.interval_seconds = 604800
     elif re.search(r"\bminutely\b", s):
         config.interval_seconds = 60
-    elif re.search(r"\bevery\b", s) and config.days_of_week and len(config.days_of_week) == 1:
+    elif (
+        re.search(r"\bevery\b", s)
+        and config.days_of_week
+        and len(config.days_of_week) == 1
+    ):
         # "every monday" style -> weekly
         config.interval_seconds = 604800
     else:
@@ -512,9 +518,7 @@ def _build_description(config: ScheduleConfig) -> str:
 # ── Next-run computation ─────────────────────────────────────────────────────
 
 
-def compute_next_run(
-    config: ScheduleConfig, after: datetime = None
-) -> datetime:
+def compute_next_run(config: ScheduleConfig, after: datetime = None) -> datetime:
     """Compute the next run time based on schedule config.
 
     Args:
@@ -964,9 +968,7 @@ class Scheduler:
                     if task.schedule_config
                     else None
                 )
-                if config and (
-                    config.time_of_day or config.start_hour is not None
-                ):
+                if config and (config.time_of_day or config.start_hour is not None):
                     next_dt = compute_next_run(config)
                     sleep_secs = max(
                         0, (next_dt - datetime.now(timezone.utc)).total_seconds()
@@ -1005,9 +1007,7 @@ class Scheduler:
         has_sessions = hasattr(self._db, "create_session")
         if has_sessions and not task.session_id:
             try:
-                session = self._db.create_session(
-                    title=f"Schedule: {task.name}"
-                )
+                session = self._db.create_session(title=f"Schedule: {task.name}")
                 task.session_id = session["id"]
                 logger.info(
                     "Created session %s for schedule '%s'",
