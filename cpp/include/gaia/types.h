@@ -102,6 +102,24 @@ inline std::string paramTypeToString(ToolParamType t) {
     return "unknown";
 }
 
+// Cross-platform environment variable helper.
+// On MSVC uses _dupenv_s (safe); on GCC/Clang (including MinGW) uses std::getenv.
+inline std::string getEnvVar(const char* name, const std::string& defaultValue = "") {
+#ifdef _MSC_VER
+    char* value = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&value, &len, name) == 0 && value) {
+        std::string result(value);
+        free(value);
+        return result;
+    }
+    return defaultValue;
+#else
+    const char* value = std::getenv(name);
+    return value ? std::string(value) : defaultValue;
+#endif
+}
+
 struct ToolParameter {
     std::string name;
     ToolParamType type = ToolParamType::UNKNOWN;
@@ -113,12 +131,27 @@ struct ToolParameter {
 // Takes JSON arguments, returns JSON result.
 using ToolCallback = std::function<json(const json&)>;
 
+// ---- Security Types ----
+
+enum class ToolPolicy { ALLOW, CONFIRM, DENY };
+
+enum class ToolConfirmResult { ALLOW_ONCE, ALWAYS_ALLOW, DENY };
+
+// Returns sanitized args or throws std::invalid_argument to reject the call.
+using ToolValidateCallback = std::function<json(const std::string& toolName, const json& args)>;
+
+// Returns ALLOW_ONCE, ALWAYS_ALLOW, or DENY.
+using ToolConfirmCallback = std::function<ToolConfirmResult(const std::string& toolName, const json& args)>;
+
+
 struct ToolInfo {
     std::string name;
     std::string description;
     std::vector<ToolParameter> parameters;
     ToolCallback callback;
     bool atomic = false;
+    ToolPolicy policy = ToolPolicy::ALLOW;                // default = backwards-compatible
+    std::optional<ToolValidateCallback> validateArgs;     // per-tool argument validator
 
     // MCP metadata (populated when tool comes from MCP server)
     std::optional<std::string> mcpServer;
@@ -156,6 +189,15 @@ inline std::string defaultBaseUrl() {
 #endif
 }
 
+// ---- Decision Support ----
+
+/// A user-facing choice presented after an LLM yes/no confirmation prompt.
+struct Decision {
+    std::string label;       // display text: "Yes", "No"
+    std::string value;       // sent to LLM: "yes", "no"
+    std::string description; // hint: "Confirm and proceed"
+};
+
 struct AgentConfig {
     std::string baseUrl = defaultBaseUrl();
     std::string modelId = "Qwen3-4B-GGUF";
@@ -168,6 +210,7 @@ struct AgentConfig {
     bool showPrompts = false;
     bool streaming = false;
     bool silentMode = false;
+    double temperature = 0.7;  // LLM sampling temperature (0.0 = deterministic)
 };
 
 } // namespace gaia

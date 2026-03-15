@@ -19,7 +19,9 @@
 
 #include "console.h"
 #include "json_utils.h"
+#include "lemonade_client.h"
 #include "mcp_client.h"
+#include "security.h"
 #include "tool_registry.h"
 #include "types.h"
 #include "gaia/export.h"
@@ -42,6 +44,10 @@ public:
     // Non-copyable
     Agent(const Agent&) = delete;
     Agent& operator=(const Agent&) = delete;
+
+    // Movable (base-class only — derived subclasses must declare their own move ops)
+    Agent(Agent&&) = default;
+    Agent& operator=(Agent&&) = default;
 
     /// Process a user query through the agent loop.
     /// This is the main entry point — mirrors Python Agent.process_query().
@@ -68,6 +74,14 @@ public:
     /// Get the tool registry (for inspection/testing).
     const ToolRegistry& tools() const { return tools_; }
 
+    /// Set the confirmation callback for CONFIRM-policy tools.
+    /// Delegates to ToolRegistry::setConfirmCallback().
+    void setToolConfirmCallback(ToolConfirmCallback cb);
+
+    /// Set the default policy for all tools (local and MCP) registered without an explicit policy.
+    /// Delegates to ToolRegistry::setDefaultPolicy().
+    void setDefaultPolicy(ToolPolicy policy);
+
     /// Get the output handler.
     OutputHandler& console() { return *console_; }
 
@@ -80,8 +94,14 @@ public:
     /// Rebuild system prompt (call after adding tools dynamically).
     void rebuildSystemPrompt();
 
+    /// Clear conversation history (start a fresh topic).
+    void clearHistory() { conversationHistory_.clear(); }
+
     /// Get a mutable reference to the tool registry (for subclass tool registration).
     ToolRegistry& toolRegistry() { return tools_; }
+
+    /// Get the Lemonade client (for explicit model loading at startup).
+    LemonadeClient& lemonade() { return lemonade_; }
 
 protected:
     /// Initialize the agent after construction.
@@ -128,6 +148,8 @@ private:
     AgentConfig config_;
     ToolRegistry tools_;
     std::unique_ptr<OutputHandler> console_;
+    LemonadeClient lemonade_;
+    bool modelEnsured_ = false;
 
     AgentState executionState_ = AgentState::PLANNING;
     json currentPlan_;
@@ -137,6 +159,9 @@ private:
 
     std::vector<std::string> errorHistory_;
     std::vector<Message> conversationHistory_;
+
+    // Security: persistent allowed-tools store (shared with tools_)
+    std::shared_ptr<AllowedToolsStore> allowedToolsStore_;
 
     // MCP clients and their configs (configs stored for reconnect)
     std::map<std::string, std::unique_ptr<MCPClient>> mcpClients_;

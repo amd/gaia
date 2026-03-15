@@ -8,6 +8,10 @@
 
 namespace gaia {
 
+// Shared patterns used by multiple functions — defined once at namespace scope.
+static const std::regex kTrailingCommaObj(R"(,\s*\})");
+static const std::regex kTrailingCommaArr(R"(,\s*\])");
+
 std::string extractFirstJsonObject(const std::string& text) {
     auto startIdx = text.find('{');
     if (startIdx == std::string::npos) {
@@ -51,8 +55,8 @@ std::string fixCommonJsonErrors(const std::string& text) {
     std::string fixed = text;
 
     // Remove trailing commas before } or ]
-    fixed = std::regex_replace(fixed, std::regex(R"(,\s*\})"), "}");
-    fixed = std::regex_replace(fixed, std::regex(R"(,\s*\])"), "]");
+    fixed = std::regex_replace(fixed, kTrailingCommaObj, "}");
+    fixed = std::regex_replace(fixed, kTrailingCommaArr, "]");
 
     // Fix single quotes to double quotes (only if no double quotes present)
     if (fixed.find('"') == std::string::npos && fixed.find('\'') != std::string::npos) {
@@ -81,7 +85,7 @@ std::string fixCommonJsonErrors(const std::string& text) {
 
 std::optional<json> extractJsonFromResponse(const std::string& response) {
     // Strategy 1: Extract from code blocks
-    std::vector<std::regex> patterns = {
+    static const std::vector<std::regex> patterns = {
         std::regex(R"(```(?:json)?\s*([\s\S]*?)\s*```)"),  // Standard code block
         std::regex(R"(`json\s*([\s\S]*?)\s*`)"),            // Single backtick with json tag
         std::regex(R"(<json>\s*([\s\S]*?)\s*</json>)"),     // XML-style tags
@@ -97,7 +101,7 @@ std::optional<json> extractJsonFromResponse(const std::string& response) {
                 json result = json::parse(match);
                 if (result.is_object()) {
                     // Ensure tool_args exists if tool is present
-                    if (result.contains("tool") && !result.contains("tool_args")) {
+                    if (result.contains("tool") && (!result.contains("tool_args") || result["tool_args"].is_null())) {
                         result["tool_args"] = json::object();
                     }
                     return result;
@@ -112,12 +116,12 @@ std::optional<json> extractJsonFromResponse(const std::string& response) {
     std::string extracted = extractFirstJsonObject(response);
     if (!extracted.empty()) {
         // Fix common issues before parsing
-        std::string fixed = std::regex_replace(extracted, std::regex(R"(,\s*\})"), "}");
-        fixed = std::regex_replace(fixed, std::regex(R"(,\s*\])"), "]");
+        std::string fixed = std::regex_replace(extracted, kTrailingCommaObj, "}");
+        fixed = std::regex_replace(fixed, kTrailingCommaArr, "]");
         try {
             json result = json::parse(fixed);
             if (result.is_object()) {
-                if (result.contains("tool") && !result.contains("tool_args")) {
+                if (result.contains("tool") && (!result.contains("tool_args") || result["tool_args"].is_null())) {
                     result["tool_args"] = json::object();
                 }
                 return result;
@@ -140,7 +144,7 @@ json validateJsonResponse(const std::string& responseText) {
         // Success - skip modification steps
     } catch (const json::parse_error& initialError) {
         // Step 2: Try extracting from code blocks
-        std::regex codeBlock(R"(```(?:json)?\s*(\{[\s\S]*?\})\s*```)");
+        static const std::regex codeBlock(R"(```(?:json)?\s*(\{[\s\S]*?\})\s*```)");
         std::smatch match;
         if (std::regex_search(responseText, match, codeBlock)) {
             try {
@@ -189,9 +193,9 @@ json validateJsonResponse(const std::string& responseText) {
             throw std::runtime_error("Response is missing required field: thought");
         }
     } else if (result.contains("tool")) {
-        if (!result.contains("thought") || !result.contains("tool_args")) {
-            // Auto-fill tool_args if missing
-            if (!result.contains("tool_args")) {
+        if (!result.contains("thought") || !result.contains("tool_args") || result["tool_args"].is_null()) {
+            // Auto-fill tool_args if missing or null
+            if (!result.contains("tool_args") || result["tool_args"].is_null()) {
                 result["tool_args"] = json::object();
             }
             if (!result.contains("thought")) {
@@ -248,7 +252,8 @@ ParsedResponse parseLlmResponse(const std::string& response) {
             }
             if (j.contains("tool")) {
                 parsed.toolName = j["tool"].get<std::string>();
-                parsed.toolArgs = j.value("tool_args", json::object());
+                parsed.toolArgs = (j.contains("tool_args") && j["tool_args"].is_object())
+                    ? j["tool_args"] : json::object();
             }
             if (j.contains("plan")) {
                 parsed.plan = j["plan"];
@@ -275,7 +280,8 @@ ParsedResponse parseLlmResponse(const std::string& response) {
         }
         if (j.contains("tool")) {
             parsed.toolName = j["tool"].get<std::string>();
-            parsed.toolArgs = j.value("tool_args", json::object());
+            parsed.toolArgs = (j.contains("tool_args") && j["tool_args"].is_object())
+                ? j["tool_args"] : json::object();
         }
         if (j.contains("plan")) {
             parsed.plan = j["plan"];
@@ -284,9 +290,9 @@ ParsedResponse parseLlmResponse(const std::string& response) {
     }
 
     // Regex-based extraction as last resort
-    std::regex thoughtRe(R"re("thought"\s*:\s*"([^"]*)")re");
-    std::regex toolRe(R"re("tool"\s*:\s*"([^"]*)")re");
-    std::regex answerRe(R"re("answer"\s*:\s*"([^"]*)")re");
+    static const std::regex thoughtRe(R"re("thought"\s*:\s*"([^"]*)")re");
+    static const std::regex toolRe(R"re("tool"\s*:\s*"([^"]*)")re");
+    static const std::regex answerRe(R"re("answer"\s*:\s*"([^"]*)")re");
     std::smatch match;
 
     if (std::regex_search(trimmed, match, answerRe)) {
@@ -305,7 +311,7 @@ ParsedResponse parseLlmResponse(const std::string& response) {
         }
 
         // Try to extract tool_args
-        std::regex argsRe(R"re("tool_args"\s*:\s*)re");
+        static const std::regex argsRe(R"re("tool_args"\s*:\s*)re");
         if (std::regex_search(trimmed, match, argsRe)) {
             size_t argsStart = static_cast<size_t>(match.position() + match.length());
             std::string remaining = trimmed.substr(argsStart);

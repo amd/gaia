@@ -11,9 +11,21 @@ on:
   workflow_call:
   push:
     branches: [ main ]
+    paths:
+      - 'src/gaia/agents/**'
+      - 'src/gaia/rag/**'
+      - 'tests/verify_*.py'
+      - 'setup.py'
+      - '.github/workflows/test_security.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/agents/**'
+      - 'src/gaia/rag/**'
+      - 'tests/verify_*.py'
+      - 'setup.py'
+      - '.github/workflows/test_security.yml'
   merge_group:
   workflow_dispatch:
 
