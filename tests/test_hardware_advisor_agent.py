@@ -92,8 +92,8 @@ class TestHardwareAdvisorAgent:
 
         assert result["success"] is True
         assert "ram_gb" in result
-        assert "gpu" in result
-        assert "npu" in result
+        assert "amd_igpu" in result
+        assert "amd_npu" in result
         assert result["ram_gb"] == 32.0
 
     def test_list_available_models_returns_success(self, agent, mock_lemonade_client):
@@ -173,8 +173,8 @@ class TestHardwareAdvisorAgentToolImplementation:
         assert "os" in result
         assert "processor" in result
         assert "ram_gb" in result
-        assert "gpu" in result
-        assert "npu" in result
+        assert "amd_igpu" in result
+        assert "amd_npu" in result
 
     def test_recommend_models_respects_memory_constraints(self, agent):
         """Test recommend_models filters by available RAM."""

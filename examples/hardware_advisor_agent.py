@@ -156,13 +156,13 @@ Always use tools to get real data - never guess specifications."""
                     "os": info.get("OS Version", "Unknown"),
                     "processor": info.get("Processor", "Unknown"),
                     "ram_gb": ram_gb,
-                    "gpu": {
+                    "amd_igpu": {
                         "name": gpu_name,
                         "memory_mb": gpu_memory_mb,
                         "memory_gb": gpu_memory_gb,
                         "available": gpu_available,
                     },
-                    "npu": {"name": npu_name, "available": npu_available},
+                    "amd_npu": {"name": npu_name, "available": npu_available},
                 }
             except Exception as e:
                 return {
