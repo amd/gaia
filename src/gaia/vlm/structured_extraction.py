@@ -148,8 +148,10 @@ class StructuredVLMExtractor:
             import fitz
 
             doc = fitz.open(str(doc_path))
-            total_pages = len(doc)
-            doc.close()
+            try:
+                total_pages = len(doc)
+            finally:
+                doc.close()
         else:
             total_pages = 1
 

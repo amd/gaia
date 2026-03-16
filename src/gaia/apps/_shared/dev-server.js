@@ -37,6 +37,30 @@ class DevServer {
   }
 
   initialize() {
+    // Simple in-memory rate limiter (no external dependencies)
+    const rateLimitStore = new Map();
+    const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+    const RATE_LIMIT_MAX = 100; // max requests per window
+
+    this.app.use((req, res, next) => {
+      const ip = req.ip || req.connection.remoteAddress;
+      const now = Date.now();
+      const record = rateLimitStore.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+
+      if (now > record.resetAt) {
+        record.count = 0;
+        record.resetAt = now + RATE_LIMIT_WINDOW;
+      }
+
+      record.count++;
+      rateLimitStore.set(ip, record);
+
+      if (record.count > RATE_LIMIT_MAX) {
+        return res.status(429).send('Too Many Requests');
+      }
+      next();
+    });
+
     // Enable CORS for development
     this.app.use(cors());
 
@@ -51,8 +75,13 @@ class DevServer {
     }
 
     // Serve the main HTML file with injected environment variables
-    this.app.get('/', (req, res) => {
-      const indexPath = path.join(this.appPath, 'public', 'index.html');
+    // Rate-limited by middleware above; path is server-controlled (not user input)
+    this.app.get('/', (req, res) => { // lgtm[js/missing-rate-limiting]
+      const publicDir = path.resolve(this.appPath, 'public');
+      const indexPath = path.resolve(publicDir, 'index.html');
+      if (!indexPath.startsWith(publicDir)) {
+        return res.status(403).send('Forbidden');
+      }
       if (fs.existsSync(indexPath)) {
         let html = fs.readFileSync(indexPath, 'utf8');
 

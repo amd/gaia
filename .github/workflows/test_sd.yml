@@ -166,9 +166,10 @@ jobs:
 
           REM Run only the fast tests (SD-Turbo, 512x512)
           REM Skip slow tests (SDXL-Base-1.0 takes 5+ minutes per image)
-          pytest tests/integration/test_sd_integration.py::TestSDIntegration::test_generate_small_image -v --tb=short
-          pytest tests/integration/test_sd_integration.py::TestSDIntegration::test_health_check_with_real_server -v --tb=short
-          pytest tests/integration/test_sd_integration.py::TestLemonadeClientSDMethods::test_list_sd_models -v --tb=short
+          REM --capture=sys avoids fd-level capture crash on Windows (ValueError: I/O on closed file)
+          pytest tests/integration/test_sd_integration.py::TestSDIntegration::test_generate_small_image -v --tb=short --capture=sys
+          pytest tests/integration/test_sd_integration.py::TestSDIntegration::test_health_check_with_real_server -v --tb=short --capture=sys
+          pytest tests/integration/test_sd_integration.py::TestLemonadeClientSDMethods::test_list_sd_models -v --tb=short --capture=sys
 
           echo.
           echo ================================================================

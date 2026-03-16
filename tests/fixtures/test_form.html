@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GAIA Computer Use Test Form</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
+        h1 { color: #333; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], textarea { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        textarea { height: 100px; resize: vertical; }
+        button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        #result { margin-top: 20px; padding: 15px; background: #f0f0f0; border-radius: 4px; display: none; }
+    </style>
+</head>
+<body>
+    <h1>Test Form</h1>
+    <p>Simple form for testing GAIA computer use workflow learning and replay.</p>
+
+    <form id="testForm">
+        <div class="form-group">
+            <label for="title">Title</label>
+            <input type="text" id="title" name="title" placeholder="Enter a title">
+        </div>
+
+        <div class="form-group">
+            <label for="content">Content</label>
+            <textarea id="content" name="content" placeholder="Enter content here"></textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="category">Category</label>
+            <input type="text" id="category" name="category" placeholder="Enter category">
+        </div>
+
+        <button type="submit" id="submitBtn">Submit</button>
+    </form>
+
+    <div id="result">
+        <h3>Submitted!</h3>
+        <p>Title: <span id="resultTitle"></span></p>
+        <p>Content: <span id="resultContent"></span></p>
+        <p>Category: <span id="resultCategory"></span></p>
+    </div>
+
+    <script>
+        document.getElementById('testForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            document.getElementById('resultTitle').textContent = document.getElementById('title').value;
+            document.getElementById('resultContent').textContent = document.getElementById('content').value;
+            document.getElementById('resultCategory').textContent = document.getElementById('category').value;
+            document.getElementById('result').style.display = 'block';
+        });
+    </script>
+</body>
+</html>

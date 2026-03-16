@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime
@@ -60,6 +61,31 @@ def _safe_json_default(obj: Any) -> Any:
 def _safe_json_dumps(obj: Any) -> str:
     """JSON dumps with fallback for non-serializable types like bytes."""
     return json.dumps(obj, default=_safe_json_default)
+
+
+def _sanitize_response_text(text: str) -> str:
+    """Strip stack trace patterns and internal details from response text.
+
+    Removes Python tracebacks, file paths, and exception class references
+    that could expose internal implementation details to end users.
+    """
+    # Remove Python traceback blocks (Traceback ... File "..." lines)
+    # Match the header then all continuation lines (indented or blank) to avoid
+    # catastrophic backtracking from DOTALL with lazy quantifiers.
+    text = re.sub(
+        r"Traceback \(most recent call last\):(?:\n(?:[ \t].*|[ \t]*))*",
+        "[internal details removed]",
+        text,
+    )
+    # Remove individual "File ..." lines from stack traces
+    text = re.sub(r'^\s*File ".*?", line \d+.*$', "", text, flags=re.MULTILINE)
+    # Remove exception class names like "ValueError: ..." or "KeyError: ..."
+    text = re.sub(r"\b\w*(Error|Exception)\b:\s*", "", text)
+    # Remove internal file paths (Unix and Windows)
+    text = re.sub(r"(/[\w./\\-]+\.py|[A-Z]:\\[\w.\\-]+\.py)", "[path]", text)
+    # Collapse multiple blank lines left by removals
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 # Pydantic models for request validation
@@ -1144,12 +1170,17 @@ def create_app(
             # Process the query through the agent
             result = _agent_instance.process_query(request.message)
 
-            # Extract the response text
+            # Extract the response text, sanitizing any internal details
             response_text = ""
             if isinstance(result, dict):
-                response_text = result.get("result", str(result))
+                raw = result.get("result", str(result))
+                response_text = _sanitize_response_text(str(raw))
             else:
-                response_text = str(result) if result else "No response generated."
+                response_text = (
+                    _sanitize_response_text(str(result))
+                    if result
+                    else "No response generated."
+                )
 
             return {
                 "success": True,
@@ -1199,7 +1230,7 @@ def create_app(
 
         # Required models for EMR agent
         vlm_model = "Qwen3-VL-4B-Instruct-GGUF"
-        llm_model = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        llm_model = "Qwen3.5-35B-A3B-GGUF"
         embed_model = "nomic-embed-text-v2-moe-GGUF"
 
         try:
@@ -1355,7 +1386,7 @@ def create_app(
 
             # Required models for EMR agent
             vlm_model = "Qwen3-VL-4B-Instruct-GGUF"
-            llm_model = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+            llm_model = "Qwen3.5-35B-A3B-GGUF"
             embed_model = "nomic-embed-text-v2-moe-GGUF"
 
             required_models = [
@@ -1615,7 +1646,34 @@ def create_app(
         if not _agent_instance:
             raise HTTPException(status_code=503, detail="Agent not initialized")
 
-        new_dir = Path(config.watch_dir).expanduser().resolve()
+        # Reject path traversal segments before resolution to prevent
+        # directory traversal attacks (e.g., "../../etc/passwd")
+        raw_watch_dir = config.watch_dir
+        if ".." in raw_watch_dir.replace("\\", "/").split("/"):
+            raise HTTPException(
+                status_code=400,
+                detail="Path traversal sequences are not allowed",
+            )
+
+        # Resolve the path and validate it points to a safe location
+        # Security: intentional validation of user-supplied path  # nosec
+        new_dir = Path(raw_watch_dir).expanduser().resolve()
+
+        # Validate resolved path matches realpath to prevent symlink attacks
+        real_path = os.path.realpath(str(new_dir))
+        if real_path != str(new_dir):
+            raise HTTPException(
+                status_code=400,
+                detail="Symbolic links in watch directory paths are not allowed",
+            )
+
+        # Ensure the path is under the user's home directory or a safe root
+        user_home = Path.home().resolve()
+        if not str(new_dir).startswith(str(user_home)):
+            raise HTTPException(
+                status_code=400,
+                detail="Watch directory must be under the user's home directory",
+            )
 
         # Validate the path doesn't traverse to sensitive system directories
         sensitive_dirs = ["/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys"]
@@ -1936,7 +1994,12 @@ def create_app(
                 logger.info(
                     f"Database cleared: {result.get('deleted', {}).get('patients', 0)} patients"
                 )
-                return result
+                # Return only known-safe fields to avoid exposing internal details
+                return {
+                    "success": result.get("success", True),
+                    "deleted": result.get("deleted", {}),
+                    "message": result.get("message", "Database cleared successfully"),
+                }
             else:
                 raise HTTPException(
                     status_code=500,

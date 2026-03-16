@@ -185,7 +185,7 @@ def stop_server(port: int = 8080) -> None:
                         print(f"⚠️  Failed to stop PID {pid}: {e}")
                 print("✅ API server stopped")
             else:
-                print("ℹ️  No API server found running on port {port}")
+                print(f"ℹ️  No API server found running on port {port}")
 
         else:
             # Linux/Mac: Use lsof to find PID, then kill it

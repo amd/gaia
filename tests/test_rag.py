@@ -16,7 +16,7 @@ import pytest
 
 # Test imports
 try:
-    from gaia.chat.sdk import ChatConfig, ChatSDK
+    from gaia.chat.sdk import AgentConfig, AgentSDK
     from gaia.rag.sdk import RAGSDK, RAGConfig, RAGResponse, quick_rag
 
     RAG_AVAILABLE = True
@@ -35,7 +35,7 @@ class TestRAGConfig:
 
         config = RAGConfig()
 
-        assert config.model == "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        assert config.model == "Qwen3.5-35B-A3B-GGUF"
         assert config.max_tokens == 1024
         assert config.chunk_size == 500
         assert config.chunk_overlap == 100
@@ -106,7 +106,7 @@ class TestRAGSDK:
             patch("gaia.rag.sdk.PdfReader") as mock_pdf,
             patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
             patch("gaia.rag.sdk.faiss") as mock_faiss,
-            patch("gaia.rag.sdk.ChatSDK") as mock_chat,
+            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
         ):
 
             # Mock VLMClient to prevent connection attempts
@@ -140,7 +140,7 @@ class TestRAGSDK:
             mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
             mock_faiss.IndexFlatL2.return_value = mock_index
 
-            # Mock ChatSDK
+            # Mock AgentSDK
             mock_chat_response = Mock()
             mock_chat_response.text = "Mocked LLM response"
             mock_chat_response.stats = {"tokens": 50}
@@ -442,12 +442,12 @@ class TestChatIntegration:
             }
 
     def test_rag_enabling(self, mock_chat_dependencies):
-        """Test enabling RAG in ChatSDK."""
+        """Test enabling RAG in AgentSDK."""
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         # Enable RAG
         chat.enable_rag(documents=["test.pdf"])
@@ -456,12 +456,12 @@ class TestChatIntegration:
         assert chat.rag is not None
 
     def test_rag_disabling(self, mock_chat_dependencies):
-        """Test disabling RAG in ChatSDK."""
+        """Test disabling RAG in AgentSDK."""
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         # Enable then disable RAG
         chat.enable_rag()
@@ -475,8 +475,8 @@ class TestChatIntegration:
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         # Setup mock to return success dict
         mock_chat_dependencies["rag"].index_document.return_value = {"success": True}
@@ -495,8 +495,8 @@ class TestChatIntegration:
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         with pytest.raises(ValueError) as exc_info:
             chat.add_document("test.pdf")
@@ -508,8 +508,8 @@ class TestChatIntegration:
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         # Enable RAG
         chat.enable_rag()
@@ -568,8 +568,8 @@ class TestErrorHandling:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = ChatConfig()
-            chat = ChatSDK(config)
+            config = AgentConfig()
+            chat = AgentSDK(config)
 
             with pytest.raises(ValueError) as exc_info:
                 chat.send("")

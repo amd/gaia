@@ -181,9 +181,9 @@ gaia/
 │   │   ├── emr/        # MedicalIntakeAgent for healthcare
 │   │   └── routing/    # RoutingAgent for intelligent agent selection
 │   ├── api/            # OpenAI-compatible REST API server
-│   ├── apps/           # Standalone applications (jira, llm, summarize, docker)
+│   ├── apps/           # Standalone applications (chat/webui, jira, llm, summarize, docker)
 │   ├── audio/          # Audio processing (Whisper ASR, Kokoro TTS)
-│   ├── chat/           # Chat SDK
+│   ├── chat/           # Chat SDK and Agent UI backend (ui/server.py, ui/database.py, ui/models.py)
 │   ├── database/       # DatabaseMixin and DatabaseAgent
 │   ├── electron/       # Electron app integration
 │   ├── eval/           # Evaluation framework
@@ -223,29 +223,30 @@ gaia/
 - **API Server** (`src/gaia/api/`): OpenAI-compatible REST API for agent access
 - **MCP Integration** (`src/gaia/mcp/`): Model Context Protocol for external integrations
 - **RAG System** (`src/gaia/rag/`): Document Q&A with PDF support - see [`docs/guides/chat.mdx`](docs/guides/chat.mdx)
+- **Agent UI** (`src/gaia/ui/`): FastAPI backend for desktop chat app - see [`docs/guides/agent-ui.mdx`](docs/guides/agent-ui.mdx)
 - **Evaluation** (`src/gaia/eval/`): Batch experiments and ground truth - see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)
 
 ### Agent Implementations
 
 | Agent | Location | Description | Default Model |
 |-------|----------|-------------|---------------|
-| **ChatAgent** | `agents/chat/agent.py` | Document Q&A with RAG | Qwen3-Coder-30B |
-| **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3-Coder-30B |
-| **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3-Coder-30B |
-| **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3-Coder-30B |
-| **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3-Coder-30B |
+| **ChatAgent** | `agents/chat/agent.py` | Document Q&A with RAG | Qwen3.5-35B |
+| **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3.5-35B |
+| **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B |
+| **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B |
+| **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B |
 | **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing | Qwen3-VL-4B (VLM) |
-| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3-Coder-30B |
+| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B |
 
 ### Default Models
 - General tasks: `Qwen3-0.6B-GGUF`
-- Code/Agents: `Qwen3-Coder-30B-A3B-Instruct-GGUF`
+- Code/Agents: `Qwen3.5-35B-A3B-GGUF`
 - Vision tasks: `Qwen3-VL-4B-Instruct-GGUF`
 
 ## CLI Commands
 
 Primary commands available via `gaia`:
-- `gaia chat` - Interactive chat with RAG
+- `gaia chat` - Interactive chat with RAG (`--ui` to launch desktop web UI)
 - `gaia talk` - Voice interaction
 - `gaia prompt` - Single prompt to LLM
 - `gaia llm` - Simple LLM queries
@@ -264,6 +265,7 @@ All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
 
 **User Guides:**
 - [`docs/guides/chat.mdx`](docs/guides/chat.mdx) - Chat with RAG
+- [`docs/guides/agent-ui.mdx`](docs/guides/agent-ui.mdx) - Chat Desktop UI
 - [`docs/guides/talk.mdx`](docs/guides/talk.mdx) - Voice interaction
 - [`docs/guides/code.mdx`](docs/guides/code.mdx) - Code generation
 - [`docs/guides/blender.mdx`](docs/guides/blender.mdx) - 3D automation
@@ -277,6 +279,7 @@ All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
 - [`docs/sdk/core/tools.mdx`](docs/sdk/core/tools.mdx) - Tool decorator
 - [`docs/sdk/core/console.mdx`](docs/sdk/core/console.mdx) - Console output
 - [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx) - Chat SDK
+- [`docs/sdk/sdks/agent-ui.mdx`](docs/sdk/sdks/agent-ui.mdx) - Agent UI SDK
 - [`docs/sdk/sdks/rag.mdx`](docs/sdk/sdks/rag.mdx) - RAG SDK
 - [`docs/sdk/sdks/llm.mdx`](docs/sdk/sdks/llm.mdx) - LLM clients
 - [`docs/sdk/sdks/vlm.mdx`](docs/sdk/sdks/vlm.mdx) - Vision LLM clients

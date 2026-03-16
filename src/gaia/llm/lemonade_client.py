@@ -67,11 +67,14 @@ def _get_lemonade_config() -> tuple:
     # Parse the URL to extract host and port for backwards compatibility
     parsed = urlparse(base_url)
     host = parsed.hostname or DEFAULT_HOST
-    port = (
-        80
-        if (parsed.port is None and host is not None)
-        else (parsed.port or DEFAULT_PORT)
-    )
+    if parsed.port is not None:
+        port = parsed.port
+    elif parsed.scheme == "https":
+        port = 443
+    elif host != DEFAULT_HOST:
+        port = 80
+    else:
+        port = DEFAULT_PORT
     return (host, port, base_url)
 
 
@@ -147,10 +150,10 @@ class LemonadeStatus:
 # Define available models
 MODELS = {
     # LLM Models
-    "qwen3-coder-30b": ModelRequirement(
+    "qwen3.5-35b": ModelRequirement(
         model_type=ModelType.LLM,
-        model_id="Qwen3-Coder-30B-A3B-Instruct-GGUF",
-        display_name="Qwen3 Coder 30B",
+        model_id="Qwen3.5-35B-A3B-GGUF",
+        display_name="Qwen3.5 35B",
         min_ctx_size=32768,
     ),
     "qwen3-0.6b": ModelRequirement(
@@ -180,49 +183,49 @@ AGENT_PROFILES = {
     "chat": AgentProfile(
         name="chat",
         display_name="Chat Agent",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Interactive chat with RAG and vision support",
     ),
     "code": AgentProfile(
         name="code",
         display_name="Code Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Autonomous coding assistant",
     ),
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Voice-enabled chat",
     ),
     "rag": AgentProfile(
         name="rag",
         display_name="RAG System",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Document Q&A with retrieval and vision",
     ),
     "blender": AgentProfile(
         name="blender",
         display_name="Blender Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="3D content generation in Blender",
     ),
     "jira": AgentProfile(
         name="jira",
         display_name="Jira Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Jira issue management",
     ),
     "docker": AgentProfile(
         name="docker",
         display_name="Docker Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Docker container management",
     ),
@@ -243,7 +246,7 @@ AGENT_PROFILES = {
     "mcp": AgentProfile(
         name="mcp",
         display_name="MCP Bridge",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Model Context Protocol bridge server with vision",
     ),
@@ -638,6 +641,7 @@ class LemonadeClient:
         self.server_process = None
         self.log = get_logger(__name__)
         self.keep_alive = keep_alive
+        self._log_file = None
 
         # Track active downloads for cancellation support
         self.active_downloads: Dict[str, DownloadTask] = {}
@@ -687,15 +691,20 @@ class LemonadeClient:
             self.server_process = subprocess.Popen(cmd, shell=True)
         elif background == "silent":
             # Run in background with subprocess
-            log_file = open("lemonade.log", "w", encoding="utf-8")
-            self.server_process = subprocess.Popen(
-                base_cmd,
-                stdout=log_file,
-                stderr=log_file,
-                text=True,
-                bufsize=1,
-                shell=True,
-            )
+            self._log_file = open("lemonade.log", "w", encoding="utf-8")
+            try:
+                self.server_process = subprocess.Popen(
+                    base_cmd,
+                    stdout=self._log_file,
+                    stderr=self._log_file,
+                    text=True,
+                    bufsize=1,
+                    shell=True,
+                )
+            except Exception:
+                self._log_file.close()
+                self._log_file = None
+                raise
         else:  # "none" or any other value
             # Run in foreground with real-time output
             self.server_process = subprocess.Popen(
@@ -796,6 +805,14 @@ class LemonadeClient:
                 except subprocess.TimeoutExpired:
                     self.log.warning("Process did not terminate within timeout")
 
+            # Close log file handle if it was opened for silent mode
+            if hasattr(self, "_log_file") and self._log_file:
+                try:
+                    self._log_file.close()
+                except Exception:
+                    pass
+                self._log_file = None
+
             # Ensure port is free
             kill_process_on_port(self.port)
 
@@ -869,7 +886,7 @@ class LemonadeClient:
         # Check for MoE models first (e.g., "30b-a3b" = 30B total, 3B active)
         # MoE models are smaller than their total parameter count suggests
         if "a3b" in model_lower or "a2b" in model_lower:
-            return 18.0  # MoE models like Qwen3-Coder-30B-A3B are ~18GB
+            return 18.0  # MoE models like Qwen3.5-35B-A3B are ~18GB
 
         # Look for billion parameter indicators (dense models)
         if "70b" in model_lower or "72b" in model_lower:
@@ -1313,6 +1330,27 @@ class LemonadeClient:
             timeout=timeout,
         )
 
+        # Separate OpenAI-standard params from llama.cpp-specific params.
+        # The OpenAI client validates parameters strictly, so non-standard
+        # ones (repeat_penalty, repeat_last_n, etc.) must go via extra_body.
+        _OPENAI_STANDARD = {
+            "frequency_penalty",
+            "presence_penalty",
+            "top_p",
+            "n",
+            "seed",
+            "user",
+            "response_format",
+            "logit_bias",
+        }
+        extra_body = {}
+        standard_kwargs = {}
+        for k, v in kwargs.items():
+            if k in _OPENAI_STANDARD:
+                standard_kwargs[k] = v
+            else:
+                extra_body[k] = v
+
         # Create request parameters
         request_params = {
             "model": model,
@@ -1320,8 +1358,11 @@ class LemonadeClient:
             "temperature": temperature,
             "max_completion_tokens": max_completion_tokens,
             "stream": True,
-            **kwargs,
+            **standard_kwargs,
         }
+
+        if extra_body:
+            request_params["extra_body"] = extra_body
 
         if stop:
             request_params["stop"] = stop
@@ -1773,7 +1814,7 @@ class LemonadeClient:
         Get detailed information about a specific model.
 
         Args:
-            model_id: The model identifier (e.g., "Qwen3-Coder-30B-GGUF")
+            model_id: The model identifier (e.g., "Qwen3.5-35B-GGUF")
 
         Returns:
             Dict containing model metadata:
@@ -1789,7 +1830,7 @@ class LemonadeClient:
 
         Examples:
             # Get model checkpoint and recipe
-            model = client.get_model_details("Qwen3-Coder-30B-GGUF")
+            model = client.get_model_details("Qwen3.5-35B-GGUF")
             print(f"Checkpoint: {model['checkpoint']}")
             print(f"Recipe: {model['recipe']}")
 
@@ -2843,7 +2884,7 @@ class LemonadeClient:
             agent: Agent name or "all" for all unique models
 
         Returns:
-            List of model IDs (e.g., ["Qwen3-Coder-30B-A3B-Instruct-GGUF", ...])
+            List of model IDs (e.g., ["Qwen3.5-35B-A3B-GGUF", ...])
         """
         model_ids = set()
 

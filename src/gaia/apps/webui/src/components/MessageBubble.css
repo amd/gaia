@@ -1,0 +1,514 @@
+/* Message -- terminal log style */
+.msg {
+    padding: 14px 24px;
+    max-width: 900px;
+    margin: 0 auto;
+    width: 100%;
+    position: relative;
+    animation: msgSlideIn 150ms var(--ease);
+}
+
+@keyframes msgSlideIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* User messages -- minimal, right-aligned, no accent */
+.msg-user {
+    background: transparent;
+    border-left: 2px solid transparent;
+    border-bottom: 1px solid var(--border);
+}
+.msg-user .msg-inner {
+    text-align: right;
+}
+.msg-user .msg-header {
+    justify-content: flex-end;
+}
+.msg-user .msg-header-left {
+    order: 1;
+}
+.msg-user .msg-actions {
+    order: 0;
+}
+.msg-user .msg-body {
+    padding-left: 0;
+    text-align: right;
+}
+
+[data-theme="dark"] .msg-user {
+    background: transparent;
+}
+
+/* Assistant messages -- red left accent, highlighted */
+.msg-assistant {
+    background: var(--bg-user-msg);
+    border-bottom: 1px solid var(--border);
+    border-left: 2px solid var(--amd-red-light);
+}
+
+[data-theme="dark"] .msg-assistant {
+    border-left-color: var(--amd-red);
+    background: var(--bg-user-msg);
+}
+
+.msg-inner { max-width: 100%; }
+
+.msg-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.msg-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Avatar -- square for terminal feel */
+.msg-avatar {
+    width: 22px;
+    height: 22px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    flex-shrink: 0;
+    letter-spacing: 0;
+}
+.msg-avatar-user {
+    background: var(--amd-red);
+    color: white;
+}
+.msg-avatar-assistant {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    overflow: hidden;
+}
+.msg-avatar-assistant img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.msg-role {
+    font-size: 11px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+}
+.role-assistant { color: var(--amd-red); }
+
+/* Timestamp (visible on hover) -- monospace */
+.msg-timestamp {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 150ms var(--ease);
+    white-space: nowrap;
+}
+.msg:hover .msg-timestamp { opacity: 1; }
+
+.msg-actions {
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 150ms var(--ease);
+}
+.msg:hover .msg-actions { opacity: 1; }
+
+.msg-action-btn,
+.msg-copy {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    transition: all 100ms var(--ease);
+}
+.msg-action-btn:hover,
+.msg-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
+.msg-copy.copied { color: var(--accent-green); }
+
+/* Delete button */
+.msg-delete:hover { color: var(--amd-red); }
+.msg-delete.confirm {
+    color: var(--amd-red);
+    background: rgba(226, 60, 64, 0.1);
+    opacity: 1;
+}
+
+/* Message body -- assistant uses sans-serif for readability */
+.msg-body {
+    font-size: 14px;
+    line-height: 1.75;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    padding-left: 30px;
+}
+
+/* Assistant message body: use sans-serif for long prose readability */
+.msg-assistant .msg-body {
+    font-family: var(--font-sans);
+}
+
+/* User message body: monospace, right-aligned, muted color */
+.msg-user .msg-body {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.msg-user .md-content {
+    color: var(--text-secondary);
+}
+/* Right-align markdown elements in user messages */
+.msg-user .md-p,
+.msg-user .md-ul,
+.msg-user .md-ol {
+    text-align: right;
+}
+
+/* ── Error message styling ────────────────────────────────────── */
+.msg-error {
+    background: rgba(239, 68, 68, 0.04);
+    border-left: 2px solid var(--amd-red);
+}
+
+[data-theme="dark"] .msg-error {
+    background: rgba(239, 68, 68, 0.06);
+}
+
+.error-banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    margin-bottom: 8px;
+    border-radius: 3px;
+    background: rgba(239, 68, 68, 0.08);
+    color: var(--amd-red);
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.msg-error .msg-body {
+    color: var(--text-secondary);
+}
+
+.msg-error .msg-body .md-p,
+.msg-error .msg-body .md-content {
+    font-family: var(--font-mono);
+    font-size: 13px;
+}
+
+/* ── Markdown content (react-markdown) ───────────────────────── */
+.md-content {
+    color: var(--text-primary);
+}
+
+.md-content > :first-child {
+    margin-top: 0;
+}
+.md-content > :last-child {
+    margin-bottom: 0;
+}
+
+/* Paragraphs */
+.md-p {
+    margin-bottom: 10px;
+}
+.md-p:last-child {
+    margin-bottom: 0;
+}
+
+/* Headers */
+.md-h2 {
+    font-size: 17px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    margin: 16px 0 8px;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.md-h3 {
+    font-size: 15px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    margin: 14px 0 6px;
+    color: var(--text-primary);
+}
+.md-h4 {
+    font-size: 14px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    margin: 12px 0 4px;
+    color: var(--text-primary);
+}
+
+/* Lists */
+.md-ul,
+.md-ol {
+    margin: 8px 0;
+    padding-left: 24px;
+}
+.md-ul {
+    list-style-type: disc;
+}
+.md-ol {
+    list-style-type: decimal;
+}
+.md-li {
+    margin-bottom: 4px;
+    padding-left: 4px;
+}
+.md-li > .md-p {
+    margin-bottom: 4px;
+}
+/* Nested lists */
+.md-li > .md-ul,
+.md-li > .md-ol {
+    margin: 4px 0;
+}
+
+/* Bold & italic (handled automatically by react-markdown) */
+.md-content strong {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.md-content em {
+    font-style: italic;
+}
+
+/* Inline code */
+.inline-code {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    padding: 2px 6px;
+    border-radius: 2px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-light);
+}
+
+/* ── Links ────────────────────────────────────────────────────── */
+.md-link {
+    color: var(--amd-red);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 150ms var(--ease);
+}
+.md-link:hover {
+    border-bottom-color: var(--amd-red);
+}
+
+/* ── File Path Links -- terminal hyperlink style ─────────────── */
+.file-path-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--terminal-green-dim);
+    cursor: pointer;
+    border-bottom: 1px dashed var(--terminal-green-dim);
+    transition: color 100ms var(--ease), background 100ms var(--ease);
+    border-radius: 0;
+    padding: 0 2px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+.file-path-link:hover {
+    color: var(--terminal-green);
+    border-bottom-color: var(--terminal-green);
+    background: rgba(0, 255, 159, 0.04);
+}
+.file-path-icon {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+.file-path-link:hover .file-path-icon {
+    opacity: 1;
+}
+
+/* ── Blockquotes ──────────────────────────────────────────────── */
+.md-blockquote {
+    margin: 12px 0;
+    padding: 8px 16px;
+    border-left: 2px solid var(--amd-red);
+    background: var(--tint-subtle);
+    border-radius: 0 3px 3px 0;
+    color: var(--text-secondary);
+}
+.md-blockquote .md-p {
+    margin-bottom: 6px;
+}
+.md-blockquote .md-p:last-child {
+    margin-bottom: 0;
+}
+
+/* ── Horizontal rule ──────────────────────────────────────────── */
+.md-hr {
+    margin: 16px 0;
+    border: none;
+    border-top: 1px solid var(--border);
+}
+
+/* ── Tables (GFM) ────────────────────────────────────────────── */
+.md-table-wrap {
+    margin: 12px 0;
+    overflow-x: auto;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+}
+.md-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    line-height: 1.5;
+}
+.md-table th {
+    text-align: left;
+    padding: 6px 12px;
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    background: var(--tint-subtle);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+.md-table td {
+    padding: 5px 12px;
+    border-bottom: 1px solid var(--border-light);
+    color: var(--text-primary);
+}
+.md-table tr:last-child td {
+    border-bottom: none;
+}
+.md-table tr:hover td {
+    background: var(--tint-subtle);
+}
+
+/* Right-align numeric columns (convention: last column in financial data) */
+.md-table td:last-child,
+.md-table th:last-child {
+    text-align: right;
+}
+
+/* ── Strikethrough (GFM) ─────────────────────────────────────── */
+.md-content del {
+    text-decoration: line-through;
+    color: var(--text-muted);
+}
+
+/* ── Task lists (GFM) ────────────────────────────────────────── */
+.md-content .task-list-item {
+    list-style: none;
+    margin-left: -20px;
+}
+.md-content .task-list-item input[type="checkbox"] {
+    margin-right: 6px;
+}
+
+/* ── Code blocks ──────────────────────────────────────────────── */
+.code-block {
+    margin: 12px 0;
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--bg-code);
+    border: 1px solid var(--border);
+}
+
+.code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.code-lang {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    text-transform: lowercase;
+    letter-spacing: 0.3px;
+}
+
+.code-copy {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    transition: all var(--duration) var(--ease);
+}
+.code-copy:hover { background: rgba(255, 255, 255, 0.1); color: var(--text-secondary); }
+
+/* Copy feedback */
+.code-copy.copied {
+    color: var(--accent-green);
+    background: rgba(0, 255, 159, 0.08);
+}
+
+.code-block pre {
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 0;
+}
+
+.code-block code {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    background: none;
+    padding: 0;
+}
+
+/* ── Streaming cursor -- block style ─────────────────────────── */
+.cursor {
+    display: inline-block;
+    width: 8px;
+    height: 16px;
+    background: var(--amd-red);
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    animation: cursorBlink 0.8s step-end infinite;
+}
+
+/* ── Responsive ───────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .msg {
+        padding: 12px 16px;
+    }
+    .msg-body {
+        padding-left: 0;
+    }
+    .md-table-wrap {
+        margin: 8px -8px;
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+    }
+}

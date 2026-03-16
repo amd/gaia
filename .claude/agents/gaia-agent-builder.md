@@ -31,7 +31,7 @@ gaia llm "query" --use-npu
 
 ## Model Selection
 - **General**: Qwen3-0.6B-GGUF
-- **Coding**: Qwen3-Coder-30B-A3B-Instruct-GGUF
+- **Coding**: Qwen3.5-35B-A3B-GGUF
 - **Jira/JSON**: Qwen3-Coder for reliable parsing
 - **Voice**: Whisper ASR + Kokoro TTS
 

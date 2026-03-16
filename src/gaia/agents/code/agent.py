@@ -101,7 +101,7 @@ class CodeAgent(
             project_type: Project type ('frontend', 'backend', 'fullstack', or 'script', default: 'script')
             **kwargs: Agent initialization parameters:
                 - max_steps: Maximum conversation steps (default: 100)
-                - model_id: LLM model to use (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)
+                - model_id: LLM model to use (default: Qwen3.5-35B-A3B-GGUF)
                 - silent_mode: Suppress console output (default: False)
                 - debug: Enable debug logging (default: False)
                 - show_prompts: Display prompts sent to LLM (default: False)
@@ -116,7 +116,7 @@ class CodeAgent(
             kwargs["max_steps"] = 100  # Increased for complex project generation
         # Use the coding model for better code understanding
         if "model_id" not in kwargs:
-            kwargs["model_id"] = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+            kwargs["model_id"] = "Qwen3.5-35B-A3B-GGUF"
         # Disable streaming by default (shows duplicate output)
         # Users can enable with --streaming flag if desired
         if "streaming" not in kwargs:
@@ -222,6 +222,7 @@ class CodeAgent(
 
         del kwargs  # Unused - accept for CLI compatibility
         # Store workspace root and change to it if provided
+        original_cwd = os.getcwd()
         if workspace_root:
             self.workspace_root = workspace_root
             self.path_validator.add_allowed_path(workspace_root)
@@ -419,7 +420,7 @@ class CodeAgent(
             return self._fix_code_with_llm(code, "file.ts", error_text)
 
         # Get LLM client for checklist generation (required)
-        # The chat SDK has a send(message, timeout) method compatible with ChatSDK protocol
+        # The chat SDK has a send(message, timeout) method compatible with AgentSDK protocol
         llm_client = getattr(self, "chat", None)
         if llm_client is None:
             raise ValueError(

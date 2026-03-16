@@ -206,12 +206,19 @@ class LemonadeManager:
                     # Context size may be cached from before models were loaded
                     # Re-check current status to see if models are loaded now
                     try:
-                        client = LemonadeClient(
-                            host=host,
-                            port=port,
-                            keep_alive=True,
-                            verbose=not quiet,
-                        )
+                        if base_url:
+                            client = LemonadeClient(
+                                base_url=base_url,
+                                keep_alive=True,
+                                verbose=not quiet,
+                            )
+                        else:
+                            client = LemonadeClient(
+                                host=host,
+                                port=port,
+                                keep_alive=True,
+                                verbose=not quiet,
+                            )
                         status = client.get_status()
                         # Update cached context size
                         cls._context_size = status.context_size or 0
@@ -247,12 +254,22 @@ class LemonadeManager:
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
 
             try:
-                client = LemonadeClient(
-                    host=host,
-                    port=port,
-                    keep_alive=True,
-                    verbose=not quiet,
-                )
+                # When base_url is provided, pass it directly to LemonadeClient
+                # so it preserves the full URL (including https:// for ngrok, etc.)
+                # rather than reconstructing from host/port with http://
+                if base_url:
+                    client = LemonadeClient(
+                        base_url=base_url,
+                        keep_alive=True,
+                        verbose=not quiet,
+                    )
+                else:
+                    client = LemonadeClient(
+                        host=host,
+                        port=port,
+                        keep_alive=True,
+                        verbose=not quiet,
+                    )
 
                 # Just check server status - no agent profile required
                 status = client.get_status()

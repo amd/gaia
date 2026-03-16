@@ -56,7 +56,7 @@ class JiraApp:
         """
         self.verbose = verbose
         self.debug = debug
-        self.model = model or "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        self.model = model or "Qwen3.5-35B-A3B-GGUF"
         self.step_mode = step_mode
         self.base_url = base_url
         # In demo/debug mode, never use silent mode so we see all agent steps
@@ -326,6 +326,7 @@ async def main(cli_args=None):
     """
     # pylint: disable=protected-access
 
+    parser = None
     if cli_args is not None:
         # Use pre-parsed arguments from CLI
         args = cli_args
@@ -407,7 +408,10 @@ Examples:
             result = await app.execute_command(args.command)
             app._display_result(result)  # pylint: disable=protected-access
         else:
-            parser.print_help()
+            if parser:
+                parser.print_help()
+            else:
+                print("No command specified. Use --interactive for interactive mode.")
 
     finally:
         await app.disconnect()

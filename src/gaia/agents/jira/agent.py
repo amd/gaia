@@ -22,6 +22,7 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -96,7 +97,7 @@ class JiraAgent(Agent):
                 - priorities: List of available priority names
             **kwargs: Other agent initialization parameters:
                 - max_steps: Maximum conversation steps (default: 10)
-                - model_id: LLM model to use (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)
+                - model_id: LLM model to use (default: Qwen3.5-35B-A3B-GGUF)
                 - silent_mode: Suppress console output (default: False)
                 - debug: Enable debug logging (default: False)
                 - show_prompts: Display prompts sent to LLM (default: False)
@@ -119,7 +120,7 @@ class JiraAgent(Agent):
             kwargs["max_steps"] = 10
         # Use the larger coding model by default for reliable JSON parsing
         if "model_id" not in kwargs:
-            kwargs["model_id"] = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+            kwargs["model_id"] = "Qwen3.5-35B-A3B-GGUF"
 
         # Store config before calling super() so system prompt can use it
         self._jira_config = jira_config
@@ -649,7 +650,8 @@ RULES:
             else:
                 params["fields"] = "key,summary,status,priority,issuetype,assignee"
 
-            logger.debug(f"Making API request to: {url}")
+            # Log only the path component to avoid exposing sensitive URL data
+            logger.debug(f"Making API request to: {urlparse(url).path}")
 
             async with session.get(url, headers=headers, params=params) as response:
                 response.raise_for_status()

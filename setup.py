@@ -28,6 +28,8 @@ setup(
         "gaia.llm.providers",
         "gaia.audio",
         "gaia.chat",
+        "gaia.ui",
+        "gaia.ui.routers",
         "gaia.database",
         "gaia.talk",
         "gaia.testing",
@@ -71,6 +73,9 @@ setup(
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
+        "gaia.filesystem",
+        "gaia.scratchpad",
+        "gaia.web",
     ],
     package_data={
         "gaia.eval": [
@@ -103,6 +108,13 @@ setup(
             "uvicorn>=0.32.0",
             "python-multipart>=0.0.9",
         ],
+        "ui": [
+            "fastapi>=0.115.0",
+            "uvicorn>=0.32.0",
+            "python-multipart>=0.0.9",
+            "httpx>=0.27.0",
+            "psutil>=5.9.0",
+        ],
         "audio": [
             "torch>=2.0.0,<2.4",
             "torchvision<0.19.0",
@@ -134,6 +146,7 @@ setup(
             "bandit",
             "responses",
             "requests",
+            "beautifulsoup4",
         ],
         "eval": [
             "anthropic",

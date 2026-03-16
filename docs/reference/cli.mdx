@@ -82,7 +82,7 @@ gaia init [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--profile, -p` | string | chat | Profile to initialize (minimal, chat, code, rag, vlm, all) |
+| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, mcp, vlm, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
@@ -97,9 +97,11 @@ gaia init [OPTIONS]
 | Profile | Models | Description | Approx Size |
 |---------|--------|-------------|-------------|
 | `minimal` | Qwen3-0.6B | Fast setup with lightweight model | ~400 MB |
-| `chat` | Qwen3-Coder-30B, nomic-embed, Qwen3-VL-4B | Interactive chat with RAG and vision | ~25 GB |
-| `code` | Qwen3-Coder-30B | Autonomous coding assistant | ~18 GB |
-| `rag` | Qwen3-Coder-30B, nomic-embed, Qwen3-VL-4B | Document Q&A with retrieval and vision | ~25 GB |
+| `sd` | SD-Turbo | Image generation with Stable Diffusion | ~8 GB |
+| `chat` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Interactive chat with RAG and vision | ~25 GB |
+| `code` | Qwen3.5-35B | Autonomous coding assistant | ~18 GB |
+| `rag` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Document Q&A with retrieval and vision | ~25 GB |
+| `mcp` | Qwen3.5-35B | MCP bridge server for external integrations | ~18 GB |
 | `vlm` | Qwen3-VL-4B | Vision pipeline for document and image extraction | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
@@ -355,8 +357,7 @@ gaia chat [MESSAGE] [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
-| `--model` | string | Qwen3-Coder-30B-A3B-Instruct-GGUF | Model name to use |
-| `--max-steps` | integer | 10 | Maximum conversation steps |
+| `--model` | string | Qwen3.5-35B-A3B-GGUF | Model name to use |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
 | `--chunk-size` | integer | 500 | Document chunk size for RAG |
@@ -366,6 +367,8 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
 | `--debug` | flag | false | Enable debug output |
 | `--list-tools` | flag | false | List available tools and exit |
+| `--ui` | flag | false | Launch the Chat Web UI (browser-based interface on port 4200) |
+| `--ui-port` | integer | 4200 | Port for the Agent UI server (used with `--ui`) |
 
 **Examples:**
 
@@ -392,9 +395,17 @@ gaia chat --index report.pdf --query "Summarize the report"
 
 ```bash Custom Settings
 gaia chat \
-  --model Qwen3-Coder-30B-A3B-Instruct-GGUF \
+  --model Qwen3.5-35B-A3B-GGUF \
   --streaming \
   --show-stats
+```
+
+```bash Web UI
+gaia chat --ui
+```
+
+```bash Web UI on Custom Port
+gaia chat --ui --ui-port 8080
 ```
 </CodeGroup>
 
@@ -946,8 +957,8 @@ gaia download --agent code
 ```
 📥 Downloading 3 model(s) for 'chat'...
 
-📥 Qwen3-Coder-30B-A3B-Instruct-GGUF
-   ⏳ [1/31] Qwen3-Coder-30B-A3B-Q4_K_M.gguf: 3.5 GB/17.7 GB (20%)
+📥 Qwen3.5-35B-A3B-GGUF
+   ⏳ [1/31] Qwen3.5-35B-A3B-Q4_K_M.gguf: 3.5 GB/17.7 GB (20%)
    ...
    ✅ Download complete
 

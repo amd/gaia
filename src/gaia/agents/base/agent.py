@@ -21,7 +21,7 @@ from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
-from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.chat.sdk import AgentConfig, AgentSDK
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -195,13 +195,13 @@ You must respond ONLY in valid JSON. No text before { or after }.
 3. After tool results, provide an "answer" summarizing them
 """
 
-        # Initialize ChatSDK with proper configuration
+        # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
         # Note: Context size is configured when starting Lemonade server, not here
-        # Use Qwen3-Coder-30B by default for better reasoning and JSON formatting
+        # Use Qwen3.5-35B by default for better reasoning and JSON formatting
         # The 0.5B model is too small for complex agent tasks
-        chat_config = ChatConfig(
-            model=model_id or "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+        chat_config = AgentConfig(
+            model=model_id or "Qwen3.5-35B-A3B-GGUF",
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
             claude_model=claude_model,
@@ -210,7 +210,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
             max_history_length=20,  # Keep more history for agent conversations
             max_tokens=4096,  # Increased for complex code generation
         )
-        self.chat = ChatSDK(chat_config)
+        self.chat = AgentSDK(chat_config)
         self.model_id = model_id
 
         # Print system prompt if show_prompts is enabled
@@ -399,41 +399,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
             >>> agent.connect_mcp_server("filesystem", "npx @modelcontextprotocol/server-filesystem /tmp")
             >>> # rebuild_system_prompt() is called automatically
         """
-        # Get base prompt from subclass
-        self.system_prompt = self._get_system_prompt()
-
-        # Append tools description
-        tools_description = self._format_tools_for_prompt()
-        self.system_prompt += f"\n\n==== AVAILABLE TOOLS ====\n{tools_description}\n"
-
-        # Add JSON response format instructions (shared across all agents)
-        self.system_prompt += """
-==== RESPONSE FORMAT ====
-You must respond ONLY in valid JSON. No text before { or after }.
-
-**To call a tool:**
-{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
-
-**To create a multi-step plan:**
-{
-  "thought": "reasoning",
-  "goal": "objective",
-  "plan": [
-    {"tool": "tool1", "tool_args": {"arg": "val"}},
-    {"tool": "tool2", "tool_args": {"arg": "val"}}
-  ],
-  "tool": "tool1",
-  "tool_args": {"arg": "val"}
-}
-
-**To provide a final answer:**
-{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
-
-**RULES:**
-1. ALWAYS use tools for real data - NEVER hallucinate
-2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
-3. After tool results, provide an "answer" summarizing them
-"""
+        # Recompose the full system prompt via _compose_system_prompt() so that
+        # mixin prompts, tool descriptions, and response format are all included.
+        self._system_prompt_cache = self._compose_system_prompt()
 
     def list_tools(self, verbose: bool = True) -> None:
         """
@@ -485,6 +453,113 @@ You must respond ONLY in valid JSON. No text before { or after }.
     def get_tools(self) -> List[Dict[str, Any]]:
         """Get a list of registered tools for the agent."""
         return list(_TOOL_REGISTRY.values())
+
+    def _extract_embedded_tool_call(self, response: str) -> Optional[Dict[str, Any]]:
+        """
+        Detect and extract a tool call JSON embedded in a text response.
+
+        LLMs sometimes output narrative text followed by a JSON tool call, e.g.:
+        "Let me search for that.\n{"thought": "...", "tool": "query_documents",
+         "tool_args": {"query": "..."}}"
+
+        This method finds the JSON block using brace-depth matching and returns
+        the parsed tool call if it contains a "tool" key.  Returns None if no
+        embedded tool call is found, allowing the caller to treat the response
+        as plain text.
+        """
+        # Quick check: must contain "tool" to be worth scanning
+        if '"tool"' not in response:
+            return None
+
+        # Build a set of character ranges inside code fences (```...```)
+        # so we don't accidentally extract example JSON from markdown.
+        _code_ranges: list[tuple[int, int]] = []
+        _fence_start = 0
+        _search_from = 0
+        while True:
+            _open = response.find("```", _search_from)
+            if _open == -1:
+                break
+            _close = response.find("```", _open + 3)
+            if _close == -1:
+                # Unclosed fence — treat rest as code
+                _code_ranges.append((_open, len(response)))
+                break
+            _code_ranges.append((_open, _close + 3))
+            _search_from = _close + 3
+
+        def _inside_code_fence(pos: int) -> bool:
+            return any(start <= pos < end for start, end in _code_ranges)
+
+        # Walk through looking for { that starts a JSON-like block with "tool"
+        idx = 0
+        while idx < len(response):
+            brace_pos = response.find("{", idx)
+            if brace_pos == -1:
+                break
+
+            # Skip JSON inside markdown code fences (example/documentation)
+            if _inside_code_fence(brace_pos):
+                idx = brace_pos + 1
+                continue
+
+            # Look ahead for "tool" near this brace (within 200 chars)
+            look_ahead = response[brace_pos : brace_pos + 200]
+            if '"tool"' not in look_ahead and '"thought"' not in look_ahead:
+                idx = brace_pos + 1
+                continue
+
+            # Use brace-depth matching to find the complete JSON object
+            depth = 0
+            in_str = False
+            escape = False
+            end_pos = brace_pos
+            for j in range(brace_pos, len(response)):
+                ch = response[j]
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"' and not escape:
+                    in_str = not in_str
+                if not in_str:
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end_pos = j
+                            break
+
+            if depth != 0:
+                # Unclosed braces — skip
+                idx = brace_pos + 1
+                continue
+
+            candidate = response[brace_pos : end_pos + 1]
+            try:
+                # Fix common trailing comma issues
+                fixed = re.sub(r",\s*}", "}", candidate)
+                fixed = re.sub(r",\s*]", "]", fixed)
+                parsed = json.loads(fixed)
+
+                # Only accept if it has a "tool" key (it's a tool call)
+                if isinstance(parsed, dict) and "tool" in parsed:
+                    if "tool_args" not in parsed:
+                        parsed["tool_args"] = {}
+                    logger.debug(
+                        f"[PARSE] Extracted embedded tool call: "
+                        f"{parsed.get('tool')}"
+                    )
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+            idx = brace_pos + 1
+
+        return None
 
     def _extract_json_from_response(self, response: str) -> Optional[Dict[str, Any]]:
         """
@@ -781,9 +856,17 @@ You must respond ONLY in valid JSON. No text before { or after }.
             logger.debug(f"📥 LLM Response: {response}")
 
         # STEP 1: Fast path - detect plain text conversational responses
-        # If response doesn't start with '{', it's likely plain text
-        # Accept it immediately without logging errors
+        # If response doesn't start with '{', it's likely plain text.
+        # However, LLMs sometimes prefix a tool call JSON with narrative text
+        # like "Let me search for that.\n{"tool": "query_documents", ...}".
+        # Detect and extract embedded tool calls before treating as plain text.
         if not response.startswith("{"):
+            # Check for embedded tool call JSON: look for {"tool" or {"thought"
+            # patterns that indicate a structured response is buried in the text
+            embedded_json = self._extract_embedded_tool_call(response)
+            if embedded_json:
+                logger.debug("[PARSE] Found embedded tool call in text response")
+                return embedded_json
             logger.debug(
                 f"[PARSE] Plain text conversational response (length: {len(response)})"
             )
@@ -816,15 +899,10 @@ You must respond ONLY in valid JSON. No text before { or after }.
         answer_match = re.search(r'"answer":\s*"([^"]*)"', response)
         plan_match = re.search(r'"plan":\s*(\[.*?\])', response, re.DOTALL)
 
-        if answer_match:
-            result = {
-                "thought": thought_match.group(1) if thought_match else "",
-                "goal": "what was achieved",
-                "answer": answer_match.group(1),
-            }
-            logger.debug(f"Extracted answer using regex: {result}")
-            return result
-
+        # Check for tool calls FIRST — if a response has both "tool" and
+        # "answer", the tool should be executed because the "answer" is
+        # often just the LLM narrating what it plans to do, not the final
+        # response.  The real answer will come after the tool executes.
         if tool_match:
             tool_args = {}
 
@@ -881,6 +959,16 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     self.error_history.append(error_msg)
 
             logger.debug(f"Extracted tool call using regex: {result}")
+            return result
+
+        # Fall back to answer extraction (only reached if no tool was found)
+        if answer_match:
+            result = {
+                "thought": thought_match.group(1) if thought_match else "",
+                "goal": "what was achieved",
+                "answer": answer_match.group(1),
+            }
+            logger.debug(f"Extracted answer using regex: {result}")
             return result
 
         # Try to match simple key-value patterns for object names (like ': "my_cube"')
@@ -1812,7 +1900,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                             prompt, f"Prompt (Step {steps_taken})"
                         )
 
-                # Get streaming response from ChatSDK with proper conversation history
+                # Get streaming response from AgentSDK with proper conversation history
                 try:
                     response_stream = self.chat.send_messages_stream(
                         messages=messages, system_prompt=self.system_prompt
@@ -1893,7 +1981,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                             f"[DEBUG] Current step: {self.current_step}/{self.total_plan_steps}"
                         )
 
-                # Get complete response from ChatSDK
+                # Get complete response from AgentSDK
                 try:
                     chat_response = self.chat.send_messages(
                         messages=messages, system_prompt=self.system_prompt
@@ -1901,6 +1989,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     response = chat_response.text
                     response_stats = chat_response.stats
                 except ConnectionError as e:
+                    self.console.stop_progress()
                     error_msg = f"LLM Server Connection Failed: {str(e)}"
                     logger.error(error_msg)
                     self.console.print_error(error_msg)
@@ -1920,6 +2009,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     )
                     break
                 except Exception as e:
+                    self.console.stop_progress()
                     if self.debug:
                         print(f"[DEBUG] Error calling LLM: {e}")
                     logger.error(f"Unexpected error calling LLM: {e}")
@@ -2001,7 +2091,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     # Add plan request to messages
                     messages.append({"role": "user", "content": plan_prompt})
 
-                    # Use ChatSDK for streaming plan response
+                    # Use AgentSDK for streaming plan response
                     stream_gen = self.chat.send_messages_stream(
                         messages=messages, system_prompt=self.system_prompt
                     )
@@ -2038,7 +2128,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     # Add plan request to messages
                     messages.append({"role": "user", "content": plan_prompt})
 
-                    # Use ChatSDK for non-streaming plan response
+                    # Use AgentSDK for non-streaming plan response
                     chat_response = self.chat.send_messages(
                         messages=messages, system_prompt=self.system_prompt
                     )

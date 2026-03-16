@@ -20,7 +20,6 @@ const rateLimit = require('express-rate-limit');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
-const url = require('url');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,9 +55,13 @@ function verifyToken(token) {
 
 // Sanitize redirect URL to prevent open redirect attacks
 function sanitizeRedirect(url) {
-  // Must start with / but not // (protocol-relative URLs)
-  if (url && typeof url === 'string' && url.startsWith('/') && !url.startsWith('//')) {
-    return url;
+  if (!url || typeof url !== 'string') return '/';
+  // Only allow relative paths: must start with / but not // or /\ (protocol-relative)
+  // Strip any backslashes and protocol-relative patterns
+  const cleaned = url.replace(/\\/g, '/');
+  if (cleaned.startsWith('/') && !cleaned.startsWith('//') && !/^\/[^/]*:/.test(cleaned)) {
+    // Return only the pathname to prevent header injection
+    try { return new URL(cleaned, 'http://localhost').pathname; } catch { return '/'; }
   }
   return '/';
 }
@@ -285,15 +288,11 @@ app.post('/auth/login', loginLimiter, (req, res) => {
       maxAge: COOKIE_MAX_AGE,
       sameSite: 'lax'
     });
-    // Retrieve redirect URL from server-side storage and validate with url.parse()
+    // Retrieve redirect URL from server-side storage (already sanitized on store)
     const target = consumeRedirect(nonce);
-    const parsed = url.parse(target || '');
-    // Only redirect to relative paths (no host/protocol) to prevent open redirects
-    if (!parsed.host && !parsed.protocol && parsed.pathname) {
-      res.redirect(303, parsed.pathname);
-    } else {
-      res.redirect(303, '/');
-    }
+    // Re-validate the stored URL to ensure it is a safe relative path
+    const safePath = sanitizeRedirect(target);
+    res.redirect(303, safePath);
   } else {
     // Retrieve the original redirect URL and re-store with a new nonce for retry
     const originalRedirect = consumeRedirect(nonce);
@@ -316,6 +315,33 @@ app.get('/auth/logout', (req, res) => {
   res.clearCookie(COOKIE_NAME);
   res.redirect('/');
 });
+
+// Simple in-memory rate limiter for general requests (no external dependencies)
+const rateLimitStore = new Map();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX = 100; // max requests per window
+
+function rateLimiter(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress;
+  const now = Date.now();
+  const record = rateLimitStore.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+
+  if (now > record.resetAt) {
+    record.count = 0;
+    record.resetAt = now + RATE_LIMIT_WINDOW;
+  }
+
+  record.count++;
+  rateLimitStore.set(ip, record);
+
+  if (record.count > RATE_LIMIT_MAX) {
+    return res.status(429).send('Too Many Requests');
+  }
+  next();
+}
+
+// Apply rate limiter before auth middleware
+app.use(rateLimiter);
 
 // Apply auth middleware
 app.use(authMiddleware);
