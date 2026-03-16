@@ -179,8 +179,9 @@ The agent will:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LEMONADE_BASE_URL` | `http://localhost:8000/api/v1` | LLM server base URL. Overrides `AgentConfig::baseUrl`. |
+| `GAIA_CPP_BASE_URL` | `http://localhost:8000/api/v1` | LLM server base URL. Overrides `AgentConfig::baseUrl`. |
 | `LEMONADE_MODEL` | _(none)_ | Model to load. Overrides `AgentConfig::modelId`. |
+| `GAIA_CPP_CTX_SIZE` | `16384` | LLM context window size in tokens. Overrides `AgentConfig::contextSize`. |
 | `GAIA_STREAMING` | _(unset)_ | Set to `1` to enable token streaming without changing code. Overrides the default for `AgentConfig::streaming`. |
 
 **Example — enable streaming for a single run:**
@@ -190,7 +191,7 @@ GAIA_STREAMING=1 ./build/my_agent
 
 **Example — point to a remote server:**
 ```bash
-LEMONADE_BASE_URL=http://192.168.1.50:8000 ./build/my_agent
+GAIA_CPP_BASE_URL=http://192.168.1.50:8000 ./build/my_agent
 ```
 
 Code-level config always takes precedence over environment variables when explicitly set, but these variables control the *default* value of each field in `AgentConfig`.
