@@ -21,6 +21,7 @@ Endpoint implementations are split into router modules under
 import asyncio
 import logging
 import shutil  # noqa: F401  # pylint: disable=unused-import
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -207,6 +208,23 @@ def create_app(db_path: str = None) -> FastAPI:
     # concurrent requests, which would corrupt conversation state.
     app.state.session_locks: dict = {}  # session_id -> asyncio.Lock
 
+    # ── Global Exception Handler ────────────────────────────────────────
+    # Prevent stack traces from leaking to external users (CodeQL
+    # py/stack-trace-exposure).  Log the full traceback server-side
+    # for debugging, but return only a generic error message.
+    @app.exception_handler(Exception)
+    async def _global_exception_handler(request: Request, exc: Exception):
+        logger.error(
+            "Unhandled exception on %s %s:\n%s",
+            request.method,
+            request.url.path,
+            traceback.format_exc(),
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        )
+
     # ── Include Routers ──────────────────────────────────────────────────
     app.include_router(system_router_mod.router)
     app.include_router(sessions_router_mod.router)
@@ -241,15 +259,31 @@ def create_app(db_path: str = None) -> FastAPI:
         )
 
         # Serve index.html for all non-API routes (SPA fallback)
+        _resolved_dist = _webui_dist.resolve()
+        _index_html = str(_resolved_dist / "index.html")
+
         @app.get("/{full_path:path}")
         async def serve_spa(full_path: str):
             """Serve the React SPA for all non-API routes."""
-            # Sanitize the path to prevent directory traversal
-            safe_path = _sanitize_static_path(_webui_dist, full_path)
-            if safe_path is not None and safe_path.is_file():
-                return FileResponse(str(safe_path))
+            # Inline path sanitization (prevents directory traversal).
+            # Checks are explicit so static analysis (CodeQL) can verify
+            # the user-controlled ``full_path`` is properly constrained.
+            if not full_path or "\x00" in full_path or ".." in full_path:
+                return FileResponse(_index_html)
+
+            candidate = (_resolved_dist / full_path).resolve()
+
+            # Verify candidate stays within the dist directory
+            try:
+                candidate.relative_to(_resolved_dist)
+            except ValueError:
+                return FileResponse(_index_html)
+
+            if candidate.is_file():
+                return FileResponse(str(candidate))
+
             # Default to index.html for SPA routing
-            return FileResponse(str(_webui_dist / "index.html"))
+            return FileResponse(_index_html)
 
     else:
         logger.info(
