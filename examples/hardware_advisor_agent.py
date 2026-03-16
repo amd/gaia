@@ -142,6 +142,9 @@ Always use tools to get real data - never guess specifications."""
                 )
 
                 # Get NPU information from Lemonade
+                # LemonadeClient.get_system_info() normalizes v10 keys
+                # (amd_npu) to legacy aliases (npu), so "npu" works for
+                # both Lemonade v9 and v10+.
                 devices = info.get("devices", {})
                 npu_info = devices.get("npu", {})
                 npu_available = npu_info.get("available", False)
