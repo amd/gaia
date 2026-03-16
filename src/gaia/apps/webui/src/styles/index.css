@@ -28,7 +28,8 @@
     --bg-hover: #f0f0f0;
     --bg-active: #e5e7eb;
     --bg-code: #1e1e1e;
-    --bg-user-msg: rgba(226, 60, 64, 0.03);
+    --bg-user-msg: rgba(0, 0, 0, 0.02);
+    --bg-assistant-msg: rgba(0, 0, 0, 0.015);
     --bg-modal-overlay: rgba(0, 0, 0, 0.5);
 
     /* Background image (set via App.tsx or inline style) */
@@ -53,9 +54,9 @@
 
     --radius-sm: 3px;
     --radius-md: 4px;
-    --radius-lg: 4px;
-    --radius-xl: 4px;
-    --radius-full: 3px;
+    --radius-lg: 6px;
+    --radius-xl: 8px;
+    --radius-full: 9999px;
 
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Roboto, Helvetica, Arial, sans-serif;
     --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
@@ -78,7 +79,8 @@
     --bg-hover: #333333;         /* Hover states — clear lift */
     --bg-active: #3c3c3c;        /* Active/selected — obvious highlight */
     --bg-code: #111111;          /* Code blocks — near-black */
-    --bg-user-msg: rgba(237, 28, 36, 0.03); /* User messages — slight red tint */
+    --bg-user-msg: rgba(255, 255, 255, 0.02); /* User messages — neutral subtle lift */
+    --bg-assistant-msg: rgba(255, 255, 255, 0.025); /* Assistant messages — subtle light lift */
     --bg-modal-overlay: rgba(0, 0, 0, 0.85);
 
     --text-primary: #d4d4d4;     /* Terminal white text */
@@ -92,8 +94,8 @@
     --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.6);
     --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.7);
 
-    --tint-subtle: rgba(226, 60, 64, 0.03);
-    --tint-hover: rgba(226, 60, 64, 0.06);
+    --tint-subtle: rgba(255, 255, 255, 0.03);
+    --tint-hover: rgba(255, 255, 255, 0.05);
 
     /* Dark mode background image -- slightly higher opacity for atmosphere */
     --bg-image: none;

@@ -57,13 +57,8 @@
     border-radius: var(--radius-md);
     background: var(--bg-secondary);
     text-align: center;
-    transition: all 250ms var(--ease);
 }
-.feature-card:hover {
-    border-color: var(--amd-red-light);
-    box-shadow: var(--shadow-md);
-    transform: translateY(-3px);
-}
+/* No hover transform — these are display-only cards, not clickable */
 
 .feature-icon {
     color: var(--amd-red);

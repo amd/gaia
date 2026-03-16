@@ -58,6 +58,8 @@ interface ChatState {
     sidebarCollapsed: boolean;
     sidebarWidth: number;
     isLoadingMessages: boolean;
+    /** Prompt queued from WelcomeScreen to be consumed by ChatView on mount. */
+    pendingPrompt: string | null;
     toggleTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
     setShowFileBrowser: (show: boolean) => void;
@@ -68,6 +70,7 @@ interface ChatState {
     setSidebarCollapsed: (collapsed: boolean) => void;
     setSidebarWidth: (width: number) => void;
     setLoadingMessages: (loading: boolean) => void;
+    setPendingPrompt: (prompt: string | null) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -180,6 +183,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         catch { return 300; }
     })(),
     isLoadingMessages: false,
+    pendingPrompt: null,
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
     setShowSettings: (show) => set({ showSettings: show }),
@@ -201,4 +205,5 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set({ sidebarWidth: clamped });
     },
     setLoadingMessages: (loading) => set({ isLoadingMessages: loading }),
+    setPendingPrompt: (prompt) => set({ pendingPrompt: prompt }),
 }));

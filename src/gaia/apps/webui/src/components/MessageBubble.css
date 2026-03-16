@@ -13,10 +13,10 @@
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* User messages -- minimal, right-aligned, no accent */
+/* User messages -- right-aligned with subtle accent */
 .msg-user {
     background: transparent;
-    border-left: 2px solid transparent;
+    border-left: 2px solid var(--border);
     border-bottom: 1px solid var(--border);
 }
 .msg-user .msg-inner {
@@ -40,16 +40,16 @@
     background: transparent;
 }
 
-/* Assistant messages -- red left accent, highlighted */
+/* Assistant messages -- AMD red left accent, subtle lift */
 .msg-assistant {
-    background: var(--bg-user-msg);
+    background: var(--bg-assistant-msg);
     border-bottom: 1px solid var(--border);
-    border-left: 2px solid var(--amd-red-light);
+    border-left: 2px solid var(--amd-red);
 }
 
 [data-theme="dark"] .msg-assistant {
     border-left-color: var(--amd-red);
-    background: var(--bg-user-msg);
+    background: var(--bg-assistant-msg);
 }
 
 .msg-inner { max-width: 100%; }
@@ -107,12 +107,12 @@
 }
 .role-assistant { color: var(--amd-red); }
 
-/* Timestamp (visible on hover) -- monospace */
+/* Timestamp -- always visible at reduced opacity, full on hover */
 .msg-timestamp {
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--text-muted);
-    opacity: 0;
+    opacity: 0.4;
     transition: opacity 150ms var(--ease);
     white-space: nowrap;
 }
@@ -486,7 +486,13 @@
     padding: 0;
 }
 
-/* ── Streaming cursor -- block style ─────────────────────────── */
+/* ── Streaming cursor -- follows the last line of text ────────── */
+/* Make the last paragraph inline so the cursor sits right after the text */
+.md-content > .cursor { display: inline-block; }
+.md-content:has(> .cursor) > :last-of-type:not(.cursor) {
+    display: inline;
+}
+
 .cursor {
     display: inline-block;
     width: 8px;

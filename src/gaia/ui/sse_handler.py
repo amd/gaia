@@ -379,6 +379,19 @@ class SSEOutputHandler(OutputHandler):
 
             stripped = self._stream_buffer.strip()
 
+            # Case 0: Buffer starts with "{" but we haven't seen enough to
+            # know if it's an LLM JSON block (e.g., {"answer":...}).  Hold
+            # the buffer for a few more chunks so Cases 1/1b can detect the
+            # pattern.  Without this, a lone "{" token is emitted as text
+            # before "answer"/"tool" appears, breaking downstream filters.
+            if (
+                stripped.startswith("{")
+                and len(stripped) < 30
+                and not any(m in stripped for m in ('"tool"', '"answer"', '"thought"'))
+                and not end_of_stream
+            ):
+                return  # Wait for more tokens
+
             # Case 1: Buffer starts with "{" and has "tool" — pure JSON accumulation
             if stripped.startswith("{") and '"tool"' in stripped:
                 if len(self._stream_buffer) > 2048:
@@ -622,6 +635,47 @@ def _tool_description(tool_name: str) -> str:
         "evaluate_retrieval": "Evaluating document retrieval quality",
     }
     return descriptions.get(tool_name, "")
+
+
+def _clean_answer_json(text: str) -> str:
+    """Strip {"answer": "..."} JSON wrapping from LLM output.
+
+    LLMs sometimes wrap their entire response in a JSON envelope like
+    ``{"answer": "the actual text..."}``.  This function detects that
+    pattern and extracts only the answer content.  It handles both
+    valid JSON (with escaped newlines) and the common case where the
+    JSON string contains literal newlines (making it invalid JSON).
+    """
+    if not text:
+        return text
+    stripped = text.strip()
+    # Quick check: must start with { and contain "answer"
+    if not (stripped.startswith("{") and '"answer"' in stripped and stripped.endswith("}")):
+        return text
+    # Try proper JSON parse first
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict) and "answer" in parsed:
+            return parsed["answer"]
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Fallback: manual extraction for JSON with literal newlines
+    m = re.match(r'^\s*\{\s*"answer"\s*:\s*"', stripped)
+    if m:
+        content_start = m.end()
+        # Walk backwards from end, skipping whitespace + closing } + "
+        end = len(stripped) - 1
+        while end > content_start and stripped[end] in " \t\n\r}":
+            end -= 1
+        if end > content_start and stripped[end] == '"':
+            end -= 1  # skip trailing quote
+        extracted = stripped[content_start : end + 1]
+        # Unescape any JSON escape sequences
+        extracted = extracted.replace("\\n", "\n")
+        extracted = extracted.replace("\\t", "\t")
+        extracted = extracted.replace('\\"', '"')
+        return extracted
+    return text
 
 
 def _fix_double_escaped(text: str) -> str:

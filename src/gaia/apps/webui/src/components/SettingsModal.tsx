@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { X } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
@@ -41,8 +41,23 @@ export function SettingsModal() {
             .finally(() => setLoading(false));
     }, []);
 
-    const clearAll = async () => {
-        if (!confirm('Delete ALL sessions, messages, and documents? This cannot be undone.')) return;
+    // Two-click confirmation for clear-all (replaces window.confirm)
+    const [confirmClear, setConfirmClear] = useState(false);
+    const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        return () => { if (clearTimerRef.current) clearTimeout(clearTimerRef.current); };
+    }, []);
+
+    const clearAll = useCallback(async () => {
+        if (!confirmClear) {
+            setConfirmClear(true);
+            if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
+            clearTimerRef.current = setTimeout(() => setConfirmClear(false), 4000);
+            return;
+        }
+        setConfirmClear(false);
+        if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
         log.system.warn(`Clearing ALL data: ${sessions.length} session(s)`);
         const t = log.system.time();
         let deleted = 0;
@@ -57,7 +72,7 @@ export function SettingsModal() {
         }
         log.system.timed(`Cleared ${deleted}/${sessions.length} session(s)`, t);
         setShowSettings(false);
-    };
+    }, [confirmClear, sessions, removeSession, setShowSettings]);
 
     const version = __APP_VERSION__;
 
@@ -116,7 +131,9 @@ export function SettingsModal() {
                         <div className="danger-divider" />
                         <div className="setting-actions">
                             <p className="danger-warning">This will permanently delete all sessions, messages, and documents.</p>
-                            <button className="btn-danger" onClick={clearAll}>Clear All Data</button>
+                            <button className="btn-danger" onClick={clearAll}>
+                                {confirmClear ? 'Click again to confirm' : 'Clear All Data'}
+                            </button>
                         </div>
                     </section>
                 </div>

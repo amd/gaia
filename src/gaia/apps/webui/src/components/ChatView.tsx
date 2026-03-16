@@ -182,20 +182,19 @@ export function ChatView({ sessionId }: ChatViewProps) {
             .catch(() => {});
     }, [setDocuments]);
 
-    // Listen for external send-prompt events (from WelcomeScreen suggestions)
+    // Consume pending prompt from store (set by WelcomeScreen suggestions).
+    // This replaces the fragile event-dispatch-with-setTimeout pattern —
+    // the prompt is stored in Zustand before the session is created, so
+    // ChatView reliably picks it up on mount regardless of render timing.
     useEffect(() => {
-        const handler = (e: Event) => {
-            const prompt = (e as CustomEvent).detail?.prompt;
-            if (prompt) {
-                log.chat.info(`Received gaia:send-prompt event: "${prompt.slice(0, 60)}"`);
-                setInput(prompt);
-                // Use ref to always invoke the latest sendMessage (avoids
-                // stale closure since this effect only re-runs on sessionId change).
-                setTimeout(() => sendMessageRef.current(prompt), 50);
-            }
-        };
-        window.addEventListener('gaia:send-prompt', handler);
-        return () => window.removeEventListener('gaia:send-prompt', handler);
+        const pending = useChatStore.getState().pendingPrompt;
+        if (pending) {
+            log.chat.info(`Consuming pending prompt: "${pending.slice(0, 60)}"`);
+            useChatStore.getState().setPendingPrompt(null);
+            setInput(pending);
+            // Defer send to next tick so React finishes mount
+            requestAnimationFrame(() => sendMessageRef.current(pending));
+        }
     }, [sessionId]);
 
     // Auto-scroll (throttled) — scrolls at most once per 100ms while

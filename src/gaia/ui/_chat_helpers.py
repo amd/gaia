@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .database import ChatDatabase
 from .models import ChatRequest
-from .sse_handler import _fix_double_escaped
+from .sse_handler import _clean_answer_json, _fix_double_escaped
 
 logger = logging.getLogger(__name__)
 
@@ -560,8 +560,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             # Send as answer event since it wasn't streamed
             yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
 
-        # Clean double-escaped newlines before DB storage
+        # Clean LLM output artifacts before DB storage
         if full_response:
+            full_response = _clean_answer_json(full_response)
             full_response = _fix_double_escaped(full_response)
 
         # Save complete response to DB (including captured agent steps)

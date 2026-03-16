@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import React, { useCallback, useRef, useState, useEffect } from 'react';
+import React, { useCallback, useRef, useState, useEffect, useMemo } from 'react';
 import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -101,8 +101,26 @@ function cleanLLMJsonBlocks(text: string): string {
             }
             // thought-only and tool/tool_args blocks are dropped silently
         } catch {
-            // Not valid JSON — keep original text
-            result += block;
+            // JSON.parse failed — common when LLMs emit {"answer": "..."}
+            // with literal newlines inside the string value (invalid JSON).
+            // Try to manually extract the answer content.
+            const answerMatch = block.match(/^\s*\{\s*"answer"\s*:\s*"/);
+            if (answerMatch) {
+                // Extract everything between the opening "answer": " and
+                // the trailing "} (with possible whitespace variations).
+                const contentStart = answerMatch[0].length;
+                // Find the closing "} — strip trailing quote + brace
+                let contentEnd = block.length - 1;
+                // Walk backwards past whitespace and closing brace/quote
+                while (contentEnd > contentStart && /[\s}]/.test(block[contentEnd])) contentEnd--;
+                if (block[contentEnd] === '"') contentEnd--; // skip closing quote
+                const extracted = block.slice(contentStart, contentEnd + 1);
+                // Unescape any JSON-escaped sequences that survived
+                result += extracted.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"');
+            } else {
+                // Not an answer block — keep original text
+                result += block;
+            }
         }
         i = j + 1;
     }
@@ -166,6 +184,12 @@ function formatMsgTime(iso: string): string {
 
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, onDelete, onResend }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
+    // Memoize the expensive LLM content cleaning (brace-depth parser) so it
+    // doesn't re-run on every render — only when message content changes.
+    const cleanedContent = useMemo(
+        () => cleanToolCallContent(message.content),
+        [message.content],
+    );
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -180,9 +204,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     }, []);
 
     const handleCopy = useCallback(() => {
-        navigator.clipboard.writeText(message.content).catch(() => {
-            // Fallback: clipboard API may be unavailable in non-secure contexts
-        });
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(message.content).catch(() => {});
+        } else {
+            // Fallback for non-HTTPS contexts (common for localhost)
+            const textarea = document.createElement('textarea');
+            textarea.value = message.content;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+        }
         setCopied(true);
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
         copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
@@ -272,8 +306,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             <span>Something went wrong</span>
                         </div>
                     )}
-                    <RenderedContent content={cleanToolCallContent(message.content)} />
-                    {isStreaming && <span className="cursor" />}
+                    <RenderedContent content={cleanedContent} showCursor={isStreaming} />
                 </div>
             </div>
         </div>
@@ -387,8 +420,9 @@ function linkifyChildren(children: React.ReactNode): React.ReactNode {
     );
 }
 
-function RenderedContent({ content }: { content: string }) {
-    if (!content) return null;
+function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
+    if (!content && !showCursor) return null;
+    if (!content && showCursor) return <span className="cursor" />;
 
     return (
         <div className="md-content">
@@ -484,6 +518,7 @@ function RenderedContent({ content }: { content: string }) {
             >
                 {content}
             </ReactMarkdown>
+            {showCursor && <span className="cursor" />}
         </div>
     );
 }

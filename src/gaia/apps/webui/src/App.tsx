@@ -176,17 +176,14 @@ function App() {
         }
     }, [addSession, setCurrentSession, setMessages, setSidebarOpen, checkSystemStatus]);
 
-    // Create task with a pre-filled prompt
+    // Create task with a pre-filled prompt — stores the prompt in Zustand
+    // so ChatView can consume it reliably on mount (no timing race).
+    const { setPendingPrompt } = useChatStore();
     const handleNewTaskWithPrompt = useCallback(async (prompt: string) => {
         log.chat.info(`New task with prompt: "${prompt.slice(0, 60)}..."`);
+        setPendingPrompt(prompt);
         await handleNewTask();
-        // Defer the event dispatch to allow React to re-render and mount
-        // ChatView (which registers the event listener in useEffect).
-        // Without this delay, the event fires before ChatView exists.
-        setTimeout(() => {
-            window.dispatchEvent(new CustomEvent('gaia:send-prompt', { detail: { prompt } }));
-        }, 100);
-    }, [handleNewTask]);
+    }, [handleNewTask, setPendingPrompt]);
 
     // Mobile gateway toggle
     const handleMobileToggle = useCallback(async () => {
@@ -243,7 +240,15 @@ function App() {
         if (showSettings) log.ui.info('Settings modal opened');
     }, [showSettings]);
 
-    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+    // Reactive mobile detection — updates on resize
+    const [isMobile, setIsMobile] = useState(
+        typeof window !== 'undefined' && window.innerWidth <= 768
+    );
+    useEffect(() => {
+        const handleResize = () => setIsMobile(window.innerWidth <= 768);
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
 
     return (
         <div className="app">

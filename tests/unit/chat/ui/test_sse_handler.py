@@ -936,6 +936,99 @@ class TestPrintStreamingText:
         assert len(events3) == 0
         assert handler._stream_buffer == ""
 
+    def test_lone_brace_buffered_until_pattern_detected(self, handler):
+        """A lone '{' should be buffered (Case 0) until a marker appears."""
+        handler.print_streaming_text("{")
+        events = _drain(handler)
+        # Should NOT be emitted yet — waiting for more tokens
+        assert len(events) == 0
+        assert handler._stream_buffer == "{"
+
+    def test_answer_json_token_by_token_filtered(self, handler):
+        """Token-by-token {"answer": "..."} should be filtered, not emitted."""
+        handler.print_streaming_text("{")
+        handler.print_streaming_text('"answer": "Hello world"}')
+        events = _drain(handler)
+        # The answer JSON should be filtered entirely
+        assert len(events) == 0
+        assert handler._stream_buffer == ""
+
+    def test_brace_followed_by_non_json_emits(self, handler):
+        """A '{' followed by normal text (no markers) should be flushed."""
+        handler.print_streaming_text("{")
+        events1 = _drain(handler)
+        assert len(events1) == 0  # Still buffered
+
+        # More text that makes buffer > 30 chars and isn't JSON-like
+        handler.print_streaming_text(" this is not JSON, it's just curly-braced text")
+        events2 = _drain(handler)
+        # Now it should emit since it's clearly not LLM JSON
+        assert len(events2) == 1
+        assert "{" in events2[0]["content"]
+
+
+# ===========================================================================
+# _clean_answer_json
+# ===========================================================================
+
+
+class TestCleanAnswerJson:
+    """Tests for the _clean_answer_json helper function."""
+
+    def test_valid_json_answer_extracted(self):
+        from gaia.ui.sse_handler import _clean_answer_json
+
+        text = '{"answer": "Hello, world!"}'
+        assert _clean_answer_json(text) == "Hello, world!"
+
+    def test_json_with_escaped_newlines(self):
+        from gaia.ui.sse_handler import _clean_answer_json
+
+        text = '{"answer": "Line 1\\nLine 2\\nLine 3"}'
+        result = _clean_answer_json(text)
+        assert result == "Line 1\nLine 2\nLine 3"
+
+    def test_json_with_literal_newlines(self):
+        """LLMs often emit literal newlines inside JSON strings (invalid JSON)."""
+        from gaia.ui.sse_handler import _clean_answer_json
+
+        text = '{"answer": "Document Summary\n\nI\'d be happy to help.\n\n1. First\n2. Second"}'
+        result = _clean_answer_json(text)
+        assert "Document Summary" in result
+        assert "I'd be happy to help." in result
+        assert "1. First" in result
+
+    def test_non_answer_json_returned_unchanged(self):
+        from gaia.ui.sse_handler import _clean_answer_json
+
+        text = '{"thought": "I should search"}'
+        assert _clean_answer_json(text) == text
+
+    def test_plain_text_returned_unchanged(self):
+        from gaia.ui.sse_handler import _clean_answer_json
+
+        text = "Just a normal response"
+        assert _clean_answer_json(text) == text
+
+    def test_empty_string(self):
+        from gaia.ui.sse_handler import _clean_answer_json
+
+        assert _clean_answer_json("") == ""
+
+    def test_none_input(self):
+        from gaia.ui.sse_handler import _clean_answer_json
+
+        assert _clean_answer_json(None) is None
+
+    def test_answer_with_markdown(self):
+        """Verify markdown content is preserved."""
+        from gaia.ui.sse_handler import _clean_answer_json
+
+        text = '{"answer": "# Title\n\n**Bold text** and *italic*\n\n1. First\n2. Second"}'
+        result = _clean_answer_json(text)
+        assert "# Title" in result
+        assert "**Bold text**" in result
+
 
 # ===========================================================================
 # SSEOutputHandler.signal_done

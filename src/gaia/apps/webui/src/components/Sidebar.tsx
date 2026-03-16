@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Plus, Search, FileText, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, FolderSearch } from 'lucide-react';
+import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -67,8 +67,8 @@ function SessionItem({ session: s, isActive, isPendingDelete, onSelect, onKeyDow
 
 export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
     const {
-        sessions, currentSessionId, setCurrentSession, removeSession,
-        setMessages, theme, toggleTheme, setShowDocLibrary, setShowFileBrowser, setShowSettings,
+        sessions, currentSessionId, setCurrentSession, removeSession, addSession,
+        setMessages, theme, toggleTheme, setShowSettings,
         sidebarOpen, setSidebarOpen, setLoadingMessages,
         sidebarCollapsed, toggleSidebarCollapsed,
         sidebarWidth, setSidebarWidth,
@@ -77,6 +77,8 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
     const [search, setSearch] = useState('');
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
     const [isResizing, setIsResizing] = useState(false);
+    // Undo-delete: temporarily preserve the deleted session for restoration
+    const [deletedSession, setDeletedSession] = useState<{ session: Session; timer: ReturnType<typeof setTimeout> } | null>(null);
     const sidebarRef = useRef<HTMLElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -157,17 +159,24 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
     const handleDelete = useCallback(async (e: React.MouseEvent | React.KeyboardEvent, id: string) => {
         e.stopPropagation();
         e.preventDefault();
-        const title = sessions.find((s) => s.id === id)?.title || '?';
+        const session = sessions.find((s) => s.id === id);
+        const title = session?.title || '?';
         // If already pending confirm for this id, execute the delete
         if (pendingDeleteId === id) {
             log.chat.info(`Deleting session: "${title}" (${id})`);
             // Remove from UI immediately (optimistic)
             removeSession(id);
             setPendingDeleteId(null);
-            // Best-effort backend delete
-            api.deleteSession(id)
-                .then(() => log.chat.info(`Session deleted from backend: "${title}"`))
-                .catch((err) => log.chat.warn(`Backend delete failed for "${title}" (may not be running)`, err));
+
+            // Show undo toast — delay the actual backend delete
+            if (deletedSession?.timer) clearTimeout(deletedSession.timer);
+            const timer = setTimeout(() => {
+                api.deleteSession(id)
+                    .then(() => log.chat.info(`Session deleted from backend: "${title}"`))
+                    .catch((err) => log.chat.warn(`Backend delete failed for "${title}"`, err));
+                setDeletedSession(null);
+            }, 5000);
+            if (session) setDeletedSession({ session, timer });
             return;
         }
         // First click: request confirmation
@@ -176,7 +185,15 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
         // Auto-cancel after 3s
         if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
         deleteTimerRef.current = setTimeout(() => setPendingDeleteId((prev) => (prev === id ? null : prev)), 3000);
-    }, [pendingDeleteId, sessions, removeSession]);
+    }, [pendingDeleteId, sessions, removeSession, deletedSession]);
+
+    const handleUndoDelete = useCallback(() => {
+        if (!deletedSession) return;
+        clearTimeout(deletedSession.timer);
+        addSession(deletedSession.session);
+        log.chat.info(`Undo delete: restored "${deletedSession.session.title}"`);
+        setDeletedSession(null);
+    }, [deletedSession, addSession]);
 
     // Cancel pending delete on outside click
     useEffect(() => {
@@ -361,12 +378,6 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                             <Smartphone size={17} />
                         </button>
                     )}
-                    <button className="btn-icon" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Document Library">
-                        <FileText size={17} />
-                    </button>
-                    <button className="btn-icon" onClick={() => setShowFileBrowser(true)} title="Browse Files" aria-label="Browse Files">
-                        <FolderSearch size={17} />
-                    </button>
                     <button className="btn-icon" onClick={() => setShowSettings(true)} title="Settings" aria-label="Settings">
                         <Settings size={17} />
                     </button>
@@ -384,6 +395,14 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                     title="Drag to resize sidebar"
                     aria-hidden="true"
                 />
+            )}
+
+            {/* Undo-delete toast */}
+            {deletedSession && (
+                <div className="toast toast-undo" role="status">
+                    Deleted &ldquo;{deletedSession.session.title}&rdquo;
+                    <span className="toast-action" onClick={handleUndoDelete}>Undo</span>
+                </div>
             )}
         </aside>
     );

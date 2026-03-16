@@ -142,6 +142,7 @@ python -m gaia.mcp.mcp_bridge
 ### Setup
 ```bash
 uv venv && uv pip install -e ".[dev]"
+uv pip install -e ".[ui]"    # For Agent UI development
 ```
 
 ### Linting (run before commits)
@@ -163,7 +164,18 @@ python -m pytest tests/ --hybrid   # Cloud + local testing
 lemonade-server serve              # Start LLM backend
 gaia llm "Hello"                   # Test LLM
 gaia chat                          # Interactive chat
+gaia chat --ui                     # Agent UI (browser-based)
 gaia-code                          # Code agent
+```
+
+### Agent UI Development
+```bash
+# Build frontend (required before gaia chat --ui)
+cd src/gaia/apps/webui && npm install && npm run build
+
+# Development with hot reload (two terminals)
+uv run python -m gaia.ui.server --debug   # Terminal 1: backend (port 4200)
+cd src/gaia/apps/webui && npm run dev      # Terminal 2: frontend (port 5173)
 ```
 
 ## Project Structure
@@ -179,27 +191,37 @@ gaia/
 │   │   ├── jira/       # JiraAgent for issue management
 │   │   ├── docker/     # DockerAgent for containerization
 │   │   ├── emr/        # MedicalIntakeAgent for healthcare
-│   │   └── routing/    # RoutingAgent for intelligent agent selection
+│   │   ├── routing/    # RoutingAgent for intelligent agent selection
+│   │   └── sd/         # Stable Diffusion image generation agent
 │   ├── api/            # OpenAI-compatible REST API server
-│   ├── apps/           # Standalone applications (chat/webui, jira, llm, summarize, docker)
+│   ├── apps/           # Standalone applications
+│   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
+│   │   ├── jira/       # Jira standalone app
+│   │   ├── llm/        # LLM standalone app
+│   │   ├── summarize/  # Document summarization app
+│   │   └── docker/     # Docker standalone app
 │   ├── audio/          # Audio processing (Whisper ASR, Kokoro TTS)
-│   ├── chat/           # Chat SDK and Agent UI backend (ui/server.py, ui/database.py, ui/models.py)
+│   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
 │   ├── database/       # DatabaseMixin and DatabaseAgent
 │   ├── electron/       # Electron app integration
 │   ├── eval/           # Evaluation framework
+│   ├── installer/      # Install/init commands (gaia init, lemonade installer)
 │   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI)
 │   ├── mcp/            # Model Context Protocol servers/clients
 │   ├── rag/            # Document retrieval (RAG)
 │   ├── shell/          # Shell integration
 │   ├── talk/           # Voice interaction SDK
 │   ├── testing/        # Test utilities and fixtures
+│   ├── ui/             # Agent UI backend (FastAPI server, routers, SSE, database)
 │   ├── utils/          # Utility modules (FileWatcher, parsing)
 │   └── cli.py          # Main CLI entry point
 ├── tests/              # Test suite
 │   ├── unit/           # Unit tests
 │   ├── mcp/            # MCP integration tests
 │   ├── integration/    # Cross-system integration tests
+│   ├── stress/         # Stress/load tests
 │   └── electron/       # Electron app tests (Jest)
+├── scripts/            # Build, install, and launch scripts
 ├── docs/               # Documentation (MDX format)
 ├── workshop/           # Tutorial materials
 └── .github/workflows/  # CI/CD pipelines
@@ -223,7 +245,9 @@ gaia/
 - **API Server** (`src/gaia/api/`): OpenAI-compatible REST API for agent access
 - **MCP Integration** (`src/gaia/mcp/`): Model Context Protocol for external integrations
 - **RAG System** (`src/gaia/rag/`): Document Q&A with PDF support - see [`docs/guides/chat.mdx`](docs/guides/chat.mdx)
-- **Agent UI** (`src/gaia/ui/`): FastAPI backend for desktop chat app - see [`docs/guides/agent-ui.mdx`](docs/guides/agent-ui.mdx)
+- **Agent SDK** (`src/gaia/chat/`): AgentSDK class (formerly ChatSDK) for programmatic chat - see [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx)
+- **Agent UI Backend** (`src/gaia/ui/`): FastAPI server with modular routers (chat, documents, files, sessions, system, tunnel), SSE streaming, database - see [`docs/guides/agent-ui.mdx`](docs/guides/agent-ui.mdx)
+- **Agent UI Frontend** (`src/gaia/apps/webui/`): React/TypeScript/Vite desktop app with Electron shell - see [`docs/sdk/sdks/agent-ui.mdx`](docs/sdk/sdks/agent-ui.mdx)
 - **Evaluation** (`src/gaia/eval/`): Batch experiments and ground truth - see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)
 
 ### Agent Implementations
@@ -237,6 +261,7 @@ gaia/
 | **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3-Coder-30B |
 | **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing | Qwen3-VL-4B (VLM) |
 | **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3-Coder-30B |
+| **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
 
 ### Default Models
 - General tasks: `Qwen3-0.6B-GGUF`
@@ -246,11 +271,14 @@ gaia/
 ## CLI Commands
 
 Primary commands available via `gaia`:
-- `gaia chat` - Interactive chat with RAG (`--ui` to launch desktop web UI)
+- `gaia chat` - Interactive chat with RAG
+- `gaia chat --ui` - Launch Agent UI (browser-based, requires `[ui]` extras)
+- `gaia chat --ui --ui-port 8080` - Agent UI on custom port
 - `gaia talk` - Voice interaction
 - `gaia prompt` - Single prompt to LLM
 - `gaia llm` - Simple LLM queries
 - `gaia blender` - Blender 3D agent
+- `gaia sd` - Stable Diffusion image generation
 - `gaia jira` - Jira integration
 - `gaia docker` - Docker management
 - `gaia api` - OpenAI-compatible API server
@@ -258,6 +286,7 @@ Primary commands available via `gaia`:
 - `gaia eval` - Evaluation framework
 - `gaia summarize` - Document summarization
 - `gaia cache` - Cache management (status, clear)
+- `gaia init` - Setup Lemonade Server and download models
 
 ## Documentation Index
 
@@ -265,7 +294,7 @@ All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
 
 **User Guides:**
 - [`docs/guides/chat.mdx`](docs/guides/chat.mdx) - Chat with RAG
-- [`docs/guides/agent-ui.mdx`](docs/guides/agent-ui.mdx) - Chat Desktop UI
+- [`docs/guides/agent-ui.mdx`](docs/guides/agent-ui.mdx) - Agent UI (desktop chat)
 - [`docs/guides/talk.mdx`](docs/guides/talk.mdx) - Voice interaction
 - [`docs/guides/code.mdx`](docs/guides/code.mdx) - Code generation
 - [`docs/guides/blender.mdx`](docs/guides/blender.mdx) - 3D automation
@@ -278,7 +307,7 @@ All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
 - [`docs/sdk/core/agent-system.mdx`](docs/sdk/core/agent-system.mdx) - Agent framework
 - [`docs/sdk/core/tools.mdx`](docs/sdk/core/tools.mdx) - Tool decorator
 - [`docs/sdk/core/console.mdx`](docs/sdk/core/console.mdx) - Console output
-- [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx) - Chat SDK
+- [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx) - Agent SDK (formerly Chat SDK)
 - [`docs/sdk/sdks/agent-ui.mdx`](docs/sdk/sdks/agent-ui.mdx) - Agent UI SDK
 - [`docs/sdk/sdks/rag.mdx`](docs/sdk/sdks/rag.mdx) - RAG SDK
 - [`docs/sdk/sdks/llm.mdx`](docs/sdk/sdks/llm.mdx) - LLM clients
@@ -335,8 +364,10 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
    - Audio processing: `src/gaia/audio/` (whisper_asr.py, kokoro_tts.py)
    - RAG system: `src/gaia/rag/` (sdk.py, pdf_utils.py)
    - Evaluation: `src/gaia/eval/` (eval.py, batch_experiment.py)
-   - Applications: `src/gaia/apps/` (jira/, llm/, summarize/, docker/)
-   - Chat SDK: `src/gaia/chat/`
+   - Applications: `src/gaia/apps/` (webui/, jira/, llm/, summarize/, docker/)
+   - Agent SDK: `src/gaia/chat/` (AgentSDK class, formerly ChatSDK)
+   - Agent UI backend: `src/gaia/ui/` (FastAPI server, routers, SSE handler)
+   - Agent UI frontend: `src/gaia/apps/webui/` (React/TypeScript/Vite/Electron)
    - API Server: `src/gaia/api/`
 
 4. **Link to relevant documentation:**
@@ -437,7 +468,7 @@ This looks like a configuration issue. Try checking your configuration and makin
 ```
 Interesting idea! GAIA doesn't currently have built-in Slack integration, but you could build this using:
 
-1. The Chat SDK (docs/sdk/sdks/chat.mdx) for message handling
+1. The Agent SDK (docs/sdk/sdks/chat.mdx) for message handling
 2. The MCP protocol (docs/sdk/infrastructure/mcp.mdx) for Slack connectivity
 3. Similar pattern to our Jira agent (src/gaia/agents/jira/agent.py)
 
@@ -462,7 +493,7 @@ Looking at your code, the issue is on line 45 where you're using subprocess.call
 
 ## Claude Agents
 
-Specialized agents are available in `.claude/agents/` for specific tasks (24 agents total):
+Specialized agents are available in `.claude/agents/` for specific tasks (23 agents total):
 
 ### Development Agents
 - **gaia-agent-builder** (opus) - Creating new GAIA agents, tool registration, state management
