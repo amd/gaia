@@ -144,12 +144,13 @@ class AgentRegistry:
                 config = yaml.safe_load(f)
 
             if not config:
-                logger.warning(f"YAML agent file {file_path} is empty or invalid")
+                logger.warning(f"YAML agent file {file_path} is empty")
                 return
 
             model_id = config.get("id") or file_path.stem
             self._register_custom_agent(model_id, config)
             logger.info(f"Loaded custom YAML agent: {model_id}")
+            logger.debug(f"YAML agent {model_id} config: {config}")  # Debug log
         except yaml.YAMLError as e:
             logger.error(f"Failed to parse YAML agent file {file_path}: {e}")
         except Exception as e:

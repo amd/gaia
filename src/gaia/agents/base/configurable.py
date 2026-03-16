@@ -77,6 +77,40 @@ class ConfigurableAgent(Agent):
         # But if we just want to restrict the LLM's view of tools, we can do that in _format_tools_for_prompt.
         pass
 
+    def _sanitize_persona_value(self, value: str) -> str:
+        """
+        Sanitize persona field values to prevent prompt injection.
+
+        Removes patterns that could be used to override system instructions.
+
+        Args:
+            value: The persona field value to sanitize
+
+        Returns:
+            Sanitized value with injection patterns removed
+        """
+        if not isinstance(value, str):
+            return str(value) if value else ""
+
+        value = value.strip()
+
+        # Remove potential prompt injection patterns
+        injection_patterns = [
+            "IGNORE ABOVE",
+            "IGNORE PREVIOUS",
+            "SYSTEM:",
+            "SYSTEM INSTRUCTION",
+            "YOU ARE NOW",
+            "NEW INSTRUCTION",
+            "### SYSTEM",
+            "<<<SYSTEM>>>",
+        ]
+
+        for pattern in injection_patterns:
+            value = value.replace(pattern, "")
+
+        return value
+
     def _get_system_prompt(self) -> str:
         """
         Return the pre-configured system prompt with full persona context injection.
@@ -88,42 +122,57 @@ class ConfigurableAgent(Agent):
         Returns:
             Complete system prompt with all context injected
         """
+        logger.debug(f"Building system prompt for agent {self.agent_name}")
+
         parts = [self.base_system_prompt]
 
         # Build persona section - inject ALL persona fields into context
         persona_sections = []
 
-        # Handle nested persona dict
+        # Handle nested persona dict - with sanitization
         if self.persona:
             if self.persona.get('style'):
-                persona_sections.append(f"**Style:** {self.persona['style']}")
+                value = self._sanitize_persona_value(self.persona['style'])
+                persona_sections.append(f"**Style:** {value}")
             if self.persona.get('focus'):
-                persona_sections.append(f"**Focus:** {self.persona['focus']}")
+                value = self._sanitize_persona_value(self.persona['focus'])
+                persona_sections.append(f"**Focus:** {value}")
             if self.persona.get('background'):
-                persona_sections.append(f"**Background:** {self.persona['background']}")
+                value = self._sanitize_persona_value(self.persona['background'])
+                persona_sections.append(f"**Background:** {value}")
             if self.persona.get('expertise'):
                 expertise = self.persona['expertise']
                 if isinstance(expertise, list):
-                    expertise = ', '.join(expertise)
+                    expertise = ', '.join(str(e) for e in expertise)
                 persona_sections.append(f"**Expertise:** {expertise}")
             if self.persona.get('voice_characteristics'):
-                persona_sections.append(f"**Voice:** {self.persona['voice_characteristics']}")
+                value = self._sanitize_persona_value(self.persona['voice_characteristics'])
+                persona_sections.append(f"**Voice:** {value}")
             if self.persona.get('communication_style'):
-                persona_sections.append(f"**Communication:** {self.persona['communication_style']}")
+                value = self._sanitize_persona_value(self.persona['communication_style'])
+                persona_sections.append(f"**Communication:** {value}")
 
         # Handle top-level persona fields (from YAML direct keys)
         if self.voice_characteristics:
-            persona_sections.append(f"**Voice Characteristics:** {self.voice_characteristics}")
+            value = self._sanitize_persona_value(self.voice_characteristics)
+            persona_sections.append(f"**Voice Characteristics:** {value}")
         if self.background:
-            persona_sections.append(f"**Background:** {self.background}")
+            value = self._sanitize_persona_value(self.background)
+            persona_sections.append(f"**Background:** {value}")
         if self.expertise:
-            persona_sections.append(f"**Expertise:** {', '.join(self.expertise)}")
+            # Sanitize each item in the list
+            sanitized = [self._sanitize_persona_value(e) for e in self.expertise]
+            persona_sections.append(f"**Expertise:** {', '.join(sanitized)}")
         if self.communication_style:
-            persona_sections.append(f"**Communication Style:** {self.communication_style}")
+            value = self._sanitize_persona_value(self.communication_style)
+            persona_sections.append(f"**Communication Style:** {value}")
 
         # Add persona section if we have any persona fields
         if persona_sections:
             parts.append("\n==== AGENT PERSONA ====\n" + "\n".join(persona_sections))
+            logger.debug(f"Injected {len(persona_sections)} persona sections for {self.agent_name}")
+        else:
+            logger.debug(f"No persona fields for {self.agent_name}, using base prompt only")
 
         return "\n\n".join(parts)
 
