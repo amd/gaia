@@ -14,12 +14,15 @@ on:
     branches: [ main ]
     paths:
       - 'cpp/**'
+      - '.github/workflows/build_cpp.yml'
+      - '.github/workflows/benchmark_cpp.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'cpp/**'
       - '.github/workflows/build_cpp.yml'
+      - '.github/workflows/benchmark_cpp.yml'
   merge_group:
   workflow_dispatch:
 
@@ -330,11 +333,18 @@ jobs:
             lemonade-server-stderr.log
             lemonade-server.log
 
+  # Performance benchmarks (runs after build passes)
+  benchmark:
+    name: C++ Benchmarks
+    needs: [build-and-test]
+    if: needs.build-and-test.result == 'success'
+    uses: ./.github/workflows/benchmark_cpp.yml
+
   # Summary job
   cpp-build-summary:
     name: C++ Build Summary
     runs-on: ubuntu-latest
-    needs: [build-and-test, install-test, shared-lib-test, integration-test]
+    needs: [build-and-test, install-test, shared-lib-test, integration-test, benchmark]
     if: >-
       ${{ always() && !cancelled() &&
           needs.build-and-test.result != 'cancelled' }}
@@ -346,6 +356,7 @@ jobs:
           echo "Install Test:      ${{ needs.install-test.result }}"
           echo "Shared Lib Test:   ${{ needs.shared-lib-test.result }}"
           echo "Integration Tests: ${{ needs.integration-test.result }}"
+          echo "Benchmarks:        ${{ needs.benchmark.result }}"
           echo ""
 
           if [[ "${{ needs.build-and-test.result }}" == "skipped" ]]; then
@@ -362,6 +373,10 @@ jobs:
           # runner may lack tools like cmake in PATH.
           if [[ "${{ needs.integration-test.result }}" == "failure" ]]; then
             echo "::warning::Integration tests failed (STX runner infrastructure issue)"
+          fi
+          # Benchmarks are non-blocking (regression alerts are warnings only)
+          if [[ "${{ needs.benchmark.result }}" == "failure" ]]; then
+            echo "::warning::Benchmark regression detected — review cpp-benchmark-* artifacts"
           fi
 
           if [[ "$FAILED" == "0" ]]; then
