@@ -8,10 +8,11 @@ These tools are agent-agnostic and don't depend on specific agent functionality.
 """
 
 import ast
+import fnmatch
 import logging
 import os
 import platform
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -32,12 +33,20 @@ class FileSearchToolsMixin:
         file_list = []
         for i, fpath in enumerate(file_paths, 1):
             p = Path(fpath)
+            name = p.name
+            parent = str(p.parent)
+            # On Linux, Path won't split Windows backslash paths properly.
+            # Fall back to PureWindowsPath when the name still has backslashes.
+            if "\\" in name:
+                wp = PureWindowsPath(fpath)
+                name = wp.name
+                parent = str(wp.parent)
             file_list.append(
                 {
                     "number": i,
-                    "name": p.name,
+                    "name": name,
                     "path": str(fpath),
-                    "directory": str(p.parent),
+                    "directory": parent,
                 }
             )
         return file_list
@@ -102,9 +111,26 @@ class FileSearchToolsMixin:
                 pattern_lower = file_pattern.lower()
                 searched_locations = []
 
+                # Detect if the pattern is a glob (contains * or ?)
+                is_glob = "*" in file_pattern or "?" in file_pattern
+
+                # For multi-word queries, split into individual words
+                # so "operations manual" matches "Operations-Manual" in filenames
+                query_words = pattern_lower.split() if not is_glob else []
+
                 def matches_pattern_and_type(file_path: Path) -> bool:
                     """Check if file matches pattern and is a document type."""
-                    name_match = pattern_lower in file_path.name.lower()
+                    name_lower = file_path.name.lower()
+                    if is_glob:
+                        # Use fnmatch for glob patterns like *.pdf, report*.docx
+                        name_match = fnmatch.fnmatch(name_lower, pattern_lower)
+                    elif len(query_words) > 1:
+                        # Multi-word query: all words must appear in filename
+                        # (handles hyphens, underscores, camelCase separators)
+                        name_match = all(w in name_lower for w in query_words)
+                    else:
+                        # Single word: simple substring match
+                        name_match = pattern_lower in name_lower
                     type_match = file_path.suffix.lower() in doc_extensions
                     return name_match and type_match
 
@@ -139,7 +165,9 @@ class FileSearchToolsMixin:
 
                     search_recursive(location, 0)
 
-                # Phase 0: Search CURRENT WORKING DIRECTORY first and thoroughly
+                # Phase 0+1: Search CWD AND common locations together
+                # (always search both before returning, so Documents/Downloads
+                # files aren't missed just because CWD had some matches)
                 cwd = Path.cwd()
                 home = Path.home()
 
@@ -157,24 +185,7 @@ class FileSearchToolsMixin:
                 # Search current directory thoroughly (unlimited depth)
                 search_location(cwd, max_depth=999)
 
-                # If found in CWD, return immediately
-                if matching_files:
-                    if hasattr(self, "console") and hasattr(
-                        self.console, "stop_progress"
-                    ):
-                        self.console.stop_progress()
-
-                    # Add helpful context about where it was found
-                    return {
-                        "status": "success",
-                        "files": matching_files[:10],
-                        "file_list": self._format_file_list(matching_files[:10]),
-                        "count": len(matching_files),
-                        "search_context": "current_directory",
-                        "display_message": f"✓ Found {len(matching_files)} file(s) in current directory ({cwd.name})",
-                    }
-
-                # Phase 1: Search common locations
+                # Always also search common locations (Documents, Downloads, etc.)
                 if hasattr(self, "console") and hasattr(self.console, "start_progress"):
                     self.console.start_progress(
                         "🔍 Searching common folders (Documents, Downloads, Desktop)..."
@@ -192,11 +203,29 @@ class FileSearchToolsMixin:
                 ]
 
                 for location in common_locations:
-                    if len(matching_files) >= 10:
+                    if len(matching_files) >= 20:
                         break
+                    # Skip if already searched as part of CWD
+                    try:
+                        if location.resolve() == cwd.resolve() or str(
+                            location.resolve()
+                        ).startswith(str(cwd.resolve())):
+                            continue
+                    except (OSError, ValueError):
+                        pass
                     search_location(location, max_depth=5)
 
-                # If found in common locations, return
+                # Deduplicate results (CWD and common locations may overlap)
+                unique_files = []
+                unique_set = set()
+                for f in matching_files:
+                    resolved = str(Path(f).resolve())
+                    if resolved not in unique_set:
+                        unique_set.add(resolved)
+                        unique_files.append(f)
+                matching_files = unique_files
+
+                # If found in CWD + common locations, return
                 if matching_files:
                     if hasattr(self, "console") and hasattr(
                         self.console, "stop_progress"
@@ -210,7 +239,7 @@ class FileSearchToolsMixin:
                         "count": len(matching_files),
                         "total_locations_searched": len(searched_locations),
                         "search_context": "common_locations",
-                        "display_message": f"✓ Found {len(matching_files)} file(s) in common locations",
+                        "display_message": f"✓ Found {len(matching_files)} file(s)",
                     }
 
                 # Phase 2: Deep drive search if still not found
@@ -416,6 +445,17 @@ class FileSearchToolsMixin:
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
+                # Guard against reading very large files into memory
+                file_size = os.path.getsize(file_path)
+                if file_size > 10_000_000:  # 10 MB
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"File too large ({file_size:,} bytes). "
+                            "Use search_file_content for large files."
+                        ),
+                    }
+
                 # Read file content
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
@@ -550,8 +590,6 @@ class FileSearchToolsMixin:
             Searches actual file contents on disk, not RAG indexed documents.
             """
             try:
-                import fnmatch
-
                 directory = Path(directory).resolve()
 
                 if not directory.exists():
@@ -662,7 +700,7 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
             name="write_file",
-            description="Write content to any file. Creates parent directories if needed.",
+            description="Write content to any file with security guardrails. Creates parent directories if needed. Validates path access, blocks writes to system directories and sensitive files.",
             parameters={
                 "file_path": {
                     "type": "str",
@@ -685,31 +723,248 @@ class FileSearchToolsMixin:
             file_path: str, content: str, create_dirs: bool = True
         ) -> Dict[str, Any]:
             """
-            Write content to a file.
+            Write content to a file with full security guardrails.
 
-            Generic file writer for any file type.
+            Security checks performed:
+            1. Path allowlist validation (PathValidator)
+            2. Blocked directory enforcement (system dirs, .ssh, etc.)
+            3. Sensitive file protection (.env, credentials, keys)
+            4. Content size limit (10 MB max)
+            5. Overwrite confirmation for existing files
+            6. Backup creation before overwrite
+            7. Audit logging of all write operations
             """
             try:
-                file_path = Path(file_path)
+                resolved_path = Path(file_path).resolve()
+                content_size = len(content.encode("utf-8"))
+
+                # Get the PathValidator from the agent (if available)
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is None:
+                    path_validator = getattr(self, "_path_validator", None)
+
+                backup_path = None
+
+                if path_validator is not None:
+                    # Full write validation: allowlist + blocklist + size + overwrite
+                    is_allowed, reason = path_validator.validate_write(
+                        str(resolved_path), content_size=content_size
+                    )
+                    if not is_allowed:
+                        path_validator.audit_write(
+                            "write", str(resolved_path), content_size, "denied", reason
+                        )
+                        logger.warning(f"Write denied: {reason}")
+                        return {
+                            "status": "error",
+                            "error": reason,
+                            "operation": "write_file",
+                        }
+
+                    # Create backup of existing file before overwriting
+                    if resolved_path.exists():
+                        backup_path = path_validator.create_backup(str(resolved_path))
+                else:
+                    logger.warning(
+                        "No PathValidator available — write_file proceeding without "
+                        "security checks for: %s",
+                        resolved_path,
+                    )
 
                 # Create parent directories if needed
-                if create_dirs and file_path.parent:
-                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                if create_dirs and resolved_path.parent:
+                    resolved_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Write the file
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(resolved_path, "w", encoding="utf-8") as f:
                     f.write(content)
 
-                return {
+                # Audit the successful write
+                if path_validator is not None:
+                    detail = ""
+                    if backup_path:
+                        detail = f"backup={backup_path}"
+                    path_validator.audit_write(
+                        "write", str(resolved_path), content_size, "success", detail
+                    )
+
+                logger.info(f"File written: {resolved_path} ({content_size} bytes)")
+
+                result = {
                     "status": "success",
-                    "file_path": str(file_path),
-                    "bytes_written": len(content.encode("utf-8")),
+                    "file_path": str(resolved_path),
+                    "bytes_written": content_size,
                     "line_count": len(content.splitlines()),
                 }
+                if backup_path:
+                    result["backup_path"] = backup_path
+                return result
+
             except Exception as e:
                 logger.error(f"Error writing file: {e}")
+                # Audit the failed write
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is None:
+                    path_validator = getattr(self, "_path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {
                     "status": "error",
                     "error": str(e),
                     "operation": "write_file",
+                }
+
+        @tool(
+            atomic=True,
+            name="edit_file",
+            description="Edit a file by replacing specific content. Finds old_content in the file and replaces it with new_content. Creates a backup before editing.",
+            parameters={
+                "file_path": {
+                    "type": "str",
+                    "description": "Path to the file to edit",
+                    "required": True,
+                },
+                "old_content": {
+                    "type": "str",
+                    "description": "Exact content to find and replace in the file",
+                    "required": True,
+                },
+                "new_content": {
+                    "type": "str",
+                    "description": "New content to replace the old content with",
+                    "required": True,
+                },
+            },
+        )
+        def edit_file(
+            file_path: str, old_content: str, new_content: str
+        ) -> Dict[str, Any]:
+            """
+            Edit a file by replacing old content with new content.
+
+            Similar to Claude Code's Edit tool — performs a partial string replacement
+            rather than overwriting the entire file. Includes all security guardrails.
+
+            Security checks performed:
+            1. Path allowlist validation (PathValidator)
+            2. Blocked directory enforcement
+            3. Sensitive file protection
+            4. Backup creation before edit
+            5. Audit logging
+            """
+            try:
+                import difflib
+
+                resolved_path = Path(file_path).resolve()
+
+                # Get the PathValidator
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is None:
+                    path_validator = getattr(self, "_path_validator", None)
+
+                if path_validator is not None:
+                    # Validate write access (skip overwrite prompt since we're editing)
+                    is_allowed, reason = path_validator.validate_write(
+                        str(resolved_path), content_size=0, prompt_user=False
+                    )
+                    # Re-check allowlist with prompting if it failed on allowlist
+                    if not is_allowed and "not in allowed paths" in reason:
+                        if not path_validator.is_path_allowed(
+                            str(resolved_path), prompt_user=True
+                        ):
+                            path_validator.audit_write(
+                                "edit", str(resolved_path), 0, "denied", reason
+                            )
+                            return {
+                                "status": "error",
+                                "error": reason,
+                                "operation": "edit_file",
+                            }
+                    elif not is_allowed:
+                        path_validator.audit_write(
+                            "edit", str(resolved_path), 0, "denied", reason
+                        )
+                        return {
+                            "status": "error",
+                            "error": reason,
+                            "operation": "edit_file",
+                        }
+
+                # File must exist for editing
+                if not resolved_path.exists():
+                    return {
+                        "status": "error",
+                        "error": f"File not found: {resolved_path}",
+                        "operation": "edit_file",
+                    }
+
+                # Read current content
+                current_content = resolved_path.read_text(encoding="utf-8")
+
+                # Check if old_content exists in file
+                if old_content not in current_content:
+                    return {
+                        "status": "error",
+                        "error": f"Content to replace not found in {resolved_path}",
+                        "operation": "edit_file",
+                    }
+
+                # Create backup before editing
+                backup_path = None
+                if path_validator is not None:
+                    backup_path = path_validator.create_backup(str(resolved_path))
+
+                # Replace content (first occurrence only)
+                updated_content = current_content.replace(old_content, new_content, 1)
+
+                # Generate diff for logging/display
+                diff = "\n".join(
+                    difflib.unified_diff(
+                        current_content.splitlines(keepends=True),
+                        updated_content.splitlines(keepends=True),
+                        fromfile=str(resolved_path),
+                        tofile=str(resolved_path),
+                    )
+                )
+
+                # Write updated content
+                resolved_path.write_text(updated_content, encoding="utf-8")
+
+                # Audit the edit
+                edit_size = len(updated_content.encode("utf-8"))
+                if path_validator is not None:
+                    detail = f"replaced {len(old_content)} chars with {len(new_content)} chars"
+                    if backup_path:
+                        detail += f", backup={backup_path}"
+                    path_validator.audit_write(
+                        "edit", str(resolved_path), edit_size, "success", detail
+                    )
+
+                logger.info(
+                    f"File edited: {resolved_path} "
+                    f"(replaced {len(old_content)} -> {len(new_content)} chars)"
+                )
+
+                result = {
+                    "status": "success",
+                    "file_path": str(resolved_path),
+                    "old_size": len(current_content),
+                    "new_size": len(updated_content),
+                    "diff": diff,
+                }
+                if backup_path:
+                    result["backup_path"] = backup_path
+                return result
+
+            except Exception as e:
+                logger.error(f"Error editing file: {e}")
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is None:
+                    path_validator = getattr(self, "_path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "error", str(e))
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    "operation": "edit_file",
                 }

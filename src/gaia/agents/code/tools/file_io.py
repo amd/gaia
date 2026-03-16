@@ -476,7 +476,9 @@ class FileIOToolsMixin:
 
                 # Create parent directories if needed
                 if create_dirs:
-                    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                    dir_name = os.path.dirname(file_path)
+                    if dir_name:
+                        os.makedirs(dir_name, exist_ok=True)
 
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
@@ -501,6 +503,8 @@ class FileIOToolsMixin:
             """Write content to any file (TypeScript, JavaScript, JSON, etc.) without syntax validation.
 
             Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
+            Includes security guardrails: path validation, blocked directory enforcement,
+            sensitive file protection, size limits, backup creation, and audit logging.
 
             Args:
                 file_path: Path where to write the file
@@ -520,6 +524,24 @@ class FileIOToolsMixin:
                     if not path.is_absolute():
                         path = base / path
                 path = path.resolve()
+                content_size = len(content.encode("utf-8"))
+
+                # Security: validate write access
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    is_allowed, reason = path_validator.validate_write(
+                        str(path), content_size=content_size
+                    )
+                    if not is_allowed:
+                        path_validator.audit_write(
+                            "write", str(path), content_size, "denied", reason
+                        )
+                        return {"status": "error", "error": reason}
+
+                    # Backup existing file before overwrite
+                    backup_path = None
+                    if path.exists():
+                        backup_path = path_validator.create_backup(str(path))
 
                 # Create parent directories if requested
                 if create_dirs and not path.parent.exists():
@@ -540,13 +562,28 @@ class FileIOToolsMixin:
                             f"write_file: {path} was created but no content was written."
                         )
 
-                return {
+                # Audit successful write
+                if path_validator is not None:
+                    detail = ""
+                    if backup_path:
+                        detail = f"backup={backup_path}"
+                    path_validator.audit_write(
+                        "write", str(path), content_size, "success", detail
+                    )
+
+                result = {
                     "status": "success",
                     "file_path": str(path),
-                    "size_bytes": len(content),
+                    "size_bytes": content_size,
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
                 }
+                if path_validator is not None and backup_path:
+                    result["backup_path"] = backup_path
+                return result
             except Exception as e:
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
         @tool
@@ -559,6 +596,8 @@ class FileIOToolsMixin:
             """Edit any file by replacing old content with new content (no syntax validation).
 
             Use this tool for non-Python files like .tsx, .ts, .js, .json, etc.
+            Includes security guardrails: path validation, blocked directory enforcement,
+            sensitive file protection, backup creation, and audit logging.
 
             Args:
                 file_path: Path to the file to edit
@@ -579,6 +618,25 @@ class FileIOToolsMixin:
                         path = base / path
                 path = path.resolve()
 
+                # Security: validate write access
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    # Check blocklist (no overwrite prompt needed for edit)
+                    is_blocked, reason = path_validator.is_write_blocked(str(path))
+                    if is_blocked:
+                        path_validator.audit_write(
+                            "edit", str(path), 0, "denied", reason
+                        )
+                        return {"status": "error", "error": reason}
+
+                    # Check allowlist
+                    if not path_validator.is_path_allowed(str(path)):
+                        reason = f"Access denied: {path} is not in allowed paths"
+                        path_validator.audit_write(
+                            "edit", str(path), 0, "denied", reason
+                        )
+                        return {"status": "error", "error": reason}
+
                 if not path.exists():
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
@@ -591,6 +649,11 @@ class FileIOToolsMixin:
                         "status": "error",
                         "error": f"Content to replace not found in {file_path}",
                     }
+
+                # Backup before editing
+                backup_path = None
+                if path_validator is not None:
+                    backup_path = path_validator.create_backup(str(path))
 
                 # Replace content
                 updated_content = current_content.replace(old_content, new_content, 1)
@@ -616,7 +679,20 @@ class FileIOToolsMixin:
                     else:
                         console.print_info(f"edit_file: No changes were made to {path}")
 
-                return {
+                # Audit successful edit
+                if path_validator is not None:
+                    detail = f"replaced {len(old_content)} chars with {len(new_content)} chars"
+                    if backup_path:
+                        detail += f", backup={backup_path}"
+                    path_validator.audit_write(
+                        "edit",
+                        str(path),
+                        len(updated_content),
+                        "success",
+                        detail,
+                    )
+
+                result = {
                     "status": "success",
                     "file_path": str(path),
                     "old_size": len(current_content),
@@ -624,7 +700,13 @@ class FileIOToolsMixin:
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
                     "diff": diff,
                 }
+                if backup_path:
+                    result["backup_path"] = backup_path
+                return result
             except Exception as e:
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
         @tool
@@ -703,6 +785,9 @@ class FileIOToolsMixin:
                 content += "- Use Black formatter for consistent style\n"
                 content += "- Ensure proper error handling\n\n"
 
+                # Check existence BEFORE writing for accurate created/updated msg
+                is_new_file = not os.path.exists(gaia_path)
+
                 # Write the file
                 with open(gaia_path, "w", encoding="utf-8") as f:
                     f.write(content)
@@ -710,8 +795,8 @@ class FileIOToolsMixin:
                 return {
                     "status": "success",
                     "file_path": gaia_path,
-                    "created": not os.path.exists(gaia_path),
-                    "message": f"GAIA.md {'created' if not os.path.exists(gaia_path) else 'updated'} at {gaia_path}",
+                    "created": is_new_file,
+                    "message": f"GAIA.md {'created' if is_new_file else 'updated'} at {gaia_path}",
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
@@ -788,6 +873,7 @@ class FileIOToolsMixin:
                                 break
 
                 # Create backup if requested
+                backup_path = None
                 if backup:
                     backup_path = f"{file_path}.bak"
                     with open(backup_path, "w", encoding="utf-8") as f:

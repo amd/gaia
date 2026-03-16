@@ -610,7 +610,7 @@ class EvaluationVisualizer {
 
         if (hasGroundtruth) {
             const gtFile = report.filename;
-            title = gtFile.replace(/\.(summarization|qa)\.groundtruth\.json$/, '').replace(/\//g, '/');
+            title = gtFile.replace(/\.(summarization|qa)\.groundtruth\.json$/, '');
             subtitle = 'Groundtruth';
             if (gtFile.includes('consolidated')) {
                 subtitle += ' [Consolidated]';

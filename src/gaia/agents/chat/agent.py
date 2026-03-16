@@ -18,7 +18,9 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
-from gaia.agents.tools import FileSearchToolsMixin  # Shared file search tools
+from gaia.agents.tools import BrowserToolsMixin  # Web browsing and search
+from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
+from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.logger import get_logger
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.security import PathValidator
@@ -52,6 +54,9 @@ class ChatAgentConfig:
 
     # RAG settings
     rag_documents: List[str] = field(default_factory=list)
+    library_documents: List[str] = field(
+        default_factory=list
+    )  # Available but not auto-indexed
     watch_directories: List[str] = field(default_factory=list)
     chunk_size: int = 500
     chunk_overlap: int = 100
@@ -61,16 +66,38 @@ class ChatAgentConfig:
     # Security
     allowed_paths: Optional[List[str]] = None
 
+    # File System settings
+    enable_filesystem: bool = True  # Enable enhanced file system tools
+    enable_scratchpad: bool = True  # Enable data scratchpad for analysis
+    filesystem_index_path: str = "~/.gaia/file_index.db"
+    filesystem_scan_depth: int = 3  # Default scan depth (conservative)
+    filesystem_exclude_patterns: List[str] = field(default_factory=list)
+
+    # Browser settings
+    enable_browser: bool = True  # Enable web browsing tools
+    browser_timeout: int = 30  # HTTP request timeout in seconds
+    browser_max_download_size: int = 100 * 1024 * 1024  # 100 MB max download
+    browser_rate_limit: float = 1.0  # Seconds between requests per domain
+
 
 class ChatAgent(
-    Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin
+    Agent,
+    RAGToolsMixin,
+    FileToolsMixin,
+    ShellToolsMixin,
+    FileSystemToolsMixin,
+    ScratchpadToolsMixin,
+    BrowserToolsMixin,
 ):
     """
-    Chat Agent with RAG, file operations, and shell command capabilities.
+    Chat Agent with RAG, file system navigation, data analysis, web browsing,
+    and shell capabilities.
 
     This agent provides:
     - Document Q&A using RAG
-    - File search and operations
+    - File system browsing, search, and navigation
+    - Structured data analysis via SQLite scratchpad
+    - Web browsing, search, and file download
     - Shell command execution
     - Auto-indexing when files change
     - Interactive chat interface
@@ -98,6 +125,9 @@ class ChatAgent(
         # Now use config for all initialization
         # Store RAG configuration from config
         self.rag_documents = config.rag_documents
+        self.library_documents = (
+            config.library_documents
+        )  # Available but not auto-indexed
         self.watch_directories = config.watch_directories
         self.chunk_size = config.chunk_size
         self.max_chunks = config.max_chunks
@@ -146,6 +176,48 @@ class ChatAgent(
         self.observers = []
         self.file_handlers = []  # Track FileChangeHandler instances for telemetry
         self.indexed_files = set()
+
+        # Initialize file system index service (optional)
+        self._fs_index = None
+        self._path_validator = self.path_validator
+        if config.enable_filesystem:
+            try:
+                from gaia.filesystem.index import FileSystemIndexService
+
+                self._fs_index = FileSystemIndexService(
+                    db_path=config.filesystem_index_path
+                )
+                logger.info("File system index service initialized")
+            except Exception as e:
+                logger.debug(f"File system index not available: {e}")
+
+        # Initialize scratchpad service (optional)
+        self._scratchpad = None
+        if config.enable_scratchpad:
+            try:
+                from gaia.scratchpad.service import ScratchpadService
+
+                self._scratchpad = ScratchpadService(
+                    db_path=config.filesystem_index_path
+                )
+                logger.info("Scratchpad service initialized")
+            except Exception as e:
+                logger.debug(f"Scratchpad service not available: {e}")
+
+        # Initialize web client for browser tools (optional)
+        self._web_client = None
+        if config.enable_browser:
+            try:
+                from gaia.web.client import WebClient
+
+                self._web_client = WebClient(
+                    timeout=config.browser_timeout,
+                    max_download_size=config.browser_max_download_size,
+                    rate_limit=config.browser_rate_limit,
+                )
+                logger.info("Web client initialized for browser tools")
+            except Exception as e:
+                logger.debug(f"Web client not available: {e}")
 
         # Session management
         self.session_manager = SessionManager()
@@ -222,7 +294,10 @@ class ChatAgent(
         """Generate the system prompt for the Chat Agent."""
         # Get list of indexed documents
         indexed_docs_section = ""
-        if hasattr(self, "rag") and self.rag and self.rag.indexed_files:
+        has_indexed = hasattr(self, "rag") and self.rag and self.rag.indexed_files
+        has_library = hasattr(self, "library_documents") and self.library_documents
+
+        if has_indexed:
             doc_names = []
             for file_path in self.rag.indexed_files:
                 doc_names.append(Path(file_path).name)
@@ -234,6 +309,26 @@ You have {len(doc_names)} document(s) already indexed and ready to search:
 
 When the user asks a question about content, you can DIRECTLY search these documents using query_documents or query_specific_file.
 You do NOT need to check what's indexed first - this list is always up-to-date.
+"""
+        elif has_library:
+            # Documents are in the library but NOT yet indexed.
+            # The agent should NOT auto-index them; let the user choose.
+            lib_entries = []
+            for fp in sorted(self.library_documents, key=lambda p: Path(p).name):
+                lib_entries.append(f"- {Path(fp).name} (path: {fp})")
+            indexed_docs_section = f"""
+**DOCUMENT LIBRARY (not yet indexed):**
+The user has {len(self.library_documents)} document(s) available in their library:
+{chr(10).join(lib_entries)}
+
+These documents are NOT yet loaded into the search index. To search a document, you must first index it using the index_document tool with the file path above.
+
+**CRITICAL RULES:**
+- Do NOT automatically index all documents. Only index what the user specifically asks about.
+- When the user asks a vague question like "summarize a document" or "what does the document say", ALWAYS ask which document they want by listing the available documents above.
+- When the user asks about a SPECIFIC document by name, index ONLY that document and then answer.
+- When the user asks "what documents do you have?" or "what's indexed?", simply list the documents above. Do NOT trigger indexing.
+- For general questions (greetings, knowledge questions), answer normally without indexing anything.
 """
         else:
             indexed_docs_section = """
@@ -251,6 +346,23 @@ No documents are currently indexed.
         # Build the prompt with indexed documents section
         # NOTE: Base agent now provides JSON format rules, so we only add ChatAgent-specific guidance
         base_prompt = """You are a helpful AI assistant with document search and RAG capabilities.
+
+**OUTPUT FORMATTING RULES:**
+Always format your responses using Markdown for readability:
+- Use **bold** for emphasis and key terms
+- Use `inline code` for file names, paths, and commands
+- Use bullet lists (- item) for enumerations
+- Use numbered lists (1. item) for ordered steps
+- Use ### headings to organize long responses into sections
+- Use markdown tables for structured/tabular data:
+  | Column A | Column B |
+  |----------|----------|
+  | value    | value    |
+- Use > blockquotes for important notes or warnings
+- Use code blocks (```) for code snippets, file contents, or raw data
+- Use --- horizontal rules to separate major sections
+- For financial/data analysis, ALWAYS use tables for categories, breakdowns, and comparisons
+- Keep responses well-structured and scannable
 """
 
         # Add indexed documents section
@@ -272,9 +384,11 @@ Use Format 2 (tool) ONLY when:
 - "what files are indexed?" → {"tool": "list_indexed_documents", "tool_args": {}}
 - "search for X" → {"tool": "query_documents", "tool_args": {"query": "X"}}
 - "what does doc say?" → {"tool": "query_specific_file", "tool_args": {...}}
-- "find the oil and gas manual" → {"tool": "search_file", "tool_args": {"file_pattern": "oil and gas manual"}}
-- "index my data folder" → {"tool": "search_directory", "tool_args": {"directory_name": "data"}}
+- "find the oil and gas manual" → {"tool": "find_files", "tool_args": {"query": "oil and gas manual", "file_types": "pdf,docx"}}
+- "what's in my Documents folder?" → {"tool": "browse_directory", "tool_args": {"path": "~/Documents"}}
+- "show me the project structure" → {"tool": "tree", "tool_args": {"path": "."}}
 - "index files in /path/to/dir" → {"tool": "index_directory", "tool_args": {"directory_path": "/path/to/dir"}}
+- "analyze my spending" → Use find_files + read_file + create_table + insert_data + query_data workflow
 
 **CRITICAL: NEVER make up or guess user data. Always use tools.**
 
@@ -284,7 +398,7 @@ When user asks a domain-specific question (e.g., "what is the vision of the oil 
 1. Check if relevant documents are indexed
 2. If NO relevant documents found:
    a. Extract key terms from question (e.g., "oil", "gas", "regulator")
-   b. Search for files using search_file with those terms
+   b. Search for files using find_files with those terms
    c. If files found, index them automatically
    d. Provide status update: "Found and indexed X file(s)"
    e. Then query to answer the question
@@ -294,72 +408,118 @@ Example Smart Discovery:
 User: "what is the vision of the oil & gas regulator?"
 You: {"tool": "list_indexed_documents", "tool_args": {}}
 Result: {"documents": [], "count": 0}
-You: {"tool": "search_file", "tool_args": {"file_pattern": "oil gas"}}
-Result: {"files": ["/docs/Oil-Gas-Manual.pdf"], "count": 1}
-You: {"tool": "index_document", "tool_args": {"file_path": "/docs/Oil-Gas-Manual.pdf"}}
+You: {"tool": "find_files", "tool_args": {"query": "oil gas", "file_types": "pdf,docx"}}
+Result: "Found 1 result(s):\n  1. C:/Users/user/Documents/Oil-Gas-Manual.pdf (2.1 MB, 2026-01-15)"
+You: {"tool": "index_document", "tool_args": {"file_path": "C:/Users/user/Documents/Oil-Gas-Manual.pdf"}}
 Result: {"status": "success", "chunks": 150}
-You: {"thought": "Document indexed, now searching for vision", "tool": "query_specific_file", "tool_args": {"file_path": "/docs/Oil-Gas-Manual.pdf", "query": "vision of the oil gas regulator"}}
+You: {"thought": "Document indexed, now searching for vision", "tool": "query_specific_file", "tool_args": {"file_path": "C:/Users/user/Documents/Oil-Gas-Manual.pdf", "query": "vision of the oil gas regulator"}}
 Result: {"chunks": ["The vision is to be recognized..."], "scores": [0.92]}
 You: {"answer": "According to the Oil & Gas Manual, the vision is to be recognized..."}
 
 **CONTEXT INFERENCE RULE:**
 
 When user asks a question without specifying which document:
-1. Check the "CURRENTLY INDEXED DOCUMENTS" section above - you already know what's indexed!
-2. If EXACTLY 1 document indexed → **IMMEDIATELY search it**: {"tool": "query_documents", "tool_args": {"query": "..."}}
-3. If 0 documents → Use Smart Discovery workflow to find and index relevant files
-4. If multiple documents → Search all with query_documents OR ask which specific one: {"answer": "Which document? You have: [list]"}
+1. Check the "CURRENTLY INDEXED DOCUMENTS" or "DOCUMENT LIBRARY" section above.
+2. If EXACTLY 1 document available → index it (if needed) and search it directly.
+3. If 0 documents → Use Smart Discovery workflow to find and index relevant files.
+4. If multiple documents and user's request is SPECIFIC (e.g., "what does the financial report say?") → index and search that specific document.
+5. If multiple documents and user's request is VAGUE (e.g., "summarize a document", "what does the doc say?") → **ALWAYS ask which document first**: {"answer": "Which document would you like me to work with?\n\n1. document_a.pdf\n2. document_b.txt\n..."}
+6. If user asks "what documents do you have?" or "what's indexed?" → just list them, do NOT index anything.
 
 **AVAILABLE TOOLS:**
 The complete list of available tools with their descriptions is provided below in the AVAILABLE TOOLS section.
 Tools are grouped by category: RAG tools, File System tools, Shell tools, etc.
 
+**FILE SYSTEM TOOLS:**
+You have powerful file system tools. Use them when the user asks about files, folders, or their PC:
+- **browse_directory**: List folder contents with sizes and dates
+- **tree**: Show visual tree of a directory structure
+- **file_info**: Get detailed info about a file (size, type, pages, lines)
+- **find_files**: Search for files by name, content, or metadata (size, date, type)
+- **read_file**: Read file contents with smart formatting (text, CSV, JSON, PDF)
+- **bookmark**: Save/list/remove bookmarks for quick access to important locations
+
 **FILE SEARCH AND AUTO-INDEX WORKFLOW:**
 When user asks "find the X manual" or "find X document on my drive":
-1. Use search_file (automatically searches all drives intelligently):
-   - Phase 1: Searches common locations (Documents, Downloads, Desktop) - FAST
-   - Phase 2: If not found, deep search entire drive(s) - THOROUGH
-   - Filters by document file types (.pdf, .docx, .txt, etc.)
+1. Use find_files (automatically searches intelligently):
+   - Searches current directory, then common locations, then everywhere
+   - Supports name patterns, content search, size/date filters
 2. Handle results:
-   - **If 1 file found**: Automatically index it
-   - **If multiple files found**: Display numbered list, ask user to select
+   - **If 1 file found**: Automatically index it for RAG
+   - **If multiple files found**: Display the list, ask user to select
    - **If none found**: Inform user
 3. After indexing, confirm and let user know they can ask questions
 
-**IMPORTANT: Always show tool results with display_message!**
-Tools like search_file return a 'display_message' field - ALWAYS show this to the user:
+Example:
+User: "Can you find the oil and gas manual on my drive?"
+You: {"tool": "find_files", "tool_args": {"query": "oil gas manual", "file_types": "pdf,docx"}}
+Result: "Found 1 result(s):\n  1. C:/Users/user/Documents/Oil-Gas-Manual.pdf (2.1 MB)"
+You: {"tool": "index_document", "tool_args": {"file_path": "C:/Users/user/Documents/Oil-Gas-Manual.pdf"}}
+You: {"answer": "Found and indexed Oil-Gas-Manual.pdf (150 chunks). You can now ask me questions about it!"}
+
+**DATA ANALYSIS WORKFLOW (Scratchpad):**
+For multi-document analysis (spending, tax, research), use the scratchpad tools:
+1. **find_files** to locate documents (e.g., credit card statements)
+2. **create_table** to set up a structured workspace
+3. **read_file** + **insert_data** for each document (extract data, store in table)
+4. **query_data** to analyze with SQL (SUM, AVG, GROUP BY, etc.)
+5. **drop_table** to clean up when done
 
 Example:
-Tool result: {"display_message": "✓ Found 2 file(s) in current directory (gaia)", "file_list": [...]}
-You must say: {"answer": "✓ Found 2 file(s) in current directory (gaia):\n1. Oil-Gas-Manual.pdf\n..."}
+User: "Analyze my credit card spending"
+You: {"tool": "find_files", "tool_args": {"query": "statement", "file_types": "pdf", "scope": "home"}}
+You: {"tool": "create_table", "tool_args": {"table_name": "transactions", "columns": "date TEXT, description TEXT, amount REAL, category TEXT, source TEXT"}}
+Then for each PDF: read_file → extract transactions → insert_data
+Then: {"tool": "query_data", "tool_args": {"sql": "SELECT category, SUM(amount) as total FROM scratch_transactions GROUP BY category ORDER BY total DESC"}}
 
-NOTE: Progress indicators (spinners) are shown automatically by the tool while searching.
-You don't need to say "searching..." - the tool displays it live!
+**DIRECTORY BROWSING WORKFLOW:**
+When user asks "what's in my Documents?" or "show me the project structure":
+1. Use browse_directory to list contents, or tree for visual hierarchy
+2. Use file_info for details about specific files
+3. Use bookmark to save frequently accessed locations
 
-Example (Single file):
-User: "Can you find the oil and gas manual on my drive?"
-You: {"tool": "search_file", "tool_args": {"file_pattern": "oil gas"}}
-Result: {"files": [...], "count": 1, "display_message": "🔍 Found 1 matching file(s)", "file_list": [{"number": 1, "name": "Oil-Gas-Manual.pdf", "directory": "C:/Users/user/Documents"}]}
-You: {"answer": "🔍 Searching for 'oil gas'... Found 1 file:\n• Oil-Gas-Manual.pdf (Documents folder)\n\nIndexing now..."}
-You: {"tool": "index_document", "tool_args": {"file_path": "C:/Users/user/Documents/Oil-Gas-Manual.pdf"}}
-You: {"answer": "✓ Indexed Oil-Gas-Manual.pdf (150 chunks). You can now ask me questions about it!"}
+**BROWSER TOOLS:**
+You can browse the web, search for information, and download files:
+- **fetch_page**: Fetch a web page and extract readable text, links, or tables
+- **search_web**: Search the web using DuckDuckGo (no API key needed)
+- **download_file**: Download files from the web to local disk
 
-Example (Multiple files):
-User: "Find the manual on my drive"
-You: {"answer": "🔍 Searching your drive for 'manual'..."}
-You: {"tool": "search_file", "tool_args": {"file_pattern": "manual"}}
-Result: {"count": 3, "file_list": [{"number": 1, "name": "Oil-Gas-Manual.pdf", "directory": "C:/Docs"}, {"number": 2, "name": "Safety-Manual.pdf", "directory": "C:/Downloads"}]}
-You: {"answer": "Found 3 matching files:\n\n1. Oil-Gas-Manual.pdf (C:/Docs/)\n2. Safety-Manual.pdf (C:/Downloads/)\n3. Training-Manual.pdf (C:/Work/)\n\nWhich one would you like me to index? (enter the number)"}
-User: "1"
-You: {"tool": "index_document", "tool_args": {"file_path": "C:/Docs/Oil-Gas-Manual.pdf"}}
-You: {"answer": "✓ Indexed Oil-Gas-Manual.pdf. You can now ask questions about it!"}
+**WEB RESEARCH WORKFLOW:**
+When user needs online information (prices, statistics, documentation, etc.):
+1. **search_web** to find relevant pages
+2. **fetch_page** to read the full content of a result
+3. Combine with local data analysis if needed
 
-**DIRECTORY INDEXING WORKFLOW:**
-When user asks to "index my data folder" or similar:
-1. Use search_directory to find matching directories
-2. Show user the matches and ask which one (if multiple)
-3. Use index_directory on the chosen path
-4. Report indexing results"""
+Example:
+User: "Compare my grocery spending to the national average"
+You: query_data to get user's spending → search_web for national averages → fetch_page to read the data → provide comparison
+
+**DOWNLOAD + ANALYZE WORKFLOW:**
+When user wants to get and analyze a web resource:
+1. **search_web** or use direct URL
+2. **download_file** to save locally
+3. **index_document** or **read_file** to process the downloaded file
+4. Use scratchpad tools for structured analysis
+
+**UNSUPPORTED FEATURES — FEATURE REQUEST GUIDANCE:**
+
+When a user asks for a feature that is NOT currently supported, you MUST:
+1. Acknowledge their request politely
+2. Explain clearly that the feature is not yet available
+3. Suggest what IS available as an alternative (if applicable)
+4. Include a feature request link: https://github.com/amd/gaia/issues/new?template=feature_request.md
+
+Unsupported feature categories:
+- **Image/Video/Audio Analysis**: Cannot analyze images, video, or audio files directly. Alternative: Index PDFs with embedded images (text is extracted), or use GAIA's VLM agent for vision tasks.
+- **External Service Integrations**: No WhatsApp/Slack/Teams/Email integration. Alternative: Use MCP protocol for custom integrations.
+- **Real-Time Data**: No weather, stock prices, or live news (local-only by design). Alternative: Download data files and index them for analysis.
+- **Multi-Agent Switching**: Cannot switch to other agents from chat. Alternative: Use CLI commands: `gaia code`, `gaia blender`, `gaia jira`.
+- **File Format Conversion**: Cannot convert between formats (PDF→Word, etc.). Alternative: Can read and analyze many formats.
+- **Scheduling & Reminders**: No scheduling or notification capabilities.
+- **Cloud Storage Access**: No Google Drive/OneDrive/Dropbox direct access. Alternative: Download files locally first.
+- **Image/Content Generation**: No image generation. Alternative: Use AMD-optimized Stable Diffusion tools.
+
+IMPORTANT: Always include the GitHub issue link when reporting unsupported features."""
 
         return prompt
 
@@ -583,13 +743,17 @@ When user asks to "index my data folder" or similar:
         self.register_rag_tools()
         self.register_file_tools()
         self.register_shell_tools()
-        self.register_file_search_tools()  # Shared file search tools
+        self.register_filesystem_tools()  # File system navigation & search
+        self.register_scratchpad_tools()  # Structured data analysis
+        self.register_browser_tools()  # Web browsing, search, download
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools
     # - FileToolsMixin (file_tools.py): Directory monitoring
     # - ShellToolsMixin (shell_tools.py): Shell command execution
-    # - FileSearchToolsMixin (shared): File and directory search across drives
+    # - FileSystemToolsMixin (shared): File system browsing, search, tree, bookmarks
+    # - ScratchpadToolsMixin (shared): SQLite working memory for data analysis
+    # - BrowserToolsMixin (shared): Web browsing, content extraction, download
 
     def _index_documents(self, documents: List[str]) -> None:
         """Index initial documents."""
@@ -793,3 +957,8 @@ When user asks to "index my data folder" or similar:
             self.stop_watching()
         except Exception as e:
             logger.error(f"Error stopping file watchers during cleanup: {e}")
+        try:
+            if self._web_client:
+                self._web_client.close()
+        except Exception as e:
+            logger.error(f"Error closing web client during cleanup: {e}")
