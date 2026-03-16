@@ -2679,8 +2679,9 @@ class LemonadeClient:
             - Physical Memory (RAM)
             - devices: Dictionary with device information
               - cpu: Name, cores, threads, availability
-              - gpu: AMD iGPU/dGPU name, memory (MB), driver version, availability
-              - npu: Name, driver version, power mode, availability
+              - amd_igpu: AMD integrated GPU name, VRAM, driver version, availability
+              - amd_dgpu: AMD discrete GPU list
+              - amd_npu: AMD NPU name, driver version, power mode, availability
 
         Examples:
             # Check available devices
@@ -2688,10 +2689,10 @@ class LemonadeClient:
             devices = sysinfo.get("devices", {})
 
             # Select best device
-            if devices.get("npu", {}).get("available"):
+            if devices.get("amd_npu", {}).get("available"):
                 print("Using NPU for acceleration")
-            elif devices.get("gpu", {}).get("available"):
-                print("Using GPU for acceleration")
+            elif devices.get("amd_igpu", {}).get("available"):
+                print("Using iGPU for acceleration")
             else:
                 print("Using CPU")
 
