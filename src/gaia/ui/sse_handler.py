@@ -549,12 +549,17 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
             file_names = []
             for f in files[:5]:
                 if isinstance(f, dict):
-                    name = f.get("name", f.get("filename", ""))
+                    name = f.get("name", f.get("filename", f.get("file_name", "")))
+                    # Fallback: extract filename from file_path if name keys are missing
+                    if not name and f.get("file_path"):
+                        name = f["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
                     directory = f.get("directory", "")
-                    if directory:
+                    if directory and name:
                         file_names.append(f"{name} ({directory})")
-                    else:
+                    elif name:
                         file_names.append(name)
+                    elif directory:
+                        file_names.append(directory)
                 else:
                     file_names.append(str(f))
             result = "\n".join(f"  {name}" for name in file_names)

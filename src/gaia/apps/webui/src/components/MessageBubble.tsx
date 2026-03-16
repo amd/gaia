@@ -429,13 +429,31 @@ function RenderedContent({ content, showCursor }: { content: string; showCursor?
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
-                    // Custom code block rendering with copy button
+                    // Code block vs inline code detection.
+                    // react-markdown calls `code` for both inline `code` and
+                    // fenced ```code``` blocks. Fenced blocks are wrapped in
+                    // <pre><code>, inline in just <code>. We use our `pre`
+                    // override to render fenced blocks as CodeBlock, so the
+                    // `code` component only handles inline code.
                     code({ className, children, ...props }) {
-                        const match = /language-(\w+)/.exec(className || '');
-                        const codeString = String(children).replace(/\n$/, '');
-
-                        // Detect block code: has a language class or contains newlines
-                        if (match || (codeString.includes('\n') && !props.style)) {
+                        // If we get here, it's inline code (fenced blocks are
+                        // handled by the `pre` override below).
+                        return (
+                            <code className="inline-code" {...props}>
+                                {children}
+                            </code>
+                        );
+                    },
+                    // Fenced code blocks: react-markdown wraps them in <pre><code>.
+                    // Extract the language and code text, render as CodeBlock.
+                    pre({ children }) {
+                        // children is <code className="language-xxx">...</code>
+                        const codeChild = React.Children.toArray(children)[0];
+                        if (React.isValidElement(codeChild) && (codeChild.type === 'code' || (codeChild.props as any)?.className !== undefined || typeof (codeChild.props as any)?.children === 'string')) {
+                            const codeProps = codeChild.props as any;
+                            const className = codeProps?.className || '';
+                            const match = /language-(\w+)/.exec(className);
+                            const codeString = String(codeProps?.children || '').replace(/\n$/, '');
                             return (
                                 <CodeBlock
                                     lang={match?.[1] || ''}
@@ -443,16 +461,8 @@ function RenderedContent({ content, showCursor }: { content: string; showCursor?
                                 />
                             );
                         }
-                        // Inline code
-                        return (
-                            <code className="inline-code" {...props}>
-                                {children}
-                            </code>
-                        );
-                    },
-                    // Wrap <pre> to avoid double-wrapping with our CodeBlock
-                    pre({ children }) {
-                        return <>{children}</>;
+                        // Fallback: render as-is
+                        return <pre>{children}</pre>;
                     },
                     // Custom table styling
                     table({ children }) {
