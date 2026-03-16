@@ -175,6 +175,28 @@ The agent will:
 
 ---
 
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LEMONADE_BASE_URL` | `http://localhost:8000/api/v1` | LLM server base URL. Overrides `AgentConfig::baseUrl`. |
+| `LEMONADE_MODEL` | _(none)_ | Model to load. Overrides `AgentConfig::modelId`. |
+| `GAIA_STREAMING` | _(unset)_ | Set to `1` to enable token streaming without changing code. Overrides the default for `AgentConfig::streaming`. |
+
+**Example — enable streaming for a single run:**
+```bash
+GAIA_STREAMING=1 ./build/my_agent
+```
+
+**Example — point to a remote server:**
+```bash
+LEMONADE_BASE_URL=http://192.168.1.50:8000 ./build/my_agent
+```
+
+Code-level config always takes precedence over environment variables when explicitly set, but these variables control the *default* value of each field in `AgentConfig`.
+
+---
+
 ## Running Tests
 
 Run the unit test binary directly (no LLM server required):
@@ -205,11 +227,15 @@ gaia/                           # repo root
     │   ├── tool_registry.h     # Tool registration and execution
     │   ├── mcp_client.h        # MCP JSON-RPC client (stdio transport)
     │   ├── json_utils.h        # JSON extraction with multi-strategy fallback
+    │   ├── lemonade_client.h   # HTTP client for the Lemonade inference server
+    │   ├── sse_parser.h        # SSE parser for streaming chat completions
     │   ├── console.h           # TerminalConsole / SilentConsole output handlers
     │   └── clean_console.h     # CleanConsole — polished TUI with colors and word-wrap
     ├── src/
     │   ├── agent.cpp           # Agent loop state machine
     │   ├── tool_registry.cpp
+    │   ├── lemonade_client.cpp # HTTP client (blocking + SSE streaming)
+    │   ├── sse_parser.cpp      # SSE token stream parser
     │   ├── mcp_client.cpp      # Cross-platform subprocess + pipes (Win32 / POSIX)
     │   ├── json_utils.cpp
     │   ├── console.cpp
@@ -221,6 +247,8 @@ gaia/                           # repo root
     │   ├── test_agent.cpp
     │   ├── test_tool_registry.cpp
     │   ├── test_json_utils.cpp
+    │   ├── test_lemonade_client.cpp
+    │   ├── test_sse_parser.cpp
     │   ├── test_mcp_client.cpp
     │   ├── test_console.cpp
     │   ├── test_clean_console.cpp

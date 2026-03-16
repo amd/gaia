@@ -92,6 +92,7 @@ add_library(gaia_core
     src/agent.cpp
     src/mcp_client.cpp
     src/security.cpp
+    src/sse_parser.cpp
 )
 
 add_library(gaia::gaia_core ALIAS gaia_core)
@@ -201,6 +202,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_tool_integration.cpp
         tests/test_decision.cpp
         tests/test_security.cpp
+        tests/test_sse_parser.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE

@@ -159,7 +159,40 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
         std::cerr << "[LLM] POST /chat/completions, messages=" << msgArray.size() << std::endl;
     }
 
-    // Delegate HTTP to LemonadeClient
+    // ---- Streaming path ----
+    if (config_.streaming) {
+        std::string accumulated;
+        std::string rawResponse = lemonade_.chatCompletionsStreaming(
+            requestBody,
+            [this, &accumulated](const std::string& token) {
+                accumulated += token;
+                console_->printStreamToken(token);
+            }
+        );
+
+        if (!accumulated.empty()) {
+            console_->printStreamEnd();
+            return accumulated;
+        }
+
+        // Fallback: server returned a non-streaming response despite "stream":true.
+        // Parse the raw response body as a regular chat completions reply.
+        if (!rawResponse.empty()) {
+            try {
+                const json responseJson = json::parse(rawResponse);
+                if (responseJson.contains("choices") && !responseJson["choices"].empty()) {
+                    const auto& choice = responseJson["choices"][0];
+                    if (choice.contains("message") && choice["message"].contains("content")) {
+                        return choice["message"]["content"].get<std::string>();
+                    }
+                }
+            } catch (...) {}
+        }
+
+        throw std::runtime_error("Streaming response contained no tokens");
+    }
+
+    // ---- Non-streaming path (unchanged) ----
     std::string responseBody = lemonade_.chatCompletions(requestBody);
 
     // Parse response
@@ -422,27 +455,28 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
             stepResults.clear();
         }
 
-        // Call LLM (retry once on failure)
-        console_->startProgress("Thinking");
+        // Call LLM (retry once on failure).
+        // Skip progress spinner when streaming — tokens serve as live progress.
+        if (!config_.streaming) console_->startProgress("Thinking");
         std::string response;
         try {
             response = callLlm(messages, systemPrompt());
         } catch (const std::exception& e) {
-            console_->stopProgress();
+            if (!config_.streaming) console_->stopProgress();
             console_->printWarning(std::string("LLM call failed, retrying: ") + e.what());
 
             // Retry once
-            console_->startProgress("Retrying");
+            if (!config_.streaming) console_->startProgress("Retrying");
             try {
                 response = callLlm(messages, systemPrompt());
             } catch (const std::exception& e2) {
-                console_->stopProgress();
+                if (!config_.streaming) console_->stopProgress();
                 console_->printError(std::string("LLM error: ") + e2.what());
                 finalAnswer = std::string("Unable to complete task due to LLM error: ") + e2.what();
                 break;
             }
         }
-        console_->stopProgress();
+        if (!config_.streaming) console_->stopProgress();
 
         // Debug: show response
         if (config_.showPrompts) {
@@ -458,14 +492,17 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
         // Parse response
         ParsedResponse parsed = parseLlmResponse(response);
 
-        // Display reasoning
-        console_->printThought(parsed.thought);
-        console_->printGoal(parsed.goal);
+        // Display reasoning.
+        // Skip when streaming — the raw tokens were already printed during callLlm().
+        if (!config_.streaming) {
+            console_->printThought(parsed.thought);
+            console_->printGoal(parsed.goal);
+        }
 
         // ---- Handle final answer ----
         if (parsed.answer.has_value()) {
             finalAnswer = parsed.answer.value();
-            console_->printFinalAnswer(finalAnswer);
+            if (!config_.streaming) console_->printFinalAnswer(finalAnswer);
             break;
         }
 
@@ -537,7 +574,7 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
         // No tool call and no answer — treat response as conversational
         if (!parsed.toolName.has_value() && !parsed.answer.has_value()) {
             finalAnswer = response;
-            console_->printFinalAnswer(finalAnswer);
+            if (!config_.streaming) console_->printFinalAnswer(finalAnswer);
             break;
         }
     }
