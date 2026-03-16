@@ -7,9 +7,21 @@ on:
   workflow_call:
   push:
     branches: ["main"]
+    paths:
+      - 'src/gaia/electron/**'
+      - 'src/gaia/apps/*/webui/**'
+      - 'src/gaia/agents/emr/dashboard/electron/**'
+      - 'tests/electron/**'
+      - '.github/workflows/test_electron.yml'
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/electron/**'
+      - 'src/gaia/apps/*/webui/**'
+      - 'src/gaia/agents/emr/dashboard/electron/**'
+      - 'tests/electron/**'
+      - '.github/workflows/test_electron.yml'
   merge_group:
   workflow_dispatch:
 

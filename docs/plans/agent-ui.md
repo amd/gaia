@@ -174,7 +174,7 @@ const SUPPORTED_EXTENSIONS = [
 
 ## Related Plans
 
-- **[GAIA Installer Plan](./gaia-installer-plan.md)** - Lightweight installer system (one-liner install, winget, `gaia update`, etc.)
+- **GAIA Installer Plan** - Lightweight installer system (one-liner install, winget, `gaia update`, etc.)
 
 ---
 
@@ -823,7 +823,7 @@ src/__tests__/
 
 ### Milestone 5: Distribution
 - [ ] Electron packaging
-- [ ] Integration with GAIA installer (see [Installer Plan](./gaia-installer-plan.md))
+- [ ] Integration with GAIA installer
 - [ ] Documentation
 - [ ] Launch announcement
 

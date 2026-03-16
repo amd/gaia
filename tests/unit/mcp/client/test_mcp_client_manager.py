@@ -207,7 +207,10 @@ class TestMCPConfig:
     """Test MCPConfig functionality."""
 
     def test_config_creates_default_file_path(self, tmp_path, monkeypatch):
-        """Test that config uses default path if not specified."""
+        """Test that config uses global path when no local mcp_servers.json exists."""
+        empty_dir = tmp_path / "no_local"
+        empty_dir.mkdir()
+        monkeypatch.chdir(empty_dir)
         monkeypatch.setenv("HOME", str(tmp_path))
 
         config = MCPConfig()
@@ -380,10 +383,9 @@ class TestMCPConfig:
         assert server["env"]["DEBUG"] == "true"
 
     def test_config_prefers_local_over_global(self, tmp_path, monkeypatch):
-        """Test that local config is preferred over global config."""
+        """Test that local config wins when both configs define the same server."""
         import json
 
-        # Create both local and global configs with different servers
         local_dir = tmp_path / "local"
         global_dir = tmp_path / "global"
         local_config = local_dir / "mcp_servers.json"
@@ -392,37 +394,44 @@ class TestMCPConfig:
         local_dir.mkdir(parents=True)
         global_config.parent.mkdir(parents=True)
 
+        # Both configs define "shared_server" — local value should win.
         local_config.write_text(
             json.dumps(
-                {"mcpServers": {"local_server": {"command": "echo", "args": ["local"]}}}
+                {
+                    "mcpServers": {
+                        "local_server": {"command": "echo", "args": ["local"]},
+                        "shared_server": {"command": "echo", "args": ["local-value"]},
+                    }
+                }
             )
         )
         global_config.write_text(
             json.dumps(
                 {
                     "mcpServers": {
-                        "global_server": {"command": "echo", "args": ["global"]}
+                        "global_server": {"command": "echo", "args": ["global"]},
+                        "shared_server": {"command": "echo", "args": ["global-value"]},
                     }
                 }
             )
         )
 
-        # Set CWD to local dir and HOME to global parent
         monkeypatch.chdir(local_dir)
         monkeypatch.setenv("HOME", str(global_dir))
 
         config = MCPConfig()
 
-        # Should load local config (has local_server, not global_server)
+        # Both servers present (stacking), shared_server uses local value.
         assert config.server_exists("local_server")
-        assert not config.server_exists("global_server")
+        assert config.server_exists("global_server")
+        assert config.get_server("shared_server")["args"] == ["local-value"]
+        # Save target is the local file.
         assert config.config_file == local_config
 
     def test_config_falls_back_to_global_when_no_local(self, tmp_path, monkeypatch):
-        """Test that global config is used when no local config exists."""
+        """Test that global config is loaded when no local config exists."""
         import json
 
-        # Create only global config (no local)
         local_dir = tmp_path / "local"
         global_dir = tmp_path / "global"
         global_config = global_dir / ".gaia" / "mcp_servers.json"
@@ -440,12 +449,196 @@ class TestMCPConfig:
             )
         )
 
-        # Set CWD to local dir (no config) and HOME to global parent
         monkeypatch.chdir(local_dir)
         monkeypatch.setenv("HOME", str(global_dir))
 
         config = MCPConfig()
 
-        # Should fall back to global config
         assert config.server_exists("global_server")
         assert config.config_file == global_config
+
+    # ---------------------------------------------------------------------------
+    # Config stacking tests
+    # ---------------------------------------------------------------------------
+
+    def test_config_stacking_merges_global_and_local(self, tmp_path, monkeypatch):
+        """Both global and local configs are loaded and merged."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        (local_dir / "mcp_servers.json").parent.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)
+
+        (local_dir / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"local_server": {"command": "echo", "args": ["l"]}}}
+            )
+        )
+        (global_dir / ".gaia" / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"global_server": {"command": "echo", "args": ["g"]}}}
+            )
+        )
+
+        monkeypatch.chdir(local_dir)
+        monkeypatch.setenv("HOME", str(global_dir))
+
+        config = MCPConfig()
+
+        assert config.server_exists("local_server")
+        assert config.server_exists("global_server")
+
+    def test_config_stacking_local_overrides_global(self, tmp_path, monkeypatch):
+        """Local config wins when the same server key appears in both."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        local_dir.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)
+
+        (local_dir / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"myserver": {"command": "echo", "args": ["local"]}}}
+            )
+        )
+        (global_dir / ".gaia" / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"myserver": {"command": "echo", "args": ["global"]}}}
+            )
+        )
+
+        monkeypatch.chdir(local_dir)
+        monkeypatch.setenv("HOME", str(global_dir))
+
+        config = MCPConfig()
+
+        assert config.get_server("myserver")["args"] == ["local"]
+
+    def test_config_stacking_global_only(self, tmp_path, monkeypatch):
+        """Only global config is loaded when no local config exists."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        local_dir.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)
+
+        (global_dir / ".gaia" / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"global_server": {"command": "echo", "args": ["g"]}}}
+            )
+        )
+
+        monkeypatch.chdir(local_dir)
+        monkeypatch.setenv("HOME", str(global_dir))
+
+        config = MCPConfig()
+
+        assert config.server_exists("global_server")
+        assert config.config_file == global_dir / ".gaia" / "mcp_servers.json"
+
+    def test_config_stacking_local_only(self, tmp_path, monkeypatch):
+        """Only local config is loaded when no global config file exists."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        local_dir.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)  # dir exists but no file
+
+        (local_dir / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"local_server": {"command": "echo", "args": ["l"]}}}
+            )
+        )
+
+        monkeypatch.chdir(local_dir)
+        monkeypatch.setenv("HOME", str(global_dir))
+
+        config = MCPConfig()
+
+        assert config.server_exists("local_server")
+        assert config.config_file == local_dir / "mcp_servers.json"
+
+    def test_config_stacking_neither_exists(self, tmp_path, monkeypatch):
+        """No servers are loaded when neither config file exists."""
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        local_dir.mkdir(parents=True)
+
+        monkeypatch.chdir(local_dir)
+        monkeypatch.setenv("HOME", str(global_dir))
+
+        config = MCPConfig()
+
+        assert config.get_servers() == {}
+        assert config.config_file == global_dir / ".gaia" / "mcp_servers.json"
+
+    def test_config_explicit_file_no_stacking(self, tmp_path, monkeypatch):
+        """When an explicit config_file is given, only that file is loaded."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        explicit_dir = tmp_path / "explicit"
+        local_dir.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)
+        explicit_dir.mkdir(parents=True)
+
+        explicit_config = explicit_dir / "my_config.json"
+        explicit_config.write_text(
+            json.dumps(
+                {"mcpServers": {"explicit_server": {"command": "echo", "args": ["e"]}}}
+            )
+        )
+        (local_dir / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"local_server": {"command": "echo", "args": ["l"]}}}
+            )
+        )
+        (global_dir / ".gaia" / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"global_server": {"command": "echo", "args": ["g"]}}}
+            )
+        )
+
+        monkeypatch.chdir(local_dir)
+        monkeypatch.setenv("HOME", str(global_dir))
+
+        config = MCPConfig(config_file=str(explicit_config))
+
+        # Only the explicit file is loaded; local and global are ignored.
+        assert config.server_exists("explicit_server")
+        assert not config.server_exists("local_server")
+        assert not config.server_exists("global_server")
+        assert config.config_file == explicit_config
+        assert config.load_report["mode"] == "explicit"
+        assert config.load_report["servers"] == ["explicit_server"]
+
+    def test_load_report_auto_with_overrides(self, tmp_path, monkeypatch):
+        """load_report captures overrides when the same server key appears in both."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        local_dir.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)
+
+        (local_dir / "mcp_servers.json").write_text(
+            json.dumps({"mcpServers": {"shared": {"command": "echo", "args": ["l"]}}})
+        )
+        (global_dir / ".gaia" / "mcp_servers.json").write_text(
+            json.dumps({"mcpServers": {"shared": {"command": "echo", "args": ["g"]}}})
+        )
+
+        monkeypatch.chdir(local_dir)
+        monkeypatch.setenv("HOME", str(global_dir))
+
+        config = MCPConfig()
+
+        assert config.load_report["mode"] == "auto"
+        assert config.load_report["overrides"] == ["shared"]
+        assert config.load_report["global"]["servers"] == ["shared"]
+        assert config.load_report["local"]["servers"] == ["shared"]

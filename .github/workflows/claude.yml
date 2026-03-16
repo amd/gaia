@@ -27,9 +27,6 @@ on:
     types: [opened, ready_for_review]
   pull_request_review_comment:
     types: [created, edited]
-  workflow_run:
-    workflows: ["PyPi"]
-    types: [completed]
 
 permissions:
   contents: write  # Allows Claude to post suggested changes (requires write for GitHub API)

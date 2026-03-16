@@ -7,9 +7,21 @@ on:
   workflow_call:
   push:
     branches: [ main ]
+    paths:
+      - 'src/gaia/rag/**'
+      - 'src/gaia/llm/**'
+      - 'tests/test_lemonade_embeddings.py'
+      - 'setup.py'
+      - '.github/workflows/test_embeddings.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/rag/**'
+      - 'src/gaia/llm/**'
+      - 'tests/test_lemonade_embeddings.py'
+      - 'setup.py'
+      - '.github/workflows/test_embeddings.yml'
   merge_group:
   workflow_dispatch:
 

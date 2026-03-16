@@ -10,9 +10,23 @@ on:
   workflow_call:
   push:
     branches: ["main"]
+    paths:
+      - 'src/gaia/api/**'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/llm/**'
+      - 'tests/test_api.py'
+      - 'setup.py'
+      - '.github/workflows/test_api.yml'
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/api/**'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/llm/**'
+      - 'tests/test_api.py'
+      - 'setup.py'
+      - '.github/workflows/test_api.yml'
   merge_group:
   workflow_dispatch:
 

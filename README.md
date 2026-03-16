@@ -4,8 +4,8 @@
 [![Latest Release](https://img.shields.io/github/v/release/amd/gaia?include_prereleases)](https://github.com/amd/gaia/releases/latest "Download the latest release")
 [![PyPI](https://img.shields.io/pypi/v/amd-gaia)](https://pypi.org/project/amd-gaia/)
 [![GitHub downloads](https://img.shields.io/github/downloads/amd/gaia/total.svg)](https://github.com/amd/gaia/releases)
-[![OS - Windows](https://img.shields.io/badge/OS-Windows-blue)](https://amd-gaia.ai/quickstart "Windows installation")
-[![OS - Linux](https://img.shields.io/badge/OS-Linux-green)](https://amd-gaia.ai/quickstart "Linux installation")
+[![OS - Windows](https://img.shields.io/badge/OS-Windows-blue)](https://amd-gaia.ai/docs/quickstart "Windows installation")
+[![OS - Linux](https://img.shields.io/badge/OS-Linux-green)](https://amd-gaia.ai/docs/quickstart "Linux installation")
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-7289DA?logo=discord&logoColor=white)](https://discord.com/channels/1392562559122407535/1402013282495102997)
@@ -112,6 +112,30 @@ For complete setup instructions including Lemonade Server, see the **[Quickstart
 - **[SDK Reference](https://amd-gaia.ai/docs/sdk)** — Complete API documentation
 - **[Guides](https://amd-gaia.ai/docs/guides)** — Chat, Voice, RAG, and more
 - **[FAQ](https://amd-gaia.ai/docs/reference/faq)** — Frequently asked questions
+
+---
+
+## Releases
+
+See the full [Release Notes](https://amd-gaia.ai/docs/releases) on the documentation site, or browse [GitHub Releases](https://github.com/amd/gaia/releases).
+
+### Release Process
+
+To publish a new release (e.g. `v0.17.0`), create a release PR that updates these 3 files:
+
+| # | File | What to change |
+|---|------|----------------|
+| 1 | `src/gaia/version.py` | Set `__version__ = "0.17.0"` |
+| 2 | `docs/releases/v0.17.0.mdx` | Create release notes (see [format guide](https://amd-gaia.ai/docs/releases)) |
+| 3 | `docs/docs.json` | **(a)** Add `"releases/v0.17.0"` to the Releases tab pages array, **(b)** update the navbar label to `"v0.17.0 · Lemonade X.Y.Z"` |
+
+Then merge and tag:
+
+```bash
+git tag v0.17.0 && git push origin v0.17.0
+```
+
+CI validates all three files are consistent with the tag before publishing to [GitHub Releases](https://github.com/amd/gaia/releases) and [PyPI](https://pypi.org/project/amd-gaia/).
 
 ---
 

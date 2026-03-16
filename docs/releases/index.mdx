@@ -1,0 +1,121 @@
+---
+title: "Release Notes"
+description: "GAIA release history and upgrade guide"
+icon: "tag"
+---
+
+# Release Notes
+
+Browse the full release history for GAIA below, or on [GitHub Releases](https://github.com/amd/gaia/releases). Each release includes a summary of new features, improvements, bug fixes, and upgrade instructions.
+
+---
+
+## Release Process
+
+GAIA follows a **release-notes-first** workflow. All release artifacts are prepared and reviewed in a PR before the tag is pushed.
+
+### Files to update
+
+Every release PR must update exactly **3 files**. Using `v0.17.0` as an example:
+
+#### 1. `src/gaia/version.py` — bump `__version__`
+
+```python
+# before
+__version__ = "0.16.1"
+
+# after
+__version__ = "0.17.0"
+```
+
+#### 2. `docs/releases/v0.17.0.mdx` — create release notes
+
+Create a new file with MDX frontmatter and the required sections:
+
+```mdx
+---
+title: "v0.17.0"
+description: "Short one-line summary of this release"
+---
+
+# GAIA v0.17.0 Release Notes
+
+Summary paragraph describing the release.
+
+## What's New
+
+### Feature Name
+Description of the feature.
+
+## Bug Fixes
+
+- **Description**: What was fixed
+
+## Full Changelog
+
+Full Changelog: [v0.16.1...v0.17.0](https://github.com/amd/gaia/compare/v0.16.1...v0.17.0)
+```
+
+**Required sections:** `## What's New` (or `## Key Changes`) and `## Full Changelog`, plus a `github.com/amd/gaia/compare/` link.
+
+#### 3. `docs/docs.json` — two changes
+
+**(a)** Add the release to the **Releases tab** pages array (newest first):
+
+```json
+{
+  "tab": "Releases",
+  "groups": [{
+    "group": "Release Notes",
+    "pages": [
+      "releases/index",
+      "releases/v0.17.0",
+      "releases/v0.16.1"
+    ]
+  }]
+}
+```
+
+Add `"releases/v0.17.0"` as the **second entry** (after `"releases/index"`, before the previous release).
+
+**(b)** Update the **navbar version label**:
+
+```json
+{
+  "navbar": {
+    "links": [
+      {
+        "label": "v0.17.0 · Lemonade 10.0.0",
+        "href": "https://github.com/amd/gaia/releases"
+      }
+    ]
+  }
+}
+```
+
+Change the version in the `label` value to match the new release tag.
+
+### Merge, tag, push
+
+After the PR is merged:
+
+```bash
+git tag v0.17.0
+git push origin v0.17.0
+```
+
+### CI validation
+
+The `Publish GAIA Release` workflow runs a `validate-release` job that **blocks the release** if any check fails:
+
+| Check | What it validates |
+|-------|-------------------|
+| Release notes exist | `docs/releases/v0.17.0.mdx` is present |
+| Version consistency | `__version__` in `src/gaia/version.py` equals `0.17.0` |
+| docs.json release entry | `releases/v0.17.0` is in the Releases tab pages array |
+| docs.json navbar | Navbar label contains `v0.17.0` |
+| Release notes structure | Has frontmatter (`title`, `description`), required sections, and changelog link |
+
+If all checks pass:
+- The release notes content is published to [GitHub Releases](https://github.com/amd/gaia/releases)
+- The package is published to [PyPI](https://pypi.org/project/amd-gaia/)

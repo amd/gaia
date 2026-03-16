@@ -10,9 +10,27 @@ on:
   workflow_call:
   push:
     branches: [ main ]
+    paths:
+      - 'src/gaia/agents/chat/**'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/rag/**'
+      - 'src/gaia/chat/**'
+      - 'tests/test_chat_agent.py'
+      - 'tests/test_chat_sdk.py'
+      - 'setup.py'
+      - '.github/workflows/test_chat_agent.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/agents/chat/**'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/rag/**'
+      - 'src/gaia/chat/**'
+      - 'tests/test_chat_agent.py'
+      - 'tests/test_chat_sdk.py'
+      - 'setup.py'
+      - '.github/workflows/test_chat_agent.yml'
   merge_group:
   workflow_dispatch:
 

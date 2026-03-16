@@ -1,0 +1,15 @@
+.git/
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+docs/
+.github/
+installer/
+*.egg-info/
+dist/
+build/
+.gaia/
+htmlcov/
+.coverage*
+.DS_Store
