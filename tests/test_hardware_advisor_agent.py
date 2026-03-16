@@ -30,7 +30,7 @@ class TestHardwareAdvisorAgent:
                 "Processor": "AMD Ryzen 9 7940HS",
                 "Physical Memory": "32.0 GB",
                 "devices": {
-                    "npu": {"available": True, "name": "AMD Ryzen AI NPU"},
+                    "amd_npu": {"available": True, "name": "AMD Ryzen AI NPU"},
                 },
             }
             mock_client.list_models.return_value = {
@@ -134,7 +134,9 @@ class TestHardwareAdvisorAgentToolImplementation:
                 "OS Version": "Linux",
                 "Processor": "AMD",
                 "Physical Memory": "64.0 GB",
-                "devices": {"npu": {"available": True, "name": "Test NPU"}},
+                "devices": {
+                    "amd_npu": {"available": True, "name": "Test NPU"},
+                },
             }
             mock_client.list_models.return_value = {
                 "data": [
@@ -187,84 +189,3 @@ class TestHardwareAdvisorAgentToolImplementation:
         assert result["constraints"]["available_ram_gb"] == 8.0
         # Max model size should be ~70% of RAM
         assert result["constraints"]["max_model_size_gb"] == pytest.approx(5.6, rel=0.1)
-
-
-class TestHardwareAdvisorLemonadeV10:
-    """Test Hardware Advisor works with Lemonade v10 response format.
-
-    Lemonade v10 renamed device keys: npu → amd_npu, gpu → amd_igpu/amd_dgpu.
-    The LemonadeClient normalizes these, so the agent should work transparently.
-    """
-
-    @pytest.fixture
-    def mock_lemonade_client_v10(self):
-        """Mock Lemonade client returning v10 format (amd_npu, amd_igpu)."""
-        with patch(
-            "examples.hardware_advisor_agent.LemonadeClient"
-        ) as mock_client_class:
-            mock_client = MagicMock()
-            # Simulate the normalized response (client adds legacy aliases)
-            mock_client.get_system_info.return_value = {
-                "OS Version": "Windows 11 24H2",
-                "Processor": "AMD Ryzen AI 9 HX 375",
-                "Physical Memory": "32.0 GB",
-                "devices": {
-                    "cpu": {
-                        "name": "AMD Ryzen AI 9 HX 375",
-                        "cores": 12,
-                        "threads": 24,
-                        "available": True,
-                    },
-                    "amd_igpu": {
-                        "name": "AMD Radeon 890M",
-                        "vram_gb": 0.5,
-                        "available": True,
-                    },
-                    "amd_dgpu": [],
-                    "amd_npu": {
-                        "name": "XDNA2",
-                        "available": True,
-                        "power_mode": "Default",
-                    },
-                    # Legacy aliases added by _normalize_system_info
-                    "npu": {
-                        "name": "XDNA2",
-                        "available": True,
-                        "power_mode": "Default",
-                    },
-                    "gpu": {
-                        "name": "AMD Radeon 890M",
-                        "vram_gb": 0.5,
-                        "available": True,
-                    },
-                },
-            }
-            mock_client.list_models.return_value = {"data": []}
-            mock_client.get_model_info.return_value = {"size_gb": 0}
-            mock_client_class.return_value = mock_client
-            yield mock_client
-
-    @pytest.fixture
-    def agent_v10(self, mock_lemonade_client_v10):
-        """Create agent with v10 mock."""
-        return HardwareAdvisorAgent()
-
-    def test_get_hardware_info_detects_npu_v10(self, agent_v10):
-        """Test that NPU is detected from Lemonade v10 normalized response."""
-        from gaia.agents.base.tools import _TOOL_REGISTRY
-
-        get_hw = _TOOL_REGISTRY["get_hardware_info"]["function"]
-        result = get_hw()
-
-        assert result["success"] is True
-        assert result["npu"]["available"] is True
-        assert result["npu"]["name"] == "XDNA2"
-
-    def test_get_hardware_info_parses_ram_v10(self, agent_v10):
-        """Test RAM parsing with v10 response."""
-        from gaia.agents.base.tools import _TOOL_REGISTRY
-
-        get_hw = _TOOL_REGISTRY["get_hardware_info"]["function"]
-        result = get_hw()
-
-        assert result["ram_gb"] == 32.0

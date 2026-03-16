@@ -2668,11 +2668,6 @@ class LemonadeClient:
         """
         Get system hardware information and device enumeration.
 
-        Supports both Lemonade Server v9 (legacy) and v10+ response formats.
-        The v10 response uses ``amd_npu``, ``amd_igpu``, and ``amd_dgpu`` keys
-        under ``devices``. This method normalizes those to the legacy ``npu``
-        and ``gpu`` aliases so callers can use either key.
-
         Args:
             verbose: If True, returns additional details like Python packages
                      and extended system information
@@ -2684,22 +2679,20 @@ class LemonadeClient:
             - Physical Memory (RAM)
             - devices: Dictionary with device information
               - cpu: Name, cores, threads, availability
-              - amd_igpu: AMD integrated GPU info (v10+)
-              - amd_dgpu: AMD discrete GPU list (v10+)
-              - amd_npu: AMD NPU info (v10+)
-              - gpu: Alias for amd_igpu (backward compat)
-              - npu: Alias for amd_npu (backward compat)
+              - amd_igpu: AMD integrated GPU name, VRAM, driver version, availability
+              - amd_dgpu: AMD discrete GPU list
+              - amd_npu: AMD NPU name, driver version, power mode, availability
 
         Examples:
             # Check available devices
             sysinfo = client.get_system_info()
             devices = sysinfo.get("devices", {})
 
-            # Select best device (works with both v9 and v10)
-            if devices.get("npu", {}).get("available"):
+            # Select best device
+            if devices.get("amd_npu", {}).get("available"):
                 print("Using NPU for acceleration")
-            elif devices.get("gpu", {}).get("available"):
-                print("Using GPU for acceleration")
+            elif devices.get("amd_igpu", {}).get("available"):
+                print("Using iGPU for acceleration")
             else:
                 print("Using CPU")
 
@@ -2709,42 +2702,7 @@ class LemonadeClient:
         url = f"{self.base_url}/system-info"
         if verbose:
             url += "?verbose=true"
-        result = self._send_request("get", url)
-        return self._normalize_system_info(result)
-
-    @staticmethod
-    def _normalize_system_info(info: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize system-info response for backward compatibility.
-
-        Lemonade v10 renamed device keys:
-          - ``npu``  → ``amd_npu``
-          - ``gpu``  → ``amd_igpu`` / ``amd_dgpu``
-
-        This adds legacy aliases (``npu``, ``gpu``) when only v10 keys are
-        present, and adds v10 aliases when only legacy keys are present, so
-        callers can use either convention.
-        """
-        devices = info.get("devices")
-        if not isinstance(devices, dict):
-            return info
-
-        # --- NPU normalization ---
-        if "amd_npu" in devices and "npu" not in devices:
-            # v10 → add legacy alias
-            devices["npu"] = devices["amd_npu"]
-        elif "npu" in devices and "amd_npu" not in devices:
-            # legacy → add v10 alias
-            devices["amd_npu"] = devices["npu"]
-
-        # --- GPU normalization ---
-        if "amd_igpu" in devices and "gpu" not in devices:
-            # v10 → add legacy alias (prefer iGPU as the default "gpu")
-            devices["gpu"] = devices["amd_igpu"]
-        elif "gpu" in devices and "amd_igpu" not in devices:
-            # legacy → add v10 alias
-            devices["amd_igpu"] = devices["gpu"]
-
-        return info
+        return self._send_request("get", url)
 
     def ready(self) -> bool:
         """
