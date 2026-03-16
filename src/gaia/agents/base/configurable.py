@@ -1,7 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Configurable Agent - Allows defining agents via configuration (JSON/MD).
+Configurable Agent - Allows defining agents via configuration (JSON/MD/YAML).
+
+Supports full context injection: persona, voice, style, background, etc.
 """
 
 import logging
@@ -16,8 +18,9 @@ logger = logging.getLogger(__name__)
 class ConfigurableAgent(Agent):
     """
     Agent that is initialized and configured via a dictionary or file.
-    
+
     This allows creating new agent 'personalities' without writing new Python classes.
+    All configuration fields (persona, voice, style, etc.) are injected into the LLM context.
     """
 
     def __init__(
@@ -26,6 +29,11 @@ class ConfigurableAgent(Agent):
         description: str,
         system_prompt: str,
         tools: List[str] = None,
+        persona: Optional[Dict[str, Any]] = None,
+        voice_characteristics: Optional[str] = None,
+        background: Optional[str] = None,
+        expertise: Optional[List[str]] = None,
+        communication_style: Optional[str] = None,
         **kwargs
     ):
         """
@@ -36,13 +44,25 @@ class ConfigurableAgent(Agent):
             description: Brief description of what the agent does
             system_prompt: The base instructions for the LLM
             tools: List of tool names to register for this agent
+            persona: Dict with style, focus, background, expertise, etc.
+            voice_characteristics: How the agent communicates (tone, style)
+            background: Agent's background story/context
+            expertise: List of expertise areas
+            communication_style: Communication style description
             **kwargs: Standard Agent initialization parameters
         """
         self.agent_name = name
         self.agent_description = description
         self.base_system_prompt = system_prompt
         self.requested_tools = tools or []
-        
+
+        # Store persona fields for context injection
+        self.persona = persona or {}
+        self.voice_characteristics = voice_characteristics
+        self.background = background
+        self.expertise = expertise or []
+        self.communication_style = communication_style
+
         # Call parent init
         super().__init__(**kwargs)
 
@@ -58,8 +78,54 @@ class ConfigurableAgent(Agent):
         pass
 
     def _get_system_prompt(self) -> str:
-        """Return the pre-configured system prompt."""
-        return self.base_system_prompt
+        """
+        Return the pre-configured system prompt with full persona context injection.
+
+        This method injects ALL persona fields into the LLM context:
+        - persona.style, persona.focus, persona.background, persona.expertise
+        - voice_characteristics, communication_style, background, expertise
+
+        Returns:
+            Complete system prompt with all context injected
+        """
+        parts = [self.base_system_prompt]
+
+        # Build persona section - inject ALL persona fields into context
+        persona_sections = []
+
+        # Handle nested persona dict
+        if self.persona:
+            if self.persona.get('style'):
+                persona_sections.append(f"**Style:** {self.persona['style']}")
+            if self.persona.get('focus'):
+                persona_sections.append(f"**Focus:** {self.persona['focus']}")
+            if self.persona.get('background'):
+                persona_sections.append(f"**Background:** {self.persona['background']}")
+            if self.persona.get('expertise'):
+                expertise = self.persona['expertise']
+                if isinstance(expertise, list):
+                    expertise = ', '.join(expertise)
+                persona_sections.append(f"**Expertise:** {expertise}")
+            if self.persona.get('voice_characteristics'):
+                persona_sections.append(f"**Voice:** {self.persona['voice_characteristics']}")
+            if self.persona.get('communication_style'):
+                persona_sections.append(f"**Communication:** {self.persona['communication_style']}")
+
+        # Handle top-level persona fields (from YAML direct keys)
+        if self.voice_characteristics:
+            persona_sections.append(f"**Voice Characteristics:** {self.voice_characteristics}")
+        if self.background:
+            persona_sections.append(f"**Background:** {self.background}")
+        if self.expertise:
+            persona_sections.append(f"**Expertise:** {', '.join(self.expertise)}")
+        if self.communication_style:
+            persona_sections.append(f"**Communication Style:** {self.communication_style}")
+
+        # Add persona section if we have any persona fields
+        if persona_sections:
+            parts.append("\n==== AGENT PERSONA ====\n" + "\n".join(persona_sections))
+
+        return "\n\n".join(parts)
 
     def _format_tools_for_prompt(self) -> str:
         """

@@ -193,6 +193,9 @@ class AgentRegistry:
 
     def _register_custom_agent(self, model_id: str, config: Dict[str, Any]):
         """Register a custom agent configuration."""
+        # Extract persona fields for direct injection
+        persona = config.get("persona", {})
+
         # Map to ConfigurableAgent class
         self._custom_agents[model_id] = {
             "type": "configurable",
@@ -201,6 +204,12 @@ class AgentRegistry:
                 "description": config.get("description", "Custom Configurable Agent"),
                 "system_prompt": config.get("system_prompt", ""),
                 "tools": config.get("tools", ["*"]),
+                # Persona fields - these get injected into LLM context
+                "persona": persona,
+                "voice_characteristics": config.get("voice_characteristics"),
+                "background": config.get("background"),
+                "expertise": config.get("expertise"),
+                "communication_style": config.get("communication_style"),
                 "init_params": config.get("init_params", {})
             }
         }
@@ -262,12 +271,18 @@ class AgentRegistry:
                 agent_class = ConfigurableAgent
                 agent_config = config["config"]
                 init_params = agent_config.get("init_params", {}).copy()
-                
+
                 # Direct parameters for ConfigurableAgent
                 init_params["name"] = agent_config["name"]
                 init_params["description"] = agent_config["description"]
                 init_params["system_prompt"] = agent_config["system_prompt"]
                 init_params["tools"] = agent_config["tools"]
+                # Persona context injection - CRITICAL FIX
+                init_params["persona"] = agent_config.get("persona")
+                init_params["voice_characteristics"] = agent_config.get("voice_characteristics")
+                init_params["background"] = agent_config.get("background")
+                init_params["expertise"] = agent_config.get("expertise")
+                init_params["communication_style"] = agent_config.get("communication_style")
             else:
                 # Handle hardcoded agents
                 agent_class = self._load_agent_class(config["class_name"])
