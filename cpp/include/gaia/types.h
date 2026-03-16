@@ -151,6 +151,7 @@ struct ToolInfo {
     ToolCallback callback;
     bool atomic = false;
     ToolPolicy policy = ToolPolicy::ALLOW;                // default = backwards-compatible
+    bool enabled = true;                                  // false = hidden from prompt + rejected on execute
     std::optional<ToolValidateCallback> validateArgs;     // per-tool argument validator
 
     // MCP metadata (populated when tool comes from MCP server)
@@ -176,17 +177,7 @@ struct ParsedResponse {
 /// Return the default LLM base URL, honoring the LEMONADE_BASE_URL
 /// environment variable if set (matching the Python CLI behavior).
 inline std::string defaultBaseUrl() {
-#ifdef _MSC_VER
-    char* env = nullptr;
-    size_t len = 0;
-    _dupenv_s(&env, &len, "LEMONADE_BASE_URL");
-    std::string result = env ? std::string(env) : "http://localhost:8000/api/v1";
-    free(env);
-    return result;
-#else
-    const char* env = std::getenv("LEMONADE_BASE_URL");  // NOLINT(concurrency-mt-unsafe)
-    return env ? std::string(env) : "http://localhost:8000/api/v1";
-#endif
+    return getEnvVar("LEMONADE_BASE_URL", "http://localhost:8000/api/v1");
 }
 
 // ---- Decision Support ----
@@ -206,11 +197,26 @@ struct AgentConfig {
     int maxConsecutiveRepeats = 4;
     int maxHistoryMessages = 40; // Max messages kept between processQuery() calls (0 = unlimited)
     int contextSize = 16384;    // LLM context window size in tokens (n_ctx)
+    int maxTokens = 4096;       // Max tokens in LLM response
     bool debug = false;
     bool showPrompts = false;
     bool streaming = false;
     bool silentMode = false;
     double temperature = 0.7;  // LLM sampling temperature (0.0 = deterministic)
+
+    /// Validate config fields; throws std::invalid_argument on violation.
+    void validate() const;
+
+    /// Construct from a JSON object. Missing fields retain defaults.
+    /// Throws std::invalid_argument if any field is out of range.
+    static AgentConfig fromJson(const json& j);
+
+    /// Load config from a JSON file. All fields are optional.
+    /// Throws std::runtime_error on file/parse error, std::invalid_argument on invalid values.
+    static AgentConfig fromJsonFile(const std::string& path);
+
+    /// Serialize all fields to JSON (round-trips through fromJson).
+    json toJson() const;
 };
 
 } // namespace gaia
