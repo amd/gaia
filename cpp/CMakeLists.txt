@@ -84,6 +84,7 @@ endif()
 # Library
 # ---------------------------------------------------------------------------
 add_library(gaia_core
+    src/types.cpp
     src/tool_registry.cpp
     src/console.cpp
     src/clean_console.cpp
