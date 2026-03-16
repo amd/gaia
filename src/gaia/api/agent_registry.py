@@ -22,6 +22,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yaml
+
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.api_agent import ApiAgent
 from gaia.agents.base.configurable import ConfigurableAgent
@@ -100,13 +102,13 @@ class AgentRegistry:
         self._scan_custom_agents(custom_agents_dir)
 
     def _scan_custom_agents(self, custom_dir: Optional[Path] = None):
-        """Scan for .json and .md agent definitions."""
+        """Scan for .json, .yml, .yaml, and .md agent definitions."""
         if custom_dir is None:
             # Determine the custom agents directory
             # In source: src/gaia/api/agent_registry.py -> src/gaia/agents/custom/
             api_dir = Path(__file__).parent
             custom_dir = api_dir.parent / "agents" / "custom"
-        
+
         if not custom_dir.exists():
             try:
                 custom_dir.mkdir(parents=True, exist_ok=True)
@@ -118,6 +120,8 @@ class AgentRegistry:
         for file_path in custom_dir.glob("*"):
             if file_path.suffix == ".json":
                 self._load_json_agent(file_path)
+            elif file_path.suffix in [".yml", ".yaml"]:
+                self._load_yaml_agent(file_path)
             elif file_path.suffix == ".md":
                 self._load_markdown_agent(file_path)
 
@@ -126,12 +130,30 @@ class AgentRegistry:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
-            
+
             model_id = config.get("id") or file_path.stem
             self._register_custom_agent(model_id, config)
             logger.info(f"Loaded custom JSON agent: {model_id}")
         except Exception as e:
             logger.error(f"Failed to load custom JSON agent from {file_path}: {e}")
+
+    def _load_yaml_agent(self, file_path: Path):
+        """Load agent definition from a YAML file (.yml or .yaml)."""
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+
+            if not config:
+                logger.warning(f"YAML agent file {file_path} is empty or invalid")
+                return
+
+            model_id = config.get("id") or file_path.stem
+            self._register_custom_agent(model_id, config)
+            logger.info(f"Loaded custom YAML agent: {model_id}")
+        except yaml.YAMLError as e:
+            logger.error(f"Failed to parse YAML agent file {file_path}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to load custom YAML agent from {file_path}: {e}")
 
     def _load_markdown_agent(self, file_path: Path):
         """Load agent definition from a Markdown file with YAML-like frontmatter."""
