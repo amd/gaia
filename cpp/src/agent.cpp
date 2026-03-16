@@ -360,8 +360,13 @@ json Agent::resolvePlanParameters(const json& toolArgs, const std::vector<json>&
 // ---- MCP Integration ----
 
 bool Agent::connectMcpServer(const std::string& name, const json& config) {
+    bool debugMode;
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        debugMode = config_.debug;
+    }
     try {
-        auto client = std::make_unique<MCPClient>(MCPClient::fromConfig(name, config, 30, config_.debug));
+        auto client = std::make_unique<MCPClient>(MCPClient::fromConfig(name, config, 30, debugMode));
         if (!client->connect()) {
             console_->printError("Failed to connect to MCP server '" + name + "': " + client->lastError());
             return false;
@@ -443,12 +448,18 @@ bool Agent::reconnectMcpServer(const std::string& name) {
     auto cfgIt = mcpServerConfigs_.find(name);
     if (cfgIt == mcpServerConfigs_.end()) return false;
 
+    bool debugMode;
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        debugMode = config_.debug;
+    }
+
     // Drop the old (dead) client
     mcpClients_.erase(name);
 
     try {
         auto client = std::make_unique<MCPClient>(
-            MCPClient::fromConfig(name, cfgIt->second, 30, config_.debug));
+            MCPClient::fromConfig(name, cfgIt->second, 30, debugMode));
         if (!client->connect()) {
             console_->printError("MCP reconnect failed for '" + name + "': " + client->lastError());
             return false;

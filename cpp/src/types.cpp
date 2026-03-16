@@ -21,8 +21,8 @@ void AgentConfig::validate() const {
         throw std::invalid_argument("contextSize must be > 0");
     if (maxPlanIterations <= 0)
         throw std::invalid_argument("maxPlanIterations must be > 0");
-    if (maxConsecutiveRepeats <= 0)
-        throw std::invalid_argument("maxConsecutiveRepeats must be > 0");
+    if (maxConsecutiveRepeats < 2)
+        throw std::invalid_argument("maxConsecutiveRepeats must be >= 2");
     if (maxHistoryMessages < 0)
         throw std::invalid_argument("maxHistoryMessages must be >= 0 (0 = unlimited)");
     if (temperature < 0.0 || temperature > 2.0)
