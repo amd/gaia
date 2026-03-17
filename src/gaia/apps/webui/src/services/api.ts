@@ -10,6 +10,18 @@ const API_BASE = '/api';
 
 // -- Helpers -------------------------------------------------------------------
 
+function getFriendlyError(status: number, detail: string): string {
+    switch (status) {
+        case 403: return 'Access denied. This location is outside your home directory.';
+        case 404: return 'Not found. The file or folder may have been moved or deleted.';
+        case 413: return 'File too large to process.';
+        case 500: return 'Server error. Please try again.';
+        case 502:
+        case 503: return 'Service unavailable. Is the backend running?';
+        default: return detail || `Request failed (HTTP ${status})`;
+    }
+}
+
 /** Fetch wrapper with logging, timing, and error handling. */
 async function apiFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${API_BASE}${path}`;
@@ -32,9 +44,11 @@ async function apiFetch<T>(method: string, path: string, body?: unknown): Promis
     }
 
     if (!res.ok) {
-        const errorText = await res.text().catch(() => 'unable to read response body');
-        log.api.error(`${method} ${url} - HTTP ${res.status} ${res.statusText}`, { errorText });
-        throw new Error(`API ${res.status}: ${errorText}`);
+        const errorText = await res.text().catch(() => '');
+        log.api.error(`${method} ${url} - HTTP ${res.status}`, { errorText });
+        let detail = errorText;
+        try { detail = JSON.parse(errorText).detail || errorText; } catch {}
+        throw new Error(getFriendlyError(res.status, detail));
     }
 
     // Some endpoints (DELETE) may not return JSON
