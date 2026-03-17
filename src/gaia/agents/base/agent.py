@@ -474,7 +474,6 @@ You must respond ONLY in valid JSON. No text before { or after }.
         # Build a set of character ranges inside code fences (```...```)
         # so we don't accidentally extract example JSON from markdown.
         _code_ranges: list[tuple[int, int]] = []
-        _fence_start = 0
         _search_from = 0
         while True:
             _open = response.find("```", _search_from)
@@ -846,6 +845,16 @@ You must respond ONLY in valid JSON. No text before { or after }.
             }
 
         response = response.strip()
+
+        # Strip Qwen3 thinking tags before parsing
+        response = re.sub(r"<think>[\s\S]*?</think>", "", response).strip()
+        if not response:
+            logger.warning("LLM response contained only thinking content")
+            return {
+                "thought": "LLM returned only thinking content",
+                "goal": "Handle thinking-only response",
+                "answer": "The model returned only internal reasoning with no answer. Please try again.",
+            }
 
         # Log what we received for debugging (show more to see full JSON)
         if len(response) > 500:

@@ -110,7 +110,10 @@ class LemonadeProvider(LLMClient):
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")
 
-        return response["choices"][0]["message"]["content"]
+        content = response["choices"][0]["message"]["content"]
+        if not content:
+            content = response["choices"][0]["message"].get("reasoning_content", "")
+        return content
 
     def embed(self, texts: list[str], **kwargs) -> list[list[float]]:
         response = self._backend.embeddings(texts, **kwargs)

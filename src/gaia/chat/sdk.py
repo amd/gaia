@@ -227,6 +227,8 @@ class AgentSDK:
             # Use generate with formatted prompt
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
+            if "max_tokens" not in kwargs:
+                kwargs["max_tokens"] = self.config.max_tokens
             response = self.llm_client.generate(
                 prompt=formatted_prompt,
                 model=self.config.model,
@@ -312,6 +314,8 @@ class AgentSDK:
             # Use generate with formatted prompt for streaming
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
+            if "max_tokens" not in kwargs:
+                kwargs["max_tokens"] = self.config.max_tokens
             full_response = ""
             for chunk in self.llm_client.generate(
                 prompt=formatted_prompt, model=self.config.model, stream=True, **kwargs

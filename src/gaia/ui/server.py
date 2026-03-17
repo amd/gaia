@@ -203,7 +203,9 @@ def create_app(db_path: str = None) -> FastAPI:
     # Concurrency control for /api/chat/send
     # ChatAgent is expensive (LLM connection, RAG indexing), so we limit
     # the number of concurrent chat requests to avoid resource exhaustion.
-    app.state.chat_semaphore = asyncio.Semaphore(2)  # max 2 concurrent
+    app.state.chat_semaphore = asyncio.Semaphore(
+        1
+    )  # serialize: _TOOL_REGISTRY is global
     # Per-session locks prevent the same session from having multiple
     # concurrent requests, which would corrupt conversation state.
     app.state.session_locks: dict = {}  # session_id -> asyncio.Lock

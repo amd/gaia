@@ -2329,9 +2329,11 @@ Examples:
             uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
         except ImportError as e:
             print(f"\n❌ Missing dependencies for Agent UI: {e}")
-            print("\n   The Agent UI requires extra dependencies that are not installed.")
+            print(
+                "\n   The Agent UI requires extra dependencies that are not installed."
+            )
             print("   Install them with:\n")
-            print("     uv pip install -e \".[ui]\"")
+            print('     uv pip install -e ".[ui]"')
             print("\n   Or if you installed from PyPI:\n")
             print("     pip install amd-gaia[ui]")
             print()

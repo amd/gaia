@@ -1024,7 +1024,9 @@ class TestCleanAnswerJson:
         """Verify markdown content is preserved."""
         from gaia.ui.sse_handler import _clean_answer_json
 
-        text = '{"answer": "# Title\n\n**Bold text** and *italic*\n\n1. First\n2. Second"}'
+        text = (
+            '{"answer": "# Title\n\n**Bold text** and *italic*\n\n1. First\n2. Second"}'
+        )
         result = _clean_answer_json(text)
         assert "# Title" in result
         assert "**Bold text**" in result

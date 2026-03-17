@@ -2340,7 +2340,18 @@ class LemonadeClient:
                 console = None
                 print(f"🔄 Loading model: {model}...")
 
-            self.load_model(model, auto_download=True, prompt=False)
+            ctx_size = None
+            for _key, req in MODELS.items():
+                if req.model_id == model:
+                    ctx_size = req.min_ctx_size
+                    break
+
+            if ctx_size is None:
+                self.log.debug(
+                    f"Model '{model}' not in MODELS registry; using server default ctx_size"
+                )
+
+            self.load_model(model, auto_download=True, prompt=False, ctx_size=ctx_size)
 
             # Print model ready message
             try:

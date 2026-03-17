@@ -236,6 +236,10 @@ class LemonadeManager:
                             and cls._context_size < min_context_size
                             and llm_models_loaded
                         ):
+                            if cls._try_reload_with_ctx(
+                                client, status, min_context_size, quiet, cls._lock
+                            ):
+                                return True
                             cls._log.warning(
                                 f"Lemonade running with {cls._context_size} tokens, "
                                 f"but {min_context_size} requested. "
@@ -309,6 +313,10 @@ class LemonadeManager:
                     and cls._context_size < min_context_size
                     and llm_models_loaded
                 ):
+                    if cls._try_reload_with_ctx(
+                        client, status, min_context_size, quiet, cls._lock
+                    ):
+                        return True
                     cls._log.warning(
                         f"Context size {cls._context_size} is less than "
                         f"requested {min_context_size}. Some features may not work correctly."
@@ -326,6 +334,88 @@ class LemonadeManager:
                 if not quiet:
                     cls.print_server_error(min_context_size)
                 return False
+
+    @classmethod
+    def _try_reload_with_ctx(
+        cls,
+        client: "LemonadeClient",
+        status,
+        min_context_size: int,
+        quiet: bool,
+        lock: "threading.Lock",
+    ) -> bool:
+        """Attempt to reload the current LLM model with a larger context size.
+
+        Temporarily releases `lock` during the blocking load_model() call so
+        other threads are not stalled for the duration of the reload.
+
+        Returns True if reload succeeded and context is now sufficient.
+        """
+        llm_models = [
+            m for m in status.loaded_models if "image" not in m.get("labels", [])
+        ]
+        if not llm_models:
+            return False
+
+        model_id = llm_models[0].get("id", "")
+        if not model_id:
+            return False
+
+        cls._log.info(
+            f"Auto-reloading '{model_id}' with ctx_size={min_context_size} "
+            f"(was {cls._context_size})"
+        )
+        if not quiet:
+            print(
+                f"\n⏳ Reloading model with ctx_size={min_context_size} tokens "
+                f"(was {cls._context_size}). This may take a moment...",
+                flush=True,
+            )
+
+        # Release the lock for the duration of the blocking model reload so
+        # other threads (e.g. status polling) are not stalled.
+        lock.release()
+        try:
+            client.load_model(model_id, ctx_size=min_context_size, prompt=False)
+            # Check if the server now reports the new context size.
+            # Some Lemonade versions do not expose ctx_size in their status
+            # (they return 0), and some may not honor the ctx_size parameter
+            # at all (always reporting the default, e.g. 4096).
+            #
+            # Regardless of what the server reports, update cls._context_size
+            # to min_context_size so we don't trigger an infinite reload loop
+            # on every request.  If the reload didn't actually change the
+            # model's context window the agent will still run — responses may
+            # be degraded — but at least the UI won't be stuck in a reload
+            # cycle on every message.
+            new_status = client.get_status()
+            reported_ctx = new_status.context_size or 0
+            actual_ctx = (
+                reported_ctx if reported_ctx >= min_context_size else min_context_size
+            )
+            success = reported_ctx >= min_context_size
+            if success:
+                cls._log.info(
+                    f"Model reloaded successfully with ctx_size={reported_ctx}"
+                )
+                if not quiet:
+                    print(f"✅ Context size updated to {reported_ctx} tokens.")
+            else:
+                cls._log.warning(
+                    "ctx_size after reload: reported=%d (need %d). "
+                    "Assuming reload succeeded to prevent reload loop.",
+                    reported_ctx,
+                    min_context_size,
+                )
+            # Always update the cached context size to break the reload loop.
+            cls._context_size = actual_ctx
+            return success
+        except Exception as e:
+            cls._log.warning(f"Auto-reload failed: {e}")
+            return False
+        finally:
+            # Re-acquire before returning to the `with cls._lock:` block.
+            lock.acquire()
 
     @classmethod
     def is_initialized(cls) -> bool:
