@@ -57,15 +57,16 @@ async def send_message(
         raise HTTPException(status_code=404, detail="Session not found")
 
     # ── Per-session lock ─────────────────────────────────────────────
-    # Get or create a lock for this session
+    # setdefault is atomic: safe under concurrent requests for the same session
     session_locks = http_request.app.state.session_locks
     chat_semaphore = http_request.app.state.chat_semaphore
     sid = request.session_id
-    if sid not in session_locks:
-        session_locks[sid] = asyncio.Lock()
-    session_lock = session_locks[sid]
+    session_lock = session_locks.setdefault(sid, asyncio.Lock())
 
-    if session_lock.locked():
+    # Acquire session lock with timeout → 409 if the session is already busy
+    try:
+        await asyncio.wait_for(session_lock.acquire(), timeout=0.5)
+    except asyncio.TimeoutError:
         raise HTTPException(
             status_code=409,
             detail="A request is already in progress for this session. "
@@ -73,16 +74,19 @@ async def send_message(
         )
 
     # ── Global concurrency gate ──────────────────────────────────────
+    # If the semaphore is full, release the session lock before raising
     try:
         await asyncio.wait_for(chat_semaphore.acquire(), timeout=0.5)
     except asyncio.TimeoutError:
+        session_lock.release()
         raise HTTPException(
             status_code=429,
             detail="The server is busy processing other chat requests. "
             "Please try again in a few moments.",
         )
 
-    # Track whether the semaphore was handed off to the stream generator
+    # Both session_lock and chat_semaphore are now held by this coroutine.
+    # Track whether ownership was transferred to the streaming generator.
     sem_released = False
 
     # Resolve the patchable functions through gaia.ui.server so tests
@@ -90,26 +94,18 @@ async def send_message(
     srv = _server_mod()
 
     try:
-        # Save user message inside the lock so ordering is preserved
-        async with session_lock:
-            db.add_message(request.session_id, "user", request.message)
-
         if request.stream:
-            # For streaming, the session lock must be held for the entire
-            # duration of the stream, not just the setup.  The generator
-            # acquires the lock and releases it (along with the semaphore)
-            # when the stream finishes or errors out.
+            # Transfer both locks to the streaming generator so they are
+            # held for the full duration of the stream and released on exit.
             async def _guarded_stream():
                 try:
-                    async with session_lock:
-                        async for chunk in srv._stream_chat_response(
-                            db, session, request
-                        ):
-                            yield chunk
+                    db.add_message(request.session_id, "user", request.message)
+                    async for chunk in srv._stream_chat_response(db, session, request):
+                        yield chunk
                 finally:
+                    session_lock.release()
                     chat_semaphore.release()
 
-            # Transfer semaphore ownership to the streaming generator
             sem_released = True
             return StreamingResponse(
                 _guarded_stream(),
@@ -121,8 +117,8 @@ async def send_message(
                 },
             )
         else:
-            # Non-streaming: hold the lock for the entire response
-            async with session_lock:
+            try:
+                db.add_message(request.session_id, "user", request.message)
                 response_text = await srv._get_chat_response(db, session, request)
                 msg_id = db.add_message(request.session_id, "assistant", response_text)
                 return ChatResponse(
@@ -130,8 +126,10 @@ async def send_message(
                     content=response_text,
                     sources=[],
                 )
+            finally:
+                session_lock.release()
     finally:
-        # Release the semaphore for non-streaming requests (or if an
-        # error occurred before the streaming generator took ownership).
+        # Release the semaphore for non-streaming requests or on error before
+        # the streaming generator took ownership.
         if not sem_released:
             chat_semaphore.release()

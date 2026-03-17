@@ -9,7 +9,7 @@ and session-document attachments.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
@@ -92,10 +92,16 @@ async def update_session(
 
 
 @router.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str, db: ChatDatabase = Depends(get_db)):
+async def delete_session(
+    session_id: str,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
+):
     """Delete a session and its messages."""
     if not db.delete_session(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    # Remove the per-session lock to prevent memory leaks
+    http_request.app.state.session_locks.pop(session_id, None)
     return {"deleted": True}
 
 

@@ -91,14 +91,15 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
 def _compute_allowed_paths(rag_file_paths: list) -> list:
     """Derive allowed filesystem paths from document locations.
 
-    Collects the unique parent directories of all RAG document paths
-    plus the user home directory, so the agent (and its RAG SDK) are
-    permitted to read the indexed files.
+    Collects the unique parent directories of all RAG document paths.
+    Falls back to the user home directory only when no document paths
+    are provided, to avoid granting unnecessary broad access.
     """
-    dirs = {str(Path.home())}
+    dirs = set()
     for fp in rag_file_paths:
-        parent = str(Path(fp).parent)
-        dirs.add(parent)
+        dirs.add(str(Path(fp).parent))
+    if not dirs:
+        dirs.add(str(Path.home()))
     return list(dirs)
 
 
@@ -214,6 +215,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         # Create SSE handler first and emit immediate feedback BEFORE the
         # slow ChatAgent construction (RAG indexing, LLM connection can take 10-30s)
         sse_handler = SSEOutputHandler()
+        sse_handler._emit(
+            {"type": "status", "status": "info", "message": "Connecting to LLM..."}
+        )
 
         # Build conversation history
         messages = db.get_messages(request.session_id, limit=20)
@@ -264,6 +268,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 # -- Phase 2: LLM connection --
                 agent = ChatAgent(config)
                 agent.console = sse_handler  # Assign early so tool events flow
+
+                # Early-exit if consumer disconnected
+                if sse_handler.cancelled.is_set():
+                    return
 
                 # -- Phase 3: RAG indexing (session-specific docs only) --
                 # Only auto-index documents explicitly attached to the session.
@@ -374,6 +382,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             agent.conversation_history.append(
                                 {"role": "assistant", "content": a}
                             )
+
+                # Early-exit if consumer disconnected
+                if sse_handler.cancelled.is_set():
+                    return
 
                 # -- Phase 5: Query processing --
                 result = agent.process_query(request.message)
@@ -533,7 +545,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     yield ": keepalive\n\n"
                 continue
 
-        # Wait for the producer thread to finish (with timeout to avoid hanging)
+        # Signal cancellation (handles client disconnect) then wait for producer
+        sse_handler.cancelled.set()
         producer.join(timeout=5.0)
         if producer.is_alive():
             logger.warning("Producer thread still running after stream ended")

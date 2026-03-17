@@ -12,6 +12,7 @@ import json
 import logging
 import queue
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -64,6 +65,7 @@ class SSEOutputHandler(OutputHandler):
 
     def __init__(self):
         self.event_queue: queue.Queue = queue.Queue()
+        self.cancelled = threading.Event()
         self._start_time: Optional[float] = None
         self._step_count = 0
         self._tool_count = 0
@@ -318,6 +320,8 @@ class SSEOutputHandler(OutputHandler):
     def print_final_answer(
         self, answer: str, streaming: bool = True
     ):  # pylint: disable=unused-argument
+        if answer:
+            answer = _THINK_TAG_SUB_RE.sub("", answer).strip()
         self._emit(
             {
                 "type": "answer",
@@ -377,6 +381,9 @@ class SSEOutputHandler(OutputHandler):
             # LLMs sometimes emit as text content before the tool is invoked.
             self._stream_buffer += text_chunk
 
+            # Strip any completed <think>...</think> blocks from the buffer.
+            self._stream_buffer = _THINK_TAG_SUB_RE.sub("", self._stream_buffer)
+
             stripped = self._stream_buffer.strip()
 
             # Case 0: Buffer starts with "{" but we haven't seen enough to
@@ -413,7 +420,7 @@ class SSEOutputHandler(OutputHandler):
             # Case 1b: Buffer starts with "{" and has "answer" — raw JSON answer
             # The LLM sometimes emits {"answer": "..."} which duplicates the
             # already-streamed text.  Accumulate until complete, then discard.
-            if stripped.startswith("{") and '"answer"' in stripped:
+            elif stripped.startswith("{") and '"answer"' in stripped:
                 if stripped.endswith("}"):
                     logger.debug("Filtered answer JSON: %s", stripped[:100])
                     self._stream_buffer = ""
@@ -428,7 +435,7 @@ class SSEOutputHandler(OutputHandler):
             # Case 2: Buffer has "answer" embedded after normal text
             # e.g., "...some text. {"answer": "duplicated text..."}"
             # Strip the JSON portion, emit only the text before it.
-            if '"answer"' in stripped and '{"answer"' in self._stream_buffer:
+            elif '"answer"' in stripped and '{"answer"' in self._stream_buffer:
                 json_idx = self._stream_buffer.find('{"answer"')
                 if json_idx >= 0:
                     text_before = self._stream_buffer[:json_idx].rstrip()
@@ -448,7 +455,7 @@ class SSEOutputHandler(OutputHandler):
 
             # Case 3: Buffer has "tool" embedded after normal text (e.g., "I'll help.\n{"tool":...")
             # Split at the JSON start and emit the text portion, buffer the JSON portion.
-            if '"tool"' in stripped and '{"tool"' in self._stream_buffer:
+            elif '"tool"' in stripped and '{"tool"' in self._stream_buffer:
                 json_idx = self._stream_buffer.find('{"tool"')
                 if json_idx > 0:
                     # Emit the text before the JSON
@@ -655,7 +662,9 @@ def _clean_answer_json(text: str) -> str:
         return text
     stripped = text.strip()
     # Quick check: must start with { and contain "answer"
-    if not (stripped.startswith("{") and '"answer"' in stripped and stripped.endswith("}")):
+    if not (
+        stripped.startswith("{") and '"answer"' in stripped and stripped.endswith("}")
+    ):
         return text
     # Try proper JSON parse first
     try:

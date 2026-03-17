@@ -474,7 +474,6 @@ You must respond ONLY in valid JSON. No text before { or after }.
         # Build a set of character ranges inside code fences (```...```)
         # so we don't accidentally extract example JSON from markdown.
         _code_ranges: list[tuple[int, int]] = []
-        _fence_start = 0
         _search_from = 0
         while True:
             _open = response.find("```", _search_from)

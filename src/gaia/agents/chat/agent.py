@@ -35,7 +35,7 @@ class ChatAgentConfig:
     use_claude: bool = False
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
-    base_url: str = "http://localhost:8000/api/v1"
+    base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = use default Qwen3-Coder-30B
 
     # Execution settings
@@ -129,6 +129,13 @@ class ChatAgent(
         # Store max_chunks for adaptive retrieval
         self.base_max_chunks = config.max_chunks
 
+        # Resolve effective base_url: config value > env var > default
+        effective_base_url = (
+            config.base_url
+            if config.base_url is not None
+            else os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+        )
+
         # Initialize RAG SDK (optional - will be None if dependencies not installed)
         try:
             rag_config = RAGConfig(
@@ -139,7 +146,7 @@ class ChatAgent(
                 show_stats=config.show_stats,
                 use_local_llm=not (config.use_claude or config.use_chatgpt),
                 use_llm_chunking=config.use_llm_chunking,  # Enable semantic chunking
-                base_url=config.base_url,  # Pass base_url to RAG for VLM client
+                base_url=effective_base_url,  # Pass base_url to RAG for VLM client
                 allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
             )
             self.rag = RAGSDK(rag_config)
@@ -165,7 +172,7 @@ class ChatAgent(
             use_claude=config.use_claude,
             use_chatgpt=config.use_chatgpt,
             claude_model=config.claude_model,
-            base_url=config.base_url,
+            base_url=effective_base_url,
             model_id=effective_model_id,  # Pass the effective model to parent
             max_steps=config.max_steps,
             debug_prompts=config.debug_prompts,
