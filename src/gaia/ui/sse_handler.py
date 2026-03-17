@@ -320,6 +320,8 @@ class SSEOutputHandler(OutputHandler):
     def print_final_answer(
         self, answer: str, streaming: bool = True
     ):  # pylint: disable=unused-argument
+        if answer:
+            answer = _THINK_TAG_SUB_RE.sub("", answer).strip()
         self._emit(
             {
                 "type": "answer",
@@ -378,6 +380,9 @@ class SSEOutputHandler(OutputHandler):
             # Buffer text to detect and suppress raw tool-call JSON that
             # LLMs sometimes emit as text content before the tool is invoked.
             self._stream_buffer += text_chunk
+
+            # Strip any completed <think>...</think> blocks from the buffer.
+            self._stream_buffer = _THINK_TAG_SUB_RE.sub("", self._stream_buffer)
 
             stripped = self._stream_buffer.strip()
 

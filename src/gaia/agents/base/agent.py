@@ -846,16 +846,6 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
         response = response.strip()
 
-        # Strip Qwen3 thinking tags before parsing
-        response = re.sub(r"<think>[\s\S]*?</think>", "", response).strip()
-        if not response:
-            logger.warning("LLM response contained only thinking content")
-            return {
-                "thought": "LLM returned only thinking content",
-                "goal": "Handle thinking-only response",
-                "answer": "The model returned only internal reasoning with no answer. Please try again.",
-            }
-
         # Log what we received for debugging (show more to see full JSON)
         if len(response) > 500:
             logger.debug(
