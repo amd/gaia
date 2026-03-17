@@ -127,16 +127,41 @@ function cleanLLMJsonBlocks(text: string): string {
     return result;
 }
 
+/**
+ * Strip outer code fences that wrap the entire text.
+ * LLMs sometimes wrap their prose in ```<lang>\n...\n``` which causes
+ * the whole response to render as a code block. This runs repeatedly
+ * to handle nested wrapping.
+ */
+function stripOuterCodeFences(text: string): string {
+    let s = text.trim();
+    // Repeat in case of nested fences (rare but possible)
+    for (let i = 0; i < 3; i++) {
+        // Match: ```<optional-lang>\n ... \n``` (greedy inner match)
+        const m = s.match(/^```[\w]*[ \t]*\n([\s\S]*)\n```\s*$/);
+        if (m) {
+            s = m[1].trim();
+            continue;
+        }
+        // Match: opening ``` without closing (unclosed fence)
+        const openOnly = s.match(/^```[\w]*[ \t]*\n([\s\S]*)$/);
+        if (openOnly && !openOnly[1].includes('```')) {
+            s = openOnly[1].trim();
+            continue;
+        }
+        // Remove trailing unclosed fence
+        s = s.replace(/\n?```\s*$/, '');
+        break;
+    }
+    return s;
+}
+
 function cleanToolCallContent(content: string): string {
     if (!content) return content;
     let cleaned = content;
 
     // Remove all tool-call JSON blocks from the content
     cleaned = cleaned.replace(TOOL_CALL_JSON_RE, '');
-
-    // Remove trailing unclosed code fences (```\n at end with no matching close)
-    // LLMs sometimes end responses with ``` or ```\n
-    cleaned = cleaned.replace(/\n?```\s*$/, '');
 
     // Remove/extract LLM JSON blocks (thought, answer, tool) from output.
     // These have nested braces so we use a brace-depth parser instead of regex.
@@ -155,15 +180,12 @@ function cleanToolCallContent(content: string): string {
     if (literalNewlines > 2 && literalNewlines > realNewlines * 2) {
         cleaned = cleaned.replace(/\\n/g, '\n');
         cleaned = cleaned.replace(/\\t/g, '\t');
-        // Also clean up any remaining double-escaped quotes
         cleaned = cleaned.replace(/\\"/g, '"');
     }
 
-    // Remove leading/trailing whitespace
-    cleaned = cleaned.trim();
-
-    // If the result is empty after cleaning, return empty —
-    // the agent activity panel already shows what happened.
+    // Strip outer code fences AFTER all other cleaning — catches fences
+    // that were inside JSON answer blocks or other wrappers.
+    cleaned = stripOuterCodeFences(cleaned);
 
     return cleaned;
 }
