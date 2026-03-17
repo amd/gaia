@@ -637,8 +637,8 @@ describe('Chat App Integration', () => {
       expect(appContent).toContain('handleNewTaskWithPrompt');
     });
 
-    it('should dispatch custom event for initial prompts', () => {
-      expect(appContent).toContain('gaia:send-prompt');
+    it('should pass prompt handler to child components', () => {
+      expect(appContent).toContain('onSendPrompt={handleNewTaskWithPrompt}');
     });
 
     it('should use useCallback for memoized handlers', () => {
@@ -901,8 +901,8 @@ describe('Chat App Integration', () => {
 
     it('should have ARIA labels on sidebar buttons', () => {
       expect(sidebarContent).toContain('aria-label="New Task"');
-      expect(sidebarContent).toContain('aria-label="Document Library"');
       expect(sidebarContent).toContain('aria-label="Settings"');
+      expect(sidebarContent).toContain('aria-label="Search tasks"');
     });
 
     it('should have ARIA labels on sessions', () => {

@@ -4,7 +4,7 @@
 > **Date:** 2026-03-06
 >
 > **Two Milestones:**
-> - **Milestone A** — [Agent UI: Wire Existing SDK Capabilities (#15)](https://github.com/amd/gaia/milestone/15)
+> - **Milestone A** — Agent UI: Wire Existing SDK Capabilities (#15)
 >   *Expose existing GAIA SDK features to the Agent UI. No new SDK code — just wiring,
 >   MCP integration, and UI work.*
 > - **Milestone B** — GAIA Agent SDK: New Capabilities (TBD)
