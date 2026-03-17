@@ -945,12 +945,14 @@ class TestPrintStreamingText:
         assert handler._stream_buffer == "{"
 
     def test_answer_json_token_by_token_filtered(self, handler):
-        """Token-by-token {"answer": "..."} should be filtered, not emitted."""
+        """Token-by-token {"answer": "..."} should extract and emit as answer."""
         handler.print_streaming_text("{")
         handler.print_streaming_text('"answer": "Hello world"}')
         events = _drain(handler)
-        # The answer JSON should be filtered entirely
-        assert len(events) == 0
+        # The answer JSON should be parsed and emitted as an "answer" event
+        assert len(events) == 1
+        assert events[0]["type"] == "answer"
+        assert events[0]["content"] == "Hello world"
         assert handler._stream_buffer == ""
 
     def test_brace_followed_by_non_json_emits(self, handler):

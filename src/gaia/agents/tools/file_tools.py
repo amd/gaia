@@ -230,9 +230,7 @@ class FileSearchToolsMixin:
                 matching_files = unique_files
 
                 # Stop progress indicator after quick search
-                if hasattr(self, "console") and hasattr(
-                    self.console, "stop_progress"
-                ):
+                if hasattr(self, "console") and hasattr(self.console, "stop_progress"):
                     self.console.stop_progress()
 
                 # If found in CWD + common locations, return immediately

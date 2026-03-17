@@ -430,13 +430,9 @@ class SSEOutputHandler(OutputHandler):
                             len(answer_text),
                             answer_text[:100],
                         )
-                        self._emit(
-                            {"type": "answer", "content": answer_text}
-                        )
+                        self._emit({"type": "answer", "content": answer_text})
                     else:
-                        logger.debug(
-                            "Filtered answer JSON: %s", stripped[:100]
-                        )
+                        logger.debug("Filtered answer JSON: %s", stripped[:100])
                     self._stream_buffer = ""
                     return
                 if len(self._stream_buffer) > 4096:
