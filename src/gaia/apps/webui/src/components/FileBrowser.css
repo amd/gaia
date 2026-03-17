@@ -9,6 +9,10 @@
     flex-direction: column;
 }
 
+.file-browser-modal.has-preview {
+    width: min(95vw, 1200px);
+}
+
 .file-browser-body {
     display: flex;
     flex-direction: column;
@@ -208,7 +212,7 @@
     overflow-y: auto;
     border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
     border-radius: 8px;
-    min-width: 0;
+    min-width: 250px;
 }
 
 .fb-entry {
@@ -262,32 +266,15 @@
 .fb-entry-size { min-width: 55px; text-align: right; }
 .fb-entry-date { min-width: 65px; text-align: right; }
 
-/* Checkbox */
-.fb-checkbox {
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-    flex-shrink: 0;
-}
-
-.fb-checkbox input { display: none; }
-
-.fb-checkmark {
+/* Checkbox — native input for guaranteed visibility */
+.fb-entry-checkbox {
     width: 16px;
     height: 16px;
-    border: 1.5px solid var(--border-default, rgba(255, 255, 255, 0.15));
-    border-radius: 3px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: transparent;
-    transition: all 0.15s;
-}
-
-.fb-entry.selected .fb-checkmark {
-    background: var(--accent, #4a9eff);
-    border-color: var(--accent, #4a9eff);
-    color: white;
+    min-width: 16px;
+    min-height: 16px;
+    cursor: pointer;
+    accent-color: var(--accent, #4a9eff);
+    flex-shrink: 0;
 }
 
 /* Preview Panel */

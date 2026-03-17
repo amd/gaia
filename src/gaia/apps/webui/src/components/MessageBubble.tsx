@@ -90,7 +90,7 @@ function cleanLLMJsonBlocks(text: string): string {
             if (text[j] === '{') depth++;
             else if (text[j] === '}') { depth--; if (depth === 0) break; }
         }
-        if (depth !== 0) { result += text.slice(braceIdx); break; } // unclosed
+        if (depth !== 0) { break; } // suppress partial/unclosed JSON block
 
         const block = text.slice(braceIdx, j + 1);
         try {
@@ -101,26 +101,28 @@ function cleanLLMJsonBlocks(text: string): string {
             }
             // thought-only and tool/tool_args blocks are dropped silently
         } catch {
-            // JSON.parse failed — common when LLMs emit {"answer": "..."}
-            // with literal newlines inside the string value (invalid JSON).
-            // Try to manually extract the answer content.
-            const answerMatch = block.match(/^\s*\{\s*"answer"\s*:\s*"/);
-            if (answerMatch) {
-                // Extract everything between the opening "answer": " and
-                // the trailing "} (with possible whitespace variations).
-                const contentStart = answerMatch[0].length;
-                // Find the closing "} — strip trailing quote + brace
-                let contentEnd = block.length - 1;
-                // Walk backwards past whitespace and closing brace/quote
-                while (contentEnd > contentStart && /[\s}]/.test(block[contentEnd])) contentEnd--;
-                if (block[contentEnd] === '"') contentEnd--; // skip closing quote
-                const extracted = block.slice(contentStart, contentEnd + 1);
-                // Unescape any JSON-escaped sequences that survived
-                result += extracted.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"');
-            } else {
-                // Not an answer block — keep original text
-                result += block;
+            // JSON.parse failed — LLM likely emitted literal newlines inside string
+            // values (e.g. {"thought":"...", "goal":"...", "answer":"line1\nline2"}).
+            // Find the "answer" field anywhere in the block and extract its content.
+            const answerKeyIdx = block.indexOf('"answer"');
+            if (answerKeyIdx !== -1) {
+                const colonIdx = block.indexOf(':', answerKeyIdx + 8);
+                if (colonIdx !== -1) {
+                    let start = colonIdx + 1;
+                    while (start < block.length && /\s/.test(block[start])) start++;
+                    if (start < block.length && block[start] === '"') {
+                        let content = block.slice(start + 1);
+                        // Strip closing "} or trailing " from JSON envelope
+                        if (content.endsWith('"}')) {
+                            content = content.slice(0, -2);
+                        } else if (content.endsWith('"')) {
+                            content = content.slice(0, -1);
+                        }
+                        result += content.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
+                    }
+                }
             }
+            // Blocks without "answer" (thought-only, tool blocks) are dropped silently
         }
         i = j + 1;
     }
@@ -192,7 +194,6 @@ function cleanToolCallContent(content: string): string {
     const realNewlines = (cleaned.match(/\n/g) || []).length;
     if (literalNewlines > 2 && literalNewlines > realNewlines * 2) {
         cleaned = cleaned.replace(/\\n/g, '\n');
-        cleaned = cleaned.replace(/\\t/g, '\t');
         cleaned = cleaned.replace(/\\"/g, '"');
     }
 

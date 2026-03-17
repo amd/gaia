@@ -26,7 +26,44 @@ const EMPTY_SUGGESTIONS = [
  * through the SSE stream. The canonical pattern is defined in sse_handler.py;
  * keep this in sync if the server-side pattern changes.
  */
-const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}/g;
+const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*"[^}]*(?:"?tool_args"?\s*:\s*\{[^}]*\})?\s*\}/g;
+
+/**
+ * Strip the LLM JSON envelope from streamed/accumulated content.
+ * Handles responses like {"thought":"...", "goal":"...", "answer":"<content>"}
+ * where the entire response is wrapped in a structured JSON object.
+ * During streaming, progressively reveals the answer content as it arrives.
+ */
+function stripStreamingEnvelope(text: string): string {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('{')) return text;
+    if (!trimmed.includes('"thought"') && !trimmed.includes('"answer"') && !trimmed.includes('"goal"')) return text;
+
+    // Try full JSON parse first (works when message is complete and well-formed)
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed.answer !== undefined) return String(parsed.answer);
+    } catch {
+        // Incomplete or malformed JSON (literal newlines in values) — fall through
+    }
+
+    // Find "answer" field and extract content progressively
+    const answerIdx = trimmed.indexOf('"answer"');
+    if (answerIdx === -1) return ''; // Still in thought/goal — suppress during streaming
+
+    const colonIdx = trimmed.indexOf(':', answerIdx + 8);
+    if (colonIdx === -1) return '';
+    let start = colonIdx + 1;
+    while (start < trimmed.length && /\s/.test(trimmed[start])) start++;
+    if (start >= trimmed.length || trimmed[start] !== '"') return '';
+
+    let content = trimmed.slice(start + 1);
+    // Strip closing "} if the JSON envelope is complete
+    if (content.endsWith('"}')) content = content.slice(0, -2);
+    else if (content.endsWith('"')) content = content.slice(0, -1);
+
+    return content.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
+}
 
 /** Map an SSE agent event to an AgentStep for the UI. */
 function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<number>): AgentStep | null {
@@ -509,7 +546,22 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     }
                     // Safety net: strip any tool-call JSON that leaked past the
                     // backend SSE filter (see sse_handler.py _TOOL_CALL_JSON_RE).
-                    const cleaned = fullContent.replace(TOOL_CALL_JSON_SAFETY_RE, '').trim();
+                    let cleaned = fullContent.replace(TOOL_CALL_JSON_SAFETY_RE, '').trim();
+                    // Strip LLM JSON envelope ({"thought":"...", "answer":"..."} format).
+                    // This handles the case where the entire response is wrapped in JSON.
+                    cleaned = stripStreamingEnvelope(cleaned);
+                    // During streaming, suppress trailing incomplete JSON blocks
+                    // (e.g. {"thought":"partial... that haven't closed yet)
+                    if (cleaned) {
+                        const trailingBrace = cleaned.lastIndexOf('{');
+                        if (trailingBrace > -1) {
+                            const tail = cleaned.slice(trailingBrace);
+                            if (/^\{\s*"(?:thought|answer|goal|tool)"/.test(tail) &&
+                                (tail.match(/\{/g) || []).length > (tail.match(/\}/g) || []).length) {
+                                cleaned = cleaned.slice(0, trailingBrace).trim();
+                            }
+                        }
+                    }
                     // Buffer chunks and flush to store at most once per frame (~60fps)
                     // instead of triggering a React re-render on every single SSE chunk
                     streamBufferRef.current = cleaned;

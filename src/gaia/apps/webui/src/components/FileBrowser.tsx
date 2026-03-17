@@ -4,7 +4,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
     X, Search, Folder, FileText, Home, Download, Monitor, ChevronRight,
-    File, FolderOpen, ArrowUp, Check, Brain, Upload, HardDrive,
+    File, FolderOpen, ArrowUp, Brain, Upload, HardDrive,
     Table, Code
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
@@ -177,19 +177,6 @@ export function FileBrowser() {
         }
     }, [loadDirectory]);
 
-    const handleFileSelect = useCallback((path: string, e: React.MouseEvent) => {
-        e.stopPropagation();
-        setSelectedFiles(prev => {
-            const next = new Set(prev);
-            if (next.has(path)) {
-                next.delete(path);
-            } else {
-                next.add(path);
-            }
-            return next;
-        });
-    }, []);
-
     const handleFilePreview = useCallback(async (path: string) => {
         setPreviewLoading(true);
         try {
@@ -249,9 +236,14 @@ export function FileBrowser() {
         let success = 0;
         let failed = 0;
         let lastError = '';
+        const folderPaths = new Set(entries.filter(e => e.type === 'folder').map(e => e.path));
         for (const filepath of supportedFiles) {
             try {
-                await api.uploadDocumentByPath(filepath);
+                if (folderPaths.has(filepath)) {
+                    await api.indexFolder(filepath);
+                } else {
+                    await api.uploadDocumentByPath(filepath);
+                }
                 success++;
                 setIndexStatus(`Indexed ${success}/${supportedFiles.length}...`);
             } catch (err) {
@@ -314,7 +306,7 @@ export function FileBrowser() {
 
     return (
         <div className="modal-overlay" onClick={() => setShowFileBrowser(false)} role="dialog" aria-modal="true" aria-label="File Browser">
-            <div className="modal-panel file-browser-modal" onClick={(e) => e.stopPropagation()}>
+            <div className={`modal-panel file-browser-modal ${previewFile ? 'has-preview' : ''}`} onClick={(e) => e.stopPropagation()}>
                 {/* Header */}
                 <div className="modal-header">
                     <h3><FolderOpen size={18} /> File Browser</h3>
@@ -337,14 +329,6 @@ export function FileBrowser() {
                                 <span>{link.name}</span>
                             </button>
                         ))}
-                        <button
-                            className="fb-quick-link"
-                            onClick={() => loadDirectory('/')}
-                            title="Drives"
-                        >
-                            <HardDrive size={14} />
-                            <span>Drives</span>
-                        </button>
                     </div>
 
                     {/* Search Bar */}
@@ -452,22 +436,21 @@ export function FileBrowser() {
                                     onDoubleClick={() => entry.type === 'folder' ? handleEntryClick(entry) : undefined}
                                     title={fileUnsupported ? `${unsupportedCat?.label || 'This'} file type cannot be indexed` : entry.path}
                                 >
-                                    {entry.type === 'file' && (
-                                        <label
-                                            className="fb-checkbox"
-                                            onClick={(e) => handleFileSelect(entry.path, e)}
-                                        >
-                                            <input
-                                                type="checkbox"
-                                                checked={selectedFiles.has(entry.path)}
-                                                onChange={() => {}}
-                                                aria-label={`Select ${entry.name}`}
-                                            />
-                                            <span className="fb-checkmark">
-                                                {selectedFiles.has(entry.path) && <Check size={10} />}
-                                            </span>
-                                        </label>
-                                    )}
+                                    <input
+                                        type="checkbox"
+                                        className="fb-entry-checkbox"
+                                        checked={selectedFiles.has(entry.path)}
+                                        onChange={() => {
+                                            setSelectedFiles(prev => {
+                                                const next = new Set(prev);
+                                                if (next.has(entry.path)) next.delete(entry.path);
+                                                else next.add(entry.path);
+                                                return next;
+                                            });
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
+                                        aria-label={`Select ${entry.name}`}
+                                    />
                                     <span className="fb-entry-icon">{getFileIcon(entry)}</span>
                                     <span className="fb-entry-name" title={entry.path}>{entry.name}</span>
                                     {fileUnsupported && (
@@ -528,7 +511,7 @@ export function FileBrowser() {
                     <div className="fb-actions">
                         <div className="fb-selection-info">
                             {selectedFiles.size > 0
-                                ? `${selectedFiles.size} file(s) selected`
+                                ? `${selectedFiles.size} item(s) selected`
                                 : 'Select files to index or analyze'}
                         </div>
                         {indexStatus && <span className="fb-index-status">{indexStatus}</span>}
