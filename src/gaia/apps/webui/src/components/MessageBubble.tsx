@@ -127,33 +127,46 @@ function cleanLLMJsonBlocks(text: string): string {
     return result;
 }
 
+/** Known programming language identifiers that should keep code block rendering. */
+const KNOWN_CODE_LANGS = new Set([
+    'python', 'py', 'javascript', 'js', 'typescript', 'ts', 'java', 'c', 'cpp',
+    'csharp', 'cs', 'go', 'rust', 'ruby', 'rb', 'php', 'swift', 'kotlin',
+    'scala', 'r', 'perl', 'lua', 'bash', 'sh', 'zsh', 'powershell', 'ps1',
+    'sql', 'html', 'css', 'scss', 'sass', 'less', 'xml', 'json', 'yaml',
+    'yml', 'toml', 'ini', 'csv', 'markdown', 'md', 'dockerfile', 'docker',
+    'makefile', 'cmake', 'nginx', 'apache', 'graphql', 'proto', 'protobuf',
+    'jsx', 'tsx', 'vue', 'svelte', 'dart', 'elixir', 'ex', 'erlang',
+    'haskell', 'hs', 'ocaml', 'ml', 'fsharp', 'fs', 'clojure', 'clj',
+    'lisp', 'scheme', 'racket', 'zig', 'nim', 'crystal', 'julia',
+    'matlab', 'octave', 'fortran', 'cobol', 'pascal', 'delphi', 'ada',
+    'assembly', 'asm', 'nasm', 'wasm', 'solidity', 'sol', 'verilog', 'vhdl',
+    'text', 'txt', 'plaintext', 'diff', 'patch', 'log',
+]);
+
 /**
- * Strip outer code fences that wrap the entire text.
- * LLMs sometimes wrap their prose in ```<lang>\n...\n``` which causes
- * the whole response to render as a code block. This runs repeatedly
- * to handle nested wrapping.
+ * Strip bogus code fences from LLM output.
+ *
+ * Local LLMs (especially Qwen-Coder) frequently wrap prose responses in
+ * fenced code blocks with fake 1-2 char "languages" like ```i or ```a.
+ * This strips fences whose language tag is NOT a known programming language,
+ * unwrapping the content back to plain markdown. Real code blocks
+ * (```python, ```bash, etc.) are preserved.
  */
-function stripOuterCodeFences(text: string): string {
-    let s = text.trim();
-    // Repeat in case of nested fences (rare but possible)
-    for (let i = 0; i < 3; i++) {
-        // Match: ```<optional-lang>\n ... \n``` (greedy inner match)
-        const m = s.match(/^```[\w]*[ \t]*\n([\s\S]*)\n```\s*$/);
-        if (m) {
-            s = m[1].trim();
-            continue;
-        }
-        // Match: opening ``` without closing (unclosed fence)
-        const openOnly = s.match(/^```[\w]*[ \t]*\n([\s\S]*)$/);
-        if (openOnly && !openOnly[1].includes('```')) {
-            s = openOnly[1].trim();
-            continue;
-        }
-        // Remove trailing unclosed fence
-        s = s.replace(/\n?```\s*$/, '');
-        break;
-    }
-    return s;
+function stripBogusCodeFences(text: string): string {
+    // Match fenced blocks: ```<lang>\n...\n```
+    // Replace bogus ones (unknown lang) with just their inner content
+    return text.replace(
+        /```(\w*)[ \t]*\n([\s\S]*?)```/g,
+        (_match, lang: string, inner: string) => {
+            const langLower = lang.toLowerCase();
+            // Keep fences with known code languages
+            if (langLower && KNOWN_CODE_LANGS.has(langLower)) {
+                return _match; // Preserve the original fenced block
+            }
+            // Strip the fence — return inner content as plain markdown
+            return inner.trim();
+        },
+    );
 }
 
 function cleanToolCallContent(content: string): string {
@@ -183,9 +196,10 @@ function cleanToolCallContent(content: string): string {
         cleaned = cleaned.replace(/\\"/g, '"');
     }
 
-    // Strip outer code fences AFTER all other cleaning — catches fences
-    // that were inside JSON answer blocks or other wrappers.
-    cleaned = stripOuterCodeFences(cleaned);
+    // Strip bogus code fences AFTER all other cleaning — catches fences
+    // that were inside JSON answer blocks or other wrappers. Only removes
+    // fences with unknown/fake language tags; preserves real code blocks.
+    cleaned = stripBogusCodeFences(cleaned).trim();
 
     return cleaned;
 }

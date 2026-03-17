@@ -10,11 +10,15 @@ interface ChatState {
     // Sessions
     sessions: Session[];
     currentSessionId: string | null;
+    /** IDs of sessions with a pending backend delete — filtered from poll results. */
+    pendingDeleteIds: string[];
     setSessions: (sessions: Session[]) => void;
     setCurrentSession: (id: string | null) => void;
     addSession: (session: Session) => void;
     removeSession: (id: string) => void;
     updateSessionInList: (id: string, updates: Partial<Session>) => void;
+    addPendingDelete: (id: string) => void;
+    removePendingDelete: (id: string) => void;
 
     // Messages (for current session)
     messages: Message[];
@@ -77,7 +81,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Sessions
     sessions: [],
     currentSessionId: null,
-    setSessions: (sessions) => set({ sessions }),
+    pendingDeleteIds: [],
+    setSessions: (sessions) =>
+        set((state) => ({
+            // Filter out any sessions that are pending backend deletion so poll
+            // results don't resurrect sessions the user already deleted.
+            sessions: sessions.filter((s) => !state.pendingDeleteIds.includes(s.id)),
+        })),
     setCurrentSession: (id) => set({ currentSessionId: id }),
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
@@ -90,6 +100,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     updateSessionInList: (id, updates) =>
         set((state) => ({
             sessions: state.sessions.map((s) => (s.id === id ? { ...s, ...updates } : s)),
+        })),
+    addPendingDelete: (id) =>
+        set((state) => ({
+            pendingDeleteIds: [...state.pendingDeleteIds, id],
+        })),
+    removePendingDelete: (id) =>
+        set((state) => ({
+            pendingDeleteIds: state.pendingDeleteIds.filter((pid) => pid !== id),
         })),
 
     // Messages

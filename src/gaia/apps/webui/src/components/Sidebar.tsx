@@ -72,6 +72,7 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
         sidebarOpen, setSidebarOpen, setLoadingMessages,
         sidebarCollapsed, toggleSidebarCollapsed,
         sidebarWidth, setSidebarWidth,
+        addPendingDelete, removePendingDelete,
     } = useChatStore();
 
     const [search, setSearch] = useState('');
@@ -168,12 +169,24 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
             removeSession(id);
             setPendingDeleteId(null);
 
-            // Show undo toast — delay the actual backend delete
+            // Mark as pending-delete so session polling won't resurrect it
+            addPendingDelete(id);
+
+            // Delete from backend immediately (fixes bug where deferred delete
+            // was lost on page refresh, causing sessions to reappear)
+            api.deleteSession(id)
+                .then(() => {
+                    log.chat.info(`Session deleted from backend: "${title}"`);
+                    removePendingDelete(id);
+                })
+                .catch((err) => {
+                    log.chat.warn(`Backend delete failed for "${title}"`, err);
+                    removePendingDelete(id);
+                });
+
+            // Show undo toast for 5 seconds — undo will re-create the session
             if (deletedSession?.timer) clearTimeout(deletedSession.timer);
             const timer = setTimeout(() => {
-                api.deleteSession(id)
-                    .then(() => log.chat.info(`Session deleted from backend: "${title}"`))
-                    .catch((err) => log.chat.warn(`Backend delete failed for "${title}"`, err));
                 setDeletedSession(null);
             }, 5000);
             if (session) setDeletedSession({ session, timer });
@@ -185,15 +198,26 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
         // Auto-cancel after 3s
         if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
         deleteTimerRef.current = setTimeout(() => setPendingDeleteId((prev) => (prev === id ? null : prev)), 3000);
-    }, [pendingDeleteId, sessions, removeSession, deletedSession]);
+    }, [pendingDeleteId, sessions, removeSession, deletedSession, addPendingDelete, removePendingDelete]);
 
     const handleUndoDelete = useCallback(() => {
         if (!deletedSession) return;
         clearTimeout(deletedSession.timer);
-        addSession(deletedSession.session);
-        log.chat.info(`Undo delete: restored "${deletedSession.session.title}"`);
+        const { session } = deletedSession;
+        log.chat.info(`Undo delete: re-creating "${session.title}"`);
+        // Remove from pending-delete filter so it can appear again
+        removePendingDelete(session.id);
+        // Re-create the session on the backend (original was already deleted)
+        api.createSession({ title: session.title })
+            .then((newSession) => {
+                addSession(newSession);
+                log.chat.info(`Undo delete: re-created "${newSession.title}" (new id=${newSession.id})`);
+            })
+            .catch((err) => {
+                log.chat.warn(`Undo delete failed for "${session.title}"`, err);
+            });
         setDeletedSession(null);
-    }, [deletedSession, addSession]);
+    }, [deletedSession, addSession, removePendingDelete]);
 
     // Cancel pending delete on outside click
     useEffect(() => {

@@ -418,11 +418,25 @@ class SSEOutputHandler(OutputHandler):
                     return
 
             # Case 1b: Buffer starts with "{" and has "answer" — raw JSON answer
-            # The LLM sometimes emits {"answer": "..."} which duplicates the
-            # already-streamed text.  Accumulate until complete, then discard.
+            # The LLM sometimes emits {"answer": "..."} as the entire response.
+            # Extract the answer text and emit it so the frontend can stream it.
             elif stripped.startswith("{") and '"answer"' in stripped:
                 if stripped.endswith("}"):
-                    logger.debug("Filtered answer JSON: %s", stripped[:100])
+                    answer_text = _clean_answer_json(stripped)
+                    if answer_text and answer_text != stripped:
+                        # Extracted answer text — emit as answer event
+                        logger.debug(
+                            "Extracted answer from JSON (%d chars): %s",
+                            len(answer_text),
+                            answer_text[:100],
+                        )
+                        self._emit(
+                            {"type": "answer", "content": answer_text}
+                        )
+                    else:
+                        logger.debug(
+                            "Filtered answer JSON: %s", stripped[:100]
+                        )
                     self._stream_buffer = ""
                     return
                 if len(self._stream_buffer) > 4096:

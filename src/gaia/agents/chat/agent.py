@@ -374,15 +374,22 @@ Tools are grouped by category: RAG tools, File System tools, Shell tools, etc.
 
 **FILE SEARCH AND AUTO-INDEX WORKFLOW:**
 When user asks "find the X manual" or "find X document on my drive":
-1. Use search_file (automatically searches all drives intelligently):
-   - Phase 1: Searches common locations (Documents, Downloads, Desktop) - FAST
-   - Phase 2: If not found, deep search entire drive(s) - THOROUGH
-   - Filters by document file types (.pdf, .docx, .txt, etc.)
-2. Handle results:
-   - **If 1 file found**: Automatically index it
+1. ALWAYS start with a QUICK search (do NOT set deep_search):
+   {"tool": "search_file", "tool_args": {"file_pattern": "..."}}
+   This searches CWD, Documents, Downloads, Desktop - FAST (seconds)
+2. Handle quick search results:
+   - **If files found**: Show results and ask user to confirm which one
+   - **If none found**: Tell user nothing was found in common locations and OFFER to do a deep search. Do NOT automatically deep search.
+3. Only do deep search if user explicitly asks for it:
+   {"tool": "search_file", "tool_args": {"file_pattern": "...", "deep_search": true}}
+   This searches all drives - SLOW (can take minutes)
+4. After user confirms the right file:
+   - **If 1 file confirmed**: Index it
    - **If multiple files found**: Display numbered list, ask user to select
-   - **If none found**: Inform user
-3. After indexing, confirm and let user know they can ask questions
+5. After indexing, confirm and let user know they can ask questions
+
+**CRITICAL: NEVER use deep_search=true on the first search call!**
+Always do quick search first, show results, and wait for user response.
 
 **IMPORTANT: Always show tool results with display_message!**
 Tools like search_file return a 'display_message' field - ALWAYS show this to the user:
@@ -394,13 +401,23 @@ You must say: {"answer": "Found 2 file(s):\n1. README.md\n2. setup.py"}
 NOTE: Progress indicators (spinners) are shown automatically by the tool while searching.
 You don't need to say "searching..." - the tool displays it live!
 
-Example (Single file):
+Example (Single file found in quick search):
 User: "Can you find the project report on my drive?"
 You: {"tool": "search_file", "tool_args": {"file_pattern": "project report"}}
 Result: {"files": [...], "count": 1, "display_message": "Found 1 matching file(s)", "file_list": [{"number": 1, "name": "Project-Report.pdf", "directory": "C:/Users/user/Documents"}]}
-You: {"answer": "Found 1 file:\n- Project-Report.pdf (Documents folder)\n\nIndexing now..."}
+You: {"answer": "Found 1 file:\n- Project-Report.pdf (Documents folder)\n\nIs this the one you're looking for?"}
+User: "yes"
+You: {"answer": "Indexing now..."}
 You: {"tool": "index_document", "tool_args": {"file_path": "C:/Users/user/Documents/Project-Report.pdf"}}
 You: {"answer": "Indexed Project-Report.pdf (150 chunks). You can now ask me questions about it!"}
+
+Example (Nothing found - offer deep search):
+User: "Find my tax return"
+You: {"tool": "search_file", "tool_args": {"file_pattern": "tax return"}}
+Result: {"count": 0, "deep_search_available": true, "suggestion": "I can do a deep search across all drives..."}
+You: {"answer": "I didn't find any files matching 'tax return' in your common folders (Documents, Downloads, Desktop).\n\nWould you like me to do a deep search across all your drives? This may take a minute."}
+User: "yes please"
+You: {"tool": "search_file", "tool_args": {"file_pattern": "tax return", "deep_search": true}}
 
 Example (Multiple files):
 User: "Find the manual on my drive"
@@ -448,7 +465,7 @@ When user asks to browse files or explore directories:
 - get_file_info: Get file metadata, size, preview
 - list_recent_files: Find recently modified files
 - analyze_data_file: Parse CSV/Excel, compute statistics, analyze spending
-- search_file: Find files by name across all drives
+- search_file: Find files by name (quick search by default, deep_search=true for all drives)
 - search_file_content: Search for text within files (grep)
 - read_file: Read full file content
 - write_file: Write content to files

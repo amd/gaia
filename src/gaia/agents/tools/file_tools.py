@@ -62,16 +62,16 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
             name="search_file",
-            description="Search for files by name/pattern across entire drive(s). Searches common locations first, then does deep search. Use when user asks 'find X on my drive'.",
+            description="Search for files by name/pattern. By default does a QUICK search of common locations (CWD, Documents, Downloads, Desktop). Only set deep_search=True if quick search found nothing AND user confirms they want a deeper search.",
             parameters={
                 "file_pattern": {
                     "type": "str",
                     "description": "File name pattern to search for (e.g., 'oil', 'manual', '*.pdf'). Supports partial matches.",
                     "required": True,
                 },
-                "search_all_drives": {
+                "deep_search": {
                     "type": "bool",
-                    "description": "Search all available drives (default: True on Windows)",
+                    "description": "If True, search ALL drives thoroughly (slow). Only use after quick search found nothing and user requests it. Default: False",
                     "required": False,
                 },
                 "file_types": {
@@ -82,14 +82,14 @@ class FileSearchToolsMixin:
             },
         )
         def search_file(
-            file_pattern: str, search_all_drives: bool = True, file_types: str = None
+            file_pattern: str, deep_search: bool = False, file_types: str = None
         ) -> Dict[str, Any]:
             """
             Search for files with intelligent prioritization.
 
             Strategy:
-            1. Search common document locations first (fast)
-            2. If not found, search entire drive(s) (thorough)
+            1. Quick search: CWD + common document locations (fast)
+            2. Deep search: entire drive(s) (only when deep_search=True)
             3. Filter by document file types for speed
             """
             try:
@@ -229,13 +229,14 @@ class FileSearchToolsMixin:
                         unique_files.append(f)
                 matching_files = unique_files
 
-                # If found in CWD + common locations, return
-                if matching_files:
-                    if hasattr(self, "console") and hasattr(
-                        self.console, "stop_progress"
-                    ):
-                        self.console.stop_progress()
+                # Stop progress indicator after quick search
+                if hasattr(self, "console") and hasattr(
+                    self.console, "stop_progress"
+                ):
+                    self.console.stop_progress()
 
+                # If found in CWD + common locations, return immediately
+                if matching_files:
                     return {
                         "status": "success",
                         "files": matching_files[:10],
@@ -246,7 +247,21 @@ class FileSearchToolsMixin:
                         "display_message": f"✓ Found {len(matching_files)} file(s)",
                     }
 
-                # Phase 2: Deep drive search if still not found
+                # Quick search found nothing
+                if not deep_search:
+                    # Return with hint that deep search is available
+                    return {
+                        "status": "success",
+                        "files": [],
+                        "count": 0,
+                        "total_locations_searched": len(searched_locations),
+                        "search_context": "common_locations",
+                        "display_message": f"No files found matching '{file_pattern}' in common locations",
+                        "deep_search_available": True,
+                        "suggestion": "I can do a deep search across all drives if you'd like (this may take a minute).",
+                    }
+
+                # Phase 2: Deep drive search (only when explicitly requested)
                 if hasattr(self, "console") and hasattr(self.console, "start_progress"):
                     self.console.start_progress(
                         "🔍 Deep search across all drives (this may take a minute)..."
@@ -254,7 +269,7 @@ class FileSearchToolsMixin:
 
                 logger.debug("Phase 2: Deep search across drive(s)...")
 
-                if platform.system() == "Windows" and search_all_drives:
+                if platform.system() == "Windows":
                     # Search all available drives on Windows
                     import string
 
