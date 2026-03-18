@@ -14,7 +14,7 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
 
 <CardGroup cols={2}>
   <Card title="Windows 11" icon="windows">
-    Full GUI and CLI support with installer and desktop shortcuts
+    Full GUI and CLI support
   </Card>
   <Card title="Linux" icon="linux">
     Full GUI and CLI support via source installation (Ubuntu/Debian)
@@ -25,8 +25,8 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
 
 <Tabs>
   <Tab title="Windows">
-    1. Follow the [Getting Started Guide](/quickstart) to install `gaia` CLI and `lemonade` LLM server
-    2. Double click the **GAIA-CLI** desktop icon to launch the command-line shell
+    1. Follow the [Quickstart](/quickstart) to install GAIA
+    2. Open PowerShell and run `gaia` to launch the Agent UI, or `gaia --cli` for terminal chat
     3. GAIA automatically starts Lemonade Server when needed, or start manually:
 
     ```bash
@@ -51,6 +51,44 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
     ```
   </Tab>
 </Tabs>
+
+---
+
+## Top-Level Flags
+
+Running `gaia` with no subcommand launches the **Agent UI** by default:
+
+```bash
+gaia            # Launches Agent UI on port 4200
+gaia --ui       # Same — explicit flag
+gaia --cli      # Launch interactive CLI chat instead
+```
+
+| Flag | Description |
+|------|-------------|
+| `--ui` | Launch the Agent UI (browser-based chat interface) — this is the default |
+| `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
+| `--cli` | Launch interactive CLI chat |
+
+**Examples:**
+
+<CodeGroup>
+```bash Launch Agent UI (default)
+gaia
+```
+
+```bash Agent UI on Custom Port
+gaia --ui-port 8080
+```
+
+```bash Launch CLI Chat
+gaia --cli
+```
+</CodeGroup>
+
+<Note>
+  `gaia chat --ui` continues to work as an alias.
+</Note>
 
 ---
 
@@ -400,12 +438,16 @@ gaia chat \
   --show-stats
 ```
 
-```bash Web UI
-gaia chat --ui
+```bash Web UI (preferred)
+gaia --ui
 ```
 
 ```bash Web UI on Custom Port
-gaia chat --ui --ui-port 8080
+gaia --ui --ui-port 8080
+```
+
+```bash Web UI (alias)
+gaia chat --ui
 ```
 </CodeGroup>
 

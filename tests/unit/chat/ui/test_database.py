@@ -334,6 +334,182 @@ class TestSessionDocuments:
         assert enriched["sessions_using"] == 0
 
 
+class TestUpdateDocumentStatus:
+    """Tests for update_document_status() method."""
+
+    def _make_doc(self, db):
+        return db.add_document("test.pdf", "/test.pdf", "hash1", 1024, 10)
+
+    def test_update_status_to_indexing(self, db):
+        doc = self._make_doc(db)
+        result = db.update_document_status(doc["id"], "indexing")
+        assert result is True
+        fetched = db.get_document(doc["id"])
+        assert fetched["indexing_status"] == "indexing"
+
+    def test_update_status_to_complete(self, db):
+        doc = self._make_doc(db)
+        db.update_document_status(doc["id"], "indexing")
+        result = db.update_document_status(doc["id"], "complete")
+        assert result is True
+        fetched = db.get_document(doc["id"])
+        assert fetched["indexing_status"] == "complete"
+
+    def test_update_status_to_failed(self, db):
+        doc = self._make_doc(db)
+        db.update_document_status(doc["id"], "indexing")
+        db.update_document_status(doc["id"], "failed")
+        fetched = db.get_document(doc["id"])
+        assert fetched["indexing_status"] == "failed"
+
+    def test_update_status_to_cancelled(self, db):
+        doc = self._make_doc(db)
+        db.update_document_status(doc["id"], "indexing")
+        db.update_document_status(doc["id"], "cancelled")
+        fetched = db.get_document(doc["id"])
+        assert fetched["indexing_status"] == "cancelled"
+
+    def test_update_status_with_chunk_count(self, db):
+        doc = self._make_doc(db)
+        db.update_document_status(doc["id"], "complete", chunk_count=99)
+        fetched = db.get_document(doc["id"])
+        assert fetched["indexing_status"] == "complete"
+        assert fetched["chunk_count"] == 99
+
+    def test_update_status_without_chunk_count_preserves_original(self, db):
+        doc = self._make_doc(db)
+        original_chunks = doc["chunk_count"]
+        db.update_document_status(doc["id"], "indexing")
+        fetched = db.get_document(doc["id"])
+        assert fetched["chunk_count"] == original_chunks
+
+    def test_update_status_updates_last_accessed_at(self, db):
+        doc = self._make_doc(db)
+        original = db.get_document(doc["id"])["last_accessed_at"]
+        time.sleep(0.01)
+        db.update_document_status(doc["id"], "indexing")
+        fetched = db.get_document(doc["id"])
+        assert fetched["last_accessed_at"] is not None
+        assert fetched["last_accessed_at"] >= original
+
+    def test_update_nonexistent_document_returns_false(self, db):
+        result = db.update_document_status("nonexistent-id", "complete")
+        assert result is False
+
+    def test_full_status_lifecycle(self, db):
+        """Test the full indexing lifecycle: pending -> indexing -> complete."""
+        doc = self._make_doc(db)
+        doc_id = doc["id"]
+
+        db.update_document_status(doc_id, "indexing")
+        assert db.get_document(doc_id)["indexing_status"] == "indexing"
+
+        db.update_document_status(doc_id, "complete", chunk_count=50)
+        fetched = db.get_document(doc_id)
+        assert fetched["indexing_status"] == "complete"
+        assert fetched["chunk_count"] == 50
+
+    def test_status_transition_indexing_to_failed_preserves_zero_chunks(self, db):
+        doc = self._make_doc(db)
+        db.update_document_status(doc["id"], "indexing")
+        db.update_document_status(doc["id"], "failed", chunk_count=0)
+        fetched = db.get_document(doc["id"])
+        assert fetched["indexing_status"] == "failed"
+        assert fetched["chunk_count"] == 0
+
+
+class TestReindexDocument:
+    """Tests for reindex_document() method."""
+
+    def test_reindex_updates_all_fields(self, db):
+        doc = db.add_document("test.pdf", "/test.pdf", "old_hash", 1024, 10)
+        result = db.reindex_document(
+            doc["id"],
+            file_hash="new_hash",
+            file_mtime=2000.0,
+            chunk_count=25,
+            file_size=2048,
+        )
+        assert result is True
+        fetched = db.get_document(doc["id"])
+        assert fetched["file_hash"] == "new_hash"
+        assert fetched["chunk_count"] == 25
+        assert fetched["file_size"] == 2048
+        assert fetched["indexing_status"] == "complete"
+
+    def test_reindex_nonexistent_returns_false(self, db):
+        result = db.reindex_document("nonexistent", file_hash="h", file_mtime=1.0)
+        assert result is False
+
+    def test_reindex_resets_status_to_complete(self, db):
+        doc = db.add_document("test.pdf", "/test.pdf", "hash1", 100, 5)
+        db.update_document_status(doc["id"], "failed")
+        db.reindex_document(
+            doc["id"], file_hash="hash2", file_mtime=2000.0, chunk_count=8
+        )
+        fetched = db.get_document(doc["id"])
+        assert fetched["indexing_status"] == "complete"
+        assert fetched["chunk_count"] == 8
+
+
+class TestUpdateDocumentMtime:
+    """Tests for update_document_mtime() method."""
+
+    def test_updates_mtime(self, db):
+        doc = db.add_document(
+            "test.pdf", "/test.pdf", "hash1", 100, 5, file_mtime=1000.0
+        )
+        result = db.update_document_mtime(doc["id"], 2000.0)
+        assert result is True
+
+    def test_nonexistent_returns_false(self, db):
+        result = db.update_document_mtime("nonexistent", 2000.0)
+        assert result is False
+
+    def test_does_not_change_other_fields(self, db):
+        doc = db.add_document("test.pdf", "/test.pdf", "hash1", 100, 5)
+        db.update_document_mtime(doc["id"], 9999.0)
+        fetched = db.get_document(doc["id"])
+        assert fetched["file_hash"] == "hash1"
+        assert fetched["chunk_count"] == 5
+        assert fetched["file_size"] == 100
+
+
+class TestAddMessageWithAgentSteps:
+    """Tests for add_message() with agent_steps parameter."""
+
+    def test_add_message_with_agent_steps(self, db):
+        session = db.create_session()
+        steps = [
+            {"id": 1, "type": "thinking", "label": "Thinking", "active": False},
+            {"id": 2, "type": "tool", "label": "search", "active": False},
+        ]
+        db.add_message(session["id"], "assistant", "Result", agent_steps=steps)
+        messages = db.get_messages(session["id"])
+        msg = messages[0]
+        assert msg["agent_steps"] is not None
+        # get_messages() parses agent_steps from JSON, so it's already a list
+        parsed = msg["agent_steps"]
+        assert isinstance(parsed, list)
+        assert len(parsed) == 2
+        assert parsed[0]["type"] == "thinking"
+        assert parsed[1]["type"] == "tool"
+
+    def test_add_message_without_agent_steps(self, db):
+        session = db.create_session()
+        db.add_message(session["id"], "user", "Hello")
+        messages = db.get_messages(session["id"])
+        assert messages[0].get("agent_steps") is None
+
+    def test_add_message_with_empty_agent_steps(self, db):
+        """Empty list is falsy in Python -- documents current behavior."""
+        session = db.create_session()
+        db.add_message(session["id"], "assistant", "Reply", agent_steps=[])
+        messages = db.get_messages(session["id"])
+        # Empty list is falsy, so the code path `if agent_steps:` skips it
+        assert messages[0].get("agent_steps") is None
+
+
 class TestStats:
     def test_get_stats(self, db):
         stats = db.get_stats()

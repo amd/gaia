@@ -112,7 +112,7 @@ export function SettingsModal() {
                     <section className="settings-section">
                         <h4>About</h4>
                         <div className="about-info">
-                            <p>GAIA Agent UI v{version}</p>
+                            <p>GAIA Agent UI v{version} <span className="beta-badge">BETA</span></p>
                             <p className="about-sub">
                                 Privacy-first AI chat for AMD Ryzen AI PCs.
                                 <br />

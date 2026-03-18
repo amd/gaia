@@ -683,6 +683,131 @@ def run_cli(action, **kwargs):
     return asyncio.run(async_main(action, **kwargs))
 
 
+def _launch_agent_ui(port=4200, base_url=None, log=None):
+    """Launch the Agent UI server (FastAPI + uvicorn).
+
+    Reused by top-level --ui, gaia chat --ui, and the interactive menu.
+    """
+    if log is None:
+        log = get_logger(__name__)
+
+    try:
+        from gaia.ui.server import create_app
+
+        # Forward --base-url to the UI server via environment variable
+        if base_url:
+            os.environ["LEMONADE_BASE_URL"] = base_url
+            log.info(f"Using remote Lemonade server: {base_url}")
+            print(f"Remote Lemonade server: {base_url}")
+
+        log.info(f"Starting GAIA Agent UI on http://localhost:{port}")
+        print(f"Starting GAIA Agent UI on http://localhost:{port}")
+        print(f"   Open your browser to http://localhost:{port}")
+        print("   Press Ctrl+C to stop\n")
+
+        import uvicorn
+
+        app = create_app()
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    except ImportError as e:
+        print(f"\nMissing dependencies for Agent UI: {e}")
+        print("\n   The Agent UI requires extra dependencies that are not installed.")
+        print("   Install them with:\n")
+        print('     uv pip install -e ".[ui]"')
+        print("\n   Or if you installed from PyPI:\n")
+        print("     pip install amd-gaia[ui]")
+        print()
+        sys.exit(1)
+    except Exception as e:
+        log.error(f"Error starting Agent UI: {e}")
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+def _launch_interactive_cli(log=None):
+    """Launch the interactive CLI chat with default configuration.
+
+    Reused by top-level --cli and the interactive menu.
+    """
+    if log is None:
+        log = get_logger(__name__)
+
+    try:
+        success, base_url = initialize_lemonade_for_agent("chat")
+        if not success:
+            sys.exit(1)
+
+        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+        from gaia.agents.chat.app import interactive_mode
+
+        config = ChatAgentConfig(
+            base_url=base_url or os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
+            silent_mode=True,
+        )
+        agent = ChatAgent(config)
+
+        if not agent.current_session:
+            agent.current_session = agent.session_manager.create_session()
+
+        interactive_mode(agent)
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user")
+    except Exception as e:
+        log.error(f"Error in chat: {e}", exc_info=True)
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+def _show_interactive_menu(log=None):
+    """Show an interactive menu when `gaia` is run with no arguments."""
+    if log is None:
+        log = get_logger(__name__)
+
+    print()
+    print("========================================")
+    print(f"  GAIA {version}")
+    print("  Build AI Agents That Run Locally")
+    print("========================================")
+    print()
+    print("  [1] Agent UI  — Desktop chat interface (browser)")
+    print("  [2] CLI Chat  — Interactive terminal chat")
+    print("  [3] Help      — Show all commands")
+    print()
+
+    try:
+        choice = input("  Select [1/2/3]: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return
+
+    if choice == "1":
+        _launch_agent_ui(log=log)
+    elif choice == "2":
+        _launch_interactive_cli(log=log)
+    elif choice == "3":
+        print()
+        print("  Usage: gaia [--ui | --cli | <command>]")
+        print()
+        print("  Quick start:")
+        print("    gaia                   Launch Agent UI (default)")
+        print("    gaia --ui              Launch Agent UI (explicit)")
+        print("    gaia --ui-port 8080    Agent UI on custom port")
+        print("    gaia --cli             Interactive CLI chat")
+        print()
+        print("  Commands:")
+        print("    gaia chat              Interactive chat with RAG")
+        print("    gaia chat --ui         Agent UI (alias for gaia --ui)")
+        print("    gaia prompt \"Hello\"    Single prompt to LLM")
+        print("    gaia talk              Voice interaction")
+        print("    gaia init              Setup Lemonade + models")
+        print("    gaia code              Code generation agent")
+        print()
+        print("  Run 'gaia --help' for the full command list.")
+    else:
+        print(f"  Unknown option: {choice}")
+        print("  Run 'gaia --help' for all commands.")
+
+
 def main():
     import argparse
 
@@ -702,6 +827,24 @@ def main():
         action="version",
         version=f"{version}",
         help="Show program's version number and exit",
+    )
+
+    # Top-level flags for launching Agent UI or CLI directly
+    parser.add_argument(
+        "--ui",
+        action="store_true",
+        help="Launch the Agent UI (browser-based chat interface)",
+    )
+    parser.add_argument(
+        "--ui-port",
+        type=int,
+        default=4200,
+        help="Port for the Agent UI server (default: 4200, used with --ui)",
+    )
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="Launch interactive CLI chat",
     )
 
     # Create a parent parser for common arguments
@@ -2293,8 +2436,18 @@ Examples:
 
     # Check if action is specified
     if not args.action:
-        log.warning("No action specified. Displaying help message.")
-        parser.print_help()
+        # Top-level --ui flag: launch Agent UI
+        if getattr(args, "ui", False):
+            _launch_agent_ui(port=getattr(args, "ui_port", 4200), log=log)
+            return
+
+        # Top-level --cli flag: launch interactive CLI chat
+        if getattr(args, "cli", False):
+            _launch_interactive_cli(log=log)
+            return
+
+        # No flags: launch Agent UI (default experience)
+        _launch_agent_ui(port=getattr(args, "ui_port", 4200), log=log)
         return
 
     # Set logging level using the GaiaLogger manager (if provided)
@@ -2303,45 +2456,13 @@ Examples:
     if hasattr(args, "logging_level"):
         log_manager.set_level("gaia", getattr(logging, args.logging_level))
 
-    # Handle chat --ui: launch Agent UI server
+    # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
-        try:
-            from gaia.ui.server import create_app
-
-            port = getattr(args, "ui_port", 4200)
-
-            # Forward --base-url to the UI server via environment variable
-            # so it connects to the correct Lemonade server (local or remote)
-            cli_base_url = getattr(args, "base_url", None)
-            if cli_base_url:
-                os.environ["LEMONADE_BASE_URL"] = cli_base_url
-                log.info(f"Using remote Lemonade server: {cli_base_url}")
-                print(f"🔗 Remote Lemonade server: {cli_base_url}")
-
-            log.info(f"Starting GAIA Agent UI on http://localhost:{port}")
-            print(f"🚀 Starting GAIA Agent UI on http://localhost:{port}")
-            print(f"   Open your browser to http://localhost:{port}")
-            print("   Press Ctrl+C to stop\n")
-
-            import uvicorn
-
-            app = create_app()
-            uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
-        except ImportError as e:
-            print(f"\n❌ Missing dependencies for Agent UI: {e}")
-            print(
-                "\n   The Agent UI requires extra dependencies that are not installed."
-            )
-            print("   Install them with:\n")
-            print('     uv pip install -e ".[ui]"')
-            print("\n   Or if you installed from PyPI:\n")
-            print("     pip install amd-gaia[ui]")
-            print()
-            sys.exit(1)
-        except Exception as e:
-            log.error(f"Error starting Agent UI: {e}")
-            print(f"❌ Error: {e}")
-            sys.exit(1)
+        _launch_agent_ui(
+            port=getattr(args, "ui_port", 4200),
+            base_url=getattr(args, "base_url", None),
+            log=log,
+        )
         return
 
     # Handle core Gaia CLI commands

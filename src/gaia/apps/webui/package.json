@@ -29,7 +29,6 @@
   ],
   "main": "main.cjs",
   "bin": {
-    "gaia": "bin/gaia-ui.mjs",
     "gaia-ui": "bin/gaia-ui.mjs"
   },
   "files": [

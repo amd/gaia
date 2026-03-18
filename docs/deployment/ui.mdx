@@ -1,26 +1,21 @@
 ---
-title: "UI Documentation"
+title: "UI Packaging & Deployment"
 icon: "desktop"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/apps/`](https://github.com/amd/gaia/blob/main/src/gaia/apps/) | [`src/gaia/ui/`](https://github.com/amd/gaia/blob/main/src/gaia/ui/) | [RAUX Repository](https://github.com/aigdat/raux)
+  **Source Code:** [`src/gaia/apps/webui/`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/) | [`src/gaia/ui/`](https://github.com/amd/gaia/blob/main/src/gaia/ui/)
 </Info>
 
-# UI Overview
+# Overview
 
-GAIA provides two desktop interfaces:
-
-| UI | Focus | Technology | Status |
-|----|-------|------------|--------|
-| **GAIA Chat** | Privacy-first chat with document Q&A | FastAPI + React/Electron | Active Development |
-| **GAIA UI (RAUX)** | Full-featured AI platform interface | OpenWebUI + Electron | Stable |
+The GAIA Agent UI is distributed as an [npm package](https://www.npmjs.com/package/@amd-gaia/agent-ui) and can also be packaged as an Electron desktop app for Windows and Ubuntu.
 
 <CardGroup cols={2}>
-  <Card title="GAIA Chat Desktop" icon="comments" href="/guides/agent-ui">
-    Lightweight, privacy-first chat with document Q&A. Drag-and-drop files, session management, and streaming responses.
+  <Card title="Agent UI Guide" icon="desktop" href="/guides/agent-ui">
+    Features, keyboard shortcuts, troubleshooting, and architecture.
   </Card>
-  <Card title="GAIA Agent SDK" icon="code" href="/sdk/sdks/agent-ui">
+  <Card title="Agent UI SDK" icon="code" href="/sdk/sdks/agent-ui">
     Python backend API: FastAPI server, SQLite database, Pydantic models, and SSE streaming.
   </Card>
 </CardGroup>
@@ -29,7 +24,18 @@ GAIA provides two desktop interfaces:
 
 # Installation
 
-Install GAIA UI on Windows and Ubuntu using the packages from the GitHub [Releases](https://github.com/amd/gaia/releases) page.
+<Warning>
+  Desktop installers (`.exe` / `.deb`) are **not yet available** for download. To use the Agent UI today, install via npm:
+
+  ```bash
+  npm install -g @amd-gaia/agent-ui
+  gaia
+  ```
+
+  Or launch from the GAIA CLI: `gaia --ui`. See the [Agent UI guide](/guides/agent-ui) for details.
+</Warning>
+
+Install GAIA UI on Windows and Ubuntu using the packages from the GitHub [Releases](https://github.com/amd/gaia/releases) page (when available).
 
 ## Supported platforms
 - Windows 11 (64-bit) - Full GUI and CLI support

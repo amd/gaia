@@ -312,6 +312,7 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                     <div className="brand-text">
                         <span className="brand-name">GAIA</span>
                         <span className="brand-version">v{__APP_VERSION__}</span>
+                        <span className="beta-badge">BETA</span>
                     </div>
                 </div>
                 <div className="sidebar-top-actions">
