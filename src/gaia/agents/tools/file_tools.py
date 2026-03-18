@@ -2012,17 +2012,13 @@ class FileSearchToolsMixin:
                     f"Found {total_found} recent file(s) in {loc_str} (last {days} days)"
                 ]
                 for f in shown:
-                    display_parts.append(
-                        f"  {f['file_name']} ({f['directory']})"
-                    )
+                    display_parts.append(f"  {f['file_name']} ({f['directory']})")
                 if extra:
                     display_parts.append(
                         f"\n<details><summary>+{len(extra)} more files</summary>\n"
                     )
                     for f in extra:
-                        display_parts.append(
-                            f"  {f['file_name']} ({f['directory']})"
-                        )
+                        display_parts.append(f"  {f['file_name']} ({f['directory']})")
                     display_parts.append("</details>")
 
                 return {
