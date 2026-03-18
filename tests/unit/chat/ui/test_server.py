@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -537,36 +538,43 @@ class TestDocumentEndpoints:
 
     @patch("gaia.ui.server._index_document")
     def test_upload_by_path_file_not_found(self, mock_index, client):
-        resp = client.post(
-            "/api/documents/upload-path", json={"filepath": "/nonexistent/file.pdf"}
-        )
+        # Path must be under $HOME (ensure_within_home is enforced first)
+        nonexistent = str(Path.home() / "nonexistent_gaia_test_file.pdf")
+        resp = client.post("/api/documents/upload-path", json={"filepath": nonexistent})
         assert resp.status_code == 404
 
     @patch("gaia.ui.server._index_document")
     def test_upload_by_path_success(self, mock_index, client):
         mock_index.return_value = 15
 
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
-            f.write(b"test content for hashing")
-            tmp_path = f.name
+        # File must be under $HOME (ensure_within_home is enforced)
+        tmp_path = Path.home() / "gaia_test_upload.txt"
+        tmp_path.write_bytes(b"test content for hashing")
 
         try:
             resp = client.post(
-                "/api/documents/upload-path", json={"filepath": tmp_path}
+                "/api/documents/upload-path", json={"filepath": str(tmp_path)}
             )
             assert resp.status_code == 200
             data = resp.json()
-            assert data["filename"] == os.path.basename(tmp_path)
+            assert data["filename"] == tmp_path.name
             assert data["chunk_count"] == 15
             assert data["file_size"] > 0
         finally:
-            os.unlink(tmp_path)
+            tmp_path.unlink(missing_ok=True)
 
     @patch("gaia.ui.server._index_document")
     def test_upload_by_path_directory_returns_400(self, mock_index, client):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            resp = client.post("/api/documents/upload-path", json={"filepath": tmp_dir})
+        # Directory must be under $HOME (ensure_within_home is enforced first)
+        tmp_dir = Path.home() / "gaia_test_dir_upload"
+        tmp_dir.mkdir(exist_ok=True)
+        try:
+            resp = client.post(
+                "/api/documents/upload-path", json={"filepath": str(tmp_dir)}
+            )
             assert resp.status_code == 400
+        finally:
+            tmp_dir.rmdir()
 
     def test_delete_document(self, client, db):
         doc = db.add_document("delete.pdf", "/del.pdf", "del_hash")
@@ -779,19 +787,19 @@ class TestValidateFilePath:
     @patch("gaia.ui.server._index_document")
     def test_upload_rejects_unsafe_extension(self, mock_index, client):
         """Integration test: upload endpoint rejects unsafe file types."""
-        with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as f:
-            f.write(b"fake executable")
-            tmp_path = f.name
+        # File must be under $HOME (ensure_within_home is enforced first)
+        tmp_path = Path.home() / "gaia_test_evil.exe"
+        tmp_path.write_bytes(b"fake executable")
 
         try:
             resp = client.post(
-                "/api/documents/upload-path", json={"filepath": tmp_path}
+                "/api/documents/upload-path", json={"filepath": str(tmp_path)}
             )
             assert resp.status_code == 400
             detail = resp.json()["detail"]
             assert "Unsupported file type" in detail or "cannot be indexed" in detail
         finally:
-            os.unlink(tmp_path)
+            tmp_path.unlink(missing_ok=True)
 
 
 class TestSanitizeDocumentPath:
