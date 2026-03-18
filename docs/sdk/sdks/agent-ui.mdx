@@ -1,6 +1,6 @@
 ---
 title: "Agent UI SDK"
-description: "Python backend SDK for the GAIA Chat desktop application - FastAPI server, SQLite database, and Pydantic models"
+description: "Python backend SDK for the GAIA Agent UI - FastAPI server, SQLite database, and Pydantic models"
 icon: "desktop"
 ---
 
@@ -17,13 +17,13 @@ from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentR
 ```
 </Note>
 
-**See also:** [User Guide](/guides/agent-ui) | [Chat SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server)
+**See also:** [User Guide](/guides/agent-ui) | [Agent SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server)
 
 ---
 
 ## Overview
 
-The Agent UI SDK is the Python backend that powers GAIA Chat Desktop. It provides:
+The Agent UI SDK is the Python backend that powers the GAIA Agent UI. It provides:
 
 - **FastAPI REST server** with session, chat, and document endpoints
 - **SQLite database** for persistent sessions, messages, and document metadata
@@ -833,27 +833,23 @@ def test_message_ordering():
 
 ---
 
-## Integration with Chat SDK
+## Integration with the Agent
 
-The Agent UI server delegates to the core [Chat SDK](/sdk/sdks/chat) for LLM communication:
+The Agent UI server delegates to the GAIA [Agent](/sdk/core/agent-system) for LLM communication and tool execution:
 
 ```python
-from gaia.chat.sdk import AgentSDK, AgentConfig
+from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
-# The server creates an AgentSDK instance per request
-config = AgentConfig(
-    model=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
+# The server creates a ChatAgent instance per request
+config = ChatAgentConfig(
+    model_id=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
     system_prompt=session.get("system_prompt"),
+    allowed_paths=["/path/to/files"],
 )
-chat = AgentSDK(config)
+agent = ChatAgent(config)
 
-# Non-streaming
-response = chat.send(message)
-
-# Streaming
-for chunk in chat.send_stream(message):
-    if not chunk.is_complete:
-        yield chunk.text
+# Process a query (agent reasons, uses tools, returns response)
+result = agent.process_query(message)
 ```
 
 Document indexing uses the [RAG SDK](/sdk/sdks/rag):
@@ -877,14 +873,16 @@ GAIA Agent UI is also available as an npm package for quick installation:
 npm install -g @amd-gaia/agent-ui
 ```
 
-This provides the `gaia-ui` CLI command:
+This provides the `gaia` CLI command:
 
 ```bash
-gaia-ui              # Start Python backend + open browser
-gaia-ui --serve      # Serve frontend only (Node.js static server)
-gaia-ui --port 8080  # Custom port
-gaia-ui --version    # Show version
+gaia              # Start Python backend + open browser
+gaia --serve      # Serve frontend only (Node.js static server)
+gaia --port 8080  # Custom port
+gaia --version    # Show version
 ```
+
+On first run, `gaia` automatically installs the Python backend (uv, Python 3.12, amd-gaia) if not already present.
 
 ### Package Contents
 
@@ -917,7 +915,7 @@ Tags matching `v*` trigger the automated npm publish workflow.
 ## Related
 
 - **[User Guide](/guides/agent-ui)** -- Desktop app usage, features, and troubleshooting
-- **[Chat SDK](/sdk/sdks/chat)** -- Core conversation SDK with memory and RAG
+- **[Agent SDK](/sdk/sdks/chat)** -- Core Agent SDK with memory and RAG
 - **[RAG SDK](/sdk/sdks/rag)** -- Document indexing and retrieval
 - **[Desktop App Installation](/deployment/ui)** -- Download and install instructions
 

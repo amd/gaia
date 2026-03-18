@@ -5,17 +5,21 @@
 
 // GAIA Agent UI CLI
 // Usage:
-//   gaia-ui                Start the app (backend + browser)
-//   gaia-ui --serve        Serve frontend only (no backend auto-start)
-//   gaia-ui --port 4200    Custom backend port
-//   gaia-ui --help         Show help
+//   gaia                   Start the app (backend + browser)
+//   gaia --serve           Serve frontend only (no backend auto-start)
+//   gaia --port 4200       Custom backend port
+//   gaia --help            Show help
+//
+// On first run, automatically installs the Python backend (amd-gaia)
+// using the GAIA install scripts (uv + Python 3.12 + amd-gaia).
 
-import { spawn, exec, execSync } from "child_process";
+import { spawn, exec, execSync, spawnSync } from "child_process";
 import { dirname, join, extname, resolve } from "path";
 import { fileURLToPath } from "url";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, mkdirSync } from "fs";
 import { readFile } from "fs/promises";
 import { createServer } from "http";
+import { homedir } from "os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -35,6 +39,18 @@ const PORT = parseInt(getArg("--port", "4200"), 10);
 const SERVE_ONLY = hasFlag("--serve");
 const OPEN_BROWSER = !hasFlag("--no-open");
 
+// ── Paths ────────────────────────────────────────────────────────────────────
+const IS_WINDOWS = process.platform === "win32";
+const GAIA_HOME = join(homedir(), ".gaia");
+const GAIA_VENV = join(GAIA_HOME, "venv");
+const GAIA_BIN = IS_WINDOWS
+  ? join(GAIA_VENV, "Scripts", "gaia.exe")
+  : join(GAIA_VENV, "bin", "gaia");
+
+// Install script URLs
+const INSTALL_SCRIPT_URL_PS1 = "https://amd-gaia.ai/install.ps1";
+const INSTALL_SCRIPT_URL_SH = "https://amd-gaia.ai/install.sh";
+
 function readPkg() {
   try {
     return JSON.parse(readFileSync(join(ROOT_DIR, "package.json"), "utf-8"));
@@ -46,10 +62,10 @@ function readPkg() {
 function printHelp() {
   const pkg = readPkg();
   console.log(`
-GAIA Agent UI - Privacy-first agentic AI interface
+GAIA - Run AI agents locally on your PC
 Version: ${pkg.version}
 
-Usage: gaia-ui [options]
+Usage: gaia [options]
 
 Options:
   --port <port>   Backend port (default: 4200)
@@ -59,35 +75,175 @@ Options:
   --version, -v   Show version
 
 Modes:
-  Default         Start Python backend (gaia chat --ui) and open browser
+  Default         Start Python backend + open browser
   --serve         Serve pre-built frontend with a lightweight Node.js server
                   (useful when running the Python backend separately)
 
-Prerequisites:
-  - Python gaia package: pip install amd-gaia
-  - Lemonade Server: lemonade-server serve
+On first run, GAIA automatically installs the Python backend
+(uv, Python 3.12, amd-gaia) into ~/.gaia/venv.
 
-Documentation: https://amd-gaia.ai/guides/chat-ui
+Documentation: https://amd-gaia.ai/guides/agent-ui
 `);
 }
 
 function printVersion() {
   const pkg = readPkg();
-  console.log(`gaia-ui v${pkg.version}`);
+  console.log(`gaia v${pkg.version}`);
 }
 
 /**
  * Check if a command exists on PATH.
  */
 function commandExists(cmd) {
-  const isWindows = process.platform === "win32";
   try {
-    const check = isWindows ? `where ${cmd}` : `which ${cmd}`;
+    const check = IS_WINDOWS ? `where ${cmd}` : `which ${cmd}`;
     execSync(check, { stdio: "ignore" });
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Check if a resolved gaia binary is the Python CLI (not this Node.js shim).
+ * Prevents infinite spawn loops when the npm "gaia" bin shadows the Python one.
+ */
+function isPythonGaia(binPath) {
+  try {
+    const result = spawnSync(binPath, ["--version"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 5000,
+    });
+    // Python gaia prints a version string; Node.js gaia-ui.mjs prints "gaia v..."
+    // Check that the binary is not this script (Node.js)
+    const stdout = (result.stdout || "").toString().trim();
+    // If it outputs nothing or errors, it's not the Python CLI
+    if (result.status !== 0 || !stdout) return false;
+    // The Python CLI outputs just a version like "0.17.0" or "gaia 0.17.0"
+    // The Node.js shim outputs "gaia v0.17.0" (from printVersion)
+    // As a safeguard, check the binary is not this exact file
+    const resolvedBin = resolve(binPath);
+    const thisScript = resolve(__filename);
+    if (resolvedBin === thisScript) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find the gaia binary - check venv first, then PATH.
+ * Returns the path to the gaia executable, or null if not found.
+ * Guards against finding this Node.js shim instead of the Python CLI.
+ */
+function findGaiaBin() {
+  // Check the managed venv first (always the Python binary)
+  if (existsSync(GAIA_BIN)) {
+    return GAIA_BIN;
+  }
+  // Fall back to PATH, but verify it's the Python CLI
+  if (commandExists("gaia")) {
+    // Resolve the full path to avoid spawning ourselves
+    try {
+      const which = IS_WINDOWS ? "where gaia" : "which gaia";
+      const resolved = execSync(which, { stdio: ["ignore", "pipe", "ignore"] })
+        .toString()
+        .trim()
+        .split("\n")[0]
+        .trim();
+      if (resolved && resolve(resolved) !== resolve(__filename) && isPythonGaia(resolved)) {
+        return resolved;
+      }
+    } catch {
+      // Fall through
+    }
+  }
+  return null;
+}
+
+/**
+ * Install the GAIA Python backend by running the install script.
+ * Windows: PowerShell install.ps1
+ * Linux/macOS: bash install.sh
+ */
+function installBackend() {
+  console.log("========================================");
+  console.log("  First-time setup: Installing GAIA backend");
+  console.log("========================================");
+  console.log("");
+  console.log("This installs uv, Python 3.12, and the amd-gaia package");
+  console.log(`into ${GAIA_VENV}`);
+  console.log("");
+
+  let result;
+
+  if (IS_WINDOWS) {
+    // Run install.ps1 via PowerShell
+    console.log("Running GAIA installer for Windows...");
+    console.log("");
+    result = spawnSync(
+      "powershell",
+      [
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        `irm ${INSTALL_SCRIPT_URL_PS1} | iex`,
+      ],
+      { stdio: "inherit", env: { ...process.env } }
+    );
+  } else {
+    // Run install.sh via bash
+    console.log("Running GAIA installer for Linux/macOS...");
+    console.log("");
+    result = spawnSync(
+      "bash",
+      ["-c", `curl -fsSL ${INSTALL_SCRIPT_URL_SH} | sh`],
+      { stdio: "inherit", env: { ...process.env } }
+    );
+  }
+
+  if (result.status !== 0) {
+    console.error("");
+    console.error("Backend installation failed.");
+    console.error("Try installing manually: https://amd-gaia.ai/quickstart");
+    process.exit(1);
+  }
+
+  console.log("");
+
+  // Verify the install worked
+  if (!existsSync(GAIA_BIN)) {
+    console.error(`Error: Expected ${GAIA_BIN} after installation, but not found.`);
+    console.error("Try installing manually: https://amd-gaia.ai/quickstart");
+    process.exit(1);
+  }
+
+  console.log("Backend installed successfully!");
+  console.log("");
+}
+
+/**
+ * Ensure the GAIA Python backend is available.
+ * If not found, auto-install via the install scripts.
+ */
+function ensureBackend() {
+  const gaiaBin = findGaiaBin();
+  if (gaiaBin) {
+    return gaiaBin;
+  }
+
+  // Not found — install automatically
+  installBackend();
+
+  // Re-check after install
+  const installed = findGaiaBin();
+  if (!installed) {
+    console.error("Error: GAIA backend not found after installation.");
+    console.error("");
+    console.error("Try installing manually:");
+    console.error("  https://amd-gaia.ai/quickstart");
+    process.exit(1);
+  }
+  return installed;
 }
 
 /**
@@ -128,27 +284,12 @@ function openBrowser(url) {
 }
 
 /**
- * Start the Python backend (gaia chat --ui).
+ * Start the Python backend (gaia --ui).
  */
-function startBackend(port) {
-  const isWindows = process.platform === "win32";
-  const gaiaCmd = isWindows ? "gaia.exe" : "gaia";
+function startBackend(gaiaBin, port) {
+  console.log(`Starting GAIA backend on port ${port}...`);
 
-  // Check if gaia command is available
-  if (!commandExists("gaia")) {
-    console.error("Error: 'gaia' command not found.");
-    console.error("");
-    console.error("Install the GAIA Python package:");
-    console.error("  pip install amd-gaia");
-    console.error("");
-    console.error("Or run in serve-only mode (requires backend running separately):");
-    console.error("  gaia-ui --serve");
-    process.exit(1);
-  }
-
-  console.log(`Starting GAIA Agent UI backend on port ${port}...`);
-
-  const child = spawn(gaiaCmd, ["chat", "--ui", "--ui-port", String(port)], {
+  const child = spawn(gaiaBin, ["--ui", "--ui-port", String(port)], {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env },
     detached: false,
@@ -166,9 +307,6 @@ function startBackend(port) {
 
   child.on("error", (err) => {
     console.error(`Failed to start backend: ${err.message}`);
-    console.error("");
-    console.error("Make sure the GAIA Python package is installed:");
-    console.error("  pip install amd-gaia");
     process.exit(1);
   });
 
@@ -287,7 +425,6 @@ const pkg = readPkg();
 console.log("");
 console.log("========================================");
 console.log(`  GAIA Agent UI v${pkg.version}`);
-console.log("  Privacy-first agentic AI");
 console.log("========================================");
 console.log("");
 
@@ -305,12 +442,10 @@ if (SERVE_ONLY) {
     openBrowser(`http://localhost:${PORT}`);
   }
 } else {
-  // Full mode: start Python backend + open browser
-  console.log("Mode: Full (backend + frontend)");
-  console.log(`Port: ${PORT}`);
-  console.log("");
+  // Full mode: ensure backend is installed, start it, open browser
+  const gaiaBin = ensureBackend();
 
-  backendProcess = startBackend(PORT);
+  backendProcess = startBackend(gaiaBin, PORT);
 
   // Wait for the backend to be ready
   console.log("Waiting for backend to start...");
@@ -338,7 +473,7 @@ if (SERVE_ONLY) {
 // Graceful shutdown
 function cleanup() {
   if (backendProcess) {
-    console.log("\nShutting down GAIA Agent UI...");
+    console.log("\nShutting down GAIA...");
     backendProcess.kill("SIGTERM");
     setTimeout(() => {
       try {

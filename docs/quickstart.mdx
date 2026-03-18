@@ -1,71 +1,37 @@
 ---
 title: "Quickstart"
-description: "Start chatting locally in minutes, or build your first AI agent"
+description: "Run AI agents locally in minutes, or build your first custom agent"
 icon: "rocket"
 ---
 
 ## Agent UI (Fastest)
 
-**Just want to chat?** Get a privacy-first AI chat running locally in minutes -- no Python or development setup required.
+Run AI agents **100% locally** on your AMD hardware — analyze documents, generate code, answer questions, and accomplish tasks on your PC without sending data to the cloud.
 
 <Tabs>
-  <Tab title="Desktop Installer">
-    <Steps>
-      <Step title="Download and install">
-        <Tabs>
-          <Tab title="Windows">
-            Download [`gaia-ui-setup.exe`](https://github.com/amd/gaia/releases) and double-click to install.
-          </Tab>
-          <Tab title="Ubuntu">
-            Download [`gaia-ui-setup.deb`](https://github.com/amd/gaia/releases) and install:
-            ```bash
-            sudo apt install ./gaia-ui-setup.deb
-            ```
-          </Tab>
-        </Tabs>
-      </Step>
-
-      <Step title="Launch GAIA Chat">
-        Open **GAIA Chat** from the Start Menu (Windows) or application menu (Ubuntu). On first launch, the app downloads models automatically. Start chatting -- your data never leaves your device.
-      </Step>
-    </Steps>
-  </Tab>
-
-  <Tab title="npm (One Command)">
-    Already have Node.js? Install and run in one command:
-
-    <Tabs>
-      <Tab title="Linux / macOS">
-        ```bash
-        curl -fsSL https://raw.githubusercontent.com/amd/gaia/main/scripts/install-ui.sh | bash
-        ```
-      </Tab>
-      <Tab title="Windows (PowerShell)">
-        ```powershell
-        irm https://raw.githubusercontent.com/amd/gaia/main/scripts/install-ui.ps1 | iex
-        ```
-      </Tab>
-      <Tab title="Manual">
-        ```bash
-        npm install -g @amd-gaia/agent-ui
-        ```
-      </Tab>
-    </Tabs>
+  <Tab title="npm (Recommended)">
+    ```bash
+    npm install -g @amd-gaia/agent-ui
+    ```
 
     Then run:
     ```bash
-    gaia-ui
+    gaia
     ```
 
+    On first run, GAIA automatically installs the Python backend and all dependencies.
+
     <Note>
-      The `gaia-ui` npm command requires the Python GAIA backend (`pip install amd-gaia`) and Lemonade Server for LLM inference. Use `gaia-ui --serve` if running the backend separately.
+      Requires [Node.js 18+](https://nodejs.org).
     </Note>
+  </Tab>
+
+  <Tab title="Desktop Installer (Coming Soon)">
+    Coming soon.
   </Tab>
 </Tabs>
 
-<Tip>
-  The desktop installer includes everything: Lemonade Server, models, and the chat interface. For document Q&A, drag PDFs or code files into the chat. See the [GAIA Chat Desktop guide](/guides/agent-ui) for all features.
-</Tip>
+See the [Agent UI guide](/guides/agent-ui) for more details.
 
 ---
 

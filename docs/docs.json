@@ -55,13 +55,13 @@
             "pages": [
               "setup",
               "quickstart",
+              "guides/agent-ui",
               {
                 "group": "User Guides",
                 "pages": [
                   "guides/index",
                   "guides/hardware-advisor",
                   "guides/chat",
-                  "guides/agent-ui",
                   "guides/talk",
                   "guides/code",
                   "guides/sd",
