@@ -74,6 +74,28 @@ class LemonadeProvider(LLMClient):
         # Default to low temperature for deterministic responses (matches old LLMClient behavior)
         kwargs.setdefault("temperature", 0.1)
 
+        # Repetition prevention: penalise recently-generated tokens so the
+        # model doesn't get stuck in a loop repeating tables, paragraphs, etc.
+        #
+        # We use TWO layers of protection:
+        #   1. OpenAI-standard params (frequency_penalty, presence_penalty) –
+        #      work in both streaming (OpenAI client) and non-streaming paths.
+        #   2. llama.cpp-native params (repeat_penalty, repeat_last_n) –
+        #      passed via extra_body for the streaming OpenAI client path,
+        #      and directly in kwargs for the non-streaming requests.post path.
+        #
+        # frequency_penalty: additive penalty proportional to token frequency
+        #                    in generated text so far (0.0 = off, 0.0–2.0 range)
+        # presence_penalty:  flat penalty if token appeared at all in output
+        #                    (0.0 = off, 0.0–2.0 range)
+        # repeat_penalty:    llama.cpp multiplicative penalty on tokens in the
+        #                    last repeat_last_n window (1.0 = off, 1.1–1.3 typical)
+        # repeat_last_n:     how far back to look (default 64; 256 covers tables)
+        kwargs.setdefault("frequency_penalty", 0.3)
+        kwargs.setdefault("presence_penalty", 0.1)
+        kwargs.setdefault("repeat_penalty", 1.1)
+        kwargs.setdefault("repeat_last_n", 256)
+
         response = self._backend.chat_completions(
             model=effective_model, messages=messages, stream=stream, **kwargs
         )
@@ -88,7 +110,10 @@ class LemonadeProvider(LLMClient):
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")
 
-        return response["choices"][0]["message"]["content"]
+        content = response["choices"][0]["message"]["content"]
+        if not content:
+            content = response["choices"][0]["message"].get("reasoning_content", "")
+        return content
 
     def embed(self, texts: list[str], **kwargs) -> list[list[float]]:
         response = self._backend.embeddings(texts, **kwargs)

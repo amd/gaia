@@ -7,7 +7,7 @@ title: "API Server"
 </Info>
 
 <Note>
-**Import:** `from gaia.api.openai_server import create_app`
+**Import:** `from gaia.api.openai_server import app`
 </Note>
 ---
 
@@ -20,13 +20,10 @@ title: "API Server"
 **Purpose:** Expose GAIA agents as OpenAI-compatible REST API.
 
 ```python
-from gaia.api.openai_server import create_app
+from gaia.api.openai_server import app
 import uvicorn
 
-# Create FastAPI app
-app = create_app()
-
-# Run server
+# Run server (app is a module-level FastAPI instance)
 uvicorn.run(app, host="0.0.0.0", port=8080)
 
 # Now accessible via OpenAI SDK:
@@ -93,8 +90,8 @@ from gaia.api.sse_handler import SSEOutputHandler
 # Create SSE handler
 sse = SSEOutputHandler()
 
-# Use with agent
-agent = MyAgent(console=sse)
+# Use with agent (parameter name is output_handler, not console)
+agent = MyAgent(output_handler=sse)
 
 # Process query
 result = agent.process_query("Generate code")

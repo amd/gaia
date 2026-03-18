@@ -68,6 +68,20 @@ class MockBrowserWindow extends EventEmitter {
     this.emit('blur');
   }
 
+  isMinimized() {
+    return this._isMinimized || false;
+  }
+
+  minimize() {
+    this._isMinimized = true;
+    this.emit('minimize');
+  }
+
+  restore() {
+    this._isMinimized = false;
+    this.emit('restore');
+  }
+
   static getAllWindows() {
     return [];
   }
@@ -205,6 +219,26 @@ module.exports = {
   },
   
   Tray: jest.fn(),
+
+  Notification: Object.assign(
+    class MockNotification extends EventEmitter {
+      constructor(options = {}) {
+        super();
+        this.options = options;
+        this.title = options.title || '';
+        this.body = options.body || '';
+      }
+      show() {
+        this.emit('show');
+      }
+      close() {
+        this.emit('close');
+      }
+    },
+    {
+      isSupported: jest.fn(() => true),
+    }
+  ),
   
   nativeTheme: {
     shouldUseDarkColors: false,

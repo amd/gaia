@@ -1,5 +1,5 @@
 ---
-title: "Chat SDK"
+title: "Agent SDK"
 description: "Programmable interface for text chat, conversation memory, and document Q&A (RAG)"
 icon: "comments"
 ---
@@ -9,23 +9,23 @@ icon: "comments"
 </Info>
 
 <Note>
-**Import:** `from gaia.chat.sdk import ChatSDK, ChatConfig, SimpleChat, ChatSession, quick_chat`
+**Import:** `from gaia.chat.sdk import AgentSDK, AgentConfig, SimpleChat, AgentSession, quick_chat`
 </Note>
 
-**See also:** [User Guide](/guides/chat) · [API Specification](/spec/chat-sdk)
+**See also:** [User Guide](/guides/chat) · [API Specification](/spec/agent-sdk)
 
 ---
 
 ## Core Classes
 
-### ChatConfig
+### AgentConfig
 
 Configure your chat session:
 
 ```python
 @dataclass
-class ChatConfig:
-    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"  # Default validated model
+class AgentConfig:
+    model: str = "Qwen3-0.6B-GGUF"  # Default validated model (DEFAULT_MODEL_NAME)
     max_tokens: int = 512
     temperature: Optional[float] = None
     system_prompt: Optional[str] = None
@@ -40,13 +40,13 @@ class ChatConfig:
     assistant_name: str = "gaia"
 ```
 
-### ChatResponse
+### AgentResponse
 
 Responses include text, history, and optional statistics:
 
 ```python
 @dataclass
-class ChatResponse:
+class AgentResponse:
     text: str
     history: Optional[List[str]] = None
     stats: Optional[Dict[str, Any]] = None
@@ -94,9 +94,9 @@ print(response)
 ## Chat with Memory
 
 ```python
-from gaia.chat.sdk import ChatSDK, ChatConfig
+from gaia.chat.sdk import AgentSDK, AgentConfig
 
-config = ChatConfig(
+config = AgentConfig(
     model="Qwen3-0.6B-GGUF",
     max_tokens=512,
     max_history_length=4,
@@ -104,7 +104,7 @@ config = ChatConfig(
     assistant_name="CodeBot"
 )
 
-chat = ChatSDK(config)
+chat = AgentSDK(config)
 
 # Multi-turn conversation
 response1 = chat.send("What is Python?")
@@ -125,9 +125,9 @@ chat.clear_history()
 ## Streaming
 
 ```python
-from gaia.chat.sdk import ChatSDK
+from gaia.chat.sdk import AgentSDK
 
-chat = ChatSDK()
+chat = AgentSDK()
 
 print("AI: ", end="", flush=True)
 for chunk in chat.send_stream("Tell me a story"):
@@ -141,13 +141,13 @@ print()
 ## Custom Assistant
 
 ```python
-from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.chat.sdk import AgentConfig, AgentSDK
 
-config = ChatConfig(
+config = AgentConfig(
     assistant_name="Gaia",
     system_prompt="You are Gaia, a helpful AI assistant."
 )
-chat = ChatSDK(config)
+chat = AgentSDK(config)
 
 response = chat.send("What's your name?")
 print(f"Gaia: {response.text}")
@@ -160,9 +160,9 @@ print(f"Gaia: {response.text}")
 Manage multiple conversation contexts:
 
 ```python
-from gaia.chat.sdk import ChatSession
+from gaia.chat.sdk import AgentSession
 
-sessions = ChatSession()
+sessions = AgentSession()
 
 # Create different contexts with custom names
 work_chat = sessions.create_session(
@@ -187,9 +187,9 @@ personal_response = personal_chat.send("What's for dinner?")
 ## Conversation History
 
 ```python
-from gaia.chat.sdk import ChatSDK
+from gaia.chat.sdk import AgentSDK
 
-chat = ChatSDK()
+chat = AgentSDK()
 
 chat.send("Hello")
 chat.send("How are you?")
@@ -207,9 +207,9 @@ print(f"Conversation pairs: {chat.conversation_pairs}")
 ## Chat with RAG
 
 ```python
-from gaia.chat.sdk import ChatSDK
+from gaia.chat.sdk import AgentSDK
 
-chat = ChatSDK()
+chat = AgentSDK()
 
 # Enable RAG and index documents
 chat.enable_rag(documents=["manual.pdf", "guide.pdf"])
@@ -228,9 +228,9 @@ chat.disable_rag()
 ### Advanced RAG Configuration
 
 ```python
-from gaia.chat.sdk import ChatSDK
+from gaia.chat.sdk import AgentSDK
 
-chat = ChatSDK()
+chat = AgentSDK()
 
 chat.enable_rag(
     documents=["doc1.pdf", "doc2.pdf"],
@@ -250,9 +250,9 @@ if chat.rag:
 ## Custom Messages
 
 ```python
-from gaia.chat.sdk import ChatSDK
+from gaia.chat.sdk import AgentSDK
 
-chat = ChatSDK()
+chat = AgentSDK()
 
 messages = [
     {"role": "system", "content": "You are a math tutor."},
@@ -272,13 +272,13 @@ print(response.text)
 
 ## API Reference
 
-### ChatSDK Methods
+### AgentSDK Methods
 
 <CardGroup cols={2}>
   <Card title="Messaging" icon="message">
-    - `send(message: str) -> ChatResponse`
+    - `send(message: str) -> AgentResponse`
     - `send_stream(message: str)`
-    - `send_messages(messages, system_prompt) -> ChatResponse`
+    - `send_messages(messages, system_prompt) -> AgentResponse`
   </Card>
 
   <Card title="History" icon="clock-rotate-left">
@@ -309,10 +309,10 @@ print(response.text)
 - `clear_memory()` — Clear conversation memory
 - `get_conversation() -> List[Dict]` — Get conversation history
 
-### ChatSession Methods
+### AgentSession Methods
 
-- `create_session(session_id, config=None, **kwargs) -> ChatSDK` — Create new session
-- `get_session(session_id) -> ChatSDK` — Get existing session
+- `create_session(session_id, config=None, **kwargs) -> AgentSDK` — Create new session
+- `get_session(session_id) -> AgentSDK` — Get existing session
 - `delete_session(session_id) -> bool` — Delete session
 - `list_sessions() -> List[str]` — List all sessions
 - `clear_all_sessions()` — Delete all sessions
@@ -328,7 +328,7 @@ print(response.text)
 
 <CardGroup cols={2}>
   <Card title="Choose the Right Interface" icon="code-branch">
-    `SimpleChat` for basic needs, `ChatSDK` for full features, `ChatSession` for multi-context apps
+    `SimpleChat` for basic needs, `AgentSDK` for full features, `AgentSession` for multi-context apps
   </Card>
 
   <Card title="Memory Management" icon="memory">
@@ -349,8 +349,10 @@ print(response.text)
 ## Related
 
 - **[User Guide](/guides/chat)** — CLI usage, RAG commands, troubleshooting
+- **[GAIA Chat Desktop](/guides/agent-ui)** — Desktop app with GUI and document Q&A
+- **[Agent UI SDK](./agent-ui)** — Python backend for the desktop application (FastAPI, SQLite, REST API)
 - **[LLM Client](./llm)** — Language model integration
-- **[API Specification](/spec/chat-sdk)** — Technical specification
+- **[API Specification](/spec/agent-sdk)** — Technical specification
 
 ---
 

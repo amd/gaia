@@ -68,6 +68,7 @@ SKIP_PATTERNS = [
     r"^\$\{",  # JS template literals
     r"^url$",  # Placeholder "url" in markdown syntax examples
     r"github\.com/amd/gaia/compare/",  # Release compare URLs (tags may not exist yet)
+    r"github\.com/amd/gaia/(blob|tree)/main/",  # Same-repo links (may 404 during PRs before merge)
 ]
 
 
@@ -224,6 +225,8 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
                 return "broken", str(e2)
         if e.code == 429:
             return "warning", "HTTP 429 (rate limited)"
+        if e.code >= 500:
+            return "warning", f"HTTP {e.code} (server error)"
         return "broken", f"HTTP {e.code}"
     except urllib.error.URLError as e:
         return "broken", f"URL error: {e.reason}"

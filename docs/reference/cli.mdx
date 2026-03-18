@@ -14,7 +14,7 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
 
 <CardGroup cols={2}>
   <Card title="Windows 11" icon="windows">
-    Full GUI and CLI support with installer and desktop shortcuts
+    Full GUI and CLI support
   </Card>
   <Card title="Linux" icon="linux">
     Full GUI and CLI support via source installation (Ubuntu/Debian)
@@ -25,8 +25,8 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
 
 <Tabs>
   <Tab title="Windows">
-    1. Follow the [Getting Started Guide](/quickstart) to install `gaia` CLI and `lemonade` LLM server
-    2. Double click the **GAIA-CLI** desktop icon to launch the command-line shell
+    1. Follow the [Quickstart](/quickstart) to install GAIA
+    2. Open PowerShell and run `gaia` to launch the Agent UI, or `gaia --cli` for terminal chat
     3. GAIA automatically starts Lemonade Server when needed, or start manually:
 
     ```bash
@@ -51,6 +51,44 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
     ```
   </Tab>
 </Tabs>
+
+---
+
+## Top-Level Flags
+
+Running `gaia` with no subcommand launches the **Agent UI** by default:
+
+```bash
+gaia            # Launches Agent UI on port 4200
+gaia --ui       # Same — explicit flag
+gaia --cli      # Launch interactive CLI chat instead
+```
+
+| Flag | Description |
+|------|-------------|
+| `--ui` | Launch the Agent UI (browser-based chat interface) — this is the default |
+| `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
+| `--cli` | Launch interactive CLI chat |
+
+**Examples:**
+
+<CodeGroup>
+```bash Launch Agent UI (default)
+gaia
+```
+
+```bash Agent UI on Custom Port
+gaia --ui-port 8080
+```
+
+```bash Launch CLI Chat
+gaia --cli
+```
+</CodeGroup>
+
+<Note>
+  `gaia chat --ui` continues to work as an alias.
+</Note>
 
 ---
 
@@ -82,7 +120,7 @@ gaia init [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--profile, -p` | string | chat | Profile to initialize (minimal, chat, code, rag, vlm, all) |
+| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, mcp, vlm, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
@@ -97,9 +135,11 @@ gaia init [OPTIONS]
 | Profile | Models | Description | Approx Size |
 |---------|--------|-------------|-------------|
 | `minimal` | Qwen3-0.6B | Fast setup with lightweight model | ~400 MB |
+| `sd` | SD-Turbo | Image generation with Stable Diffusion | ~8 GB |
 | `chat` | Qwen3-Coder-30B, nomic-embed, Qwen3-VL-4B | Interactive chat with RAG and vision | ~25 GB |
 | `code` | Qwen3-Coder-30B | Autonomous coding assistant | ~18 GB |
 | `rag` | Qwen3-Coder-30B, nomic-embed, Qwen3-VL-4B | Document Q&A with retrieval and vision | ~25 GB |
+| `mcp` | Qwen3-Coder-30B | MCP bridge server for external integrations | ~18 GB |
 | `vlm` | Qwen3-VL-4B | Vision pipeline for document and image extraction | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
@@ -356,7 +396,6 @@ gaia chat [MESSAGE] [OPTIONS]
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
 | `--model` | string | Qwen3-Coder-30B-A3B-Instruct-GGUF | Model name to use |
-| `--max-steps` | integer | 10 | Maximum conversation steps |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
 | `--chunk-size` | integer | 500 | Document chunk size for RAG |
@@ -366,6 +405,8 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
 | `--debug` | flag | false | Enable debug output |
 | `--list-tools` | flag | false | List available tools and exit |
+| `--ui` | flag | false | Launch the Chat Web UI (browser-based interface on port 4200) |
+| `--ui-port` | integer | 4200 | Port for the Agent UI server (used with `--ui`) |
 
 **Examples:**
 
@@ -395,6 +436,18 @@ gaia chat \
   --model Qwen3-Coder-30B-A3B-Instruct-GGUF \
   --streaming \
   --show-stats
+```
+
+```bash Web UI (preferred)
+gaia --ui
+```
+
+```bash Web UI on Custom Port
+gaia --ui --ui-port 8080
+```
+
+```bash Web UI (alias)
+gaia chat --ui
 ```
 </CodeGroup>
 

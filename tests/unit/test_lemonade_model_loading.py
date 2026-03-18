@@ -25,8 +25,10 @@ class TestEnsureModelLoaded:
         # Execute
         client._ensure_model_loaded("model-b", auto_download=True)
 
-        # Verify - should call with prompt=False to skip user confirmation
-        mock_load.assert_called_once_with("model-b", auto_download=True, prompt=False)
+        # Verify - should call with prompt=False and ctx_size from MODELS (None for unknown models)
+        mock_load.assert_called_once_with(
+            "model-b", auto_download=True, prompt=False, ctx_size=None
+        )
 
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
@@ -233,7 +235,9 @@ class TestModelLoadingIntegration:
         )
 
         # Verify load_model was called to download/load the model WITHOUT prompting
-        mock_load.assert_called_once_with("new-model", auto_download=True, prompt=False)
+        mock_load.assert_called_once_with(
+            "new-model", auto_download=True, prompt=False, ctx_size=None
+        )
 
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
