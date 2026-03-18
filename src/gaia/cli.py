@@ -797,7 +797,7 @@ def _show_interactive_menu(log=None):
         print("  Commands:")
         print("    gaia chat              Interactive chat with RAG")
         print("    gaia chat --ui         Agent UI (alias for gaia --ui)")
-        print("    gaia prompt \"Hello\"    Single prompt to LLM")
+        print('    gaia prompt "Hello"    Single prompt to LLM')
         print("    gaia talk              Voice interaction")
         print("    gaia init              Setup Lemonade + models")
         print("    gaia code              Code generation agent")
