@@ -310,8 +310,10 @@ def safe_open_document(user_path: str):
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
+    # O_NOFOLLOW is POSIX-only; on Windows fall back to 0 (symlink check above)
+    _o_nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(user_path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(user_path, os.O_RDONLY | _o_nofollow)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
     except OSError as e:
