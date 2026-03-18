@@ -1502,11 +1502,18 @@ These positions indicate where to split the text."""
         Returns:
             True if a document was evicted, False otherwise
         """
-        if not self.config.enable_lru_eviction or not self.file_access_times:
+        if not self.config.enable_lru_eviction:
+            self.log.warning("LRU eviction disabled, cannot free memory")
+            return False
+
+        if not self.file_access_times:
+            self.log.warning("No tracked files available for LRU eviction")
             return False
 
         # Find LRU file (oldest access time)
         lru_file = min(self.file_access_times, key=self.file_access_times.get)
+
+        self.log.info(f"Evicting LRU document to free memory: {Path(lru_file).name}")
 
         if self.config.show_stats:
             print(
@@ -1514,11 +1521,17 @@ These positions indicate where to split the text."""
             )
 
         # Remove the LRU document
-        return self.remove_document(lru_file)
+        result = self.remove_document(lru_file)
+        if not result:
+            self.log.error(f"Failed to evict LRU document: {Path(lru_file).name}")
+        return result
 
-    def _check_memory_limits(self) -> None:
+    def _check_memory_limits(self) -> bool:
         """
         Check memory limits and evict documents if necessary.
+
+        Returns:
+            True if limits are satisfied, False if still exceeded
         """
         # Check total chunks limit
         while (
@@ -1527,15 +1540,61 @@ These positions indicate where to split the text."""
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
             if not self._evict_lru_document():
+                self.log.warning(
+                    f"Cannot meet chunk limit: {len(self.chunks)} chunks "
+                    f"exceeds max {self.config.max_total_chunks}, eviction failed"
+                )
                 break
 
         # Check indexed files limit
         while (
             self.config.max_indexed_files > 0
             and len(self.indexed_files) > self.config.max_indexed_files
-        ):
+            and len(self.indexed_files) > 1
+        ):  # Keep at least one file
             if not self._evict_lru_document():
+                self.log.warning(
+                    f"Cannot meet file limit: {len(self.indexed_files)} files "
+                    f"exceeds max {self.config.max_indexed_files}, eviction failed"
+                )
                 break
+
+        chunks_ok = (
+            self.config.max_total_chunks <= 0
+            or len(self.chunks) <= self.config.max_total_chunks
+        )
+        files_ok = (
+            self.config.max_indexed_files <= 0
+            or len(self.indexed_files) <= self.config.max_indexed_files
+        )
+        return chunks_ok and files_ok
+
+    def _has_indexing_capacity(self) -> bool:
+        """Check if there is capacity to index another document.
+
+        This is a read-only check — it does not evict. When eviction is
+        enabled, capacity is available if there is at least one document
+        that could be evicted. When disabled, capacity requires being
+        under the limits.
+        """
+        files_at_limit = (
+            self.config.max_indexed_files > 0
+            and len(self.indexed_files) >= self.config.max_indexed_files
+        )
+        chunks_at_limit = (
+            self.config.max_total_chunks > 0
+            and len(self.chunks) >= self.config.max_total_chunks
+        )
+
+        if not files_at_limit and not chunks_at_limit:
+            return True  # Under both limits
+
+        # At limit — can we evict to make room?
+        if self.config.enable_lru_eviction and len(self.indexed_files) > 0:
+            return True  # Eviction can free space (post-index)
+
+        # At limit with no eviction possible
+        return False
 
     def index_document(self, file_path: str) -> Dict[str, Any]:
         """
@@ -1585,6 +1644,8 @@ These positions indicate where to split the text."""
             "num_chunks": 0,
             "total_indexed_files": len(self.indexed_files),
             "total_chunks": len(self.chunks),
+            "max_indexed_files": self.config.max_indexed_files,
+            "max_total_chunks": self.config.max_total_chunks,
         }
 
         # Check if file exists before processing
@@ -1651,6 +1712,22 @@ These positions indicate where to split the text."""
             stats["already_indexed"] = True
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)
+            return stats
+
+        # Pre-flight: check capacity before investing in indexing
+        if not self._has_indexing_capacity():
+            msg = (
+                f"Memory limit reached: {len(self.indexed_files)} files "
+                f"(max: {self.config.max_indexed_files}), "
+                f"{len(self.chunks)} chunks "
+                f"(max: {self.config.max_total_chunks}). "
+                "Enable LRU eviction or remove documents manually."
+            )
+            self.log.warning(f"Cannot index {file_path}: {msg}")
+            if self.config.show_stats:
+                print(f"❌ {msg}")
+            stats["error"] = msg
+            stats["memory_limit_reached"] = True
             return stats
 
         # Check cache - the cache key is based on file content hash
@@ -1741,8 +1818,17 @@ These positions indicate where to split the text."""
                         }
 
                     self.indexed_files.add(file_path)
+
+                    # Track access time for LRU (was missing — pre-existing bug)
+                    current_time = time.time()
+                    self.file_index_times[file_path] = current_time
+                    self.file_access_times[file_path] = current_time
+
                     if self.config.show_stats:
                         print("  ✅ Successfully loaded from cache")
+
+                    # Check memory limits after cache load
+                    limits_ok = self._check_memory_limits()
 
                     # Update stats for cache load
                     stats["success"] = True
@@ -1753,6 +1839,8 @@ These positions indicate where to split the text."""
                     stats["total_indexed_files"] = len(self.indexed_files)
                     stats["total_chunks"] = len(self.chunks)
                     stats["from_cache"] = True
+                    if not limits_ok:
+                        stats["memory_limit_warning"] = True
                     return stats
             except Exception as e:
                 self.log.warning(f"Cache load failed: {e}, reindexing")
@@ -1873,7 +1961,13 @@ These positions indicate where to split the text."""
             self.file_access_times[file_path] = current_time
 
             # Check memory limits and evict if necessary
-            self._check_memory_limits()
+            limits_ok = self._check_memory_limits()
+            if not limits_ok:
+                self.log.warning(
+                    f"Memory limits exceeded after indexing {file_path}. "
+                    "Consider increasing limits or removing documents."
+                )
+                stats["memory_limit_warning"] = True
 
             if self.config.show_stats:
                 print(f"✅ Successfully indexed {Path(file_path).name}")
