@@ -38,11 +38,13 @@
               "cpp/integration",
               "cpp/testing",
               "cpp/api-reference",
+              "cpp/security",
               {
                 "group": "User Guides",
                 "pages": [
                   "cpp/health-agent",
                   "cpp/wifi-agent",
+                  "cpp/process-agent",
                   "cpp/custom-agent"
                 ]
               }
@@ -53,6 +55,7 @@
             "pages": [
               "setup",
               "quickstart",
+              "guides/agent-ui",
               {
                 "group": "User Guides",
                 "pages": [
@@ -67,6 +70,7 @@
                   "guides/jira",
                   "guides/docker",
                   "guides/routing",
+                  "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
                 ]
@@ -129,6 +133,7 @@
                     "group": "SDKs",
                     "pages": [
                       "sdk/sdks/chat",
+                      "sdk/sdks/agent-ui",
                       "sdk/sdks/rag",
                       "sdk/sdks/mcp",
                       "sdk/sdks/llm",
@@ -203,7 +208,8 @@
           {
             "group": "SDKs",
             "pages": [
-              "spec/chat-sdk",
+              "spec/agent-sdk",
+              "spec/agent-ui-server",
               "spec/rag-sdk",
               "spec/talk-sdk",
               "spec/mcp-client",
@@ -345,7 +351,7 @@
             "pages": [
               "plans/agent-hub",
               "plans/installer",
-              "plans/chat-ui",
+              "plans/agent-ui",
               "plans/mcp-client",
               "plans/cua",
               "plans/docker-containers",
@@ -362,6 +368,8 @@
           {
             "group": "Release Notes",
             "pages": [
+              "releases/index",
+              "releases/v0.16.1",
               "releases/v0.16.0",
               "releases/v0.15.4.1",
               "releases/v0.15.4",
@@ -404,7 +412,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.16.0 · Lemonade 9.3.0",
+        "label": "v0.16.1 · Lemonade 10.0.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {
@@ -449,6 +457,7 @@
     {"source": "/guides/cpp/integration", "destination": "/cpp/integration"},
     {"source": "/guides/cpp/custom-agent", "destination": "/cpp/custom-agent"},
     {"source": "/guides/cpp/wifi-agent", "destination": "/cpp/wifi-agent"},
+    {"source": "/guides/cpp/process-agent", "destination": "/cpp/process-agent"},
     {"source": "/guides/mcp/client", "destination": "/sdk/sdks/mcp"}
   ]
 }

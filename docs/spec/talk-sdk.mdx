@@ -18,11 +18,11 @@ icon: "microphone"
 
 ## Overview
 
-TalkSDK provides a unified interface for integrating GAIA's voice and text chat capabilities into applications. It combines ChatSDK for text generation with AudioClient for voice input/output, providing seamless voice and text interaction with conversation history management.
+TalkSDK provides a unified interface for integrating GAIA's voice and text chat capabilities into applications. It combines AgentSDK for text generation with AudioClient for voice input/output, providing seamless voice and text interaction with conversation history management.
 
 **Key Features:**
 - Unified voice and text chat interface
-- Conversation history management (via ChatSDK)
+- Conversation history management (via AgentSDK)
 - Text-to-speech (TTS) output
 - Speech-to-text (STT) input via Whisper
 - RAG (Retrieval-Augmented Generation) support
@@ -38,7 +38,7 @@ TalkSDK provides a unified interface for integrating GAIA's voice and text chat 
 1. **Text Chat**
    - Send text messages and receive complete responses
    - Streaming text generation support
-   - Conversation history tracking (via ChatSDK)
+   - Conversation history tracking (via AgentSDK)
    - Configurable max history length
 
 2. **Voice Chat**
@@ -103,7 +103,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from gaia.audio.audio_client import AudioClient
-from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 class TalkMode(Enum):
@@ -123,7 +123,7 @@ class TalkConfig:
     enable_tts: bool = True
     mode: TalkMode = TalkMode.VOICE_AND_TEXT
 
-    # Chat settings (from ChatConfig)
+    # Chat settings (from AgentConfig)
     model: str = DEFAULT_MODEL_NAME
     max_tokens: int = 512
     system_prompt: Optional[str] = None
@@ -402,8 +402,8 @@ def __init__(self, config: Optional[TalkConfig] = None):
     self.log = get_logger(__name__)
     self.log.setLevel(getattr(logging, self.config.logging_level))
 
-    # Initialize ChatSDK for text generation with conversation history
-    chat_config = ChatConfig(
+    # Initialize AgentSDK for text generation with conversation history
+    chat_config = AgentConfig(
         model=self.config.model,
         max_tokens=self.config.max_tokens,
         system_prompt=self.config.system_prompt,
@@ -414,7 +414,7 @@ def __init__(self, config: Optional[TalkConfig] = None):
         use_claude=self.config.use_claude,
         use_chatgpt=self.config.use_chatgpt,
     )
-    self.chat_sdk = ChatSDK(chat_config)
+    self.chat_sdk = AgentSDK(chat_config)
 
     # Initialize AudioClient for voice features
     self.audio_client = AudioClient(
@@ -441,7 +441,7 @@ def __init__(self, config: Optional[TalkConfig] = None):
 ```python
 async def chat(self, message: str) -> TalkResponse:
     try:
-        # Use ChatSDK for text generation (with conversation history)
+        # Use AgentSDK for text generation (with conversation history)
         chat_response = self.chat_sdk.send(message)
 
         stats = None
@@ -468,13 +468,13 @@ async def start_voice_session(
         # Initialize TTS if enabled
         self.audio_client.initialize_tts()
 
-        # Create voice processor that uses ChatSDK for responses
+        # Create voice processor that uses AgentSDK for responses
         async def voice_processor(text: str):
             # Call user callback if provided
             if on_voice_input:
                 on_voice_input(text)
 
-            # Use ChatSDK to generate response (with conversation history)
+            # Use AgentSDK to generate response (with conversation history)
             chat_response = self.chat_sdk.send(text)
 
             # If TTS is enabled, speak the response
@@ -664,7 +664,7 @@ from enum import Enum
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
 from gaia.audio.audio_client import AudioClient
-from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 ```

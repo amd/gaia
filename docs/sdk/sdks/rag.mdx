@@ -119,20 +119,20 @@ from gaia.rag.sdk import quick_rag
 
 # Index and query in one call
 answer = quick_rag(
-    query="What are the main features?",
-    documents=["product_guide.pdf", "feature_list.pdf"]
+    pdf_path="product_guide.pdf",
+    question="What are the main features?"
 )
 print(answer)
 ```
 
 **What happens behind the scenes:**
-1. Extracts text from both PDFs
+1. Extracts text from the PDF
 2. Splits into chunks (default: 500 tokens each)
 3. Generates embeddings for all chunks
 4. Creates temporary FAISS index
 5. Searches for relevant chunks
 6. Sends chunks + question to LLM
-7. Returns the generated answer
+7. Returns the generated answer as a string
 
 **Best for:** Quick exploration, one-off questions, prototyping
 

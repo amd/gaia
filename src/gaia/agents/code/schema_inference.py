@@ -59,7 +59,7 @@ def infer_schema(
 
     Args:
         user_query: The user's app description (e.g., "build me a todo app")
-        chat_sdk: Optional ChatSDK instance for local LLM fallback
+        chat_sdk: Optional AgentSDK instance for local LLM fallback
 
     Returns:
         Dictionary with:
@@ -180,11 +180,11 @@ def _infer_via_perplexity(query: str) -> Dict[str, Any]:
 
 
 def _infer_via_local_llm(query: str, chat_sdk: Any) -> Dict[str, Any]:
-    """Infer schema using local LLM via ChatSDK.
+    """Infer schema using local LLM via AgentSDK.
 
     Args:
         query: User's app description
-        chat_sdk: ChatSDK instance for LLM calls
+        chat_sdk: AgentSDK instance for LLM calls
 
     Returns:
         Schema result or empty dict on failure

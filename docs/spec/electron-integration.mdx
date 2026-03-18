@@ -22,7 +22,7 @@ title: "Electron Integration"
 The Electron Integration system provides a reusable framework for packaging GAIA web UI applications as standalone desktop apps. It abstracts Electron configuration, window management, and backend communication into a shared library that any GAIA app can use.
 
 **Key Features:**
-- Shared Electron framework (`@gaia/electron`)
+- Shared Electron framework (`@amd-gaia/electron`)
 - Multi-app support (Jira, Chat, Docker)
 - Dynamic app loading via `app.config.json`
 - Express backend integration
@@ -130,7 +130,7 @@ flowchart TD
 
 | Directory | Contents |
 |-----------|----------|
-| **electron/** | `package.json` (@gaia/electron metadata) |
+| **electron/** | `package.json` (@amd-gaia/electron metadata) |
 | **electron/src/** | `main.js` (entry point), `app-controller.js` (lifecycle) |
 | **electron/preload/** | `preload.js` (renderer context bridge) |
 | **electron/services/** | `window-manager.js`, `base-ipc-handlers.js`, `mcp-client.js` |
@@ -533,7 +533,7 @@ describe('App Launch', function() {
 
 ```json
 {
-  "name": "@gaia/electron",
+  "name": "@amd-gaia/electron",
   "version": "1.0.0",
   "dependencies": {
     "cors": "^2.8.5",

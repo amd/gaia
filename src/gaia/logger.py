@@ -1,7 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-import io
 import logging
 import subprocess
 import sys
@@ -13,23 +12,14 @@ def configure_console_encoding():
     """Configure console encoding to support Unicode characters on Windows."""
     if sys.platform.startswith("win"):
         try:
-            # Get the original stdout/stderr
-            original_stdout = sys.stdout
-            original_stderr = sys.stderr
-
-            # Wrap with UTF-8 encoding, using 'replace' error handling
-            sys.stdout = io.TextIOWrapper(
-                original_stdout.buffer,
-                encoding="utf-8",
-                errors="replace",
-                line_buffering=True,
-            )
-            sys.stderr = io.TextIOWrapper(
-                original_stderr.buffer,
-                encoding="utf-8",
-                errors="replace",
-                line_buffering=True,
-            )
+            # Use reconfigure() to change encoding in-place without creating
+            # new TextIOWrapper instances. Creating new wrappers detaches the
+            # underlying buffer from the original stream, which breaks pytest's
+            # capture mechanism (causes "I/O operation on closed file" errors).
+            for stream_name in ("stdout", "stderr"):
+                stream = getattr(sys, stream_name)
+                if stream and not stream.closed and hasattr(stream, "reconfigure"):
+                    stream.reconfigure(encoding="utf-8", errors="replace")
 
             # Also try to set the console code page to UTF-8
             try:

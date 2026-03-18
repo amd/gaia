@@ -653,9 +653,13 @@ Generate ONLY the code, no explanations."""
 
             # Extract code from markdown blocks if present
             if "```python" in code:
-                code = code.split("```python")[1].split("```")[0].strip()
+                parts = code.split("```python")
+                if len(parts) > 1:
+                    code = parts[1].split("```")[0].strip()
             elif "```" in code:
-                code = code.split("```")[1].split("```")[0].strip()
+                parts = code.split("```")
+                if len(parts) > 1:
+                    code = parts[1].split("```")[0].strip()
 
             return code
 
@@ -719,11 +723,13 @@ Return ONLY the corrected code, no explanations."""
 
                 # Extract code from markdown blocks
                 if f"```{lang}" in fixed_code:
-                    fixed_code = (
-                        fixed_code.split(f"```{lang}")[1].split("```")[0].strip()
-                    )
+                    parts = fixed_code.split(f"```{lang}")
+                    if len(parts) > 1:
+                        fixed_code = parts[1].split("```")[0].strip()
                 elif "```" in fixed_code:
-                    fixed_code = fixed_code.split("```")[1].split("```")[0].strip()
+                    parts = fixed_code.split("```")
+                    if len(parts) > 1:
+                        fixed_code = parts[1].split("```")[0].strip()
 
                 # Validate the fix (only for Python - TypeScript validated later)
                 if is_python:

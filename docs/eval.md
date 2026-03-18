@@ -12,7 +12,7 @@ The GAIA evaluation framework documentation has been restructured and moved to o
 ### New Location
 
 **Evaluation Framework Documentation:**
-- **New URL:** https://amd-gaia.ai/reference/eval
+- **New URL:** https://amd-gaia.ai/docs/reference/eval
 - **GitHub:** [docs/reference/eval.mdx](https://github.com/amd/gaia/blob/main/docs/reference/eval.mdx)
 
 ### What You'll Find
@@ -28,14 +28,14 @@ The updated evaluation documentation includes:
 
 ### Quick Links
 
-- **Main Documentation:** https://amd-gaia.ai
-- **Getting Started:** https://amd-gaia.ai/setup
-- **All Features:** https://amd-gaia.ai/reference/features
+- **Main Documentation:** https://amd-gaia.ai/docs
+- **Getting Started:** https://amd-gaia.ai/docs/setup
+- **All Features:** https://amd-gaia.ai/docs/reference/features
 - **GitHub Repository:** https://github.com/amd/gaia
 
 ---
 
 If you have questions or need help, please:
-- Visit our [FAQ](https://amd-gaia.ai/reference/faq)
+- Visit our [FAQ](https://amd-gaia.ai/docs/reference/faq)
 - Join our [Discord community](https://discord.com/channels/1392562559122407535/1402013282495102997)
 - Open an [issue on GitHub](https://github.com/amd/gaia/issues)

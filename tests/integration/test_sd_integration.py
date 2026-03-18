@@ -22,20 +22,21 @@ from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 from gaia.sd import SDToolsMixin
 
 
-def lemonade_available():
-    """Check if Lemonade Server is running and SD models are available."""
+@pytest.fixture(autouse=True, scope="session")
+def _require_lemonade_sd():
+    """Skip all tests if Lemonade Server is not running with SD models.
+
+    Uses a session-scoped fixture instead of module-level pytestmark to avoid
+    calling LemonadeClient during pytest collection, which closes file
+    descriptors and crashes pytest's fd-level capture on Windows.
+    """
     try:
         client = LemonadeClient(verbose=False)
         sd_models = client.list_sd_models()
-        return len(sd_models) > 0
+        if not sd_models:
+            pytest.skip("Lemonade Server has no SD models available")
     except Exception:
-        return False
-
-
-# Skip all tests if Lemonade is not available
-pytestmark = pytest.mark.skipif(
-    not lemonade_available(), reason="Lemonade Server with SD model not available"
-)
+        pytest.skip("Lemonade Server with SD model not available")
 
 
 class TestSDIntegration:

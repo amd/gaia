@@ -11,9 +11,19 @@ on:
   workflow_call:
   push:
     branches: ["main"]
+    paths:
+      - 'src/gaia/eval/**'
+      - 'tests/test_eval.py'
+      - 'setup.py'
+      - '.github/workflows/test_eval.yml'
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/eval/**'
+      - 'tests/test_eval.py'
+      - 'setup.py'
+      - '.github/workflows/test_eval.yml'
   merge_group:
   workflow_dispatch:
 

@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
 from gaia.audio.audio_client import AudioClient
-from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 
@@ -37,7 +37,7 @@ class TalkConfig:
     enable_tts: bool = True
     mode: TalkMode = TalkMode.VOICE_AND_TEXT
 
-    # Chat settings (from ChatConfig)
+    # Chat settings (from AgentConfig)
     model: str = DEFAULT_MODEL_NAME
     max_tokens: int = 512
     system_prompt: Optional[str] = None
@@ -110,8 +110,8 @@ class TalkSDK:
         self.log = get_logger(__name__)
         self.log.setLevel(getattr(logging, self.config.logging_level))
 
-        # Initialize ChatSDK for text generation with conversation history
-        chat_config = ChatConfig(
+        # Initialize AgentSDK for text generation with conversation history
+        chat_config = AgentConfig(
             model=self.config.model,
             max_tokens=self.config.max_tokens,
             system_prompt=self.config.system_prompt,
@@ -122,7 +122,7 @@ class TalkSDK:
             use_claude=self.config.use_claude,
             use_chatgpt=self.config.use_chatgpt,
         )
-        self.chat_sdk = ChatSDK(chat_config)
+        self.chat_sdk = AgentSDK(chat_config)
 
         # Initialize AudioClient with configuration (for voice features)
         self.audio_client = AudioClient(
@@ -144,7 +144,7 @@ class TalkSDK:
         if self.config.rag_documents:
             self.enable_rag(documents=self.config.rag_documents)
 
-        self.log.info("TalkSDK initialized with ChatSDK integration")
+        self.log.info("TalkSDK initialized with AgentSDK integration")
 
     async def chat(self, message: str) -> TalkResponse:
         """
@@ -157,7 +157,7 @@ class TalkSDK:
             TalkResponse with the complete response
         """
         try:
-            # Use ChatSDK for text generation (with conversation history)
+            # Use AgentSDK for text generation (with conversation history)
             chat_response = self.chat_sdk.send(message)
 
             stats = None
@@ -181,7 +181,7 @@ class TalkSDK:
             TalkResponse chunks as they arrive
         """
         try:
-            # Use ChatSDK for streaming text generation (with conversation history)
+            # Use AgentSDK for streaming text generation (with conversation history)
             for chat_chunk in self.chat_sdk.send_stream(message):
                 if not chat_chunk.is_complete:
                     yield TalkResponse(text=chat_chunk.text, is_complete=False)
@@ -207,7 +207,7 @@ class TalkSDK:
             TalkResponse with the processed response
         """
         try:
-            # Use ChatSDK to generate response (with conversation history)
+            # Use AgentSDK to generate response (with conversation history)
             chat_response = self.chat_sdk.send(text)
 
             # If TTS is enabled, speak the response
@@ -240,13 +240,13 @@ class TalkSDK:
             # Initialize TTS if enabled
             self.audio_client.initialize_tts()
 
-            # Create voice processor that uses ChatSDK for responses
+            # Create voice processor that uses AgentSDK for responses
             async def voice_processor(text: str):
                 # Call user callback if provided
                 if on_voice_input:
                     on_voice_input(text)
 
-                # Use ChatSDK to generate response (with conversation history)
+                # Use AgentSDK to generate response (with conversation history)
                 chat_response = self.chat_sdk.send(text)
 
                 # If TTS is enabled, speak the response
@@ -288,7 +288,7 @@ class TalkSDK:
             Dictionary of performance stats
         """
         try:
-            # Get stats from ChatSDK instead of directly from LLMClient
+            # Get stats from AgentSDK instead of directly from LLMClient
             return self.chat_sdk.get_stats()
         except Exception as e:
             self.log.warning(f"Failed to get stats: {e}")
@@ -314,7 +314,7 @@ class TalkSDK:
         if "silence_threshold" in kwargs:
             self.audio_client.silence_threshold = kwargs["silence_threshold"]
 
-        # Update ChatSDK configuration
+        # Update AgentSDK configuration
         chat_updates = {}
         if "system_prompt" in kwargs:
             chat_updates["system_prompt"] = kwargs["system_prompt"]

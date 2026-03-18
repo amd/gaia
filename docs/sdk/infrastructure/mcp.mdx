@@ -20,12 +20,11 @@ title: "MCP Integration"
 **Purpose:** Base class for Model Context Protocol compatible agents.
 
 ```python
-from gaia.agents.base.agent import Agent
 from gaia.agents.base.mcp_agent import MCPAgent
 from gaia.agents.base.tools import tool
 from typing import List, Dict
 
-class MyMCPAgent(MCPAgent, Agent):
+class MyMCPAgent(MCPAgent):
     """Agent compatible with MCP protocol."""
 
     def get_mcp_tool_definitions(self) -> List[Dict]:

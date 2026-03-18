@@ -326,12 +326,12 @@ function Invoke-ImportTests {
         @{Import="from gaia.llm import create_client"; Desc="LLM factory"; Optional=$false},
         @{Import="from gaia.llm import NotSupportedError"; Desc="LLM exception"; Optional=$false},
 
-        # Chat SDK
-        @{Module="gaia.chat.sdk"; Desc="Chat SDK module"; Optional=$false},
-        @{Import="from gaia.chat.sdk import ChatSDK"; Desc="Chat SDK class"; Optional=$false},
-        @{Import="from gaia.chat.sdk import ChatConfig"; Desc="Chat configuration"; Optional=$false},
-        @{Import="from gaia.chat.sdk import ChatSession"; Desc="Chat session"; Optional=$false},
-        @{Import="from gaia.chat.sdk import ChatResponse"; Desc="Chat response"; Optional=$false},
+        # Agent SDK (Chat SDK)
+        @{Module="gaia.chat.sdk"; Desc="Agent SDK module"; Optional=$false},
+        @{Import="from gaia.chat.sdk import AgentSDK"; Desc="Agent SDK class"; Optional=$false},
+        @{Import="from gaia.chat.sdk import AgentConfig"; Desc="Agent configuration"; Optional=$false},
+        @{Import="from gaia.chat.sdk import AgentSession"; Desc="Agent session"; Optional=$false},
+        @{Import="from gaia.chat.sdk import AgentResponse"; Desc="Agent response"; Optional=$false},
         @{Import="from gaia.chat.sdk import quick_chat"; Desc="Quick chat function"; Optional=$false},
 
         # RAG SDK

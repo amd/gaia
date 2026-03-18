@@ -5,11 +5,11 @@ The GAIA Chat module provides a powerful SDK for text-based conversations with L
 ## Quick Start
 
 ```python
-from gaia.chat.sdk import ChatSDK, ChatConfig
+from gaia.chat.sdk import AgentSDK, AgentConfig
 
 # Create chat instance
-config = ChatConfig(assistant_name="gaia", show_stats=True)
-chat = ChatSDK(config)
+config = AgentConfig(assistant_name="gaia", show_stats=True)
+chat = AgentSDK(config)
 
 # Send message
 response = chat.send("Hello!")
@@ -23,11 +23,11 @@ print(response.text)
 
 ## Key Features
 
-- 🧠 **Conversation Memory**: Maintains context across exchanges
-- 📄 **RAG Support**: Document-based Q&A with PDF indexing
-- 🔄 **Streaming**: Real-time response streaming
-- 🎯 **Model Flexibility**: Support for local and cloud models
-- 🗂️ **Session Management**: Multiple independent conversations
+- **Conversation Memory**: Maintains context across exchanges
+- **RAG Support**: Document-based Q&A with PDF indexing
+- **Streaming**: Real-time response streaming
+- **Model Flexibility**: Support for local and cloud models
+- **Session Management**: Multiple independent conversations
 
 ## CLI Usage
 
@@ -46,7 +46,7 @@ gaia chat --query "What is Python?"
 
 ```
 chat/
-├── sdk.py          # ChatSDK, ChatConfig, SimpleChat, ChatSession
+├── sdk.py          # AgentSDK, AgentConfig, SimpleChat, AgentSession
 ├── app.py          # CLI application and demos
 ├── prompts.py      # System prompts and templates
 └── README.md       # This file

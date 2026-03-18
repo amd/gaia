@@ -7,9 +7,21 @@ on:
   workflow_call:
   push:
     branches: ["main"]
+    paths:
+      - 'src/gaia/electron/**'
+      - 'src/gaia/apps/*/webui/**'
+      - 'src/gaia/agents/emr/dashboard/electron/**'
+      - 'tests/electron/**'
+      - '.github/workflows/test_electron.yml'
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/electron/**'
+      - 'src/gaia/apps/*/webui/**'
+      - 'src/gaia/agents/emr/dashboard/electron/**'
+      - 'tests/electron/**'
+      - '.github/workflows/test_electron.yml'
   merge_group:
   workflow_dispatch:
 
@@ -87,6 +99,14 @@ jobs:
           cd tests/electron
           # Run structure tests for all apps and framework integration
           npm test -- test_electron_jira_app.js test_electron_example_app.js test_electron_emr_dashboard.js test_electron_framework_integration.js
+
+      - name: Run Agent UI tests
+        run: |
+          cd tests/electron
+          # Agent UI service tests: process manager, notification service
+          # --forceExit needed because AgentProcessManager health-check intervals
+          # survive Jest teardown in mocked environments (tests pass correctly)
+          npm test -- test_agent_process_manager.js test_notification_service.js --forceExit
 
       - name: Upload test results
         if: always()

@@ -9,6 +9,8 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.tools import get_tool_display_name
+
 logger = logging.getLogger(__name__)
 
 # Import Rich library for pretty printing and syntax highlighting
@@ -24,6 +26,13 @@ try:
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+    rprint = print
+    Panel = None
+    Console = None
+    Live = None
+    Spinner = None
+    Syntax = None
+    Table = None
     print(
         "Rich library not found. Install with 'uv pip install rich' for syntax highlighting."
     )
@@ -787,15 +796,16 @@ class AgentConsole(OutputHandler):
         # Get the description or use the tool name if not found
         action_desc = tool_descriptions.get(tool_name, tool_descriptions["default"])
 
+        display_name = get_tool_display_name(tool_name)
         if self.rich_available:
             self.console.print(f"\n[bold blue]{action_desc}[/bold blue]")
             if action_desc == tool_descriptions["default"]:
-                # If using default, also show the tool name
-                self.console.print(f"  [dim]Tool: {tool_name}[/dim]")
+                # If using default, also show the tool display name
+                self.console.print(f"  [dim]Tool: {display_name}[/dim]")
         else:
             print(f"\n{action_desc}")
             if action_desc == tool_descriptions["default"]:
-                print(f"  Tool: {tool_name}")
+                print(f"  Tool: {display_name}")
 
     def print_tool_complete(self) -> None:
         """Print that tool execution is complete."""
@@ -2029,6 +2039,13 @@ class SilentConsole(OutputHandler):
             return
 
         # Use Rich table format (same as AgentConsole)
+        if not RICH_AVAILABLE:
+            # Fallback: print plain text stats
+            for key, value in stats.items():
+                if value is not None:
+                    print(f"  {key}: {value}")
+            return
+
         from rich.console import Console
         from rich.panel import Panel
         from rich.table import Table

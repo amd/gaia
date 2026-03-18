@@ -288,55 +288,55 @@ class TestMCPAgent:
 # ============================================================================
 
 
-class TestChatSDK:
-    """Test Chat SDK interface."""
+class TestAgentSDK:
+    """Test Agent SDK interface."""
 
-    def test_chat_config_exists(self):
-        """Verify ChatConfig can be imported and instantiated."""
-        from gaia.chat.sdk import ChatConfig
+    def test_agent_config_exists(self):
+        """Verify AgentConfig can be imported and instantiated."""
+        from gaia.chat.sdk import AgentConfig
 
-        config = ChatConfig()
+        config = AgentConfig()
         assert config is not None
         assert hasattr(config, "model")
         assert hasattr(config, "max_tokens")
         assert hasattr(config, "system_prompt")
 
-    def test_chat_sdk_exists(self):
-        """Verify ChatSDK can be imported and instantiated."""
-        from gaia.chat.sdk import ChatConfig, ChatSDK
+    def test_agent_sdk_exists(self):
+        """Verify AgentSDK can be imported and instantiated."""
+        from gaia.chat.sdk import AgentConfig, AgentSDK
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
         assert chat is not None
 
-    @patch("gaia.chat.sdk.ChatSDK.send")
-    def test_chat_sdk_send_interface(self, mock_send):
-        """Verify ChatSDK.send method signature."""
-        from gaia.chat.sdk import ChatConfig, ChatResponse, ChatSDK
+    @patch("gaia.chat.sdk.AgentSDK.send")
+    def test_agent_sdk_send_interface(self, mock_send):
+        """Verify AgentSDK.send method signature."""
+        from gaia.chat.sdk import AgentConfig, AgentResponse, AgentSDK
 
         # Mock response
-        mock_send.return_value = ChatResponse(
+        mock_send.return_value = AgentResponse(
             text="Test response", history=None, stats=None, is_complete=True
         )
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         # Test send interface
         response = chat.send("test message")
 
-        assert isinstance(response, ChatResponse)
+        assert isinstance(response, AgentResponse)
         assert hasattr(response, "text")
         assert hasattr(response, "history")
         assert hasattr(response, "stats")
         assert hasattr(response, "is_complete")
 
-    def test_chat_sdk_history_methods(self):
+    def test_agent_sdk_history_methods(self):
         """Verify history management methods exist."""
-        from gaia.chat.sdk import ChatConfig, ChatSDK
+        from gaia.chat.sdk import AgentConfig, AgentSDK
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         # Test interface methods exist
         assert hasattr(chat, "get_history")
@@ -698,7 +698,7 @@ class TestUtilities:
 class TestAgentIntegration:
     """Test full agent integration with mocked components."""
 
-    @patch("gaia.chat.sdk.ChatSDK")
+    @patch("gaia.chat.sdk.AgentSDK")
     def test_agent_with_mocked_llm(self, mock_chat_sdk):
         """Test agent can process queries with mocked LLM."""
         from gaia.agents.base.agent import Agent
@@ -846,7 +846,7 @@ class TestSDKDocumentation:
 
         # Chat SDK
         try:
-            from gaia.chat.sdk import ChatConfig, ChatSDK, quick_chat  # noqa: F401
+            from gaia.chat.sdk import AgentConfig, AgentSDK, quick_chat  # noqa: F401
         except ImportError as e:
             pytest.fail(f"Chat SDK import failed: {e}")
 
@@ -1052,11 +1052,11 @@ class TestPerformanceInterfaces:
 
     def test_streaming_interfaces_exist(self):
         """Verify streaming support exists in all components."""
-        from gaia.chat.sdk import ChatSDK
+        from gaia.chat.sdk import AgentSDK
 
-        # ChatSDK should have streaming
-        assert hasattr(ChatSDK, "send_stream")
-        assert hasattr(ChatSDK, "send_messages_stream")
+        # AgentSDK should have streaming
+        assert hasattr(AgentSDK, "send_stream")
+        assert hasattr(AgentSDK, "send_messages_stream")
 
 
 # ============================================================================
@@ -1076,11 +1076,11 @@ class TestPythonVersionCompatibility:
 
         # All core imports should work
         from gaia.agents.base.agent import Agent
-        from gaia.chat.sdk import ChatSDK
+        from gaia.chat.sdk import AgentSDK
         from gaia.rag.sdk import RAGSDK
 
         assert Agent is not None
-        assert ChatSDK is not None
+        assert AgentSDK is not None
         assert RAGSDK is not None
 
 
@@ -1600,13 +1600,13 @@ class TestMultiModalIntegration:
     """Test multi-modal capabilities."""
 
     def test_vlm_integration_with_chat(self):
-        """Verify VLM can be integrated with ChatSDK."""
-        from gaia.chat.sdk import ChatConfig, ChatSDK
+        """Verify VLM can be integrated with AgentSDK."""
+        from gaia.chat.sdk import AgentConfig, AgentSDK
         from gaia.llm.vlm_client import VLMClient
 
         # Should be able to create both clients
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
         assert chat is not None
 
         # VLM client should exist
@@ -1614,15 +1614,15 @@ class TestMultiModalIntegration:
 
     @patch("gaia.audio.audio_client.AudioClient.__init__")
     def test_audio_integration_with_chat(self, mock_audio_init):
-        """Verify Audio can be integrated with ChatSDK."""
+        """Verify Audio can be integrated with AgentSDK."""
         from gaia.audio.audio_client import AudioClient
-        from gaia.chat.sdk import ChatConfig, ChatSDK
+        from gaia.chat.sdk import AgentConfig, AgentSDK
 
         mock_audio_init.return_value = None
 
         # Should be able to create both clients
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
         audio = AudioClient.__new__(AudioClient)
 
         assert chat is not None
@@ -1677,13 +1677,13 @@ class TestEdgeCases:
         agent = EmptyPromptAgent(silent_mode=True)
         assert agent is not None
 
-    def test_chat_sdk_with_empty_config(self):
-        """Verify ChatSDK works with default config."""
-        from gaia.chat.sdk import ChatConfig, ChatSDK
+    def test_agent_sdk_with_empty_config(self):
+        """Verify AgentSDK works with default config."""
+        from gaia.chat.sdk import AgentConfig, AgentSDK
 
         # Default config should work
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
         assert chat is not None
 
     def test_tool_with_no_docstring(self):

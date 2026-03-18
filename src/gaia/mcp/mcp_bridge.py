@@ -333,13 +333,13 @@ class GAIAMCPBridge:
     def _execute_chat(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute chat interaction with conversation context."""
         try:
-            from gaia.chat.sdk import ChatConfig, ChatSDK
+            from gaia.chat.sdk import AgentConfig, AgentSDK
 
             # Initialize chat SDK if not already done
             if self.chat_sdk is None:
-                # ChatSDK uses the global LLM configuration, not a base_url
-                config = ChatConfig()
-                self.chat_sdk = ChatSDK(config=config)
+                # AgentSDK uses the global LLM configuration, not a base_url
+                config = AgentConfig()
+                self.chat_sdk = AgentSDK(config=config)
 
             # Get the query
             query = args.get("query", "")
@@ -570,13 +570,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             if not boundary:
                 raise ValueError("Missing multipart boundary")
 
-            # boundary is bytes, decode for parser if needed
-            boundary = boundary.decode("latin-1").strip('"')
-            boundary_bytes = (
-                boundary
-                if isinstance(boundary, (bytes, bytearray))
-                else str(boundary).encode("utf-8")
-            )
+            # boundary is bytes from parse_options_header; encode to UTF-8 for parser
+            boundary_bytes = boundary.decode("latin-1").strip('"').encode("utf-8")
 
             collector = MultipartCollector()
             mp = MultipartParser(boundary_bytes, callbacks=collector.callbacks())

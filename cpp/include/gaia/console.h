@@ -14,6 +14,7 @@
 
 #include <nlohmann/json.hpp>
 #include "gaia/export.h"
+#include "gaia/types.h"
 
 namespace gaia {
 
@@ -59,6 +60,7 @@ public:
     virtual void printSeparator(int /*length*/ = 50) {}
     virtual void printToolInfo(const std::string& /*name*/, const std::string& /*params*/,
                                const std::string& /*description*/) {}
+    virtual void printDecisionMenu(const std::vector<Decision>& /*decisions*/) {}
 };
 
 /// Terminal console with ANSI color output.

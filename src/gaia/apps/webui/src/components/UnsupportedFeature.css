@@ -1,0 +1,181 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* ── Unsupported Feature Banner ─────────────────────────────────────────── */
+
+.unsupported-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    margin: 8px 0;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.unsupported-banner-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.unsupported-banner-header svg {
+    color: #f59e0b;
+    flex-shrink: 0;
+}
+
+.unsupported-banner-body {
+    color: var(--text-secondary);
+    padding-left: 26px;
+}
+
+.unsupported-banner-body p {
+    margin: 0 0 6px;
+}
+
+.unsupported-alternatives {
+    margin: 8px 0 4px;
+    padding: 0;
+    list-style: none;
+}
+
+.unsupported-alternatives li {
+    position: relative;
+    padding-left: 16px;
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+}
+
+.unsupported-alternatives li::before {
+    content: '✓';
+    position: absolute;
+    left: 0;
+    color: #22c55e;
+    font-weight: 600;
+    font-size: 12px;
+}
+
+.unsupported-feature-request {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1px dashed var(--border);
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.unsupported-feature-request svg {
+    color: #8b5cf6;
+    flex-shrink: 0;
+}
+
+.unsupported-feature-request a {
+    color: #8b5cf6;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.unsupported-feature-request a:hover {
+    text-decoration: underline;
+    color: #7c3aed;
+}
+
+/* ── Inline error toast for DocumentLibrary and FileBrowser ───────────── */
+
+.upload-error-toast {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    margin: 8px 0;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text);
+    animation: toast-slide-in 0.25s ease-out;
+}
+
+.upload-error-toast svg {
+    color: #ef4444;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.upload-error-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.upload-error-title {
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.upload-error-detail {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.upload-error-detail a {
+    color: #8b5cf6;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.upload-error-detail a:hover {
+    text-decoration: underline;
+}
+
+.upload-error-dismiss {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.upload-error-dismiss:hover {
+    color: var(--text);
+    background: var(--surface);
+}
+
+/* ── File browser unsupported indicator ──────────────────────────────── */
+
+.fb-entry.unsupported {
+    opacity: 0.55;
+}
+
+.fb-unsupported-badge {
+    font-size: 10px;
+    color: var(--text-secondary);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    white-space: nowrap;
+    margin-left: auto;
+}
+
+@keyframes toast-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
