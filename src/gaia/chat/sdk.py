@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 """
-Gaia Chat SDK - Unified text chat integration with conversation history
+Gaia Agent SDK - Unified text chat integration with conversation history
 """
 
 import json
@@ -19,8 +19,8 @@ from gaia.logger import get_logger
 
 
 @dataclass
-class ChatConfig:
-    """Configuration for ChatSDK."""
+class AgentConfig:
+    """Configuration for AgentSDK."""
 
     model: str = DEFAULT_MODEL_NAME
     max_tokens: int = 512
@@ -42,7 +42,7 @@ class ChatConfig:
 
 
 @dataclass
-class ChatResponse:
+class AgentResponse:
     """Response from chat operations."""
 
     text: str
@@ -51,20 +51,20 @@ class ChatResponse:
     is_complete: bool = True
 
 
-class ChatSDK:
+class AgentSDK:
     """
-    Gaia Chat SDK - Unified text chat integration with conversation history.
+    Gaia Agent SDK - Unified text chat integration with conversation history.
 
     This SDK provides a simple interface for integrating Gaia's text chat
     capabilities with conversation memory into applications.
 
     Example usage:
         ```python
-        from gaia.chat.sdk import ChatSDK, ChatConfig
+        from gaia.chat.sdk import AgentSDK, AgentConfig
 
         # Create SDK instance
-        config = ChatConfig(model=DEFAULT_MODEL_NAME, show_stats=True)
-        chat = ChatSDK(config)
+        config = AgentConfig(model=DEFAULT_MODEL_NAME, show_stats=True)
+        chat = AgentSDK(config)
 
         # Single message
         response = await chat.send("Hello, how are you?")
@@ -79,14 +79,14 @@ class ChatSDK:
         ```
     """
 
-    def __init__(self, config: Optional[ChatConfig] = None):
+    def __init__(self, config: Optional[AgentConfig] = None):
         """
-        Initialize the ChatSDK.
+        Initialize the AgentSDK.
 
         Args:
             config: Configuration options. If None, uses defaults.
         """
-        self.config = config or ChatConfig()
+        self.config = config or AgentConfig()
         self.log = get_logger(__name__)
         self.log.setLevel(getattr(logging, self.config.logging_level))
 
@@ -110,7 +110,7 @@ class ChatSDK:
         self.rag = None
         self.rag_enabled = False
 
-        self.log.debug("ChatSDK initialized")
+        self.log.debug("AgentSDK initialized")
 
     def _format_history_for_context(self) -> str:
         """Format chat history for inclusion in LLM context using model-specific formatting."""
@@ -169,7 +169,7 @@ class ChatSDK:
         messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         **kwargs,
-    ) -> ChatResponse:
+    ) -> AgentResponse:
         """
         Send a full conversation history and get a response.
 
@@ -179,7 +179,7 @@ class ChatSDK:
             **kwargs: Additional arguments for LLM generation
 
         Returns:
-            ChatResponse with the complete response
+            AgentResponse with the complete response
         """
         try:
             messages = self._prepare_messages_for_llm(messages)
@@ -227,6 +227,8 @@ class ChatSDK:
             # Use generate with formatted prompt
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
+            if "max_tokens" not in kwargs:
+                kwargs["max_tokens"] = self.config.max_tokens
             response = self.llm_client.generate(
                 prompt=formatted_prompt,
                 model=self.config.model,
@@ -239,7 +241,7 @@ class ChatSDK:
             if self.config.show_stats:
                 stats = self.get_stats()
 
-            return ChatResponse(text=response, stats=stats, is_complete=True)
+            return AgentResponse(text=response, stats=stats, is_complete=True)
 
         except ConnectionError as e:
             # Re-raise connection errors with additional context
@@ -264,7 +266,7 @@ class ChatSDK:
             **kwargs: Additional arguments for LLM generation
 
         Yields:
-            ChatResponse chunks as they arrive
+            AgentResponse chunks as they arrive
         """
         try:
             messages = self._prepare_messages_for_llm(messages)
@@ -312,18 +314,20 @@ class ChatSDK:
             # Use generate with formatted prompt for streaming
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
+            if "max_tokens" not in kwargs:
+                kwargs["max_tokens"] = self.config.max_tokens
             full_response = ""
             for chunk in self.llm_client.generate(
                 prompt=formatted_prompt, model=self.config.model, stream=True, **kwargs
             ):
                 full_response += chunk
-                yield ChatResponse(text=chunk, is_complete=False)
+                yield AgentResponse(text=chunk, is_complete=False)
 
             # Send final response with stats
             # Always get stats for token tracking (show_stats controls display, not collection)
             stats = self.get_stats()
 
-            yield ChatResponse(text="", stats=stats, is_complete=True)
+            yield AgentResponse(text="", stats=stats, is_complete=True)
 
         except ConnectionError as e:
             # Re-raise connection errors with additional context
@@ -335,7 +339,9 @@ class ChatSDK:
             self.log.error(f"Error in send_messages_stream: {e}")
             raise
 
-    def send(self, message: str, *, no_history: bool = False, **kwargs) -> ChatResponse:
+    def send(
+        self, message: str, *, no_history: bool = False, **kwargs
+    ) -> AgentResponse:
         """
         Send a message and get a complete response with conversation history.
 
@@ -345,7 +351,7 @@ class ChatSDK:
             **kwargs: Additional arguments for LLM generation
 
         Returns:
-            ChatResponse with the complete response and updated history
+            AgentResponse with the complete response and updated history
         """
         try:
             if not message.strip():
@@ -411,7 +417,7 @@ class ChatSDK:
                 else None
             )
 
-            return ChatResponse(
+            return AgentResponse(
                 text=response, history=history, stats=stats, is_complete=True
             )
 
@@ -428,7 +434,7 @@ class ChatSDK:
             **kwargs: Additional arguments for LLM generation
 
         Yields:
-            ChatResponse chunks as they arrive
+            AgentResponse chunks as they arrive
         """
         try:
             if not message.strip():
@@ -468,7 +474,7 @@ class ChatSDK:
                 full_prompt, model=self.config.model, stream=True, **generate_kwargs
             ):
                 full_response += chunk
-                yield ChatResponse(text=chunk, is_complete=False)
+                yield AgentResponse(text=chunk, is_complete=False)
 
             # Add complete assistant message to history
             self.chat_history.append(f"{self.config.assistant_name}: {full_response}")
@@ -484,7 +490,7 @@ class ChatSDK:
                 else None
             )
 
-            yield ChatResponse(text="", history=history, stats=stats, is_complete=True)
+            yield AgentResponse(text="", history=history, stats=stats, is_complete=True)
 
         except Exception as e:
             self.log.error(f"Error in send_stream: {e}")
@@ -839,7 +845,7 @@ class ChatSDK:
             "You have full access to the prior conversation history above; summarize it directly without restating the entire transcript."
         )
 
-        # Use ChatSDK's send() so history formatting/ordering is handled consistently
+        # Use AgentSDK's send() so history formatting/ordering is handled consistently
         # by the same path used for normal chat turns.
         original_history = list(self.chat_history)
         try:
@@ -1035,14 +1041,14 @@ class SimpleChat:
             model: Model to use (defaults to DEFAULT_MODEL_NAME)
             assistant_name: Name to use for the assistant (defaults to "assistant")
         """
-        config = ChatConfig(
+        config = AgentConfig(
             model=model or DEFAULT_MODEL_NAME,
             system_prompt=system_prompt,
             assistant_name=assistant_name or "gaia",
             show_stats=False,
             logging_level="WARNING",  # Minimal logging
         )
-        self._sdk = ChatSDK(config)
+        self._sdk = AgentSDK(config)
 
     def ask(self, question: str) -> str:
         """
@@ -1080,16 +1086,16 @@ class SimpleChat:
         return self._sdk.get_formatted_history()
 
 
-class ChatSession:
+class AgentSession:
     """
     Session-based chat interface for managing multiple separate conversations.
 
     Example usage:
         ```python
-        from gaia.chat.sdk import ChatSession
+        from gaia.chat.sdk import AgentSession
 
         # Create session manager
-        sessions = ChatSession()
+        sessions = AgentSession()
 
         # Create different chat sessions
         work_chat = sessions.create_session("work", system_prompt="You are a professional assistant")
@@ -1101,15 +1107,15 @@ class ChatSession:
         ```
     """
 
-    def __init__(self, default_config: Optional[ChatConfig] = None):
+    def __init__(self, default_config: Optional[AgentConfig] = None):
         """Initialize the session manager."""
-        self.default_config = default_config or ChatConfig()
-        self.sessions: Dict[str, ChatSDK] = {}
+        self.default_config = default_config or AgentConfig()
+        self.sessions: Dict[str, AgentSDK] = {}
         self.log = get_logger(__name__)
 
     def create_session(
-        self, session_id: str, config: Optional[ChatConfig] = None, **config_kwargs
-    ) -> ChatSDK:
+        self, session_id: str, config: Optional[AgentConfig] = None, **config_kwargs
+    ) -> AgentSDK:
         """
         Create a new chat session.
 
@@ -1119,11 +1125,11 @@ class ChatSession:
             **config_kwargs: Configuration parameters to override
 
         Returns:
-            ChatSDK instance for the session
+            AgentSDK instance for the session
         """
         if config is None:
             # Create config from defaults with overrides
-            config = ChatConfig(
+            config = AgentConfig(
                 model=config_kwargs.get("model", self.default_config.model),
                 max_tokens=config_kwargs.get(
                     "max_tokens", self.default_config.max_tokens
@@ -1151,12 +1157,12 @@ class ChatSession:
                 ),
             )
 
-        session = ChatSDK(config)
+        session = AgentSDK(config)
         self.sessions[session_id] = session
         self.log.debug(f"Created chat session: {session_id}")
         return session
 
-    def get_session(self, session_id: str) -> Optional[ChatSDK]:
+    def get_session(self, session_id: str) -> Optional[AgentSDK]:
         """Get an existing session by ID."""
         return self.sessions.get(session_id)
 
@@ -1197,7 +1203,7 @@ def quick_chat(
     Returns:
         AI response
     """
-    config = ChatConfig(
+    config = AgentConfig(
         model=model or DEFAULT_MODEL_NAME,
         system_prompt=system_prompt,
         assistant_name=assistant_name or "gaia",
@@ -1205,7 +1211,7 @@ def quick_chat(
         logging_level="WARNING",
         max_history_length=2,  # Small history for quick chat
     )
-    sdk = ChatSDK(config)
+    sdk = AgentSDK(config)
     response = sdk.send(message)
     return response.text
 
@@ -1228,14 +1234,14 @@ def quick_chat_with_memory(
     Returns:
         List of AI responses
     """
-    config = ChatConfig(
+    config = AgentConfig(
         model=model or DEFAULT_MODEL_NAME,
         system_prompt=system_prompt,
         assistant_name=assistant_name or "gaia",
         show_stats=False,
         logging_level="WARNING",
     )
-    sdk = ChatSDK(config)
+    sdk = AgentSDK(config)
 
     responses = []
     for message in messages:
@@ -1243,3 +1249,10 @@ def quick_chat_with_memory(
         responses.append(response.text)
 
     return responses
+
+
+# Backwards-compatible aliases
+ChatSDK = AgentSDK
+ChatConfig = AgentConfig
+ChatResponse = AgentResponse
+ChatSession = AgentSession

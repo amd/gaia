@@ -289,12 +289,14 @@ class BatchExperimentRunner:
 
             # Extract response text
             response = response_data["content"]
-            if isinstance(response, list):
+            if isinstance(response, list) and response:
                 response_text = (
                     response[0].text
                     if hasattr(response[0], "text")
                     else str(response[0])
                 )
+            elif isinstance(response, list):
+                response_text = ""
             else:
                 response_text = (
                     response.text if hasattr(response, "text") else str(response)
@@ -1332,12 +1334,14 @@ class BatchExperimentRunner:
                                 context_prompt
                             )
                             response = response_data["content"]
-                            if isinstance(response, list):
+                            if isinstance(response, list) and response:
                                 response_text = (
                                     response[0].text
                                     if hasattr(response[0], "text")
                                     else str(response[0])
                                 )
+                            elif isinstance(response, list):
+                                response_text = ""
                             else:
                                 response_text = (
                                     response.text

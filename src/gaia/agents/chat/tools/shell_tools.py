@@ -12,7 +12,6 @@ import shlex
 import subprocess
 import time
 from collections import deque
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -351,24 +350,55 @@ class ShellToolsMixin:
                 if hasattr(self, "debug") and self.debug:
                     logger.info(f"Executing command: {command} in {cwd}")
 
+                # On Windows, many commands are shell built-ins (dir, cd, type,
+                # echo) and Unix commands (ls, pwd, cat) don't exist as .exe
+                # files.  Since we have already validated the command against the
+                # whitelist, we use shell=True on Windows so cmd.exe can resolve
+                # both built-ins and commands on PATH (including those from Git
+                # for Windows which provides ls, cat, grep, etc.).
+                use_shell = os.name == "nt"
+
+                # On Windows, also map common Unix commands to Windows equivalents
+                # when Git-for-Windows tools aren't on PATH.
+                if os.name == "nt":
+                    _UNIX_TO_WIN = {
+                        "ls": "dir",
+                        "pwd": "cd",
+                        "cat": "type",
+                        "which": "where",
+                        "cp": "copy",
+                        "mv": "move",
+                    }
+                    if cmd_base in _UNIX_TO_WIN:
+                        # Check if the Unix command exists on PATH (e.g. Git Bash)
+                        import shutil
+
+                        if not shutil.which(cmd_base):
+                            win_cmd = _UNIX_TO_WIN[cmd_base]
+                            logger.info(
+                                f"Mapping Unix command '{cmd_base}' -> Windows '{win_cmd}'"
+                            )
+                            cmd_parts[0] = win_cmd
+
                 # Execute command
-                start_time = datetime.utcnow()
+                start_time = time.monotonic()
                 try:
                     result = subprocess.run(
-                        cmd_parts,
+                        cmd_parts if not use_shell else " ".join(cmd_parts),
                         cwd=cwd,
                         capture_output=True,
                         text=True,
                         timeout=timeout,
                         check=False,
                         env=os.environ.copy(),
+                        shell=use_shell,
                     )
-                    duration = (datetime.utcnow() - start_time).total_seconds()
+                    duration = time.monotonic() - start_time
 
                     # Record successful command execution for rate limiting
                     self._record_command_execution()
                 except subprocess.TimeoutExpired as exc:
-                    duration = (datetime.utcnow() - start_time).total_seconds()
+                    duration = time.monotonic() - start_time
 
                     # Handle timeout gracefully
                     stdout_str = ""

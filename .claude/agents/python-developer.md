@@ -55,7 +55,7 @@ log.error(f"Failed to process: {error}")
 import abc
 from typing import Any, Dict, List, Optional
 from gaia.agents.base import Agent
-from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.chat.sdk import AgentConfig, AgentSDK
 
 class MyAgent(Agent):
     """
@@ -212,16 +212,16 @@ class MyAgent(Agent, FileSearchToolsMixin):
         self.register_file_search_tools()
 ```
 
-### ChatSDK Pattern
+### AgentSDK Pattern
 
 **From `src/gaia/chat/sdk.py`:**
 
 ```python
-# Using ChatSDK for LLM interaction
-from gaia.chat.sdk import ChatSDK, ChatConfig
+# Using AgentSDK for LLM interaction
+from gaia.chat.sdk import AgentSDK, AgentConfig
 
 # Configuration
-config = ChatConfig(
+config = AgentConfig(
     model="Qwen3-Coder-30B-A3B-Instruct-GGUF",
     max_tokens=512,
     show_stats=True,
@@ -230,7 +230,7 @@ config = ChatConfig(
 )
 
 # Initialize SDK
-chat = ChatSDK(config)
+chat = AgentSDK(config)
 
 # Send messages
 response = chat.send("User message")
@@ -321,7 +321,7 @@ class MyClass:
 - Base Agent: `src/gaia/agents/base/agent.py`
 - Tool Registry: `src/gaia/agents/base/tools.py`
 - File Tools Mixin: `src/gaia/agents/tools/file_tools.py`
-- ChatSDK: `src/gaia/chat/sdk.py`
+- AgentSDK: `src/gaia/chat/sdk.py`
 - LLM Client: `src/gaia/llm/llm_client.py`
 - Lemonade Client: `src/gaia/llm/lemonade_client.py`
 

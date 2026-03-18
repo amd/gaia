@@ -67,11 +67,14 @@ def _get_lemonade_config() -> tuple:
     # Parse the URL to extract host and port for backwards compatibility
     parsed = urlparse(base_url)
     host = parsed.hostname or DEFAULT_HOST
-    port = (
-        80
-        if (parsed.port is None and host is not None)
-        else (parsed.port or DEFAULT_PORT)
-    )
+    if parsed.port is not None:
+        port = parsed.port
+    elif parsed.scheme == "https":
+        port = 443
+    elif host != DEFAULT_HOST:
+        port = 80
+    else:
+        port = DEFAULT_PORT
     return (host, port, base_url)
 
 
@@ -638,6 +641,7 @@ class LemonadeClient:
         self.server_process = None
         self.log = get_logger(__name__)
         self.keep_alive = keep_alive
+        self._log_file = None
 
         # Track active downloads for cancellation support
         self.active_downloads: Dict[str, DownloadTask] = {}
@@ -687,15 +691,20 @@ class LemonadeClient:
             self.server_process = subprocess.Popen(cmd, shell=True)
         elif background == "silent":
             # Run in background with subprocess
-            log_file = open("lemonade.log", "w", encoding="utf-8")
-            self.server_process = subprocess.Popen(
-                base_cmd,
-                stdout=log_file,
-                stderr=log_file,
-                text=True,
-                bufsize=1,
-                shell=True,
-            )
+            self._log_file = open("lemonade.log", "w", encoding="utf-8")
+            try:
+                self.server_process = subprocess.Popen(
+                    base_cmd,
+                    stdout=self._log_file,
+                    stderr=self._log_file,
+                    text=True,
+                    bufsize=1,
+                    shell=True,
+                )
+            except Exception:
+                self._log_file.close()
+                self._log_file = None
+                raise
         else:  # "none" or any other value
             # Run in foreground with real-time output
             self.server_process = subprocess.Popen(
@@ -795,6 +804,14 @@ class LemonadeClient:
                     self.server_process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     self.log.warning("Process did not terminate within timeout")
+
+            # Close log file handle if it was opened for silent mode
+            if hasattr(self, "_log_file") and self._log_file:
+                try:
+                    self._log_file.close()
+                except Exception:
+                    pass
+                self._log_file = None
 
             # Ensure port is free
             kill_process_on_port(self.port)
@@ -1313,6 +1330,27 @@ class LemonadeClient:
             timeout=timeout,
         )
 
+        # Separate OpenAI-standard params from llama.cpp-specific params.
+        # The OpenAI client validates parameters strictly, so non-standard
+        # ones (repeat_penalty, repeat_last_n, etc.) must go via extra_body.
+        _OPENAI_STANDARD = {
+            "frequency_penalty",
+            "presence_penalty",
+            "top_p",
+            "n",
+            "seed",
+            "user",
+            "response_format",
+            "logit_bias",
+        }
+        extra_body = {}
+        standard_kwargs = {}
+        for k, v in kwargs.items():
+            if k in _OPENAI_STANDARD:
+                standard_kwargs[k] = v
+            else:
+                extra_body[k] = v
+
         # Create request parameters
         request_params = {
             "model": model,
@@ -1320,8 +1358,11 @@ class LemonadeClient:
             "temperature": temperature,
             "max_completion_tokens": max_completion_tokens,
             "stream": True,
-            **kwargs,
+            **standard_kwargs,
         }
+
+        if extra_body:
+            request_params["extra_body"] = extra_body
 
         if stop:
             request_params["stop"] = stop
@@ -2299,7 +2340,18 @@ class LemonadeClient:
                 console = None
                 print(f"🔄 Loading model: {model}...")
 
-            self.load_model(model, auto_download=True, prompt=False)
+            ctx_size = None
+            for _key, req in MODELS.items():
+                if req.model_id == model:
+                    ctx_size = req.min_ctx_size
+                    break
+
+            if ctx_size is None:
+                self.log.debug(
+                    f"Model '{model}' not in MODELS registry; using server default ctx_size"
+                )
+
+            self.load_model(model, auto_download=True, prompt=False, ctx_size=ctx_size)
 
             # Print model ready message
             try:
@@ -2679,8 +2731,9 @@ class LemonadeClient:
             - Physical Memory (RAM)
             - devices: Dictionary with device information
               - cpu: Name, cores, threads, availability
-              - gpu: AMD iGPU/dGPU name, memory (MB), driver version, availability
-              - npu: Name, driver version, power mode, availability
+              - amd_igpu: AMD integrated GPU name, VRAM, driver version, availability
+              - amd_dgpu: AMD discrete GPU list
+              - amd_npu: AMD NPU name, driver version, power mode, availability
 
         Examples:
             # Check available devices
@@ -2688,10 +2741,10 @@ class LemonadeClient:
             devices = sysinfo.get("devices", {})
 
             # Select best device
-            if devices.get("npu", {}).get("available"):
+            if devices.get("amd_npu", {}).get("available"):
                 print("Using NPU for acceleration")
-            elif devices.get("gpu", {}).get("available"):
-                print("Using GPU for acceleration")
+            elif devices.get("amd_igpu", {}).get("available"):
+                print("Using iGPU for acceleration")
             else:
                 print("Using CPU")
 

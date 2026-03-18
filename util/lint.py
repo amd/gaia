@@ -39,7 +39,8 @@ PYLINT_CONFIG = ".pylintrc"
 # R0401: Cyclic import
 # E0401: Import error (handled separately)
 # W0718: Broad exception
-DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
+# W0212: Protected access (common in intra-package imports of _helper functions)
+DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718,W0212"
 EXCLUDE_DIRS = (
     ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
 )
@@ -67,6 +68,7 @@ def uvx(tool: str, *args: str) -> list[str]:
     """Build a uvx command for a tool (auto-downloads if not installed)."""
     # Check if uvx is available
     import shutil
+
     if shutil.which("uvx"):
         return ["uvx", tool, *args]
     else:
@@ -333,12 +335,12 @@ def check_imports() -> CheckResult:
         ("from", "gaia.llm", "VLMClient", "Vision LLM client", False),
         ("from", "gaia.llm", "create_client", "LLM factory", False),
         ("from", "gaia.llm", "NotSupportedError", "LLM exception", False),
-        # Chat SDK
-        ("import", "gaia.chat.sdk", "Chat SDK module", False),
-        ("from", "gaia.chat.sdk", "ChatSDK", "Chat SDK class", False),
-        ("from", "gaia.chat.sdk", "ChatConfig", "Chat configuration", False),
-        ("from", "gaia.chat.sdk", "ChatSession", "Chat session", False),
-        ("from", "gaia.chat.sdk", "ChatResponse", "Chat response", False),
+        # Agent SDK
+        ("import", "gaia.chat.sdk", "Agent SDK module", False),
+        ("from", "gaia.chat.sdk", "AgentSDK", "Agent SDK class", False),
+        ("from", "gaia.chat.sdk", "AgentConfig", "Agent configuration", False),
+        ("from", "gaia.chat.sdk", "AgentSession", "Agent session", False),
+        ("from", "gaia.chat.sdk", "AgentResponse", "Agent response", False),
         ("from", "gaia.chat.sdk", "quick_chat", "Quick chat function", False),
         # RAG SDK
         ("import", "gaia.rag.sdk", "RAG SDK module", False),
@@ -449,8 +451,11 @@ def check_doc_versions() -> CheckResult:
 
     if exit_code != 0:
         return CheckResult(
-            "Doc Version Consistency", False, False, 1,
-            "Version mismatches found in documentation"
+            "Doc Version Consistency",
+            False,
+            False,
+            1,
+            "Version mismatches found in documentation",
         )
 
     return CheckResult("Doc Version Consistency", True, False, 0, "")
