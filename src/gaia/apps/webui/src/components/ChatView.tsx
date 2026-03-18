@@ -142,6 +142,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
+    const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string) => void>(() => {});
 
     // ── Streaming chunk buffer ──────────────────────────────────────
@@ -525,6 +526,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         clearAgentSteps();
         setCompletedSteps([]);
         stepIdRef.current = 0;
+        toolOccurredRef.current = false;
 
         log.stream.info('Starting agent stream...');
         const streamStart = log.stream.time();
@@ -542,6 +544,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'answer') {
                         fullContent = content;
                     } else {
+                        // If a tool just ran between text chunks, add a paragraph separator
+                        if (toolOccurredRef.current && fullContent.length > 0) {
+                            fullContent += '\n\n';
+                            toolOccurredRef.current = false;
+                        }
                         fullContent += content;
                     }
                     // Safety net: strip any tool-call JSON that leaked past the
@@ -607,6 +614,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             content: c.content,
                         }));
                     }
+                    // Pass through file list if available
+                    if (event.result_data?.type === 'file_list' &&
+                        (event.result_data as any).files?.length > 0) {
+                        updates.fileList = {
+                            files: (event.result_data as any).files,
+                            total: (event.result_data as any).total ??
+                                (event.result_data as any).files.length,
+                        };
+                    }
                     updateLastToolStep(updates);
                     return;
                 }
@@ -669,7 +685,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
 
                 const step = agentEventToStep(event, stepIdRef);
-                if (step) addAgentStep(step);
+                if (step) {
+                    addAgentStep(step);
+                    if (event.type === 'tool_start') {
+                        toolOccurredRef.current = true;
+                    }
+                }
             },
             onDone: (event) => {
                 if (doneHandled) return;

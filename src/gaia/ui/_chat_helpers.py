@@ -502,6 +502,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         # Persist structured command output for terminal rendering
                         if event.get("command_output"):
                             tool_step["commandOutput"] = event["command_output"]
+                        # Persist file list for rich file list rendering
+                        result_data = event.get("result_data", {})
+                        if result_data.get("type") == "file_list":
+                            tool_step["fileList"] = {
+                                "files": result_data.get("files", []),
+                                "total": result_data.get("total", 0),
+                            }
                 elif event_type == "plan":
                     step_id += 1
                     for s in captured_steps:

@@ -23,6 +23,7 @@ import {
     FileEdit,
     Copy,
     Check,
+    File,
     type LucideIcon,
 } from 'lucide-react';
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
@@ -136,6 +137,12 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                 continue;
             }
             result.push(step);
+        }
+        // Filter: hide thinking steps that appear after the first tool step.
+        // These are LLM post-tool internal reasoning that should not be shown to users.
+        const firstToolIdx = result.findIndex((s) => s.type === 'tool');
+        if (firstToolIdx >= 0) {
+            return result.filter((s, i) => s.type !== 'thinking' || i < firstToolIdx);
         }
         return result;
     }, [steps]);
@@ -263,6 +270,46 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     );
 }
 
+// ── Flow: File list from file search tools ───────────────────────────────
+
+function FileListView({ fileList }: { fileList: { files: Array<Record<string, unknown>>; total: number } }) {
+    const [expanded, setExpanded] = useState(false);
+    const PREVIEW_COUNT = 5;
+    const displayFiles = expanded ? fileList.files : fileList.files.slice(0, PREVIEW_COUNT);
+    const remaining = fileList.total - PREVIEW_COUNT;
+
+    const getFileName = (f: Record<string, unknown>, i: number): string => {
+        const name = f.name || f.filename || f.file_name;
+        if (name) return String(name);
+        if (f.file_path) return String(f.file_path).replace(/\\/g, '/').split('/').pop() || `File ${i + 1}`;
+        return `File ${i + 1}`;
+    };
+
+    const getDirectory = (f: Record<string, unknown>): string => {
+        return f.directory ? String(f.directory) : '';
+    };
+
+    return (
+        <div className="file-list-view">
+            {displayFiles.map((f, i) => (
+                <div key={i} className="file-list-item">
+                    <File size={11} className="file-list-icon" />
+                    <span className="file-list-name">{getFileName(f, i)}</span>
+                    {getDirectory(f) && <span className="file-list-dir">{getDirectory(f)}</span>}
+                </div>
+            ))}
+            {remaining > 0 && !expanded && (
+                <button className="file-list-more" onClick={() => setExpanded(true)}>
+                    +{remaining} more
+                </button>
+            )}
+            {expanded && fileList.files.length < fileList.total && (
+                <span className="file-list-truncated">Showing {fileList.files.length} of {fileList.total} files</span>
+            )}
+        </div>
+    );
+}
+
 // ── Flow: Thinking text ──────────────────────────────────────────────────
 
 function FlowThought({ step }: { step: AgentStep }) {
@@ -339,7 +386,7 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
     const Icon = meta.icon;
     const color = meta.color;
     const friendlyLabel = step.active ? meta.activeLabel : meta.label;
-    const hasDetail = !!(step.detail || step.result || step.commandOutput);
+    const hasDetail = !!(step.detail || step.result || step.commandOutput || step.fileList?.files?.length);
 
     return (
         <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false ? 'error' : ''}`}>
@@ -401,6 +448,9 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
                     {/* Retrieved document chunks */}
                     {step.retrievalChunks && step.retrievalChunks.length > 0 && (
                         <ChunksView chunks={step.retrievalChunks} />
+                    )}
+                    {step.fileList && step.fileList.files.length > 0 && (
+                        <FileListView fileList={step.fileList} />
                     )}
                 </div>
             )}

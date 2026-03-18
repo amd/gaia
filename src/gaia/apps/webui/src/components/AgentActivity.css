@@ -758,3 +758,67 @@
         display: none;
     }
 }
+
+/* File list view (search results) */
+.file-list-view {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 4px;
+    padding: 6px 8px;
+    background: var(--color-bg-subtle, rgba(0,0,0,0.04));
+    border-radius: 6px;
+}
+
+.file-list-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--color-text-primary, #374151);
+    overflow: hidden;
+}
+
+.file-list-icon {
+    flex-shrink: 0;
+    color: var(--color-text-muted, #6b7280);
+}
+
+.file-list-name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-list-dir {
+    color: var(--color-text-muted, #6b7280);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+}
+
+.file-list-more {
+    background: none;
+    border: none;
+    padding: 2px 0;
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--color-primary, #6366f1);
+    cursor: pointer;
+    text-align: left;
+    font-weight: 500;
+}
+
+.file-list-more:hover {
+    text-decoration: underline;
+}
+
+.file-list-truncated {
+    font-size: 11px;
+    color: var(--color-text-muted, #6b7280);
+    margin-top: 2px;
+}

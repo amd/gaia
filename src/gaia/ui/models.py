@@ -3,7 +3,7 @@
 
 """Pydantic models for GAIA Agent UI API."""
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -109,6 +109,13 @@ class CommandOutputResponse(BaseModel):
     truncated: bool = False
 
 
+class FileListResponse(BaseModel):
+    """Structured file list from file search tool results."""
+
+    files: List[Dict[str, Any]] = []
+    total: int = 0
+
+
 class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
@@ -123,6 +130,7 @@ class AgentStepResponse(BaseModel):
     planSteps: Optional[List[str]] = None
     timestamp: int = 0
     commandOutput: Optional[CommandOutputResponse] = None
+    fileList: Optional[FileListResponse] = None
 
 
 class MessageResponse(BaseModel):

@@ -163,6 +163,11 @@ export interface AgentStep {
     commandOutput?: CommandOutput;
     /** Retrieved document chunks (for RAG query tools). */
     retrievalChunks?: RetrievalChunk[];
+    /** File list from file search tools. */
+    fileList?: {
+        files: Array<Record<string, unknown>>;
+        total: number;
+    };
 }
 
 /** Extended SSE event types for agent communication. */
