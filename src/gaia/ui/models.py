@@ -349,3 +349,15 @@ class FileUploadResponse(BaseModel):
     size: int
     content_type: str
     is_image: bool
+
+
+# ── Tool Confirmation ─────────────────────────────────────────────────────
+
+
+class ToolConfirmRequest(BaseModel):
+    """Request to resolve a pending tool execution confirmation."""
+
+    session_id: str
+    confirm_id: str
+    action: str = Field(..., description="'allow' or 'deny'")
+    remember: bool = False

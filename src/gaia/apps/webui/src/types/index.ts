@@ -197,19 +197,20 @@ export interface AgentStep {
 
 /** Extended SSE event types for agent communication. */
 export type StreamEventType =
-    | 'chunk'       // Text content chunk
-    | 'done'        // Stream complete
-    | 'error'       // Error
-    | 'status'      // Agent state change
-    | 'step'        // Step progress
-    | 'thinking'    // Agent reasoning
-    | 'plan'        // Agent plan
-    | 'tool_start'  // Tool execution started
-    | 'tool_end'    // Tool execution completed
-    | 'tool_result' // Tool result summary
-    | 'tool_args'   // Tool arguments detail
-    | 'answer'      // Final answer from agent
-    | 'agent_error';// Agent-level error (non-fatal)
+    | 'chunk'        // Text content chunk
+    | 'done'         // Stream complete
+    | 'error'        // Error
+    | 'status'       // Agent state change
+    | 'step'         // Step progress
+    | 'thinking'     // Agent reasoning
+    | 'plan'         // Agent plan
+    | 'tool_start'   // Tool execution started
+    | 'tool_end'     // Tool execution completed
+    | 'tool_result'  // Tool result summary
+    | 'tool_args'    // Tool arguments detail
+    | 'tool_confirm' // Tool requires user confirmation (blocking)
+    | 'answer'       // Final answer from agent
+    | 'agent_error'; // Agent-level error (non-fatal)
 
 export interface StreamEvent {
     type: StreamEventType;
@@ -243,6 +244,10 @@ export interface StreamEvent {
         duration_seconds?: number;
         truncated?: boolean;
     };
+    /** Confirmation ID (for tool_confirm events). */
+    confirm_id?: string;
+    /** Timeout in seconds (for tool_confirm events). */
+    timeout_seconds?: number;
     /** Structured result data (for tool_result with search results, file lists, etc.). */
     result_data?: {
         type: string;
