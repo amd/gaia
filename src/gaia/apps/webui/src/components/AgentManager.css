@@ -1,0 +1,629 @@
+/* ── Agent Manager ─────────────────────────────────────────────────────── */
+
+.agent-manager {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────── */
+
+.agent-manager-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.agent-manager-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.agent-manager-title h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.3px;
+}
+
+.agent-manager-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.stat-badge-running {
+  color: var(--accent-green);
+}
+
+.running-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  animation: agentPulse 2s infinite;
+}
+
+@keyframes agentPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.agent-manager-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-agent-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+  white-space: nowrap;
+}
+
+.btn-agent-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--amd-red-light);
+  color: var(--text-primary);
+}
+
+.btn-agent-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-agent-action.btn-agent-icon-only {
+  padding: 6px;
+}
+
+.btn-agent-action.btn-agent-icon-only span {
+  display: none;
+}
+
+.btn-agent-action .spin {
+  animation: spinAnim 1s linear infinite;
+}
+
+@keyframes spinAnim {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Error Banner ─────────────────────────────────────────────────────── */
+
+.agent-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  margin: 12px 24px 0;
+  background: rgba(226, 60, 64, 0.08);
+  border: 1px solid rgba(226, 60, 64, 0.2);
+  border-radius: var(--radius-sm);
+  color: var(--amd-red);
+  font-size: 13px;
+  animation: agentFadeIn 150ms var(--ease);
+}
+
+.agent-error-banner span {
+  flex: 1;
+}
+
+@keyframes agentFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Loading State ────────────────────────────────────────────────────── */
+
+.agent-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px;
+  gap: 16px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* ── Agent List ───────────────────────────────────────────────────────── */
+
+.agent-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Empty State ──────────────────────────────────────────────────────── */
+
+.agent-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 48px 32px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.agent-empty-state h3 {
+  margin-top: 16px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.agent-empty-state p {
+  margin-top: 8px;
+  font-size: 13px;
+  max-width: 360px;
+  line-height: 1.5;
+}
+
+.agent-browse-btn {
+  margin-top: 20px;
+  width: auto;
+  padding: 10px 24px;
+}
+
+/* ── Agent Card ───────────────────────────────────────────────────────── */
+
+.agent-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  transition: all var(--duration) var(--ease);
+  cursor: default;
+  position: relative;
+}
+
+.agent-card:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+
+.agent-card.agent-card-selected {
+  border-color: var(--amd-red-light);
+  box-shadow: 0 0 0 1px rgba(226, 60, 64, 0.1);
+}
+
+.agent-card.agent-card-running {
+  border-left: 3px solid var(--accent-green);
+  padding-left: 13px;
+}
+
+.agent-card.agent-card-error {
+  border-left: 3px solid var(--amd-red);
+  padding-left: 13px;
+}
+
+/* Status indicator */
+.agent-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+  transition: background var(--duration) var(--ease);
+}
+
+.agent-status-dot.dot-running {
+  background: var(--accent-green);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+}
+
+.agent-status-dot.dot-stopped {
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+
+.agent-status-dot.dot-not-installed {
+  background: transparent;
+  border: 2px solid var(--accent-yellow);
+}
+
+.agent-status-dot.dot-error {
+  background: var(--amd-red);
+  box-shadow: 0 0 6px rgba(226, 60, 64, 0.4);
+}
+
+/* Card content */
+.agent-card-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.agent-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-card-version {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-full);
+}
+
+.agent-card-description {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+/* Card meta (status text, tools, uptime) */
+.agent-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+
+.agent-card-meta .meta-icon {
+  margin-right: 3px;
+  vertical-align: middle;
+}
+
+.agent-card-meta .meta-sep {
+  color: var(--border);
+}
+
+.agent-card-meta .meta-pid {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.agent-card-meta .meta-memory {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+/* Card actions */
+.agent-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--duration) var(--ease);
+}
+
+.agent-card:hover .agent-card-actions {
+  opacity: 1;
+}
+
+/* Always show actions for cards with running state */
+.agent-card-running .agent-card-actions {
+  opacity: 1;
+}
+
+.btn-card-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+}
+
+.btn-card-action:hover {
+  background: var(--bg-active);
+  border-color: var(--amd-red-light);
+  color: var(--amd-red);
+}
+
+.btn-card-action.btn-card-start:hover {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+.btn-card-action.btn-card-stop:hover {
+  border-color: var(--amd-red);
+  color: var(--amd-red);
+}
+
+.btn-card-action.btn-card-install {
+  width: auto;
+  padding: 6px 14px;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.btn-card-action.btn-card-install:hover {
+  background: var(--amd-red);
+  border-color: var(--amd-red);
+  color: white;
+}
+
+/* Install progress bar */
+.agent-install-progress {
+  margin-top: 8px;
+}
+
+.install-progress-bar {
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.install-progress-fill {
+  height: 100%;
+  background: var(--amd-red);
+  border-radius: 2px;
+  transition: width 300ms var(--ease);
+}
+
+.install-progress-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.install-progress-label .install-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--amd-red);
+  border-radius: 50%;
+  animation: spinAnim 0.8s linear infinite;
+}
+
+.install-progress-error {
+  color: var(--amd-red);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+/* ── Config Dialog ────────────────────────────────────────────────────── */
+
+.config-dialog {
+  width: 480px;
+}
+
+.config-section {
+  margin-bottom: 24px;
+}
+
+.config-section:last-child {
+  margin-bottom: 0;
+}
+
+.config-section h4 {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.config-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.config-row:last-child {
+  border-bottom: none;
+}
+
+.config-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.config-label-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.config-label-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Config header icon */
+.config-header-icon {
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+/* Config value (read-only info rows) */
+.config-value {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Config status value */
+.config-value-status {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.config-value-status.status-running {
+  color: var(--accent-green);
+}
+
+/* Config capability badge */
+.config-capability {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.config-capability.capability-enabled {
+  color: var(--accent-green);
+}
+
+/* Toggle switch */
+.config-toggle {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--border);
+  cursor: pointer;
+  transition: background var(--duration) var(--ease);
+  flex-shrink: 0;
+  border: none;
+  padding: 0;
+}
+
+.config-toggle.active {
+  background: var(--accent-green);
+}
+
+.config-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  transition: transform var(--duration) var(--ease);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.config-toggle.active::after {
+  transform: translateX(18px);
+}
+
+/* Select dropdown */
+.config-select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  outline: none;
+  transition: border-color var(--duration) var(--ease);
+}
+
+.config-select:focus {
+  border-color: var(--amd-red);
+}
+
+/* Config footer */
+.config-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+  margin-top: 8px;
+}
+
+.config-footer .btn-secondary {
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+.config-footer .btn-primary {
+  width: auto;
+  padding: 8px 20px;
+  font-size: 13px;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .agent-manager-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .agent-manager-actions {
+    width: 100%;
+  }
+
+  .btn-agent-action {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .agent-list {
+    padding: 12px 16px;
+  }
+
+  .agent-card-actions {
+    opacity: 1;
+  }
+}

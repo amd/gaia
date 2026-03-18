@@ -94,7 +94,7 @@ class Orchestrator:
     def __init__(
         self,
         tool_executor: ToolExecutor,
-        llm_client: ChatSDK,
+        llm_client: AgentSDK,
         llm_fixer: Optional[Callable[[str, str], Optional[str]]] = None,
         progress_callback: Optional[Callable[[str, str, int, int], None]] = None,
         console: Optional[AgentConsole] = None,

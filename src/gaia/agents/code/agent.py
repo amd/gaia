@@ -222,6 +222,7 @@ class CodeAgent(
 
         del kwargs  # Unused - accept for CLI compatibility
         # Store workspace root and change to it if provided
+        original_cwd = os.getcwd()
         if workspace_root:
             self.workspace_root = workspace_root
             self.path_validator.add_allowed_path(workspace_root)
@@ -419,7 +420,7 @@ class CodeAgent(
             return self._fix_code_with_llm(code, "file.ts", error_text)
 
         # Get LLM client for checklist generation (required)
-        # The chat SDK has a send(message, timeout) method compatible with ChatSDK protocol
+        # The chat SDK has a send(message, timeout) method compatible with AgentSDK protocol
         llm_client = getattr(self, "chat", None)
         if llm_client is None:
             raise ValueError(

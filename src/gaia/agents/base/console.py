@@ -26,6 +26,13 @@ try:
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+    rprint = print
+    Panel = None
+    Console = None
+    Live = None
+    Spinner = None
+    Syntax = None
+    Table = None
     print(
         "Rich library not found. Install with 'uv pip install rich' for syntax highlighting."
     )
@@ -2032,6 +2039,13 @@ class SilentConsole(OutputHandler):
             return
 
         # Use Rich table format (same as AgentConsole)
+        if not RICH_AVAILABLE:
+            # Fallback: print plain text stats
+            for key, value in stats.items():
+                if value is not None:
+                    print(f"  {key}: {value}")
+            return
+
         from rich.console import Console
         from rich.panel import Panel
         from rich.table import Table

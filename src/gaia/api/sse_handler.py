@@ -91,10 +91,13 @@ class SSEOutputHandler(OutputHandler):
 
     # === Core Progress/State Methods (Required) ===
 
-    def print_processing_start(self, query: str, max_steps: int):
+    def print_processing_start(self, query: str, max_steps: int, model_id: str = None):
         """Print processing start message."""
         self.total_steps = max_steps
-        self._add_event("processing_start", {"query": query, "max_steps": max_steps})
+        self._add_event(
+            "processing_start",
+            {"query": query, "max_steps": max_steps, "model_id": model_id},
+        )
 
     def print_step_header(self, step_num: int, step_limit: int):
         """Print step header."""
@@ -166,7 +169,9 @@ class SSEOutputHandler(OutputHandler):
 
     # === Completion Methods (Required) ===
 
-    def print_final_answer(self, answer: str):
+    def print_final_answer(
+        self, answer: str, streaming: bool = True
+    ):  # pylint: disable=unused-argument
         """Print final answer/result."""
         self._add_event("final_answer", {"answer": answer})
 

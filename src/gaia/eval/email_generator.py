@@ -493,7 +493,8 @@ Examples:
         print(f"  Total tokens used: {total_tokens:,}")
         print(f"  Total cost: ${total_cost:.4f}")
         print(f"  Average tokens per file: {avg_tokens:.0f}")
-        print(f"  Average cost per file: ${total_cost/len(summary['emails']):.4f}")
+        avg_cost = total_cost / len(summary["emails"]) if summary["emails"] else 0
+        print(f"  Average cost per file: ${avg_cost:.4f}")
         print(f"  Email types: {', '.join(generation_info['email_types'])}")
         print(f"  Claude model: {generation_info['claude_model']}")
 
