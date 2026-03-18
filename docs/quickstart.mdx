@@ -8,54 +8,30 @@ icon: "rocket"
 
 Run AI agents **100% locally** on your AMD hardware — analyze documents, generate code, answer questions, and accomplish tasks on your PC without sending data to the cloud.
 
-```bash
-npm install -g @amd-gaia/agent-ui
-```
+<Tabs>
+  <Tab title="npm (Recommended)">
+    ```bash
+    npm install -g @amd-gaia/agent-ui
+    ```
 
-Then run:
-```bash
-gaia-ui
-```
+    Then run:
+    ```bash
+    gaia
+    ```
 
-On first run, GAIA automatically installs the Python backend and all dependencies.
+    On first run, GAIA automatically installs the Python backend and all dependencies.
 
-<Note>
-  Requires [Node.js 18+](https://nodejs.org). If you don't have it:
+    <Note>
+      Requires [Node.js 18+](https://nodejs.org).
+    </Note>
+  </Tab>
 
-  - **Windows:** `winget install OpenJS.NodeJS.LTS`
-  - **macOS:** `brew install node@20`
-  - **Linux:** `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs`
-</Note>
+  <Tab title="Desktop Installer (Coming Soon)">
+    Coming soon.
+  </Tab>
+</Tabs>
 
 See the [Agent UI guide](/guides/agent-ui) for more details.
-
-### Update
-
-```bash
-npm install -g @amd-gaia/agent-ui@latest
-```
-
-On next run, GAIA automatically updates the Python backend to match.
-
-To install a specific version:
-
-```bash
-npm install -g @amd-gaia/agent-ui@0.16.1
-```
-
-### Uninstall
-
-```bash
-npm uninstall -g @amd-gaia/agent-ui
-rm -rf ~/.gaia
-```
-
-On Windows (PowerShell):
-
-```powershell
-npm uninstall -g @amd-gaia/agent-ui
-Remove-Item -Recurse -Force "$env:USERPROFILE\.gaia"
-```
 
 ---
 

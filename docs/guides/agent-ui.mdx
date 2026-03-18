@@ -10,17 +10,6 @@ GAIA Agent UI is a desktop interface for running AI agents **100% locally** on y
   **Ready to install?** See the [Quickstart](/quickstart#agent-ui-fastest) for installation instructions.
 </Info>
 
-<Warning>
-  **Tested Configuration:** The Agent UI has been tested exclusively on **AMD Ryzen AI MAX+ 395** processors running the **Qwen3-Coder-30B-A3B-Instruct-GGUF** model via Lemonade Server. Other hardware or model combinations may work but are not officially verified.
-
-  If you encounter issues on a different configuration, please [open a GitHub issue](https://github.com/amd/gaia/issues/new) and include:
-  - Your processor model (e.g., Ryzen AI 9 HX 370, Ryzen AI MAX+ 395)
-  - RAM and available memory
-  - The LLM model you are using
-  - Operating system and version
-  - Steps to reproduce the issue
-</Warning>
-
 ---
 
 ## What You Can Do
@@ -54,18 +43,6 @@ Create, rename, search, export (Markdown/JSON), and delete sessions. Sessions pe
 
 ---
 
-## MCP Server
-
-The Agent UI includes a built-in **MCP (Model Context Protocol) server** that exposes the full Agent UI as a set of tools. This lets external AI assistants — like **Claude Code**, **Cursor**, or any MCP-compatible client — interact with GAIA agents through the same backend that powers the web UI.
-
-Conversations initiated via MCP appear in the browser UI in real time, so you can watch tool execution and agent activity as it happens.
-
-The MCP server provides 15 tools for managing sessions, sending messages, indexing documents, browsing files, and more.
-
-See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions and usage examples.
-
----
-
 ## Troubleshooting
 
 <AccordionGroup>
@@ -85,11 +62,7 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
 
   <Accordion title="Port 4200 already in use">
     ```bash
-    # npm CLI
-    gaia-ui --port 8080
-
-    # Python CLI
-    gaia --ui-port 8080
+    gaia --ui --ui-port 8080
     ```
   </Accordion>
 
@@ -152,8 +125,8 @@ For the REST API reference and backend classes, see the [Agent UI SDK Reference]
     Create a custom agent with tools in minutes
   </Card>
 
-  <Card title="MCP Server" icon="plug" href="/guides/mcp/agent-ui">
-    Connect Claude Code, Cursor, or any MCP client to the Agent UI
+  <Card title="Desktop App Packaging" icon="download" href="/deployment/ui">
+    Package and distribute the Electron desktop app
   </Card>
 </CardGroup>
 
