@@ -95,6 +95,7 @@ async def list_documents(db: ChatDatabase = Depends(get_db)):
 async def upload_by_path(
     request: DocumentUploadRequest,
     db: ChatDatabase = Depends(get_db),
+    indexing_tasks: dict = Depends(get_indexing_tasks),
     upload_locks: dict = Depends(get_upload_locks),
 ):
     """Index a document by file path (for Electron/local use).
@@ -162,7 +163,7 @@ async def upload_by_path(
                         doc_id,
                     )
                     chunk_count = await _index_document(temp_file)
-                    if doc_id in indexing_tasks:  # pylint: disable=undefined-variable  # noqa: F821
+                    if doc_id in indexing_tasks:
                         db.update_document_status(
                             doc_id, "complete", chunk_count=chunk_count
                         )
@@ -183,13 +184,13 @@ async def upload_by_path(
                         exc_info=True,
                     )
                 finally:
-                    indexing_tasks.pop(doc_id, None)  # pylint: disable=undefined-variable  # noqa: F821
+                    indexing_tasks.pop(doc_id, None)
                     _cleanup_temp(temp_file)
 
             task = asyncio.create_task(
                 _background_index(doc_id, bg_temp, safe_filepath.name)
             )
-            indexing_tasks[doc_id] = task  # pylint: disable=undefined-variable  # noqa: F821
+            indexing_tasks[doc_id] = task
             doc["indexing_status"] = "indexing"
             return doc_to_response(doc)
 

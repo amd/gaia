@@ -310,8 +310,21 @@ def safe_open_document(user_path: str):
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
-    # O_NOFOLLOW is POSIX-only; on Windows fall back to 0 (symlink check above)
+    # O_NOFOLLOW is POSIX-only; on Windows do an explicit pre-open check.
+    # (Windows symlinks require elevated privileges, so the TOCTOU window
+    # between is_symlink() and os.open() is negligible in practice.)
     _o_nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if _o_nofollow == 0:
+        # No kernel-level symlink rejection — check manually
+        try:
+            if Path(user_path).is_symlink():
+                raise HTTPException(
+                    status_code=400, detail="Symbolic links are not supported"
+                )
+        except HTTPException:
+            raise
+        except OSError:
+            pass  # If we can't stat it, os.open below will fail with a proper error
     try:
         fd = os.open(user_path, os.O_RDONLY | _o_nofollow)
     except FileNotFoundError:
