@@ -1,62 +1,74 @@
-/* Settings Modal */
-.settings-modal { width: 520px; }
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* Settings Modal -- refined design */
+.settings-modal { width: 560px; }
 
 .settings-section { margin-bottom: 28px; }
 .settings-section:last-child { margin-bottom: 0; }
 
 .settings-section h4 {
-    font-size: 12px;
-    font-weight: 700;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0.8px;
+    letter-spacing: 2px;
     color: var(--text-muted);
-    margin-bottom: 12px;
+    margin-bottom: 14px;
 }
 
-.status-grid { display: flex; flex-direction: column; gap: 6px; }
+.status-grid { display: flex; flex-direction: column; gap: 8px; }
 
 .status-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
     background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    transition: border-color var(--duration) var(--ease);
 }
-.status-label { font-size: 13px; }
-.status-value { font-size: 13px; font-weight: 600; }
-.status-value.ok { color: #22c55e; }
-.status-value.warn { color: #f59e0b; }
+.status-row:hover {
+    border-color: var(--border);
+}
+.status-label { font-size: 13px; font-family: var(--font-sans); }
+.status-value { font-size: 13px; font-weight: 600; font-family: var(--font-mono); }
+.status-value.ok { color: var(--accent-green); }
+.status-value.warn { color: var(--accent-gold); }
 
 .status-error {
-    padding: 16px;
+    padding: 20px;
     text-align: center;
     color: var(--text-muted);
+    font-family: var(--font-sans);
 }
 .status-error code {
     display: inline-block;
-    margin-top: 8px;
-    padding: 4px 12px;
+    margin-top: 10px;
+    padding: 5px 14px;
     background: var(--bg-tertiary);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     font-family: var(--font-mono);
     font-size: 13px;
+    border: 1px solid var(--border);
 }
 
 .setting-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 0;
+    padding: 8px 0;
     font-size: 14px;
+    font-family: var(--font-sans);
 }
 .setting-path {
     font-family: var(--font-mono);
     font-size: 12px;
     color: var(--text-secondary);
     background: var(--bg-tertiary);
-    padding: 2px 8px;
-    border-radius: 4px;
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-light);
 }
 
 /* Danger zone */
@@ -69,14 +81,15 @@
 .danger-divider {
     height: 1px;
     background: var(--border);
-    margin: 14px 0;
+    margin: 16px 0;
 }
 
 .danger-warning {
     font-size: 12px;
     color: var(--text-muted);
-    margin-bottom: 10px;
-    line-height: 1.4;
+    margin-bottom: 12px;
+    line-height: 1.5;
+    font-family: var(--font-sans);
 }
 
 .setting-actions { margin-top: 4px; }
@@ -84,10 +97,11 @@
 .loading-text {
     font-size: 13px;
     color: var(--text-muted);
-    padding: 12px;
+    padding: 16px;
     text-align: center;
+    font-family: var(--font-sans);
 }
 
 .about-info { }
-.about-info p { font-size: 14px; font-weight: 500; }
-.about-sub { font-size: 13px; color: var(--text-secondary); margin-top: 4px; line-height: 1.5; font-weight: 400; }
+.about-info p { font-size: 14px; font-weight: 500; font-family: var(--font-sans); }
+.about-sub { font-size: 13px; color: var(--text-secondary); margin-top: 6px; line-height: 1.6; font-weight: 400; font-family: var(--font-sans); }

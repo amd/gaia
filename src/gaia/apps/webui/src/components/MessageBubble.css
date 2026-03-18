@@ -1,15 +1,15 @@
-/* Message -- terminal log style */
+/* Message -- refined conversation style */
 .msg {
-    padding: 14px 24px;
+    padding: 16px 24px;
     max-width: 900px;
     margin: 0 auto;
     width: 100%;
     position: relative;
-    animation: msgSlideIn 150ms var(--ease);
+    animation: msgSlideIn 200ms var(--ease);
 }
 
 @keyframes msgSlideIn {
-    from { opacity: 0; transform: translateY(4px); }
+    from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
@@ -17,7 +17,7 @@
 .msg-user {
     background: transparent;
     border-left: 2px solid var(--border);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-light);
 }
 .msg-user .msg-inner {
     text-align: right;
@@ -38,18 +38,19 @@
 
 [data-theme="dark"] .msg-user {
     background: transparent;
+    border-left-color: var(--border);
 }
 
-/* Assistant messages -- AMD red left accent, subtle lift */
+/* Assistant messages -- AMD red left accent, refined lift */
 .msg-assistant {
     background: var(--bg-assistant-msg);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-light);
     border-left: 2px solid var(--amd-red);
 }
 
 [data-theme="dark"] .msg-assistant {
     border-left-color: var(--amd-red);
-    background: var(--bg-assistant-msg);
+    background: rgba(237, 28, 36, 0.02);
 }
 
 .msg-inner { max-width: 100%; }
@@ -58,7 +59,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
 }
 
 .msg-header-left {
@@ -67,11 +68,11 @@
     gap: 8px;
 }
 
-/* Avatar -- square for terminal feel */
+/* Avatar -- rounded for modern feel */
 .msg-avatar {
-    width: 22px;
-    height: 22px;
-    border-radius: 3px;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-md);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -99,10 +100,10 @@
 
 .msg-role {
     font-size: 11px;
-    font-weight: 700;
+    font-weight: 600;
     font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0.8px;
+    letter-spacing: 1.5px;
     color: var(--text-muted);
 }
 .role-assistant { color: var(--amd-red); }
@@ -112,8 +113,8 @@
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--text-muted);
-    opacity: 0.4;
-    transition: opacity 150ms var(--ease);
+    opacity: 0.35;
+    transition: opacity 200ms var(--ease);
     white-space: nowrap;
 }
 .msg:hover .msg-timestamp { opacity: 1; }
@@ -122,7 +123,7 @@
     display: flex;
     gap: 2px;
     opacity: 0;
-    transition: opacity 150ms var(--ease);
+    transition: opacity 200ms var(--ease);
 }
 .msg:hover .msg-actions { opacity: 1; }
 
@@ -131,12 +132,12 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 3px 8px;
-    border-radius: 3px;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--text-muted);
-    transition: all 100ms var(--ease);
+    transition: all 120ms var(--ease);
 }
 .msg-action-btn:hover,
 .msg-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -146,17 +147,17 @@
 .msg-delete:hover { color: var(--amd-red); }
 .msg-delete.confirm {
     color: var(--amd-red);
-    background: rgba(226, 60, 64, 0.1);
+    background: var(--amd-red-dim);
     opacity: 1;
 }
 
 /* Message body -- assistant uses sans-serif for readability */
 .msg-body {
-    font-size: 14px;
-    line-height: 1.75;
+    font-size: 14.5px;
+    line-height: 1.78;
     word-wrap: break-word;
     overflow-wrap: break-word;
-    padding-left: 30px;
+    padding-left: 32px;
 }
 
 /* Assistant message body: use sans-serif for long prose readability */
@@ -164,10 +165,10 @@
     font-family: var(--font-sans);
 }
 
-/* User message body: monospace, right-aligned, muted color */
+/* User message body: clean, right-aligned, muted color */
 .msg-user .msg-body {
-    font-family: var(--font-mono);
-    font-size: 13px;
+    font-family: var(--font-sans);
+    font-size: 14px;
     color: var(--text-secondary);
 }
 .msg-user .md-content {
@@ -187,23 +188,23 @@
 }
 
 [data-theme="dark"] .msg-error {
-    background: rgba(239, 68, 68, 0.06);
+    background: rgba(239, 68, 68, 0.05);
 }
 
 .error-banner {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 5px 10px;
+    padding: 6px 12px;
     margin-bottom: 8px;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     background: rgba(239, 68, 68, 0.08);
     color: var(--amd-red);
     font-size: 11px;
     font-weight: 600;
     font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 1px;
 }
 
 .msg-error .msg-body {
@@ -238,26 +239,25 @@
 
 /* Headers */
 .md-h2 {
-    font-size: 17px;
+    font-size: 18px;
     font-weight: 700;
-    font-family: var(--font-mono);
-    margin: 16px 0 8px;
+    font-family: var(--font-sans);
+    margin: 20px 0 10px;
     color: var(--text-primary);
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: -0.3px;
 }
 .md-h3 {
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    margin: 14px 0 6px;
+    font-family: var(--font-sans);
+    margin: 16px 0 8px;
     color: var(--text-primary);
 }
 .md-h4 {
-    font-size: 14px;
+    font-size: 14.5px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    margin: 12px 0 4px;
+    font-family: var(--font-sans);
+    margin: 14px 0 6px;
     color: var(--text-primary);
 }
 
@@ -299,8 +299,8 @@
 .inline-code {
     font-family: var(--font-mono);
     font-size: 12.5px;
-    padding: 2px 6px;
-    border-radius: 2px;
+    padding: 2px 7px;
+    border-radius: var(--radius-sm);
     background: var(--bg-tertiary);
     color: var(--text-primary);
     border: 1px solid var(--border-light);
@@ -311,13 +311,13 @@
     color: var(--amd-red);
     text-decoration: none;
     border-bottom: 1px solid transparent;
-    transition: border-color 150ms var(--ease);
+    transition: border-color 200ms var(--ease);
 }
 .md-link:hover {
     border-bottom-color: var(--amd-red);
 }
 
-/* ── File Path Links -- terminal hyperlink style ─────────────── */
+/* ── File Path Links ─────────────────────────────────────────── */
 .file-path-link {
     display: inline-flex;
     align-items: center;
@@ -325,16 +325,16 @@
     color: var(--terminal-green-dim);
     cursor: pointer;
     border-bottom: 1px dashed var(--terminal-green-dim);
-    transition: color 100ms var(--ease), background 100ms var(--ease);
+    transition: color 120ms var(--ease), background 120ms var(--ease);
     border-radius: 0;
-    padding: 0 2px;
+    padding: 0 3px;
     font-family: var(--font-mono);
     font-size: 12px;
 }
 .file-path-link:hover {
     color: var(--terminal-green);
     border-bottom-color: var(--terminal-green);
-    background: rgba(0, 255, 159, 0.04);
+    background: rgba(78, 201, 50, 0.05);
 }
 .file-path-icon {
     flex-shrink: 0;
@@ -347,10 +347,10 @@
 /* ── Blockquotes ──────────────────────────────────────────────── */
 .md-blockquote {
     margin: 12px 0;
-    padding: 8px 16px;
+    padding: 10px 18px;
     border-left: 2px solid var(--amd-red);
     background: var(--tint-subtle);
-    border-radius: 0 3px 3px 0;
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
     color: var(--text-secondary);
 }
 .md-blockquote .md-p {
@@ -362,39 +362,40 @@
 
 /* ── Horizontal rule ──────────────────────────────────────────── */
 .md-hr {
-    margin: 16px 0;
+    margin: 20px 0;
     border: none;
     border-top: 1px solid var(--border);
 }
 
 /* ── Tables (GFM) ────────────────────────────────────────────── */
 .md-table-wrap {
-    margin: 12px 0;
+    margin: 14px 0;
     overflow-x: auto;
-    border-radius: 3px;
+    border-radius: var(--radius-lg);
     border: 1px solid var(--border);
 }
 .md-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 12px;
-    font-family: var(--font-mono);
-    line-height: 1.5;
+    font-size: 13px;
+    font-family: var(--font-sans);
+    line-height: 1.6;
 }
 .md-table th {
     text-align: left;
-    padding: 6px 12px;
+    padding: 8px 14px;
     font-weight: 600;
-    font-size: 10px;
+    font-size: 10.5px;
+    font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 1.5px;
     color: var(--text-muted);
-    background: var(--tint-subtle);
+    background: var(--bg-tertiary);
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
 }
 .md-table td {
-    padding: 5px 12px;
+    padding: 7px 14px;
     border-bottom: 1px solid var(--border-light);
     color: var(--text-primary);
 }
@@ -405,7 +406,7 @@
     background: var(--tint-subtle);
 }
 
-/* Right-align numeric columns (convention: last column in financial data) */
+/* Right-align numeric columns */
 .md-table td:last-child,
 .md-table th:last-child {
     text-align: right;
@@ -428,8 +429,8 @@
 
 /* ── Code blocks ──────────────────────────────────────────────── */
 .code-block {
-    margin: 12px 0;
-    border-radius: 3px;
+    margin: 14px 0;
+    border-radius: var(--radius-lg);
     overflow: hidden;
     background: var(--bg-code);
     border: 1px solid var(--border);
@@ -439,9 +440,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 5px 12px;
-    background: rgba(255, 255, 255, 0.04);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .code-lang {
@@ -449,30 +450,30 @@
     font-family: var(--font-mono);
     color: var(--text-muted);
     text-transform: lowercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.5px;
 }
 
 .code-copy {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 8px;
-    border-radius: 3px;
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--text-muted);
     transition: all var(--duration) var(--ease);
 }
-.code-copy:hover { background: rgba(255, 255, 255, 0.1); color: var(--text-secondary); }
+.code-copy:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); }
 
 /* Copy feedback */
 .code-copy.copied {
     color: var(--accent-green);
-    background: rgba(0, 255, 159, 0.08);
+    background: rgba(78, 201, 50, 0.08);
 }
 
 .code-block pre {
-    padding: 14px 16px;
+    padding: 16px 18px;
     overflow-x: auto;
     margin: 0;
 }
@@ -480,14 +481,14 @@
 .code-block code {
     font-family: var(--font-mono);
     font-size: 13px;
-    line-height: 1.6;
+    line-height: 1.65;
     color: var(--text-primary);
     background: none;
     padding: 0;
 }
 
-/* ── Streaming cursor -- follows the last line of text ────────── */
-/* Make the last paragraph inline so the cursor sits right after the text */
+/* ── Terminal cursor — solid red write head ───────────────────── */
+/* Sits inline after the last text element so it follows the content. */
 .md-content > .cursor { display: inline-block; }
 .md-content:has(> .cursor) > :last-of-type:not(.cursor) {
     display: inline;
@@ -495,12 +496,21 @@
 
 .cursor {
     display: inline-block;
-    width: 8px;
+    width: 7px;
     height: 16px;
     background: var(--amd-red);
     margin-left: 2px;
     vertical-align: text-bottom;
-    animation: cursorBlink 0.8s step-end infinite;
+    border-radius: 1px;
+    /* Solid — no blink. Models a terminal write head. */
+    opacity: 0.85;
+    box-shadow: 0 0 6px rgba(237, 28, 36, 0.3);
+}
+
+/* Subtle glow on dark backgrounds */
+[data-theme="dark"] .cursor {
+    opacity: 1;
+    box-shadow: 0 0 8px rgba(237, 28, 36, 0.4);
 }
 
 /* ── Responsive ───────────────────────────────────────────────── */

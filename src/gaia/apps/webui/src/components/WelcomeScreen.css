@@ -1,4 +1,6 @@
-/* Welcome Screen */
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* Welcome Screen -- premium hero-style layout */
 .welcome {
     flex: 1;
     display: flex;
@@ -6,87 +8,209 @@
     justify-content: center;
     padding: 40px 40px 24px;
     overflow-y: auto;
+    position: relative;
+}
+
+/* Extra radial gradient accents on welcome screen (layers on top of global ambient bg) */
+[data-theme="dark"] .welcome::before {
+    content: '';
+    position: absolute;
+    top: -80px;
+    right: -120px;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(237, 28, 36, 0.10) 0%, transparent 70%);
+    pointer-events: none;
+}
+[data-theme="dark"] .welcome::after {
+    content: '';
+    position: absolute;
+    bottom: -80px;
+    left: -80px;
+    width: 450px;
+    height: 450px;
+    background: radial-gradient(circle, rgba(78, 201, 50, 0.05) 0%, transparent 70%);
+    pointer-events: none;
 }
 
 .welcome-inner {
-    max-width: 640px;
+    max-width: 680px;
     text-align: center;
+    position: relative;
+    z-index: 1;
+    animation: revealUp 650ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .welcome-title {
-    font-size: 40px;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-    background: linear-gradient(135deg, var(--amd-red), var(--amd-red-light));
+    font-size: clamp(32px, 5vw, 48px);
+    font-weight: 700;
+    font-family: var(--font-display);
+    letter-spacing: -1px;
+    background: linear-gradient(135deg, var(--amd-red), #ff6b35);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
+    line-height: 1.1;
+    /* Subtle glow via drop-shadow — works with gradient-clipped text */
+    filter: drop-shadow(0 0 18px rgba(237, 28, 36, 0.25))
+            drop-shadow(0 0 60px rgba(237, 28, 36, 0.10));
+}
+
+/* Pulse the glow subtly on dark backgrounds */
+[data-theme="dark"] .welcome-title {
+    filter: drop-shadow(0 0 20px rgba(237, 28, 36, 0.35))
+            drop-shadow(0 0 80px rgba(237, 28, 36, 0.12));
+    animation: titleGlow 4s ease-in-out infinite;
+}
+
+@keyframes titleGlow {
+    0%, 100% {
+        filter: drop-shadow(0 0 20px rgba(237, 28, 36, 0.35))
+                drop-shadow(0 0 80px rgba(237, 28, 36, 0.12));
+    }
+    50% {
+        filter: drop-shadow(0 0 28px rgba(237, 28, 36, 0.45))
+                drop-shadow(0 0 100px rgba(237, 28, 36, 0.18));
+    }
 }
 
 .welcome-version {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
+    font-family: var(--font-mono);
     color: var(--text-muted);
-    background: var(--bg-secondary);
+    background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-full);
-    padding: 2px 10px;
-    margin-bottom: 8px;
-    letter-spacing: 0.3px;
+    padding: 4px 14px;
+    margin-bottom: 12px;
+    letter-spacing: 0.5px;
 }
 
 .welcome-sub {
     font-size: 16px;
     color: var(--text-secondary);
-    margin-bottom: 32px;
-    line-height: 1.5;
+    margin-bottom: 40px;
+    line-height: 1.85;
+    font-family: var(--font-sans);
+    font-weight: 300;
+    max-width: 520px;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .features {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-    margin-bottom: 28px;
+    gap: 16px;
+    margin-bottom: 36px;
 }
 
 .feature-card {
-    padding: 18px 12px 14px;
+    padding: 22px 16px 18px;
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--bg-secondary);
+    border-radius: var(--radius-lg);
+    background: var(--bg-card);
     text-align: center;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s var(--ease), transform 0.25s var(--ease);
 }
-/* No hover transform — these are display-only cards, not clickable */
+
+/* Top accent line on feature cards */
+.feature-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--amd-red), #ff6b35);
+    opacity: 0;
+    transition: opacity 0.3s var(--ease);
+}
+
+.feature-card:hover {
+    border-color: var(--amd-red);
+    transform: translateY(-2px);
+}
+.feature-card:hover::before {
+    opacity: 1;
+}
+
+[data-theme="dark"] .feature-card {
+    background: linear-gradient(168deg, rgba(20, 8, 8, 0.4) 0%, var(--bg-card) 40%);
+}
 
 .feature-icon {
     color: var(--amd-red);
-    margin-bottom: 8px;
+    margin-bottom: 10px;
     display: flex;
     justify-content: center;
 }
 
-.feature-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
-.feature-card p { font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
+.feature-card h3 {
+    font-size: 14px;
+    font-weight: 700;
+    font-family: var(--font-sans);
+    margin-bottom: 4px;
+    letter-spacing: -0.2px;
+}
+.feature-card p {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    font-family: var(--font-sans);
+}
 
-.start-btn { margin-bottom: 28px; padding: 12px 36px; font-size: 15px; }
+.start-btn {
+    margin-bottom: 36px;
+    padding: 14px 40px;
+    font-size: 14px;
+    border-radius: var(--radius-lg);
+}
 
-.suggestions { display: flex; flex-direction: column; align-items: center; gap: 10px; }
-.suggestions-label { font-size: 13px; color: var(--text-muted); }
+.suggestions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+.suggestions-label {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
 
-.suggestion-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.suggestion-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+}
 
 .chip {
-    padding: 7px 16px;
+    padding: 8px 18px;
     border: 1px solid var(--border);
-    border-radius: var(--radius-full);
+    border-radius: var(--radius-lg);
     font-size: 13px;
+    font-family: var(--font-sans);
     color: var(--text-secondary);
-    background: var(--bg-input);
-    transition: all var(--duration) var(--ease);
+    background: var(--bg-card);
+    transition: all 0.25s var(--ease);
 }
-.chip:hover { border-color: var(--amd-red); color: var(--amd-red); }
+.chip:hover {
+    border-color: var(--amd-red);
+    color: var(--amd-red);
+    background: var(--amd-red-dim2);
+    transform: translateY(-1px);
+}
 
 /* ── Responsive ───────────────────────────────────────────────── */
 @media (max-width: 768px) {
@@ -97,15 +221,15 @@
     }
 
     .welcome-title { font-size: 28px; }
-    .welcome-sub { font-size: 14px; margin-bottom: 24px; }
+    .welcome-sub { font-size: 14px; margin-bottom: 28px; }
 
     .features {
         grid-template-columns: repeat(2, 1fr);
         gap: 10px;
     }
 
-    .feature-card { padding: 16px 10px 14px; }
-    .start-btn { margin-bottom: 24px; }
+    .feature-card { padding: 16px 12px 14px; }
+    .start-btn { margin-bottom: 28px; }
 }
 
 @media (max-width: 480px) {

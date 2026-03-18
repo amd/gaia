@@ -1,4 +1,6 @@
-/* Sidebar -- terminal panel style */
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* Sidebar -- refined panel with glassmorphism */
 .sidebar {
     width: var(--sidebar-w);
     min-width: var(--sidebar-w);
@@ -9,7 +11,13 @@
     user-select: none;
     transition: width 200ms var(--ease), min-width 200ms var(--ease), transform 200ms var(--ease);
     position: relative;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
+}
+
+[data-theme="dark"] .sidebar {
+    background: rgba(8, 8, 13, 0.92);
+    backdrop-filter: blur(24px) saturate(1.2);
+    -webkit-backdrop-filter: blur(24px) saturate(1.2);
 }
 
 /* Disable transition while dragging */
@@ -21,7 +29,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 14px 14px 10px;
+    padding: 16px 16px 12px;
     gap: 8px;
 }
 
@@ -38,9 +46,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 3px;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-md);
     flex-shrink: 0;
     overflow: hidden;
 }
@@ -54,27 +62,27 @@
 .brand-text {
     display: flex;
     align-items: baseline;
-    gap: 5px;
+    gap: 6px;
     white-space: nowrap;
     overflow: hidden;
 }
 
 .brand-name {
     font-size: 15px;
-    font-weight: 800;
-    font-family: var(--font-mono);
-    letter-spacing: 1px;
+    font-weight: 700;
+    font-family: var(--font-display);
+    letter-spacing: 2px;
     text-transform: uppercase;
-    background: linear-gradient(135deg, var(--amd-red), var(--amd-red-light));
+    background: linear-gradient(135deg, var(--amd-red), #ff6b35);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
 }
 
 .brand-label {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 500;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -85,7 +93,7 @@
     font-weight: 500;
     font-family: var(--font-mono);
     color: var(--text-muted);
-    opacity: 0.6;
+    opacity: 0.5;
     align-self: center;
     margin-left: 2px;
 }
@@ -102,25 +110,26 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 3px;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border);
     transition: all var(--duration) var(--ease);
 }
 .new-task-btn:hover {
-    background: var(--bg-hover);
+    background: var(--amd-red-dim);
     border-color: var(--amd-red);
     color: var(--amd-red);
+    transform: translateY(-1px);
 }
 
 .collapse-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 3px;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-md);
     color: var(--text-muted);
     transition: all var(--duration) var(--ease);
 }
@@ -129,14 +138,14 @@
     color: var(--text-primary);
 }
 
-/* Search -- terminal style */
+/* Search -- refined style */
 .sidebar-search {
     position: relative;
-    padding: 0 10px 8px;
+    padding: 0 12px 10px;
 }
 .sidebar-search .search-icon {
     position: absolute;
-    left: 20px;
+    left: 22px;
     top: 50%;
     transform: translateY(-60%);
     color: var(--text-muted);
@@ -144,66 +153,71 @@
 }
 .sidebar-search input {
     width: 100%;
-    padding: 6px 10px 6px 30px;
+    padding: 8px 12px 8px 32px;
     border: 1px solid var(--border);
-    border-radius: 3px;
+    border-radius: var(--radius-md);
     outline: none;
     font-size: 12px;
-    font-family: var(--font-mono);
-    transition: border-color var(--duration) var(--ease);
+    font-family: var(--font-sans);
+    transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
 }
-.sidebar-search input:focus { border-color: rgba(226, 60, 64, 0.4); box-shadow: 0 0 6px rgba(226, 60, 64, 0.08); }
-.sidebar-search input::placeholder { color: var(--text-muted); font-family: var(--font-mono); }
+.sidebar-search input:focus {
+    border-color: rgba(237, 28, 36, 0.4);
+    box-shadow: 0 0 12px rgba(237, 28, 36, 0.08);
+}
+.sidebar-search input::placeholder { color: var(--text-muted); font-family: var(--font-sans); }
 
 /* Session list */
 .session-list {
     flex: 1;
     overflow-y: auto;
-    padding: 2px 6px;
+    padding: 4px 8px;
 }
 
 /* Session group headers (Today, Yesterday, etc.) */
 .session-group-label {
-    padding: 8px 8px 4px;
-    font-size: 9px;
+    padding: 10px 10px 5px;
+    font-size: 10px;
     font-weight: 600;
     font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0.8px;
+    letter-spacing: 2px;
     color: var(--text-muted);
     user-select: none;
 }
-/* Add separator border above non-first group wrappers.
-   Each group is a <div> wrapping label+items inside <nav>. */
+/* Add separator border above non-first group wrappers. */
 .session-list > div + div > .session-group-label {
     margin-top: 4px;
     border-top: 1px solid var(--border-light);
-    padding-top: 10px;
+    padding-top: 12px;
 }
 
-/* Session items -- list entry style, not card */
+/* Session items -- refined list entries */
 .session-item {
     display: flex;
     align-items: center;
-    padding: 7px 8px;
-    border-radius: 2px;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
     cursor: pointer;
-    margin-bottom: 1px;
+    margin-bottom: 2px;
     position: relative;
-    transition: background var(--duration) var(--ease);
+    transition: all var(--duration) var(--ease);
     outline: none;
     border-left: 2px solid transparent;
 }
-.session-item:hover { background: var(--bg-hover); }
+.session-item:hover {
+    background: var(--bg-hover);
+}
 .session-item.active {
     background: var(--bg-active);
     font-weight: 500;
     border-left: 2px solid var(--amd-red);
-    padding-left: 8px;
+    padding-left: 10px;
 }
 
 [data-theme="dark"] .session-item.active {
-    box-shadow: inset 0 0 12px rgba(226, 60, 64, 0.06);
+    background: var(--amd-red-dim2);
+    box-shadow: inset 0 0 20px rgba(237, 28, 36, 0.06);
 }
 
 .session-item:focus-visible {
@@ -216,8 +230,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 12px;
-    font-family: var(--font-mono);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    font-weight: 400;
 }
 
 .session-time {
@@ -234,29 +249,30 @@
     display: none;
     align-items: center;
     position: absolute;
-    right: 6px;
+    right: 8px;
     padding: 4px;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     color: var(--text-muted);
     transition: all var(--duration) var(--ease);
 }
 .session-item:hover .session-delete { display: flex; }
 .session-delete:hover { background: var(--amd-red); color: white; }
 
-/* Delete confirmation state -- always visible, expanded with label */
+/* Delete confirmation state */
 .session-delete.confirm {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 3px 8px;
+    padding: 3px 10px;
     background: var(--amd-red);
     color: white;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     font-size: 10px;
     font-weight: 600;
     font-family: var(--font-mono);
     white-space: nowrap;
     text-transform: uppercase;
+    letter-spacing: 0.5px;
     animation: confirmPop 150ms var(--ease);
 }
 .session-delete.confirm:hover {
@@ -280,7 +296,7 @@
 
 /* Bottom bar -- status row */
 .sidebar-bottom {
-    padding: 10px 12px;
+    padding: 12px 14px;
     border-top: 1px solid var(--border);
     display: flex;
     align-items: center;
@@ -290,14 +306,14 @@
 .privacy-badge {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-secondary);
     overflow: hidden;
     white-space: nowrap;
     text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 1px;
 }
 
 .privacy-dot {
@@ -307,7 +323,7 @@
     background: var(--accent-green);
     animation: pulse 2s infinite;
     flex-shrink: 0;
-    box-shadow: 0 0 4px rgba(0, 255, 159, 0.3);
+    box-shadow: 0 0 6px rgba(78, 201, 50, 0.4);
 }
 
 .version-badge {
@@ -315,7 +331,7 @@
     font-size: 9px;
     font-family: var(--font-mono);
     color: var(--text-muted);
-    opacity: 0.6;
+    opacity: 0.5;
 }
 
 .sidebar-actions { display: flex; gap: 2px; flex-shrink: 0; }
@@ -339,7 +355,7 @@
     height: 6px;
     border-radius: 50%;
     background: var(--accent-green);
-    box-shadow: 0 0 6px rgba(0, 255, 159, 0.5);
+    box-shadow: 0 0 8px rgba(78, 201, 50, 0.6);
     animation: pulse 2s infinite;
 }
 
@@ -354,10 +370,11 @@
 
 .empty-hint {
     text-align: center;
-    padding: 24px 16px;
-    font-size: 12px;
-    font-family: var(--font-mono);
+    padding: 28px 16px;
+    font-size: 13px;
+    font-family: var(--font-sans);
     color: var(--text-muted);
+    line-height: 1.7;
 }
 
 /* ── Drag-to-resize handle ─────────────────────────────────────── */
