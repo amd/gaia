@@ -1,3 +1,5 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
 /* ── Agent Terminal ────────────────────────────────────────────────────── */
 
 .agent-terminal {
@@ -476,8 +478,8 @@
 
 [data-theme="light"] .terminal-content,
 :root:not([data-theme="dark"]) .terminal-content {
-  background: var(--bg-code, #1a1a2e);
-  color: var(--text-code, #e0e0e0);
+  background: var(--bg-code);
+  color: var(--text-code);
 }
 
 [data-theme="light"] .terminal-line:hover,
@@ -492,7 +494,7 @@
 
 [data-theme="light"] .terminal-line-content,
 :root:not([data-theme="dark"]) .terminal-line-content {
-  color: var(--text-code, #e0e0e0);
+  color: var(--text-code);
 }
 
 [data-theme="light"] .terminal-line-time,

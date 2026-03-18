@@ -1,3 +1,5 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
 /* ── Agent Manager ─────────────────────────────────────────────────────── */
 
 .agent-manager {
@@ -344,13 +346,21 @@
   transition: opacity var(--duration) var(--ease);
 }
 
-.agent-card:hover .agent-card-actions {
+.agent-card:hover .agent-card-actions,
+.agent-card:focus-within .agent-card-actions {
   opacity: 1;
 }
 
 /* Always show actions for cards with running state */
 .agent-card-running .agent-card-actions {
   opacity: 1;
+}
+
+/* Always show actions on touch-only devices (no hover capability) */
+@media (hover: none) {
+  .agent-card-actions {
+    opacity: 1;
+  }
 }
 
 .btn-card-action {

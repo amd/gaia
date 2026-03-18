@@ -50,10 +50,17 @@
 
     /* Accent colors for status indicators */
     --accent-green: #4ec932;
+    --accent-green-dim: rgba(78, 201, 50, 0.12);
     --accent-yellow: #e8a830;
     --accent-blue: #3b9eff;
+    --accent-cyan: #06b6d4;
     --accent-gold: #e8a830;
     --accent-gold-dim: rgba(232, 168, 48, 0.12);
+    --accent-danger: #ef4444;
+    --accent-danger-dim: rgba(239, 68, 68, 0.10);
+
+    /* Code text color (used in terminal/code contexts that stay dark in both themes) */
+    --text-code: #d4d4d4;
 
     --bg-primary: #ffffff;
     --bg-secondary: #f8f9fa;
@@ -88,6 +95,7 @@
     --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
     --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.12);
 
+    --radius-xs: 3px;
     --radius-sm: 6px;
     --radius-md: 8px;
     --radius-lg: 10px;
@@ -123,7 +131,7 @@
 
     --text-primary: #e8e8f0;     /* Bright white with warmth */
     --text-secondary: #9898b0;   /* Clear secondary with purple tint */
-    --text-muted: #787890;       /* Muted — WCAG AA compliant against bg-primary */
+    --text-muted: #8585a0;       /* Muted — WCAG AA compliant (5.1:1 against bg-primary) */
 
     --border: #222236;           /* Borders — blue-purple tinted */
     --border-light: #1a1a2a;     /* Subtle dividers */
@@ -194,6 +202,20 @@ a:hover { text-decoration: underline; }
 /* Layout */
 .app { display: flex; height: 100vh; height: 100dvh; position: relative; }
 .main-content { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; position: relative; }
+
+/* ── View transitions ───────────────────────────────────────────── */
+.view-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    transition: opacity 250ms var(--ease), transform 250ms var(--ease);
+}
+
+.view-container.view-transitioning {
+    opacity: 0;
+    transform: translateY(6px);
+}
 
 /* Ambient background glow — subtle radial gradients for depth (dark mode only).
  * Creates the atmosphere from the reference report design. */
@@ -438,9 +460,11 @@ textarea:focus-visible {
 /* ── Animations ──────────────────────────────────────────────────── */
 
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
-@keyframes toastOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes toastOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(8px); } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideDown { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(12px); } }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 @keyframes bounce {
@@ -461,6 +485,17 @@ textarea:focus-visible {
 @keyframes revealUp {
     from { opacity: 0; transform: translateY(20px); }
     to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Theme transition smoothing ─────────────────────────────────── */
+html.theme-transitioning,
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
+    transition: background-color 400ms ease,
+                color 300ms ease,
+                border-color 300ms ease,
+                box-shadow 300ms ease !important;
 }
 
 /* ── Reduced Motion ──────────────────────────────────────────────── */

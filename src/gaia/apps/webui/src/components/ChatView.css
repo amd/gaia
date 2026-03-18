@@ -181,7 +181,8 @@
     cursor: pointer;
     transition: all var(--duration) var(--ease);
 }
-.doc-pill:hover .doc-pill-remove {
+.doc-pill:hover .doc-pill-remove,
+.doc-pill:focus-within .doc-pill-remove {
     display: inline-flex;
 }
 .doc-pill-remove:hover {
@@ -278,7 +279,18 @@
     color: var(--text-secondary);
     background: var(--bg-card);
     transition: all 0.25s var(--ease);
+    animation: chipCascade 300ms var(--ease) both;
 }
+.empty-chat-chip:nth-child(1) { animation-delay: 450ms; }
+.empty-chat-chip:nth-child(2) { animation-delay: 530ms; }
+.empty-chat-chip:nth-child(3) { animation-delay: 610ms; }
+.empty-chat-chip:nth-child(4) { animation-delay: 690ms; }
+
+@keyframes chipCascade {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 .empty-chat-chip:hover {
     border-color: var(--amd-red);
     color: var(--amd-red);
@@ -294,6 +306,7 @@
     max-width: 900px;
     margin: 0 auto;
     width: 100%;
+    transition: opacity 200ms var(--ease);
 }
 
 .skeleton-msg {
@@ -345,8 +358,12 @@
 .skeleton-line:nth-child(3) { width: 40%; animation-delay: 300ms; }
 
 @keyframes skeletonPulse {
-    0%, 100% { opacity: 0.3; }
-    50% { opacity: 0.7; }
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 0.6; }
+}
+
+.skeleton-msg {
+    transition: opacity 200ms var(--ease);
 }
 
 /* ── Drag overlay ────────────────────────────────────────────────── */
@@ -381,6 +398,12 @@
     max-width: 900px;
     margin: 0 auto;
     width: 100%;
+    animation: typingRowFadeIn 250ms var(--ease);
+}
+
+@keyframes typingRowFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 .typing-label {
@@ -402,13 +425,20 @@
 .typing-dots span {
     width: 6px;
     height: 14px;
-    border-radius: 1px;
+    border-radius: 0;
     background: var(--amd-red);
-    opacity: 0.7;
-    animation: cursorBlink 1s infinite;
+    box-shadow: 0 0 6px rgba(237, 28, 36, 0.4);
+    image-rendering: pixelated;
+    animation: typingBounce 1.4s infinite;
 }
-.typing-dots span:nth-child(2) { animation-delay: 0.33s; }
-.typing-dots span:nth-child(3) { animation-delay: 0.66s; }
+.typing-dots span:nth-child(1) { animation-delay: 0ms; }
+.typing-dots span:nth-child(2) { animation-delay: 150ms; }
+.typing-dots span:nth-child(3) { animation-delay: 300ms; }
+
+@keyframes typingBounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-6px); opacity: 1; }
+}
 
 /* ── Input Area -- refined prompt input ──────────────────────────── */
 
@@ -443,7 +473,14 @@
 
 .input-box:focus-within {
     border-color: rgba(237, 28, 36, 0.4);
-    box-shadow: 0 0 16px rgba(237, 28, 36, 0.08);
+    box-shadow: 0 0 20px rgba(237, 28, 36, 0.1);
+    animation: inputFocusPulse 400ms var(--ease);
+}
+
+@keyframes inputFocusPulse {
+    0% { box-shadow: 0 0 0 rgba(237, 28, 36, 0); }
+    50% { box-shadow: 0 0 24px rgba(237, 28, 36, 0.14); }
+    100% { box-shadow: 0 0 20px rgba(237, 28, 36, 0.1); }
 }
 
 .msg-input {
@@ -464,16 +501,18 @@
 .msg-input::placeholder { color: var(--text-muted); opacity: 0.5; font-family: var(--font-sans); }
 .msg-input:disabled { opacity: 0.5; }
 
-/* Blinking block cursor */
+/* Blinking block cursor -- pixelated terminal aesthetic */
 .input-cursor {
     display: inline-block;
-    width: 7px;
+    width: 8px;
     height: 17px;
     background: var(--amd-red);
     animation: cursorBlink 1s step-end infinite;
     align-self: center;
     flex-shrink: 0;
-    border-radius: 1px;
+    border-radius: 0;
+    image-rendering: pixelated;
+    box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
     margin-right: 4px;
 }
 
@@ -561,10 +600,18 @@
     align-items: center;
     justify-content: center;
     box-shadow: var(--shadow-md);
-    transition: all var(--duration) var(--ease);
+    transition: opacity 150ms var(--ease), transform 150ms var(--ease),
+                background var(--duration) var(--ease), color var(--duration) var(--ease),
+                border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
     z-index: 5;
-    animation: fadeIn 100ms var(--ease);
+    animation: scrollBtnSlideIn 200ms var(--ease);
 }
+
+@keyframes scrollBtnSlideIn {
+    from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 .scroll-bottom-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
@@ -707,9 +754,7 @@
     flex-shrink: 0;
 }
 
-@keyframes spin {
-    to { transform: rotate(360deg); }
-}
+/* @keyframes spin defined in global index.css */
 
 .attachment-error-text {
     color: var(--amd-red);
@@ -734,7 +779,8 @@
     padding: 0;
 }
 
-.attachment-preview:hover .attachment-remove {
+.attachment-preview:hover .attachment-remove,
+.attachment-preview:focus-within .attachment-remove {
     opacity: 1;
 }
 

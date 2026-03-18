@@ -1998,25 +1998,42 @@ class FileSearchToolsMixin:
                 # Sort by modification time (most recent first)
                 recent_files.sort(key=lambda x: x["modified"], reverse=True)
 
-                # Limit results
                 total_found = len(recent_files)
-                recent_files = recent_files[:max_results]
-
-                # Build location description
                 locations_searched = [d.name for d in dirs_to_scan if d.exists()]
+
+                # Return all files — first batch shown directly, rest in a
+                # collapsible section so the LLM doesn't truncate them.
+                shown = recent_files[:max_results]
+                extra = recent_files[max_results:]
+
+                # Build display_message with collapsible extra files
+                loc_str = ", ".join(locations_searched)
+                display_parts = [
+                    f"Found {total_found} recent file(s) in {loc_str} (last {days} days)"
+                ]
+                for f in shown:
+                    display_parts.append(
+                        f"  {f['file_name']} ({f['directory']})"
+                    )
+                if extra:
+                    display_parts.append(
+                        f"\n<details><summary>+{len(extra)} more files</summary>\n"
+                    )
+                    for f in extra:
+                        display_parts.append(
+                            f"  {f['file_name']} ({f['directory']})"
+                        )
+                    display_parts.append("</details>")
 
                 return {
                     "status": "success",
-                    "files": recent_files,
-                    "count": len(recent_files),
+                    "files": recent_files[:max_results],
+                    "all_files": recent_files,
+                    "count": len(shown),
                     "total_found": total_found,
                     "locations_searched": locations_searched,
                     "days_range": days,
-                    "display_message": (
-                        f"Found {total_found} recent file(s) in "
-                        f"{', '.join(locations_searched)} "
-                        f"(showing {len(recent_files)}, last {days} days)"
-                    ),
+                    "display_message": "\n".join(display_parts),
                 }
 
             except Exception as e:

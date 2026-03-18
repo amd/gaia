@@ -1,6 +1,6 @@
 /* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
-/* Welcome Screen -- premium hero-style layout */
+/* Welcome Screen -- premium hero-style layout with terminal animations */
 .welcome {
     flex: 1;
     display: flex;
@@ -38,32 +38,9 @@
     text-align: center;
     position: relative;
     z-index: 1;
-    animation: revealUp 650ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.welcome-title {
-    font-size: clamp(32px, 5vw, 48px);
-    font-weight: 700;
-    font-family: var(--font-display);
-    letter-spacing: -1px;
-    background: linear-gradient(135deg, var(--amd-red), #ff6b35);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin-bottom: 10px;
-    line-height: 1.1;
-    /* Subtle glow via drop-shadow — works with gradient-clipped text */
-    filter: drop-shadow(0 0 18px rgba(237, 28, 36, 0.25))
-            drop-shadow(0 0 60px rgba(237, 28, 36, 0.10));
-}
-
-/* Pulse the glow subtly on dark backgrounds */
-[data-theme="dark"] .welcome-title {
-    filter: drop-shadow(0 0 20px rgba(237, 28, 36, 0.35))
-            drop-shadow(0 0 80px rgba(237, 28, 36, 0.12));
-    animation: titleGlow 4s ease-in-out infinite;
-}
-
+/* ── Animation Keyframes ────────────────────────────────────── */
 @keyframes titleGlow {
     0%, 100% {
         filter: drop-shadow(0 0 20px rgba(237, 28, 36, 0.35))
@@ -75,6 +52,110 @@
     }
 }
 
+@keyframes terminalBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeInScale {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes chipFadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Title with terminal typewriter ─────────────────────────── */
+.welcome-title {
+    font-size: clamp(32px, 5vw, 48px);
+    font-weight: 700;
+    font-family: 'JetBrains Mono', 'Space Mono', monospace;
+    letter-spacing: -1px;
+    background: linear-gradient(135deg, var(--amd-red), #ff6b35);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 10px;
+    line-height: 1.1;
+    display: inline-flex;
+    align-items: center;
+    filter: none;
+}
+
+/* Glow applied only after typing completes */
+.welcome-title.typing-done {
+    filter: drop-shadow(0 0 18px rgba(237, 28, 36, 0.25))
+            drop-shadow(0 0 60px rgba(237, 28, 36, 0.10));
+}
+
+/* Pulse the glow subtly on dark backgrounds -- only after typing completes */
+[data-theme="dark"] .welcome-title.typing-done {
+    filter: drop-shadow(0 0 20px rgba(237, 28, 36, 0.35))
+            drop-shadow(0 0 80px rgba(237, 28, 36, 0.12));
+    animation: titleGlow 4s ease-in-out infinite;
+}
+
+/* All child spans need their own gradient (background-clip:text
+   doesn't inherit through child elements) */
+.welcome-title > span {
+    background: linear-gradient(135deg, var(--amd-red), #ff6b35);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    /* Preserve whitespace inside spans */
+    white-space: pre;
+}
+/* "GAIA" text gets extra pulsating glow */
+.gaia-glow {
+    filter: drop-shadow(0 0 6px rgba(237, 28, 36, 0.3));
+    transition: filter 0.5s ease;
+}
+.welcome-title.typing-done .gaia-glow {
+    animation: gaiaGlow 3s ease-in-out infinite;
+}
+@keyframes gaiaGlow {
+    0%, 100% { filter: drop-shadow(0 0 8px rgba(237, 28, 36, 0.35)); }
+    50% { filter: drop-shadow(0 0 16px rgba(237, 28, 36, 0.55)) drop-shadow(0 0 40px rgba(237, 28, 36, 0.15)); }
+}
+
+/* Terminal cursor: pixelated red block that blinks after typing finishes */
+.terminal-cursor {
+    display: inline-block;
+    width: 8px;
+    height: 1.15em;
+    background: var(--amd-red);
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    /* Pixelated aesthetic - sharp edges, no rounding */
+    border-radius: 0;
+    image-rendering: pixelated;
+    box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
+}
+
+.terminal-cursor.blink {
+    animation: terminalBlink 1s step-end infinite;
+}
+
+/* Subtitle cursor: slightly smaller to match subtitle font size */
+.terminal-cursor-sub {
+    width: 6px;
+    height: 1em;
+}
+
+/* Smaller cursor for feature card expanded descriptions */
+.terminal-cursor-sm {
+    width: 6px;
+    height: 0.9em;
+}
+
+/* ── Version badge: hidden until content-revealed ────────────── */
 .welcome-version {
     display: inline-flex;
     align-items: center;
@@ -89,8 +170,14 @@
     padding: 4px 14px;
     margin-bottom: 12px;
     letter-spacing: 0.5px;
+    opacity: 0;
 }
 
+.content-revealed .welcome-version {
+    animation: fadeInUp 500ms var(--ease) forwards;
+}
+
+/* ── Subtitle with typewriter ────────────────────────────────── */
 .welcome-sub {
     font-size: 16px;
     color: var(--text-secondary);
@@ -101,8 +188,14 @@
     max-width: 520px;
     margin-left: auto;
     margin-right: auto;
+    min-height: 1.85em;
 }
 
+.typewriter-text {
+    display: inline;
+}
+
+/* ── Feature cards: staggered reveal via content-revealed ─────── */
 .features {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -119,7 +212,24 @@
     position: relative;
     overflow: hidden;
     transition: border-color 0.3s var(--ease), transform 0.25s var(--ease);
+    /* Fixed height — expanded text overlays within, no layout shift */
+    height: 155px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+    padding-bottom: 32px;
+    opacity: 0;
+    transform: translateY(16px);
 }
+
+.content-revealed .feature-card {
+    animation: fadeInUp 500ms var(--ease) forwards;
+}
+.content-revealed .feature-card:nth-child(1) { animation-delay: 0ms; }
+.content-revealed .feature-card:nth-child(2) { animation-delay: 120ms; }
+.content-revealed .feature-card:nth-child(3) { animation-delay: 240ms; }
+.content-revealed .feature-card:nth-child(4) { animation-delay: 360ms; }
 
 /* Top accent line on feature cards */
 .feature-card::before {
@@ -146,6 +256,19 @@
     background: linear-gradient(168deg, rgba(20, 8, 8, 0.4) 0%, var(--bg-card) 40%);
 }
 
+/* Hide icon, title, desc when hovered — terminal takes over */
+.feature-icon,
+.feature-card h3,
+.feature-card > p {
+    transition: opacity 150ms var(--ease);
+}
+.feature-card.feature-hovered .feature-icon,
+.feature-card.feature-hovered h3,
+.feature-card.feature-hovered > p {
+    opacity: 0;
+    pointer-events: none;
+}
+
 .feature-icon {
     color: var(--amd-red);
     margin-bottom: 10px;
@@ -167,25 +290,90 @@
     font-family: var(--font-sans);
 }
 
+/* ── Feature card terminal area ─────────────────────────────── */
+.feature-terminal {
+    position: absolute;
+    bottom: 12px;
+    left: 14px;
+    right: 14px;
+    font-size: 10.5px;
+    font-family: var(--font-mono);
+    line-height: 1.5;
+    text-align: left;
+    min-height: 1.5em;
+    border-top: 1px solid var(--border-light);
+    padding-top: 6px;
+    transition: all 200ms var(--ease);
+}
+
+/* When card is hovered, terminal expands to fill the full card */
+.feature-card.feature-hovered .feature-terminal {
+    top: 14px;
+    bottom: 14px;
+    left: 14px;
+    right: 14px;
+    border-top: none;
+    padding-top: 0;
+    display: flex;
+    align-items: center;
+}
+
+/* Inline wrapper keeps cursor inline with streaming text */
+.feature-inline {
+    display: inline;
+    word-break: break-word;
+}
+
+/* Static code hint — faint terminal command */
+.feature-code-hint {
+    color: var(--text-muted);
+    opacity: 0.4;
+    letter-spacing: 0.3px;
+}
+.feature-code-erasing {
+    opacity: 0.7;
+    color: var(--amd-red);
+}
+
+/* Typed expanded description */
+.feature-expanded-text {
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+/* ── Start button: scale-in via content-revealed ──────────────── */
 .start-btn {
     margin-bottom: 36px;
     padding: 14px 40px;
     font-size: 14px;
     border-radius: var(--radius-lg);
+    opacity: 0;
 }
 
+.content-revealed .start-btn {
+    animation: fadeInScale 500ms var(--ease) 500ms forwards;
+}
+
+/* ── Suggestions: cascading chip reveal via content-revealed ──── */
 .suggestions {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 12px;
 }
+
 .suggestions-label {
     font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 2px;
+    opacity: 0;
+}
+
+.content-revealed .suggestions-label {
+    animation: chipFadeIn 400ms var(--ease) 600ms forwards;
 }
 
 .suggestion-chips {
@@ -204,7 +392,17 @@
     color: var(--text-secondary);
     background: var(--bg-card);
     transition: all 0.25s var(--ease);
+    opacity: 0;
 }
+
+.content-revealed .chip {
+    animation: chipFadeIn 400ms var(--ease) forwards;
+}
+.content-revealed .chip:nth-child(1) { animation-delay: 700ms; }
+.content-revealed .chip:nth-child(2) { animation-delay: 820ms; }
+.content-revealed .chip:nth-child(3) { animation-delay: 940ms; }
+.content-revealed .chip:nth-child(4) { animation-delay: 1060ms; }
+
 .chip:hover {
     border-color: var(--amd-red);
     color: var(--amd-red);
@@ -228,7 +426,7 @@
         gap: 10px;
     }
 
-    .feature-card { padding: 16px 12px 14px; }
+    .feature-card { padding: 16px 12px 14px; height: 145px; }
     .start-btn { margin-bottom: 28px; }
 }
 

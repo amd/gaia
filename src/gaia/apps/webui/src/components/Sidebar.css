@@ -142,6 +142,7 @@
 .sidebar-search {
     position: relative;
     padding: 0 12px 10px;
+    transition: opacity 150ms var(--ease);
 }
 .sidebar-search .search-icon {
     position: absolute;
@@ -172,6 +173,7 @@
     flex: 1;
     overflow-y: auto;
     padding: 4px 8px;
+    transition: opacity 150ms var(--ease);
 }
 
 /* Session group headers (Today, Yesterday, etc.) */
@@ -243,7 +245,8 @@
     flex-shrink: 0;
     transition: opacity 100ms var(--ease);
 }
-.session-item:hover .session-time { opacity: 0; }
+.session-item:hover .session-time,
+.session-item:focus-within .session-time { opacity: 0; }
 
 .session-delete {
     display: none;
@@ -255,7 +258,8 @@
     color: var(--text-muted);
     transition: all var(--duration) var(--ease);
 }
-.session-item:hover .session-delete { display: flex; }
+.session-item:hover .session-delete,
+.session-item:focus-within .session-delete { display: flex; }
 .session-delete:hover { background: var(--amd-red); color: white; }
 
 /* Delete confirmation state */
@@ -334,7 +338,7 @@
     opacity: 0.5;
 }
 
-.sidebar-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.sidebar-actions { display: flex; gap: 2px; flex-shrink: 0; transition: opacity 150ms var(--ease); }
 
 /* Mobile access gateway button */
 .mobile-toggle-btn {

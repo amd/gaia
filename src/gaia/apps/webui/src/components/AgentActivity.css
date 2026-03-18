@@ -1,3 +1,5 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
 /* Agent Activity - terminal-style flow layout with thinking + inline tool cards */
 
 .agent-activity {
@@ -14,7 +16,7 @@
     justify-content: space-between;
     width: 100%;
     padding: 7px 12px;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
     font-size: 11px;
@@ -61,15 +63,13 @@
     animation: spin 1s linear infinite;
     color: var(--amd-red);
 }
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
+/* @keyframes spin defined in global index.css */
 
 /* Active state */
 .agent-activity.active .agent-summary-bar {
-    border-color: rgba(226, 60, 64, 0.25);
-    background: rgba(226, 60, 64, 0.03);
+    border-color: rgba(226, 60, 64, 0.30);
+    background: rgba(226, 60, 64, 0.04);
+    box-shadow: 0 0 12px rgba(226, 60, 64, 0.08);
 }
 [data-theme="dark"] .agent-activity.active .agent-summary-bar {
     background: rgba(226, 60, 64, 0.05);
@@ -97,17 +97,17 @@
 .agent-flow {
     margin-top: 6px;
     padding: 8px 12px;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: flowSlideDown 150ms var(--ease);
+    animation: flowSlideDown 300ms var(--ease);
 }
 
 @keyframes flowSlideDown {
-    from { opacity: 0; transform: translateY(-3px); }
+    from { opacity: 0; transform: translateY(-6px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
@@ -121,7 +121,12 @@
     font-family: var(--font-mono);
     color: var(--text-muted);
     line-height: 1.5;
-    animation: fadeIn 100ms var(--ease);
+    animation: thoughtSlideIn 250ms var(--ease);
+}
+
+@keyframes thoughtSlideIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to { opacity: 1; transform: translateX(0); }
 }
 
 .flow-thought.active {
@@ -140,19 +145,27 @@
     word-break: break-word;
 }
 
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-}
+/* @keyframes fadeIn defined in global index.css */
 
 /* ── Flow: Tool Card ─────────────────────────────────────────── */
 .flow-tool {
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     background: var(--bg-tertiary);
     border: 1px solid var(--border-light);
     transition: border-color var(--duration-fast) var(--ease);
-    animation: fadeIn 100ms var(--ease);
+    animation: toolSlideIn 250ms var(--ease) both;
 }
+
+@keyframes toolSlideIn {
+    from { opacity: 0; transform: translateY(8px) scale(0.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.flow-tool:nth-child(1) { animation-delay: 0ms; }
+.flow-tool:nth-child(2) { animation-delay: 80ms; }
+.flow-tool:nth-child(3) { animation-delay: 160ms; }
+.flow-tool:nth-child(4) { animation-delay: 240ms; }
+.flow-tool:nth-child(5) { animation-delay: 320ms; }
 
 .flow-tool.active {
     border-color: rgba(226, 60, 64, 0.25);
@@ -183,6 +196,21 @@
     align-items: center;
     gap: 7px;
     min-width: 0;
+}
+
+/* Smooth transition for spinner → checkmark/error icon swap */
+.flow-tool-left > svg {
+    transition: transform 200ms var(--ease), color 200ms var(--ease);
+    flex-shrink: 0;
+}
+.flow-tool-left > svg:not(.flow-tool-spinner) {
+    animation: toolStatusPop 250ms var(--ease);
+}
+
+@keyframes toolStatusPop {
+    0% { transform: scale(0.6); opacity: 0; }
+    60% { transform: scale(1.15); }
+    100% { transform: scale(1); opacity: 1; }
 }
 
 .flow-tool-right {
@@ -246,14 +274,20 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: fadeIn 100ms var(--ease);
+    animation: detailExpand 250ms var(--ease);
+    overflow: hidden;
     border-top: 1px solid var(--border-light);
+}
+
+@keyframes detailExpand {
+    from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; }
+    to { opacity: 1; max-height: 500px; }
 }
 
 /* ── Flow: Plan ──────────────────────────────────────────────── */
 .flow-plan {
     padding: 6px 8px;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     background: rgba(245, 158, 11, 0.04);
     border: 1px solid rgba(245, 158, 11, 0.12);
     animation: fadeIn 100ms var(--ease);
@@ -295,13 +329,18 @@
     align-items: flex-start;
     gap: 6px;
     padding: 6px 8px;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     background: rgba(239, 68, 68, 0.04);
     border: 1px solid rgba(239, 68, 68, 0.15);
     font-size: 11px;
     font-family: var(--font-mono);
     color: var(--amd-red);
-    animation: fadeIn 100ms var(--ease);
+    animation: errorSlideIn 300ms var(--ease);
+}
+
+@keyframes errorSlideIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 [data-theme="dark"] .flow-error {
@@ -324,7 +363,7 @@
 /* Arguments display */
 .step-detail-args {
     padding: 8px 10px 10px;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     background: var(--bg-secondary);
     border: 1px solid var(--border-light);
 }
@@ -372,7 +411,7 @@
 /* Result display */
 .step-detail-result {
     padding: 8px 10px 10px;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     font-size: 11px;
     line-height: 1.6;
 }
@@ -436,7 +475,7 @@
 }
 
 .chunk-card {
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     background: var(--bg-secondary);
     border: 1px solid var(--border-light);
     overflow: hidden;
@@ -494,7 +533,7 @@
 .chunk-score {
     font-family: var(--font-mono);
     font-size: 9px;
-    color: #06b6d4;
+    color: var(--accent-cyan);
     padding: 0 4px;
     border-radius: 2px;
     background: rgba(6, 182, 212, 0.08);
@@ -568,7 +607,7 @@
 
 /* ── Command Output (Terminal View) ───────────────────────────── */
 .cmd-output {
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     overflow: hidden;
     border: 1px solid var(--border);
     background: var(--bg-code, #1e1e1e);
@@ -741,6 +780,12 @@
     .flow-plan,
     .flow-error {
         animation: none;
+    }
+
+    .flow-tool-left > svg,
+    .flow-tool-left > svg:not(.flow-tool-spinner) {
+        animation: none;
+        transition: none;
     }
 
     .flow-tool-chevron {

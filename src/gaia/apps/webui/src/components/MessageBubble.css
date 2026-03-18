@@ -9,8 +9,8 @@
 }
 
 @keyframes msgSlideIn {
-    from { opacity: 0; transform: translateY(6px); }
-    to { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; transform: translateY(8px) scale(0.99); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 /* User messages -- right-aligned with subtle accent */
@@ -46,6 +46,7 @@
     background: var(--bg-assistant-msg);
     border-bottom: 1px solid var(--border-light);
     border-left: 2px solid var(--amd-red);
+    animation: msgSlideIn 250ms var(--ease);
 }
 
 [data-theme="dark"] .msg-assistant {
@@ -113,7 +114,7 @@
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--text-muted);
-    opacity: 0.35;
+    opacity: 0.6;
     transition: opacity 200ms var(--ease);
     white-space: nowrap;
 }
@@ -125,7 +126,8 @@
     opacity: 0;
     transition: opacity 200ms var(--ease);
 }
-.msg:hover .msg-actions { opacity: 1; }
+.msg:hover .msg-actions,
+.msg:focus-within .msg-actions { opacity: 1; }
 
 .msg-action-btn,
 .msg-copy {
@@ -158,6 +160,8 @@
     word-wrap: break-word;
     overflow-wrap: break-word;
     padding-left: 32px;
+    overflow: hidden;
+    min-width: 0;
 }
 
 /* Assistant message body: use sans-serif for long prose readability */
@@ -412,6 +416,48 @@
     text-align: right;
 }
 
+/* ── Collapsible sections (<details><summary>) ───────────────── */
+.md-content details {
+    margin: 8px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+.md-content details summary {
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--amd-red);
+    cursor: pointer;
+    background: var(--tint-subtle);
+    transition: background var(--duration) var(--ease);
+    user-select: none;
+    list-style: none;
+}
+.md-content details summary::-webkit-details-marker {
+    display: none;
+}
+.md-content details summary::before {
+    content: '\25B6';
+    display: inline-block;
+    margin-right: 8px;
+    font-size: 10px;
+    transition: transform var(--duration) var(--ease);
+}
+.md-content details[open] summary::before {
+    transform: rotate(90deg);
+}
+.md-content details summary:hover {
+    background: var(--tint-hover);
+}
+.md-content details > :not(summary) {
+    padding: 4px 14px;
+}
+.md-content details[open] {
+    border-color: rgba(237, 28, 36, 0.2);
+}
+
 /* ── Strikethrough (GFM) ─────────────────────────────────────── */
 .md-content del {
     text-decoration: line-through;
@@ -441,8 +487,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 6px 14px;
-    background: rgba(255, 255, 255, 0.03);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .code-lang {
@@ -476,15 +522,21 @@
     padding: 16px 18px;
     overflow-x: auto;
     margin: 0;
+    white-space: pre;
+    word-wrap: normal;
+    overflow-wrap: normal;
 }
 
 .code-block code {
     font-family: var(--font-mono);
     font-size: 13px;
     line-height: 1.65;
-    color: var(--text-primary);
+    color: var(--text-code);
     background: none;
     padding: 0;
+    white-space: pre;
+    word-wrap: normal;
+    overflow-wrap: normal;
 }
 
 /* ── Terminal cursor — solid red write head ───────────────────── */
@@ -493,24 +545,27 @@
 .md-content:has(> .cursor) > :last-of-type:not(.cursor) {
     display: inline;
 }
+/* Hide empty pre/code blocks that react-markdown sometimes generates from LLM noise.
+ * Also hide empty inline-code elements (e.g. from trailing ``` in LLM output). */
+.md-content > pre:empty,
+.md-content > pre:has(> code:empty) {
+    display: none;
+}
+.inline-code:empty {
+    display: none;
+}
 
 .cursor {
     display: inline-block;
-    width: 7px;
+    width: 8px;
     height: 16px;
     background: var(--amd-red);
     margin-left: 2px;
     vertical-align: text-bottom;
-    border-radius: 1px;
-    /* Solid — no blink. Models a terminal write head. */
-    opacity: 0.85;
-    box-shadow: 0 0 6px rgba(237, 28, 36, 0.3);
-}
-
-/* Subtle glow on dark backgrounds */
-[data-theme="dark"] .cursor {
-    opacity: 1;
-    box-shadow: 0 0 8px rgba(237, 28, 36, 0.4);
+    /* Pixelated terminal aesthetic - sharp edges */
+    border-radius: 0;
+    image-rendering: pixelated;
+    box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
 }
 
 /* ── Responsive ───────────────────────────────────────────────── */

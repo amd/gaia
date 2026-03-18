@@ -1080,16 +1080,24 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     </div>
                 )}
 
-                {messages.map((msg) => (
-                    <div key={msg.id}>
-                        <MessageBubble
-                            message={msg}
-                            agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
-                            onDelete={!isStreaming ? handleDeleteMessage : undefined}
-                            onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
-                        />
-                    </div>
-                ))}
+                {messages.map((msg, idx) => {
+                    // Show a solid terminal cursor on the last assistant message
+                    // (only when not actively streaming — the streaming bubble has its own cursor)
+                    const isLastAssistant = !isStreaming
+                        && msg.role === 'assistant'
+                        && messages.slice(idx + 1).every((m) => m.role !== 'assistant');
+                    return (
+                        <div key={msg.id}>
+                            <MessageBubble
+                                message={msg}
+                                showTerminalCursor={isLastAssistant}
+                                agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
+                                onDelete={!isStreaming ? handleDeleteMessage : undefined}
+                                onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
+                            />
+                        </div>
+                    );
+                })}
 
                 {/* Active streaming message with agent activity inside */}
                 {isStreaming && (

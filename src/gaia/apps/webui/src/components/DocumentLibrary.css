@@ -1,3 +1,5 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
 /* Document Library Modal */
 .doc-modal { width: 640px; }
 
@@ -35,7 +37,7 @@
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+/* @keyframes spin defined in global index.css */
 
 /* Path input */
 .path-input-form {
@@ -117,12 +119,13 @@
     align-items: center;
     gap: 4px;
     font-size: 12px;
-    padding: 1px 6px;
-    border-radius: 4px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
 }
-.doc-status-failed { color: #dc3545; background: rgba(220, 53, 69, 0.08); }
+.doc-status-failed { color: var(--accent-danger); background: var(--accent-danger-dim); }
 .doc-status-cancelled { color: var(--text-muted); background: rgba(128, 128, 128, 0.08); }
-.doc-status-missing { color: #e67e22; background: rgba(230, 126, 34, 0.08); }
+.doc-status-missing { color: var(--accent-gold); background: var(--accent-gold-dim); }
 
 .doc-delete { color: var(--text-muted); }
 .doc-delete:hover { color: var(--amd-red); }

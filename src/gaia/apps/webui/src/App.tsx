@@ -250,6 +250,27 @@ function App() {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
+    // ── Welcome -> Chat crossfade transition ─────────────────────────
+    const [isViewTransitioning, setIsViewTransitioning] = useState(false);
+    const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (currentSessionId !== displayedSessionId) {
+            setIsViewTransitioning(true);
+            // Allow fade-out to complete, then swap content
+            const timer = setTimeout(() => {
+                setDisplayedSessionId(currentSessionId);
+                // Brief delay before removing transition class (allows new content to mount)
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        setIsViewTransitioning(false);
+                    });
+                });
+            }, 250); // matches CSS transition duration
+            return () => clearTimeout(timer);
+        }
+    }, [currentSessionId, displayedSessionId]);
+
     return (
         <div className="app">
             {/* Mobile sidebar toggle */}
@@ -279,14 +300,16 @@ function App() {
                 {/* Connection / LLM status banner */}
                 <ConnectionBanner onRetry={checkSystemStatus} />
 
-                {currentSessionId ? (
-                    <ChatView key={currentSessionId} sessionId={currentSessionId} />
-                ) : (
-                    <WelcomeScreen
-                        onNewTask={handleNewTask}
-                        onSendPrompt={handleNewTaskWithPrompt}
-                    />
-                )}
+                <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
+                    {displayedSessionId ? (
+                        <ChatView key={displayedSessionId} sessionId={displayedSessionId} />
+                    ) : (
+                        <WelcomeScreen
+                            onNewTask={handleNewTask}
+                            onSendPrompt={handleNewTaskWithPrompt}
+                        />
+                    )}
+                </div>
             </div>
 
             {showDocLibrary && <DocumentLibrary />}

@@ -4,6 +4,7 @@
 import React, { useCallback, useRef, useState, useEffect, useMemo } from 'react';
 import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import rehypeRaw from 'rehype-raw';
 import remarkGfm from 'remark-gfm';
 import { AgentActivity } from './AgentActivity';
 import * as api from '../services/api';
@@ -15,6 +16,8 @@ import './MessageBubble.css';
 interface MessageBubbleProps {
     message: Message;
     isStreaming?: boolean;
+    /** Show a solid terminal cursor at the end of the message (even when not streaming). */
+    showTerminalCursor?: boolean;
     /** Agent steps to display inside this message bubble. */
     agentSteps?: AgentStep[];
     /** Whether agent steps are currently active (streaming). */
@@ -219,7 +222,7 @@ function formatMsgTime(iso: string): string {
     return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, onDelete, onResend }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, showTerminalCursor, agentSteps, agentStepsActive, onDelete, onResend }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     // Memoize the expensive LLM content cleaning (brace-depth parser) so it
     // doesn't re-run on every render — only when message content changes.
@@ -343,7 +346,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             <span>Something went wrong</span>
                         </div>
                     )}
-                    <RenderedContent content={cleanedContent} showCursor={isStreaming} />
+                    <RenderedContent content={cleanedContent} showCursor={isStreaming || showTerminalCursor} />
                 </div>
             </div>
         </div>
@@ -362,9 +365,19 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     }, []);
 
     const handleCopy = useCallback(() => {
-        navigator.clipboard.writeText(code).catch(() => {
-            // Fallback: clipboard API may be unavailable in non-secure contexts
-        });
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(code).catch(() => {});
+        } else {
+            // Fallback for non-HTTPS contexts (common for localhost)
+            const textarea = document.createElement('textarea');
+            textarea.value = code;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+        }
         setCopied(true);
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
         copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
@@ -411,7 +424,7 @@ function FilePathLink({ path }: { path: string }) {
             title={`Open in file explorer: ${path}`}
             role="button"
             tabIndex={0}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleClick(e as unknown as React.MouseEvent); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(e as unknown as React.MouseEvent); } }}
         >
             <FolderOpen size={12} className="file-path-icon" />
             {path}
@@ -465,6 +478,7 @@ function RenderedContent({ content, showCursor }: { content: string; showCursor?
         <div className="md-content">
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeRaw]}
                 components={{
                     // Code block vs inline code detection.
                     // react-markdown calls `code` for both inline `code` and
