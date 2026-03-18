@@ -5,13 +5,13 @@
 
 // GAIA Agent UI CLI
 // Usage:
-//   gaia                   Start the app (backend + browser)
-//   gaia --serve           Serve frontend only (no backend auto-start)
-//   gaia --port 4200       Custom backend port
-//   gaia --help            Show help
+//   gaia-ui                Start the app (backend + browser)
+//   gaia-ui --serve        Serve frontend only (no backend auto-start)
+//   gaia-ui --port 4200    Custom backend port
+//   gaia-ui --help         Show help
 //
-// On first run, automatically installs the Python backend (amd-gaia)
-// using the GAIA install scripts (uv + Python 3.12 + amd-gaia).
+// On first run, automatically installs the Python backend (amd-gaia[ui])
+// using uv + Python 3.12.
 
 import { spawn, exec, execSync, spawnSync } from "child_process";
 import { dirname, join, extname, resolve } from "path";
@@ -38,18 +38,19 @@ const hasFlag = (name) => args.includes(name);
 const PORT = parseInt(getArg("--port", "4200"), 10);
 const SERVE_ONLY = hasFlag("--serve");
 const OPEN_BROWSER = !hasFlag("--no-open");
+const GAIA_VERSION_OVERRIDE = getArg("--gaia-version", null);
 
 // ── Paths ────────────────────────────────────────────────────────────────────
 const IS_WINDOWS = process.platform === "win32";
 const GAIA_HOME = join(homedir(), ".gaia");
 const GAIA_VENV = join(GAIA_HOME, "venv");
+
+// Display-friendly paths (use ~ instead of full home directory)
+const GAIA_VENV_DISPLAY = "~/.gaia/venv";
 const GAIA_BIN = IS_WINDOWS
   ? join(GAIA_VENV, "Scripts", "gaia.exe")
   : join(GAIA_VENV, "bin", "gaia");
 
-// Install script URLs
-const INSTALL_SCRIPT_URL_PS1 = "https://amd-gaia.ai/install.ps1";
-const INSTALL_SCRIPT_URL_SH = "https://amd-gaia.ai/install.sh";
 
 function readPkg() {
   try {
@@ -65,22 +66,22 @@ function printHelp() {
 GAIA - Run AI agents locally on your PC
 Version: ${pkg.version}
 
-Usage: gaia [options]
+Usage: gaia-ui [options]
 
 Options:
-  --port <port>   Backend port (default: 4200)
-  --serve         Serve frontend only (skip Python backend)
-  --no-open       Don't auto-open browser
-  --help, -h      Show this help
-  --version, -v   Show version
-
-Modes:
-  Default         Start Python backend + open browser
-  --serve         Serve pre-built frontend with a lightweight Node.js server
-                  (useful when running the Python backend separately)
+  --port <port>          Backend port (default: 4200)
+  --gaia-version <ver>   Install a specific GAIA version (e.g. 0.16.1)
+  --serve                Serve frontend only (skip Python backend)
+  --no-open              Don't auto-open browser
+  --help, -h             Show this help
+  --version, -v          Show version
 
 On first run, GAIA automatically installs the Python backend
-(uv, Python 3.12, amd-gaia) into ~/.gaia/venv.
+(uv, Python 3.12, amd-gaia[ui]==${pkg.version}) into ~/.gaia/venv.
+On subsequent runs, it auto-updates if the version doesn't match.
+
+Update:   npm install -g @amd-gaia/agent-ui@latest
+Uninstall: npm uninstall -g @amd-gaia/agent-ui && rm -rf ~/.gaia
 
 Documentation: https://amd-gaia.ai/guides/agent-ui
 `);
@@ -88,7 +89,7 @@ Documentation: https://amd-gaia.ai/guides/agent-ui
 
 function printVersion() {
   const pkg = readPkg();
-  console.log(`gaia v${pkg.version}`);
+  console.log(`gaia-ui v${pkg.version}`);
 }
 
 /**
@@ -105,134 +106,212 @@ function commandExists(cmd) {
 }
 
 /**
- * Check if a resolved gaia binary is the Python CLI (not this Node.js shim).
- * Prevents infinite spawn loops when the npm "gaia" bin shadows the Python one.
- */
-function isPythonGaia(binPath) {
-  try {
-    const result = spawnSync(binPath, ["--version"], {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 5000,
-    });
-    // Python gaia prints a version string; Node.js gaia-ui.mjs prints "gaia v..."
-    // Check that the binary is not this script (Node.js)
-    const stdout = (result.stdout || "").toString().trim();
-    // If it outputs nothing or errors, it's not the Python CLI
-    if (result.status !== 0 || !stdout) return false;
-    // The Python CLI outputs just a version like "0.17.0" or "gaia 0.17.0"
-    // The Node.js shim outputs "gaia v0.17.0" (from printVersion)
-    // As a safeguard, check the binary is not this exact file
-    const resolvedBin = resolve(binPath);
-    const thisScript = resolve(__filename);
-    if (resolvedBin === thisScript) return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Find the gaia binary - check venv first, then PATH.
  * Returns the path to the gaia executable, or null if not found.
- * Guards against finding this Node.js shim instead of the Python CLI.
  */
 function findGaiaBin() {
-  // Check the managed venv first (always the Python binary)
+  // Check the managed venv first
   if (existsSync(GAIA_BIN)) {
     return GAIA_BIN;
   }
-  // Fall back to PATH, but verify it's the Python CLI
+  // Fall back to PATH
   if (commandExists("gaia")) {
-    // Resolve the full path to avoid spawning ourselves
-    try {
-      const which = IS_WINDOWS ? "where gaia" : "which gaia";
-      const resolved = execSync(which, { stdio: ["ignore", "pipe", "ignore"] })
-        .toString()
-        .trim()
-        .split("\n")[0]
-        .trim();
-      if (resolved && resolve(resolved) !== resolve(__filename) && isPythonGaia(resolved)) {
-        return resolved;
-      }
-    } catch {
-      // Fall through
-    }
+    return "gaia";
   }
   return null;
 }
 
 /**
- * Install the GAIA Python backend by running the install script.
- * Windows: PowerShell install.ps1
- * Linux/macOS: bash install.sh
+ * Ensure uv is available. Install it if not found.
+ */
+function ensureUv() {
+  if (commandExists("uv")) return;
+
+  console.log("Installing uv (Python package manager)...");
+
+  let result;
+  if (IS_WINDOWS) {
+    result = spawnSync(
+      "powershell",
+      ["-ExecutionPolicy", "Bypass", "-Command", "irm https://astral.sh/uv/install.ps1 | iex"],
+      { stdio: "inherit", env: { ...process.env } }
+    );
+  } else {
+    result = spawnSync(
+      "bash",
+      ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
+      { stdio: "inherit", env: { ...process.env } }
+    );
+  }
+
+  if (result.status !== 0 || !commandExists("uv")) {
+    console.error("");
+    console.error("Could not install uv automatically.");
+    console.error("This can happen behind corporate proxies or on restricted systems.");
+    console.error("");
+    console.error("Install uv manually, then re-run gaia-ui:");
+    if (IS_WINDOWS) {
+      console.error("  powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\"");
+    } else {
+      console.error("  curl -LsSf https://astral.sh/uv/install.sh | sh");
+    }
+    console.error("");
+    console.error("Or install the GAIA backend manually:");
+    console.error("  https://amd-gaia.ai/quickstart#cli-install");
+    process.exit(1);
+  }
+}
+
+/**
+ * Install the exact GAIA Python backend version that matches this npm package.
+ * Uses uv to create a venv and install the pinned amd-gaia[ui] package.
  */
 function installBackend() {
+  const pkg = readPkg();
+  const gaiaVersion = GAIA_VERSION_OVERRIDE || pkg.version;
+  const pipPackage = `amd-gaia[ui]==${gaiaVersion}`;
+
   console.log("========================================");
   console.log("  First-time setup: Installing GAIA backend");
   console.log("========================================");
   console.log("");
-  console.log("This installs uv, Python 3.12, and the amd-gaia package");
-  console.log(`into ${GAIA_VENV}`);
+  console.log(`  Package: ${pipPackage}`);
+  console.log(`  Location: ${GAIA_VENV_DISPLAY}`);
   console.log("");
 
-  let result;
+  // Step 1: Ensure uv is available
+  ensureUv();
 
-  if (IS_WINDOWS) {
-    // Run install.ps1 via PowerShell
-    console.log("Running GAIA installer for Windows...");
-    console.log("");
-    result = spawnSync(
-      "powershell",
-      [
-        "-ExecutionPolicy", "Bypass",
-        "-Command",
-        `irm ${INSTALL_SCRIPT_URL_PS1} | iex`,
-      ],
-      { stdio: "inherit", env: { ...process.env } }
-    );
-  } else {
-    // Run install.sh via bash
-    console.log("Running GAIA installer for Linux/macOS...");
-    console.log("");
-    result = spawnSync(
-      "bash",
-      ["-c", `curl -fsSL ${INSTALL_SCRIPT_URL_SH} | sh`],
-      { stdio: "inherit", env: { ...process.env } }
-    );
+  // Step 2: Create venv if it doesn't exist
+  if (!existsSync(GAIA_VENV)) {
+    console.log("Creating Python environment...");
+    mkdirSync(GAIA_HOME, { recursive: true });
+
+    const venvResult = spawnSync("uv", ["venv", GAIA_VENV, "--python", "3.12"], {
+      stdio: "inherit",
+    });
+
+    if (venvResult.status !== 0) {
+      console.error("");
+      console.error("Failed to create Python environment.");
+      console.error("This may happen if Python 3.12 could not be downloaded.");
+      console.error("");
+      console.error("Try creating it manually, then re-run gaia-ui:");
+      console.error(`  uv venv ${GAIA_VENV_DISPLAY} --python 3.12`);
+      console.error("");
+      console.error("Full manual install: https://amd-gaia.ai/quickstart#cli-install");
+      process.exit(1);
+    }
   }
 
-  if (result.status !== 0) {
+  // Step 3: Install pinned amd-gaia[ui] into the venv
+  console.log(`Installing ${pipPackage}...`);
+
+  const pipArgs = ["pip", "install", pipPackage, "--python", join(GAIA_VENV, IS_WINDOWS ? "Scripts/python.exe" : "bin/python")];
+
+  // Linux: use CPU-only PyTorch to avoid large CUDA packages
+  if (!IS_WINDOWS) {
+    pipArgs.push("--extra-index-url", "https://download.pytorch.org/whl/cpu");
+  }
+
+  const installResult = spawnSync("uv", pipArgs, {
+    stdio: "inherit",
+    env: { ...process.env },
+  });
+
+  if (installResult.status !== 0) {
     console.error("");
-    console.error("Backend installation failed.");
-    console.error("Try installing manually: https://amd-gaia.ai/quickstart");
+    console.error(`Failed to install ${pipPackage}.`);
+    console.error("This can happen if the version is not available on PyPI or due to network issues.");
+    console.error("");
+    console.error("Try installing manually, then re-run gaia-ui:");
+    const pythonBinDisplay = IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`;
+    console.error(`  uv pip install ${pipPackage} --python ${pythonBinDisplay}`);
+    console.error("");
+    console.error("Full manual install: https://amd-gaia.ai/quickstart#cli-install");
     process.exit(1);
   }
-
-  console.log("");
 
   // Verify the install worked
   if (!existsSync(GAIA_BIN)) {
-    console.error(`Error: Expected ${GAIA_BIN} after installation, but not found.`);
-    console.error("Try installing manually: https://amd-gaia.ai/quickstart");
+    console.error("");
+    console.error(`Expected gaia binary at ${GAIA_VENV_DISPLAY} after installation, but not found.`);
+    console.error("");
+    console.error("Try installing manually: https://amd-gaia.ai/quickstart#cli-install");
     process.exit(1);
   }
 
+  console.log("");
   console.log("Backend installed successfully!");
   console.log("");
+
+  // Run gaia init to install Lemonade Server and download models
+  console.log("Setting up Lemonade Server and downloading models...");
+  console.log("(This may take a few minutes on first run)");
+  console.log("");
+
+  const initResult = spawnSync(GAIA_BIN, ["init", "--profile", "minimal"], {
+    stdio: "inherit",
+    env: { ...process.env },
+  });
+
+  if (initResult.status !== 0) {
+    console.log("");
+    console.log("Warning: gaia init did not complete successfully.");
+    console.log("You can run it manually later: gaia init --profile minimal");
+    console.log("");
+  }
 }
 
 /**
- * Ensure the GAIA Python backend is available.
- * If not found, auto-install via the install scripts.
+ * Get the installed Python gaia version by running `gaia --version`.
+ * Returns the version string (e.g. "0.17.0") or null if unknown.
+ */
+function getInstalledVersion(gaiaBin) {
+  try {
+    const result = spawnSync(gaiaBin, ["--version"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 5000,
+    });
+    if (result.status === 0 && result.stdout) {
+      // Output may be "0.17.0" or "gaia 0.17.0" — extract the version number
+      const match = result.stdout.toString().trim().match(/(\d+\.\d+\.\d+)/);
+      return match ? match[1] : null;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+/**
+ * Ensure the GAIA Python backend is available and matches the expected version.
+ * Installs or upgrades automatically if needed.
  */
 function ensureBackend() {
+  const pkg = readPkg();
+  const expectedVersion = GAIA_VERSION_OVERRIDE || pkg.version;
+
   const gaiaBin = findGaiaBin();
   if (gaiaBin) {
-    return gaiaBin;
-  }
+    // Check if the installed version matches
+    const installedVersion = getInstalledVersion(gaiaBin);
+    if (installedVersion === expectedVersion) {
+      return gaiaBin;
+    }
 
-  // Not found — install automatically
-  installBackend();
+    // Version mismatch — upgrade
+    if (installedVersion) {
+      console.log(`Updating GAIA backend: ${installedVersion} → ${expectedVersion}`);
+    }
+    installBackend();
+
+    const upgraded = findGaiaBin();
+    if (upgraded) return upgraded;
+  } else {
+    // Not found — install from scratch
+    installBackend();
+  }
 
   // Re-check after install
   const installed = findGaiaBin();
@@ -284,12 +363,13 @@ function openBrowser(url) {
 }
 
 /**
- * Start the Python backend (gaia --ui).
+ * Start the Python backend.
+ * Uses "chat --ui" for compatibility with all gaia versions.
  */
 function startBackend(gaiaBin, port) {
   console.log(`Starting GAIA backend on port ${port}...`);
 
-  const child = spawn(gaiaBin, ["--ui", "--ui-port", String(port)], {
+  const child = spawn(gaiaBin, ["chat", "--ui", "--ui-port", String(port)], {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env },
     detached: false,
