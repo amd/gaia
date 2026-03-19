@@ -95,21 +95,20 @@ interface AgentActivityProps {
 
 /** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
 export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActivityProps) {
-    // Default to expanded so all activity is visible
-    const [expanded, setExpanded] = useState(true);
+    // Inline (during streaming): start expanded so activity is visible.
+    // Summary (completed messages): start collapsed for a clean look.
+    const [expanded, setExpanded] = useState(variant === 'inline');
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
     const prevStepCountRef = useRef(0);
     const collapseTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
-    const wasActiveRef2 = useRef(isActive);
+    const prevIsActiveRef = useRef(isActive);
 
     // Auto-collapse when activity completes (thinking done → answer streaming)
     useEffect(() => {
-        if (wasActiveRef2.current && !isActive) {
-            // Small delay so erase animation can start before collapsing
-            const timer = setTimeout(() => setExpanded(false), 300);
-            return () => clearTimeout(timer);
+        if (prevIsActiveRef.current && !isActive) {
+            setExpanded(false);
         }
-        wasActiveRef2.current = isActive;
+        prevIsActiveRef.current = isActive;
     }, [isActive]);
 
     // Cleanup timers on unmount
@@ -122,13 +121,16 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
 
     // ── Consolidate display steps ────────────────────────────────────
     // Merge consecutive thinking/status steps into one.
+    // IMPORTANT: Use concatenation for detail fields (not `||`) to
+    // preserve accumulated thinking text across multiple steps.
     const displaySteps = useMemo(() => {
         const result: AgentStep[] = [];
         for (const step of steps) {
             const prev = result[result.length - 1];
-            // Merge consecutive thinking steps
+            // Merge consecutive thinking steps — concatenate details
             if (step.type === 'thinking' && prev && prev.type === 'thinking') {
-                result[result.length - 1] = { ...step, detail: step.detail || prev.detail };
+                const merged = (prev.detail || '') + (step.detail || '');
+                result[result.length - 1] = { ...step, detail: merged || prev.detail };
                 continue;
             }
             // Merge consecutive status steps
@@ -136,14 +138,14 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                 result[result.length - 1] = { ...step, label: step.label || prev.label };
                 continue;
             }
-            // Absorb thinking into adjacent status
+            // Absorb thinking into adjacent status — keep thinking detail
             if (step.type === 'thinking' && prev && prev.type === 'status' && prev.active !== false) {
-                result[result.length - 1] = { ...prev, detail: step.detail || prev.detail, active: step.active };
+                result[result.length - 1] = { ...prev, type: 'thinking', detail: step.detail || prev.detail, active: step.active };
                 continue;
             }
-            // Absorb status into adjacent thinking
+            // Absorb status into adjacent thinking — preserve thinking detail
             if (step.type === 'status' && prev && prev.type === 'thinking') {
-                result[result.length - 1] = { ...prev, label: step.label || prev.label, detail: step.detail || prev.detail, active: step.active ?? prev.active };
+                result[result.length - 1] = { ...prev, label: step.label || prev.label, active: step.active ?? prev.active };
                 continue;
             }
             result.push(step);
@@ -249,34 +251,38 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                 </div>
             </button>
 
-            {/* Flow content — thinking text + inline tool cards */}
-            {expanded && displaySteps.length > 0 && (
-                <div className="agent-flow">
-                    {displaySteps.map((step) => {
-                        if (step.type === 'thinking') {
-                            return <FlowThought key={step.id} step={step} />;
-                        }
-                        if (step.type === 'status') {
-                            return <FlowStatus key={step.id} step={step} />;
-                        }
-                        if (step.type === 'tool') {
-                            return (
-                                <FlowToolCard
-                                    key={step.id}
-                                    step={step}
-                                    isExpanded={expandedTools.has(step.id)}
-                                    onToggle={() => toggleTool(step.id)}
-                                />
-                            );
-                        }
-                        if (step.type === 'plan') {
-                            return <FlowPlan key={step.id} step={step} />;
-                        }
-                        if (step.type === 'error') {
-                            return <FlowError key={step.id} step={step} />;
-                        }
-                        return null;
-                    })}
+            {/* Flow content — thinking text + inline tool cards.
+                Uses a wrapper div that's always mounted so CSS can animate
+                the height transition on collapse/expand. */}
+            {displaySteps.length > 0 && (
+                <div className={`agent-flow-wrap ${expanded ? 'flow-expanded' : 'flow-collapsed'}`}>
+                    <div className="agent-flow">
+                        {displaySteps.map((step) => {
+                            if (step.type === 'thinking') {
+                                return <FlowThought key={step.id} step={step} />;
+                            }
+                            if (step.type === 'status') {
+                                return <FlowStatus key={step.id} step={step} />;
+                            }
+                            if (step.type === 'tool') {
+                                return (
+                                    <FlowToolCard
+                                        key={step.id}
+                                        step={step}
+                                        isExpanded={expandedTools.has(step.id)}
+                                        onToggle={() => toggleTool(step.id)}
+                                    />
+                                );
+                            }
+                            if (step.type === 'plan') {
+                                return <FlowPlan key={step.id} step={step} />;
+                            }
+                            if (step.type === 'error') {
+                                return <FlowError key={step.id} step={step} />;
+                            }
+                            return null;
+                        })}
+                    </div>
                 </div>
             )}
         </div>
@@ -288,7 +294,6 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
 function FlowThought({ step }: { step: AgentStep }) {
     const text = step.detail || step.label || '';
     const containerRef = useRef<HTMLDivElement>(null);
-    const cursorRef = useRef<HTMLSpanElement>(null);
 
     // Auto-scroll to keep cursor visible as text streams in
     useEffect(() => {
@@ -302,7 +307,7 @@ function FlowThought({ step }: { step: AgentStep }) {
     return (
         <div ref={containerRef} className="flow-thought-hacker">
             <span>{text}</span>
-            {step.active && <span ref={cursorRef} className="flow-thought-cursor" />}
+            {step.active && <span className="flow-thought-cursor" />}
         </div>
     );
 }

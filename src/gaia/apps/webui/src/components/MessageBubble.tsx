@@ -30,13 +30,52 @@ interface MessageBubbleProps {
 
 
 
-/** Immediate "Thinking..." with blinking dots while waiting for LLM. */
-function LoadingMessage() {
+/** Thinking indicator next to GAIA name — types out "Thinking...", erases when done. */
+function ThinkingIndicator({ active }: { active: boolean }) {
+    const text = 'Thinking...';
+    const [chars, setChars] = useState(0);
+    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>('typing');
+    const wasActiveRef = useRef(active);
+
+    // Type out characters
+    useEffect(() => {
+        if (phase !== 'typing') return;
+        if (chars >= text.length) { setPhase('idle'); return; }
+        const timer = setTimeout(() => setChars(c => c + 1), 30);
+        return () => clearTimeout(timer);
+    }, [phase, chars]);
+
+    // Detect active → false: start erasing
+    useEffect(() => {
+        if (wasActiveRef.current && !active) {
+            setPhase('erasing');
+        }
+        wasActiveRef.current = active;
+    }, [active]);
+
+    // Erase characters
+    useEffect(() => {
+        if (phase !== 'erasing') return;
+        if (chars <= 0) { setPhase('done'); return; }
+        const timer = setTimeout(() => setChars(c => c - 1), 20);
+        return () => clearTimeout(timer);
+    }, [phase, chars]);
+
+    // Reset on new active cycle
+    useEffect(() => {
+        if (active && phase === 'done') {
+            setChars(0);
+            setPhase('typing');
+        }
+    }, [active, phase]);
+
+    if (phase === 'done') return null;
+
     return (
-        <div className="loading-message">
-            <span>Thinking</span>
-            <span className="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
-        </div>
+        <span className="thinking-indicator">
+            <span className="thinking-indicator-text">{text.slice(0, chars)}</span>
+            {active && <span className="cursor" />}
+        </span>
     );
 }
 
@@ -307,6 +346,9 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                         {message.created_at && (
                             <span className="msg-timestamp">{formatMsgTime(message.created_at)}</span>
                         )}
+                        {message.role === 'assistant' && isStreaming && (
+                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} />
+                        )}
                     </div>
                     {!isStreaming && (
                         <div className="msg-actions">
@@ -357,10 +399,6 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                             <AlertTriangle size={14} />
                             <span>Something went wrong</span>
                         </div>
-                    )}
-                    {/* Loading message: typed by red cursor while waiting for LLM */}
-                    {message.role === 'assistant' && isStreaming && !cleanedContent && (!agentSteps || agentSteps.length === 0) && (
-                        <LoadingMessage />
                     )}
                     <RenderedContent content={cleanedContent} showCursor={(isStreaming || showTerminalCursor) && !!cleanedContent && !agentStepsActive} />
                     {message.role === 'assistant' && message.stats && !isStreaming && message.stats.tokens_per_second > 0 && (

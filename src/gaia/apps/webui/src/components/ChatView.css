@@ -440,9 +440,6 @@
     animation: streamBubbleIn 350ms var(--ease);
 }
 .streaming-bubble.stream-ending {
-    opacity: 0;
-    transform: translateY(-6px);
-    filter: blur(2px);
     pointer-events: none;
 }
 @keyframes streamBubbleIn {

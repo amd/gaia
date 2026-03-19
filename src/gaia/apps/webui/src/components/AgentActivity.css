@@ -65,16 +65,9 @@
 }
 /* @keyframes spin defined in global index.css */
 
-/* Active state -- slightly stronger glow for dark mode so the
- * "THINKING..." bar reads as clearly active in the deep UI. */
+/* Active state -- subtle background tint, no red border */
 .agent-activity.active .agent-summary-bar {
-    border-color: rgba(226, 60, 64, 0.30);
-    background: rgba(226, 60, 64, 0.04);
-    box-shadow: 0 0 12px rgba(226, 60, 64, 0.08);
-}
-[data-theme="dark"] .agent-activity.active .agent-summary-bar {
-    background: rgba(226, 60, 64, 0.06);
-    box-shadow: 0 0 14px rgba(226, 60, 64, 0.10);
+    background: var(--bg-hover);
 }
 
 /* Summary variant (post-completion) -- retains a faint background
@@ -96,9 +89,32 @@
     background: var(--tint-hover);
 }
 
+/* ── Flow wrapper — animated expand/collapse ─────────────────── */
+.agent-flow-wrap {
+    display: grid;
+    /* grid-template-rows trick for smooth height animation */
+    grid-template-rows: 1fr;
+    transition: grid-template-rows 350ms var(--ease),
+                opacity 300ms var(--ease),
+                margin-top 350ms var(--ease);
+    opacity: 1;
+    margin-top: 6px;
+}
+
+.agent-flow-wrap.flow-collapsed {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    margin-top: 0;
+    pointer-events: none;
+}
+
+.agent-flow-wrap > .agent-flow {
+    overflow: hidden;
+    min-height: 0;
+}
+
 /* ── Flow container ──────────────────────────────────────────── */
 .agent-flow {
-    margin-top: 6px;
     padding: 8px 12px;
     border-radius: var(--radius-xs);
     background: var(--bg-secondary);
@@ -187,17 +203,7 @@
 
 /* @keyframes cursorBlink is defined globally in index.css */
 
-/* Blinking dots after "Thinking" — traveling red glow, one dot at a time.
- * Uses loadingDotGlow keyframe defined in MessageBubble.css for consistency. */
-.thinking-dots span {
-    animation: loadingDotGlow 1.2s linear infinite;
-    opacity: 0.15;
-    color: var(--amd-red, #ff3b3b);
-    text-shadow: 0 0 2px rgba(237, 28, 36, 0.2);
-}
-.thinking-dots span:nth-child(1) { animation-delay: 0s; }
-.thinking-dots span:nth-child(2) { animation-delay: 0.4s; }
-.thinking-dots span:nth-child(3) { animation-delay: 0.8s; }
+/* .thinking-dots styles are defined globally in index.css */
 
 /* ── Flow: Tool Card ─────────────────────────────────────────── */
 .flow-tool {
@@ -822,6 +828,10 @@
     .agent-spinner,
     .flow-tool-spinner {
         animation: none;
+    }
+
+    .agent-flow-wrap {
+        transition: none;
     }
 
     .agent-flow,

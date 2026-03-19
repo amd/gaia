@@ -124,7 +124,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
-        agentSteps, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps,
+        agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
         documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
         systemStatus,
     } = useChatStore();
@@ -649,15 +649,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // Instead of creating a new step for every thought, update
                 // the existing thinking step so we get ONE "Thinking" entry
                 // that shows the latest thought, not a massive stream.
+                // Uses appendThinkingContent() which atomically reads the
+                // current detail and appends inside a single set() call,
+                // preventing stale-read races that can lose accumulated text.
                 if (event.type === 'thinking') {
                     const currentSteps = useChatStore.getState().agentSteps;
                     const lastStep = currentSteps[currentSteps.length - 1];
                     if (lastStep && lastStep.type === 'thinking') {
-                        // Append new thinking content to existing step
-                        updateLastAgentStep({
-                            detail: (lastStep.detail || '') + (event.content || ''),
-                            active: true,
-                        });
+                        appendThinkingContent(event.content || '');
                         return;
                     }
                     // First thinking step or after a non-thinking step - create it
@@ -677,12 +676,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (status === 'working' || status === 'warning' || status === 'info') {
                         const currentSteps = useChatStore.getState().agentSteps;
                         const lastStep = currentSteps[currentSteps.length - 1];
-                        // Consolidate with previous status/thinking step
-                        if (lastStep && (lastStep.type === 'status' || lastStep.type === 'thinking') && lastStep.active) {
+                        // Consolidate with previous status step (but NOT thinking —
+                        // overwriting a thinking step's detail would discard all
+                        // accumulated thinking text).
+                        if (lastStep && lastStep.type === 'status' && lastStep.active) {
                             updateLastAgentStep({
                                 label: msg || 'Working',
                                 detail: msg,
                             });
+                            return;
+                        }
+                        // If the last step is thinking, update only the label
+                        // so the summary bar shows the status, but preserve the
+                        // accumulated thinking detail.
+                        if (lastStep && lastStep.type === 'thinking' && lastStep.active) {
+                            updateLastAgentStep({ label: msg || 'Thinking' });
                             return;
                         }
                         const step = agentEventToStep(event, stepIdRef);
@@ -818,7 +826,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         });
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
@@ -1143,13 +1151,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     const isLastAssistant = !isStreaming && !streamEnding
                         && msg.role === 'assistant'
                         && messages.slice(idx + 1).every((m) => m.role !== 'assistant');
-                    // During stream-ending fade, hide the just-completed message
-                    // so it doesn't overlap with the fading streaming bubble
+                    // During stream-ending, skip rendering the just-completed
+                    // assistant message entirely — the streaming bubble shows it.
+                    // This prevents the flash/jump when transitioning.
                     const isStreamEndingMsg = streamEnding
                         && msg.role === 'assistant'
                         && idx === messages.length - 1;
+                    if (isStreamEndingMsg) return null;
                     return (
-                        <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : isStreamEndingMsg ? 'msg-entering' : undefined}>
+                        <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
                             <MessageBubble
                                 message={msg}
                                 showTerminalCursor={isLastAssistant}
