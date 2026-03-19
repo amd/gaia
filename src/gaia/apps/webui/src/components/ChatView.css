@@ -446,14 +446,6 @@
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
 }
-/* Hide the completed message while streaming bubble fades out, then reveal */
-.msg-entering {
-    opacity: 0;
-    max-height: 0;
-    overflow: hidden;
-    pointer-events: none;
-}
-
 /* Message delete animation -- fade + shrink before removal */
 .msg-deleting {
     animation: msgDelete 250ms var(--ease) forwards;

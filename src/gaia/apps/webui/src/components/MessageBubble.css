@@ -594,7 +594,7 @@
 .thinking-indicator {
     font-family: var(--font-mono, 'JetBrains Mono', 'SF Mono', monospace);
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.4);
+    color: var(--text-muted);
     margin-left: 8px;
     white-space: nowrap;
 }
