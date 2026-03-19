@@ -14,6 +14,40 @@ import { ConnectionBanner } from './components/ConnectionBanner';
 import { useChatStore } from './stores/chatStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
+import { getSessionHash, findSessionByHash } from './utils/format';
+
+/** Wrapper that delays unmount to allow CSS exit animations to play. */
+function AnimatedPresence({ show, children, duration = 250 }: {
+    show: boolean;
+    children: React.ReactNode;
+    duration?: number;
+}) {
+    const [shouldRender, setShouldRender] = useState(false);
+    const [animState, setAnimState] = useState<'entering' | 'exiting' | 'idle'>('idle');
+
+    useEffect(() => {
+        if (show) {
+            setShouldRender(true);
+            // Use rAF to ensure DOM has mounted before applying entering class
+            requestAnimationFrame(() => setAnimState('entering'));
+        } else if (shouldRender) {
+            setAnimState('exiting');
+            const timer = setTimeout(() => {
+                setShouldRender(false);
+                setAnimState('idle');
+            }, duration);
+            return () => clearTimeout(timer);
+        }
+    }, [show, shouldRender, duration]);
+
+    if (!shouldRender) return null;
+
+    return (
+        <div className={`animated-presence ${animState}`} data-duration={duration}>
+            {children}
+        </div>
+    );
+}
 
 function App() {
     const {
@@ -110,25 +144,46 @@ function App() {
         };
     }, [setSessions, setBackendConnected]);
 
-    // Support URL-based session navigation (?session=<id>)
+    // Support URL-based session navigation (?session=<id> or #<hash>)
     useEffect(() => {
+        if (currentSessionId) return; // Already have a session selected
+
         const params = new URLSearchParams(window.location.search);
         const sessionParam = params.get('session');
-        if (sessionParam && !currentSessionId) {
-            log.nav.info(`URL session parameter: ${sessionParam}`);
-            // Defer so session list has time to load
-            const timer = setTimeout(() => {
-                const { sessions } = useChatStore.getState();
-                if (sessions.some((s: { id: string }) => s.id === sessionParam)) {
-                    setCurrentSession(sessionParam);
-                    setMessages([]);
-                } else {
-                    log.nav.warn(`Session ${sessionParam} not found in loaded sessions`);
-                }
-            }, 500);
-            return () => clearTimeout(timer);
-        }
+        const hashParam = window.location.hash.replace(/^#/, '');
+
+        const target = sessionParam || hashParam;
+        if (!target) return;
+
+        log.nav.info(`URL session parameter: ${target}`);
+        // Defer so session list has time to load
+        const timer = setTimeout(() => {
+            const { sessions } = useChatStore.getState();
+            // Try exact match first (full UUID), then short hash match
+            let matchId: string | null = sessions.some((s: { id: string }) => s.id === target)
+                ? target
+                : findSessionByHash(sessions, target);
+            if (matchId) {
+                setCurrentSession(matchId);
+                setMessages([]);
+            } else {
+                log.nav.warn(`Session ${target} not found in loaded sessions`);
+            }
+        }, 500);
+        return () => clearTimeout(timer);
     }, [currentSessionId, setCurrentSession, setMessages]);
+
+    // Update URL hash when the current session changes
+    useEffect(() => {
+        if (currentSessionId) {
+            const hash = getSessionHash(currentSessionId);
+            if (window.location.hash !== `#${hash}`) {
+                window.history.replaceState(null, '', `#${hash}`);
+            }
+        } else if (window.location.hash) {
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+    }, [currentSessionId]);
 
     // Check tunnel status on mount
     useEffect(() => {
@@ -312,17 +367,25 @@ function App() {
                 </div>
             </div>
 
-            {showDocLibrary && <DocumentLibrary />}
-            {showFileBrowser && <FileBrowser />}
-            {showSettings && <SettingsModal />}
+            <AnimatedPresence show={showDocLibrary}>
+                <DocumentLibrary />
+            </AnimatedPresence>
+            <AnimatedPresence show={showFileBrowser}>
+                <FileBrowser />
+            </AnimatedPresence>
+            <AnimatedPresence show={showSettings}>
+                <SettingsModal />
+            </AnimatedPresence>
 
             {/* Mobile Access Modal */}
             {!isMobile && (
-                <MobileAccessModal
-                    isOpen={showMobileAccess}
-                    onClose={() => setShowMobileAccess(false)}
-                    error={tunnelError}
-                />
+                <AnimatedPresence show={showMobileAccess}>
+                    <MobileAccessModal
+                        isOpen={showMobileAccess}
+                        onClose={() => setShowMobileAccess(false)}
+                        error={tunnelError}
+                    />
+                </AnimatedPresence>
             )}
 
             {/* Session creation error toast */}

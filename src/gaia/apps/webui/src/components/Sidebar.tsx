@@ -6,6 +6,7 @@ import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpe
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { getSessionHash } from '../utils/format';
 import gaiaRobot from '../assets/gaia-robot.png';
 import type { Session } from '../types';
 import './Sidebar.css';
@@ -17,19 +18,42 @@ interface SidebarProps {
     onMobileToggle?: () => void;
 }
 
+/** Copy a session's hash link to the clipboard. */
+function copySessionLink(e: React.MouseEvent, sessionId: string) {
+    e.stopPropagation();
+    e.preventDefault();
+    const hash = getSessionHash(sessionId);
+    const url = `${window.location.origin}${window.location.pathname}#${hash}`;
+    navigator.clipboard.writeText(url).then(() => {
+        log.ui.info(`Copied session link: ${url}`);
+    }).catch(() => {
+        // Fallback: select the URL in a temporary input
+        log.ui.warn('Clipboard write failed');
+    });
+}
+
 /** Extracted session row to share between grouped and flat rendering. */
-function SessionItem({ session: s, isActive, isPendingDelete, onSelect, onKeyDown, onDelete, formatTime }: {
+function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSelect, onKeyDown, onDelete, formatTime }: {
     session: Session;
     isActive: boolean;
     isPendingDelete: boolean;
+    isDeleting: boolean;
     onSelect: (id: string) => void;
     onKeyDown: (e: React.KeyboardEvent, id: string) => void;
     onDelete: (e: React.MouseEvent | React.KeyboardEvent, id: string) => void;
     formatTime: (iso: string) => string;
 }) {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopyHash = useCallback((e: React.MouseEvent) => {
+        copySessionLink(e, s.id);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+    }, [s.id]);
+
     return (
         <div
-            className={`session-item ${isActive ? 'active' : ''}`}
+            className={`session-item ${isActive ? 'active' : ''} ${isDeleting ? 'session-deleting' : ''}`}
             onClick={() => onSelect(s.id)}
             onKeyDown={(e) => onKeyDown(e, s.id)}
             role="button"
@@ -38,6 +62,15 @@ function SessionItem({ session: s, isActive, isPendingDelete, onSelect, onKeyDow
             aria-current={isActive ? 'true' : undefined}
         >
             <span className="session-title">{s.title}</span>
+            <a
+                className={`session-hash ${copied ? 'copied' : ''}`}
+                href={`#${getSessionHash(s.id)}`}
+                onClick={handleCopyHash}
+                title={copied ? 'Copied!' : `Copy link #${getSessionHash(s.id)}`}
+                aria-label={`Copy link for session ${getSessionHash(s.id)}`}
+            >
+                #{getSessionHash(s.id)}
+            </a>
             <span className="session-time">{formatTime(s.updated_at)}</span>
             {isPendingDelete ? (
                 <button
@@ -77,6 +110,7 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
 
     const [search, setSearch] = useState('');
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+    const [deletingId, setDeletingId] = useState<string | null>(null);
     const [isResizing, setIsResizing] = useState(false);
     // Undo-delete: temporarily preserve the deleted session for restoration
     const [deletedSession, setDeletedSession] = useState<{ session: Session; timer: ReturnType<typeof setTimeout> } | null>(null);
@@ -165,9 +199,10 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
         // If already pending confirm for this id, execute the delete
         if (pendingDeleteId === id) {
             log.chat.info(`Deleting session: "${title}" (${id})`);
-            // Remove from UI immediately (optimistic)
-            removeSession(id);
             setPendingDeleteId(null);
+
+            // Start shrink + fade animation, then remove after it completes
+            setDeletingId(id);
 
             // Mark as pending-delete so session polling won't resurrect it
             addPendingDelete(id);
@@ -190,6 +225,12 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                 setDeletedSession(null);
             }, 5000);
             if (session) setDeletedSession({ session, timer });
+
+            // Remove from UI after the animation completes (250ms)
+            setTimeout(() => {
+                removeSession(id);
+                setDeletingId(null);
+            }, 250);
             return;
         }
         // First click: request confirmation
@@ -359,6 +400,7 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                                     session={s}
                                     isActive={s.id === currentSessionId}
                                     isPendingDelete={pendingDeleteId === s.id}
+                                    isDeleting={deletingId === s.id}
                                     onSelect={handleSelect}
                                     onKeyDown={handleSessionKeyDown}
                                     onDelete={handleDelete}
@@ -375,6 +417,7 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                             session={s}
                             isActive={s.id === currentSessionId}
                             isPendingDelete={pendingDeleteId === s.id}
+                            isDeleting={deletingId === s.id}
                             onSelect={handleSelect}
                             onKeyDown={handleSessionKeyDown}
                             onDelete={handleDelete}

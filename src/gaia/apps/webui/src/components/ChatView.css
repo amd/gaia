@@ -69,6 +69,42 @@
     box-shadow: 0 0 0 3px rgba(237, 28, 36, 0.12);
 }
 
+/* Session hash badge -- copyable permalink */
+.session-hash-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-weight: 500;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    border: 1px solid var(--border);
+    letter-spacing: 0.5px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all var(--duration) var(--ease);
+}
+.session-hash-badge:hover {
+    border-color: var(--amd-red);
+    color: var(--amd-red);
+    background: var(--amd-red-dim2);
+}
+.session-hash-badge.copied {
+    border-color: var(--accent-green);
+    color: var(--accent-green);
+    background: rgba(78, 201, 50, 0.08);
+}
+.session-hash-badge.copied::after {
+    content: 'copied';
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
 .model-badge {
     font-size: 10px;
     padding: 3px 10px;
@@ -415,6 +451,28 @@
     max-height: 0;
     overflow: hidden;
     pointer-events: none;
+}
+
+/* Message delete animation -- fade + shrink before removal */
+.msg-deleting {
+    animation: msgDelete 250ms var(--ease) forwards;
+    pointer-events: none;
+}
+
+@keyframes msgDelete {
+    from {
+        opacity: 1;
+        max-height: 500px;
+        transform: scale(1);
+    }
+    to {
+        opacity: 0;
+        max-height: 0;
+        padding: 0;
+        margin: 0;
+        transform: scale(0.97);
+        overflow: hidden;
+    }
 }
 
 /* ── Typing indicator ───────────────────────────────────────────── */
@@ -829,6 +887,7 @@
     }
 
     .model-badge { display: none; }
+    .session-hash-badge { display: none; }
 
     .input-area {
         padding: 10px 12px max(10px, env(safe-area-inset-bottom));

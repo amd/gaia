@@ -238,6 +238,38 @@
     font-weight: 400;
 }
 
+/* Session hash link -- short permalink for troubleshooting */
+.session-hash {
+    font-size: 9px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    opacity: 0;
+    margin-left: 4px;
+    flex-shrink: 0;
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+    letter-spacing: 0.5px;
+    transition: all 150ms var(--ease);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.session-item:hover .session-hash,
+.session-item:focus-within .session-hash,
+.session-item.active .session-hash {
+    opacity: 0.5;
+}
+.session-hash:hover {
+    opacity: 1 !important;
+    color: var(--amd-red);
+    background: var(--amd-red-dim2);
+}
+.session-hash.copied {
+    opacity: 1 !important;
+    color: var(--accent-green);
+    background: rgba(78, 201, 50, 0.1);
+}
+
 .session-time {
     font-size: 10px;
     font-family: var(--font-mono);
@@ -297,6 +329,29 @@
 @keyframes confirmPop {
     from { opacity: 0; transform: scale(0.9); }
     to { opacity: 1; transform: scale(1); }
+}
+
+/* Session delete animation -- shrink + fade before removal */
+.session-item.session-deleting {
+    animation: sessionDelete 250ms var(--ease) forwards;
+    pointer-events: none;
+}
+
+@keyframes sessionDelete {
+    from {
+        opacity: 1;
+        max-height: 50px;
+        margin-bottom: 0;
+        transform: translateX(0);
+    }
+    to {
+        opacity: 0;
+        max-height: 0;
+        margin-bottom: 0;
+        padding-top: 0;
+        padding-bottom: 0;
+        transform: translateX(-20px);
+    }
 }
 
 /* Bottom bar -- status row */

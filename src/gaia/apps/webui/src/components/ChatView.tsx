@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { getSessionHash } from '../utils/format';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment } from '../types';
 import './ChatView.css';
@@ -137,6 +138,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [completedSteps, setCompletedSteps] = useState<AgentStep[]>([]);
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [docsExpanded, setDocsExpanded] = useState(false);
+    const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
     // Smooth streaming exit — snapshot last content so fade-out shows real text
     const [streamEnding, setStreamEnding] = useState(false);
     const lastStreamContentRef = useRef('');
@@ -832,17 +834,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const handleDeleteMessage = useCallback(async (messageId: number) => {
         if (isStreaming) return;
         log.chat.info(`Deleting message ${messageId} from session=${sessionId}`);
-        // Optimistic removal
-        removeMessage(messageId);
-        try {
-            await api.deleteMessage(sessionId, messageId);
-        } catch (err) {
-            log.chat.error(`Failed to delete message ${messageId}`, err);
-            // Reload messages on error to restore accurate state
-            api.getMessages(sessionId)
-                .then((data) => setMessages(data.messages || []))
-                .catch(() => {});
-        }
+        // Animate first, then remove after 250ms
+        setDeletingMsgId(messageId);
+        setTimeout(async () => {
+            removeMessage(messageId);
+            setDeletingMsgId(null);
+            try {
+                await api.deleteMessage(sessionId, messageId);
+            } catch (err) {
+                log.chat.error(`Failed to delete message ${messageId}`, err);
+                // Reload messages on error to restore accurate state
+                api.getMessages(sessionId)
+                    .then((data) => setMessages(data.messages || []))
+                    .catch(() => {});
+            }
+        }, 250);
     }, [sessionId, isStreaming, removeMessage, setMessages]);
 
     // Resend a user message: delete it and everything below, then re-send
@@ -875,6 +881,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
             sendMessage();
         }
     };
+
+    // Session hash link copy
+    const [hashCopied, setHashCopied] = useState(false);
+    const handleCopyHash = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        const hash = getSessionHash(sessionId);
+        const url = `${window.location.origin}${window.location.pathname}#${hash}`;
+        navigator.clipboard.writeText(url).then(() => {
+            log.ui.info(`Copied session link: ${url}`);
+            setHashCopied(true);
+            setTimeout(() => setHashCopied(false), 1500);
+        }).catch(() => {
+            log.ui.warn('Clipboard write failed');
+        });
+    }, [sessionId]);
 
     // Title editing
     const startEditTitle = () => {
@@ -983,6 +1004,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                 </div>
                 <div className="chat-header-right">
+                    <a
+                        className={`session-hash-badge ${hashCopied ? 'copied' : ''}`}
+                        href={`#${getSessionHash(sessionId)}`}
+                        onClick={handleCopyHash}
+                        title={hashCopied ? 'Copied!' : `Copy session link #${getSessionHash(sessionId)}`}
+                        aria-label={`Copy link for session ${getSessionHash(sessionId)}`}
+                    >
+                        <Link size={10} />
+                        <span>#{getSessionHash(sessionId)}</span>
+                    </a>
                     <span className="model-badge">{session?.model || 'Local LLM'}</span>
                     <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Attach documents">
                         <Paperclip size={15} />
@@ -1116,7 +1147,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         && msg.role === 'assistant'
                         && idx === messages.length - 1;
                     return (
-                        <div key={msg.id} className={isStreamEndingMsg ? 'msg-entering' : undefined}>
+                        <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : isStreamEndingMsg ? 'msg-entering' : undefined}>
                             <MessageBubble
                                 message={msg}
                                 showTerminalCursor={isLastAssistant}

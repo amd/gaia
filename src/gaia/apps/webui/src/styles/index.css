@@ -394,6 +394,23 @@ textarea:focus-visible {
 .modal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
 .modal-body::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
+/* ── AnimatedPresence exit animations ──────────────────────────── */
+.animated-presence.exiting .modal-overlay {
+    animation: modalOverlayOut 200ms var(--ease) forwards;
+}
+.animated-presence.exiting .modal-panel {
+    animation: modalPanelOut 250ms var(--ease) forwards;
+}
+
+@keyframes modalOverlayOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+}
+@keyframes modalPanelOut {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(12px); }
+}
+
 /* ── Sidebar Overlay (Mobile) ────────────────────────────────────── */
 
 .sidebar-overlay {
