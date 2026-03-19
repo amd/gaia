@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { getSessionHash } from '../utils/format';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment } from '../types';
 import './ChatView.css';
@@ -123,8 +124,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
-        agentSteps, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps,
+        agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
         documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
+        systemStatus,
     } = useChatStore();
 
     const session = sessions.find((s) => s.id === sessionId);
@@ -137,6 +139,31 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [completedSteps, setCompletedSteps] = useState<AgentStep[]>([]);
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [docsExpanded, setDocsExpanded] = useState(false);
+    const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
+    // Smooth streaming exit — snapshot last content so fade-out shows real text
+    const [streamEnding, setStreamEnding] = useState(false);
+    const lastStreamContentRef = useRef('');
+    const lastAgentStepsRef = useRef<AgentStep[]>([]);
+    const prevStreamingRef = useRef(false);
+    // Continuously snapshot the streaming state so we have it when streaming ends
+    useEffect(() => {
+        if (streamingContent) lastStreamContentRef.current = streamingContent;
+    }, [streamingContent]);
+    useEffect(() => {
+        if (agentSteps.length > 0) lastAgentStepsRef.current = agentSteps.map(s => ({ ...s, active: false }));
+    }, [agentSteps]);
+    useEffect(() => {
+        if (!isStreaming && prevStreamingRef.current) {
+            setStreamEnding(true);
+            const timer = setTimeout(() => {
+                setStreamEnding(false);
+                lastStreamContentRef.current = '';
+                lastAgentStepsRef.current = [];
+            }, 350);
+            return () => clearTimeout(timer);
+        }
+        prevStreamingRef.current = isStreaming;
+    }, [isStreaming]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -622,15 +649,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // Instead of creating a new step for every thought, update
                 // the existing thinking step so we get ONE "Thinking" entry
                 // that shows the latest thought, not a massive stream.
+                // Uses appendThinkingContent() which atomically reads the
+                // current detail and appends inside a single set() call,
+                // preventing stale-read races that can lose accumulated text.
                 if (event.type === 'thinking') {
                     const currentSteps = useChatStore.getState().agentSteps;
                     const lastStep = currentSteps[currentSteps.length - 1];
                     if (lastStep && lastStep.type === 'thinking') {
-                        // Update the existing thinking step with new content
-                        updateLastAgentStep({
-                            detail: event.content,
-                            active: true,
-                        });
+                        appendThinkingContent(event.content || '');
                         return;
                     }
                     // First thinking step or after a non-thinking step - create it
@@ -650,12 +676,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (status === 'working' || status === 'warning' || status === 'info') {
                         const currentSteps = useChatStore.getState().agentSteps;
                         const lastStep = currentSteps[currentSteps.length - 1];
-                        // Consolidate with previous status/thinking step
-                        if (lastStep && (lastStep.type === 'status' || lastStep.type === 'thinking') && lastStep.active) {
+                        // Consolidate with previous status step (but NOT thinking —
+                        // overwriting a thinking step's detail would discard all
+                        // accumulated thinking text).
+                        if (lastStep && lastStep.type === 'status' && lastStep.active) {
                             updateLastAgentStep({
                                 label: msg || 'Working',
                                 detail: msg,
                             });
+                            return;
+                        }
+                        // If the last step is thinking, update only the label
+                        // so the summary bar shows the status, but preserve the
+                        // accumulated thinking detail.
+                        if (lastStep && lastStep.type === 'thinking' && lastStep.active) {
+                            updateLastAgentStep({ label: msg || 'Thinking' });
                             return;
                         }
                         const step = agentEventToStep(event, stepIdRef);
@@ -701,6 +736,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         created_at: new Date().toISOString(),
                         rag_sources: null,
                         agentSteps: stepsSnapshot.length > 0 ? stepsSnapshot : undefined,
+                        stats: event.stats || undefined,
                     };
                     addMessage(assistantMsg);
                 }
@@ -790,7 +826,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         });
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
@@ -808,17 +844,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const handleDeleteMessage = useCallback(async (messageId: number) => {
         if (isStreaming) return;
         log.chat.info(`Deleting message ${messageId} from session=${sessionId}`);
-        // Optimistic removal
-        removeMessage(messageId);
-        try {
-            await api.deleteMessage(sessionId, messageId);
-        } catch (err) {
-            log.chat.error(`Failed to delete message ${messageId}`, err);
-            // Reload messages on error to restore accurate state
-            api.getMessages(sessionId)
-                .then((data) => setMessages(data.messages || []))
-                .catch(() => {});
-        }
+        // Animate first, then remove after 250ms
+        setDeletingMsgId(messageId);
+        setTimeout(async () => {
+            removeMessage(messageId);
+            setDeletingMsgId(null);
+            try {
+                await api.deleteMessage(sessionId, messageId);
+            } catch (err) {
+                log.chat.error(`Failed to delete message ${messageId}`, err);
+                // Reload messages on error to restore accurate state
+                api.getMessages(sessionId)
+                    .then((data) => setMessages(data.messages || []))
+                    .catch(() => {});
+            }
+        }, 250);
     }, [sessionId, isStreaming, removeMessage, setMessages]);
 
     // Resend a user message: delete it and everything below, then re-send
@@ -851,6 +891,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
             sendMessage();
         }
     };
+
+    // Session hash link copy
+    const [hashCopied, setHashCopied] = useState(false);
+    const handleCopyHash = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        const hash = getSessionHash(sessionId);
+        const url = `${window.location.origin}${window.location.pathname}#${hash}`;
+        navigator.clipboard.writeText(url).then(() => {
+            log.ui.info(`Copied session link: ${url}`);
+            setHashCopied(true);
+            setTimeout(() => setHashCopied(false), 1500);
+        }).catch(() => {
+            log.ui.warn('Clipboard write failed');
+        });
+    }, [sessionId]);
 
     // Title editing
     const startEditTitle = () => {
@@ -959,7 +1014,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                 </div>
                 <div className="chat-header-right">
-                    <span className="model-badge">{session?.model || 'Local LLM'}</span>
+                    <a
+                        className={`session-hash-badge ${hashCopied ? 'copied' : ''}`}
+                        href={`#${getSessionHash(sessionId)}`}
+                        onClick={handleCopyHash}
+                        title={hashCopied ? 'Copied!' : `Copy session link #${getSessionHash(sessionId)}`}
+                        aria-label={`Copy link for session ${getSessionHash(sessionId)}`}
+                    >
+                        <Link size={10} />
+                        <span>#{getSessionHash(sessionId)}</span>
+                    </a>
+                    <span className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}>{systemStatus?.model_loaded || 'No model loaded'}</span>
                     <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Attach documents">
                         <Paperclip size={15} />
                     </button>
@@ -1080,32 +1145,50 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     </div>
                 )}
 
-                {messages.map((msg) => (
-                    <div key={msg.id}>
-                        <MessageBubble
-                            message={msg}
-                            agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
-                            onDelete={!isStreaming ? handleDeleteMessage : undefined}
-                            onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
-                        />
-                    </div>
-                ))}
+                {messages.map((msg, idx) => {
+                    // Show a solid terminal cursor on the last assistant message
+                    // (only when not actively streaming — the streaming bubble has its own cursor)
+                    const isLastAssistant = !isStreaming && !streamEnding
+                        && msg.role === 'assistant'
+                        && messages.slice(idx + 1).every((m) => m.role !== 'assistant');
+                    // During stream-ending, skip rendering the just-completed
+                    // assistant message entirely — the streaming bubble shows it.
+                    // This prevents the flash/jump when transitioning.
+                    const isStreamEndingMsg = streamEnding
+                        && msg.role === 'assistant'
+                        && idx === messages.length - 1;
+                    if (isStreamEndingMsg) return null;
+                    return (
+                        <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
+                            <MessageBubble
+                                message={msg}
+                                showTerminalCursor={isLastAssistant}
+                                agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
+                                onDelete={!isStreaming ? handleDeleteMessage : undefined}
+                                onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
+                            />
+                        </div>
+                    );
+                })}
 
                 {/* Active streaming message with agent activity inside */}
-                {isStreaming && (
-                    <MessageBubble
-                        message={{
-                            id: -1,
-                            session_id: sessionId,
-                            role: 'assistant',
-                            content: streamingContent || '',
-                            created_at: '',
-                            rag_sources: null,
-                        }}
-                        isStreaming
-                        agentSteps={agentSteps}
-                        agentStepsActive={true}
-                    />
+                {(isStreaming || streamEnding) && (
+                    <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
+                        <MessageBubble
+                            message={{
+                                id: -1,
+                                session_id: sessionId,
+                                role: 'assistant',
+                                content: (isStreaming ? streamingContent : lastStreamContentRef.current) || '',
+                                created_at: '',
+                                rag_sources: null,
+                            }}
+                            isStreaming={isStreaming}
+                            showTerminalCursor={streamEnding}
+                            agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
+                            agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
+                        />
+                    </div>
                 )}
                 <div ref={messagesEndRef} />
             </div>

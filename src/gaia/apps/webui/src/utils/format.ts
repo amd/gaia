@@ -24,6 +24,26 @@ export function formatDuration(seconds: number): string {
   return `${days}d ${hrs % 24}h`;
 }
 
+/**
+ * Get a short hash for a session ID (for linking/troubleshooting).
+ * Strips hyphens from the UUID and returns the first 7 characters.
+ * Example: "550e8400-e29b-41d4-..." → "550e840"
+ */
+export function getSessionHash(sessionId: string): string {
+  return sessionId.replace(/-/g, '').slice(0, 7);
+}
+
+/**
+ * Find a session by its short hash (first 7 hex chars of UUID).
+ * Returns the matching session ID or null if not found.
+ */
+export function findSessionByHash(sessions: { id: string }[], hash: string): string | null {
+  const normalizedHash = hash.replace(/^#/, '').toLowerCase();
+  if (!normalizedHash || normalizedHash.length < 4) return null;
+  const match = sessions.find((s) => s.id.replace(/-/g, '').toLowerCase().startsWith(normalizedHash));
+  return match ? match.id : null;
+}
+
 /** Format a timestamp as HH:MM:SS (24-hour, no ms). */
 export function formatTimeHMS(ts: number): string {
   const d = new Date(ts);

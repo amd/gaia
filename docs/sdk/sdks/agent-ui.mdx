@@ -19,6 +19,10 @@ from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentR
 
 **See also:** [User Guide](/guides/agent-ui) | [Agent SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server)
 
+<Warning>
+  **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Qwen3-Coder-30B-A3B-Instruct-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
+</Warning>
+
 ---
 
 ## Overview
@@ -346,6 +350,7 @@ class MessageResponse(BaseModel):
     content: str
     created_at: str
     rag_sources: Optional[List[SourceInfo]] = None
+    agent_steps: Optional[List[AgentStepResponse]] = None
 
 class MessageListResponse(BaseModel):
     messages: List[MessageResponse]
@@ -365,6 +370,7 @@ class DocumentResponse(BaseModel):
     indexed_at: str
     last_accessed_at: Optional[str] = None
     sessions_using: int = 0
+    indexing_status: str = "complete"  # pending | indexing | complete | failed | cancelled | missing
 
 class DocumentListResponse(BaseModel):
     documents: List[DocumentResponse]
@@ -859,8 +865,8 @@ from gaia.rag.sdk import RAGSDK, RAGConfig
 
 config = RAGConfig()
 rag = RAGSDK(config)
-result = rag.index_file(filepath)
-chunk_count = result.get("chunk_count", 0)
+result = rag.index_document(filepath)
+chunk_count = result.get("num_chunks", 0)
 ```
 
 ---
@@ -873,16 +879,16 @@ GAIA Agent UI is also available as an npm package for quick installation:
 npm install -g @amd-gaia/agent-ui
 ```
 
-This provides the `gaia` CLI command:
+This provides the `gaia-ui` CLI command:
 
 ```bash
-gaia              # Start Python backend + open browser
-gaia --serve      # Serve frontend only (Node.js static server)
-gaia --port 8080  # Custom port
-gaia --version    # Show version
+gaia-ui              # Start Python backend + open browser
+gaia-ui --serve      # Serve frontend only (Node.js static server)
+gaia-ui --port 8080  # Custom port
+gaia-ui --version    # Show version
 ```
 
-On first run, `gaia` automatically installs the Python backend (uv, Python 3.12, amd-gaia) if not already present.
+On first run, `gaia-ui` automatically installs the Python backend (uv, Python 3.12, amd-gaia) if not already present. On subsequent runs, it auto-updates if the version doesn't match.
 
 ### Package Contents
 

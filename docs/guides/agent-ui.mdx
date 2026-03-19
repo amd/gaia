@@ -10,6 +10,17 @@ GAIA Agent UI is a desktop interface for running AI agents **100% locally** on y
   **Ready to install?** See the [Quickstart](/quickstart#agent-ui-fastest) for installation instructions.
 </Info>
 
+<Warning>
+  **Tested Configuration:** The Agent UI has been tested exclusively on **AMD Ryzen AI MAX+ 395** processors running the **Qwen3-Coder-30B-A3B-Instruct-GGUF** model via Lemonade Server. Other hardware or model combinations may work but are not officially verified.
+
+  If you encounter issues on a different configuration, please [open a GitHub issue](https://github.com/amd/gaia/issues/new) and include:
+  - Your processor model (e.g., Ryzen AI 9 HX 370, Ryzen AI MAX+ 395)
+  - RAM and available memory
+  - The LLM model you are using
+  - Operating system and version
+  - Steps to reproduce the issue
+</Warning>
+
 ---
 
 ## What You Can Do
@@ -74,7 +85,11 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
 
   <Accordion title="Port 4200 already in use">
     ```bash
-    gaia --ui --ui-port 8080
+    # npm CLI
+    gaia-ui --port 8080
+
+    # Python CLI
+    gaia --ui-port 8080
     ```
   </Accordion>
 

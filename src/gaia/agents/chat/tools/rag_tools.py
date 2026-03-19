@@ -1122,11 +1122,22 @@ class RAGToolsMixin:
                     # Update system prompt to include the new document
                     self.rebuild_system_prompt()
 
+                    # Build appropriate message based on indexing result
+                    file_name = result.get("file_name", file_path)
+                    if result.get("already_indexed", False):
+                        msg = f"Document already indexed, skipping: {file_name}"
+                    elif result.get("from_cache", False):
+                        msg = f"Loaded from cache: {file_name}"
+                    elif result.get("reindexed", False):
+                        msg = f"Re-indexed (updated): {file_name}"
+                    else:
+                        msg = f"Successfully indexed: {file_name}"
+
                     # Return detailed stats from RAG SDK
                     return {
                         "status": "success",
-                        "message": f"Successfully indexed: {result.get('file_name', file_path)}",
-                        "file_name": result.get("file_name"),
+                        "message": msg,
+                        "file_name": file_name,
                         "file_type": result.get("file_type"),
                         "file_size_mb": result.get("file_size_mb"),
                         "num_pages": result.get("num_pages"),
@@ -1157,11 +1168,11 @@ class RAGToolsMixin:
         @tool(
             atomic=True,
             name="list_indexed_documents",
-            description="List all currently indexed documents",
+            description="List all currently indexed documents with per-document chunk counts, file sizes, and types",
             parameters={},
         )
         def list_indexed_documents() -> Dict[str, Any]:
-            """List indexed documents."""
+            """List indexed documents with detailed per-document statistics."""
             try:
                 if self.rag is None:
                     return {
@@ -1169,13 +1180,61 @@ class RAGToolsMixin:
                         "documents": [],
                         "count": 0,
                         "total_chunks": 0,
+                        "total_size_mb": 0,
                     }
                 docs = list(self.rag.indexed_files)
+
+                # Build per-document details
+                doc_details = []
+                type_counts = {}  # {".pdf": 3, ".txt": 1, ...}
+                total_size_bytes = 0
+
+                for doc_path in docs:
+                    doc_name = str(Path(doc_path).name)
+                    doc_ext = str(Path(doc_path).suffix).lower()
+
+                    # Count chunks for this document
+                    chunk_count = len(
+                        self.rag.file_to_chunk_indices.get(str(doc_path), [])
+                    )
+
+                    # Get file size and metadata
+                    file_size_mb = 0
+                    num_pages = None
+                    metadata = self.rag.file_metadata.get(str(doc_path), {})
+                    if metadata:
+                        file_size_mb = metadata.get("file_size_mb", 0)
+                        num_pages = metadata.get("num_pages")
+                    elif os.path.exists(doc_path):
+                        try:
+                            file_size_mb = round(
+                                os.path.getsize(doc_path) / (1024 * 1024), 2
+                            )
+                        except OSError:
+                            pass
+
+                    total_size_bytes += int(file_size_mb * 1024 * 1024)
+
+                    # Track document types
+                    type_counts[doc_ext] = type_counts.get(doc_ext, 0) + 1
+
+                    doc_info = {
+                        "name": doc_name,
+                        "type": doc_ext,
+                        "chunks": chunk_count,
+                        "size_mb": round(file_size_mb, 2),
+                    }
+                    if num_pages is not None:
+                        doc_info["pages"] = num_pages
+                    doc_details.append(doc_info)
+
                 return {
                     "status": "success",
-                    "documents": [str(Path(d).name) for d in docs],
+                    "documents": doc_details,
                     "count": len(docs),
                     "total_chunks": len(self.rag.chunks),
+                    "total_size_mb": round(total_size_bytes / (1024 * 1024), 2),
+                    "document_types": type_counts,
                 }
             except Exception as e:
                 logger.error(f"Error in list_indexed_documents: {e}")
@@ -1189,16 +1248,30 @@ class RAGToolsMixin:
         @tool(
             atomic=True,
             name="rag_status",
-            description="Get the status of the RAG system",
+            description="Get the status of the RAG system including indexed files, chunks, index size, and configuration",
             parameters={},
         )
         def rag_status() -> Dict[str, Any]:
-            """Get RAG system status."""
+            """Get RAG system status with comprehensive details."""
             try:
                 status = self.rag.get_status()
+
+                # Calculate total index size from file metadata
+                total_size_bytes = 0
+                type_counts = {}
+                for doc_path in self.rag.indexed_files:
+                    metadata = self.rag.file_metadata.get(str(doc_path), {})
+                    file_size_mb = metadata.get("file_size_mb", 0)
+                    total_size_bytes += int(file_size_mb * 1024 * 1024)
+
+                    doc_ext = str(Path(doc_path).suffix).lower()
+                    type_counts[doc_ext] = type_counts.get(doc_ext, 0) + 1
+
                 return {
                     "status": "success",
                     **status,
+                    "total_index_size_mb": round(total_size_bytes / (1024 * 1024), 2),
+                    "document_types": type_counts,
                     "watched_directories": self.watch_directories,
                 }
             except Exception as e:
