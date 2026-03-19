@@ -13,10 +13,12 @@
     to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* User messages -- right-aligned with subtle accent */
+/* User messages -- right-aligned, clean separation via bottom border only.
+ * No left border: avoids clashing with the right-aligned text direction
+ * and keeps a clear visual distinction from the assistant's red accent. */
 .msg-user {
     background: transparent;
-    border-left: 2px solid var(--border);
+    border-left: none;
     border-bottom: 1px solid var(--border-light);
 }
 .msg-user .msg-inner {
@@ -38,7 +40,6 @@
 
 [data-theme="dark"] .msg-user {
     background: transparent;
-    border-left-color: var(--border);
 }
 
 /* Assistant messages -- AMD red left accent, refined lift */
@@ -93,6 +94,10 @@
     color: var(--text-secondary);
     overflow: hidden;
 }
+[data-theme="dark"] .msg-avatar-assistant {
+    border-color: rgba(237, 28, 36, 0.25);
+    box-shadow: 0 0 8px rgba(237, 28, 36, 0.12);
+}
 .msg-avatar-assistant img {
     width: 100%;
     height: 100%;
@@ -134,16 +139,16 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 4px 10px;
+    padding: 5px 10px;
     border-radius: var(--radius-sm);
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--text-muted);
-    transition: all 120ms var(--ease);
+    transition: all var(--duration-fast) var(--ease);
 }
 .msg-action-btn:hover,
 .msg-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
-.msg-copy.copied { color: var(--accent-green); }
+.msg-copy.copied { color: var(--accent-green); background: var(--accent-green-dim); }
 
 /* Delete button */
 .msg-delete:hover { color: var(--amd-red); }
@@ -329,7 +334,7 @@
     color: var(--terminal-green-dim);
     cursor: pointer;
     border-bottom: 1px dashed var(--terminal-green-dim);
-    transition: color 120ms var(--ease), background 120ms var(--ease);
+    transition: color var(--duration-fast) var(--ease), background var(--duration-fast) var(--ease);
     border-radius: 0;
     padding: 0 3px;
     font-family: var(--font-mono);
@@ -510,7 +515,7 @@
     color: var(--text-muted);
     transition: all var(--duration) var(--ease);
 }
-.code-copy:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); }
+.code-copy:hover { background: rgba(255, 255, 255, 0.08); color: #d4d4d4; }
 
 /* Copy feedback */
 .code-copy.copied {

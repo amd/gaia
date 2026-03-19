@@ -15,6 +15,12 @@
   animation: notifSlideIn 200ms var(--ease);
 }
 
+[data-theme="dark"] .notification-center {
+  background: rgba(14, 14, 22, 0.92);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+}
+
 @keyframes notifSlideIn {
   from {
     opacity: 0;
@@ -32,7 +38,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border);
 }
 
 .notification-center-title-row {
@@ -107,7 +113,13 @@
   flex: 1;
   overflow-y: auto;
   min-height: 100px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.notification-list::-webkit-scrollbar { width: 5px; }
+.notification-list::-webkit-scrollbar-track { background: transparent; }
+.notification-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+.notification-list::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── Empty State ─────────────────────────────────────────────────────── */
 .notification-empty {

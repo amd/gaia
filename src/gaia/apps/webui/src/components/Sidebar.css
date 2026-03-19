@@ -178,7 +178,7 @@
 
 /* Session group headers (Today, Yesterday, etc.) */
 .session-group-label {
-    padding: 10px 10px 5px;
+    padding: 12px 10px 6px;
     font-size: 10px;
     font-weight: 600;
     font-family: var(--font-mono);
@@ -209,6 +209,7 @@
 }
 .session-item:hover {
     background: var(--bg-hover);
+    border-left-color: var(--border);
 }
 .session-item.active {
     background: var(--bg-active);
@@ -218,8 +219,8 @@
 }
 
 [data-theme="dark"] .session-item.active {
-    background: var(--amd-red-dim2);
-    box-shadow: inset 0 0 20px rgba(237, 28, 36, 0.06);
+    background: rgba(237, 28, 36, 0.08);
+    box-shadow: inset 0 0 24px rgba(237, 28, 36, 0.08);
 }
 
 .session-item:focus-visible {
@@ -396,7 +397,7 @@
 .sidebar-resize-handle:hover,
 .sidebar-resize-handle:active {
     background: var(--amd-red);
-    opacity: 0.5;
+    opacity: 0.6;
 }
 
 /* ── Collapsed state ───────────────────────────────────────────── */

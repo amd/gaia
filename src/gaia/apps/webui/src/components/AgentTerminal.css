@@ -233,9 +233,9 @@
   color: var(--text-primary);
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling -- matches global 5px width */
 .terminal-content::-webkit-scrollbar {
-  width: 8px;
+  width: 5px;
 }
 
 .terminal-content::-webkit-scrollbar-track {
@@ -244,7 +244,7 @@
 
 .terminal-content::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-full);
 }
 
 .terminal-content::-webkit-scrollbar-thumb:hover {

@@ -157,7 +157,13 @@
   padding: 0;
   max-height: 160px;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.permission-tool-args::-webkit-scrollbar { width: 5px; }
+.permission-tool-args::-webkit-scrollbar-track { background: transparent; }
+.permission-tool-args::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+.permission-tool-args::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 .permission-tool-args pre {
   margin: 0;
   padding: 10px 12px;

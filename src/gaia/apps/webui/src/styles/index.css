@@ -199,6 +199,16 @@ input, textarea { font: inherit; color: var(--text-primary); background: var(--b
 a { color: var(--amd-red); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+/* Text selection -- AMD red tint for brand cohesion */
+::selection {
+    background: rgba(237, 28, 36, 0.18);
+    color: inherit;
+}
+::-moz-selection {
+    background: rgba(237, 28, 36, 0.18);
+    color: inherit;
+}
+
 /* Layout */
 .app { display: flex; height: 100vh; height: 100dvh; position: relative; }
 .main-content { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; position: relative; }
@@ -228,7 +238,7 @@ a:hover { text-decoration: underline; }
     background:
         radial-gradient(ellipse 600px 500px at 85% 10%, rgba(237, 28, 36, 0.06) 0%, transparent 70%),
         radial-gradient(ellipse 500px 400px at 10% 90%, rgba(78, 201, 50, 0.03) 0%, transparent 70%),
-        radial-gradient(ellipse 400px 350px at 50% 50%, rgba(59, 158, 255, 0.02) 0%, transparent 70%);
+        radial-gradient(ellipse 400px 350px at 50% 50%, rgba(59, 158, 255, 0.025) 0%, transparent 70%);
 }
 
 /* Focus indicators for keyboard accessibility -- terminal green */
@@ -287,6 +297,9 @@ textarea:focus-visible {
     color: var(--amd-red);
     background: var(--amd-red-dim2);
 }
+.btn-secondary:active {
+    transform: translateY(0) scale(0.98);
+}
 
 .btn-danger {
     display: inline-flex; align-items: center; gap: 6px;
@@ -297,6 +310,7 @@ textarea:focus-visible {
     transition: all var(--duration) var(--ease);
 }
 .btn-danger:hover { background: var(--amd-red); color: white; }
+.btn-danger:active { transform: scale(0.98); }
 
 .btn-icon {
     display: flex; align-items: center; justify-content: center;
@@ -305,6 +319,7 @@ textarea:focus-visible {
     transition: all var(--duration) var(--ease);
 }
 .btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-icon:active { transform: scale(0.94); }
 
 .btn-icon-sm {
     display: flex; align-items: center; justify-content: center;
@@ -313,6 +328,7 @@ textarea:focus-visible {
     transition: all var(--duration) var(--ease);
 }
 .btn-icon-sm:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-icon-sm:active { transform: scale(0.94); }
 
 /* ── Beta Badge ─────────────────────────────────────────────────── */
 
@@ -366,7 +382,17 @@ textarea:focus-visible {
     color: var(--text-secondary);
 }
 
-.modal-body { padding: 24px; overflow-y: auto; flex: 1; }
+.modal-body {
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+.modal-body::-webkit-scrollbar { width: 5px; }
+.modal-body::-webkit-scrollbar-track { background: transparent; }
+.modal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+.modal-body::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── Sidebar Overlay (Mobile) ────────────────────────────────────── */
 

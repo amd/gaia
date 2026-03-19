@@ -165,7 +165,13 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.agent-list::-webkit-scrollbar { width: 5px; }
+.agent-list::-webkit-scrollbar-track { background: transparent; }
+.agent-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+.agent-list::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── Empty State ──────────────────────────────────────────────────────── */
 

@@ -137,6 +137,30 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [completedSteps, setCompletedSteps] = useState<AgentStep[]>([]);
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [docsExpanded, setDocsExpanded] = useState(false);
+    // Smooth streaming exit — snapshot last content so fade-out shows real text
+    const [streamEnding, setStreamEnding] = useState(false);
+    const lastStreamContentRef = useRef('');
+    const lastAgentStepsRef = useRef<AgentStep[]>([]);
+    const prevStreamingRef = useRef(false);
+    // Continuously snapshot the streaming state so we have it when streaming ends
+    useEffect(() => {
+        if (streamingContent) lastStreamContentRef.current = streamingContent;
+    }, [streamingContent]);
+    useEffect(() => {
+        if (agentSteps.length > 0) lastAgentStepsRef.current = agentSteps.map(s => ({ ...s, active: false }));
+    }, [agentSteps]);
+    useEffect(() => {
+        if (!isStreaming && prevStreamingRef.current) {
+            setStreamEnding(true);
+            const timer = setTimeout(() => {
+                setStreamEnding(false);
+                lastStreamContentRef.current = '';
+                lastAgentStepsRef.current = [];
+            }, 350);
+            return () => clearTimeout(timer);
+        }
+        prevStreamingRef.current = isStreaming;
+    }, [isStreaming]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1083,11 +1107,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 {messages.map((msg, idx) => {
                     // Show a solid terminal cursor on the last assistant message
                     // (only when not actively streaming — the streaming bubble has its own cursor)
-                    const isLastAssistant = !isStreaming
+                    const isLastAssistant = !isStreaming && !streamEnding
                         && msg.role === 'assistant'
                         && messages.slice(idx + 1).every((m) => m.role !== 'assistant');
+                    // During stream-ending fade, hide the just-completed message
+                    // so it doesn't overlap with the fading streaming bubble
+                    const isStreamEndingMsg = streamEnding
+                        && msg.role === 'assistant'
+                        && idx === messages.length - 1;
                     return (
-                        <div key={msg.id}>
+                        <div key={msg.id} className={isStreamEndingMsg ? 'msg-entering' : undefined}>
                             <MessageBubble
                                 message={msg}
                                 showTerminalCursor={isLastAssistant}
@@ -1100,20 +1129,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 })}
 
                 {/* Active streaming message with agent activity inside */}
-                {isStreaming && (
-                    <MessageBubble
-                        message={{
-                            id: -1,
-                            session_id: sessionId,
-                            role: 'assistant',
-                            content: streamingContent || '',
-                            created_at: '',
-                            rag_sources: null,
-                        }}
-                        isStreaming
-                        agentSteps={agentSteps}
-                        agentStepsActive={true}
-                    />
+                {(isStreaming || streamEnding) && (
+                    <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
+                        <MessageBubble
+                            message={{
+                                id: -1,
+                                session_id: sessionId,
+                                role: 'assistant',
+                                content: (isStreaming ? streamingContent : lastStreamContentRef.current) || '',
+                                created_at: '',
+                                rag_sources: null,
+                            }}
+                            isStreaming={isStreaming}
+                            showTerminalCursor={streamEnding}
+                            agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
+                            agentStepsActive={isStreaming}
+                        />
+                    </div>
                 )}
                 <div ref={messagesEndRef} />
             </div>

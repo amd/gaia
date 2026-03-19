@@ -25,11 +25,11 @@
     transition: all var(--duration) var(--ease);
     cursor: pointer;
     text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.5px;
 }
 .agent-summary-bar:hover {
     background: var(--bg-hover);
-    border-color: var(--border);
+    border-color: var(--text-muted);
 }
 
 .agent-summary-left {
@@ -65,32 +65,35 @@
 }
 /* @keyframes spin defined in global index.css */
 
-/* Active state */
+/* Active state -- slightly stronger glow for dark mode so the
+ * "THINKING..." bar reads as clearly active in the deep UI. */
 .agent-activity.active .agent-summary-bar {
     border-color: rgba(226, 60, 64, 0.30);
     background: rgba(226, 60, 64, 0.04);
     box-shadow: 0 0 12px rgba(226, 60, 64, 0.08);
 }
 [data-theme="dark"] .agent-activity.active .agent-summary-bar {
-    background: rgba(226, 60, 64, 0.05);
-    box-shadow: 0 0 8px rgba(226, 60, 64, 0.06);
+    background: rgba(226, 60, 64, 0.06);
+    box-shadow: 0 0 14px rgba(226, 60, 64, 0.10);
 }
 
-/* Summary variant (post-completion) */
+/* Summary variant (post-completion) -- retains a faint background
+ * so the collapsed bar is still perceivable as an interactive region. */
 .agent-activity.summary {
     margin-top: -4px;
     margin-bottom: 4px;
 }
 .agent-activity.summary .agent-summary-bar {
-    background: transparent;
+    background: var(--tint-subtle);
     border-color: transparent;
-    padding: 5px 0;
+    padding: 5px 8px;
     font-size: 10px;
     color: var(--text-muted);
+    border-radius: var(--radius-xs);
 }
 .agent-activity.summary .agent-summary-bar:hover {
     color: var(--text-secondary);
-    background: transparent;
+    background: var(--tint-hover);
 }
 
 /* ── Flow container ──────────────────────────────────────────── */
@@ -151,7 +154,7 @@
 .flow-tool {
     border-radius: var(--radius-xs);
     background: var(--bg-tertiary);
-    border: 1px solid var(--border-light);
+    border: 1px solid var(--border);
     transition: border-color var(--duration-fast) var(--ease);
     animation: toolSlideIn 250ms var(--ease) both;
 }
@@ -491,7 +494,7 @@
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    padding: 4px 8px;
+    padding: 5px 10px;
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--text-secondary);
@@ -625,9 +628,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 4px 10px;
-    background: var(--tint-subtle);
-    border-bottom: 1px solid var(--border-light);
+    padding: 5px 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .cmd-header-left {
@@ -683,7 +686,7 @@
     padding: 2px 4px;
     border-radius: 2px;
     color: var(--text-muted);
-    transition: all 100ms var(--ease);
+    transition: all var(--duration-fast) var(--ease);
     cursor: pointer;
 }
 .cmd-copy:hover {

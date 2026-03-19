@@ -233,7 +233,13 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     min-width: 250px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
 }
+.fb-file-list::-webkit-scrollbar { width: 5px; }
+.fb-file-list::-webkit-scrollbar-track { background: transparent; }
+.fb-file-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+.fb-file-list::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 .fb-entry {
     display: flex;
@@ -357,7 +363,13 @@
     line-height: 1.5;
     margin: 0;
     background: var(--bg-code);
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
 }
+.fb-preview-content::-webkit-scrollbar { width: 5px; height: 5px; }
+.fb-preview-content::-webkit-scrollbar-track { background: transparent; }
+.fb-preview-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+.fb-preview-content::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 .fb-preview-loading, .fb-preview-binary {
     padding: 20px;
