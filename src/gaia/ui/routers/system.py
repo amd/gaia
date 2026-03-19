@@ -131,18 +131,24 @@ async def system_status():
 
     # Device support check.
     # Skipped when:
-    #   1. GAIA_SKIP_DEVICE_CHECK env var is set (explicit override)
+    #   1. GAIA_SKIP_DEVICE_CHECK env var is set to "1", "true", or "yes"
     #   2. LEMONADE_BASE_URL points to a non-localhost server — inference runs
     #      remotely so local hardware requirements don't apply.
     try:
         from gaia.device import check_device_supported, get_processor_name
 
+        skip_check = os.environ.get("GAIA_SKIP_DEVICE_CHECK", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         lemonade_url = os.environ.get("LEMONADE_BASE_URL", "")
+        _LOCAL_ADDRS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
         is_remote = lemonade_url and not any(
-            loc in lemonade_url for loc in ("localhost", "127.0.0.1", "::1")
+            loc in lemonade_url for loc in _LOCAL_ADDRS
         )
 
-        if os.environ.get("GAIA_SKIP_DEVICE_CHECK") or is_remote:
+        if skip_check or is_remote:
             status.device_supported = True
             status.processor_name = get_processor_name() or "unknown"
         else:

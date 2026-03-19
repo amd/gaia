@@ -705,12 +705,13 @@ def _launch_agent_ui(port=4200, base_url=None, log=None):
         print(f"   Open your browser to http://localhost:{port}")
         print("   Press Ctrl+C to stop")
         print()
-        print("   Prerequisites:")
-        print(
-            "     1. Models downloaded  : gaia init --profile chat  (first time only, ~25 GB)"
-        )
-        print("     2. Lemonade running   : lemonade-server serve")
-        print()
+        if not base_url:
+            print("   Prerequisites:")
+            print(
+                "     1. Models downloaded  : gaia init --profile chat  (first time only, ~25 GB)"
+            )
+            print("     2. Lemonade running   : lemonade-server serve")
+            print()
 
         import uvicorn
 
