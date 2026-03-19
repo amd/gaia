@@ -236,7 +236,7 @@ export function SettingsModal() {
                                         setCustomModelInput(e.target.value);
                                         setShowModelWarning(false);
                                     }}
-                                    placeholder="e.g. huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated"
+                                    placeholder="e.g. Qwen3-Coder-30B-A3B-Instruct-GGUF"
                                     spellCheck={false}
                                     disabled={modelSaving}
                                 />

@@ -65,29 +65,7 @@
 }
 /* @keyframes spin defined in global index.css */
 
-/* Active state -- subtle background tint, no red border */
-.agent-activity.active .agent-summary-bar {
-    background: var(--bg-hover);
-}
-
-/* Summary variant (post-completion) -- retains a faint background
- * so the collapsed bar is still perceivable as an interactive region. */
-.agent-activity.summary {
-    margin-top: -4px;
-    margin-bottom: 4px;
-}
-.agent-activity.summary .agent-summary-bar {
-    background: var(--tint-subtle);
-    border-color: transparent;
-    padding: 5px 8px;
-    font-size: 10px;
-    color: var(--text-muted);
-    border-radius: var(--radius-xs);
-}
-.agent-activity.summary .agent-summary-bar:hover {
-    color: var(--text-secondary);
-    background: var(--tint-hover);
-}
+/* No visual difference between active/done states — bar stays stable */
 
 /* ── Flow wrapper — animated expand/collapse ─────────────────── */
 .agent-flow-wrap {

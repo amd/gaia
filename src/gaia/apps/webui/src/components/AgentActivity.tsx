@@ -95,9 +95,9 @@ interface AgentActivityProps {
 
 /** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
 export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActivityProps) {
-    // Inline (during streaming): start expanded so activity is visible.
-    // Summary (completed messages): start collapsed for a clean look.
-    const [expanded, setExpanded] = useState(variant === 'inline');
+    // Always start collapsed — thinking text is shown via ThinkingIndicator
+    // in the message header. Users can expand to see details if they want.
+    const [expanded, setExpanded] = useState(false);
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
     const prevStepCountRef = useRef(0);
     const collapseTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
@@ -191,36 +191,11 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     // Don't render until there are real steps to show
     if (displaySteps.length === 0) return null;
 
-    // Build summary content (can be string or JSX for animated dots)
-    const activeStep = displaySteps.find((s) => s.active);
-    let summaryText: string;
-    let isThinking = false;
-
-    if (isActive && activeStep) {
-        if (activeStep.type === 'tool' && activeStep.tool) {
-            summaryText = getToolMeta(activeStep.tool).activeLabel;
-        } else if (activeStep.type === 'thinking') {
-            summaryText = 'Thinking';
-            isThinking = true;
-        } else {
-            summaryText = activeStep.label || 'Working...';
-        }
-    } else if (isActive) {
-        summaryText = 'Thinking';
-        isThinking = true;
-    } else {
-        const uniqueTools = [...new Set(toolSteps.map((s) => s.tool).filter(Boolean) as string[])];
-        if (uniqueTools.length > 0) {
-            const toolLabels = uniqueTools.slice(0, 3).map((t) => getToolMeta(t).label);
-            summaryText = toolLabels.join(', ');
-            if (uniqueTools.length > 3) summaryText += ` +${uniqueTools.length - 3} more`;
-        } else {
-            summaryText = `${displaySteps.length} step${displaySteps.length !== 1 ? 's' : ''}`;
-        }
-        if (toolSteps.length > 0) {
-            summaryText += ` \u00b7 ${toolSteps.length} tool${toolSteps.length !== 1 ? 's' : ''}`;
-        }
-    }
+    // Build summary — always use stable step count so the bar doesn't
+    // visually change when transitioning from thinking to answer streaming.
+    const stepCount = displaySteps.length;
+    const summaryText = `${stepCount} step${stepCount !== 1 ? 's' : ''}`
+        + (toolSteps.length > 0 ? ` \u00b7 ${toolSteps.length} tool${toolSteps.length !== 1 ? 's' : ''}` : '');
 
     return (
         <div className={`agent-activity ${variant} ${isActive ? 'active' : 'done'} ${hasErrors ? 'has-errors' : ''}`}>
@@ -232,19 +207,12 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                 aria-label={expanded ? 'Collapse agent activity' : 'Expand agent activity'}
             >
                 <div className="agent-summary-left">
-                    {isActive ? (
-                        <div className="agent-spinner-wrap">
-                            <Loader2 size={14} className="agent-spinner" />
-                        </div>
-                    ) : hasErrors ? (
+                    {hasErrors ? (
                         <AlertCircle size={14} className="agent-icon-error" />
                     ) : (
                         <Zap size={14} className="agent-icon-done" />
                     )}
-                    <span className="agent-summary-text">
-                        {summaryText}
-                        {isThinking && <span className="thinking-dots"><span>.</span><span>.</span><span>.</span></span>}
-                    </span>
+                    <span className="agent-summary-text">{summaryText}</span>
                 </div>
                 <div className="agent-summary-right">
                     {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
