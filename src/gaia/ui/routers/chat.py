@@ -137,6 +137,10 @@ async def send_message(
             chat_semaphore.release()
 
 
+# Security note: confirm_id (UUID v4) provides request-scoping but not
+# authentication. This endpoint is safe for local-only deployments.
+# For network-exposed deployments (e.g., tunnel mode), consider adding
+# session token validation.
 @router.post("/api/chat/confirm")
 async def confirm_tool_execution(
     request: ToolConfirmRequest,

@@ -22,6 +22,9 @@ from gaia.agents.base.console import OutputHandler
 
 logger = logging.getLogger(__name__)
 
+#: Seconds the agent thread waits for a tool-confirm response from the frontend.
+TOOL_CONFIRM_TIMEOUT_SECONDS = 60
+
 # ── Shared LLM output cleaning patterns ─────────────────────────────────
 # These regexes are the canonical definitions for filtering LLM noise.
 # Other consumers (MCP server, frontend safety nets) should import from here
@@ -554,8 +557,9 @@ class SSEOutputHandler(OutputHandler):
         """Block the agent thread until the user approves or denies a tool call.
 
         Emits a ``tool_confirm`` SSE event so the frontend can show a modal.
-        Waits up to 60 s for ``resolve_confirmation()`` to be called by the
-        HTTP endpoint.  Returns ``True`` if the user allows, ``False`` otherwise.
+        Waits up to ``TOOL_CONFIRM_TIMEOUT_SECONDS`` for ``resolve_confirmation()``
+        to be called by the HTTP endpoint.  Returns ``True`` if the user allows,
+        ``False`` otherwise.
         """
         confirm_id = str(uuid.uuid4())
         self._confirm_event = threading.Event()
@@ -568,12 +572,12 @@ class SSEOutputHandler(OutputHandler):
                 "tool": tool_name,
                 "args": tool_args,
                 "confirm_id": confirm_id,
-                "timeout_seconds": 60,
+                "timeout_seconds": TOOL_CONFIRM_TIMEOUT_SECONDS,
             }
         )
 
         # Poll in short intervals so cancellation is detected promptly.
-        deadline = time.time() + 60
+        deadline = time.time() + TOOL_CONFIRM_TIMEOUT_SECONDS
         while time.time() < deadline:
             if self.cancelled.is_set():
                 self._confirm_id = None
@@ -587,7 +591,7 @@ class SSEOutputHandler(OutputHandler):
                 {
                     "type": "status",
                     "status": "warning",
-                    "message": f"Confirmation for '{tool_name}' timed out (60 s). Execution denied.",
+                    "message": f"Confirmation for '{tool_name}' timed out ({TOOL_CONFIRM_TIMEOUT_SECONDS} s). Execution denied.",
                 }
             )
             logger.warning("Tool confirmation timed out for '%s'", tool_name)

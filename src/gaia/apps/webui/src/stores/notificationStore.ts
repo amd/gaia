@@ -19,6 +19,9 @@ import { useChatStore } from './chatStore';
 /** Maximum notifications kept in the center to prevent unbounded growth. */
 const MAX_NOTIFICATIONS = 500;
 
+/** localStorage key for the "always allow" tool list. */
+export const ALWAYS_ALLOW_TOOLS_KEY = 'gaia_always_allow_tools';
+
 // ── State Interface ──────────────────────────────────────────────────────
 
 interface NotificationState {
@@ -105,13 +108,12 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
     }
     // Persist "always allow" preference in localStorage
     if (action === 'allow' && remember) {
-      const ALWAYS_ALLOW_KEY = 'gaia_always_allow_tools';
       const notification = get().notifications.find((n) => n.id === id);
       if (notification?.tool) {
-        const existing: string[] = JSON.parse(localStorage.getItem(ALWAYS_ALLOW_KEY) || '[]');
+        const existing: string[] = JSON.parse(localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]');
         if (!existing.includes(notification.tool)) {
           existing.push(notification.tool);
-          localStorage.setItem(ALWAYS_ALLOW_KEY, JSON.stringify(existing));
+          localStorage.setItem(ALWAYS_ALLOW_TOOLS_KEY, JSON.stringify(existing));
         }
       }
     }

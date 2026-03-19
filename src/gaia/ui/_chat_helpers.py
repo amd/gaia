@@ -238,6 +238,11 @@ async def _stream_chat_response(
         if http_request is not None:
             _active = getattr(http_request.app.state, "active_sse_handlers", None)
             if _active is not None:
+                if request.session_id in _active:
+                    logger.warning(
+                        "SSE handler already registered for session %s — overwriting",
+                        request.session_id,
+                    )
                 _active[request.session_id] = sse_handler
         sse_handler._emit(
             {"type": "status", "status": "info", "message": "Connecting to LLM..."}

@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore } from '../stores/notificationStore';
+import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -604,21 +604,24 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onAgentEvent: (event) => {
                 // ── Tool confirmation popup ──────────────────────────────
                 if (event.type === 'tool_confirm') {
+                    if (!event.confirm_id) {
+                        console.error('[ChatView] tool_confirm event missing confirm_id, ignoring');
+                        return;
+                    }
                     const toolName = event.tool || '';
-                    const ALWAYS_ALLOW_KEY = 'gaia_always_allow_tools';
                     const alwaysAllowed: string[] = JSON.parse(
-                        localStorage.getItem(ALWAYS_ALLOW_KEY) || '[]'
+                        localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
                     );
                     if (alwaysAllowed.includes(toolName)) {
                         // Auto-approve without showing the modal
-                        api.confirmToolExecution(sessionId, event.confirm_id!, 'allow', false).catch(
+                        api.confirmToolExecution(sessionId, event.confirm_id, 'allow', false).catch(
                             (err) => console.error('[ChatView] auto-confirm failed:', err)
                         );
                         return;
                     }
                     // Show the PermissionPrompt modal via notificationStore
                     const notification: GaiaNotification = {
-                        id: event.confirm_id!,
+                        id: event.confirm_id,
                         type: 'permission_request',
                         agentId: 'chat',
                         agentName: 'GAIA',
