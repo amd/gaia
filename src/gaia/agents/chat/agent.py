@@ -60,6 +60,10 @@ class ChatAgentConfig:
     chunk_overlap: int = 100
     max_chunks: int = 5
     use_llm_chunking: bool = False  # Use fast heuristic-based chunking by default
+    max_indexed_files: int = (
+        100  # Maximum number of files to keep indexed (LRU eviction)
+    )
+    max_total_chunks: int = 10000  # Maximum total chunks across all indexed files
 
     # Security
     allowed_paths: Optional[List[str]] = None
@@ -148,6 +152,8 @@ class ChatAgent(
                 use_llm_chunking=config.use_llm_chunking,  # Enable semantic chunking
                 base_url=effective_base_url,  # Pass base_url to RAG for VLM client
                 allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
+                max_indexed_files=config.max_indexed_files,
+                max_total_chunks=config.max_total_chunks,
             )
             self.rag = RAGSDK(rag_config)
         except ImportError as e:
