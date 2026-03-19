@@ -71,6 +71,7 @@ async def list_documents(db: ChatDatabase = Depends(get_db)):
 @router.post("/api/documents/upload-path", response_model=DocumentResponse)
 async def upload_by_path(
     request: DocumentUploadRequest,
+    http_request: Request,
     db: ChatDatabase = Depends(get_db),
     indexing_tasks: dict = Depends(get_indexing_tasks),
 ):
@@ -81,6 +82,19 @@ async def upload_by_path(
     document will have ``indexing_status='indexing'`` and the frontend
     can poll ``GET /api/documents/{id}/status`` for progress.
     """
+    # Enforce max_indexed_files limit using DB state (LRU eviction)
+    max_files = getattr(http_request.app.state, "max_indexed_files", 0)
+    if max_files > 0:
+        all_docs = db.list_documents()
+        if len(all_docs) >= max_files:
+            # Evict least-recently-used document
+            oldest = min(all_docs, key=lambda d: d.get("updated_at", d.get("created_at", "")))
+            logger.info(
+                "LRU eviction: removing %s (id=%s) to stay under limit of %d",
+                oldest.get("filename", "unknown"), oldest["id"], max_files,
+            )
+            db.delete_document(oldest["id"])
+
     # Use safe_open_document for TOCTOU-safe validation (rejects symlinks,
     # enforces home-directory confinement, checks extension).
     # Then copy to a temp file so indexing reads a stable snapshot.

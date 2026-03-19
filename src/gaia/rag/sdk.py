@@ -221,6 +221,8 @@ class RAGSDK:
         # This prevents TOCTOU attacks where symlinks are swapped
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY  # Ensure binary mode on Windows
 
         try:
             # Open file descriptor with O_NOFOLLOW

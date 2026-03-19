@@ -11,6 +11,7 @@ import { FileBrowser } from './components/FileBrowser';
 import { SettingsModal } from './components/SettingsModal';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
+import { PermissionPrompt } from './components/PermissionPrompt';
 import { useChatStore } from './stores/chatStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
@@ -306,6 +307,9 @@ function App() {
                     error={tunnelError}
                 />
             )}
+
+            {/* Tool confirmation popup */}
+            <PermissionPrompt />
 
             {/* Session creation error toast */}
             {createError && (
