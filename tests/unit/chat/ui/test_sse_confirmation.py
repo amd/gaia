@@ -38,6 +38,17 @@ def _drain(handler: SSEOutputHandler):
 # ===========================================================================
 
 
+class TestConfirmToolExecutionTimeout:
+    """confirm_tool_execution returns False after the safety-net timeout."""
+
+    def test_timeout_returns_false(self, handler):
+        """When no resolve arrives, confirm_tool_execution returns False after timeout."""
+        result = handler.confirm_tool_execution(
+            "run_shell_command", {"cmd": "ls"}, timeout=0.3
+        )
+        assert result is False
+
+
 class TestConfirmToolExecutionCancellation:
     """confirm_tool_execution returns False when the stream is cancelled."""
 
@@ -205,8 +216,9 @@ class TestConfirmToolEndpoint:
 
         app = FastAPI()
         app.include_router(router)
-        # Initialize state that the endpoint expects
-        app.state.active_sse_handlers = {}
+        # Initialize state that the chat router expects (session_locks, semaphore).
+        # Note: the confirm-tool endpoint uses _chat_helpers._active_sse_handlers
+        # (module-level dict), not app.state.
         app.state.session_locks = {}
         app.state.chat_semaphore = None
         return app

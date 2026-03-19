@@ -613,6 +613,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
+        _active_sse_handlers.pop(session_id, None)
         error_msg = "Error: Could not get response from LLM. Is Lemonade Server running? Check server logs for details."
         try:
             db.add_message(request.session_id, "assistant", error_msg)

@@ -184,35 +184,7 @@
   font-weight: 600;
 }
 
-/* ── Remember Checkbox ───────────────────────────────────────────────── */
-.permission-remember {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  border-top: 1px solid var(--border-light);
-  transition: background 150ms var(--ease);
-}
-.permission-remember:hover {
-  background: var(--bg-hover);
-}
-.permission-remember input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--amd-red);
-  cursor: pointer;
-}
-.permission-remember code {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-}
+
 
 /* ── Action Buttons ──────────────────────────────────────────────────── */
 .permission-actions {

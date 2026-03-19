@@ -51,7 +51,6 @@ interface PromptInnerProps {
 }
 
 function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
-  const [remember, setRemember] = useState(false);
   const hasTimeout = notification.timeoutSeconds != null && notification.timeoutSeconds > 0;
   const [countdown, setCountdown] = useState<number | null>(
     hasTimeout ? notification.timeoutSeconds! : null
@@ -103,12 +102,12 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
     setIsResponding(true);
     if (timerRef.current) clearInterval(timerRef.current);
     try {
-      await onRespond(notification.id, 'allow', remember);
+      await onRespond(notification.id, 'allow', false);
     } finally {
       isRespondingRef.current = false;
       setIsResponding(false);
     }
-  }, [notification.id, remember, onRespond]);
+  }, [notification.id, onRespond]);
 
   const handleDeny = useCallback(async () => {
     if (isRespondingRef.current) return;
@@ -116,12 +115,12 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
     setIsResponding(true);
     if (timerRef.current) clearInterval(timerRef.current);
     try {
-      await onRespond(notification.id, 'deny', remember);
+      await onRespond(notification.id, 'deny', false);
     } finally {
       isRespondingRef.current = false;
       setIsResponding(false);
     }
-  }, [notification.id, remember, onRespond]);
+  }, [notification.id, onRespond]);
 
   // Handle keyboard shortcuts — preventDefault stops lower-priority Escape handlers
   useEffect(() => {
@@ -191,18 +190,6 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
           </div>
         )}
       </div>
-
-      {/* Remember checkbox — only shown when a specific tool is identified */}
-      {notification.tool && (
-        <label className="permission-remember">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-          />
-          <span>Remember this choice for <code>{notification.tool}</code></span>
-        </label>
-      )}
 
       {/* Actions */}
       <div className="permission-actions">

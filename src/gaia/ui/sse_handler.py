@@ -518,11 +518,16 @@ class SSEOutputHandler(OutputHandler):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
 
-    def confirm_tool_execution(self, tool_name: str, tool_args: Dict[str, Any]) -> bool:
+    def confirm_tool_execution(
+        self, tool_name: str, tool_args: Dict[str, Any], *, timeout: float = 120.0
+    ) -> bool:
         """Emit a permission_request event and block until the frontend responds.
 
         The /api/chat/confirm-tool endpoint calls ``resolve_tool_confirmation()``
         which sets ``_confirm_result`` and signals ``_confirm_event``.
+
+        A safety-net *timeout* (default 120 s) auto-denies if the frontend never
+        responds (e.g. browser tab closed without proper disconnect).
         """
         self._confirm_event.clear()
         self._confirm_result = None
@@ -533,12 +538,20 @@ class SSEOutputHandler(OutputHandler):
                 "args": tool_args,
             }
         )
-        # Block the agent thread until the frontend responds or the stream
-        # is cancelled.  Poll in 0.5 s increments so cancellation is responsive.
+        # Block the agent thread until the frontend responds, the stream is
+        # cancelled, or the safety-net timeout fires.
+        deadline = time.monotonic() + timeout
         while not self._confirm_event.is_set():
             if self.cancelled.is_set():
                 return False
-            self._confirm_event.wait(timeout=0.5)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    "Tool confirmation for %s timed out after %.0fs", tool_name, timeout
+                )
+                self._confirm_result = False
+                return False
+            self._confirm_event.wait(timeout=min(0.5, remaining))
         return bool(self._confirm_result)
 
     def resolve_tool_confirmation(self, approved: bool) -> None:
