@@ -17,6 +17,8 @@ import sys
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from pydantic import BaseModel
+
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
@@ -133,3 +135,30 @@ async def send_message(
         # the streaming generator took ownership.
         if not sem_released:
             chat_semaphore.release()
+
+
+class ToolConfirmRequest(BaseModel):
+    """Request body for the tool confirmation endpoint."""
+
+    session_id: str
+    approved: bool
+
+
+@router.post("/api/chat/confirm-tool")
+async def confirm_tool(request: ToolConfirmRequest):
+    """Respond to a tool confirmation prompt from the agent.
+
+    The agent blocks in ``SSEOutputHandler.confirm_tool_execution()`` until
+    this endpoint is called.  The frontend triggers this when the user
+    clicks Allow or Deny on the PermissionPrompt overlay.
+    """
+    from .._chat_helpers import _active_sse_handlers
+
+    handler = _active_sse_handlers.get(request.session_id)
+    if not handler:
+        raise HTTPException(
+            status_code=404,
+            detail="No active chat session found for this session ID",
+        )
+    handler.resolve_tool_confirmation(request.approved)
+    return {"status": "ok", "approved": request.approved}

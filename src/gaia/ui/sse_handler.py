@@ -71,6 +71,10 @@ class SSEOutputHandler(OutputHandler):
         self._tool_count = 0
         self._last_tool_name: Optional[str] = None
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
+        # Tool confirmation gate: confirm_tool_execution() blocks on this
+        # event until the frontend responds via the /api/chat/confirm-tool endpoint.
+        self._confirm_event = threading.Event()
+        self._confirm_result: Optional[bool] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -514,6 +518,36 @@ class SSEOutputHandler(OutputHandler):
             ):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
+
+    def confirm_tool_execution(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> bool:
+        """Emit a permission_request event and block until the frontend responds.
+
+        The /api/chat/confirm-tool endpoint calls ``resolve_tool_confirmation()``
+        which sets ``_confirm_result`` and signals ``_confirm_event``.
+        """
+        self._confirm_event.clear()
+        self._confirm_result = None
+        self._emit(
+            {
+                "type": "permission_request",
+                "tool": tool_name,
+                "args": tool_args,
+            }
+        )
+        # Block the agent thread until the frontend responds or the stream
+        # is cancelled.  Poll in 0.5 s increments so cancellation is responsive.
+        while not self._confirm_event.is_set():
+            if self.cancelled.is_set():
+                return False
+            self._confirm_event.wait(timeout=0.5)
+        return bool(self._confirm_result)
+
+    def resolve_tool_confirmation(self, approved: bool) -> None:
+        """Called by the /api/chat/confirm-tool endpoint to unblock the agent."""
+        self._confirm_result = approved
+        self._confirm_event.set()
 
     def signal_done(self):
         """Signal that the agent has finished processing."""

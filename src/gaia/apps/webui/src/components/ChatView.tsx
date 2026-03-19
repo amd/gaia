@@ -5,6 +5,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
+import { useNotificationStore } from '../stores/notificationStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
@@ -23,10 +24,10 @@ const EMPTY_SUGGESTIONS = [
  *
  * Primary filtering happens server-side in sse_handler.py (see _TOOL_CALL_JSON_RE).
  * This frontend regex is a secondary safety net in case any tool-call JSON leaks
- * through the SSE stream. The canonical pattern is defined in sse_handler.py;
- * keep this in sync if the server-side pattern changes.
+ * through the SSE stream. Uses quote-aware matching to avoid stripping answer
+ * content from JSON-wrapped responses. Keep in sync with the server-side pattern.
  */
-const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*"[^}]*(?:"?tool_args"?\s*:\s*\{[^}]*\})?\s*\}/g;
+const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*"(?:\s*,\s*"[^"]*"\s*:\s*(?:"(?:[^"\\]|\\.)*"|[^,}]*))*\s*\}/g;
 
 /**
  * Strip the LLM JSON envelope from streamed/accumulated content.
@@ -682,6 +683,27 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
                 if (event.type === 'step') {
                     return; // Step headers are redundant with actual tool/thinking steps
+                }
+
+                // Permission request — push to notification store for the
+                // PermissionPrompt overlay, which calls confirmTool() on response.
+                if (event.type === 'permission_request') {
+                    const { addNotification } = useNotificationStore.getState();
+                    addNotification({
+                        id: `perm-${Date.now()}`,
+                        type: 'permission_request',
+                        agentId: sessionId,
+                        agentName: 'GAIA Agent',
+                        title: `Tool: ${event.tool}`,
+                        message: `The agent wants to run "${event.tool}". Allow?`,
+                        timestamp: Date.now(),
+                        read: false,
+                        dismissed: false,
+                        priority: 'high',
+                        tool: event.tool,
+                        toolArgs: event.args,
+                    });
+                    return;
                 }
 
                 const step = agentEventToStep(event, stepIdRef);

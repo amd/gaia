@@ -34,7 +34,17 @@ CHUNK_TRUNCATION_SIZE = 2500
 # Tools that require explicit user confirmation before execution.
 # Adding a tool name here causes _execute_tool() to call
 # console.confirm_tool_execution() and block until the user responds.
-TOOLS_REQUIRING_CONFIRMATION = {"run_shell_command"}
+TOOLS_REQUIRING_CONFIRMATION = {
+    "run_shell_command",
+    "run_cli_command",
+    "write_file",
+    "write_python_file",
+    "edit_file",
+    "edit_python_file",
+    "write_markdown_file",
+    "replace_function",
+    "update_gaia_md",
+}
 
 
 class Agent(abc.ABC):
