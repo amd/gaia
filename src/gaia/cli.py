@@ -12,8 +12,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from gaia.agents.base.console import AgentConsole
-from gaia.device import GITHUB_DEVICE_SUPPORT_URL as _GITHUB_DEVICE_SUPPORT_URL
-from gaia.device import check_device_supported as _check_device_supported
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
@@ -685,54 +683,13 @@ def run_cli(action, **kwargs):
     return asyncio.run(async_main(action, **kwargs))
 
 
-def _launch_agent_ui(port=4200, base_url=None, log=None, skip_device_check=False):
+def _launch_agent_ui(port=4200, base_url=None, log=None):
     """Launch the Agent UI server (FastAPI + uvicorn).
 
     Reused by top-level --ui, gaia chat --ui, and the interactive menu.
     """
     if log is None:
         log = get_logger(__name__)
-
-    # ── Device compatibility check ───────────────────────────────────────
-    # The Agent UI relies on large local LLMs (e.g. Qwen3-Coder-30B) that
-    # require Strix Halo class hardware (AMD Ryzen AI Max).  When a remote
-    # Lemonade server is specified via --base-url the check is skipped
-    # because the heavy inference happens on the remote machine.
-    if (
-        not skip_device_check
-        and not base_url
-        and not os.environ.get("GAIA_SKIP_DEVICE_CHECK")
-    ):
-        supported, processor_name = _check_device_supported(log=log)
-        if not supported:
-            print()
-            print("=" * 60)
-            print("  UNSUPPORTED DEVICE")
-            print("=" * 60)
-            print()
-            print(f"  Detected: {processor_name}")
-            print()
-            print("  The GAIA Agent UI requires one of the following to")
-            print("  run large language models locally:")
-            print()
-            print("    - AMD Ryzen AI Max (Strix Halo) — unified HBM memory")
-            print("    - AMD Radeon GPU with >= 24 GB VRAM")
-            print()
-            print("  Want support for your device?")
-            print("  Request it on GitHub:")
-            print(f"  {_GITHUB_DEVICE_SUPPORT_URL}")
-            print()
-            print("  To bypass this check:")
-            print("    gaia --ui --skip-device-check")
-            print("    gaia chat --ui --skip-device-check")
-            print("    set GAIA_SKIP_DEVICE_CHECK=1")
-            print()
-            print("  To connect to a remote Lemonade server instead:")
-            print("    gaia --ui --base-url https://your-server:8000/api/v1")
-            print()
-            sys.exit(1)
-        else:
-            log.debug(f"Device check passed: {processor_name}")
 
     try:
         from gaia.ui.server import create_app
@@ -746,7 +703,12 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, skip_device_check=False
         log.info(f"Starting GAIA Agent UI on http://localhost:{port}")
         print(f"Starting GAIA Agent UI on http://localhost:{port}")
         print(f"   Open your browser to http://localhost:{port}")
-        print("   Press Ctrl+C to stop\n")
+        print("   Press Ctrl+C to stop")
+        print()
+        print("   Prerequisites:")
+        print("     1. Models downloaded  : gaia init --profile chat  (first time only, ~25 GB)")
+        print("     2. Lemonade running   : lemonade-server serve")
+        print()
 
         import uvicorn
 
@@ -760,6 +722,18 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, skip_device_check=False
         print("\n   Or if you installed from PyPI:\n")
         print("     pip install amd-gaia[ui]")
         print()
+        sys.exit(1)
+    except OSError as e:
+        err_str = str(e).lower()
+        # Windows WSAEADDRINUSE (10048) or WSAEACCES (10013) — port already in use
+        if "10048" in str(e) or "10013" in str(e) or "address already in use" in err_str:
+            print(f"\nPort {port} is already in use.")
+            print(f"   Another process is already listening on port {port}.")
+            print(f"   Try a different port:")
+            print(f"     gaia chat --ui --ui-port 8080")
+        else:
+            log.error(f"Error starting Agent UI: {e}")
+            print(f"Error: {e}")
         sys.exit(1)
     except Exception as e:
         log.error(f"Error starting Agent UI: {e}")
@@ -890,16 +864,10 @@ def main():
         help="Launch interactive CLI chat",
     )
     parser.add_argument(
-        "--skip-device-check",
-        action="store_true",
-        help="Skip the Strix Halo device check when launching Agent UI",
-    )
-    parser.add_argument(
         "--base-url",
         default=None,
         help=(
             "Remote Lemonade server base URL (e.g. https://host:8000/api/v1)."
-            " Skips the device check because inference runs on the remote machine."
             " Used with --ui."
         ),
     )
@@ -1062,12 +1030,6 @@ def main():
         default=4200,
         help="Port for the Agent UI server (default: 4200)",
     )
-    chat_parser.add_argument(
-        "--skip-device-check",
-        action="store_true",
-        help="Skip the Strix Halo device check when launching Agent UI",
-    )
-
     talk_parser = subparsers.add_parser(
         "talk", help="Start voice conversation with Gaia", parents=[parent_parser]
     )
@@ -2516,7 +2478,6 @@ Examples:
                 port=getattr(args, "ui_port", 4200),
                 base_url=getattr(args, "base_url", None),
                 log=log,
-                skip_device_check=getattr(args, "skip_device_check", False),
             )
             return
 
@@ -2530,7 +2491,6 @@ Examples:
             port=getattr(args, "ui_port", 4200),
             base_url=getattr(args, "base_url", None),
             log=log,
-            skip_device_check=getattr(args, "skip_device_check", False),
         )
         return
 
@@ -2546,7 +2506,6 @@ Examples:
             port=getattr(args, "ui_port", 4200),
             base_url=getattr(args, "base_url", None),
             log=log,
-            skip_device_check=getattr(args, "skip_device_check", False),
         )
         return
 
