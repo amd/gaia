@@ -10,10 +10,14 @@ Contains helper functions and data shared across multiple router modules:
 - Filesystem helpers (format_size, quick links, Windows drives)
 """
 
+import errno
 import hashlib
 import json
 import logging
+import os
+import stat as stat_module
 import string
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -280,6 +284,87 @@ def sanitize_document_path(user_path: str) -> Path:
         raise HTTPException(status_code=400, detail=detail)
 
     return resolved
+
+
+@contextmanager
+def safe_open_document(user_path: str):
+    """Open a document with TOCTOU protection.
+
+    Yields (fd, stat_result, resolved_path). The fd is closed automatically
+    when the context manager exits. Uses O_NOFOLLOW to atomically reject
+    symlinks at the kernel level, then validates via fstat on the open fd
+    (not the path) to prevent TOCTOU races.
+
+    Raises:
+        HTTPException 400: null bytes, symlink, directory, disallowed extension
+        HTTPException 403: path outside home directory
+        HTTPException 404: file not found
+    """
+    if "\x00" in user_path:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    resolved = Path(user_path).resolve()
+    ensure_within_home(resolved)
+
+    ext = resolved.suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+
+    # O_NOFOLLOW is POSIX-only; on Windows do an explicit pre-open check.
+    # (Windows symlinks require elevated privileges, so the TOCTOU window
+    # between is_symlink() and os.open() is negligible in practice.)
+    _o_nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if _o_nofollow == 0:
+        # No kernel-level symlink rejection — check manually
+        try:
+            if Path(user_path).is_symlink():
+                raise HTTPException(
+                    status_code=400, detail="Symbolic links are not supported"
+                )
+        except HTTPException:
+            raise
+        except OSError:
+            pass  # If we can't stat it, os.open below will fail with a proper error
+    try:
+        fd = os.open(user_path, os.O_RDONLY | _o_nofollow)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found")
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise HTTPException(
+                status_code=400, detail="Symbolic links are not supported"
+            )
+        raise HTTPException(status_code=400, detail=f"Cannot open file: {e}")
+
+    try:
+        st = os.fstat(fd)
+        if not stat_module.S_ISREG(st.st_mode):
+            raise HTTPException(status_code=400, detail="Path is not a regular file")
+        yield fd, st, resolved
+    finally:
+        os.close(fd)
+
+
+def compute_file_hash_from_fd(fd: int) -> str:
+    """Compute SHA-256 hash from an open file descriptor.
+
+    Uses os.dup() to create a duplicate fd for reading (so the original fd
+    position is preserved for subsequent reads). Resets original fd to
+    position 0 when done.
+    """
+    sha256 = hashlib.sha256()
+    dup_fd = os.dup(fd)
+    try:
+        f = os.fdopen(dup_fd, "rb")
+    except OSError:
+        os.close(dup_fd)
+        raise
+    # f now owns dup_fd; the with block closes it on exit (normal or exception)
+    with f:
+        for block in iter(lambda: f.read(8192), b""):
+            sha256.update(block)
+    os.lseek(fd, 0, os.SEEK_SET)
+    return sha256.hexdigest()
 
 
 def sanitize_static_path(base_dir: Path, user_path: str) -> Optional[Path]:

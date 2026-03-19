@@ -2,12 +2,20 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for MCPClientManager."""
 
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
 from gaia.mcp.client.config import MCPConfig
 from gaia.mcp.client.mcp_client_manager import MCPClientManager
+
+
+def _mock_home(monkeypatch, home_dir: Path):
+    """Monkeypatch Path.home() and HOME/USERPROFILE to use a custom directory."""
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("USERPROFILE", str(home_dir))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
 
 
 class TestMCPClientManager:
@@ -211,7 +219,7 @@ class TestMCPConfig:
         empty_dir = tmp_path / "no_local"
         empty_dir.mkdir()
         monkeypatch.chdir(empty_dir)
-        monkeypatch.setenv("HOME", str(tmp_path))
+        _mock_home(monkeypatch, tmp_path)
 
         config = MCPConfig()
 
@@ -417,7 +425,7 @@ class TestMCPConfig:
         )
 
         monkeypatch.chdir(local_dir)
-        monkeypatch.setenv("HOME", str(global_dir))
+        _mock_home(monkeypatch, global_dir)
 
         config = MCPConfig()
 
@@ -450,7 +458,7 @@ class TestMCPConfig:
         )
 
         monkeypatch.chdir(local_dir)
-        monkeypatch.setenv("HOME", str(global_dir))
+        _mock_home(monkeypatch, global_dir)
 
         config = MCPConfig()
 
@@ -482,7 +490,7 @@ class TestMCPConfig:
         )
 
         monkeypatch.chdir(local_dir)
-        monkeypatch.setenv("HOME", str(global_dir))
+        _mock_home(monkeypatch, global_dir)
 
         config = MCPConfig()
 
@@ -510,7 +518,7 @@ class TestMCPConfig:
         )
 
         monkeypatch.chdir(local_dir)
-        monkeypatch.setenv("HOME", str(global_dir))
+        _mock_home(monkeypatch, global_dir)
 
         config = MCPConfig()
 
@@ -532,7 +540,7 @@ class TestMCPConfig:
         )
 
         monkeypatch.chdir(local_dir)
-        monkeypatch.setenv("HOME", str(global_dir))
+        _mock_home(monkeypatch, global_dir)
 
         config = MCPConfig()
 
@@ -555,7 +563,7 @@ class TestMCPConfig:
         )
 
         monkeypatch.chdir(local_dir)
-        monkeypatch.setenv("HOME", str(global_dir))
+        _mock_home(monkeypatch, global_dir)
 
         config = MCPConfig()
 
@@ -569,7 +577,7 @@ class TestMCPConfig:
         local_dir.mkdir(parents=True)
 
         monkeypatch.chdir(local_dir)
-        monkeypatch.setenv("HOME", str(global_dir))
+        _mock_home(monkeypatch, global_dir)
 
         config = MCPConfig()
 
@@ -605,7 +613,7 @@ class TestMCPConfig:
         )
 
         monkeypatch.chdir(local_dir)
-        monkeypatch.setenv("HOME", str(global_dir))
+        _mock_home(monkeypatch, global_dir)
 
         config = MCPConfig(config_file=str(explicit_config))
 
@@ -634,7 +642,7 @@ class TestMCPConfig:
         )
 
         monkeypatch.chdir(local_dir)
-        monkeypatch.setenv("HOME", str(global_dir))
+        _mock_home(monkeypatch, global_dir)
 
         config = MCPConfig()
 
