@@ -1,20 +1,24 @@
 ---
-description: Finalizes implementation by merging main, running the GAIA claude.yml code review (Opus), fixing issues, linting, and looping until tests pass.
+description: Finalizes implementation by rebasing onto main, running the GAIA claude.yml code review (Opus), fixing issues, linting, and looping until tests pass.
 ---
 
 You are finalizing the current branch's implementation. Work through the following steps in order. Be thorough and methodical — fix every issue you find before moving on.
 
 ---
 
-## Step 1: Merge Latest from Main
+## Step 1: Rebase onto Latest Main
 
 1. Record the current branch: `git rev-parse --abbrev-ref HEAD`
-2. Switch to main and pull: `git checkout main && git pull`
-3. Switch back to the feature branch: `git checkout <branch>`
-4. Merge main: `git merge main`
-5. If merge conflicts exist, resolve them intelligently based on the intent of both sides. Prefer the feature branch changes unless main has clearly superseded them. Commit the resolution.
-
-After merging, confirm you're back on the feature branch and working tree is clean.
+2. Verify the working tree is clean: `git status --porcelain`
+   - If dirty: stop and tell the user to commit or stash their changes first.
+3. Fetch latest: `git fetch origin main`
+4. Rebase onto main: `git rebase origin/main`
+   - If conflicts arise, resolve them per-commit. Prefer the feature branch intent unless main has clearly superseded it. After resolving each conflict: `git add <files>` then `git rebase --continue`.
+   - If the rebase becomes intractable, run `git rebase --abort` and fall back to `git merge origin/main` with a warning to the user.
+5. Push the rebased branch:
+   - If no remote tracking branch exists yet: `git push -u origin <branch>`
+   - If remote branch exists: `git push --force-with-lease`
+6. Confirm success: `git log --oneline origin/main..HEAD` should show only feature commits, no merge commits.
 
 ---
 
@@ -127,7 +131,7 @@ When the loop exits with everything passing, report:
 ✅ FINALIZE COMPLETE
 
 Branch: <branch-name>
-Merged from: main
+Rebased onto: main
 
 Code Review: No Critical or Important issues remaining
 Lint: Passing
