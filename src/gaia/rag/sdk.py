@@ -142,8 +142,11 @@ class RAGSDK:
         )  # {file_path: {'full_text': str, 'num_pages': int, 'vlm_pages': int, ...}}
 
         # LRU tracking for memory management
-        self.file_access_times = {}  # {file_path: last_access_time}
-        self.file_index_times = {}  # {file_path: index_time}
+        # Uses a monotonic counter (not time.time()) to guarantee strict ordering
+        # even on platforms with coarse clock resolution (e.g. ~15ms on Windows).
+        self._access_counter = 0
+        self.file_access_times = {}  # {file_path: monotonic access counter}
+        self.file_index_times = {}  # {file_path: index_time (wall clock for display)}
 
         # Create cache directory
         os.makedirs(self.config.cache_dir, exist_ok=True)
@@ -1822,7 +1825,8 @@ These positions indicate where to split the text."""
                     # Track access time for LRU (was missing — pre-existing bug)
                     current_time = time.time()
                     self.file_index_times[file_path] = current_time
-                    self.file_access_times[file_path] = current_time
+                    self._access_counter += 1
+                    self.file_access_times[file_path] = self._access_counter
 
                     if self.config.show_stats:
                         print("  ✅ Successfully loaded from cache")
@@ -1958,7 +1962,8 @@ These positions indicate where to split the text."""
             # Track index time for LRU
             current_time = time.time()
             self.file_index_times[file_path] = current_time
-            self.file_access_times[file_path] = current_time
+            self._access_counter += 1
+            self.file_access_times[file_path] = self._access_counter
 
             # Check memory limits and evict if necessary
             limits_ok = self._check_memory_limits()
@@ -2015,7 +2020,8 @@ These positions indicate where to split the text."""
             raise ValueError(f"File not indexed: {file_path}")
 
         # Update access time for LRU tracking
-        self.file_access_times[file_path] = time.time()
+        self._access_counter += 1
+        self.file_access_times[file_path] = self._access_counter
 
         # Get chunk indices for this file
         file_chunk_indices = self.file_to_chunk_indices[file_path]

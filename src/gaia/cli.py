@@ -587,8 +587,8 @@ async def async_main(action, **kwargs):
                 chunk_size=kwargs.get("chunk_size", 500),
                 max_chunks=kwargs.get("max_chunks", 3),
                 allowed_paths=kwargs.get("allowed_paths", None),
-                max_indexed_files=kwargs.get("max_indexed_files", 100),
-                max_total_chunks=kwargs.get("max_total_chunks", 10000),
+                max_indexed_files=kwargs.get("max_indexed_files"),
+                max_total_chunks=kwargs.get("max_total_chunks"),
             )
 
             # Create Chat Agent with configuration

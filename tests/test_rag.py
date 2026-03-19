@@ -756,8 +756,13 @@ class TestMemoryLimits:
                 assert result["max_indexed_files"] == 100
                 assert result["max_total_chunks"] == 10000
 
-    def test_eviction_failure_logged(self, mock_dependencies, caplog):
-        """Test that eviction failure is logged with a warning."""
+    def test_preflight_rejection_logged(self, mock_dependencies, caplog):
+        """Test that pre-flight capacity rejection is logged when eviction is disabled.
+
+        When enable_lru_eviction=False and the file limit is reached,
+        _has_indexing_capacity returns False BEFORE _check_memory_limits
+        is called, so the rejection happens at the pre-flight check.
+        """
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
@@ -793,6 +798,63 @@ class TestMemoryLimits:
                     keyword in log_messages
                     for keyword in ["Memory limit", "cannot", "eviction"]
                 ), f"Expected memory limit warning in logs, got: {log_messages}"
+
+    def test_eviction_failure_logged(self, mock_dependencies, caplog):
+        """Test that a warning is logged when LRU eviction fails to free memory.
+
+        With enable_lru_eviction=True, _has_indexing_capacity passes
+        the pre-flight check (eviction could theoretically free space).
+        After indexing, _check_memory_limits calls _evict_lru_document,
+        which calls remove_document. If remove_document returns False,
+        eviction fails and a warning about exceeding the file limit is logged.
+        """
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        import logging
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(
+                cache_dir=temp_dir,
+                max_indexed_files=1,
+                enable_lru_eviction=True,
+                show_stats=False,
+            )
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create two temp PDF files
+                pdf1 = Path(temp_dir) / "doc1.pdf"
+                pdf1.write_text("dummy content 1")
+                pdf2 = Path(temp_dir) / "doc2.pdf"
+                pdf2.write_text("dummy content 2")
+
+                # Index first doc - succeeds normally
+                result1 = rag.index_document(str(pdf1))
+                assert result1["success"] is True
+
+                # Mock remove_document to return False so eviction fails
+                with (
+                    patch.object(rag, "remove_document", return_value=False),
+                    caplog.at_level(logging.WARNING),
+                ):
+                    result2 = rag.index_document(str(pdf2))
+
+                # The document still gets indexed (success=True) but
+                # _check_memory_limits logs a warning about eviction failure
+                assert result2["success"] is True
+
+                # Verify warning about eviction failure was logged
+                log_messages = " ".join(r.message for r in caplog.records)
+                assert any(
+                    keyword in log_messages
+                    for keyword in [
+                        "eviction failed",
+                        "Failed to evict",
+                        "Cannot meet file limit",
+                    ]
+                ), f"Expected eviction failure warning in logs, got: {log_messages}"
 
     def test_cache_load_tracks_access_times(self, mock_dependencies):
         """Test that loading from cache sets file_access_times and file_index_times."""

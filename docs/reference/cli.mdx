@@ -400,6 +400,8 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
 | `--chunk-size` | integer | 500 | Document chunk size for RAG |
 | `--max-chunks` | integer | 3 | Maximum chunks to retrieve for RAG |
+| `--max-indexed-files` | integer | 100 | Maximum number of files to keep indexed. Evicts least-recently-accessed files when LRU eviction is enabled; rejects new files when disabled. |
+| `--max-total-chunks` | integer | 10000 | Maximum total chunks across all indexed files. Same eviction behavior as `--max-indexed-files`. |
 | `--stats` | flag | false | Show performance statistics |
 | `--streaming` | flag | false | Enable streaming responses |
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
