@@ -69,6 +69,7 @@ gaia --cli      # Launch interactive CLI chat instead
 | `--ui` | Launch the Agent UI (browser-based chat interface) — this is the default |
 | `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
 | `--cli` | Launch interactive CLI chat |
+| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:8000/api/v1`). |
 
 **Examples:**
 
@@ -84,10 +85,14 @@ gaia --ui-port 8080
 ```bash Launch CLI Chat
 gaia --cli
 ```
+
+```bash Remote Lemonade Server
+gaia --ui --base-url https://your-server:8000/api/v1
+```
 </CodeGroup>
 
 <Note>
-  `gaia chat --ui` continues to work as an alias.
+  `gaia chat --ui` continues to work as an alias. The Agent UI requires an AMD Ryzen AI Max (Strix Halo) or an AMD Radeon GPU with ≥ 24 GB VRAM. If your device is not supported, a dismissible warning banner will appear in the UI.
 </Note>
 
 ---

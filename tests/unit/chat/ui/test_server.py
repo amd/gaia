@@ -116,6 +116,53 @@ class TestSystemStatus:
         data = resp.json()
         assert data["disk_space_gb"] >= 0
 
+    def test_system_status_device_supported_fields_present(self, client):
+        """device_supported and processor_name fields must be present."""
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert "device_supported" in data
+        assert isinstance(data["device_supported"], bool)
+        # processor_name is optional (may be None)
+        assert "processor_name" in data
+
+    def test_system_status_skip_device_check_env_forces_supported(self, client):
+        """GAIA_SKIP_DEVICE_CHECK=1 makes device_supported always true."""
+        with patch.dict(os.environ, {"GAIA_SKIP_DEVICE_CHECK": "1"}):
+            with patch(
+                "gaia.device.check_device_supported", return_value=(False, "linux")
+            ):
+                resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["device_supported"] is True
+
+    def test_system_status_remote_lemonade_url_skips_device_check(self, client):
+        """Non-localhost LEMONADE_BASE_URL means device_supported is always true."""
+        with patch.dict(
+            os.environ, {"LEMONADE_BASE_URL": "https://remote-server:8000/api/v1"}
+        ):
+            with patch(
+                "gaia.device.check_device_supported",
+                return_value=(False, "AMD Ryzen 7 5800X"),
+            ):
+                resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["device_supported"] is True
+
+    def test_system_status_localhost_lemonade_url_still_checks_device(self, client):
+        """localhost LEMONADE_BASE_URL still runs the device check normally."""
+        with patch.dict(
+            os.environ,
+            {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"},
+            clear=False,
+        ):
+            with patch(
+                "gaia.device.check_device_supported",
+                return_value=(False, "AMD Ryzen 7 5800X"),
+            ):
+                resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["device_supported"] is False
+
 
 class TestSessionEndpoints:
     """Tests for /api/sessions/* endpoints."""
@@ -548,40 +595,37 @@ class TestDocumentEndpoints:
     def test_upload_by_path_success(self, mock_index, client):
         mock_index.return_value = 15
 
-        # Use home directory so safe_open_document() home-confinement check passes
         from pathlib import Path
 
-        home_tmp = Path.home() / "tmp_gaia_test_upload_success"
-        home_tmp.mkdir(exist_ok=True)
-        tmp_file = home_tmp / "test_upload.txt"
-        tmp_file.write_bytes(b"test content for hashing")
+        # Use home directory so the path passes the home-confinement check
+        # on all platforms (CI Linux uses /tmp which is outside home).
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False, dir=Path.home()
+        ) as f:
+            f.write(b"test content for hashing")
+            tmp_path = f.name
 
         try:
             resp = client.post(
-                "/api/documents/upload-path", json={"filepath": str(tmp_file)}
+                "/api/documents/upload-path", json={"filepath": tmp_path}
             )
             assert resp.status_code == 200
             data = resp.json()
-            assert data["filename"] == tmp_file.name
+            assert data["filename"] == os.path.basename(tmp_path)
             assert data["chunk_count"] == 15
             assert data["file_size"] > 0
         finally:
-            tmp_file.unlink(missing_ok=True)
-            home_tmp.rmdir()
+            os.unlink(tmp_path)
 
     @patch("gaia.ui.server._index_document")
     def test_upload_by_path_directory_returns_400(self, mock_index, client):
         from pathlib import Path
 
-        home_tmp = Path.home() / "tmp_gaia_test_upload_dir"
-        home_tmp.mkdir(exist_ok=True)
-        try:
-            resp = client.post(
-                "/api/documents/upload-path", json={"filepath": str(home_tmp)}
-            )
+        # Use home directory so the path passes the home-confinement check
+        # on all platforms (CI Linux uses /tmp which is outside home).
+        with tempfile.TemporaryDirectory(dir=Path.home()) as tmp_dir:
+            resp = client.post("/api/documents/upload-path", json={"filepath": tmp_dir})
             assert resp.status_code == 400
-        finally:
-            home_tmp.rmdir()
 
     def test_delete_document(self, client, db):
         doc = db.add_document("delete.pdf", "/del.pdf", "del_hash")
@@ -796,14 +840,17 @@ class TestValidateFilePath:
         """Integration test: upload endpoint rejects unsafe file types."""
         from pathlib import Path
 
-        home_tmp = Path.home() / "tmp_gaia_test_upload_unsafe"
-        home_tmp.mkdir(exist_ok=True)
-        tmp_file = home_tmp / "test_unsafe.exe"
-        tmp_file.write_bytes(b"fake executable")
+        # Use home directory so the path passes the home-confinement check
+        # on all platforms (CI Linux uses /tmp which is outside home).
+        with tempfile.NamedTemporaryFile(
+            suffix=".exe", delete=False, dir=Path.home()
+        ) as f:
+            f.write(b"fake executable")
+            tmp_path = f.name
 
         try:
             resp = client.post(
-                "/api/documents/upload-path", json={"filepath": str(tmp_file)}
+                "/api/documents/upload-path", json={"filepath": tmp_path}
             )
             assert resp.status_code == 400
             detail = resp.json()["detail"]
@@ -816,8 +863,7 @@ class TestValidateFilePath:
                 )
             )
         finally:
-            tmp_file.unlink(missing_ok=True)
-            home_tmp.rmdir()
+            os.unlink(tmp_path)
 
 
 class TestSanitizeDocumentPath:

@@ -22,11 +22,29 @@
     padding: 8px 12px;
     border-radius: var(--radius-sm);
     background: var(--bg-secondary);
+    gap: 8px;
 }
-.status-label { font-size: 13px; }
+.status-row--has-hint { align-items: flex-start; }
+.status-label { font-size: 13px; flex-shrink: 0; padding-top: 1px; }
+.status-value-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 0; }
 .status-value { font-size: 13px; font-weight: 600; }
 .status-value.ok { color: #22c55e; }
 .status-value.warn { color: #f59e0b; }
+.status-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 400;
+}
+.status-hint code {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.07);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+[data-theme="dark"] .status-hint code { background: rgba(255, 255, 255, 0.07); }
 
 .status-error {
     padding: 16px;

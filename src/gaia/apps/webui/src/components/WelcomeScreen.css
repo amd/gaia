@@ -70,6 +70,45 @@
 .feature-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
 .feature-card p { font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
 
+/* ── First-run setup hint ─────────────────────────────────────── */
+.welcome-setup-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 20px;
+    padding: 10px 14px;
+    border: 1px solid #fed7aa;
+    border-radius: var(--radius-md);
+    background: #fffbeb;
+    color: #92400e;
+    font-size: 12px;
+    text-align: left;
+    line-height: 1.5;
+}
+
+.welcome-setup-hint svg {
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.welcome-setup-hint code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.07);
+}
+
+[data-theme="dark"] .welcome-setup-hint {
+    background: #120e05;
+    border-color: #2a1e08;
+    color: #fcd34d;
+}
+
+[data-theme="dark"] .welcome-setup-hint code {
+    background: rgba(255, 255, 255, 0.08);
+}
+
 .start-btn { margin-bottom: 28px; padding: 12px 36px; font-size: 15px; }
 
 .suggestions { display: flex; flex-direction: column; align-items: center; gap: 10px; }
