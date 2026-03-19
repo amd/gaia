@@ -36,7 +36,7 @@ class ChatAgentConfig:
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None
-    model_id: Optional[str] = None  # None = use default Qwen3-Coder-30B
+    model_id: Optional[str] = None  # None = use default Qwen3.5-35B-A3B
 
     # Execution settings
     max_steps: int = 10
@@ -115,8 +115,8 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use Qwen3-Coder-30B by default for better JSON parsing (same as Jira agent)
-        effective_model_id = config.model_id or "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        # Use Qwen3.5-35B-A3B by default for better JSON parsing (same as Jira agent)
+        effective_model_id = config.model_id or "unsloth/Qwen3.5-35B-A3B-GGUF:Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf"
 
         # Debug logging for model selection
         logger.debug(
@@ -296,6 +296,7 @@ No documents are currently indexed.
             platform_hint = f"""
 **SYSTEM PLATFORM:** Windows ({os_version}, {machine})
 - Use Windows commands: `systeminfo`, `wmic cpu get name`, `wmic path win32_videocontroller get name`, `tasklist`, `ipconfig`, `driverquery`
+- For network queries: prefer `ipconfig` over PowerShell. The primary adapter is the one with a real Default Gateway (e.g., 192.168.x.1). Ignore virtual adapters (Hyper-V, WSL, VPN tunnels) unless specifically asked.
 - Use `powershell -Command "Get-WmiObject Win32_Processor | Select-Object Name"` for detailed hardware queries
 - Use `powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM"` for GPU info
 - Do NOT use Linux commands (lscpu, /proc/cpuinfo, /sys/..., uname). They do not exist on Windows.
