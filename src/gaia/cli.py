@@ -706,7 +706,9 @@ def _launch_agent_ui(port=4200, base_url=None, log=None):
         print("   Press Ctrl+C to stop")
         print()
         print("   Prerequisites:")
-        print("     1. Models downloaded  : gaia init --profile chat  (first time only, ~25 GB)")
+        print(
+            "     1. Models downloaded  : gaia init --profile chat  (first time only, ~25 GB)"
+        )
         print("     2. Lemonade running   : lemonade-server serve")
         print()
 
@@ -726,11 +728,15 @@ def _launch_agent_ui(port=4200, base_url=None, log=None):
     except OSError as e:
         err_str = str(e).lower()
         # Windows WSAEADDRINUSE (10048) or WSAEACCES (10013) — port already in use
-        if "10048" in str(e) or "10013" in str(e) or "address already in use" in err_str:
+        if (
+            "10048" in str(e)
+            or "10013" in str(e)
+            or "address already in use" in err_str
+        ):
             print(f"\nPort {port} is already in use.")
             print(f"   Another process is already listening on port {port}.")
-            print(f"   Try a different port:")
-            print(f"     gaia chat --ui --ui-port 8080")
+            print("   Try a different port:")
+            print("     gaia chat --ui --ui-port 8080")
         else:
             log.error(f"Error starting Agent UI: {e}")
             print(f"Error: {e}")

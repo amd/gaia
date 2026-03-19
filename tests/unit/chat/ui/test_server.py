@@ -141,7 +141,8 @@ class TestSystemStatus:
             os.environ, {"LEMONADE_BASE_URL": "https://remote-server:8000/api/v1"}
         ):
             with patch(
-                "gaia.device.check_device_supported", return_value=(False, "AMD Ryzen 7 5800X")
+                "gaia.device.check_device_supported",
+                return_value=(False, "AMD Ryzen 7 5800X"),
             ):
                 resp = client.get("/api/system/status")
         data = resp.json()
