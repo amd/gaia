@@ -115,7 +115,7 @@ def get_gpu_info() -> list[tuple[str, float]]:
 def check_device_supported(log=None) -> tuple[bool, str]:
     """Check if the current device is supported for running the Agent UI.
 
-    Supported configurations:
+    Supported configurations (Windows only — Linux/macOS support coming soon):
 
     - **AMD Ryzen AI Max** (Strix Halo) — unified HBM memory (64 GB+).
     - **AMD Radeon discrete GPU** with >= 24 GB VRAM to fit Qwen3-Coder-30B.
@@ -128,6 +128,12 @@ def check_device_supported(log=None) -> tuple[bool, str]:
         CPU or GPU name (includes VRAM for GPU matches), or the CPU name
         when the device is rejected.
     """
+    # OS check — Agent UI is Windows-only for now
+    if sys.platform != "win32":
+        if log:
+            log.debug(f"Unsupported OS: {sys.platform}")
+        return False, sys.platform
+
     processor_name = get_processor_name()
     if log:
         log.debug(f"Detected processor: {processor_name}")

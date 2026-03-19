@@ -175,3 +175,24 @@ class TestCheckDeviceSupported:
                 supported, name = _check_device_supported()
         assert name == cpu
         assert supported is True
+
+    # ── OS check ───────────────────────────────────────────────────────
+
+    @pytest.mark.parametrize("platform_name", ["linux", "darwin", "freebsd"])
+    def test_non_windows_os_is_rejected(self, platform_name):
+        """Non-Windows platforms are rejected immediately (Agent UI is Windows-only)."""
+        with patch.object(sys, "platform", platform_name):
+            supported, name = _check_device_supported()
+        assert supported is False
+        assert name == platform_name
+
+    def test_windows_os_proceeds_to_hardware_check(self):
+        """On Windows, the OS check passes and hardware check runs."""
+        with patch.object(sys, "platform", "win32"):
+            with patch(
+                "gaia.device.get_processor_name",
+                return_value="AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+            ):
+                with patch("gaia.device.get_gpu_info", return_value=_NO_GPUS):
+                    supported, _ = _check_device_supported()
+        assert supported is True

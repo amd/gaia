@@ -129,12 +129,20 @@ async def system_status():
     init_marker = Path.home() / ".gaia" / "chat" / "initialized"
     status.initialized = init_marker.exists()
 
-    # Device support check — respect GAIA_SKIP_DEVICE_CHECK for consistency
-    # with the CLI bypass so the UI banner matches the launch-time decision.
+    # Device support check.
+    # Skipped when:
+    #   1. GAIA_SKIP_DEVICE_CHECK env var is set (explicit override)
+    #   2. LEMONADE_BASE_URL points to a non-localhost server — inference runs
+    #      remotely so local hardware requirements don't apply.
     try:
         from gaia.device import check_device_supported, get_processor_name
 
-        if os.environ.get("GAIA_SKIP_DEVICE_CHECK"):
+        lemonade_url = os.environ.get("LEMONADE_BASE_URL", "")
+        is_remote = lemonade_url and not any(
+            loc in lemonade_url for loc in ("localhost", "127.0.0.1", "::1")
+        )
+
+        if os.environ.get("GAIA_SKIP_DEVICE_CHECK") or is_remote:
             status.device_supported = True
             status.processor_name = get_processor_name() or "unknown"
         else:
@@ -142,7 +150,7 @@ async def system_status():
             status.processor_name = device_name
             status.device_supported = supported
     except Exception:
-        pass  # Unknown device — don't block the UI after it's already running
+        pass  # Unknown device — don't block the UI
 
     return status
 

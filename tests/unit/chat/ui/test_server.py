@@ -116,6 +116,52 @@ class TestSystemStatus:
         data = resp.json()
         assert data["disk_space_gb"] >= 0
 
+    def test_system_status_device_supported_fields_present(self, client):
+        """device_supported and processor_name fields must be present."""
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert "device_supported" in data
+        assert isinstance(data["device_supported"], bool)
+        # processor_name is optional (may be None)
+        assert "processor_name" in data
+
+    def test_system_status_skip_device_check_env_forces_supported(self, client):
+        """GAIA_SKIP_DEVICE_CHECK=1 makes device_supported always true."""
+        with patch.dict(os.environ, {"GAIA_SKIP_DEVICE_CHECK": "1"}):
+            with patch(
+                "gaia.device.check_device_supported", return_value=(False, "linux")
+            ):
+                resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["device_supported"] is True
+
+    def test_system_status_remote_lemonade_url_skips_device_check(self, client):
+        """Non-localhost LEMONADE_BASE_URL means device_supported is always true."""
+        with patch.dict(
+            os.environ, {"LEMONADE_BASE_URL": "https://remote-server:8000/api/v1"}
+        ):
+            with patch(
+                "gaia.device.check_device_supported", return_value=(False, "AMD Ryzen 7 5800X")
+            ):
+                resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["device_supported"] is True
+
+    def test_system_status_localhost_lemonade_url_still_checks_device(self, client):
+        """localhost LEMONADE_BASE_URL still runs the device check normally."""
+        with patch.dict(
+            os.environ,
+            {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"},
+            clear=False,
+        ):
+            with patch(
+                "gaia.device.check_device_supported",
+                return_value=(False, "AMD Ryzen 7 5800X"),
+            ):
+                resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["device_supported"] is False
+
 
 class TestSessionEndpoints:
     """Tests for /api/sessions/* endpoints."""
