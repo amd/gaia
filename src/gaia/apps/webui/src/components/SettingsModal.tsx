@@ -94,11 +94,32 @@ export function SettingsModal() {
                             <p className="loading-text">Checking system...</p>
                         ) : status ? (
                             <div className="status-grid">
-                                <StatusRow label="Lemonade Server" value={status.lemonade_running ? 'Running' : 'Not Running'} ok={status.lemonade_running} />
+                                <StatusRow label="Lemonade Server" value={status.lemonade_running ? `Running${status.lemonade_version ? ` v${status.lemonade_version}` : ''}` : 'Not Running'} ok={status.lemonade_running} />
                                 <StatusRow label="Model" value={status.model_loaded || 'None loaded'} ok={!!status.model_loaded} />
+                                {status.model_size_gb != null && (
+                                    <StatusRow label="Model Size" value={`${status.model_size_gb} GB`} ok={true} />
+                                )}
+                                {status.model_device && (
+                                    <StatusRow label="Device" value={status.model_device.toUpperCase()} ok={status.model_device !== 'cpu'} />
+                                )}
+                                {status.model_context_size != null && (
+                                    <StatusRow label="Context Window" value={`${(status.model_context_size / 1024).toFixed(0)}K tokens`} ok={true} />
+                                )}
+                                {status.model_labels && status.model_labels.length > 0 && (
+                                    <StatusRow label="Capabilities" value={status.model_labels.join(', ')} ok={true} />
+                                )}
                                 <StatusRow label="Embedding Model" value={status.embedding_model_loaded ? 'Available' : 'Not loaded'} ok={status.embedding_model_loaded} />
+                                {status.gpu_name && (
+                                    <StatusRow label="GPU" value={`${status.gpu_name}${status.gpu_vram_gb ? ` (${status.gpu_vram_gb} GB)` : ''}`} ok={true} />
+                                )}
                                 <StatusRow label="Disk Space" value={`${status.disk_space_gb} GB free`} ok={status.disk_space_gb > 5} />
                                 <StatusRow label="Memory" value={`${status.memory_available_gb} GB available`} ok={status.memory_available_gb > 2} />
+                                {status.tokens_per_second != null && (
+                                    <StatusRow label="Inference Speed" value={`${status.tokens_per_second} tok/s`} ok={status.tokens_per_second > 10} />
+                                )}
+                                {status.time_to_first_token != null && (
+                                    <StatusRow label="Time to First Token" value={`${(status.time_to_first_token * 1000).toFixed(0)} ms`} ok={status.time_to_first_token < 1} />
+                                )}
                                 {status.processor_name && (
                                     <StatusRow
                                         label="Processor"

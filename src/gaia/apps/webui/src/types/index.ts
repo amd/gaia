@@ -66,6 +66,16 @@ export interface SystemStatus {
     memory_available_gb: number;
     initialized: boolean;
     version: string;
+    // Extended Lemonade info
+    lemonade_version: string | null;
+    model_size_gb: number | null;
+    model_device: string | null;
+    model_context_size: number | null;
+    model_labels: string[] | null;
+    gpu_name: string | null;
+    gpu_vram_gb: number | null;
+    tokens_per_second: number | null;
+    time_to_first_token: number | null;
     // Device compatibility check
     processor_name: string | null;
     device_supported: boolean;
