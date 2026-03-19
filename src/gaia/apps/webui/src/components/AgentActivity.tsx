@@ -343,7 +343,7 @@ function linkifyPaths(text: string): React.ReactNode {
             parts.push(text.slice(lastIndex, match.index));
         }
         const rawMatch = match[0];
-        const filePath = rawMatch.replace(/[)}\]]+$/, ''); // trim trailing brackets
+        const filePath = rawMatch.replace(/[)}]+$/, ''); // trim trailing ) and } only
         const handleClick = () => {
             api.openFileOrFolder(filePath).catch((err) => log.ui.error('Failed to open path', err));
         };
