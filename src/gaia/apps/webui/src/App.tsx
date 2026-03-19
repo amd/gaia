@@ -74,15 +74,49 @@ function App() {
 
     // ── Check system status (Lemonade, backend connectivity) ────────
     const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    // Track consecutive "lemonade not running" reports so a single slow
+    // health-check under heavy load doesn't immediately show the warning banner.
+    const lemonadeFailCountRef = useRef(0);
+    const LEMONADE_FAIL_THRESHOLD = 3; // require 3 consecutive failures (~45s)
 
     const checkSystemStatus = useCallback(async () => {
         try {
             const status = await api.getSystemStatus();
-            setSystemStatus(status);
             setBackendConnected(true);
+
+            if (status.lemonade_running) {
+                // Server confirmed running — reset failure counter
+                lemonadeFailCountRef.current = 0;
+                setSystemStatus(status);
+            } else {
+                // Server reported Lemonade not running — might be a transient
+                // timeout when the LLM is overwhelmed with parallel requests.
+                lemonadeFailCountRef.current += 1;
+                log.system.warn(
+                    `Lemonade health check failed (${lemonadeFailCountRef.current}/${LEMONADE_FAIL_THRESHOLD})`
+                );
+
+                if (lemonadeFailCountRef.current >= LEMONADE_FAIL_THRESHOLD) {
+                    // Enough consecutive failures — propagate the "not running" state
+                    setSystemStatus(status);
+                } else {
+                    // Below threshold — keep the previous (good) status to avoid
+                    // flashing the warning banner on transient timeouts.
+                    // Still update non-lemonade fields (disk, memory, etc).
+                    const prev = useChatStore.getState().systemStatus;
+                    if (prev && prev.lemonade_running) {
+                        setSystemStatus({ ...prev, disk_space_gb: status.disk_space_gb, memory_available_gb: status.memory_available_gb });
+                    } else {
+                        // No previous good status — show what we have
+                        setSystemStatus(status);
+                    }
+                }
+            }
+
             log.system.info('System status:', {
                 lemonade: status.lemonade_running,
                 model: status.model_loaded,
+                failCount: lemonadeFailCountRef.current,
             });
         } catch (err) {
             log.system.warn('System status check failed', err);
@@ -105,27 +139,53 @@ function App() {
 
     // Startup banner + load sessions on mount, then poll for changes
     const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const lastSessionCountRef = useRef<number>(0);
+    /** Fingerprint of the last server session list (id:updated_at:title per session). */
+    const lastSessionFingerprintRef = useRef<string>('');
 
     useEffect(() => {
         logBanner(__APP_VERSION__);
         log.system.info('App mounting, loading sessions...');
         const t = log.system.time();
 
+        /** Build a cheap fingerprint string for a session list so we can detect
+         *  any change — new/deleted sessions, title edits, updated_at bumps. */
+        const fingerprint = (sessions: Array<{ id: string; updated_at: string; title: string }>) =>
+            sessions.map((s) => `${s.id}|${s.updated_at}|${s.title}`).join('\n');
+
         const loadSessions = (isInitial = false) => {
             api.listSessions()
                 .then((data) => {
-                    const sessions = data.sessions || [];
+                    const serverSessions = data.sessions || [];
                     if (isInitial) {
-                        setSessions(sessions);
+                        setSessions(serverSessions);
                         setBackendConnected(true);
-                        log.system.timed(`Loaded ${sessions.length} session(s)`, t);
-                    } else if (sessions.length !== lastSessionCountRef.current) {
-                        // New or deleted session detected — refresh list
-                        log.system.info(`Session list changed: ${lastSessionCountRef.current} -> ${sessions.length}`);
-                        setSessions(sessions);
+                        lastSessionFingerprintRef.current = fingerprint(serverSessions);
+                        log.system.timed(`Loaded ${serverSessions.length} session(s)`, t);
+                        return;
                     }
-                    lastSessionCountRef.current = sessions.length;
+
+                    // Guard: never replace a populated sidebar with an empty list.
+                    // This prevents transient backend glitches (restart, slow DB)
+                    // from wiping the user's session list.
+                    const localSessions = useChatStore.getState().sessions;
+                    if (serverSessions.length === 0 && localSessions.length > 0) {
+                        log.system.warn(
+                            'Session poll returned 0 sessions but sidebar has '
+                            + `${localSessions.length} — skipping update to prevent data loss`
+                        );
+                        return;
+                    }
+
+                    // Compare fingerprints to detect ANY change (count, titles,
+                    // updated_at timestamps) — not just count changes.
+                    const fp = fingerprint(serverSessions);
+                    if (fp !== lastSessionFingerprintRef.current) {
+                        log.system.info(
+                            `Session list changed (${localSessions.length} → ${serverSessions.length} sessions)`
+                        );
+                        setSessions(serverSessions);
+                        lastSessionFingerprintRef.current = fp;
+                    }
                 })
                 .catch((err) => {
                     if (isInitial) {
