@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends
 
@@ -63,9 +64,9 @@ async def system_status():
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
 
-                # Fetch last inference stats
+                # Fetch last inference stats (short timeout — supplementary info)
                 try:
-                    stats_resp = await client.get(f"{base_url}/stats")
+                    stats_resp = await client.get(f"{base_url}/stats", timeout=3.0)
                     if stats_resp.status_code == 200:
                         stats_data = stats_resp.json()
                         tps = stats_data.get("tokens_per_second")
@@ -77,9 +78,11 @@ async def system_status():
                 except Exception:
                     pass
 
-                # Fetch GPU info
+                # Fetch GPU info (short timeout — supplementary info)
                 try:
-                    sysinfo_resp = await client.get(f"{base_url}/system-info")
+                    sysinfo_resp = await client.get(
+                        f"{base_url}/system-info", timeout=3.0
+                    )
                     if sysinfo_resp.status_code == 200:
                         devices = sysinfo_resp.json().get("devices", {})
                         for key, dev in devices.items():
@@ -143,10 +146,12 @@ async def system_status():
             "yes",
         )
         lemonade_url = os.environ.get("LEMONADE_BASE_URL", "")
-        _LOCAL_ADDRS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
-        is_remote = lemonade_url and not any(
-            loc in lemonade_url for loc in _LOCAL_ADDRS
-        )
+        _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", ""}
+        try:
+            _parsed_hostname = urlparse(lemonade_url).hostname or ""
+        except Exception:
+            _parsed_hostname = ""
+        is_remote = bool(lemonade_url) and _parsed_hostname not in _LOCAL_HOSTS
 
         if skip_check or is_remote:
             status.device_supported = True
