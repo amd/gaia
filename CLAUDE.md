@@ -530,3 +530,9 @@ Specialized agents are available in `.claude/agents/` for specific tasks (23 age
 - **ui-ux-designer** (opus) - User-centered design, accessibility
 
 When invoking a proactive agent from `.claude/agents/`, indicate which agent you are using in your response.
+
+## Skills (Slash Commands)
+
+Reusable workflows available in `.claude/skills/`. Invoke with `/skill-name`.
+
+- **`/finalize-implementation`** — Run tests, lint, CI review simulation, fix issues in a loop (max 5 iterations), then commit and create a draft PR. Invoke when you believe implementation is complete. Runs inline to preserve full conversation context (original issue, user intent).
