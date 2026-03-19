@@ -8,12 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from gaia.device import (
-    check_device_supported as _check_device_supported,
-    get_gpu_info as _get_gpu_info,
-    get_processor_name as _get_processor_name,
-)
-
+from gaia.device import check_device_supported as _check_device_supported
+from gaia.device import get_processor_name as _get_processor_name
 
 # ── _get_processor_name ────────────────────────────────────────────────────
 
@@ -83,16 +79,18 @@ class TestCheckDeviceSupported:
     @pytest.mark.parametrize(
         "gpu_name,vram_gb",
         [
-            ("AMD Radeon RX 7900 XTX", 24.0),   # exactly 24 GB — pass
-            ("AMD Radeon RX 7900 XTX", 24.1),   # slightly above — pass
-            ("AMD Radeon Pro W7900", 48.0),       # workstation 48 GB — pass
-            ("AMD Radeon Pro W7800", 32.0),       # workstation 32 GB — pass
+            ("AMD Radeon RX 7900 XTX", 24.0),  # exactly 24 GB — pass
+            ("AMD Radeon RX 7900 XTX", 24.1),  # slightly above — pass
+            ("AMD Radeon Pro W7900", 48.0),  # workstation 48 GB — pass
+            ("AMD Radeon Pro W7800", 32.0),  # workstation 32 GB — pass
             ("AMD Radeon Instinct MI300X", 192.0),  # compute 192 GB — pass
         ],
     )
     def test_radeon_gpu_with_sufficient_vram_is_supported(self, gpu_name, vram_gb):
         """AMD Radeon GPU with >= 24 GB VRAM passes the check."""
-        with patch("gaia.device.get_processor_name", return_value="Intel Core i9-13900K"):
+        with patch(
+            "gaia.device.get_processor_name", return_value="Intel Core i9-13900K"
+        ):
             with patch("gaia.device.get_gpu_info", return_value=[(gpu_name, vram_gb)]):
                 supported, name = _check_device_supported()
         assert supported is True
@@ -102,23 +100,27 @@ class TestCheckDeviceSupported:
     @pytest.mark.parametrize(
         "gpu_name,vram_gb",
         [
-            ("AMD Radeon RX 7900 XT", 20.0),     # 20 GB — below threshold
-            ("AMD Radeon RX 7900 GRE", 16.0),    # 16 GB — below threshold
-            ("AMD Radeon RX 6900 XT", 16.0),     # 16 GB — below threshold
-            ("AMD Radeon RX 9070 XT", 16.0),     # 16 GB — below threshold
-            ("AMD Radeon RX 7900 XTX", 23.9),    # just under 24 GB — fail
+            ("AMD Radeon RX 7900 XT", 20.0),  # 20 GB — below threshold
+            ("AMD Radeon RX 7900 GRE", 16.0),  # 16 GB — below threshold
+            ("AMD Radeon RX 6900 XT", 16.0),  # 16 GB — below threshold
+            ("AMD Radeon RX 9070 XT", 16.0),  # 16 GB — below threshold
+            ("AMD Radeon RX 7900 XTX", 23.9),  # just under 24 GB — fail
         ],
     )
     def test_radeon_gpu_with_insufficient_vram_is_rejected(self, gpu_name, vram_gb):
         """AMD Radeon GPU below 24 GB VRAM is rejected."""
-        with patch("gaia.device.get_processor_name", return_value="Intel Core i9-13900K"):
+        with patch(
+            "gaia.device.get_processor_name", return_value="Intel Core i9-13900K"
+        ):
             with patch("gaia.device.get_gpu_info", return_value=[(gpu_name, vram_gb)]):
                 supported, _ = _check_device_supported()
         assert supported is False
 
     def test_non_amd_gpu_is_rejected(self):
         """NVIDIA or Intel GPUs are not allowed regardless of VRAM."""
-        with patch("gaia.device.get_processor_name", return_value="Intel Core i9-13900K"):
+        with patch(
+            "gaia.device.get_processor_name", return_value="Intel Core i9-13900K"
+        ):
             with patch(
                 "gaia.device.get_gpu_info",
                 return_value=[("NVIDIA GeForce RTX 4090", 24.0)],
@@ -129,7 +131,7 @@ class TestCheckDeviceSupported:
     def test_multiple_gpus_passes_if_any_qualifies(self):
         """If one GPU qualifies, the device is supported."""
         gpus = [
-            ("AMD Radeon RX 7900 XT", 20.0),   # not enough
+            ("AMD Radeon RX 7900 XT", 20.0),  # not enough
             ("AMD Radeon RX 7900 XTX", 24.0),  # qualifies
         ]
         with patch("gaia.device.get_processor_name", return_value="AMD Ryzen 9 7950X"):
@@ -146,7 +148,7 @@ class TestCheckDeviceSupported:
             "Intel Core i9-13900K",
             "Apple M3 Max",
             "AMD Ryzen AI 9 HX 375",  # Phoenix — not Strix Halo
-            "AMD RYZEN AI 300",        # not AI MAX
+            "AMD RYZEN AI 300",  # not AI MAX
         ],
     )
     def test_unsupported_cpu_no_gpu_is_rejected(self, processor_name):

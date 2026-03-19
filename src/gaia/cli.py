@@ -12,6 +12,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from gaia.agents.base.console import AgentConsole
+from gaia.device import GITHUB_DEVICE_SUPPORT_URL as _GITHUB_DEVICE_SUPPORT_URL
+from gaia.device import check_device_supported as _check_device_supported
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
@@ -683,14 +685,6 @@ def run_cli(action, **kwargs):
     return asyncio.run(async_main(action, **kwargs))
 
 
-from gaia.device import (
-    GITHUB_DEVICE_SUPPORT_URL as _GITHUB_DEVICE_SUPPORT_URL,
-    check_device_supported as _check_device_supported,
-    get_gpu_info as _get_gpu_info,
-    get_processor_name as _get_processor_name,
-)
-
-
 def _launch_agent_ui(port=4200, base_url=None, log=None, skip_device_check=False):
     """Launch the Agent UI server (FastAPI + uvicorn).
 
@@ -704,7 +698,11 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, skip_device_check=False
     # require Strix Halo class hardware (AMD Ryzen AI Max).  When a remote
     # Lemonade server is specified via --base-url the check is skipped
     # because the heavy inference happens on the remote machine.
-    if not skip_device_check and not base_url and not os.environ.get("GAIA_SKIP_DEVICE_CHECK"):
+    if (
+        not skip_device_check
+        and not base_url
+        and not os.environ.get("GAIA_SKIP_DEVICE_CHECK")
+    ):
         supported, processor_name = _check_device_supported(log=log)
         if not supported:
             print()
