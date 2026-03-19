@@ -167,9 +167,9 @@ function App() {
         try {
             const session = await api.createSession({ title: 'New Task' });
             log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
+            setMessages([]);
             addSession(session);
             setCurrentSession(session.id);
-            setMessages([]);
             // Auto-close sidebar on mobile
             if (window.innerWidth <= 768) setSidebarOpen(false);
         } catch (err) {

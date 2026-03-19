@@ -5,6 +5,7 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 """
 
 import os
+import platform
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -324,9 +325,28 @@ Always format your responses using Markdown for readability:
 - Keep responses well-structured and scannable
 """
 
+        # Add platform/environment context so the LLM uses correct paths
+        home_dir = str(Path.home())
+        os_name = platform.system()  # "Windows", "Linux", "Darwin"
+        if os_name == "Windows":
+            platform_section = f"""
+**ENVIRONMENT:**
+- Operating system: Windows
+- Home directory: {home_dir}
+- Use native Windows paths (e.g., C:\\Users\\user\\Desktop\\file.txt). NEVER use WSL/Unix-style mount paths like /mnt/c/Users/...
+- Common user folders: Desktop, Documents, Downloads (all under {home_dir})
+"""
+        else:
+            platform_section = f"""
+**ENVIRONMENT:**
+- Operating system: {os_name}
+- Home directory: {home_dir}
+"""
+
         # Add indexed documents section
         prompt = (
             base_prompt
+            + platform_section
             + indexed_docs_section
             + """
 **WHEN TO USE TOOLS VS DIRECT ANSWERS:**

@@ -781,6 +781,35 @@ class FileSearchToolsMixin:
                     "bytes_written": len(content.encode("utf-8")),
                     "line_count": len(content.splitlines()),
                 }
+            except PermissionError:
+                logger.error(f"Permission denied writing to: {file_path}")
+                return {
+                    "status": "error",
+                    "error": f"Permission denied: cannot write to '{file_path}'. "
+                    "This folder may be protected by the operating system. "
+                    "Try writing to a different location such as the Downloads folder.",
+                    "operation": "write_file",
+                }
+            except FileNotFoundError:
+                logger.error(f"Path not found for writing: {file_path}")
+                return {
+                    "status": "error",
+                    "error": f"Path not found: '{file_path}'. "
+                    "The parent directory does not exist and could not be created.",
+                    "operation": "write_file",
+                }
+            except OSError as e:
+                logger.error(f"OS error writing file: {e}")
+                hint = ""
+                if "read-only" in str(e).lower():
+                    hint = " The file or folder may be read-only."
+                elif "No space" in str(e) or "ENOSPC" in str(e):
+                    hint = " The disk may be full."
+                return {
+                    "status": "error",
+                    "error": f"Cannot write to '{file_path}': {e}.{hint}",
+                    "operation": "write_file",
+                }
             except Exception as e:
                 logger.error(f"Error writing file: {e}")
                 return {
