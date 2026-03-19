@@ -1,14 +1,18 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for the Strix Halo / Radeon device-check guard in cli.py."""
+"""Unit tests for the Strix Halo / Radeon device-check guard in gaia.device."""
 
 import sys
 from unittest.mock import patch
 
 import pytest
 
-from gaia.cli import _check_device_supported, _get_processor_name
+from gaia.device import (
+    check_device_supported as _check_device_supported,
+    get_gpu_info as _get_gpu_info,
+    get_processor_name as _get_processor_name,
+)
 
 
 # ── _get_processor_name ────────────────────────────────────────────────────
@@ -27,7 +31,7 @@ class TestGetProcessorName:
         """Falls back gracefully when registry read fails."""
         if sys.platform != "win32":
             pytest.skip("Windows-only test")
-        with patch("winreg.OpenKey", side_effect=OSError("access denied")):
+        with patch("gaia.device.winreg", side_effect=ImportError, create=True):
             with patch("platform.processor", return_value="fallback"):
                 name = _get_processor_name()
         # Either fallback value or empty string is acceptable
@@ -68,8 +72,8 @@ class TestCheckDeviceSupported:
     )
     def test_strix_halo_processors_are_supported(self, processor_name):
         """Ryzen AI Max processors are recognised as supported (no GPU check needed)."""
-        with patch("gaia.cli._get_processor_name", return_value=processor_name):
-            with patch("gaia.cli._get_gpu_info", return_value=_NO_GPUS):
+        with patch("gaia.device.get_processor_name", return_value=processor_name):
+            with patch("gaia.device.get_gpu_info", return_value=_NO_GPUS):
                 supported, name = _check_device_supported()
         assert supported is True
         assert name == processor_name
@@ -88,8 +92,8 @@ class TestCheckDeviceSupported:
     )
     def test_radeon_gpu_with_sufficient_vram_is_supported(self, gpu_name, vram_gb):
         """AMD Radeon GPU with >= 24 GB VRAM passes the check."""
-        with patch("gaia.cli._get_processor_name", return_value="Intel Core i9-13900K"):
-            with patch("gaia.cli._get_gpu_info", return_value=[(gpu_name, vram_gb)]):
+        with patch("gaia.device.get_processor_name", return_value="Intel Core i9-13900K"):
+            with patch("gaia.device.get_gpu_info", return_value=[(gpu_name, vram_gb)]):
                 supported, name = _check_device_supported()
         assert supported is True
         assert gpu_name in name
@@ -107,16 +111,16 @@ class TestCheckDeviceSupported:
     )
     def test_radeon_gpu_with_insufficient_vram_is_rejected(self, gpu_name, vram_gb):
         """AMD Radeon GPU below 24 GB VRAM is rejected."""
-        with patch("gaia.cli._get_processor_name", return_value="Intel Core i9-13900K"):
-            with patch("gaia.cli._get_gpu_info", return_value=[(gpu_name, vram_gb)]):
+        with patch("gaia.device.get_processor_name", return_value="Intel Core i9-13900K"):
+            with patch("gaia.device.get_gpu_info", return_value=[(gpu_name, vram_gb)]):
                 supported, _ = _check_device_supported()
         assert supported is False
 
     def test_non_amd_gpu_is_rejected(self):
         """NVIDIA or Intel GPUs are not allowed regardless of VRAM."""
-        with patch("gaia.cli._get_processor_name", return_value="Intel Core i9-13900K"):
+        with patch("gaia.device.get_processor_name", return_value="Intel Core i9-13900K"):
             with patch(
-                "gaia.cli._get_gpu_info",
+                "gaia.device.get_gpu_info",
                 return_value=[("NVIDIA GeForce RTX 4090", 24.0)],
             ):
                 supported, _ = _check_device_supported()
@@ -128,8 +132,8 @@ class TestCheckDeviceSupported:
             ("AMD Radeon RX 7900 XT", 20.0),   # not enough
             ("AMD Radeon RX 7900 XTX", 24.0),  # qualifies
         ]
-        with patch("gaia.cli._get_processor_name", return_value="AMD Ryzen 9 7950X"):
-            with patch("gaia.cli._get_gpu_info", return_value=gpus):
+        with patch("gaia.device.get_processor_name", return_value="AMD Ryzen 9 7950X"):
+            with patch("gaia.device.get_gpu_info", return_value=gpus):
                 supported, _ = _check_device_supported()
         assert supported is True
 
@@ -147,16 +151,16 @@ class TestCheckDeviceSupported:
     )
     def test_unsupported_cpu_no_gpu_is_rejected(self, processor_name):
         """Non-Strix-Halo CPU with no qualifying GPU is rejected."""
-        with patch("gaia.cli._get_processor_name", return_value=processor_name):
-            with patch("gaia.cli._get_gpu_info", return_value=_NO_GPUS):
+        with patch("gaia.device.get_processor_name", return_value=processor_name):
+            with patch("gaia.device.get_gpu_info", return_value=_NO_GPUS):
                 supported, name = _check_device_supported()
         assert supported is False
         assert name == processor_name
 
     def test_unknown_processor_is_allowed(self):
         """When processor name cannot be detected, we allow with a warning."""
-        with patch("gaia.cli._get_processor_name", return_value=""):
-            with patch("gaia.cli._get_gpu_info", return_value=_NO_GPUS):
+        with patch("gaia.device.get_processor_name", return_value=""):
+            with patch("gaia.device.get_gpu_info", return_value=_NO_GPUS):
                 supported, name = _check_device_supported()
         assert supported is True
         assert name == "unknown"
@@ -164,8 +168,8 @@ class TestCheckDeviceSupported:
     def test_returns_processor_name_for_strix_halo(self):
         """Returned name matches the CPU name for Strix Halo."""
         cpu = "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"
-        with patch("gaia.cli._get_processor_name", return_value=cpu):
-            with patch("gaia.cli._get_gpu_info", return_value=_NO_GPUS):
+        with patch("gaia.device.get_processor_name", return_value=cpu):
+            with patch("gaia.device.get_gpu_info", return_value=_NO_GPUS):
                 supported, name = _check_device_supported()
         assert name == cpu
         assert supported is True

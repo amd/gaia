@@ -36,9 +36,6 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         }
     }, [systemStatus]);
 
-    // Nothing to show
-    if (dismissed && deviceDismissed) return null;
-
     // Case 1: Backend API is unreachable
     if (!backendConnected) {
         return (

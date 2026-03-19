@@ -1,4 +1,4 @@
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """System and health-check endpoints for GAIA Agent UI."""
@@ -97,13 +97,18 @@ async def system_status():
     init_marker = Path.home() / ".gaia" / "chat" / "initialized"
     status.initialized = init_marker.exists()
 
-    # Device support check
+    # Device support check — respect GAIA_SKIP_DEVICE_CHECK for consistency
+    # with the CLI bypass so the UI banner matches the launch-time decision.
     try:
-        from gaia.cli import _check_device_supported
+        from gaia.device import check_device_supported, get_processor_name
 
-        supported, processor_name = _check_device_supported(log=logger)
-        status.processor_name = processor_name
-        status.device_supported = supported
+        if os.environ.get("GAIA_SKIP_DEVICE_CHECK"):
+            status.device_supported = True
+            status.processor_name = get_processor_name() or "unknown"
+        else:
+            supported, device_name = check_device_supported(log=logger)
+            status.processor_name = device_name
+            status.device_supported = supported
     except Exception:
         pass  # Unknown device — don't block the UI after it's already running
 

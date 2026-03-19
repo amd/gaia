@@ -683,150 +683,12 @@ def run_cli(action, **kwargs):
     return asyncio.run(async_main(action, **kwargs))
 
 
-def _get_processor_name() -> str:
-    """Get the human-readable processor name.
-
-    On Windows, reads from the registry for instant results.
-    Falls back to platform.processor() on other OSes.
-
-    Returns:
-        Processor name string (e.g. "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"),
-        or empty string if detection fails.
-    """
-    # Windows: read from registry (no subprocess needed, instant)
-    if sys.platform == "win32":
-        try:
-            import winreg
-
-            key = winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
-            )
-            name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
-            winreg.CloseKey(key)
-            return name.strip()
-        except Exception:
-            pass
-
-    # Linux/macOS: parse /proc/cpuinfo or use platform
-    try:
-        import platform
-
-        return platform.processor()
-    except Exception:
-        return ""
-
-
-def _get_gpu_info() -> list:
-    """Get a list of (name, vram_gb) tuples for display adapters on this system.
-
-    On Windows, reads the display adapter registry keys which contain a
-    REG_QWORD value ``HardwareInformation.qwMemorySize`` with the accurate
-    VRAM size (unlike Win32_VideoController.AdapterRAM which caps at 4 GB).
-
-    Returns:
-        List of (name: str, vram_gb: float) tuples, empty on failure.
-    """
-    results = []
-    if sys.platform != "win32":
-        return results
-
-    try:
-        import winreg
-
-        _DISPLAY_CLASS = (
-            r"SYSTEM\CurrentControlSet\Control\Class"
-            r"\{4d36e968-e325-11ce-bfc1-08002be10318}"
-        )
-        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _DISPLAY_CLASS)
-        idx = 0
-        while True:
-            try:
-                subkey_name = winreg.EnumKey(root, idx)
-                idx += 1
-                if subkey_name in ("Properties", "Configuration"):
-                    continue
-                sk = winreg.OpenKey(root, subkey_name)
-                try:
-                    desc, _ = winreg.QueryValueEx(sk, "DriverDesc")
-                    try:
-                        vram_bytes, _ = winreg.QueryValueEx(
-                            sk, "HardwareInformation.qwMemorySize"
-                        )
-                        vram_gb = vram_bytes / (1024**3)
-                    except OSError:
-                        vram_gb = 0.0
-                    results.append((desc, vram_gb))
-                except OSError:
-                    pass
-                finally:
-                    winreg.CloseKey(sk)
-            except OSError:
-                break
-        winreg.CloseKey(root)
-    except Exception:
-        pass
-
-    return results
-
-
-# ── Supported device fingerprints ─────────────────────────────────────────
-# Strix Halo processors contain "Ryzen AI Max" (iGPU/HBM, unified memory).
-_SUPPORTED_CPU_KEYWORDS = ["RYZEN AI MAX"]
-
-# AMD Radeon discrete GPU keyword — must be paired with a >= 24 GB VRAM check.
-# 24 GB is the minimum to load Qwen3-Coder-30B-A3B-Instruct-GGUF (Q4_K_M ~17 GB).
-_RADEON_GPU_KEYWORD = "AMD RADEON"
-_MIN_GPU_VRAM_GB = 24.0
-
-_GITHUB_DEVICE_SUPPORT_URL = (
-    "https://github.com/amd/gaia/issues/new?"
-    "template=feature_request.md&"
-    "title=[Feature]%20Support%20Agent%20UI%20on%20additional%20devices&"
-    "labels=enhancement,agent-ui"
+from gaia.device import (
+    GITHUB_DEVICE_SUPPORT_URL as _GITHUB_DEVICE_SUPPORT_URL,
+    check_device_supported as _check_device_supported,
+    get_gpu_info as _get_gpu_info,
+    get_processor_name as _get_processor_name,
 )
-
-
-def _check_device_supported(log=None) -> tuple:
-    """Check if the current device is supported for running the Agent UI.
-
-    Supported configurations:
-    - AMD Ryzen AI Max (Strix Halo) — unified HBM memory (64 GB+)
-    - AMD Radeon discrete GPU with >= 24 GB VRAM to fit Qwen3-Coder-30B
-
-    Returns:
-        Tuple of (supported: bool, device_name: str)
-        ``device_name`` is either the processor name or the GPU name,
-        whichever matched (or the processor name when rejected).
-    """
-    processor_name = _get_processor_name()
-    if log:
-        log.debug(f"Detected processor: {processor_name}")
-
-    if not processor_name:
-        # Can't detect — allow with a warning rather than blocking
-        if log:
-            log.warning("Could not detect processor name; skipping device check")
-        return True, "unknown"
-
-    upper_cpu = processor_name.upper()
-    for keyword in _SUPPORTED_CPU_KEYWORDS:
-        if keyword in upper_cpu:
-            if log:
-                log.debug(f"Supported CPU detected: {processor_name}")
-            return True, processor_name
-
-    # Not a supported CPU — check for a qualifying AMD Radeon discrete GPU
-    gpu_info = _get_gpu_info()
-    if log:
-        log.debug(f"Detected GPUs: {gpu_info}")
-    for gpu_name, vram_gb in gpu_info:
-        if _RADEON_GPU_KEYWORD in gpu_name.upper() and vram_gb >= _MIN_GPU_VRAM_GB:
-            if log:
-                log.debug(f"Supported GPU detected: {gpu_name} ({vram_gb:.0f} GB)")
-            return True, f"{gpu_name} ({vram_gb:.0f} GB VRAM)"
-
-    return False, processor_name
 
 
 def _launch_agent_ui(port=4200, base_url=None, log=None, skip_device_check=False):
@@ -1033,6 +895,15 @@ def main():
         "--skip-device-check",
         action="store_true",
         help="Skip the Strix Halo device check when launching Agent UI",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help=(
+            "Remote Lemonade server base URL (e.g. https://host:8000/api/v1)."
+            " Skips the device check because inference runs on the remote machine."
+            " Used with --ui."
+        ),
     )
 
     # Create a parent parser for common arguments
@@ -2645,6 +2516,7 @@ Examples:
         if getattr(args, "ui", False):
             _launch_agent_ui(
                 port=getattr(args, "ui_port", 4200),
+                base_url=getattr(args, "base_url", None),
                 log=log,
                 skip_device_check=getattr(args, "skip_device_check", False),
             )
@@ -2658,6 +2530,7 @@ Examples:
         # No flags: launch Agent UI (default experience)
         _launch_agent_ui(
             port=getattr(args, "ui_port", 4200),
+            base_url=getattr(args, "base_url", None),
             log=log,
             skip_device_check=getattr(args, "skip_device_check", False),
         )
