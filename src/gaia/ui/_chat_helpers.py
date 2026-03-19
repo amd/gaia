@@ -24,6 +24,10 @@ from .sse_handler import _clean_answer_json, _fix_double_escaped
 
 logger = logging.getLogger(__name__)
 
+# Active SSE handlers keyed by session_id.  The /api/chat/confirm-tool
+# endpoint looks up the handler here to resolve a pending confirmation.
+_active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
+
 
 # ── Chat Helpers ─────────────────────────────────────────────────────────────
 
@@ -215,6 +219,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         # Create SSE handler first and emit immediate feedback BEFORE the
         # slow ChatAgent construction (RAG indexing, LLM connection can take 10-30s)
         sse_handler = SSEOutputHandler()
+        # Register so /api/chat/confirm-tool can find this handler.
+        session_id = request.session_id
+        _active_sse_handlers[session_id] = sse_handler
         sse_handler._emit(
             {"type": "status", "status": "info", "message": "Connecting to LLM..."}
         )
@@ -554,6 +561,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
         # Signal cancellation (handles client disconnect) then wait for producer
         sse_handler.cancelled.set()
+        _active_sse_handlers.pop(session_id, None)
         producer.join(timeout=5.0)
         if producer.is_alive():
             logger.warning("Producer thread still running after stream ended")
@@ -605,6 +613,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
+        _active_sse_handlers.pop(session_id, None)
         error_msg = "Error: Could not get response from LLM. Is Lemonade Server running? Check server logs for details."
         try:
             db.add_message(request.session_id, "assistant", error_msg)

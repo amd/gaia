@@ -2509,6 +2509,9 @@ Examples:
 
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
+        max_files = getattr(args, "max_indexed_files", 0)
+        if max_files:
+            os.environ["GAIA_MAX_INDEXED_FILES"] = str(max_files)
         _launch_agent_ui(
             port=getattr(args, "ui_port", 4200),
             base_url=getattr(args, "base_url", None),

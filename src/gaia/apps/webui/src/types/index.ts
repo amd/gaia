@@ -197,7 +197,8 @@ export type StreamEventType =
     | 'tool_result' // Tool result summary
     | 'tool_args'   // Tool arguments detail
     | 'answer'      // Final answer from agent
-    | 'agent_error';// Agent-level error (non-fatal)
+    | 'agent_error' // Agent-level error (non-fatal)
+    | 'permission_request'; // Tool confirmation request
 
 export interface StreamEvent {
     type: StreamEventType;

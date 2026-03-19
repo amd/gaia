@@ -11,6 +11,7 @@
 
 import { create } from 'zustand';
 import type { GaiaNotification, NotificationType } from '../types/agent';
+import { confirmTool } from '../services/api';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -78,18 +79,29 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   setTypeFilter: (type) => set({ typeFilter: type }),
 
   respondToPermission: async (id, action, remember) => {
-    const api = window.gaiaAPI;
-    if (api) {
+    // Find the notification to get the session ID for the REST call
+    const notification = get().notifications.find((n) => n.id === id);
+    const sessionId = notification?.agentId;
+
+    // Try Electron IPC first, then fall back to REST API
+    const electronApi = window.gaiaAPI;
+    if (electronApi?.notification?.respondPermission) {
       try {
-        await api.notification.respondPermission(id, action, remember);
+        await electronApi.notification.respondPermission(id, action, remember);
       } catch (err) {
         console.error('[notificationStore] Failed to send permission response via IPC:', err);
-        // Don't update local state — the agent didn't receive the response.
-        // The permission prompt remains actionable so the user can retry.
+        return;
+      }
+    } else if (sessionId) {
+      // Web browser mode — call the REST endpoint
+      try {
+        await confirmTool(sessionId, action === 'allow');
+      } catch (err) {
+        console.error('[notificationStore] Failed to send permission response via REST:', err);
         return;
       }
     }
-    // Update local state only after IPC succeeds (or if no IPC is available)
+    // Update local state only after backend confirms
     set((state) => ({
       notifications: state.notifications.map((n) =>
         n.id === id

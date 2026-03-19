@@ -111,6 +111,12 @@ export async function deleteMessagesFrom(sessionId: string, messageId: number): 
     return apiFetch('DELETE', `/sessions/${sessionId}/messages/${messageId}/and-below`);
 }
 
+// -- Tool Confirmation --------------------------------------------------------
+
+export async function confirmTool(sessionId: string, approved: boolean): Promise<{ status: string; approved: boolean }> {
+    return apiFetch('POST', '/chat/confirm-tool', { session_id: sessionId, approved });
+}
+
 // -- Chat (Streaming with Agent Events) ----------------------------------------
 
 /**
@@ -134,6 +140,7 @@ export interface StreamCallbacks {
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'agent_error',
+    'permission_request',
 ]);
 
 export function sendMessageStream(

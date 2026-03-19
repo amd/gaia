@@ -461,6 +461,8 @@ def safe_open_document(
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW  # POSIX only; raises OSError(ELOOP) on symlinks
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY  # Ensure binary mode on Windows
 
     try:
         fd = os.open(str(resolved), flags)

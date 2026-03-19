@@ -20,6 +20,7 @@ Endpoint implementations are split into router modules under
 
 import asyncio
 import logging
+import os
 import shutil  # noqa: F401  # pylint: disable=unused-import
 import traceback
 from contextlib import asynccontextmanager
@@ -195,6 +196,7 @@ def create_app(db_path: str = None) -> FastAPI:
     # Store shared state on app.state so routers can access via Depends
     app.state.db = db
     app.state.indexing_tasks = indexing_tasks
+    app.state.max_indexed_files = int(os.environ.get("GAIA_MAX_INDEXED_FILES", "0"))
 
     # Initialize tunnel manager for mobile access
     tunnel = TunnelManager(port=DEFAULT_PORT)
