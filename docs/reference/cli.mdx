@@ -69,6 +69,8 @@ gaia --cli      # Launch interactive CLI chat instead
 | `--ui` | Launch the Agent UI (browser-based chat interface) — this is the default |
 | `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
 | `--cli` | Launch interactive CLI chat |
+| `--skip-device-check` | Skip the hardware compatibility check (AMD Ryzen AI Max or Radeon ≥ 24 GB VRAM) |
+| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:8000/api/v1`). Skips the device check since inference runs remotely. |
 
 **Examples:**
 
@@ -84,10 +86,18 @@ gaia --ui-port 8080
 ```bash Launch CLI Chat
 gaia --cli
 ```
+
+```bash Remote Lemonade Server (device check skipped)
+gaia --ui --base-url https://your-server:8000/api/v1
+```
+
+```bash Force bypass device check
+gaia --ui --skip-device-check
+```
 </CodeGroup>
 
 <Note>
-  `gaia chat --ui` continues to work as an alias.
+  `gaia chat --ui` continues to work as an alias. The Agent UI requires an AMD Ryzen AI Max (Strix Halo) or an AMD Radeon GPU with ≥ 24 GB VRAM. Set `GAIA_SKIP_DEVICE_CHECK=1` to bypass this check via environment variable.
 </Note>
 
 ---
@@ -409,6 +419,7 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--list-tools` | flag | false | List available tools and exit |
 | `--ui` | flag | false | Launch the Chat Web UI (browser-based interface on port 4200) |
 | `--ui-port` | integer | 4200 | Port for the Agent UI server (used with `--ui`) |
+| `--skip-device-check` | flag | false | Skip hardware compatibility check when launching Agent UI |
 
 **Examples:**
 

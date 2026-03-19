@@ -10,6 +10,23 @@ GAIA Agent UI is a desktop interface for running AI agents **100% locally** on y
   **Ready to install?** See the [Quickstart](/quickstart#agent-ui-fastest) for installation instructions.
 </Info>
 
+<Warning>
+  **Hardware Requirements:** The Agent UI requires one of the following to run large language models locally:
+
+  - **AMD Ryzen AI Max (Strix Halo)** — unified HBM memory (e.g. Ryzen AI MAX+ 395)
+  - **AMD Radeon discrete GPU** with **≥ 24 GB VRAM** (e.g. RX 7900 XTX, Radeon Pro W7900)
+
+  If your device is not supported, the CLI will display an error at launch and the in-app banner will appear with a link to [request support for your device](https://github.com/amd/gaia/issues/new?template=feature_request.md&title=[Feature]%20Support%20Agent%20UI%20on%20additional%20devices&labels=enhancement,agent-ui).
+
+  To bypass the check (e.g. when connecting to a remote Lemonade server):
+  ```bash
+  gaia --ui --base-url https://your-server:8000/api/v1   # remote server — check skipped
+  gaia --ui --skip-device-check                          # force bypass
+  set GAIA_SKIP_DEVICE_CHECK=1 && gaia --ui              # env var bypass
+  ```
+</Warning>
+
+
 ---
 
 ## What You Can Do
@@ -76,6 +93,25 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
     ```bash
     gaia --ui --ui-port 8080
     ```
+  </Accordion>
+
+  <Accordion title="Unsupported device error at launch">
+    The Agent UI requires an AMD Ryzen AI Max (Strix Halo) or an AMD Radeon GPU with ≥ 24 GB VRAM to run large language models locally.
+
+    **Bypass options:**
+
+    ```bash
+    # Connect to a remote Lemonade server (inference runs there, not locally)
+    gaia --ui --base-url https://your-server:8000/api/v1
+
+    # Force bypass (you accept responsibility for memory requirements)
+    gaia --ui --skip-device-check
+
+    # Via environment variable
+    set GAIA_SKIP_DEVICE_CHECK=1 && gaia --ui
+    ```
+
+    To request support for your device, [open a GitHub issue](https://github.com/amd/gaia/issues/new?template=feature_request.md&title=[Feature]%20Support%20Agent%20UI%20on%20additional%20devices&labels=enhancement,agent-ui).
   </Accordion>
 
   <Accordion title="Database locked error">
