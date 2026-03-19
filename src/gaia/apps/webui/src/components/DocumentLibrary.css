@@ -1,34 +1,31 @@
-/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
-/* SPDX-License-Identifier: MIT */
 /* Document Library Modal */
-.doc-modal { width: 640px; }
+.doc-modal { width: 620px; }
 
 .drop-zone {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 36px;
+    padding: 32px;
     border: 2px dashed var(--border);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-md);
     text-align: center;
     cursor: pointer;
     color: var(--text-secondary);
-    transition: all 250ms var(--ease);
-    margin-bottom: 18px;
+    transition: all 200ms var(--ease);
+    margin-bottom: 16px;
 }
 .drop-zone:hover, .drop-zone.drag-over {
     border-color: var(--amd-red);
-    background: var(--amd-red-dim2);
+    background: rgba(226, 60, 64, 0.03);
     color: var(--amd-red);
-    transform: translateY(-1px);
 }
 .drop-zone.uploading {
     border-color: var(--amd-red);
     cursor: default;
 }
-.drop-zone p { margin-top: 10px; font-size: 14px; font-weight: 500; font-family: var(--font-sans); }
-.drop-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; font-family: var(--font-sans); }
+.drop-zone p { margin-top: 10px; font-size: 14px; font-weight: 500; }
+.drop-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 
 .upload-spinner {
     width: 28px; height: 28px;
@@ -37,7 +34,7 @@
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
-/* @keyframes spin defined in global index.css */
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* Path input */
 .path-input-form {
@@ -49,13 +46,12 @@
 .path-icon { color: var(--text-muted); flex-shrink: 0; }
 .path-input {
     flex: 1;
-    padding: 9px 14px;
+    padding: 8px 12px;
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-sm);
     outline: none;
     font-size: 13px;
-    font-family: var(--font-mono);
-    transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
+    transition: border-color var(--duration) var(--ease);
 }
 .path-input:focus { border-color: var(--amd-red); }
 .path-input::placeholder { color: var(--text-muted); }
@@ -78,12 +74,12 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 14px;
+    padding: 10px 12px;
     border: 1px solid var(--border-light);
-    border-radius: var(--radius-md);
-    transition: border-color var(--duration) var(--ease), background var(--duration) var(--ease);
+    border-radius: var(--radius-sm);
+    transition: border-color var(--duration) var(--ease);
 }
-.doc-row:hover { border-color: var(--amd-red-light); background: var(--tint-subtle); }
+.doc-row:hover { border-color: var(--amd-red-light); }
 
 .doc-info { flex: 1; min-width: 0; }
 .doc-name {
@@ -119,13 +115,12 @@
     align-items: center;
     gap: 4px;
     font-size: 12px;
-    padding: 2px 8px;
-    border-radius: var(--radius-sm);
-    font-family: var(--font-mono);
+    padding: 1px 6px;
+    border-radius: 4px;
 }
-.doc-status-failed { color: var(--accent-danger); background: var(--accent-danger-dim); }
+.doc-status-failed { color: #dc3545; background: rgba(220, 53, 69, 0.08); }
 .doc-status-cancelled { color: var(--text-muted); background: rgba(128, 128, 128, 0.08); }
-.doc-status-missing { color: var(--accent-gold); background: var(--accent-gold-dim); }
+.doc-status-missing { color: #e67e22; background: rgba(230, 126, 34, 0.08); }
 
 .doc-delete { color: var(--text-muted); }
 .doc-delete:hover { color: var(--amd-red); }

@@ -61,9 +61,9 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    LLM server is not responding &mdash; it may be busy or not running.{' '}
+                    LLM server is not running &mdash; chat will not work.{' '}
                     <span className="connection-banner__hint">
-                        If not started, run: <code>lemonade-server serve</code>
+                        Start it with: <code>lemonade-server serve</code>
                     </span>
                 </div>
                 {onRetry && (

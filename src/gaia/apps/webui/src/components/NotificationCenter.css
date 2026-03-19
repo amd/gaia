@@ -15,12 +15,6 @@
   animation: notifSlideIn 200ms var(--ease);
 }
 
-[data-theme="dark"] .notification-center {
-  background: rgba(14, 14, 22, 0.92);
-  backdrop-filter: blur(20px) saturate(1.2);
-  -webkit-backdrop-filter: blur(20px) saturate(1.2);
-}
-
 @keyframes notifSlideIn {
   from {
     opacity: 0;
@@ -38,7 +32,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-light);
 }
 
 .notification-center-title-row {
@@ -113,13 +107,7 @@
   flex: 1;
   overflow-y: auto;
   min-height: 100px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
 }
-.notification-list::-webkit-scrollbar { width: 5px; }
-.notification-list::-webkit-scrollbar-track { background: transparent; }
-.notification-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
-.notification-list::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── Empty State ─────────────────────────────────────────────────────── */
 .notification-empty {
@@ -197,7 +185,7 @@
   border-left-color: var(--accent-blue);
 }
 .notification-item.notif-type-error {
-  border-left-color: var(--accent-danger);
+  border-left-color: #ef4444;
 }
 
 /* ── Type-based icon colors ──────────────────────────────────────────── */
@@ -214,7 +202,7 @@
   color: var(--accent-blue);
 }
 .notif-type-error .notification-icon {
-  color: var(--accent-danger);
+  color: #ef4444;
 }
 
 /* ── Icon ─────────────────────────────────────────────────────────────── */
@@ -281,7 +269,7 @@
   font-family: var(--font-mono);
   font-size: 11px;
   padding: 1px 4px;
-  border-radius: var(--radius-xs);
+  border-radius: 3px;
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }
@@ -314,8 +302,8 @@
 }
 
 .notification-action-deny {
-  background: var(--accent-danger-dim);
-  color: var(--accent-danger);
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 .notification-action-deny:hover {
@@ -338,8 +326,8 @@
   color: var(--accent-green);
 }
 .notification-response-badge.response-deny {
-  background: var(--accent-danger-dim);
-  color: var(--accent-danger);
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
 }
 
 /* ── Dismiss Button ──────────────────────────────────────────────────── */
@@ -392,14 +380,7 @@
   color: var(--text-secondary);
 }
 .notification-footer-clear:hover {
-  color: var(--accent-danger);
-}
-
-/* Always show dismiss button on touch-only devices (no hover capability) */
-@media (hover: none) {
-  .notification-dismiss {
-    opacity: 1;
-  }
+  color: #ef4444;
 }
 
 /* ── Responsive ──────────────────────────────────────────────────────── */

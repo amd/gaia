@@ -3,7 +3,7 @@
 
 """Pydantic models for GAIA Agent UI API."""
 
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -25,48 +25,6 @@ class SystemStatus(BaseModel):
     memory_available_gb: float = 0.0
     initialized: bool = False
     version: str = _gaia_version
-    # Extended Lemonade info (settings modal)
-    lemonade_version: Optional[str] = None
-    model_size_gb: Optional[float] = None
-    model_device: Optional[str] = None
-    model_context_size: Optional[int] = None
-    model_labels: Optional[List[str]] = None
-    gpu_name: Optional[str] = None
-    gpu_vram_gb: Optional[float] = None
-    # Last inference stats
-    tokens_per_second: Optional[float] = None
-    time_to_first_token: Optional[float] = None
-
-
-# ── Settings ────────────────────────────────────────────────────────────────
-
-
-class ModelStatus(BaseModel):
-    """Status of a custom model on the Lemonade server."""
-
-    found: bool = False
-    downloaded: bool = False
-    loaded: bool = False
-
-
-class SettingsResponse(BaseModel):
-    """Current user settings."""
-
-    custom_model: Optional[str] = None
-    model_status: Optional[ModelStatus] = None
-
-
-class SettingsUpdateRequest(BaseModel):
-    """Request to update user settings."""
-
-    custom_model: Optional[str] = Field(
-        None,
-        description=(
-            "HuggingFace model ID to use instead of the default model. "
-            "Example: huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated. "
-            "Set to empty string or null to clear the override."
-        ),
-    )
 
 
 # ── Sessions ────────────────────────────────────────────────────────────────
@@ -151,6 +109,13 @@ class CommandOutputResponse(BaseModel):
     truncated: bool = False
 
 
+class FileListResponse(BaseModel):
+    """Structured file list from file search tool results."""
+
+    files: List[Dict[str, Any]] = []
+    total: int = 0
+
+
 class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
@@ -165,6 +130,7 @@ class AgentStepResponse(BaseModel):
     planSteps: Optional[List[str]] = None
     timestamp: int = 0
     commandOutput: Optional[CommandOutputResponse] = None
+    fileList: Optional[FileListResponse] = None
 
 
 class MessageResponse(BaseModel):
@@ -349,15 +315,3 @@ class FileUploadResponse(BaseModel):
     size: int
     content_type: str
     is_image: bool
-
-
-# ── Tool Confirmation ─────────────────────────────────────────────────────
-
-
-class ToolConfirmRequest(BaseModel):
-    """Request to resolve a pending tool execution confirmation."""
-
-    session_id: str
-    confirm_id: str
-    action: Literal["allow", "deny"] = Field(..., description="'allow' or 'deny'")
-    remember: bool = False

@@ -1,5 +1,3 @@
-/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
-/* SPDX-License-Identifier: MIT */
 /* Agent Activity - terminal-style flow layout with thinking + inline tool cards */
 
 .agent-activity {
@@ -16,7 +14,7 @@
     justify-content: space-between;
     width: 100%;
     padding: 7px 12px;
-    border-radius: var(--radius-xs);
+    border-radius: 3px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border);
     font-size: 11px;
@@ -25,11 +23,11 @@
     transition: all var(--duration) var(--ease);
     cursor: pointer;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.3px;
 }
 .agent-summary-bar:hover {
     background: var(--bg-hover);
-    border-color: var(--text-muted);
+    border-color: var(--border);
 }
 
 .agent-summary-left {
@@ -63,48 +61,53 @@
     animation: spin 1s linear infinite;
     color: var(--amd-red);
 }
-/* @keyframes spin defined in global index.css */
-
-/* No visual difference between active/done states — bar stays stable */
-
-/* ── Flow wrapper — animated expand/collapse ─────────────────── */
-.agent-flow-wrap {
-    display: grid;
-    /* grid-template-rows trick for smooth height animation */
-    grid-template-rows: 1fr;
-    transition: grid-template-rows 350ms var(--ease),
-                opacity 300ms var(--ease),
-                margin-top 350ms var(--ease);
-    opacity: 1;
-    margin-top: 6px;
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 
-.agent-flow-wrap.flow-collapsed {
-    grid-template-rows: 0fr;
-    opacity: 0;
-    margin-top: 0;
-    pointer-events: none;
+/* Active state */
+.agent-activity.active .agent-summary-bar {
+    border-color: rgba(226, 60, 64, 0.25);
+    background: rgba(226, 60, 64, 0.03);
+}
+[data-theme="dark"] .agent-activity.active .agent-summary-bar {
+    background: rgba(226, 60, 64, 0.05);
+    box-shadow: 0 0 8px rgba(226, 60, 64, 0.06);
 }
 
-.agent-flow-wrap > .agent-flow {
-    overflow: hidden;
-    min-height: 0;
+/* Summary variant (post-completion) */
+.agent-activity.summary {
+    margin-top: -4px;
+    margin-bottom: 4px;
+}
+.agent-activity.summary .agent-summary-bar {
+    background: transparent;
+    border-color: transparent;
+    padding: 5px 0;
+    font-size: 10px;
+    color: var(--text-muted);
+}
+.agent-activity.summary .agent-summary-bar:hover {
+    color: var(--text-secondary);
+    background: transparent;
 }
 
 /* ── Flow container ──────────────────────────────────────────── */
 .agent-flow {
+    margin-top: 6px;
     padding: 8px 12px;
-    border-radius: var(--radius-xs);
+    border-radius: 3px;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: flowSlideDown 300ms var(--ease);
+    animation: flowSlideDown 150ms var(--ease);
 }
 
 @keyframes flowSlideDown {
-    from { opacity: 0; transform: translateY(-6px); }
+    from { opacity: 0; transform: translateY(-3px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
@@ -118,16 +121,18 @@
     font-family: var(--font-mono);
     color: var(--text-muted);
     line-height: 1.5;
-    animation: thoughtSlideIn 250ms var(--ease);
-}
-
-@keyframes thoughtSlideIn {
-    from { opacity: 0; transform: translateX(-8px); }
-    to { opacity: 1; transform: translateX(0); }
+    animation: fadeIn 100ms var(--ease);
 }
 
 .flow-thought.active {
     color: var(--text-secondary);
+}
+
+.flow-thought-spinner {
+    animation: spin 1s linear infinite;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    margin-top: 2px;
 }
 
 .flow-thought-text {
@@ -135,73 +140,19 @@
     word-break: break-word;
 }
 
-/* @keyframes fadeIn defined in global index.css */
-
-/* ── Flow: Hacker-style thinking text ────────────────────────── */
-.flow-thought-hacker {
-    max-height: 200px;
-    overflow-y: auto;
-    padding: 6px 8px;
-    font-size: 11px;
-    font-family: var(--font-mono);
-    color: rgba(255, 255, 255, 0.5);
-    line-height: 1.6;
-    word-break: break-word;
-    white-space: pre-wrap;
-    border-radius: var(--radius-xs);
-    background: rgba(0, 0, 0, 0.25);
-    border: none;
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
-
-[data-theme="light"] .flow-thought-hacker {
-    color: rgba(0, 0, 0, 0.45);
-    background: rgba(0, 0, 0, 0.04);
-}
-
-.flow-thought-hacker::-webkit-scrollbar {
-    width: 4px;
-}
-.flow-thought-hacker::-webkit-scrollbar-track {
-    background: transparent;
-}
-.flow-thought-hacker::-webkit-scrollbar-thumb {
-    background: rgba(237, 28, 36, 0.2);
-    border-radius: 0;
-}
-
-.flow-thought-cursor {
-    display: inline-block;
-    width: 0.55em;
-    height: 1.1em;
-    background: var(--amd-red);
-    vertical-align: text-bottom;
-    margin-left: 1px;
-    animation: cursorBlink 600ms steps(2, start) infinite;
-}
-
-/* @keyframes cursorBlink is defined globally in index.css */
-
-/* .thinking-dots styles are defined globally in index.css */
 
 /* ── Flow: Tool Card ─────────────────────────────────────────── */
 .flow-tool {
-    border-radius: var(--radius-xs);
+    border-radius: 3px;
     background: var(--bg-tertiary);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-light);
     transition: border-color var(--duration-fast) var(--ease);
-    animation: toolSlideIn 250ms var(--ease) both;
+    animation: fadeIn 100ms var(--ease);
 }
-
-@keyframes toolSlideIn {
-    from { opacity: 0; transform: translateY(8px) scale(0.97); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-.flow-tool:nth-child(1) { animation-delay: 0ms; }
-.flow-tool:nth-child(2) { animation-delay: 80ms; }
-.flow-tool:nth-child(3) { animation-delay: 160ms; }
-.flow-tool:nth-child(4) { animation-delay: 240ms; }
-.flow-tool:nth-child(5) { animation-delay: 320ms; }
 
 .flow-tool.active {
     border-color: rgba(226, 60, 64, 0.25);
@@ -232,21 +183,6 @@
     align-items: center;
     gap: 7px;
     min-width: 0;
-}
-
-/* Smooth transition for spinner → checkmark/error icon swap */
-.flow-tool-left > svg {
-    transition: transform 200ms var(--ease), color 200ms var(--ease);
-    flex-shrink: 0;
-}
-.flow-tool-left > svg:not(.flow-tool-spinner) {
-    animation: toolStatusPop 250ms var(--ease);
-}
-
-@keyframes toolStatusPop {
-    0% { transform: scale(0.6); opacity: 0; }
-    60% { transform: scale(1.15); }
-    100% { transform: scale(1); opacity: 1; }
 }
 
 .flow-tool-right {
@@ -310,20 +246,14 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: detailExpand 250ms var(--ease);
-    overflow: hidden;
+    animation: fadeIn 100ms var(--ease);
     border-top: 1px solid var(--border-light);
-}
-
-@keyframes detailExpand {
-    from { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; }
-    to { opacity: 1; max-height: 500px; }
 }
 
 /* ── Flow: Plan ──────────────────────────────────────────────── */
 .flow-plan {
     padding: 6px 8px;
-    border-radius: var(--radius-xs);
+    border-radius: 3px;
     background: rgba(245, 158, 11, 0.04);
     border: 1px solid rgba(245, 158, 11, 0.12);
     animation: fadeIn 100ms var(--ease);
@@ -365,18 +295,13 @@
     align-items: flex-start;
     gap: 6px;
     padding: 6px 8px;
-    border-radius: var(--radius-xs);
+    border-radius: 3px;
     background: rgba(239, 68, 68, 0.04);
     border: 1px solid rgba(239, 68, 68, 0.15);
     font-size: 11px;
     font-family: var(--font-mono);
     color: var(--amd-red);
-    animation: errorSlideIn 300ms var(--ease);
-}
-
-@keyframes errorSlideIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to { opacity: 1; transform: translateY(0); }
+    animation: fadeIn 100ms var(--ease);
 }
 
 [data-theme="dark"] .flow-error {
@@ -399,7 +324,7 @@
 /* Arguments display */
 .step-detail-args {
     padding: 8px 10px 10px;
-    border-radius: var(--radius-xs);
+    border-radius: 3px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-light);
 }
@@ -447,7 +372,7 @@
 /* Result display */
 .step-detail-result {
     padding: 8px 10px 10px;
-    border-radius: var(--radius-xs);
+    border-radius: 3px;
     font-size: 11px;
     line-height: 1.6;
 }
@@ -511,7 +436,7 @@
 }
 
 .chunk-card {
-    border-radius: var(--radius-xs);
+    border-radius: 3px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-light);
     overflow: hidden;
@@ -527,7 +452,7 @@
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    padding: 5px 10px;
+    padding: 4px 8px;
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--text-secondary);
@@ -569,7 +494,7 @@
 .chunk-score {
     font-family: var(--font-mono);
     font-size: 9px;
-    color: var(--accent-cyan);
+    color: #06b6d4;
     padding: 0 4px;
     border-radius: 2px;
     background: rgba(6, 182, 212, 0.08);
@@ -643,7 +568,7 @@
 
 /* ── Command Output (Terminal View) ───────────────────────────── */
 .cmd-output {
-    border-radius: var(--radius-xs);
+    border-radius: 3px;
     overflow: hidden;
     border: 1px solid var(--border);
     background: var(--bg-code, #1e1e1e);
@@ -661,9 +586,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 5px 10px;
-    background: rgba(255, 255, 255, 0.04);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 4px 10px;
+    background: var(--tint-subtle);
+    border-bottom: 1px solid var(--border-light);
 }
 
 .cmd-header-left {
@@ -719,7 +644,7 @@
     padding: 2px 4px;
     border-radius: 2px;
     color: var(--text-muted);
-    transition: all var(--duration-fast) var(--ease);
+    transition: all 100ms var(--ease);
     cursor: pointer;
 }
 .cmd-copy:hover {
@@ -804,33 +729,18 @@
 /* ── Accessibility: reduced motion ────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
     .agent-spinner,
-    .flow-tool-spinner {
+    .flow-tool-spinner,
+    .flow-thought-spinner {
         animation: none;
-    }
-
-    .agent-flow-wrap {
-        transition: none;
     }
 
     .agent-flow,
     .flow-thought,
-    .flow-thought-hacker,
     .flow-tool,
     .flow-tool-detail,
     .flow-plan,
     .flow-error {
         animation: none;
-    }
-
-    .flow-thought-cursor {
-        animation: none;
-        opacity: 1;
-    }
-
-    .flow-tool-left > svg,
-    .flow-tool-left > svg:not(.flow-tool-spinner) {
-        animation: none;
-        transition: none;
     }
 
     .flow-tool-chevron {
@@ -847,4 +757,68 @@
     .flow-tool-badge {
         display: none;
     }
+}
+
+/* File list view (search results) */
+.file-list-view {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 4px;
+    padding: 6px 8px;
+    background: var(--color-bg-subtle, rgba(0,0,0,0.04));
+    border-radius: 6px;
+}
+
+.file-list-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--color-text-primary, #374151);
+    overflow: hidden;
+}
+
+.file-list-icon {
+    flex-shrink: 0;
+    color: var(--color-text-muted, #6b7280);
+}
+
+.file-list-name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-list-dir {
+    color: var(--color-text-muted, #6b7280);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+}
+
+.file-list-more {
+    background: none;
+    border: none;
+    padding: 2px 0;
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--color-primary, #6366f1);
+    cursor: pointer;
+    text-align: left;
+    font-weight: 500;
+}
+
+.file-list-more:hover {
+    text-decoration: underline;
+}
+
+.file-list-truncated {
+    font-size: 11px;
+    color: var(--color-text-muted, #6b7280);
+    margin-top: 2px;
 }

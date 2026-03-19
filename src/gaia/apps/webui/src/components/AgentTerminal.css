@@ -1,5 +1,3 @@
-/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
-/* SPDX-License-Identifier: MIT */
 /* ── Agent Terminal ────────────────────────────────────────────────────── */
 
 .agent-terminal {
@@ -233,9 +231,9 @@
   color: var(--text-primary);
 }
 
-/* Scrollbar styling -- matches global 5px width */
+/* Scrollbar styling */
 .terminal-content::-webkit-scrollbar {
-  width: 5px;
+  width: 8px;
 }
 
 .terminal-content::-webkit-scrollbar-track {
@@ -244,7 +242,7 @@
 
 .terminal-content::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: var(--radius-full);
+  border-radius: 4px;
 }
 
 .terminal-content::-webkit-scrollbar-thumb:hover {
@@ -478,8 +476,8 @@
 
 [data-theme="light"] .terminal-content,
 :root:not([data-theme="dark"]) .terminal-content {
-  background: var(--bg-code);
-  color: var(--text-code);
+  background: var(--bg-code, #1a1a2e);
+  color: var(--text-code, #e0e0e0);
 }
 
 [data-theme="light"] .terminal-line:hover,
@@ -494,7 +492,7 @@
 
 [data-theme="light"] .terminal-line-content,
 :root:not([data-theme="dark"]) .terminal-line-content {
-  color: var(--text-code);
+  color: var(--text-code, #e0e0e0);
 }
 
 [data-theme="light"] .terminal-line-time,

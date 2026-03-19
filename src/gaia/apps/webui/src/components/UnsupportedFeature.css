@@ -1,15 +1,16 @@
 /* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
-/* Unsupported Feature Banner — migrated to design system tokens */
+
+/* ── Unsupported Feature Banner ─────────────────────────────────────────── */
 
 .unsupported-banner {
     display: flex;
     flex-direction: column;
     gap: 10px;
     padding: 14px 16px;
-    border-radius: var(--radius-lg);
+    border-radius: 10px;
     border: 1px solid var(--border);
-    background: var(--bg-card);
+    background: var(--surface);
     margin: 8px 0;
     font-size: 13px;
     line-height: 1.5;
@@ -20,11 +21,11 @@
     align-items: center;
     gap: 8px;
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--text);
 }
 
 .unsupported-banner-header svg {
-    color: var(--accent-gold);
+    color: #f59e0b;
     flex-shrink: 0;
 }
 
@@ -51,10 +52,10 @@
 }
 
 .unsupported-alternatives li::before {
-    content: '\2713';
+    content: '✓';
     position: absolute;
     left: 0;
-    color: var(--accent-green);
+    color: #22c55e;
     font-weight: 600;
     font-size: 12px;
 }
@@ -64,8 +65,8 @@
     align-items: center;
     gap: 8px;
     padding: 10px 14px;
-    border-radius: var(--radius-md);
-    background: var(--bg-secondary);
+    border-radius: 8px;
+    background: var(--bg);
     border: 1px dashed var(--border);
     margin-top: 4px;
     font-size: 12px;
@@ -73,19 +74,19 @@
 }
 
 .unsupported-feature-request svg {
-    color: var(--amd-red);
+    color: #8b5cf6;
     flex-shrink: 0;
 }
 
 .unsupported-feature-request a {
-    color: var(--amd-red);
+    color: #8b5cf6;
     text-decoration: none;
     font-weight: 600;
 }
 
 .unsupported-feature-request a:hover {
     text-decoration: underline;
-    color: var(--amd-red-light);
+    color: #7c3aed;
 }
 
 /* ── Inline error toast for DocumentLibrary and FileBrowser ───────────── */
@@ -95,18 +96,18 @@
     align-items: flex-start;
     gap: 10px;
     padding: 12px 14px;
-    border-radius: var(--radius-md);
-    background: var(--amd-red-dim2);
-    border: 1px solid rgba(237, 28, 36, 0.15);
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.2);
     margin: 8px 0;
     font-size: 12.5px;
     line-height: 1.5;
-    color: var(--text-primary);
-    animation: toast-slide-in 0.25s var(--ease);
+    color: var(--text);
+    animation: toast-slide-in 0.25s ease-out;
 }
 
 .upload-error-toast svg {
-    color: var(--amd-red);
+    color: #ef4444;
     flex-shrink: 0;
     margin-top: 1px;
 }
@@ -127,7 +128,7 @@
 }
 
 .upload-error-detail a {
-    color: var(--amd-red);
+    color: #8b5cf6;
     text-decoration: none;
     font-weight: 500;
 }
@@ -142,14 +143,13 @@
     color: var(--text-secondary);
     cursor: pointer;
     padding: 2px;
-    border-radius: var(--radius-sm);
+    border-radius: 4px;
     flex-shrink: 0;
-    transition: all var(--duration) var(--ease);
 }
 
 .upload-error-dismiss:hover {
-    color: var(--text-primary);
-    background: var(--bg-hover);
+    color: var(--text);
+    background: var(--surface);
 }
 
 /* ── File browser unsupported indicator ──────────────────────────────── */
@@ -161,9 +161,9 @@
 .fb-unsupported-badge {
     font-size: 10px;
     color: var(--text-secondary);
-    background: var(--bg-tertiary);
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: 4px;
     padding: 1px 6px;
     white-space: nowrap;
     margin-left: auto;

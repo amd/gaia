@@ -26,8 +26,3 @@ def get_tunnel(request: Request) -> TunnelManager:
 def get_indexing_tasks(request: Request) -> dict:
     """Return the dict of active background indexing tasks."""
     return request.app.state.indexing_tasks
-
-
-def get_upload_locks(request: Request) -> dict:
-    """Return the dict of per-file upload locks."""
-    return request.app.state.upload_locks

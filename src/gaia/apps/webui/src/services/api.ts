@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse } from '../types';
+import type { Session, Message, Document, SystemStatus, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -73,16 +73,6 @@ export async function getHealth(): Promise<{ status: string; stats: Record<strin
     return apiFetch('GET', '/health');
 }
 
-// -- Settings ------------------------------------------------------------------
-
-export async function getSettings(): Promise<Settings> {
-    return apiFetch<Settings>('GET', '/settings');
-}
-
-export async function updateSettings(data: Partial<Settings>): Promise<Settings> {
-    return apiFetch<Settings>('PUT', '/settings', data);
-}
-
 // -- Sessions ------------------------------------------------------------------
 
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
@@ -143,7 +133,7 @@ export interface StreamCallbacks {
 /** Agent event types that represent activity rather than content. */
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
-    'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
+    'tool_start', 'tool_end', 'tool_result', 'tool_args', 'agent_error',
 ]);
 
 export function sendMessageStream(
@@ -275,18 +265,6 @@ export function sendMessageStream(
         });
 
     return controller;
-}
-
-// -- Tool Confirmation ---------------------------------------------------------
-
-/** Resolve a pending tool execution confirmation (Allow or Deny). */
-export async function confirmToolExecution(
-    sessionId: string,
-    confirmId: string,
-    action: 'allow' | 'deny',
-    remember: boolean,
-): Promise<void> {
-    return apiFetch('POST', '/chat/confirm', { session_id: sessionId, confirm_id: confirmId, action, remember });
 }
 
 // -- Documents -----------------------------------------------------------------

@@ -39,9 +39,6 @@ interface ChatState {
     agentSteps: AgentStep[];
     addAgentStep: (step: AgentStep) => void;
     updateLastAgentStep: (updates: Partial<AgentStep>) => void;
-    /** Atomically append content to the last thinking step's detail.
-     *  Reads + writes inside a single set() to avoid stale-read races. */
-    appendThinkingContent: (content: string) => void;
     /** Update the last tool step (not the absolute last step). */
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
     clearAgentSteps: () => void;
@@ -151,19 +148,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (state.agentSteps.length === 0) return state;
             const steps = [...state.agentSteps];
             steps[steps.length - 1] = { ...steps[steps.length - 1], ...updates };
-            return { agentSteps: steps };
-        }),
-    appendThinkingContent: (content) =>
-        set((state) => {
-            if (state.agentSteps.length === 0) return state;
-            const steps = [...state.agentSteps];
-            const last = steps[steps.length - 1];
-            if (last.type !== 'thinking') return state;
-            steps[steps.length - 1] = {
-                ...last,
-                detail: (last.detail || '') + content,
-                active: true,
-            };
             return { agentSteps: steps };
         }),
     updateLastToolStep: (updates) =>

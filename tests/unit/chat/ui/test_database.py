@@ -36,7 +36,7 @@ class TestSessions:
 
     def test_create_session_default_model(self, db):
         session = db.create_session()
-        assert session["model"] == "Qwen3.5-35B-A3B-GGUF"
+        assert session["model"] == "Qwen3-Coder-30B-A3B-Instruct-GGUF"
 
     def test_create_session_with_system_prompt(self, db):
         session = db.create_session(system_prompt="You are helpful.")

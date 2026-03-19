@@ -31,17 +31,17 @@
 }
 
 .tunnel-status .status-dot.active {
-    background: var(--accent-green);
-    box-shadow: 0 0 8px rgba(78, 201, 50, 0.4);
+    background: #22c55e;
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.4);
 }
 
 .tunnel-status .status-dot.starting {
-    background: var(--accent-gold);
+    background: #f59e0b;
     animation: pulse-dot 1.2s ease-in-out infinite;
 }
 
 .tunnel-status .status-dot.error {
-    background: var(--accent-danger);
+    background: #ef4444;
 }
 
 .tunnel-status .status-dot.inactive {
@@ -69,7 +69,7 @@
     background: rgba(239, 68, 68, 0.08);
     border: 1px solid rgba(239, 68, 68, 0.25);
     border-radius: var(--radius-sm);
-    color: var(--accent-danger);
+    color: #ef4444;
     font-size: 13px;
     line-height: 1.5;
     word-break: break-word;
@@ -106,7 +106,7 @@
 
 .qr-placeholder.error {
     border-color: rgba(239, 68, 68, 0.3);
-    color: var(--accent-danger);
+    color: #ef4444;
 }
 
 .qr-placeholder .placeholder-spinner {
@@ -144,7 +144,7 @@
     padding: 8px 12px;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: 6px;
     font-family: var(--font-mono);
     font-size: 12px;
     color: var(--text-primary);
@@ -155,29 +155,29 @@
     border-color: var(--amd-red);
 }
 
-button.copy-url-btn {
+.copy-url-btn {
     display: flex;
     align-items: center;
     gap: 6px;
     padding: 8px 14px;
     background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border: 1px solid var(--border) !important;
+    border-radius: 6px;
     font-size: 12px;
     font-weight: 500;
     white-space: nowrap;
     transition: all var(--duration) var(--ease);
 }
 
-button.copy-url-btn:hover {
+.copy-url-btn:hover {
     background: var(--bg-hover);
-    border-color: var(--amd-red);
+    border-color: var(--amd-red) !important;
     color: var(--amd-red);
 }
 
-button.copy-url-btn.copied {
-    color: var(--accent-green);
-    border-color: var(--accent-green);
+.copy-url-btn.copied {
+    color: #22c55e;
+    border-color: #22c55e !important;
 }
 
 /* Tunnel password hint */
@@ -195,7 +195,7 @@ button.copy-url-btn.copied {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.8px;
-    color: var(--accent-gold);
+    color: #f59e0b;
     margin-bottom: 6px;
 }
 

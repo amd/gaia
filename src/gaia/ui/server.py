@@ -200,11 +200,6 @@ def create_app(db_path: str = None) -> FastAPI:
     tunnel = TunnelManager(port=DEFAULT_PORT)
     app.state.tunnel = tunnel
 
-    # Active SSE handlers keyed by session_id.
-    # Used by /api/chat/confirm to route user responses back to the
-    # agent thread blocked inside SSEOutputHandler.confirm_tool_execution().
-    app.state.active_sse_handlers: dict = {}
-
     # Concurrency control for /api/chat/send
     # ChatAgent is expensive (LLM connection, RAG indexing), so we limit
     # the number of concurrent chat requests to avoid resource exhaustion.
@@ -214,7 +209,6 @@ def create_app(db_path: str = None) -> FastAPI:
     # Per-session locks prevent the same session from having multiple
     # concurrent requests, which would corrupt conversation state.
     app.state.session_locks: dict = {}  # session_id -> asyncio.Lock
-    app.state.upload_locks: dict = {}  # resolved_path -> asyncio.Lock
 
     # ── Global Exception Handler ────────────────────────────────────────
     # Prevent stack traces from leaking to external users (CodeQL
