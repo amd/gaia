@@ -198,9 +198,11 @@ async def upload_by_path(
             if temp_path is not None:
                 _cleanup_temp(temp_path)
 
-    # Clean up lock entry if no other upload is waiting
-    if not lock.locked():
-        upload_locks.pop(str(resolved), None)
+    # Lock entries are intentionally never removed: asyncio.Lock.release() sets
+    # _locked=False before the next waiter resumes, so lock.locked() would
+    # return False even with a pending waiter, causing a pop that breaks
+    # serialization. Lock objects are cheap and the key space is bounded by
+    # the number of distinct file paths ever uploaded.
 
 
 @router.get("/api/documents/monitor/status")

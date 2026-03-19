@@ -355,15 +355,14 @@ def compute_file_hash_from_fd(fd: int) -> str:
     sha256 = hashlib.sha256()
     dup_fd = os.dup(fd)
     try:
-        with os.fdopen(dup_fd, "rb") as f:
-            for block in iter(lambda: f.read(8192), b""):
-                sha256.update(block)
-    except Exception:
-        try:
-            os.close(dup_fd)
-        except OSError:
-            pass
+        f = os.fdopen(dup_fd, "rb")
+    except OSError:
+        os.close(dup_fd)
         raise
+    # f now owns dup_fd; the with block closes it on exit (normal or exception)
+    with f:
+        for block in iter(lambda: f.read(8192), b""):
+            sha256.update(block)
     os.lseek(fd, 0, os.SEEK_SET)
     return sha256.hexdigest()
 
