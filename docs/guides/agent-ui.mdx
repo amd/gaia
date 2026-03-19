@@ -10,6 +10,58 @@ GAIA Agent UI is a desktop interface for running AI agents **100% locally** on y
   **Ready to install?** See the [Quickstart](/quickstart#agent-ui-fastest) for installation instructions.
 </Info>
 
+<Warning>
+  **Requirements:** The Agent UI is currently supported on **Windows only** (Linux/macOS coming soon) and requires one of the following to run large language models locally:
+
+  - **AMD Ryzen AI Max (Strix Halo)** — unified HBM memory (e.g. Ryzen AI MAX+ 395)
+  - **AMD Radeon discrete GPU** with **≥ 24 GB VRAM** (e.g. RX 7900 XTX, Radeon Pro W7900)
+
+  If your device is not supported, a banner will appear in the UI. You can dismiss it and continue, connect to a remote Lemonade server (`gaia --ui --base-url <url>`), or [request support on GitHub](https://github.com/amd/gaia/issues/new?template=feature_request.md&title=[Feature]%20Support%20Agent%20UI%20on%20additional%20devices&labels=enhancement,agent-ui). See the Troubleshooting section below for details.
+</Warning>
+
+---
+
+## Before You Start
+
+The Agent UI requires three things to be in place before you can chat. Run these steps once in order:
+
+<Steps>
+  <Step title="Install dependencies">
+    Install GAIA with Agent UI support:
+    ```bash
+    pip install amd-gaia[ui]
+    ```
+    Or if developing locally:
+    ```bash
+    uv pip install -e ".[ui]"
+    ```
+  </Step>
+  <Step title="Download models (first time only, ~25 GB)">
+    This downloads Lemonade Server and the AI models needed for the Agent UI. Only required once:
+    ```bash
+    gaia init --profile chat
+    ```
+    The `chat` profile downloads a large language model, an embedding model for document Q&A, and a vision model for PDF image extraction — everything the Agent UI needs.
+    <Note>
+      Model downloads are large (~25 GB). Ensure you have at least **30 GB of free disk space** before running this command. Download time varies by internet speed (typically 15–60 minutes).
+    </Note>
+  </Step>
+  <Step title="Start the LLM server">
+    In a separate terminal, start Lemonade Server (must remain running while using the UI):
+    ```bash
+    lemonade-server serve
+    ```
+  </Step>
+  <Step title="Launch the Agent UI">
+    ```bash
+    gaia chat --ui
+    ```
+    Then open [http://localhost:4200](http://localhost:4200) in your browser.
+  </Step>
+</Steps>
+
+If any of these steps are incomplete, the Agent UI will display a banner explaining what needs to be fixed.
+
 ---
 
 ## What You Can Do
@@ -67,6 +119,11 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
   </Accordion>
 
   <Accordion title="No model loaded">
+    Run `gaia init --profile chat` to download models and configure Lemonade Server in one step (~25 GB, required once):
+    ```bash
+    gaia init --profile chat
+    ```
+    If you've already run `gaia init` but need to re-download a specific agent's models:
     ```bash
     gaia download --agent chat
     ```
@@ -76,6 +133,24 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
     ```bash
     gaia --ui --ui-port 8080
     ```
+  </Accordion>
+
+  <Accordion title="Unsupported device warning banner">
+    The Agent UI is currently supported on **Windows only** (Linux/macOS coming soon) and requires an AMD Ryzen AI Max (Strix Halo) or an AMD Radeon GPU with ≥ 24 GB VRAM to run large language models locally.
+
+    If your device does not meet these requirements, a warning banner appears at the top of the UI. You can **dismiss it and continue** (the UI is fully functional — you may just hit memory limits depending on the model), or use one of these options:
+
+    **Connect to a remote Lemonade server** — inference runs there; no local hardware requirements:
+    ```bash
+    gaia --ui --base-url https://your-server:8000/api/v1
+    ```
+
+    **Suppress the banner entirely** (environment variable):
+    ```bash
+    set GAIA_SKIP_DEVICE_CHECK=1 && gaia --ui
+    ```
+
+    To request support for your device, [open a GitHub issue](https://github.com/amd/gaia/issues/new?template=feature_request.md&title=[Feature]%20Support%20Agent%20UI%20on%20additional%20devices&labels=enhancement,agent-ui).
   </Accordion>
 
   <Accordion title="Database locked error">

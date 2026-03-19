@@ -30,6 +30,12 @@
     border-bottom: 1px solid #fed7aa;
 }
 
+.connection-banner--device {
+    background: #f0f9ff;
+    color: #075985;
+    border-bottom: 1px solid #bae6fd;
+}
+
 [data-theme="dark"] .connection-banner--error {
     background: #120808;
     color: #fca5a5;
@@ -40,6 +46,12 @@
     background: #120e05;
     color: #fcd34d;
     border-bottom: 1px solid #2a1e08;
+}
+
+[data-theme="dark"] .connection-banner--device {
+    background: #031624;
+    color: #7dd3fc;
+    border-bottom: 1px solid #0c2d42;
 }
 
 .connection-banner__icon {
@@ -71,6 +83,15 @@
 
 [data-theme="dark"] .connection-banner__hint code {
     background: rgba(255, 255, 255, 0.08);
+}
+
+.connection-banner__link {
+    color: inherit;
+    text-decoration: underline;
+    opacity: 0.85;
+}
+.connection-banner__link:hover {
+    opacity: 1;
 }
 
 .connection-banner__dismiss {

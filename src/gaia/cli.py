@@ -703,7 +703,15 @@ def _launch_agent_ui(port=4200, base_url=None, log=None):
         log.info(f"Starting GAIA Agent UI on http://localhost:{port}")
         print(f"Starting GAIA Agent UI on http://localhost:{port}")
         print(f"   Open your browser to http://localhost:{port}")
-        print("   Press Ctrl+C to stop\n")
+        print("   Press Ctrl+C to stop")
+        print()
+        if not base_url:
+            print("   Prerequisites:")
+            print(
+                "     1. Models downloaded  : gaia init --profile chat  (first time only, ~25 GB)"
+            )
+            print("     2. Lemonade running   : lemonade-server serve")
+            print()
 
         import uvicorn
 
@@ -717,6 +725,22 @@ def _launch_agent_ui(port=4200, base_url=None, log=None):
         print("\n   Or if you installed from PyPI:\n")
         print("     pip install amd-gaia[ui]")
         print()
+        sys.exit(1)
+    except OSError as e:
+        err_str = str(e).lower()
+        # Windows WSAEADDRINUSE (10048) or WSAEACCES (10013) — port already in use
+        if (
+            "10048" in str(e)
+            or "10013" in str(e)
+            or "address already in use" in err_str
+        ):
+            print(f"\nPort {port} is already in use.")
+            print(f"   Another process is already listening on port {port}.")
+            print("   Try a different port:")
+            print("     gaia chat --ui --ui-port 8080")
+        else:
+            log.error(f"Error starting Agent UI: {e}")
+            print(f"Error: {e}")
         sys.exit(1)
     except Exception as e:
         log.error(f"Error starting Agent UI: {e}")
@@ -845,6 +869,14 @@ def main():
         "--cli",
         action="store_true",
         help="Launch interactive CLI chat",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help=(
+            "Remote Lemonade server base URL (e.g. https://host:8000/api/v1)."
+            " Used with --ui."
+        ),
     )
 
     # Create a parent parser for common arguments
@@ -1005,7 +1037,6 @@ def main():
         default=4200,
         help="Port for the Agent UI server (default: 4200)",
     )
-
     talk_parser = subparsers.add_parser(
         "talk", help="Start voice conversation with Gaia", parents=[parent_parser]
     )
@@ -2450,7 +2481,11 @@ Examples:
     if not args.action:
         # Top-level --ui flag: launch Agent UI
         if getattr(args, "ui", False):
-            _launch_agent_ui(port=getattr(args, "ui_port", 4200), log=log)
+            _launch_agent_ui(
+                port=getattr(args, "ui_port", 4200),
+                base_url=getattr(args, "base_url", None),
+                log=log,
+            )
             return
 
         # Top-level --cli flag: launch interactive CLI chat
@@ -2459,7 +2494,11 @@ Examples:
             return
 
         # No flags: launch Agent UI (default experience)
-        _launch_agent_ui(port=getattr(args, "ui_port", 4200), log=log)
+        _launch_agent_ui(
+            port=getattr(args, "ui_port", 4200),
+            base_url=getattr(args, "base_url", None),
+            log=log,
+        )
         return
 
     # Set logging level using the GaiaLogger manager (if provided)

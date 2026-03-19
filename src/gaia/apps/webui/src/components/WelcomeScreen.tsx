@@ -1,7 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { Lock, Zap, FileText, DollarSign } from 'lucide-react';
+import { Lock, Zap, FileText, DollarSign, Terminal } from 'lucide-react';
+import { useChatStore } from '../stores/chatStore';
 import './WelcomeScreen.css';
 
 interface WelcomeScreenProps {
@@ -17,6 +18,13 @@ const SUGGESTIONS = [
 ];
 
 export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
+    const { systemStatus } = useChatStore();
+
+    // Determine if a setup hint should be shown to guide first-time users.
+    // Only show hints when backend is reachable (systemStatus is not null).
+    const notInitialized = systemStatus !== null && !systemStatus.initialized;
+    const noModel = systemStatus !== null && systemStatus.lemonade_running && !systemStatus.model_loaded;
+
     return (
         <main className="welcome">
             <div className="welcome-inner">
@@ -32,6 +40,25 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
                     <Feature icon={<FileText size={22} />} title="Smart" desc="Document Q&A" />
                     <Feature icon={<DollarSign size={22} />} title="Free" desc="No subscriptions" />
                 </div>
+
+                {/* First-run setup hints */}
+                {notInitialized && (
+                    <div className="welcome-setup-hint">
+                        <Terminal size={14} />
+                        <span>
+                            <strong>First time?</strong> Run <code>gaia init --profile chat</code> in a terminal to
+                            install Lemonade Server and download the required AI models (~25&nbsp;GB).
+                        </span>
+                    </div>
+                )}
+                {!notInitialized && noModel && (
+                    <div className="welcome-setup-hint">
+                        <Terminal size={14} />
+                        <span>
+                            No model loaded. Run <code>gaia init --profile chat</code> to download models (~25&nbsp;GB).
+                        </span>
+                    </div>
+                )}
 
                 <button className="btn-primary start-btn" onClick={onNewTask}>
                     Start a New Task
