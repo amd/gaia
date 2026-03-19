@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 CHUNK_TRUNCATION_THRESHOLD = 5000
 CHUNK_TRUNCATION_SIZE = 2500
 
+# Tools that require explicit user confirmation before execution.
+# Adding a tool name here causes _execute_tool() to call
+# console.confirm_tool_execution() and block until the user responds.
+TOOLS_REQUIRING_CONFIRMATION = {"run_shell_command"}
+
 
 class Agent(abc.ABC):
     """
@@ -1148,6 +1153,16 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 logger.error(f"Tool '{tool_name}' not found in registry")
                 return {"status": "error", "error": f"Tool '{tool_name}' not found"}
 
+        # Guardrail: require explicit user confirmation for high-risk tools.
+        # The SSEOutputHandler overrides this to block until the frontend
+        # responds; the default implementation auto-approves (CLI path).
+        if tool_name in TOOLS_REQUIRING_CONFIRMATION:
+            if not self.console.confirm_tool_execution(tool_name, tool_args):
+                return {
+                    "status": "denied",
+                    "error": f"Tool '{tool_name}' was denied by the user.",
+                }
+
         tool = _TOOL_REGISTRY[tool_name]["function"]
         sig = inspect.signature(tool)
 
@@ -1933,7 +1948,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                     # Return error response
                     final_answer = (
-                        f"Unable to complete task due to LLM server error: {str(e)}"
+                        f"I'm having trouble reaching the language model right now. "
+                        f"Please make sure Lemonade Server is running.\n\n"
+                        f"*Technical details: {str(e)}*"
                     )
                     break
                 except Exception as e:
@@ -1950,7 +1967,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                     # Return error response
                     final_answer = (
-                        f"Unable to complete task due to streaming error: {str(e)}"
+                        f"Sorry, I ran into a problem while processing your request. "
+                        f"This might be a temporary issue — try again in a moment.\n\n"
+                        f"*Technical details: {str(e)}*"
                     )
                     break
             else:
@@ -2004,7 +2023,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                     # Return error response
                     final_answer = (
-                        f"Unable to complete task due to LLM server error: {str(e)}"
+                        f"I'm having trouble reaching the language model right now. "
+                        f"Please make sure Lemonade Server is running.\n\n"
+                        f"*Technical details: {str(e)}*"
                     )
                     break
                 except Exception as e:
@@ -2019,7 +2040,11 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     )
 
                     # Return error response
-                    final_answer = f"Unable to complete task due to error: {str(e)}"
+                    final_answer = (
+                        f"Sorry, I ran into an unexpected problem. "
+                        f"This might be a temporary issue — try again in a moment.\n\n"
+                        f"*Technical details: {str(e)}*"
+                    )
                     break
 
                 # Stop the progress indicator

@@ -587,6 +587,8 @@ async def async_main(action, **kwargs):
                 chunk_size=kwargs.get("chunk_size", 500),
                 max_chunks=kwargs.get("max_chunks", 3),
                 allowed_paths=kwargs.get("allowed_paths", None),
+                max_indexed_files=kwargs.get("max_indexed_files"),
+                max_total_chunks=kwargs.get("max_total_chunks"),
             )
 
             # Create Chat Agent with configuration
@@ -979,6 +981,31 @@ def main():
         "--allowed-paths",
         nargs="+",
         help="Allowed directory paths for file operations (default: current directory)",
+    )
+    chat_parser.add_argument(
+        "--max-indexed-files",
+        type=int,
+        default=100,
+        help="Maximum number of files to keep indexed before LRU eviction (default: 100)",
+    )
+    chat_parser.add_argument(
+        "--max-total-chunks",
+        type=int,
+        default=10000,
+        help="Maximum total chunks across all indexed files (default: 10000)",
+    )
+
+    # Agent UI
+    chat_parser.add_argument(
+        "--ui",
+        action="store_true",
+        help="Launch the Agent UI (browser-based chat interface)",
+    )
+    chat_parser.add_argument(
+        "--ui-port",
+        type=int,
+        default=4200,
+        help="Port for the Agent UI server (default: 4200)",
     )
 
     # Agent UI
