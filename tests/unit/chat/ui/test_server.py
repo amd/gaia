@@ -548,7 +548,13 @@ class TestDocumentEndpoints:
     def test_upload_by_path_success(self, mock_index, client):
         mock_index.return_value = 15
 
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+        from pathlib import Path
+
+        # Use home directory so the path passes the home-confinement check
+        # on all platforms (CI Linux uses /tmp which is outside home).
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False, dir=Path.home()
+        ) as f:
             f.write(b"test content for hashing")
             tmp_path = f.name
 
@@ -566,7 +572,11 @@ class TestDocumentEndpoints:
 
     @patch("gaia.ui.server._index_document")
     def test_upload_by_path_directory_returns_400(self, mock_index, client):
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        from pathlib import Path
+
+        # Use home directory so the path passes the home-confinement check
+        # on all platforms (CI Linux uses /tmp which is outside home).
+        with tempfile.TemporaryDirectory(dir=Path.home()) as tmp_dir:
             resp = client.post("/api/documents/upload-path", json={"filepath": tmp_dir})
             assert resp.status_code == 400
 
@@ -781,7 +791,13 @@ class TestValidateFilePath:
     @patch("gaia.ui.server._index_document")
     def test_upload_rejects_unsafe_extension(self, mock_index, client):
         """Integration test: upload endpoint rejects unsafe file types."""
-        with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as f:
+        from pathlib import Path
+
+        # Use home directory so the path passes the home-confinement check
+        # on all platforms (CI Linux uses /tmp which is outside home).
+        with tempfile.NamedTemporaryFile(
+            suffix=".exe", delete=False, dir=Path.home()
+        ) as f:
             f.write(b"fake executable")
             tmp_path = f.name
 
