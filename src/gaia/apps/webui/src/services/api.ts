@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -71,6 +71,16 @@ export async function getSystemStatus(): Promise<SystemStatus> {
 
 export async function getHealth(): Promise<{ status: string; stats: Record<string, number> }> {
     return apiFetch('GET', '/health');
+}
+
+// -- Settings ------------------------------------------------------------------
+
+export async function getSettings(): Promise<Settings> {
+    return apiFetch<Settings>('GET', '/settings');
+}
+
+export async function updateSettings(data: Partial<Settings>): Promise<Settings> {
+    return apiFetch<Settings>('PUT', '/settings', data);
 }
 
 // -- Sessions ------------------------------------------------------------------

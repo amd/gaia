@@ -630,11 +630,15 @@ class TestPrintInfo:
 class TestStartProgress:
     """Tests for SSEOutputHandler.start_progress."""
 
-    def test_emits_thinking_for_normal_message(self, handler):
+    def test_emits_status_for_normal_message(self, handler):
         handler.start_progress("Analyzing code...")
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0] == {"type": "thinking", "content": "Analyzing code..."}
+        assert events[0] == {
+            "type": "status",
+            "status": "working",
+            "message": "Analyzing code...",
+        }
 
     def test_filters_executing_prefix(self, handler):
         handler.start_progress("Executing search_file")
@@ -651,14 +655,14 @@ class TestStartProgress:
         handler.start_progress(None)
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0]["content"] == "Working"
+        assert events[0]["message"] == "Working"
 
     def test_empty_string_emits_working_fallback(self, handler):
         # "" is falsy, so startswith check skipped; "message or 'Working'" applies
         handler.start_progress("")
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0]["content"] == "Working"
+        assert events[0]["message"] == "Working"
 
 
 # ===========================================================================

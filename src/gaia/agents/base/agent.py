@@ -1933,7 +1933,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                     # Return error response
                     final_answer = (
-                        f"Unable to complete task due to LLM server error: {str(e)}"
+                        f"I'm having trouble reaching the language model right now. "
+                        f"Please make sure Lemonade Server is running.\n\n"
+                        f"*Technical details: {str(e)}*"
                     )
                     break
                 except Exception as e:
@@ -1950,7 +1952,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                     # Return error response
                     final_answer = (
-                        f"Unable to complete task due to streaming error: {str(e)}"
+                        f"Sorry, I ran into a problem while processing your request. "
+                        f"This might be a temporary issue — try again in a moment.\n\n"
+                        f"*Technical details: {str(e)}*"
                     )
                     break
             else:
@@ -2004,7 +2008,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                     # Return error response
                     final_answer = (
-                        f"Unable to complete task due to LLM server error: {str(e)}"
+                        f"I'm having trouble reaching the language model right now. "
+                        f"Please make sure Lemonade Server is running.\n\n"
+                        f"*Technical details: {str(e)}*"
                     )
                     break
                 except Exception as e:
@@ -2019,7 +2025,11 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     )
 
                     # Return error response
-                    final_answer = f"Unable to complete task due to error: {str(e)}"
+                    final_answer = (
+                        f"Sorry, I ran into an unexpected problem. "
+                        f"This might be a temporary issue — try again in a moment.\n\n"
+                        f"*Technical details: {str(e)}*"
+                    )
                     break
 
                 # Stop the progress indicator
