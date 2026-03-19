@@ -35,7 +35,10 @@ class TestSafeOpenDocument:
         real_file = home_tmp_dir / "real.txt"
         real_file.write_text("content")
         symlink = home_tmp_dir / "link.txt"
-        symlink.symlink_to(real_file)
+        try:
+            symlink.symlink_to(real_file)
+        except OSError:
+            pytest.skip("Symlink creation requires elevated privileges on Windows")
         with pytest.raises(HTTPException) as exc_info:
             with safe_open_document(str(symlink)):
                 pass
