@@ -97,6 +97,16 @@ async def system_status():
     init_marker = Path.home() / ".gaia" / "chat" / "initialized"
     status.initialized = init_marker.exists()
 
+    # Device support check
+    try:
+        from gaia.cli import _check_device_supported
+
+        supported, processor_name = _check_device_supported(log=logger)
+        status.processor_name = processor_name
+        status.device_supported = supported
+    except Exception:
+        pass  # Unknown device — don't block the UI after it's already running
+
     return status
 
 

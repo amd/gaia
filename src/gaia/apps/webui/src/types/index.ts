@@ -66,6 +66,9 @@ export interface SystemStatus {
     memory_available_gb: number;
     initialized: boolean;
     version: string;
+    // Device compatibility check
+    processor_name: string | null;
+    device_supported: boolean;
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────

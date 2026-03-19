@@ -25,6 +25,9 @@ class SystemStatus(BaseModel):
     memory_available_gb: float = 0.0
     initialized: bool = False
     version: str = _gaia_version
+    # Device compatibility check
+    processor_name: Optional[str] = None
+    device_supported: bool = True
 
 
 # ── Sessions ────────────────────────────────────────────────────────────────

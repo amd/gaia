@@ -99,6 +99,13 @@ export function SettingsModal() {
                                 <StatusRow label="Embedding Model" value={status.embedding_model_loaded ? 'Available' : 'Not loaded'} ok={status.embedding_model_loaded} />
                                 <StatusRow label="Disk Space" value={`${status.disk_space_gb} GB free`} ok={status.disk_space_gb > 5} />
                                 <StatusRow label="Memory" value={`${status.memory_available_gb} GB available`} ok={status.memory_available_gb > 2} />
+                                {status.processor_name && (
+                                    <StatusRow
+                                        label="Processor"
+                                        value={status.processor_name}
+                                        ok={status.device_supported !== false}
+                                    />
+                                )}
                             </div>
                         ) : (
                             <div className="status-error">
