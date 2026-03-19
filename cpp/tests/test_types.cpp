@@ -79,6 +79,20 @@ TEST(TypesTest, AgentConfigDefaults) {
     EXPECT_FALSE(config.silentMode);
 }
 
+TEST(TypesTest, AgentConfigStreamingCanBeEnabled) {
+    AgentConfig config;
+    config.streaming = true;
+    EXPECT_TRUE(config.streaming);
+}
+
+TEST(TypesTest, DefaultStreamingReturnsBool) {
+    // Verifies defaultStreaming() is callable and returns a bool.
+    // Value depends on GAIA_STREAMING env var; we just assert it doesn't crash
+    // and matches what AgentConfig picks up.
+    AgentConfig config;
+    EXPECT_EQ(config.streaming, defaultStreaming());
+}
+
 // ---- ParsedResponse Tests ----
 
 TEST(TypesTest, ParsedResponseDefaults) {

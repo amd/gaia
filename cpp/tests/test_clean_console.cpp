@@ -729,3 +729,33 @@ TEST(CleanConsoleTest, PrettyPrintJsonToolResultErrorPreventsOutput) {
     EXPECT_TRUE(out.find("Output:") == std::string::npos)
         << "Output: should NOT appear when error is present; got: " << out;
 }
+
+// ---- Streaming Tests ----
+
+TEST(CleanConsoleTest, PrintStreamTokenOutput) {
+    CleanConsole console;
+    CoutCapture cap;
+
+    console.printStreamToken("hello");
+
+    EXPECT_EQ(cap.str(), "hello");
+}
+
+TEST(CleanConsoleTest, PrintStreamTokenMultiple) {
+    CleanConsole console;
+    CoutCapture cap;
+
+    console.printStreamToken("foo");
+    console.printStreamToken("bar");
+
+    EXPECT_EQ(cap.str(), "foobar");
+}
+
+TEST(CleanConsoleTest, PrintStreamEndNewline) {
+    CleanConsole console;
+    CoutCapture cap;
+
+    console.printStreamEnd();
+
+    EXPECT_EQ(cap.str(), "\n");
+}

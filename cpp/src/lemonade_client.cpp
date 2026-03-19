@@ -9,6 +9,7 @@
 
 #include <httplib.h>
 
+#include "gaia/sse_parser.h"
 #include "gaia/types.h" // getEnvVar
 
 namespace gaia {
@@ -437,6 +438,144 @@ std::string LemonadeClient::chatCompletions(const json& requestBody, int timeout
     }
 
     return responseBody;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming inference
+// ---------------------------------------------------------------------------
+
+void LemonadeClient::httpPostStreaming(const std::string& path, const std::string& body,
+                                       std::function<bool(const char*, size_t)> receiver,
+                                       bool& streamDone, int timeoutSec) {
+    UrlParts p = parseUrl(baseUrl_);
+    std::string fullPath = p.basePath + path;
+    if (fullPath.empty()) fullPath = "/";
+
+    if (debug_) {
+        std::cerr << "[Lemonade] POST (stream) " << p.host << ":" << p.port << fullPath << std::endl;
+    }
+
+    // Use a lambda that captures the caller's receiver and the streamDone flag.
+    // The ContentReceiverWithProgress signature is (data, len, offset, total).
+    auto contentReceiver = [&receiver, &streamDone](
+                               const char* data, size_t len,
+                               uint64_t /*offset*/, uint64_t /*total*/) -> bool {
+        const bool cont = receiver(data, len);
+        if (!cont) streamDone = true;
+        return cont;
+    };
+
+    // Capture HTTP status via the response handler (fires after headers, before body).
+    int httpStatus = 0;
+    auto responseHandler = [&httpStatus](const httplib::Response& res) -> bool {
+        httpStatus = res.status;
+        return true; // always proceed to read body (needed for error messages)
+    };
+
+    auto buildAndSend = [&](auto& cli) {
+        cli.set_connection_timeout(30);
+        cli.set_read_timeout(timeoutSec);
+
+        httplib::Request req;
+        req.method = "POST";
+        req.path   = fullPath;
+        req.set_header("Content-Type", "application/json");
+        req.body             = body;
+        req.response_handler = responseHandler;
+        req.content_receiver = contentReceiver;
+
+        return cli.send(req);
+    };
+
+    httplib::Result result;
+    if (p.useSSL) {
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+        httplib::SSLClient cli(p.host, p.port);
+        result = buildAndSend(cli);
+#else
+        throw std::runtime_error("SSL not supported. Use http:// base URL.");
+#endif
+    } else {
+        httplib::Client cli(p.host, p.port);
+        result = buildAndSend(cli);
+    }
+
+    if (!result) {
+        // Error::Canceled is expected when the SSE [DONE] sentinel causes the
+        // content receiver to return false. Treat it as normal completion,
+        // but still validate the HTTP status captured before the body arrived.
+        if (result.error() == httplib::Error::Canceled && streamDone) {
+            if (httpStatus >= 200 && httpStatus < 300) return;
+            throw std::runtime_error("POST " + fullPath + " returned HTTP " +
+                                     std::to_string(httpStatus));
+        }
+        throw std::runtime_error("POST " + fullPath + " streaming failed: " +
+                                 httplib::to_string(result.error()));
+    }
+
+    if (httpStatus < 200 || httpStatus >= 300) {
+        throw std::runtime_error("POST " + fullPath + " returned HTTP " +
+                                 std::to_string(httpStatus));
+    }
+}
+
+std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
+                                                      StreamCallback onToken,
+                                                      int timeoutSec) {
+    json body = requestBody;
+    body["stream"] = true;
+
+    SseParser parser(onToken);
+    std::string rawBytes;
+    bool streamDone = false;
+
+    httpPostStreaming(
+        "/chat/completions",
+        body.dump(),
+        [&parser, &rawBytes](const char* data, size_t len) -> bool {
+            rawBytes.append(data, len);
+            return parser.feed(data, len);
+        },
+        streamDone,
+        timeoutSec
+    );
+
+    // If no tokens were extracted, the server may have returned an error or a
+    // non-streaming response. Apply the same embedded-error check as chatCompletions().
+    if (!parser.hasTokens() && !rawBytes.empty()) {
+        try {
+            const json responseJson = json::parse(rawBytes);
+            if (responseJson.contains("error")) {
+                std::string errMsg = "LLM server error";
+                try {
+                    const auto& inner =
+                        responseJson["error"]["details"]["response"]["error"];
+                    std::string msg = inner.value("message", "");
+                    if (msg.find("exceeds the available context size") != std::string::npos) {
+                        int nCtx    = inner.value("n_ctx", 0);
+                        int nPrompt = inner.value("n_prompt_tokens", 0);
+                        errMsg =
+                            "Server context window too small: prompt is " +
+                            std::to_string(nPrompt) + " tokens but server n_ctx=" +
+                            std::to_string(nCtx) + ".\n" +
+                            "  Restart Lemonade with a larger context:\n" +
+                            "    lemonade-server serve --ctx-size 32768\n" +
+                            "  or via the helper script:\n" +
+                            "    .\\scripts\\start-lemonade.ps1 -CtxSize 32768";
+                    } else if (!msg.empty()) {
+                        errMsg = msg;
+                    }
+                } catch (...) {}
+                throw std::runtime_error(errMsg);
+            }
+        } catch (const std::runtime_error&) {
+            throw;
+        } catch (...) {
+            // Not valid JSON — return raw bytes for caller's fallback handling
+        }
+    }
+
+    return rawBytes;
 }
 
 } // namespace gaia
