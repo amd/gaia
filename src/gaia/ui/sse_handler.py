@@ -384,6 +384,21 @@ class SSEOutputHandler(OutputHandler):
             # Strip any completed <think>...</think> blocks from the buffer.
             self._stream_buffer = _THINK_TAG_SUB_RE.sub("", self._stream_buffer)
 
+            # If an incomplete <think> block is open (no closing tag yet),
+            # hold the buffer so we don't emit raw <think> content to the UI.
+            if (
+                "<think>" in self._stream_buffer
+                and "</think>" not in self._stream_buffer
+            ):
+                if not end_of_stream:
+                    return
+                # At end of stream, discard the unclosed think block entirely.
+                idx = self._stream_buffer.find("<think>")
+                self._stream_buffer = self._stream_buffer[:idx]
+                if not self._stream_buffer.strip():
+                    self._stream_buffer = ""
+                    return
+
             stripped = self._stream_buffer.strip()
 
             # Case 0: Buffer starts with "{" but we haven't seen enough to

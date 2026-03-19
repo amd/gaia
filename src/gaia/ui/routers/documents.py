@@ -13,7 +13,9 @@ effect correctly.
 
 import asyncio
 import logging
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import List
 
@@ -32,9 +34,10 @@ from ..utils import (
     ALLOWED_EXTENSIONS,
     LARGE_FILE_THRESHOLD,
     compute_file_hash,
+    compute_file_hash_from_fd,
     doc_to_response,
     ensure_within_home,
-    sanitize_document_path,
+    safe_open_document,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,24 +81,39 @@ async def upload_by_path(
     document will have ``indexing_status='indexing'`` and the frontend
     can poll ``GET /api/documents/{id}/status`` for progress.
     """
-    safe_filepath = sanitize_document_path(request.filepath)
+    # Use safe_open_document for TOCTOU-safe validation (rejects symlinks,
+    # enforces home-directory confinement, checks extension).
+    # Then copy to a temp file so indexing reads a stable snapshot.
+    with safe_open_document(request.filepath) as (fd, file_stat, safe_filepath):
+        file_hash = compute_file_hash_from_fd(fd)
+        file_size = file_stat.st_size
+        file_mtime = file_stat.st_mtime
 
-    if not safe_filepath.exists():
-        raise HTTPException(status_code=404, detail="File not found")
+        suffix = safe_filepath.suffix
+        tmp_fd, tmp_path_str = tempfile.mkstemp(prefix="gaia_upload_", suffix=suffix)
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            with os.fdopen(tmp_fd, "wb") as tmp_f:
+                while True:
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        break
+                    tmp_f.write(chunk)
+        except Exception:
+            os.unlink(tmp_path_str)
+            raise
 
-    if not safe_filepath.is_file():
-        raise HTTPException(status_code=400, detail="Path is not a file")
-
-    file_stat = safe_filepath.stat()
-    file_hash = compute_file_hash(safe_filepath)
-    file_size = file_stat.st_size
-    file_mtime = file_stat.st_mtime
+    tmp_path = Path(tmp_path_str)
 
     _index_document = _server_mod()._index_document
 
     if file_size <= LARGE_FILE_THRESHOLD:
         # Small file: index synchronously (fast)
-        chunk_count = await _index_document(safe_filepath)
+        try:
+            chunk_count = await _index_document(tmp_path)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
         doc = db.add_document(
             filename=safe_filepath.name,
             filepath=str(safe_filepath),
@@ -118,13 +136,13 @@ async def upload_by_path(
     doc_id = doc["id"]
     db.update_document_status(doc_id, "indexing")
 
-    async def _background_index(doc_id: str, filepath: Path):
+    async def _background_index(doc_id: str, filepath: Path, tmp: Path):
         """Run indexing in background, updating DB status on completion."""
         try:
             logger.info(
                 "Background indexing started for %s (%s)", filepath.name, doc_id
             )
-            chunk_count = await _index_document(filepath)
+            chunk_count = await _index_document(tmp)
             # Check if task was cancelled while we were indexing
             if doc_id in indexing_tasks:
                 db.update_document_status(doc_id, "complete", chunk_count=chunk_count)
@@ -146,8 +164,9 @@ async def upload_by_path(
             )
         finally:
             indexing_tasks.pop(doc_id, None)
+            tmp.unlink(missing_ok=True)
 
-    task = asyncio.create_task(_background_index(doc_id, safe_filepath))
+    task = asyncio.create_task(_background_index(doc_id, safe_filepath, tmp_path))
     indexing_tasks[doc_id] = task
 
     # Return immediately with indexing_status='indexing'

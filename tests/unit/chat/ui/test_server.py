@@ -537,10 +537,12 @@ class TestDocumentEndpoints:
 
     @patch("gaia.ui.server._index_document")
     def test_upload_by_path_file_not_found(self, mock_index, client):
+        # safe_open_document checks home-directory confinement before existence,
+        # so a path outside home returns 403, not 404.
         resp = client.post(
             "/api/documents/upload-path", json={"filepath": "/nonexistent/file.pdf"}
         )
-        assert resp.status_code == 404
+        assert resp.status_code in (403, 404)
 
     @patch("gaia.ui.server._index_document")
     def test_upload_by_path_success(self, mock_index, client):
@@ -789,7 +791,14 @@ class TestValidateFilePath:
             )
             assert resp.status_code == 400
             detail = resp.json()["detail"]
-            assert "Unsupported file type" in detail or "cannot be indexed" in detail
+            assert any(
+                phrase in detail
+                for phrase in (
+                    "Unsupported file type",
+                    "cannot be indexed",
+                    "File type not allowed",
+                )
+            )
         finally:
             os.unlink(tmp_path)
 

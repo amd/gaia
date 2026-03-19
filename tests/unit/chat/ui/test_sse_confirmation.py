@@ -5,6 +5,10 @@
 
 Tests the blocking confirm_tool_execution / resolve_confirmation handshake
 used by the tool execution guardrails feature.
+
+NOTE: The tool confirmation flow was removed in PR #566 (round 5 fixes) as
+part of simplifying the Agent UI. These tests are skipped until the feature
+is re-implemented.
 """
 
 import threading
@@ -12,7 +16,11 @@ import time
 
 import pytest
 
-from gaia.ui.sse_handler import SSEOutputHandler
+pytestmark = pytest.mark.skip(
+    reason="Tool confirmation flow removed in PR #566; tests skipped until re-implemented"
+)
+
+from gaia.ui.sse_handler import SSEOutputHandler  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures

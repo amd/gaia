@@ -71,7 +71,7 @@ function App() {
 
     // Startup banner + load sessions on mount, then poll for changes
     const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const lastSessionCountRef = useRef<number>(0);
+    const lastSessionFingerprintRef = useRef<string>('');
 
     useEffect(() => {
         logBanner(__APP_VERSION__);
@@ -82,16 +82,21 @@ function App() {
             api.listSessions()
                 .then((data) => {
                     const sessions = data.sessions || [];
+                    const fingerprint = sessions.map((s: { id: string; title?: string }) => `${s.id}:${s.title ?? ''}`).join('|');
                     if (isInitial) {
                         setSessions(sessions);
                         setBackendConnected(true);
                         log.system.timed(`Loaded ${sessions.length} session(s)`, t);
-                    } else if (sessions.length !== lastSessionCountRef.current) {
-                        // New or deleted session detected — refresh list
-                        log.system.info(`Session list changed: ${lastSessionCountRef.current} -> ${sessions.length}`);
+                        lastSessionFingerprintRef.current = fingerprint;
+                    } else if (fingerprint !== lastSessionFingerprintRef.current) {
+                        // Guard: don't replace a populated list with an empty one
+                        // (transient API error returning empty array)
+                        const { sessions: currentSessions } = useChatStore.getState();
+                        if (sessions.length === 0 && currentSessions.length > 0) return;
+                        log.system.info(`Session list changed, refreshing sidebar`);
                         setSessions(sessions);
+                        lastSessionFingerprintRef.current = fingerprint;
                     }
-                    lastSessionCountRef.current = sessions.length;
                 })
                 .catch((err) => {
                     if (isInitial) {

@@ -8,6 +8,7 @@ Provides shell command execution capabilities for file operations and system que
 
 import logging
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -186,6 +187,21 @@ class ShellToolsMixin:
                     cwd = str(Path(working_directory).resolve())
                 else:
                     cwd = str(Path.cwd())
+
+                # Block dangerous shell operators before any other parsing.
+                # On Windows shell=True is used, so cmd.exe interprets &&, ||,
+                # ;, backticks, and $(...) — a whitelist on the first token
+                # alone would not prevent command chaining.
+                _DANGEROUS_SHELL_OPERATORS = re.compile(
+                    r"(&&|\|\||;|`|\$\(|>\s*/|2>&1.*rm)"
+                )
+                if _DANGEROUS_SHELL_OPERATORS.search(command):
+                    return {
+                        "status": "error",
+                        "error": "Command contains dangerous shell operators (&&, ||, ;, backticks, $(...)) which are not allowed",
+                        "has_errors": True,
+                        "hint": "Run one command at a time without chaining operators",
+                    }
 
                 # Parse command safely
                 try:
