@@ -16,7 +16,6 @@ import sys
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-
 from pydantic import BaseModel
 
 from ..database import ChatDatabase

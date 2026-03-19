@@ -29,8 +29,7 @@ logger = logging.getLogger(__name__)
 # Regex to detect raw tool-call JSON that LLMs sometimes emit as text content.
 # Matches patterns like: {"tool": "search_file", "tool_args": {...}}
 _TOOL_CALL_JSON_RE = re.compile(
-    r'^\s*\{["\s]*tool["\s]*:\s*"[^"]+"\s*,\s*["\s]*tool_args["\s]*:\s*\{.*\}\s*\}\s*$',
-    re.DOTALL,
+    r'^\s*\{["\s]*tool["\s]*:\s*"[^"]+"\s*,\s*["\s]*tool_args["\s]*:\s*\{[^}]*\}\s*\}\s*$',
 )
 
 # Regex for use with re.sub() to strip tool-call JSON from mixed content.
@@ -519,9 +518,7 @@ class SSEOutputHandler(OutputHandler):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
 
-    def confirm_tool_execution(
-        self, tool_name: str, tool_args: Dict[str, Any]
-    ) -> bool:
+    def confirm_tool_execution(self, tool_name: str, tool_args: Dict[str, Any]) -> bool:
         """Emit a permission_request event and block until the frontend responds.
 
         The /api/chat/confirm-tool endpoint calls ``resolve_tool_confirmation()``

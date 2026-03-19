@@ -88,10 +88,14 @@ async def upload_by_path(
         all_docs = db.list_documents()
         if len(all_docs) >= max_files:
             # Evict least-recently-used document
-            oldest = min(all_docs, key=lambda d: d.get("updated_at", d.get("created_at", "")))
+            oldest = min(
+                all_docs, key=lambda d: d.get("updated_at", d.get("created_at", ""))
+            )
             logger.info(
                 "LRU eviction: removing %s (id=%s) to stay under limit of %d",
-                oldest.get("filename", "unknown"), oldest["id"], max_files,
+                oldest.get("filename", "unknown"),
+                oldest["id"],
+                max_files,
             )
             db.delete_document(oldest["id"])
 

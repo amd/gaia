@@ -27,7 +27,7 @@ const EMPTY_SUGGESTIONS = [
  * through the SSE stream. Uses quote-aware matching to avoid stripping answer
  * content from JSON-wrapped responses. Keep in sync with the server-side pattern.
  */
-const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*"(?:\s*,\s*"[^"]*"\s*:\s*(?:"(?:[^"\\]|\\.)*"|[^,}]*))*\s*\}/g;
+const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*"[^}]*\}/g;
 
 /**
  * Strip the LLM JSON envelope from streamed/accumulated content.

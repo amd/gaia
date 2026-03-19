@@ -3,12 +3,8 @@
 
 """Unit tests for SSEOutputHandler tool confirmation flow.
 
-Tests the blocking confirm_tool_execution / resolve_confirmation handshake
-used by the tool execution guardrails feature.
-
-NOTE: The tool confirmation flow was removed in PR #566 (round 5 fixes) as
-part of simplifying the Agent UI. These tests are skipped until the feature
-is re-implemented.
+Tests the blocking confirm_tool_execution / resolve_tool_confirmation handshake
+used by the tool execution guardrails feature (PR #565, re-implemented in PR #604).
 """
 
 import threading
@@ -16,11 +12,7 @@ import time
 
 import pytest
 
-pytestmark = pytest.mark.skip(
-    reason="Tool confirmation flow removed in PR #566; tests skipped until re-implemented"
-)
-
-from gaia.ui.sse_handler import SSEOutputHandler  # noqa: E402
+from gaia.ui.sse_handler import SSEOutputHandler
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -42,55 +34,73 @@ def _drain(handler: SSEOutputHandler):
 
 
 # ===========================================================================
-# confirm_tool_execution — timeout
+# confirm_tool_execution — cancellation
 # ===========================================================================
 
 
-class TestConfirmToolExecutionTimeout:
-    """confirm_tool_execution returns False after timeout."""
+class TestConfirmToolExecutionCancellation:
+    """confirm_tool_execution returns False when the stream is cancelled."""
 
-    def test_timeout_returns_false(self, handler, monkeypatch):
-        """When no resolve arrives, confirm_tool_execution returns False."""
-        # Patch the module-level constant to a tiny value so the test runs fast
-        monkeypatch.setattr("gaia.ui.sse_handler.TOOL_CONFIRM_TIMEOUT_SECONDS", 0.3)
+    def test_cancellation_returns_false(self, handler):
+        """When cancelled is set, confirm_tool_execution returns False."""
+        result_holder = {"result": None}
 
-        result = handler.confirm_tool_execution("run_shell_command", {"cmd": "ls"})
+        def run_confirm():
+            result_holder["result"] = handler.confirm_tool_execution(
+                "run_shell_command", {"cmd": "ls"}
+            )
 
-        assert result is False
-        # A tool_confirm event should have been emitted
+        t = threading.Thread(target=run_confirm)
+        t.start()
+
+        # Wait for the confirmation to be set up
+        time.sleep(0.2)
+
+        # Simulate cancellation
+        handler.cancelled.set()
+
+        t.join(timeout=3.0)
+        assert not t.is_alive()
+        assert result_holder["result"] is False
+
+    def test_emits_permission_request_event(self, handler):
+        """confirm_tool_execution emits a permission_request event."""
+        result_holder = {}
+
+        def run_confirm():
+            result_holder["result"] = handler.confirm_tool_execution(
+                "run_shell_command", {"cmd": "ls"}
+            )
+
+        t = threading.Thread(target=run_confirm)
+        t.start()
+
+        # Wait for the event to be emitted
+        time.sleep(0.2)
+
         events = _drain(handler)
-        confirm_events = [e for e in events if e and e.get("type") == "tool_confirm"]
-        assert len(confirm_events) == 1
-        assert confirm_events[0]["tool"] == "run_shell_command"
-        # A timeout warning should also have been emitted
-        warning_events = [
-            e
-            for e in events
-            if e and e.get("type") == "status" and e.get("status") == "warning"
+        permission_events = [
+            e for e in events if e and e.get("type") == "permission_request"
         ]
-        assert len(warning_events) == 1
-        assert "timed out" in warning_events[0]["message"]
+        assert len(permission_events) == 1
+        assert permission_events[0]["tool"] == "run_shell_command"
+        assert permission_events[0]["args"] == {"cmd": "ls"}
 
-    def test_timeout_clears_internal_state(self, handler, monkeypatch):
-        """After timeout, _confirm_id and _confirm_event are cleared."""
-        monkeypatch.setattr("gaia.ui.sse_handler.TOOL_CONFIRM_TIMEOUT_SECONDS", 0.3)
-
-        handler.confirm_tool_execution("test_tool", {})
-
-        assert handler._confirm_id is None
-        assert handler._confirm_event is None
+        # Clean up
+        handler.cancelled.set()
+        t.join(timeout=3.0)
 
 
 # ===========================================================================
-# confirm_tool_execution — resolve with allow
+# confirm_tool_execution — resolve with approve
 # ===========================================================================
 
 
-class TestConfirmToolExecutionAllow:
-    """confirm_tool_execution returns True when resolved with allow."""
+class TestConfirmToolExecutionApprove:
+    """confirm_tool_execution returns True when resolved with approved=True."""
 
-    def test_allow_returns_true(self, handler):
-        """Resolving with allowed=True unblocks and returns True."""
+    def test_approve_returns_true(self, handler):
+        """Resolving with approved=True unblocks and returns True."""
         result_holder = {"result": None}
 
         def run_confirm():
@@ -101,23 +111,19 @@ class TestConfirmToolExecutionAllow:
         t = threading.Thread(target=run_confirm)
         t.start()
 
-        # Wait briefly for the confirm to be set up
+        # Wait for the confirmation to be set up
         deadline = time.time() + 2.0
-        while handler._confirm_id is None and time.time() < deadline:
+        while handler._confirm_result is None and time.time() < deadline:
             time.sleep(0.05)
 
-        assert handler._confirm_id is not None
-        confirm_id = handler._confirm_id
-
-        success = handler.resolve_confirmation(confirm_id, allowed=True)
-        assert success is True
+        handler.resolve_tool_confirmation(approved=True)
 
         t.join(timeout=3.0)
         assert not t.is_alive()
         assert result_holder["result"] is True
 
-    def test_allow_clears_internal_state(self, handler):
-        """After allow, _confirm_id and _confirm_event are cleared."""
+    def test_approve_sets_confirm_result(self, handler):
+        """After approval, _confirm_result is True."""
         result_holder = {}
 
         def run_confirm():
@@ -127,14 +133,13 @@ class TestConfirmToolExecutionAllow:
         t.start()
 
         deadline = time.time() + 2.0
-        while handler._confirm_id is None and time.time() < deadline:
+        while handler._confirm_result is None and time.time() < deadline:
             time.sleep(0.05)
 
-        handler.resolve_confirmation(handler._confirm_id, allowed=True)
+        handler.resolve_tool_confirmation(approved=True)
         t.join(timeout=3.0)
 
-        assert handler._confirm_id is None
-        assert handler._confirm_event is None
+        assert handler._confirm_result is True
 
 
 # ===========================================================================
@@ -143,10 +148,10 @@ class TestConfirmToolExecutionAllow:
 
 
 class TestConfirmToolExecutionDeny:
-    """confirm_tool_execution returns False when resolved with deny."""
+    """confirm_tool_execution returns False when resolved with approved=False."""
 
     def test_deny_returns_false(self, handler):
-        """Resolving with allowed=False unblocks and returns False."""
+        """Resolving with approved=False unblocks and returns False."""
         result_holder = {"result": None}
 
         def run_confirm():
@@ -158,14 +163,10 @@ class TestConfirmToolExecutionDeny:
         t.start()
 
         deadline = time.time() + 2.0
-        while handler._confirm_id is None and time.time() < deadline:
+        while handler._confirm_result is None and time.time() < deadline:
             time.sleep(0.05)
 
-        assert handler._confirm_id is not None
-        confirm_id = handler._confirm_id
-
-        success = handler.resolve_confirmation(confirm_id, allowed=False)
-        assert success is True  # resolve itself succeeds
+        handler.resolve_tool_confirmation(approved=False)
 
         t.join(timeout=3.0)
         assert not t.is_alive()
@@ -173,55 +174,27 @@ class TestConfirmToolExecutionDeny:
 
 
 # ===========================================================================
-# resolve_confirmation — wrong confirm_id
+# resolve_tool_confirmation — no pending confirmation
 # ===========================================================================
 
 
-class TestResolveConfirmationWrongId:
-    """resolve_confirmation with wrong confirm_id returns False."""
+class TestResolveToolConfirmationNoPending:
+    """resolve_tool_confirmation with no pending request just sets the event."""
 
-    def test_wrong_id_returns_false(self, handler):
-        """Mismatched confirm_id should not unblock the waiting thread."""
-        result_holder = {"result": None}
-
-        def run_confirm():
-            result_holder["result"] = handler.confirm_tool_execution("tool", {})
-
-        t = threading.Thread(target=run_confirm)
-        t.start()
-
-        deadline = time.time() + 2.0
-        while handler._confirm_id is None and time.time() < deadline:
-            time.sleep(0.05)
-
-        assert handler._confirm_id is not None
-
-        # Try resolving with a wrong ID
-        success = handler.resolve_confirmation("wrong-id-12345", allowed=True)
-        assert success is False
-
-        # The thread should still be waiting (not unblocked)
-        time.sleep(0.2)
-        assert t.is_alive()
-
-        # Now resolve with the correct ID so the thread can exit
-        handler.resolve_confirmation(handler._confirm_id, allowed=False)
-        t.join(timeout=3.0)
-        assert result_holder["result"] is False
-
-    def test_no_pending_confirmation_returns_false(self, handler):
-        """resolve_confirmation with no pending request returns False."""
-        success = handler.resolve_confirmation("some-id", allowed=True)
-        assert success is False
+    def test_no_pending_sets_event(self, handler):
+        """Calling resolve with no pending confirm just sets the event/result."""
+        handler.resolve_tool_confirmation(approved=True)
+        assert handler._confirm_result is True
+        assert handler._confirm_event.is_set()
 
 
 # ===========================================================================
-# POST /api/chat/confirm endpoint
+# POST /api/chat/confirm-tool endpoint
 # ===========================================================================
 
 
-class TestConfirmEndpoint:
-    """Basic tests for the POST /api/chat/confirm endpoint."""
+class TestConfirmToolEndpoint:
+    """Tests for the POST /api/chat/confirm-tool endpoint."""
 
     @pytest.fixture
     def app(self):
@@ -245,104 +218,57 @@ class TestConfirmEndpoint:
 
         return TestClient(app)
 
-    def test_confirm_allow_routes_to_handler(self, client, app):
-        """Allow action resolves the pending confirmation."""
+    def test_confirm_approve_routes_to_handler(self, client, app):
+        """Approve action resolves the pending confirmation."""
+        from gaia.ui._chat_helpers import _active_sse_handlers
+
         handler = SSEOutputHandler()
         session_id = "test-session-1"
-        app.state.active_sse_handlers[session_id] = handler
+        _active_sse_handlers[session_id] = handler
 
         # Set up a pending confirmation
         handler._confirm_event = threading.Event()
-        handler._confirm_result = False
-        handler._confirm_id = "test-confirm-id"
+        handler._confirm_result = None
 
-        resp = client.post(
-            "/api/chat/confirm",
-            json={
-                "session_id": session_id,
-                "confirm_id": "test-confirm-id",
-                "action": "allow",
-                "remember": False,
-            },
-        )
+        try:
+            resp = client.post(
+                "/api/chat/confirm-tool",
+                json={"session_id": session_id, "approved": True},
+            )
 
-        assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
-        assert handler._confirm_result is True
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "ok", "approved": True}
+            assert handler._confirm_result is True
+            assert handler._confirm_event.is_set()
+        finally:
+            _active_sse_handlers.pop(session_id, None)
 
     def test_confirm_deny_routes_to_handler(self, client, app):
         """Deny action resolves the pending confirmation with False."""
+        from gaia.ui._chat_helpers import _active_sse_handlers
+
         handler = SSEOutputHandler()
         session_id = "test-session-2"
-        app.state.active_sse_handlers[session_id] = handler
+        _active_sse_handlers[session_id] = handler
 
         handler._confirm_event = threading.Event()
-        handler._confirm_result = True  # Start True to verify it gets set to False
-        handler._confirm_id = "test-confirm-id-2"
+        handler._confirm_result = None
 
-        resp = client.post(
-            "/api/chat/confirm",
-            json={
-                "session_id": session_id,
-                "confirm_id": "test-confirm-id-2",
-                "action": "deny",
-                "remember": False,
-            },
-        )
+        try:
+            resp = client.post(
+                "/api/chat/confirm-tool",
+                json={"session_id": session_id, "approved": False},
+            )
 
-        assert resp.status_code == 200
-        assert handler._confirm_result is False
+            assert resp.status_code == 200
+            assert handler._confirm_result is False
+        finally:
+            _active_sse_handlers.pop(session_id, None)
 
     def test_confirm_no_active_session_returns_404(self, client):
         """Missing session returns 404."""
         resp = client.post(
-            "/api/chat/confirm",
-            json={
-                "session_id": "nonexistent",
-                "confirm_id": "some-id",
-                "action": "allow",
-                "remember": False,
-            },
+            "/api/chat/confirm-tool",
+            json={"session_id": "nonexistent", "approved": True},
         )
         assert resp.status_code == 404
-
-    def test_confirm_wrong_id_returns_410(self, client, app):
-        """Wrong confirm_id returns 410 (expired/mismatch)."""
-        handler = SSEOutputHandler()
-        session_id = "test-session-3"
-        app.state.active_sse_handlers[session_id] = handler
-
-        handler._confirm_event = threading.Event()
-        handler._confirm_id = "correct-id"
-
-        resp = client.post(
-            "/api/chat/confirm",
-            json={
-                "session_id": session_id,
-                "confirm_id": "wrong-id",
-                "action": "allow",
-                "remember": False,
-            },
-        )
-        assert resp.status_code == 410
-
-    def test_confirm_invalid_action_returns_422(self, client, app):
-        """Invalid action value is rejected by Pydantic validation."""
-        handler = SSEOutputHandler()
-        session_id = "test-session-4"
-        app.state.active_sse_handlers[session_id] = handler
-
-        handler._confirm_event = threading.Event()
-        handler._confirm_id = "some-id"
-
-        resp = client.post(
-            "/api/chat/confirm",
-            json={
-                "session_id": session_id,
-                "confirm_id": "some-id",
-                "action": "maybe",
-                "remember": False,
-            },
-        )
-        # Pydantic Literal validation should reject "maybe"
-        assert resp.status_code == 422
