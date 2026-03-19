@@ -19,7 +19,7 @@ from fastapi.responses import StreamingResponse
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
-from ..models import ChatRequest, ChatResponse
+from ..models import ChatRequest, ChatResponse, ToolConfirmRequest
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,9 @@ async def send_message(
             async def _guarded_stream():
                 try:
                     db.add_message(request.session_id, "user", request.message)
-                    async for chunk in srv._stream_chat_response(db, session, request):
+                    async for chunk in srv._stream_chat_response(
+                        db, session, request, http_request
+                    ):
                         yield chunk
                 finally:
                     session_lock.release()
@@ -133,3 +135,32 @@ async def send_message(
         # the streaming generator took ownership.
         if not sem_released:
             chat_semaphore.release()
+
+
+# Security note: confirm_id (UUID v4) provides request-scoping but not
+# authentication. This endpoint is safe for local-only deployments.
+# For network-exposed deployments (e.g., tunnel mode), consider adding
+# session token validation.
+@router.post("/api/chat/confirm")
+async def confirm_tool_execution(
+    request: ToolConfirmRequest,
+    http_request: Request,
+):
+    """Resolve a pending tool execution confirmation.
+
+    Called by the frontend PermissionPrompt when the user clicks Allow or Deny.
+    Unblocks the agent thread waiting inside SSEOutputHandler.confirm_tool_execution().
+    """
+    active_handlers = getattr(http_request.app.state, "active_sse_handlers", {})
+    handler = active_handlers.get(request.session_id)
+    if handler is None:
+        raise HTTPException(status_code=404, detail="No active session found")
+
+    allowed = request.action == "allow"
+    success = handler.resolve_confirmation(request.confirm_id, allowed)
+    if not success:
+        raise HTTPException(
+            status_code=410, detail="Confirmation expired or ID mismatch"
+        )
+
+    return {"status": "ok"}

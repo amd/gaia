@@ -14,12 +14,16 @@ import queue
 import re
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
 
 logger = logging.getLogger(__name__)
+
+#: Seconds the agent thread waits for a tool-confirm response from the frontend.
+TOOL_CONFIRM_TIMEOUT_SECONDS = 60
 
 # ── Shared LLM output cleaning patterns ─────────────────────────────────
 # These regexes are the canonical definitions for filtering LLM noise.
@@ -72,6 +76,10 @@ class SSEOutputHandler(OutputHandler):
         self._last_tool_name: Optional[str] = None
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
         self._in_thinking = False  # True while inside a <think>...</think> block
+        # Tool confirmation state (blocking until frontend responds)
+        self._confirm_event: Optional[threading.Event] = None
+        self._confirm_result: bool = False
+        self._confirm_id: Optional[str] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -542,6 +550,71 @@ class SSEOutputHandler(OutputHandler):
             ):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
+
+    # === Tool Confirmation (blocking) ===
+
+    def confirm_tool_execution(self, tool_name: str, tool_args: Dict[str, Any]) -> bool:
+        """Block the agent thread until the user approves or denies a tool call.
+
+        Emits a ``tool_confirm`` SSE event so the frontend can show a modal.
+        Waits up to ``TOOL_CONFIRM_TIMEOUT_SECONDS`` for ``resolve_confirmation()``
+        to be called by the HTTP endpoint.  Returns ``True`` if the user allows,
+        ``False`` otherwise.
+        """
+        confirm_id = str(uuid.uuid4())
+        self._confirm_event = threading.Event()
+        self._confirm_result = False
+        self._confirm_id = confirm_id
+
+        self._emit(
+            {
+                "type": "tool_confirm",
+                "tool": tool_name,
+                "args": tool_args,
+                "confirm_id": confirm_id,
+                "timeout_seconds": TOOL_CONFIRM_TIMEOUT_SECONDS,
+            }
+        )
+
+        # Poll in short intervals so cancellation is detected promptly.
+        deadline = time.time() + TOOL_CONFIRM_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            if self.cancelled.is_set():
+                self._confirm_id = None
+                self._confirm_event = None
+                return False
+            if self._confirm_event.wait(timeout=0.5):
+                break
+        else:
+            # Timeout reached
+            self._emit(
+                {
+                    "type": "status",
+                    "status": "warning",
+                    "message": f"Confirmation for '{tool_name}' timed out ({TOOL_CONFIRM_TIMEOUT_SECONDS} s). Execution denied.",
+                }
+            )
+            logger.warning("Tool confirmation timed out for '%s'", tool_name)
+            self._confirm_id = None
+            self._confirm_event = None
+            return False
+
+        result = self._confirm_result
+        self._confirm_id = None
+        self._confirm_event = None
+        return result
+
+    def resolve_confirmation(self, confirm_id: str, allowed: bool) -> bool:
+        """Unblock the agent thread waiting in ``confirm_tool_execution()``.
+
+        Called by the ``POST /api/chat/confirm`` HTTP endpoint.  Returns
+        ``False`` if ``confirm_id`` does not match the pending request.
+        """
+        if self._confirm_id != confirm_id or self._confirm_event is None:
+            return False
+        self._confirm_result = allowed
+        self._confirm_event.set()
+        return True
 
     def signal_done(self):
         """Signal that the agent has finished processing."""

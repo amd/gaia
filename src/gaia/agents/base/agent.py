@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 CHUNK_TRUNCATION_THRESHOLD = 5000
 CHUNK_TRUNCATION_SIZE = 2500
 
+# Tools that require explicit user confirmation before execution.
+# Adding a tool name here causes _execute_tool() to call
+# console.confirm_tool_execution() and block until the user responds.
+TOOLS_REQUIRING_CONFIRMATION = {"run_shell_command"}
+
 
 class Agent(abc.ABC):
     """
@@ -1147,6 +1152,16 @@ You must respond ONLY in valid JSON. No text before { or after }.
             else:
                 logger.error(f"Tool '{tool_name}' not found in registry")
                 return {"status": "error", "error": f"Tool '{tool_name}' not found"}
+
+        # Guardrail: require explicit user confirmation for high-risk tools.
+        # The SSEOutputHandler overrides this to block until the frontend
+        # responds; the default implementation auto-approves (CLI path).
+        if tool_name in TOOLS_REQUIRING_CONFIRMATION:
+            if not self.console.confirm_tool_execution(tool_name, tool_args):
+                return {
+                    "status": "denied",
+                    "error": f"Tool '{tool_name}' was denied by the user.",
+                }
 
         tool = _TOOL_REGISTRY[tool_name]["function"]
         sig = inspect.signature(tool)

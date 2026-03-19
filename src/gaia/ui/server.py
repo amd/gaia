@@ -200,6 +200,11 @@ def create_app(db_path: str = None) -> FastAPI:
     tunnel = TunnelManager(port=DEFAULT_PORT)
     app.state.tunnel = tunnel
 
+    # Active SSE handlers keyed by session_id.
+    # Used by /api/chat/confirm to route user responses back to the
+    # agent thread blocked inside SSEOutputHandler.confirm_tool_execution().
+    app.state.active_sse_handlers: dict = {}
+
     # Concurrency control for /api/chat/send
     # ChatAgent is expensive (LLM connection, RAG indexing), so we limit
     # the number of concurrent chat requests to avoid resource exhaustion.

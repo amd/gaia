@@ -143,7 +143,7 @@ export interface StreamCallbacks {
 /** Agent event types that represent activity rather than content. */
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
-    'tool_start', 'tool_end', 'tool_result', 'tool_args', 'agent_error',
+    'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
 ]);
 
 export function sendMessageStream(
@@ -275,6 +275,18 @@ export function sendMessageStream(
         });
 
     return controller;
+}
+
+// -- Tool Confirmation ---------------------------------------------------------
+
+/** Resolve a pending tool execution confirmation (Allow or Deny). */
+export async function confirmToolExecution(
+    sessionId: string,
+    confirmId: string,
+    action: 'allow' | 'deny',
+    remember: boolean,
+): Promise<void> {
+    return apiFetch('POST', '/chat/confirm', { session_id: sessionId, confirm_id: confirmId, action, remember });
 }
 
 // -- Documents -----------------------------------------------------------------

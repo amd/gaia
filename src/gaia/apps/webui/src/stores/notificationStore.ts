@@ -11,11 +11,16 @@
 
 import { create } from 'zustand';
 import type { GaiaNotification, NotificationType } from '../types/agent';
+import { confirmToolExecution } from '../services/api';
+import { useChatStore } from './chatStore';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
 /** Maximum notifications kept in the center to prevent unbounded growth. */
 const MAX_NOTIFICATIONS = 500;
+
+/** localStorage key for the "always allow" tool list. */
+export const ALWAYS_ALLOW_TOOLS_KEY = 'gaia_always_allow_tools';
 
 // ── State Interface ──────────────────────────────────────────────────────
 
@@ -78,18 +83,41 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   setTypeFilter: (type) => set({ typeFilter: type }),
 
   respondToPermission: async (id, action, remember) => {
-    const api = window.gaiaAPI;
-    if (api) {
+    const electronApi = window.gaiaAPI;
+    if (electronApi) {
+      // Electron path: route via IPC
       try {
-        await api.notification.respondPermission(id, action, remember);
+        await electronApi.notification.respondPermission(id, action, remember);
       } catch (err) {
         console.error('[notificationStore] Failed to send permission response via IPC:', err);
         // Don't update local state — the agent didn't receive the response.
         // The permission prompt remains actionable so the user can retry.
         return;
       }
+    } else {
+      // Web path: route via HTTP to /api/chat/confirm
+      const sessionId = useChatStore.getState().currentSessionId;
+      if (sessionId) {
+        try {
+          await confirmToolExecution(sessionId, id, action, remember);
+        } catch (err) {
+          console.error('[notificationStore] Failed to send permission response via HTTP:', err);
+          return;
+        }
+      }
     }
-    // Update local state only after IPC succeeds (or if no IPC is available)
+    // Persist "always allow" preference in localStorage
+    if (action === 'allow' && remember) {
+      const notification = get().notifications.find((n) => n.id === id);
+      if (notification?.tool) {
+        const existing: string[] = JSON.parse(localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]');
+        if (!existing.includes(notification.tool)) {
+          existing.push(notification.tool);
+          localStorage.setItem(ALWAYS_ALLOW_TOOLS_KEY, JSON.stringify(existing));
+        }
+      }
+    }
+    // Update local state after response is delivered
     set((state) => ({
       notifications: state.notifications.map((n) =>
         n.id === id

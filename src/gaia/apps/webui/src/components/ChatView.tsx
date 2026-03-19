@@ -5,6 +5,8 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
+import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
+import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { getSessionHash } from '../utils/format';
@@ -128,6 +130,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
         systemStatus,
     } = useChatStore();
+
+    const { addNotification } = useNotificationStore();
 
     const session = sessions.find((s) => s.id === sessionId);
     const [input, setInput] = useState('');
@@ -598,6 +602,43 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
             },
             onAgentEvent: (event) => {
+                // ── Tool confirmation popup ──────────────────────────────
+                if (event.type === 'tool_confirm') {
+                    if (!event.confirm_id) {
+                        console.error('[ChatView] tool_confirm event missing confirm_id, ignoring');
+                        return;
+                    }
+                    const toolName = event.tool || '';
+                    const alwaysAllowed: string[] = JSON.parse(
+                        localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
+                    );
+                    if (alwaysAllowed.includes(toolName)) {
+                        // Auto-approve without showing the modal
+                        api.confirmToolExecution(sessionId, event.confirm_id, 'allow', false).catch(
+                            (err) => console.error('[ChatView] auto-confirm failed:', err)
+                        );
+                        return;
+                    }
+                    // Show the PermissionPrompt modal via notificationStore
+                    const notification: GaiaNotification = {
+                        id: event.confirm_id,
+                        type: 'permission_request',
+                        agentId: 'chat',
+                        agentName: 'GAIA',
+                        title: `Allow ${toolName}?`,
+                        message: `The agent wants to execute: ${toolName}`,
+                        timestamp: Date.now(),
+                        read: false,
+                        dismissed: false,
+                        priority: 'high',
+                        tool: toolName,
+                        toolArgs: event.args as Record<string, unknown> | undefined,
+                        timeoutSeconds: event.timeout_seconds ?? 60,
+                    };
+                    addNotification(notification);
+                    return;
+                }
+
                 // Tool completion updates the last TOOL step (not just the last step,
                 // since thinking/status events may have been interleaved during execution)
                 if (event.type === 'tool_end') {

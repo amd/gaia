@@ -216,7 +216,9 @@ async def _get_chat_response(
 # ── Streaming Chat ───────────────────────────────────────────────────────────
 
 
-async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):
+async def _stream_chat_response(
+    db: ChatDatabase, session: dict, request: ChatRequest, http_request=None
+):
     """Stream chat response as Server-Sent Events.
 
     Uses ChatAgent with SSEOutputHandler to emit agent activity events
@@ -231,6 +233,20 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     try:
         # Create SSE handler for streaming events
         sse_handler = SSEOutputHandler()
+        # Register so /api/chat/confirm can route user responses back to the
+        # blocked agent thread in confirm_tool_execution().
+        if http_request is not None:
+            _active = getattr(http_request.app.state, "active_sse_handlers", None)
+            if _active is not None:
+                if request.session_id in _active:
+                    logger.warning(
+                        "SSE handler already registered for session %s — overwriting",
+                        request.session_id,
+                    )
+                _active[request.session_id] = sse_handler
+        sse_handler._emit(
+            {"type": "status", "status": "info", "message": "Connecting to LLM..."}
+        )
 
         # Build conversation history
         messages = db.get_messages(request.session_id, limit=20)
@@ -647,6 +663,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             pass
         error_data = json.dumps({"type": "error", "content": error_msg})
         yield f"data: {error_data}\n\n"
+    finally:
+        # Unregister SSE handler so the confirm endpoint stops routing to it
+        if http_request is not None:
+            _active = getattr(http_request.app.state, "active_sse_handlers", None)
+            if _active is not None:
+                _active.pop(request.session_id, None)
 
 
 # ── Document Indexing ────────────────────────────────────────────────────────
