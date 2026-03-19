@@ -71,6 +71,7 @@ class SSEOutputHandler(OutputHandler):
         self._tool_count = 0
         self._last_tool_name: Optional[str] = None
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
+        self._in_thinking = False  # True while inside a <think>...</think> block
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -304,11 +305,12 @@ class SSEOutputHandler(OutputHandler):
         # these just echo the tool name which the frontend already shows.
         if message and message.lower().startswith("executing "):
             return
-        # Emit as thinking so the user can see what the agent is doing
+        # Emit as status (not thinking — thinking is reserved for LLM reasoning)
         self._emit(
             {
-                "type": "thinking",
-                "content": message or "Working",
+                "type": "status",
+                "status": "working",
+                "message": message or "Working",
             }
         )
 
@@ -381,8 +383,49 @@ class SSEOutputHandler(OutputHandler):
             # LLMs sometimes emit as text content before the tool is invoked.
             self._stream_buffer += text_chunk
 
-            # Strip any completed <think>...</think> blocks from the buffer.
-            self._stream_buffer = _THINK_TAG_SUB_RE.sub("", self._stream_buffer)
+            # ── Handle <think>...</think> blocks ──────────────────────
+            # Route thinking content to thinking events, keep remainder
+            # in buffer for normal tool-call filtering below.
+            while "<think>" in self._stream_buffer or self._in_thinking:
+                if self._in_thinking:
+                    # We're inside a thinking block — look for closing tag
+                    close_idx = self._stream_buffer.find("</think>")
+                    if close_idx >= 0:
+                        thinking_text = self._stream_buffer[:close_idx].strip()
+                        if thinking_text:
+                            self._emit({"type": "thinking", "content": thinking_text})
+                        self._stream_buffer = self._stream_buffer[
+                            close_idx + len("</think>") :
+                        ]
+                        self._in_thinking = False
+                        continue  # Check for more <think> blocks
+                    else:
+                        # Still inside thinking — emit partial and wait
+                        if self._stream_buffer.strip():
+                            self._emit(
+                                {"type": "thinking", "content": self._stream_buffer}
+                            )
+                        self._stream_buffer = ""
+                        return
+                else:
+                    # Not in thinking — look for opening tag
+                    open_idx = self._stream_buffer.find("<think>")
+                    if open_idx >= 0:
+                        # Emit any text before <think> as regular content
+                        before = self._stream_buffer[:open_idx]
+                        if before.strip():
+                            self._emit({"type": "chunk", "content": before})
+                        self._stream_buffer = self._stream_buffer[
+                            open_idx + len("<think>") :
+                        ]
+                        self._in_thinking = True
+                        continue
+                    else:
+                        break  # No more <think> tags
+
+            # If buffer is empty after thinking extraction, nothing left to do
+            if not self._stream_buffer:
+                return
 
             stripped = self._stream_buffer.strip()
 
@@ -502,6 +545,12 @@ class SSEOutputHandler(OutputHandler):
 
     def signal_done(self):
         """Signal that the agent has finished processing."""
+        # Flush any pending thinking content
+        if self._in_thinking and self._stream_buffer:
+            self._emit({"type": "thinking", "content": self._stream_buffer})
+            self._stream_buffer = ""
+            self._in_thinking = False
+
         # Flush any remaining stream buffer before signaling done
         if self._stream_buffer:
             stripped = self._stream_buffer.strip()

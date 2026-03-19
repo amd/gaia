@@ -113,10 +113,16 @@ SAFE_PS_CMDLET_PREFIXES = (
     "where-object",
     "sort-object",
     "measure-object",
+    "group-object",
     "convertto-",
+    "convertfrom-",
     "out-string",
     "out-null",
     "write-output",
+    "test-path",
+    "join-path",
+    "split-path",
+    "resolve-path",
 )
 
 # Dangerous PowerShell patterns to block
@@ -157,7 +163,14 @@ DANGEROUS_PS_PATTERNS = (
 
 # Shell operators that could be used for command chaining or redirection
 # Pipe (|) is allowed but validated separately
-DANGEROUS_SHELL_OPERATORS = re.compile(r"(?:>>|>[^&]|<[^<]|&&|\|\||;|`|\$\()")
+# SECURITY: Block command chaining and redirection operators.
+# - && and & are command separators (Windows cmd.exe / bash)
+# - > >> are output redirection, < is input redirection
+# - || is OR chaining, ; is command separator
+# - ` and $() are command substitution
+# Note: bare & is matched as word-boundary to avoid false positives
+# inside quoted PowerShell strings (e.g. @{N='...'}).
+DANGEROUS_SHELL_OPERATORS = re.compile(r"(?:&&|&(?=\s|$)|>>|>[^&]|<[^<]|\|\||;|`|\$\()")
 
 
 class ShellToolsMixin:
@@ -416,10 +429,35 @@ class ShellToolsMixin:
 
                 # Block dangerous shell operators (redirects, chaining)
                 # Pipes (|) are allowed but each command is validated
-                if DANGEROUS_SHELL_OPERATORS.search(command):
+                # For PowerShell commands, only check operators in the outer
+                # shell portion — the PS script body is validated separately
+                # by _validate_command (DANGEROUS_PS_PATTERNS + cmdlet
+                # prefix checks).
+                shell_text_to_check = command
+                cmd_lower_stripped = command.strip().lower()
+                if cmd_lower_stripped.startswith(("powershell ", "powershell.exe ")):
+                    # Strip out the -Command argument content so we only
+                    # check the outer shell for dangerous operators.
+                    try:
+                        _ps_parts = shlex.split(command)
+                    except ValueError:
+                        _ps_parts = command.split()
+                    _ps_outer = []
+                    _skip_next = False
+                    for _p in _ps_parts:
+                        if _skip_next:
+                            _skip_next = False
+                            continue
+                        if _p.lower() in ("-command", "-c"):
+                            _skip_next = True
+                            continue
+                        _ps_outer.append(_p)
+                    shell_text_to_check = " ".join(_ps_outer)
+
+                if DANGEROUS_SHELL_OPERATORS.search(shell_text_to_check):
                     return {
                         "status": "error",
-                        "error": "Shell operators (>, >>, <, &&, ||, ;, `, $()) are not allowed for security reasons.",
+                        "error": "Shell operators (&, >, >>, <, &&, ||, ;, `, $()) are not allowed for security reasons.",
                         "has_errors": True,
                         "hint": "Pipe (|) is allowed. Use individual commands for other operations.",
                     }

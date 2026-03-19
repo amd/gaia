@@ -524,6 +524,12 @@ textarea:focus-visible {
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
 }
+/* Red dot glow -- traveling wave for "Thinking..." dots */
+@keyframes loadingDotGlow {
+    0%, 25% { opacity: 0.15; text-shadow: 0 0 2px rgba(237, 28, 36, 0.2); }
+    30% { opacity: 1; text-shadow: 0 0 8px rgba(237, 28, 36, 0.8), 0 0 3px rgba(237, 28, 36, 1); }
+    36%, 100% { opacity: 0.15; text-shadow: 0 0 2px rgba(237, 28, 36, 0.2); }
+}
 /* Scroll reveal animation */
 @keyframes revealUp {
     from { opacity: 0; transform: translateY(20px); }

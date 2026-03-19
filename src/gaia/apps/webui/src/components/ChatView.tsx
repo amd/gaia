@@ -126,6 +126,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps,
         documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
+        systemStatus,
     } = useChatStore();
 
     const session = sessions.find((s) => s.id === sessionId);
@@ -652,9 +653,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     const currentSteps = useChatStore.getState().agentSteps;
                     const lastStep = currentSteps[currentSteps.length - 1];
                     if (lastStep && lastStep.type === 'thinking') {
-                        // Update the existing thinking step with new content
+                        // Append new thinking content to existing step
                         updateLastAgentStep({
-                            detail: event.content,
+                            detail: (lastStep.detail || '') + (event.content || ''),
                             active: true,
                         });
                         return;
@@ -727,6 +728,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         created_at: new Date().toISOString(),
                         rag_sources: null,
                         agentSteps: stepsSnapshot.length > 0 ? stepsSnapshot : undefined,
+                        stats: event.stats || undefined,
                     };
                     addMessage(assistantMsg);
                 }
@@ -1014,7 +1016,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         <Link size={10} />
                         <span>#{getSessionHash(sessionId)}</span>
                     </a>
-                    <span className="model-badge">{session?.model || 'Local LLM'}</span>
+                    <span className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}>{systemStatus?.model_loaded || 'No model loaded'}</span>
                     <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Attach documents">
                         <Paperclip size={15} />
                     </button>
@@ -1174,7 +1176,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             isStreaming={isStreaming}
                             showTerminalCursor={streamEnding}
                             agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
-                            agentStepsActive={isStreaming}
+                            agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
                         />
                     </div>
                 )}

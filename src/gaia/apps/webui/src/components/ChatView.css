@@ -118,6 +118,10 @@
     text-transform: lowercase;
     letter-spacing: 0.3px;
 }
+.model-badge.no-model {
+    color: var(--accent-gold);
+    border-color: rgba(234, 179, 8, 0.25);
+}
 
 /* ── Indexed documents context bar ───────────────────────────────── */
 

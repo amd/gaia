@@ -16,6 +16,7 @@ patches take effect.
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 
 from .database import ChatDatabase
@@ -148,8 +149,21 @@ async def _get_chat_response(
             )
 
         allowed = _compute_allowed_paths(all_doc_paths)
+
+        # Use custom model override if set in user settings,
+        # otherwise fall back to the session's model.
+        model_id = session.get("model")
+        custom_model = db.get_setting("custom_model")
+        if custom_model:
+            logger.info(
+                "Using custom model override: %s (session default: %s)",
+                custom_model,
+                model_id,
+            )
+            model_id = custom_model
+
         config = ChatAgentConfig(
-            model_id=session.get("model"),
+            model_id=model_id,
             max_steps=10,
             silent_mode=True,
             debug=False,
@@ -190,10 +204,13 @@ async def _get_chat_response(
         )
     except asyncio.TimeoutError:
         logger.error("Chat response timed out after 120 seconds")
-        return "Error: Response timed out after 120 seconds. The query may be too complex — try breaking it into simpler questions."
+        return "I took too long thinking about that one. Try breaking your question into simpler parts and I'll do my best."
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
-        return "Error: Could not get response from LLM. Is Lemonade Server running? Check server logs for details."
+        return (
+            "I'm having trouble connecting to the language model right now. "
+            "Please make sure Lemonade Server is running and try again."
+        )
 
 
 # ── Streaming Chat ───────────────────────────────────────────────────────────
@@ -212,12 +229,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     from gaia.ui.sse_handler import SSEOutputHandler
 
     try:
-        # Create SSE handler first and emit immediate feedback BEFORE the
-        # slow ChatAgent construction (RAG indexing, LLM connection can take 10-30s)
+        # Create SSE handler for streaming events
         sse_handler = SSEOutputHandler()
-        sse_handler._emit(
-            {"type": "status", "status": "info", "message": "Connecting to LLM..."}
-        )
 
         # Build conversation history
         messages = db.get_messages(request.session_id, limit=20)
@@ -239,6 +252,16 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
         allowed = _compute_allowed_paths(all_doc_paths)
         model_id = session.get("model")
+
+        # Use custom model override if set in user settings
+        custom_model = db.get_setting("custom_model")
+        if custom_model:
+            logger.info(
+                "Streaming: using custom model override: %s (session default: %s)",
+                custom_model,
+                model_id,
+            )
+            model_id = custom_model
 
         # Move ALL slow work (ChatAgent constructor + process_query) into the
         # background thread so the SSE generator can yield the thinking event
@@ -362,13 +385,6 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 _MAX_MSG_CHARS = 500
                 if history_pairs:
                     recent = history_pairs[-_MAX_HISTORY_PAIRS:]
-                    sse_handler._emit(
-                        {
-                            "type": "status",
-                            "status": "info",
-                            "message": f"Restoring {len(recent)} previous message(s)",
-                        }
-                    )
                     for user_msg, assistant_msg in recent:
                         if hasattr(agent, "conversation_history"):
                             # Truncate to keep context manageable
@@ -586,19 +602,45 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 full_response,
                 agent_steps=captured_steps if captured_steps else None,
             )
-            done_data = json.dumps(
-                {"type": "done", "message_id": msg_id, "content": full_response}
-            )
+            done_event: dict = {
+                "type": "done",
+                "message_id": msg_id,
+                "content": full_response,
+            }
+            # Fetch last inference stats from Lemonade (non-blocking)
+            try:
+                import httpx
+
+                base_url = os.environ.get(
+                    "LEMONADE_BASE_URL", "http://localhost:8000/api/v1"
+                )
+                async with httpx.AsyncClient(timeout=3.0) as stats_client:
+                    stats_resp = await stats_client.get(f"{base_url}/stats")
+                    if stats_resp.status_code == 200:
+                        stats_data = stats_resp.json()
+                        done_event["stats"] = {
+                            "tokens_per_second": round(
+                                stats_data.get("tokens_per_second", 0), 1
+                            ),
+                            "time_to_first_token": round(
+                                stats_data.get("time_to_first_token", 0), 3
+                            ),
+                            "input_tokens": stats_data.get("input_tokens", 0),
+                            "output_tokens": stats_data.get("output_tokens", 0),
+                        }
+            except Exception:
+                pass
+            done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
         else:
-            error_msg = "No response received from agent. Is Lemonade Server running?"
+            error_msg = "I wasn't able to generate a response. Please make sure Lemonade Server is running and try again."
             db.add_message(request.session_id, "assistant", error_msg)
             error_data = json.dumps({"type": "error", "content": error_msg})
             yield f"data: {error_data}\n\n"
 
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
-        error_msg = "Error: Could not get response from LLM. Is Lemonade Server running? Check server logs for details."
+        error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
             db.add_message(request.session_id, "assistant", error_msg)
         except Exception:

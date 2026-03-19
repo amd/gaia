@@ -100,6 +100,17 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
     const prevStepCountRef = useRef(0);
     const collapseTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+    const wasActiveRef2 = useRef(isActive);
+
+    // Auto-collapse when activity completes (thinking done → answer streaming)
+    useEffect(() => {
+        if (wasActiveRef2.current && !isActive) {
+            // Small delay so erase animation can start before collapsing
+            const timer = setTimeout(() => setExpanded(false), 300);
+            return () => clearTimeout(timer);
+        }
+        wasActiveRef2.current = isActive;
+    }, [isActive]);
 
     // Cleanup timers on unmount
     useEffect(() => {
@@ -178,20 +189,23 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     // Don't render until there are real steps to show
     if (displaySteps.length === 0) return null;
 
-    // Build summary text
+    // Build summary content (can be string or JSX for animated dots)
     const activeStep = displaySteps.find((s) => s.active);
     let summaryText: string;
+    let isThinking = false;
 
     if (isActive && activeStep) {
         if (activeStep.type === 'tool' && activeStep.tool) {
             summaryText = getToolMeta(activeStep.tool).activeLabel;
         } else if (activeStep.type === 'thinking') {
-            summaryText = activeStep.detail || activeStep.label || 'Thinking...';
+            summaryText = 'Thinking';
+            isThinking = true;
         } else {
             summaryText = activeStep.label || 'Working...';
         }
     } else if (isActive) {
-        summaryText = 'Thinking...';
+        summaryText = 'Thinking';
+        isThinking = true;
     } else {
         const uniqueTools = [...new Set(toolSteps.map((s) => s.tool).filter(Boolean) as string[])];
         if (uniqueTools.length > 0) {
@@ -225,7 +239,10 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                     ) : (
                         <Zap size={14} className="agent-icon-done" />
                     )}
-                    <span className="agent-summary-text">{summaryText}</span>
+                    <span className="agent-summary-text">
+                        {summaryText}
+                        {isThinking && <span className="thinking-dots"><span>.</span><span>.</span><span>.</span></span>}
+                    </span>
                 </div>
                 <div className="agent-summary-right">
                     {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -236,8 +253,11 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
             {expanded && displaySteps.length > 0 && (
                 <div className="agent-flow">
                     {displaySteps.map((step) => {
-                        if (step.type === 'thinking' || step.type === 'status') {
+                        if (step.type === 'thinking') {
                             return <FlowThought key={step.id} step={step} />;
+                        }
+                        if (step.type === 'status') {
+                            return <FlowStatus key={step.id} step={step} />;
                         }
                         if (step.type === 'tool') {
                             return (
@@ -263,19 +283,38 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     );
 }
 
-// ── Flow: Thinking text ──────────────────────────────────────────────────
+// ── Flow: Thinking text (hacker-style with red cursor) ────────────────────
 
 function FlowThought({ step }: { step: AgentStep }) {
     const text = step.detail || step.label || '';
+    const containerRef = useRef<HTMLDivElement>(null);
+    const cursorRef = useRef<HTMLSpanElement>(null);
+
+    // Auto-scroll to keep cursor visible as text streams in
+    useEffect(() => {
+        if (step.active && containerRef.current) {
+            containerRef.current.scrollTop = containerRef.current.scrollHeight;
+        }
+    }, [text, step.active]);
+
     if (!text) return null;
 
-    // Show the actual thinking text — never replace with generic labels
-    const displayText = text;
+    return (
+        <div ref={containerRef} className="flow-thought-hacker">
+            <span>{text}</span>
+            {step.active && <span ref={cursorRef} className="flow-thought-cursor" />}
+        </div>
+    );
+}
 
+// ── Flow: Status text (no cursor, simple text) ────────────────────────────
+
+function FlowStatus({ step }: { step: AgentStep }) {
+    const text = step.detail || step.label || '';
+    if (!text) return null;
     return (
         <div className={`flow-thought ${step.active ? 'active' : ''}`}>
-            {step.active && <Loader2 size={11} className="flow-thought-spinner" />}
-            <span className="flow-thought-text">{displayText}</span>
+            <span className="flow-thought-text">{text}</span>
         </div>
     );
 }

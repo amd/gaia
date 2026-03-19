@@ -14,6 +14,13 @@ export interface Session {
     document_ids: string[];
 }
 
+export interface InferenceStats {
+    tokens_per_second: number;
+    time_to_first_token: number;
+    input_tokens: number;
+    output_tokens: number;
+}
+
 export interface Message {
     id: number;
     session_id: string;
@@ -23,6 +30,8 @@ export interface Message {
     rag_sources: SourceInfo[] | null;
     /** Agent activity that occurred while generating this message. */
     agentSteps?: AgentStep[];
+    /** Inference performance stats from the LLM backend. */
+    stats?: InferenceStats;
 }
 
 export interface SourceInfo {
@@ -58,6 +67,17 @@ export interface Attachment {
     error?: string;
 }
 
+export interface ModelStatus {
+    found: boolean;
+    downloaded: boolean;
+    loaded: boolean;
+}
+
+export interface Settings {
+    custom_model: string | null;
+    model_status: ModelStatus | null;
+}
+
 export interface SystemStatus {
     lemonade_running: boolean;
     model_loaded: string | null;
@@ -66,6 +86,16 @@ export interface SystemStatus {
     memory_available_gb: number;
     initialized: boolean;
     version: string;
+    // Extended Lemonade info
+    lemonade_version: string | null;
+    model_size_gb: number | null;
+    model_device: string | null;
+    model_context_size: number | null;
+    model_labels: string[] | null;
+    gpu_name: string | null;
+    gpu_vram_gb: number | null;
+    tokens_per_second: number | null;
+    time_to_first_token: number | null;
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────
@@ -201,6 +231,8 @@ export interface StreamEvent {
     model?: string;
     elapsed?: number;
     tools_used?: number;
+    /** Inference stats from the LLM backend (attached to done events). */
+    stats?: InferenceStats;
     /** Structured command output (for tool_result of run_shell_command). */
     command_output?: {
         command: string;

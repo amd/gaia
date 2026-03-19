@@ -460,7 +460,27 @@ class FileSearchToolsMixin:
             """
             try:
                 if not os.path.exists(file_path):
-                    return {"status": "error", "error": f"File not found: {file_path}"}
+                    # Check if parent directory exists to give a more helpful error
+                    parent_dir = os.path.dirname(file_path)
+                    parent_exists = os.path.exists(parent_dir) if parent_dir else False
+                    file_name = os.path.basename(file_path)
+                    hint = (
+                        f" The parent directory '{parent_dir}' also does not exist."
+                        if parent_dir and not parent_exists
+                        else (
+                            f" The directory '{parent_dir}' exists but the file is not in it."
+                            if parent_dir
+                            else ""
+                        )
+                    )
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"File not found: {file_path}.{hint}"
+                            f" Try using search_file with pattern '{file_name}'"
+                            " to locate it elsewhere."
+                        ),
+                    }
 
                 # Guard against reading very large files into memory
                 file_size = os.path.getsize(file_path)

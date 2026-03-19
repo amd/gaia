@@ -571,6 +571,7 @@
     border-radius: 0;
     image-rendering: pixelated;
     box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
+    animation: cursorBlink 600ms steps(2, start) infinite;
 }
 
 /* ── Responsive ───────────────────────────────────────────────── */
@@ -587,4 +588,37 @@
         border-left: none;
         border-right: none;
     }
+}
+
+/* Loading message — "Thinking..." with blinking dots while waiting for LLM */
+.loading-message {
+    font-family: var(--font-mono, 'JetBrains Mono', 'SF Mono', monospace);
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.45);
+    line-height: 1.6;
+}
+
+.loading-message .thinking-dots span {
+    animation: loadingDotGlow 1.2s linear infinite;
+    opacity: 0.15;
+    color: var(--amd-red, #ff3b3b);
+    text-shadow: 0 0 2px rgba(237, 28, 36, 0.2);
+}
+/* Stagger so only one dot is lit at a time — "traveling" effect */
+.loading-message .thinking-dots span:nth-child(1) { animation-delay: 0s; }
+.loading-message .thinking-dots span:nth-child(2) { animation-delay: 0.4s; }
+.loading-message .thinking-dots span:nth-child(3) { animation-delay: 0.8s; }
+
+/* @keyframes loadingDotGlow is defined globally in index.css */
+
+/* Inference stats footer */
+.msg-stats {
+    display: flex;
+    gap: 12px;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+    font-size: 11px;
+    color: var(--text-tertiary, rgba(255,255,255,0.35));
+    font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
 }

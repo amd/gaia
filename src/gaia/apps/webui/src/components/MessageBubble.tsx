@@ -28,6 +28,18 @@ interface MessageBubbleProps {
     onResend?: (message: Message) => void;
 }
 
+
+
+/** Immediate "Thinking..." with blinking dots while waiting for LLM. */
+function LoadingMessage() {
+    return (
+        <div className="loading-message">
+            <span>Thinking</span>
+            <span className="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
+        </div>
+    );
+}
+
 /** Detect if message content looks like an error. */
 function isErrorContent(content: string): boolean {
     if (!content) return false;
@@ -346,7 +358,20 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                             <span>Something went wrong</span>
                         </div>
                     )}
-                    <RenderedContent content={cleanedContent} showCursor={isStreaming || showTerminalCursor} />
+                    {/* Loading message: typed by red cursor while waiting for LLM */}
+                    {message.role === 'assistant' && isStreaming && !cleanedContent && (!agentSteps || agentSteps.length === 0) && (
+                        <LoadingMessage />
+                    )}
+                    <RenderedContent content={cleanedContent} showCursor={(isStreaming || showTerminalCursor) && !!cleanedContent && !agentStepsActive} />
+                    {message.role === 'assistant' && message.stats && !isStreaming && message.stats.tokens_per_second > 0 && (
+                        <div className="msg-stats">
+                            <span>{message.stats.tokens_per_second} tok/s</span>
+                            <span>{message.stats.output_tokens} tokens</span>
+                            {message.stats.time_to_first_token != null && (
+                                <span>{(message.stats.time_to_first_token * 1000).toFixed(0)}ms TTFT</span>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

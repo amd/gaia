@@ -140,13 +140,34 @@ class LemonadeProvider(LLMClient):
         return response["choices"][0]["text"]
 
     def _handle_stream(self, response) -> Iterator[str]:
+        in_thinking = False
         for chunk in response:
             if "choices" in chunk and chunk["choices"]:
                 delta = chunk["choices"][0].get("delta", {})
                 content = delta.get("content")
                 if content:
+                    # Close thinking block before yielding actual content
+                    if in_thinking:
+                        yield "</think>"
+                        in_thinking = False
                     yield content
-                elif "text" in chunk["choices"][0]:
-                    text = chunk["choices"][0]["text"]
-                    if text:
-                        yield text
+                else:
+                    # Thinking models (e.g. Qwen3.5) stream reasoning in a
+                    # separate field. Wrap in <think> tags so the UI can
+                    # display it in a collapsible section.
+                    reasoning = delta.get("reasoning_content")
+                    if reasoning:
+                        if not in_thinking:
+                            yield "<think>"
+                            in_thinking = True
+                        yield reasoning
+                    elif "text" in chunk["choices"][0]:
+                        text = chunk["choices"][0]["text"]
+                        if text:
+                            if in_thinking:
+                                yield "</think>"
+                                in_thinking = False
+                            yield text
+        # Close any unclosed thinking block at end of stream
+        if in_thinking:
+            yield "</think>"
