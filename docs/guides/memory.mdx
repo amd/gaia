@@ -1,0 +1,424 @@
+---
+title: "Agent Memory"
+description: "Give your agent a persistent second brain that remembers everything across sessions"
+icon: "brain"
+---
+
+GAIA Agent Memory is a persistent knowledge system that gives your agent a **second brain**. It remembers facts, preferences, errors, and workflows across sessions -- so every conversation picks up where the last one left off. All data stays local on your machine in a single SQLite file.
+
+<Info>
+  **First time here?** Complete the [Setup](/setup) guide first, then come back to enable memory.
+</Info>
+
+<Note>
+  Memory is currently integrated into the Chat Agent. Any agent built on the GAIA Agent base class can add memory via the `MemoryMixin` -- see the [Memory SDK Reference](/sdk/sdks/memory) for developer details.
+</Note>
+
+---
+
+## How It Works
+
+Agent memory operates on four principles:
+
+1. **Store automatically** -- conversations, tool calls, errors, and preferences are captured without manual effort
+2. **Recall naturally** -- the LLM decides when to search memory using its own tools (no forced pre-query step)
+3. **Learn silently** -- errors and successes update confidence scores without user awareness
+4. **Be temporally aware** -- the agent knows the current time, what is coming up, what is overdue, and proactively surfaces time-sensitive items
+
+Everything is stored in a single file at `~/.gaia/memory.db` (SQLite with WAL mode for concurrent reads). No cloud services, no external dependencies.
+
+---
+
+## Quick Start
+
+<Steps>
+  <Step title="Bootstrap your memory">
+    Run the day-zero onboarding flow. The agent asks a few questions about you and optionally scans your system to discover projects, tools, and interests:
+
+    ```bash
+    gaia memory bootstrap
+    ```
+
+    You can run just the conversational part or just the system discovery:
+
+    ```bash
+    gaia memory bootstrap --chat-only    # Questions only
+    gaia memory bootstrap --discover     # System scan only
+    ```
+
+    <Tip>
+      Bootstrap is repeatable. Run it again anytime to refresh the agent's understanding. New discoveries will not overwrite items you have manually edited.
+    </Tip>
+  </Step>
+
+  <Step title="Check memory status">
+    See how much the agent knows and how the memory is structured:
+
+    ```bash
+    gaia memory status
+    ```
+
+    This shows counts by category (fact, preference, error, skill, note, reminder), context (work, personal, global), total conversations, tool call stats, and database size.
+  </Step>
+
+  <Step title="Start chatting">
+    Memory is active automatically. The agent injects relevant knowledge into its system prompt and uses memory tools during conversation:
+
+    ```bash
+    gaia chat
+    ```
+
+    Try saying things like:
+    - *"Remember that our project uses React 19 with the app router"*
+    - *"I prefer concise answers with code examples"*
+    - *"What do you know about me?"*
+    - *"What did we talk about last week?"*
+  </Step>
+</Steps>
+
+---
+
+## Memory Tools
+
+The agent has 5 memory tools it can use during conversation. You do not call these directly -- the LLM decides when to use them based on your conversation.
+
+### remember
+
+Stores a new fact, preference, error pattern, or skill in persistent memory.
+
+```
+You: "Remember that Sarah's email is sarah@company.com"
+Agent: Stored as a fact, linked to entity person:sarah_chen
+
+You: "I have a course starting on March 25th"
+Agent: Stored with due_at=2026-03-25, will remind you when it's coming up
+
+You: "I always want dark mode in code examples"
+Agent: Stored as a preference, applied to future sessions
+```
+
+### recall
+
+Searches memory for relevant knowledge using full-text search or filters.
+
+```
+You: "What do you know about my deployment process?"
+Agent: [recalls skill entries about deployment workflow]
+
+You: "What do you know about Sarah?"
+Agent: [recalls all entries linked to entity person:sarah_chen]
+```
+
+### update_memory
+
+Modifies an existing memory entry. The agent uses `recall` first to find the ID, then updates it.
+
+```
+You: "Actually, we switched from React to Vue"
+Agent: [recalls the React fact, updates content to "Project uses Vue 3"]
+
+Agent: "By the way, your course starts in 3 days."
+Agent: [internally calls update_memory to set reminded_at so it won't repeat]
+```
+
+### forget
+
+Removes a specific memory entry by ID.
+
+```
+You: "Forget what you know about the old deployment process"
+Agent: [recalls the entry, deletes it]
+```
+
+### search_past_conversations
+
+Searches across all past conversation sessions by keyword or time range.
+
+```
+You: "What did we discuss about database migration?"
+Agent: [searches conversation history for "database migration"]
+
+You: "Show me what we talked about in the last 7 days"
+Agent: [retrieves recent conversations from the past week]
+```
+
+---
+
+## Knowledge Categories
+
+Every memory entry belongs to one of six categories:
+
+| Category | What it stores | Example |
+|----------|---------------|---------|
+| **fact** | Things about you, your projects, your world | "User's project uses React 19 with app router" |
+| **preference** | How you want the agent to behave | "User prefers concise answers", "Always use dark mode" |
+| **error** | Tool error patterns to avoid in the future | "pip install torch fails without --index-url on this machine" |
+| **skill** | Learned workflows and multi-step patterns | "To deploy: run tests, build, push to staging, verify, promote" |
+| **note** | Free-form observations or reminders without a due date | "Interesting article about AMD XDNA2 architecture" |
+| **reminder** | Time-sensitive items to follow up on | "Check if the PR was merged by Friday" (use with `due_at`) |
+
+The agent automatically categorizes knowledge when you ask it to remember something. You can also specify the category explicitly:
+
+```
+You: "Remember as a skill: to set up a new React project,
+      run npx create-next-app, then install tailwind, then configure eslint"
+```
+
+---
+
+## Context Scoping
+
+Different areas of your life produce different knowledge. Without scoping, the agent mixes work deployment commands with personal dentist appointments. **Contexts keep them separate.**
+
+| Context | When it is active | What it contains |
+|---------|-------------------|------------------|
+| `global` | Always included | Universal preferences, your name, timezone |
+| `work` | Work-related tasks | Colleagues, project details, work tools |
+| `personal` | Personal assistant mode | Appointments, health goals, personal contacts |
+| Custom (e.g., `project-x`) | User-defined per project | Project-specific facts, skills, errors |
+
+The agent's system prompt always includes `global` items plus items from the active context. You can switch contexts mid-session:
+
+```
+You: "Switch to my personal context"
+Agent: Context switched from work to personal
+
+You: "Remember that my dentist appointment is Thursday at 2pm"
+Agent: Stored in personal context with due_at
+```
+
+<Tip>
+  When you use `gaia chat`, the default context is `global`. You can start with a specific context by telling the agent, or programmatically via `init_memory(context="work")` in the SDK.
+</Tip>
+
+---
+
+## Sensitive Data
+
+Some knowledge is private -- email addresses, API tokens, health information, financial data. The `sensitive` flag controls how this data is handled:
+
+| Where | Normal (default) | Sensitive |
+|-------|------------------|-----------|
+| System prompt | Included | **Never included** |
+| `recall` results | Returned | Returned (explicit query only) |
+| Tool history args | Full args logged | Args redacted to keys only |
+| Memory Dashboard | Normal display | Content blurred until clicked |
+
+The agent can still access sensitive data when you explicitly ask for it via `recall` -- it just will not be broadcast in the system prompt where it could leak into logs or debugging output.
+
+```
+You: "Remember Sarah's email is sarah@company.com, mark it as sensitive"
+Agent: Stored as sensitive fact, linked to person:sarah_chen
+```
+
+<Warning>
+  Sensitive data is still stored in plaintext in `~/.gaia/memory.db`. The `sensitive` flag controls **visibility**, not encryption. Do not store passwords or tokens in agent memory -- use your OS keyring for credentials.
+</Warning>
+
+---
+
+## Entity Linking
+
+For managing contacts, apps, and services, the agent associates knowledge with specific entities using a `type:name` convention:
+
+| Entity pattern | Example knowledge |
+|----------------|-------------------|
+| `person:sarah_chen` | "Sarah Chen, VP Engineering, sarah@company.com" |
+| `person:sarah_chen` | "Sarah prefers morning meetings" |
+| `app:vscode` | "User prefers dark mode, 4-space tabs" |
+| `service:gmail` | "User's work email is alex@company.com" |
+| `project:gaia` | "Project uses Python 3.12, uv for package management" |
+
+Multiple entries can share an entity, building a profile over time. When you say "email Sarah about the roadmap," the agent calls `recall(entity="person:sarah_chen")` to get her email and preferences.
+
+---
+
+## Temporal Awareness
+
+The agent always knows the current date and time. It can track commitments and deadlines using the `due_at` field on memory entries.
+
+### How reminders work
+
+1. You mention something time-sensitive -- the agent stores it with a `due_at` date
+2. As the date approaches, the agent sees it in its per-turn context and proactively mentions it
+3. After mentioning it, the agent marks `reminded_at` so it does not repeat itself
+4. If the due date passes, the item appears as **overdue** until resolved
+
+```
+Day 1:
+You: "I have a course starting next Tuesday"
+Agent: Stored with due_at=2026-03-25
+
+Day 5 (3 days before):
+You: "What's the weather like?"
+Agent: "It's sunny. By the way, your online course starts in 3 days."
+
+Day 8 (the day):
+You: "Good morning"
+Agent: "Good morning! Your course starts today. How's it going?"
+```
+
+### Accountability
+
+The agent can hold you accountable to your own commitments:
+
+```
+You: "I committed to exercising 3 times this week"
+Agent: Stored with due_at set to end of week
+
+Friday evening:
+You: "Let's plan the weekend"
+Agent: "Before we plan -- it's the end of the week. How did
+        the exercise commitment go? Did you hit 3 times?"
+```
+
+---
+
+## Memory Dashboard
+
+The Agent UI includes a **Memory Dashboard** for viewing and managing everything the agent knows. Click the **Brain** icon in the toolbar to open it.
+
+### What you can see
+
+- **Stats overview** -- total memories, sessions, tool calls, success rate
+- **Knowledge browser** -- filterable, sortable table of all memory entries with inline editing
+- **Tool performance** -- per-tool success rates, error history, average duration
+- **Upcoming and overdue** -- time-sensitive items due soon or past due
+- **Conversation history** -- searchable archive of all past sessions
+
+### What you can do
+
+- **Create** new memory entries manually (stored with high confidence)
+- **Edit** any field on any memory entry -- content, category, context, entity, sensitivity
+- **Delete** entries the agent got wrong
+- **Toggle sensitive** to hide or show private data
+- **Search** across all knowledge using full-text search
+- **Filter** by category, context, or entity
+
+<Info>
+  To launch the Agent UI with the dashboard: `gaia chat --ui`
+</Info>
+
+---
+
+## How Memory Improves Over Time
+
+### Confidence scoring
+
+Every memory entry has a confidence score from 0.0 to 1.0:
+
+- **0.3** -- heuristic-extracted (regex pattern matched in your input)
+- **0.4** -- system discovery (found during bootstrap scan)
+- **0.5** -- tool-stored (agent explicitly remembered it)
+- **0.8** -- user-created (you manually added it via dashboard)
+
+Each time a memory is recalled, its confidence increases by +0.02. Frequently-used memories become more prominent in the system prompt.
+
+### Confidence decay
+
+Memories that are not accessed for 30+ days have their confidence multiplied by 0.9. This happens once per session start. Over time, stale knowledge naturally fades from the system prompt in favor of actively-used information.
+
+### Automatic error learning
+
+When a tool call fails, the agent automatically stores the error pattern as knowledge. Next time, the system prompt includes "Known errors to avoid" so the agent can handle or avoid the same failure.
+
+```
+Agent runs: import torch
+Error: ModuleNotFoundError: No module named 'torch'
+
+Next session system prompt:
+Known errors to avoid:
+  - execute_code: import torch fails — torch not installed on this machine
+```
+
+### Heuristic extraction
+
+The agent automatically detects patterns in your input without needing the LLM to call tools:
+
+- *"I prefer concise answers"* -- stored as a preference
+- *"My name is Alex"* -- stored as a global fact
+- *"We use Python and TypeScript"* -- stored as a fact in the active context
+
+This is best-effort extraction via regex. The LLM's memory tools handle anything the heuristics miss.
+
+---
+
+## Privacy
+
+<CardGroup cols={2}>
+  <Card title="100% Local" icon="lock">
+    All memory is stored in a single SQLite file at `~/.gaia/memory.db`. Nothing is transmitted to any server or cloud service.
+  </Card>
+
+  <Card title="User Control" icon="user-shield">
+    You can view, edit, and delete any memory entry via the dashboard or CLI. The agent only knows what you approve.
+  </Card>
+
+  <Card title="Bootstrap Consent" icon="check-circle">
+    System discovery scans are opt-in. The agent shows you what it found and asks for approval before storing anything.
+  </Card>
+
+  <Card title="Sensitive Flagging" icon="eye-slash">
+    Mark any entry as sensitive to exclude it from the system prompt. Browser history and email addresses are auto-flagged during bootstrap.
+  </Card>
+</CardGroup>
+
+### Deleting all memory
+
+To reset discovery-sourced items while preserving your manual edits:
+
+```bash
+gaia memory bootstrap --reset
+```
+
+To completely delete all memory, remove the database file:
+
+```bash
+rm ~/.gaia/memory.db
+```
+
+---
+
+## CLI Reference
+
+| Command | Description |
+|---------|-------------|
+| `gaia memory bootstrap` | Run full onboarding (conversation + discovery) |
+| `gaia memory bootstrap --chat-only` | Conversational onboarding only |
+| `gaia memory bootstrap --discover` | System discovery scan only |
+| `gaia memory bootstrap --reset` | Delete discovery items (with confirmation) |
+| `gaia memory status` | Show memory stats (counts, categories, contexts) |
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Memory SDK Reference" icon="code" href="/sdk/sdks/memory">
+    MemoryMixin API, MemoryStore class, and code examples for adding memory to custom agents
+  </Card>
+
+  <Card title="Agent UI" icon="desktop" href="/guides/agent-ui">
+    Desktop interface with Memory Dashboard for visual knowledge management
+  </Card>
+
+  <Card title="Agent SDK" icon="comments" href="/sdk/sdks/chat">
+    Chat SDK for building conversational agents programmatically
+  </Card>
+
+  <Card title="Build Your First Agent" icon="rocket" href="/quickstart#build-your-first-agent">
+    Create a custom agent with tools and memory in minutes
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

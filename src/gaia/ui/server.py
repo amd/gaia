@@ -50,6 +50,7 @@ from .document_monitor import DocumentMonitor
 from .routers import chat as chat_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
+from .routers import memory as memory_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
@@ -237,6 +238,7 @@ def create_app(db_path: str = None) -> FastAPI:
     app.include_router(documents_router_mod.router)
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)
+    app.include_router(memory_router_mod.router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.

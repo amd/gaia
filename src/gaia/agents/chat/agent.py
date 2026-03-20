@@ -17,6 +17,7 @@ except ImportError:
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.tools import FileSearchToolsMixin  # Shared file search tools
@@ -67,7 +68,12 @@ class ChatAgentConfig:
 
 
 class ChatAgent(
-    Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin
+    MemoryMixin,
+    Agent,
+    RAGToolsMixin,
+    FileToolsMixin,
+    ShellToolsMixin,
+    FileSearchToolsMixin,
 ):
     """
     Chat Agent with RAG, file operations, and shell command capabilities.
@@ -169,6 +175,9 @@ class ChatAgent(
         self.conversation_history: List[Dict[str, str]] = (
             []
         )  # Track conversation for persistence
+
+        # Initialize memory subsystem (before super().__init__ which calls _register_tools)
+        self.init_memory()
 
         # Call parent constructor
         super().__init__(
@@ -811,6 +820,7 @@ The link format is: https://github.com/amd/gaia/issues/new?template=feature_requ
         self.register_file_tools()
         self.register_shell_tools()
         self.register_file_search_tools()  # Shared file search tools
+        self.register_memory_tools()  # Persistent memory tools
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools

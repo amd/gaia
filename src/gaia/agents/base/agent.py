@@ -270,7 +270,11 @@ You must respond ONLY in valid JSON. No text before { or after }.
             if fragment:
                 prompts.append(fragment)
 
-        # Add more mixin checks here as new prompt-providing mixins are created
+        # Check for Memory mixin prompts
+        if hasattr(self, "get_memory_system_prompt"):
+            fragment = self.get_memory_system_prompt()
+            if fragment:
+                prompts.append(fragment)
 
         return prompts
 
@@ -2531,6 +2535,13 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
         # Store the result internally
         self.last_result = result
+
+        # Post-query hook for mixins (e.g., MemoryMixin conversation storage)
+        if hasattr(self, "_after_process_query"):
+            try:
+                self._after_process_query(user_input, result.get("result", ""))
+            except Exception as e:
+                logger.warning(f"Post-query hook failed: {e}")
 
         return result
 

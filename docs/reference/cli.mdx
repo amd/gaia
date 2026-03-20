@@ -1135,6 +1135,75 @@ Node.js must be installed. Dependencies are automatically installed on first run
 
 ---
 
+## Memory
+
+<Card title="Agent Memory Guide" icon="brain" href="/guides/memory">
+  Persistent second brain — remembers facts, preferences, and workflows across sessions
+</Card>
+
+Manage agent memory: run day-zero onboarding and view memory statistics.
+
+### Commands
+
+<Tabs>
+  <Tab title="status">
+    Show aggregate memory statistics.
+
+    ```bash
+    gaia memory status
+    ```
+
+    **Output includes:**
+    - Knowledge entries by category (fact, preference, error, skill) and context
+    - Conversation count and session history
+    - Tool call success rates and error counts
+    - Upcoming and overdue time-sensitive items
+    - Database size
+  </Tab>
+
+  <Tab title="bootstrap">
+    Run day-zero onboarding to populate memory.
+
+    ```bash
+    gaia memory bootstrap [OPTIONS]
+    ```
+
+    **Options:**
+
+    | Option | Description |
+    |--------|-------------|
+    | `--chat-only` | Conversational questions only (skip system scan) |
+    | `--discover` | System discovery scan only (skip questions) |
+    | `--reset` | Delete all discovery-sourced items (preserves user edits) |
+
+    **Examples:**
+
+    Full onboarding (conversational + system scan):
+    ```bash
+    gaia memory bootstrap
+    ```
+
+    Questions only:
+    ```bash
+    gaia memory bootstrap --chat-only
+    ```
+
+    Re-run system discovery:
+    ```bash
+    gaia memory bootstrap --discover
+    ```
+
+    Reset discovered items:
+    ```bash
+    gaia memory bootstrap --reset
+    ```
+  </Tab>
+</Tabs>
+
+[→ Full Memory Guide](/guides/memory) · [→ Memory SDK Reference](/sdk/sdks/memory)
+
+---
+
 ## Utility Commands
 
 ### Stats Command
@@ -1359,6 +1428,9 @@ For more help, see:
   </Card>
   <Card title="Evaluation Framework" icon="chart-bar" href="/reference/eval">
     Testing and benchmarking
+  </Card>
+  <Card title="Agent Memory" icon="brain" href="/guides/memory">
+    Persistent memory across sessions
   </Card>
 </CardGroup>
 

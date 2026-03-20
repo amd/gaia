@@ -9,6 +9,7 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { FileBrowser } from './components/FileBrowser';
 import { SettingsModal } from './components/SettingsModal';
+import { MemoryDashboard } from './components/MemoryDashboard';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { PermissionPrompt } from './components/PermissionPrompt';
@@ -26,6 +27,7 @@ function App() {
         showDocLibrary,
         showFileBrowser,
         showSettings,
+        showMemoryDashboard,
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
@@ -295,9 +297,18 @@ function App() {
                 )}
             </div>
 
-            {showDocLibrary && <DocumentLibrary />}
-            {showFileBrowser && <FileBrowser />}
-            {showSettings && <SettingsModal />}
+            <AnimatedPresence show={showDocLibrary}>
+                <DocumentLibrary />
+            </AnimatedPresence>
+            <AnimatedPresence show={showFileBrowser}>
+                <FileBrowser />
+            </AnimatedPresence>
+            <AnimatedPresence show={showSettings}>
+                <SettingsModal />
+            </AnimatedPresence>
+            <AnimatedPresence show={showMemoryDashboard}>
+                <MemoryDashboard />
+            </AnimatedPresence>
 
             {/* Mobile Access Modal */}
             {!isMobile && (
