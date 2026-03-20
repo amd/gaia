@@ -2374,6 +2374,39 @@ Examples:
         "--all", action="store_true", help="Clear all caches"
     )
 
+    # Memory command (agent memory management)
+    memory_parser = subparsers.add_parser(
+        "memory",
+        help="Manage agent memory (bootstrap onboarding, view status)",
+    )
+    memory_subparsers = memory_parser.add_subparsers(
+        dest="memory_action", help="Memory action to perform"
+    )
+
+    # Memory status command
+    _ = memory_subparsers.add_parser("status", help="Show memory statistics")
+
+    # Memory bootstrap command
+    memory_bootstrap_parser = memory_subparsers.add_parser(
+        "bootstrap",
+        help="Run day-zero onboarding (conversational + system discovery)",
+    )
+    memory_bootstrap_parser.add_argument(
+        "--chat-only",
+        action="store_true",
+        help="Conversational onboarding only",
+    )
+    memory_bootstrap_parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="System discovery only (re-scannable)",
+    )
+    memory_bootstrap_parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Clear source='discovery' items (with confirmation)",
+    )
+
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
     init_parser = subparsers.add_parser(
@@ -4466,6 +4499,11 @@ Let me know your answer!
         handle_cache_command(args)
         return
 
+    # Handle Memory command
+    if args.action == "memory":
+        handle_memory_command(args)
+        return
+
     # Handle Blender command
     if args.action == "blender":
         handle_blender_command(args)
@@ -5716,6 +5754,383 @@ def handle_cache_command(args):
         cache_log.error(f"Error managing cache: {e}")
         print(f"❌ Error: {e}")
         sys.exit(1)
+
+
+def handle_memory_command(args):
+    """Handle the memory management command.
+
+    Subcommands:
+        status    — Show memory stats (entries by source/category/context, DB size)
+        bootstrap — Run day-zero onboarding (conversation + discovery)
+    """
+    if not hasattr(args, "memory_action") or args.memory_action is None:
+        print("❌ Error: No memory action specified")
+        print("Available actions: status, bootstrap")
+        print("Run 'gaia memory --help' for more information")
+        return
+
+    if args.memory_action == "status":
+        _handle_memory_status()
+    elif args.memory_action == "bootstrap":
+        _handle_memory_bootstrap(args)
+
+
+def _handle_memory_status():
+    """Show memory statistics: entries by source/category/context, DB size, session count."""
+    from gaia.agents.base.memory_store import MemoryStore
+
+    try:
+        store = MemoryStore()
+    except Exception as e:
+        print(f"❌ Error opening memory database: {e}")
+        sys.exit(1)
+
+    try:
+        stats = store.get_stats()
+
+        # Also query by_source (not in get_stats, do a direct query)
+        by_source = {}
+        try:
+            with store._lock:
+                rows = store._conn.execute(
+                    "SELECT source, COUNT(*) FROM knowledge GROUP BY source"
+                ).fetchall()
+            by_source = {row[0]: row[1] for row in rows}
+        except Exception:
+            pass
+
+        # --- Format output ---
+        print("\n=== GAIA Agent Memory ===\n")
+
+        # Knowledge section
+        k = stats["knowledge"]
+        print(f"  Knowledge entries: {k['total']}")
+        if k["by_category"]:
+            cats = ", ".join(
+                f"{cat}: {count}" for cat, count in sorted(k["by_category"].items())
+            )
+            print(f"    By category:  {cats}")
+        if k["by_context"]:
+            ctxs = ", ".join(
+                f"{ctx}: {count}" for ctx, count in sorted(k["by_context"].items())
+            )
+            print(f"    By context:   {ctxs}")
+        if by_source:
+            srcs = ", ".join(
+                f"{src}: {count}" for src, count in sorted(by_source.items())
+            )
+            print(f"    By source:    {srcs}")
+        if k["sensitive_count"] > 0:
+            print(f"    Sensitive:    {k['sensitive_count']}")
+        if k["entity_count"] > 0:
+            print(f"    Entities:     {k['entity_count']}")
+        if k["total"] > 0:
+            print(f"    Avg confidence: {k['avg_confidence']:.2f}")
+
+        # Conversations section
+        c = stats["conversations"]
+        print(
+            f"\n  Conversations:     {c['total_turns']} turns across {c['total_sessions']} sessions"
+        )
+        if c["first_session"]:
+            print(f"    First session: {c['first_session'][:10]}")
+        if c["last_session"]:
+            print(f"    Last session:  {c['last_session'][:10]}")
+
+        # Tools section
+        t = stats["tools"]
+        print(
+            f"\n  Tool calls:        {t['total_calls']} ({t['unique_tools']} unique tools)"
+        )
+        if t["total_calls"] > 0:
+            print(f"    Success rate:  {t['overall_success_rate']:.0%}")
+            print(f"    Total errors:  {t['total_errors']}")
+
+        # Temporal section
+        tp = stats["temporal"]
+        if tp["upcoming_count"] > 0 or tp["overdue_count"] > 0:
+            print(f"\n  Temporal:")
+            if tp["upcoming_count"] > 0:
+                print(f"    Upcoming (7d): {tp['upcoming_count']}")
+            if tp["overdue_count"] > 0:
+                print(f"    Overdue:       {tp['overdue_count']}")
+
+        # DB size
+        db_mb = stats["db_size_bytes"] / (1024 * 1024)
+        if db_mb >= 1.0:
+            print(f"\n  Database size:     {db_mb:.1f} MB")
+        else:
+            db_kb = stats["db_size_bytes"] / 1024
+            print(f"\n  Database size:     {db_kb:.1f} KB")
+
+        print()
+
+    except Exception as e:
+        print(f"❌ Error reading memory stats: {e}")
+        sys.exit(1)
+    finally:
+        store.close()
+
+
+def _handle_memory_bootstrap(args):
+    """Handle the memory bootstrap subcommand.
+
+    Flags:
+        --chat-only  Conversational onboarding only
+        --discover   System discovery only
+        --reset      Clear source='discovery' items
+        (default)    Run chat-only then discover
+    """
+    if args.reset:
+        _bootstrap_reset()
+    elif args.chat_only:
+        _bootstrap_chat()
+    elif args.discover:
+        _bootstrap_discover()
+    else:
+        # Default: run both phases
+        _bootstrap_chat()
+        print()
+        _bootstrap_discover()
+
+
+# ---- Bootstrap: conversational onboarding ----
+
+_BOOTSTRAP_QUESTIONS = [
+    {
+        "prompt": "What's your name?",
+        "category": "fact",
+        "template": "User's name is {answer}",
+    },
+    {
+        "prompt": "What do you do? (role/profession)",
+        "category": "fact",
+        "template": "User's role: {answer}",
+    },
+    {
+        "prompt": "What will you mainly use GAIA for?",
+        "category": "fact",
+        "template": "Primary use cases: {answer}",
+    },
+    {
+        "prompt": "How should I communicate? (concise/detailed, formal/casual)",
+        "category": "preference",
+        "template": "Communication style: {answer}",
+    },
+    {
+        "prompt": "What's your timezone?",
+        "category": "fact",
+        "template": "Timezone: {answer}",
+    },
+    {
+        "prompt": "What tools/languages do you use most?",
+        "category": "fact",
+        "template": "Primary tools/languages: {answer}",
+    },
+]
+
+
+def _bootstrap_chat():
+    """Phase 1: Conversational onboarding — ask questions, store answers."""
+    from gaia.agents.base.memory_store import MemoryStore
+
+    print("\n=== GAIA Memory Bootstrap — Conversational Onboarding ===")
+    print("Answer a few questions so GAIA can be helpful from the start.")
+    print("Press Enter to skip any question.\n")
+
+    try:
+        store = MemoryStore()
+    except Exception as e:
+        print(f"❌ Error opening memory database: {e}")
+        sys.exit(1)
+
+    stored_count = 0
+    try:
+        for q in _BOOTSTRAP_QUESTIONS:
+            try:
+                answer = input(f"  {q['prompt']} ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n\nBootstrap cancelled.")
+                return
+
+            if not answer:
+                continue
+
+            content = q["template"].format(answer=answer)
+            try:
+                store.store(
+                    category=q["category"],
+                    content=content,
+                    source="user",
+                    context="global",
+                    confidence=0.8,
+                )
+                stored_count += 1
+            except Exception as e:
+                print(f"  ⚠ Failed to store: {e}")
+
+        print(f"\n✅ Stored {stored_count} memory entries from onboarding.")
+    finally:
+        store.close()
+
+
+# ---- Bootstrap: system discovery ----
+
+
+def _bootstrap_discover():
+    """Phase 2: System discovery — scan local system, present findings for review."""
+    from gaia.agents.base.discovery import SystemDiscovery
+    from gaia.agents.base.memory_store import MemoryStore
+
+    print("\n=== GAIA Memory Bootstrap — System Discovery ===")
+    print("Scanning your system for projects, apps, and more...")
+    print("Nothing is stored without your approval.\n")
+
+    try:
+        discovery = SystemDiscovery()
+    except Exception as e:
+        print(f"❌ Error initializing system discovery: {e}")
+        sys.exit(1)
+
+    try:
+        all_results = discovery.scan_all()
+    except Exception as e:
+        print(f"❌ Error during system scan: {e}")
+        sys.exit(1)
+
+    # Flatten and count
+    findings = []
+    for source_name, items in all_results.items():
+        for item in items:
+            item["_source_name"] = source_name
+            findings.append(item)
+
+    if not findings:
+        print("No discoveries found on this system.")
+        return
+
+    print(f"Found {len(findings)} items. Review each one:\n")
+    print("  [Y] = approve (default)   [n] = skip   [q] = quit review\n")
+
+    try:
+        store = MemoryStore()
+    except Exception as e:
+        print(f"❌ Error opening memory database: {e}")
+        sys.exit(1)
+
+    approved_count = 0
+    skipped_count = 0
+    try:
+        for i, item in enumerate(findings, 1):
+            sensitive_tag = " [SENSITIVE]" if item.get("sensitive") else ""
+            ctx_tag = f" [{item.get('context', 'unclassified')}]"
+            print(f"  ({i}/{len(findings)}) {item['content']}{ctx_tag}{sensitive_tag}")
+
+            try:
+                choice = input("    Approve? [Y/n/q]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n\nReview cancelled.")
+                break
+
+            if choice == "q":
+                print("  Review stopped.")
+                break
+            elif choice == "n":
+                skipped_count += 1
+                continue
+            else:
+                # Default = approve (empty string or 'y')
+                try:
+                    store.store(
+                        category=item.get("category", "fact"),
+                        content=item["content"],
+                        source="discovery",
+                        context=item.get("context", "global"),
+                        sensitive=item.get("sensitive", False),
+                        entity=item.get("entity") or None,
+                        confidence=item.get("confidence", 0.4),
+                    )
+                    approved_count += 1
+                except Exception as e:
+                    print(f"    ⚠ Failed to store: {e}")
+
+        print(
+            f"\n✅ Discovery complete: {approved_count} approved, {skipped_count} skipped."
+        )
+    finally:
+        store.close()
+
+
+# ---- Bootstrap: reset discovery items ----
+
+
+def _bootstrap_reset():
+    """Clear all source='discovery' knowledge items after user confirmation."""
+    from gaia.agents.base.memory_store import MemoryStore
+
+    try:
+        store = MemoryStore()
+    except Exception as e:
+        print(f"❌ Error opening memory database: {e}")
+        sys.exit(1)
+
+    try:
+        # Count discovery items
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT COUNT(*) FROM knowledge WHERE source = 'discovery'"
+            ).fetchone()
+        count = row[0] if row else 0
+
+        if count == 0:
+            print("No discovery items found in memory. Nothing to reset.")
+            return
+
+        # Prompt for confirmation
+        try:
+            response = (
+                input(
+                    f"Delete {count} discovered item(s)? "
+                    "User-edited items (source='user') are preserved. [y/N]: "
+                )
+                .strip()
+                .lower()
+            )
+        except (EOFError, KeyboardInterrupt):
+            print("\nReset cancelled.")
+            return
+
+        if response != "y":
+            print("Reset cancelled.")
+            return
+
+        # Delete discovery items (and clean up FTS)
+        with store._lock:
+            # Get IDs to delete from FTS
+            ids = [
+                r[0]
+                for r in store._conn.execute(
+                    "SELECT id FROM knowledge WHERE source = 'discovery'"
+                ).fetchall()
+            ]
+            for kid in ids:
+                store._conn.execute(
+                    "DELETE FROM knowledge_fts WHERE rowid = "
+                    "(SELECT rowid FROM knowledge WHERE id = ?)",
+                    (kid,),
+                )
+            deleted = store._conn.execute(
+                "DELETE FROM knowledge WHERE source = 'discovery'"
+            ).rowcount
+            store._conn.commit()
+
+        print(f"✅ Deleted {deleted} discovery item(s).")
+
+    except Exception as e:
+        print(f"❌ Error during reset: {e}")
+        sys.exit(1)
+    finally:
+        store.close()
 
 
 def handle_mcp_command(args):
