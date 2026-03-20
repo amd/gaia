@@ -151,9 +151,10 @@ class ChatAgent(
                 allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
             )
             self.rag = RAGSDK(rag_config)
-        except ImportError as e:
-            # RAG dependencies not installed - this is fine, RAG features will be disabled
-            logger.debug(f"RAG dependencies not available: {e}")
+        except Exception as e:
+            logger.warning(
+                "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
+            )
             self.rag = None
 
         # File system monitoring

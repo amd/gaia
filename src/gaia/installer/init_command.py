@@ -44,6 +44,7 @@ INIT_PROFILES = {
         "approx_size": "~400 MB",
         "min_lemonade_version": "9.0.4",
         "min_context_size": 4096,
+        "pip_extras": [],
     },
     "sd": {
         "description": "Image generation with multi-modal AI (LLM + SD + VLM)",
@@ -56,6 +57,7 @@ INIT_PROFILES = {
         "approx_size": "~15 GB",
         "min_lemonade_version": "9.2.0",  # SDXL-Turbo requires v9.2.0+
         "min_context_size": 16384,  # SD agent needs 16K for multi-step planning
+        "pip_extras": [],
     },
     "chat": {
         "description": "Interactive chat with RAG and vision support",
@@ -64,6 +66,7 @@ INIT_PROFILES = {
         "approx_size": "~25 GB",
         "min_lemonade_version": "9.0.4",
         "min_context_size": 32768,
+        "pip_extras": ["rag"],
     },
     "code": {
         "description": "Autonomous coding assistant",
@@ -72,6 +75,7 @@ INIT_PROFILES = {
         "approx_size": "~18 GB",
         "min_lemonade_version": "9.0.4",
         "min_context_size": 32768,
+        "pip_extras": [],
     },
     "rag": {
         "description": "Document Q&A with retrieval",
@@ -80,6 +84,7 @@ INIT_PROFILES = {
         "approx_size": "~25 GB",
         "min_lemonade_version": "9.0.4",
         "min_context_size": 32768,
+        "pip_extras": ["rag"],
     },
     "vlm": {
         "description": "Vision pipeline for document and image extraction",
@@ -88,6 +93,7 @@ INIT_PROFILES = {
         "approx_size": "~3 GB",
         "min_lemonade_version": "9.0.4",
         "min_context_size": 8192,
+        "pip_extras": [],
     },
     "all": {
         "description": "All models for all agents",
@@ -96,6 +102,7 @@ INIT_PROFILES = {
         "approx_size": "~26 GB",
         "min_lemonade_version": "9.2.0",  # Includes SD, so needs v9.2.0+
         "min_context_size": 32768,  # Max requirement across all agents
+        "pip_extras": ["rag"],
     },
 }
 
@@ -348,6 +355,76 @@ class InitCommand:
                 size_str += f"/{total / 1024 / 1024:.1f} MB"
             self._print(f"\r   [{bar}] {percent:.0f}% ({size_str})", end="")
 
+    def _install_pip_extras(self) -> bool:
+        """
+        Install pip extras required by the current profile.
+
+        Returns:
+            True on success or if no extras needed, False on failure.
+        """
+        profile_config = INIT_PROFILES[self.profile]
+        pip_extras = profile_config.get("pip_extras", [])
+        if not pip_extras:
+            return True
+
+        extras_str = ",".join(pip_extras)
+
+        # Detect editable vs package install
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "show", "amd-gaia"],
+                capture_output=True,
+                text=True,
+            )
+            editable = False
+            location = ""
+            for line in result.stdout.splitlines():
+                if line.startswith("Editable project location:"):
+                    editable = True
+                    location = line.split(":", 1)[1].strip()
+                    break
+        except Exception:
+            editable = False
+            location = ""
+
+        if editable and location:
+            install_spec = f"-e {location}[{extras_str}]"
+            install_args = ["-e", f"{location}[{extras_str}]"]
+        else:
+            install_spec = f"amd-gaia[{extras_str}]"
+            install_args = [f"amd-gaia[{extras_str}]"]
+
+        self._print_success(f"Installing extras: {extras_str}")
+
+        # Try uv pip first, fall back to regular pip
+        for pip_cmd in [
+            [sys.executable, "-m", "uv", "pip", "install"] + install_args,
+            [sys.executable, "-m", "pip", "install"] + install_args,
+        ]:
+            try:
+                result = subprocess.run(
+                    pip_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                if result.returncode == 0:
+                    self._print_success(f"Installed [{extras_str}] dependencies")
+                    return True
+            except FileNotFoundError:
+                continue
+            except subprocess.TimeoutExpired:
+                self._print_warning("Pip install timed out, continuing anyway")
+                return True
+            except Exception:
+                continue
+
+        self._print_warning(
+            f"Could not install [{extras_str}] extras automatically. "
+            f"Please run: pip install {install_spec}"
+        )
+        return True  # Warn but don't fail
+
     def run(self) -> int:
         """
         Execute the initialization workflow.
@@ -357,7 +434,12 @@ class InitCommand:
         """
         self._print_header()
 
+        profile_config = INIT_PROFILES[self.profile]
+        has_pip_extras = bool(profile_config.get("pip_extras"))
+
         total_steps = 4 if not self.skip_models else 3
+        if has_pip_extras:
+            total_steps += 1
 
         try:
             # Step 1: Check/Install Lemonade (skip for remote servers or CI)
@@ -407,7 +489,16 @@ class InitCommand:
                 if not self._download_models():
                     return 1
 
-            # Step 4: Verify setup
+            # Step N: Install pip extras (after models, before verify)
+            if has_pip_extras:
+                step_num = 4 if not self.skip_models else 3
+                self._print("")
+                self._print_step(
+                    step_num, total_steps, "Installing Python dependencies..."
+                )
+                self._install_pip_extras()
+
+            # Final step: Verify setup
             step_num = total_steps
             self._print("")
             self._print_step(step_num, total_steps, "Verifying setup...")
