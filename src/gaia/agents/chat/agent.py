@@ -155,6 +155,7 @@ class ChatAgent(
             logger.warning(
                 "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
             )
+            logger.debug("RAG init traceback:", exc_info=True)
             self.rag = None
 
         # File system monitoring

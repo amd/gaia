@@ -375,6 +375,7 @@ class InitCommand:
                 [sys.executable, "-m", "pip", "show", "amd-gaia"],
                 capture_output=True,
                 text=True,
+                check=False,
             )
             editable = False
             location = ""
@@ -388,10 +389,10 @@ class InitCommand:
             location = ""
 
         if editable and location:
-            install_spec = f"-e {location}[{extras_str}]"
+            install_spec = f'uv pip install -e ".[{extras_str}]"'
             install_args = ["-e", f"{location}[{extras_str}]"]
         else:
-            install_spec = f"amd-gaia[{extras_str}]"
+            install_spec = f'pip install "amd-gaia[{extras_str}]"'
             install_args = [f"amd-gaia[{extras_str}]"]
 
         self._print_success(f"Installing extras: {extras_str}")
@@ -407,6 +408,7 @@ class InitCommand:
                     capture_output=True,
                     text=True,
                     timeout=300,
+                    check=False,
                 )
                 if result.returncode == 0:
                     self._print_success(f"Installed [{extras_str}] dependencies")
@@ -414,7 +416,9 @@ class InitCommand:
             except FileNotFoundError:
                 continue
             except subprocess.TimeoutExpired:
-                self._print_warning("Pip install timed out, continuing anyway")
+                self._print_warning(
+                    f"Pip install timed out. Please run manually: {install_spec}"
+                )
                 return True
             except Exception:
                 continue
@@ -479,7 +483,7 @@ class InitCommand:
 
             # Step 3: Download models (unless skipped)
             if not self.skip_models:
-                step_num = 3
+                step_num += 1
                 self._print("")
                 self._print_step(
                     step_num,
@@ -489,9 +493,9 @@ class InitCommand:
                 if not self._download_models():
                     return 1
 
-            # Step N: Install pip extras (after models, before verify)
+            # Install pip extras (after models, before verify)
             if has_pip_extras:
-                step_num = 4 if not self.skip_models else 3
+                step_num += 1
                 self._print("")
                 self._print_step(
                     step_num, total_steps, "Installing Python dependencies..."
@@ -499,7 +503,7 @@ class InitCommand:
                 self._install_pip_extras()
 
             # Final step: Verify setup
-            step_num = total_steps
+            step_num += 1
             self._print("")
             self._print_step(step_num, total_steps, "Verifying setup...")
             if not self._verify_setup():
