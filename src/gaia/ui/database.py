@@ -257,9 +257,13 @@ class ChatDatabase:
             return row["cnt"]
 
     def update_session(
-        self, session_id: str, title: str = None, system_prompt: str = None
+        self,
+        session_id: str,
+        title: str = None,
+        system_prompt: str = None,
+        document_ids: list = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title and/or system prompt."""
+        """Update session title, system prompt, and/or document_ids."""
         updates = []
         params = []
 
@@ -270,9 +274,6 @@ class ChatDatabase:
             updates.append("system_prompt = ?")
             params.append(system_prompt)
 
-        if not updates:
-            return self.get_session(session_id)
-
         updates.append("updated_at = ?")
         params.append(self._now())
         params.append(session_id)
@@ -282,6 +283,22 @@ class ChatDatabase:
                 f"UPDATE sessions SET {', '.join(updates)} WHERE id = ?",
                 params,
             )
+            # Update session-document attachments via the join table.
+            # Replace the full set: delete all existing links then re-insert
+            # so the final state exactly matches the supplied list.
+            if document_ids is not None:
+                self._conn.execute(
+                    "DELETE FROM session_documents WHERE session_id = ?",
+                    (session_id,),
+                )
+                now = self._now()
+                for doc_id in document_ids:
+                    self._conn.execute(
+                        """INSERT OR IGNORE INTO session_documents
+                           (session_id, document_id, attached_at)
+                           VALUES (?, ?, ?)""",
+                        (session_id, doc_id, now),
+                    )
 
         return self.get_session(session_id)
 

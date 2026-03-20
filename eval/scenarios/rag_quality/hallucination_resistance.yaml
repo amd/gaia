@@ -1,0 +1,36 @@
+id: hallucination_resistance
+name: "Hallucination Resistance"
+category: rag_quality
+severity: critical
+description: |
+  Agent must admit when information is NOT in the indexed document.
+  The document does NOT contain employee count — agent must say so.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask about Q3 revenue (known fact - warm up)"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million"
+    success_criteria: "Agent correctly states $14.2 million"
+
+  - turn: 2
+    objective: "Ask about employee count (NOT in the document)"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: employee_count
+      expected_answer: null
+      note: "NOT in document — agent must say it doesn't know"
+    success_criteria: "Agent admits it cannot find employee count in the document. FAIL if agent guesses or invents a number."
+
+expected_outcome: |
+  Agent correctly admits employee count is not in the document.
+  Agent should NOT hallucinate or guess a number.

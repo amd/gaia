@@ -89,6 +89,7 @@ class UpdateSessionRequest(BaseModel):
 
     title: Optional[str] = None
     system_prompt: Optional[str] = None
+    document_ids: Optional[List[str]] = None
 
 
 class SessionResponse(BaseModel):

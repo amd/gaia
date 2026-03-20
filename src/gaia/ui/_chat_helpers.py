@@ -20,7 +20,12 @@ from pathlib import Path
 
 from .database import ChatDatabase
 from .models import ChatRequest
-from .sse_handler import _clean_answer_json, _fix_double_escaped
+from .sse_handler import (
+    _clean_answer_json,
+    _fix_double_escaped,
+    _THOUGHT_JSON_SUB_RE,
+    _TOOL_CALL_JSON_SUB_RE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,14 +87,14 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
                 logger.warning("Document %s not found in database, skipping", doc_id)
         return rag_file_paths, []
     else:
-        # No specific docs attached -- make entire library available
-        # but do NOT auto-index (let the agent decide based on user's query)
-        library_paths = []
-        all_docs = db.list_documents()
-        for doc in all_docs:
-            if doc.get("filepath"):
-                library_paths.append(doc["filepath"])
-        return [], library_paths
+        # No session-specific documents attached — return empty lists.
+        # Previously this exposed ALL global library documents, causing
+        # cross-session contamination: documents from unrelated sessions
+        # would appear in the system prompt and list_indexed_documents,
+        # confusing the agent about what's actually available in the
+        # current session.  Users who want a document available must
+        # explicitly index it and link it to their session via document_ids.
+        return [], []
 
 
 def _compute_allowed_paths(rag_file_paths: list) -> list:
@@ -163,9 +168,12 @@ async def _get_chat_response(
         )
         agent = ChatAgent(config)
 
-        # Restore conversation history (limited to prevent context overflow)
-        _MAX_PAIRS = 2
-        _MAX_CHARS = 500
+        # Restore conversation history (limited to prevent context overflow).
+        # 5 pairs × 2 msgs × ~500 tokens ≈ 5 000 tokens — well within 32K.
+        # 2000-char truncation preserves enough assistant context for cross-turn
+        # recall, pronoun resolution, and multi-step planning.
+        _MAX_PAIRS = 5
+        _MAX_CHARS = 2000
         for user_msg, assistant_msg in history_pairs[-_MAX_PAIRS:]:
             if hasattr(agent, "conversation_history"):
                 u = user_msg[:_MAX_CHARS]
@@ -280,10 +288,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 if sse_handler.cancelled.is_set():
                     return
 
-                # -- Phase 3: RAG indexing (session-specific docs only) --
-                # Only auto-index documents explicitly attached to the session.
-                # Library documents are NOT auto-indexed; the agent indexes
-                # them on demand based on the user's query.
+                # -- Phase 3: RAG indexing --
+                # Session-attached docs are indexed with full SSE progress events.
+                # Library docs are silently pre-indexed from disk cache so the
+                # system prompt shows them as "already indexed" — preventing the
+                # LLM from calling index_document again on unchanged files.
+                # The hash-based cache (RAGSDK) guarantees no re-processing
+                # unless file content has actually changed.
                 if rag_file_paths and agent.rag:
                     sse_handler._emit(
                         {
@@ -360,13 +371,42 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         }
                     )
 
+                # -- Phase 3b: Silently pre-index library docs from cache --
+                # Library docs that are already on disk are loaded from the
+                # hash-based RAG cache (no LLM/embedding re-computation for
+                # unchanged files).  Adding them to agent.indexed_files causes
+                # rebuild_system_prompt() to emit the ANTI-RE-INDEX RULE, so
+                # the LLM will query them directly instead of re-indexing.
+                if library_paths and agent.rag:
+                    preindexed = 0
+                    for fpath in library_paths:
+                        try:
+                            result = agent.rag.index_document(fpath)
+                            if result.get("success") and not result.get("error"):
+                                agent.indexed_files.add(fpath)
+                                preindexed += 1
+                        except Exception as lib_err:
+                            logger.debug(
+                                "Library pre-index skipped for %s: %s", fpath, lib_err
+                            )
+                    if preindexed:
+                        agent.rebuild_system_prompt()
+                        logger.info(
+                            "Pre-indexed %d library doc(s) from cache", preindexed
+                        )
+
                 # -- Phase 4: Conversation history --
                 # Limit history to prevent context window overflow.
                 # With RAG chunks + tools + system prompt, the 32K context
-                # fills fast.  Keep only the last 2 exchanges and truncate
-                # long assistant messages to ~500 chars each.
-                _MAX_HISTORY_PAIRS = 2
-                _MAX_MSG_CHARS = 500
+                # fills fast.  Keep the last 5 exchanges and truncate long
+                # assistant messages to ~2000 chars each.
+                # NOTE: Increasing from (2, 500) → (5, 2000) unblocks multi-turn
+                # scenarios: cross_turn_file_recall, pronoun_resolution,
+                # multi_doc_context, conversation_summary, multi_step_plan,
+                # vague_request_clarification, topic_switch.
+                # 5 pairs × 2 msgs × ~500 tokens ≈ 5 000 tokens — well within 32K.
+                _MAX_HISTORY_PAIRS = 5
+                _MAX_MSG_CHARS = 2000
                 if history_pairs:
                     recent = history_pairs[-_MAX_HISTORY_PAIRS:]
                     sse_handler._emit(
@@ -588,10 +628,15 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             # Send as answer event since it wasn't streamed
             yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
 
-        # Clean LLM output artifacts before DB storage
+        # Clean LLM output artifacts before DB storage.
+        # Apply all canonical patterns so stored content is always clean
+        # regardless of which streaming path was taken.
         if full_response:
             full_response = _clean_answer_json(full_response)
+            full_response = _TOOL_CALL_JSON_SUB_RE.sub("", full_response)
+            full_response = _THOUGHT_JSON_SUB_RE.sub("", full_response)
             full_response = _fix_double_escaped(full_response)
+            full_response = full_response.strip()
 
         # Save complete response to DB (including captured agent steps)
         if full_response:

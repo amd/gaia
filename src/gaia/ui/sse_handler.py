@@ -47,6 +47,14 @@ _THOUGHT_JSON_SUB_RE = re.compile(r'\s*\{\s*"thought"\s*:\s*"[^"]*"[^}]*\}\s*')
 # These duplicate the already-streamed text content and should be stripped.
 _ANSWER_JSON_RE = re.compile(r'\s*\{\s*"answer"\s*:\s*"', re.DOTALL)
 
+# Regex for use with re.sub() to strip {"answer": "..."} JSON blobs embedded
+# in content.  Used in print_final_answer to remove trailing JSON wrappers
+# that some models append after their plain-text response.
+# Handles escaped quotes (\") inside the answer string value.
+_ANSWER_JSON_SUB_RE = re.compile(
+    r'\s*\{\s*"answer"\s*:\s*"(?:[^"\\]|\\.)*"\s*\}', re.DOTALL
+)
+
 # Regex to remove <think>...</think> tags that some models output.
 _THINK_TAG_SUB_RE = re.compile(r"<think>[\s\S]*?</think>")
 
@@ -325,6 +333,13 @@ class SSEOutputHandler(OutputHandler):
     ):  # pylint: disable=unused-argument
         if answer:
             answer = _THINK_TAG_SUB_RE.sub("", answer).strip()
+            # Strip any trailing {"answer": "..."} JSON blob that some models
+            # append to their plain-text response.  The streaming filter (Case 2
+            # in print_streaming_text) already removed these from the chunk
+            # stream, but print_final_answer receives the raw LLM output which
+            # can still contain the wrapper.  Stripping here ensures the "answer"
+            # SSE event always carries clean text, not a re-wrapped JSON blob.
+            answer = _ANSWER_JSON_SUB_RE.sub("", answer).strip()
         self._emit(
             {
                 "type": "answer",
@@ -428,7 +443,18 @@ class SSEOutputHandler(OutputHandler):
                         logger.debug("Filtered tool-call JSON: %s", stripped[:100])
                         self._stream_buffer = ""
                         return
-                    self._emit({"type": "chunk", "content": self._stream_buffer})
+                    # Also handle compound patterns where "tool"/"tool_args" are
+                    # preceded by "thought"/"goal" keys, e.g.:
+                    #   {"thought": "...", "goal": "...", "tool": "x", "tool_args": {...}}
+                    cleaned = _TOOL_CALL_JSON_SUB_RE.sub("", stripped)
+                    cleaned = _THOUGHT_JSON_SUB_RE.sub("", cleaned).strip()
+                    if not cleaned:
+                        logger.debug(
+                            "Filtered compound tool-call JSON: %s", stripped[:100]
+                        )
+                        self._stream_buffer = ""
+                        return
+                    self._emit({"type": "chunk", "content": cleaned})
                     self._stream_buffer = ""
                 # If end_of_stream, fall through to the flush block below
                 # instead of returning (otherwise the buffer is never flushed).

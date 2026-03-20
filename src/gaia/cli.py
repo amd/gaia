@@ -1862,6 +1862,66 @@ Examples:
         help="Last line in the file to include in the prompt (default: EOF)",
     )
 
+    # Agent eval subcommand: gaia eval agent [OPTIONS]
+    agent_eval_parser = eval_subparsers.add_parser(
+        "agent",
+        help="Run agent eval benchmark scenarios",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run all scenarios
+  gaia eval agent
+
+  # Run a specific scenario by ID
+  gaia eval agent --scenario simple_factual_rag
+
+  # Run all scenarios in a category
+  gaia eval agent --category rag_quality
+
+  # Run architecture audit only (no LLM calls)
+  gaia eval agent --audit-only
+
+  # Run against a custom backend
+  gaia eval agent --backend http://localhost:8080
+        """,
+    )
+    agent_eval_parser.add_argument(
+        "--scenario",
+        default=None,
+        help="Run specific scenario by ID",
+    )
+    agent_eval_parser.add_argument(
+        "--category",
+        default=None,
+        help="Run all scenarios in category",
+    )
+    agent_eval_parser.add_argument(
+        "--audit-only",
+        action="store_true",
+        help="Run architecture audit only (no LLM calls)",
+    )
+    agent_eval_parser.add_argument(
+        "--backend",
+        default="http://localhost:4200",
+        help="Agent UI backend URL (default: http://localhost:4200)",
+    )
+    agent_eval_parser.add_argument(
+        "--model",
+        default="claude-sonnet-4-6",
+        help="Eval model (default: claude-sonnet-4-6)",
+    )
+    agent_eval_parser.add_argument(
+        "--budget",
+        default="0.50",
+        help="Max budget per scenario in USD (default: 0.50)",
+    )
+    agent_eval_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="Timeout per scenario in seconds (default: 300)",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -3719,6 +3779,22 @@ Let me know your answer!
 
     # Handle evaluation
     if args.action == "eval":
+        if getattr(args, "eval_command", None) == "agent":
+            from gaia.eval.runner import AgentEvalRunner
+
+            runner = AgentEvalRunner(
+                backend_url=args.backend,
+                model=args.model,
+                budget_per_scenario=args.budget,
+                timeout_per_scenario=args.timeout,
+            )
+            runner.run(
+                scenario_id=getattr(args, "scenario", None),
+                category=getattr(args, "category", None),
+                audit_only=getattr(args, "audit_only", False),
+            )
+            return
+
         if getattr(args, "eval_command", None) == "fix-code":
             try:
                 from gaia.eval.fix_code_testbench.fix_code_testbench import (

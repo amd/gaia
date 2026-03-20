@@ -548,10 +548,30 @@ class RAGToolsMixin:
                 ]
 
                 if not matching_files:
-                    return {
-                        "status": "error",
-                        "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
-                    }
+                    # Fuzzy basename fallback: agent may pass a guessed absolute path
+                    # like "C:\Users\foo\document.md" when only "document.md" is indexed.
+                    # Extract the basename and try an exact filename match.
+                    basename = Path(file_path).name
+                    matching_files = [
+                        f
+                        for f in self.rag.indexed_files
+                        if Path(str(f)).name == basename
+                    ]
+                    if len(matching_files) == 0:
+                        return {
+                            "status": "error",
+                            "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
+                        }
+                    elif len(matching_files) > 1:
+                        ambiguous = [str(f) for f in matching_files]
+                        return {
+                            "status": "error",
+                            "error": f"Ambiguous filename '{basename}' — multiple matches found: {ambiguous}. Use the full path.",
+                        }
+                    logger.info(
+                        f"[query_specific_file] Path '{file_path}' not found directly; "
+                        f"resolved via basename to: {matching_files[0]}"
+                    )
 
                 # For now, use the first match
                 # TODO: Let user disambiguate if multiple matches
@@ -1114,6 +1134,22 @@ class RAGToolsMixin:
 
                 # Resolve to real path for consistent validation
                 real_file_path = os.path.realpath(file_path)
+
+                # Guard: skip re-indexing if already tracked in this session.
+                # self.indexed_files is populated at agent startup (session-attached
+                # docs) and after each successful index_document call.  This prevents
+                # the LLM from calling the tool redundantly within a single request.
+                # The hash-based RAG cache prevents re-processing across requests.
+                if file_path in self.indexed_files or real_file_path in self.indexed_files:
+                    logger.debug("Skipping re-index for already-indexed file: %s", file_path)
+                    return {
+                        "status": "success",
+                        "message": f"Already indexed: {Path(file_path).name}",
+                        "file_name": Path(file_path).name,
+                        "already_indexed": True,
+                        "from_cache": True,
+                        "total_indexed_files": len(self.indexed_files),
+                    }
 
                 # Validate path with ChatAgent's internal logic (which uses allowed_paths)
                 if hasattr(self, "_is_path_allowed"):

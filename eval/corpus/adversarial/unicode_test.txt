@@ -1,0 +1,76 @@
+Unicode Test Document — Mixed Scripts and Special Characters
+=============================================================
+
+This document tests how the RAG system handles heavy Unicode content across
+multiple scripts, emoji, mathematical symbols, and mixed encodings.
+
+--- SECTION 1: Chinese (Simplified) ---
+这是一段中文测试文本。人工智能正在改变世界。我们正在测试文档检索系统对多语言内容的处理能力。
+北京、上海、广州和深圳是中国最重要的商业城市。科技公司正在快速发展。
+数据科学和机器学习是当今最热门的技术领域。云计算为企业提供了强大的基础设施支持。
+
+--- SECTION 2: Arabic ---
+هذا نص اختباري باللغة العربية. الذكاء الاصطناعي يغير العالم من حولنا.
+نحن نختبر كيفية تعامل نظام استرجاع المستندات مع المحتوى متعدد اللغات.
+القاهرة، الرياض، دبي وأبو ظبي من أهم المراكز التجارية في الشرق الأوسط.
+التعلم الآلي ومعالجة اللغة الطبيعية من أكثر مجالات التكنولوجيا نمواً.
+
+--- SECTION 3: Japanese ---
+これは日本語のテストテキストです。人工知能は世界を変えつつあります。
+私たちは、文書検索システムが多言語コンテンツをどのように処理するかをテストしています。
+東京、大阪、名古屋は日本の主要な都市です。テクノロジー企業が急速に成長しています。
+機械学習と自然言語処理は、現代のテクノロジーの中で最も重要な分野の一つです。
+
+--- SECTION 4: Korean ---
+이것은 한국어 테스트 텍스트입니다. 인공지능이 세상을 변화시키고 있습니다.
+우리는 문서 검색 시스템이 다국어 콘텐츠를 어떻게 처리하는지 테스트하고 있습니다.
+서울, 부산, 인천은 한국의 주요 도시입니다. 기술 기업들이 빠르게 성장하고 있습니다.
+
+--- SECTION 5: Russian (Cyrillic) ---
+Это тестовый текст на русском языке. Искусственный интеллект меняет мир.
+Мы тестируем, как система поиска документов обрабатывает многоязычный контент.
+Москва, Санкт-Петербург и Новосибирск — крупнейшие города России.
+Машинное обучение и обработка естественного языка являются важнейшими областями технологий.
+
+--- SECTION 6: Hindi (Devanagari) ---
+यह हिंदी में एक परीक्षण पाठ है। कृत्रिम बुद्धिमत्ता दुनिया को बदल रही है।
+हम परीक्षण कर रहे हैं कि दस्तावेज़ पुनर्प्राप्ति प्रणाली बहुभाषी सामग्री को कैसे संभालती है।
+मुंबई, दिल्ली और बेंगलुरु भारत के प्रमुख तकनीकी केंद्र हैं।
+
+--- SECTION 7: Emoji (Heavy Usage) ---
+Business metrics: 📈 Revenue up 23% 📊 | Profit margin: 💰 68% | Team morale: 😊😊😊
+Product launch: 🚀🚀🚀 | Customer rating: ⭐⭐⭐⭐⭐ (4.7/5) | Issues: 🐛 (0 critical)
+Weather forecast: ☀️ Monday | 🌤️ Tuesday | 🌧️ Wednesday | ⛈️ Thursday | 🌈 Friday
+Food menu: 🍕 Pizza | 🍣 Sushi | 🌮 Tacos | 🥗 Salad | ☕ Coffee | 🍰 Dessert
+Travel: ✈️ → 🗺️ → 🏨 → 🏛️ → 📸 → 🛍️ → 🍽️ → 🛬
+Emotions: 😀😃😄😁😆😅🤣😂🙂🙃😉😊😇🥰😍🤩😘😗😙😚😋😛😜🤪😝🤑🤗🤭🤫🤔🤐🤨😐
+Status indicators: ✅ Done | ❌ Failed | ⏳ Pending | 🔄 In Progress | ⚠️ Warning | 🔒 Locked
+Mathematical: ∑ Σ ∏ ∫ ∂ ∇ ∞ ≈ ≠ ≤ ≥ ± √ ∛ ∜ π φ λ μ σ τ ω
+
+--- SECTION 8: Mathematical Symbols ---
+Set theory: ∈ ∉ ⊂ ⊃ ⊆ ⊇ ∪ ∩ ∅ ℕ ℤ ℚ ℝ ℂ
+Logic: ∀ ∃ ∄ ¬ ∧ ∨ ⊕ → ↔ ⊤ ⊥
+Geometry: ∠ ∟ ⊿ △ ▲ ■ □ ● ○ ◆ ◇ ★ ☆
+Arrows: ← → ↑ ↓ ↔ ↕ ⇐ ⇒ ⇑ ⇓ ⇔ ⇕ ⇆ ⇄ ⇌ ⇋
+Calculus: f'(x) = lim(h→0) [f(x+h) - f(x)]/h
+∫₀^∞ e^(-x²) dx = √π/2
+∑_{n=1}^∞ 1/n² = π²/6 (Basel problem)
+Euler's identity: e^(iπ) + 1 = 0
+
+--- SECTION 9: Special Characters and Punctuation ---
+Dashes: — (em dash) – (en dash) - (hyphen) ‐ ‑ ‒ ─
+Quotes: "smart double" 'smart single' «guillemets» ‹angle›
+Currency: $ € £ ¥ ₹ ₩ ₪ ₣ ₦ ₫ ₭ ₮ ₯ ₰ ₱ ₲ ₳ ₴ ₵ ₶ ₷ ₸ ₹
+Trademark: ™ ® © ℗ ℠
+Fractions: ½ ⅓ ¼ ⅔ ¾ ⅕ ⅖ ⅗ ⅘ ⅙ ⅚ ⅛ ⅜ ⅝ ⅞
+Superscript: ⁰ ¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹ ⁺ ⁻ ⁼ ⁽ ⁾ ⁿ
+Subscript: ₀ ₁ ₂ ₃ ₄ ₅ ₆ ₇ ₈ ₉ ₊ ₋ ₌ ₍ ₎
+
+--- SECTION 10: Mixed Script Paragraph ---
+In 2025年, the company reported revenue of $14.2百万 (十四点二百万美元).
+Key metrics include: तकनीकी विकास दर +23%, معدل النمو 23٪, 성장률 23%.
+Our team includes: 张伟 (Engineering), Акира Танака (Research), محمد الأمين (Sales).
+Product codes: WPX-αβγ-001, GP-ΩΨΦ-002, SVC-∞∑∏-003.
+Status: 完了 (完成) ✅ | В процессе ⏳ | المهمة معلقة 🔄 | 진행 중 🔄
+
+--- END OF UNICODE TEST DOCUMENT ---

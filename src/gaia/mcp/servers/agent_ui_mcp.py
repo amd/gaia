@@ -25,10 +25,12 @@ import requests
 from mcp.server.fastmcp import FastMCP
 
 from gaia.ui.sse_handler import (
+    _ANSWER_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
     _THOUGHT_JSON_SUB_RE,
     _TOOL_CALL_JSON_SUB_RE,
     _TRAILING_CODE_FENCE_RE,
+    _clean_answer_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -130,7 +132,14 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
             event_log.append(f"[plan] {len(steps)} steps: {', '.join(steps[:5])}")
 
         elif etype == "answer":
-            full_content = event.get("content", "") or full_content
+            # Use the answer event content to override accumulated dirty chunks.
+            # The streaming filter (Case 1b in print_streaming_text) extracts a
+            # clean answer from {"answer": "..."} JSON; print_final_answer also
+            # fires at the end.  Both should carry clean extracted text, so the
+            # last non-empty answer wins over whatever chunk accumulation happened.
+            answer_content = event.get("content", "")
+            if answer_content:
+                full_content = answer_content
 
         elif etype == "agent_error":
             event_log.append(f"[error] {event.get('content', '')}")
@@ -243,11 +252,40 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
         return _api(backend_url, "get", "/documents")
 
     @mcp.tool()
-    def index_document(filepath: str) -> Dict[str, Any]:
-        """Index a document file for RAG (supports PDF, TXT, CSV, XLSX, etc.)."""
-        return _api(
+    def index_document(filepath: str, session_id: str = "") -> Dict[str, Any]:
+        """Index a document file for RAG (supports PDF, TXT, CSV, XLSX, etc.).
+
+        If session_id is provided, the document is also linked to that session so
+        the agent automatically loads it as a session document on every turn.
+        Without session_id the document is indexed globally (library mode) but the
+        agent won't treat it as session-specific.
+        """
+        result = _api(
             backend_url, "post", "/documents/upload-path", json={"filepath": filepath}
         )
+        # If a session was specified, link the newly-indexed document to it so
+        # the agent sees it as a session document (not just a library document).
+        # Use POST /sessions/{id}/documents (attach_document endpoint) which
+        # correctly writes to the session_documents join table.
+        if session_id and isinstance(result, dict):
+            doc_id = result.get("id") or result.get("result", {}).get("id")
+            if doc_id:
+                attach_result = _api(
+                    backend_url,
+                    "post",
+                    f"/sessions/{session_id}/documents",
+                    json={"document_id": doc_id},
+                )
+                if "error" not in attach_result:
+                    result["linked_to_session"] = session_id
+                else:
+                    logger.warning(
+                        "Failed to link doc %s to session %s: %s",
+                        doc_id,
+                        session_id,
+                        attach_result.get("error"),
+                    )
+        return result
 
     @mcp.tool()
     def index_folder(folder_path: str, recursive: bool = True) -> Dict[str, Any]:

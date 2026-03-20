@@ -15,6 +15,7 @@ import { PermissionPrompt } from './components/PermissionPrompt';
 import { useChatStore } from './stores/chatStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
+import type { Session } from './types';
 
 function App() {
     const {
@@ -22,6 +23,8 @@ function App() {
         setSessions,
         setCurrentSession,
         addSession,
+        removeSession,
+        updateSessionInList,
         setMessages,
         showDocLibrary,
         showFileBrowser,
@@ -72,7 +75,6 @@ function App() {
 
     // Startup banner + load sessions on mount, then poll for changes
     const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const lastSessionFingerprintRef = useRef<string>('');
 
     useEffect(() => {
         logBanner(__APP_VERSION__);
@@ -82,21 +84,61 @@ function App() {
         const loadSessions = (isInitial = false) => {
             api.listSessions()
                 .then((data) => {
-                    const sessions = data.sessions || [];
-                    const fingerprint = sessions.map((s: { id: string; title?: string }) => `${s.id}:${s.title ?? ''}`).join('|');
+                    const backendSessions: Session[] = data.sessions || [];
+
                     if (isInitial) {
-                        setSessions(sessions);
+                        setSessions(backendSessions);
                         setBackendConnected(true);
-                        log.system.timed(`Loaded ${sessions.length} session(s)`, t);
-                        lastSessionFingerprintRef.current = fingerprint;
-                    } else if (fingerprint !== lastSessionFingerprintRef.current) {
-                        // Guard: don't replace a populated list with an empty one
-                        // (transient API error returning empty array)
-                        const { sessions: currentSessions } = useChatStore.getState();
-                        if (sessions.length === 0 && currentSessions.length > 0) return;
-                        log.system.info(`Session list changed, refreshing sidebar`);
-                        setSessions(sessions);
-                        lastSessionFingerprintRef.current = fingerprint;
+                        log.system.timed(`Loaded ${backendSessions.length} session(s)`, t);
+                        return;
+                    }
+
+                    // Smart diff: add/remove/update only what changed rather than
+                    // replacing the whole list.  Wholesale replacement was causing
+                    // sessions to flash/disappear-and-reappear because:
+                    //   1. The old fingerprint was order-sensitive — any updated_at
+                    //      change reordered backend results → fingerprint mismatch →
+                    //      setSessions() nuked and rebuilt the entire list.
+                    //   2. Sessions crossing date-group boundaries (Yesterday → Today)
+                    //      were unmounted from one group and remounted in another,
+                    //      producing the visible flicker.
+                    const { sessions: currentSessions, pendingDeleteIds } = useChatStore.getState();
+
+                    // Guard: don't act on an empty response (transient API error)
+                    if (backendSessions.length === 0 && currentSessions.length > 0) return;
+
+                    const currentMap = new Map(currentSessions.map((s) => [s.id, s]));
+                    const backendMap = new Map(backendSessions.map((s) => [s.id, s]));
+
+                    // Add sessions that appeared externally (via MCP / API / another browser tab)
+                    for (const s of backendSessions) {
+                        if (!currentMap.has(s.id) && !pendingDeleteIds.includes(s.id)) {
+                            log.system.info(`Poll: new session detected, adding "${s.title}" (${s.id})`);
+                            addSession(s);
+                        }
+                    }
+
+                    // Remove sessions deleted externally (skip ones pending local delete —
+                    // they're already removed from the UI and their backend delete is in-flight)
+                    for (const s of currentSessions) {
+                        if (!backendMap.has(s.id) && !pendingDeleteIds.includes(s.id)) {
+                            log.system.info(`Poll: session removed externally, dropping "${s.title}" (${s.id})`);
+                            removeSession(s.id);
+                        }
+                    }
+
+                    // Update metadata (title, updated_at) for sessions whose backend
+                    // record changed without replacing their position in the list.
+                    for (const backendSession of backendSessions) {
+                        const local = currentMap.get(backendSession.id);
+                        if (!local) continue;
+                        const updates: Partial<Session> = {};
+                        if (backendSession.title !== local.title) updates.title = backendSession.title;
+                        if (backendSession.updated_at !== local.updated_at) updates.updated_at = backendSession.updated_at;
+                        if (Object.keys(updates).length > 0) {
+                            log.system.debug(`Poll: updating session ${backendSession.id}`, updates);
+                            updateSessionInList(backendSession.id, updates);
+                        }
                     }
                 })
                 .catch((err) => {
@@ -114,7 +156,7 @@ function App() {
         return () => {
             if (sessionPollRef.current) clearInterval(sessionPollRef.current);
         };
-    }, [setSessions, setBackendConnected]);
+    }, [setSessions, addSession, removeSession, updateSessionInList, setBackendConnected]);
 
     // Support URL-based session navigation (?session=<id>)
     useEffect(() => {

@@ -21,6 +21,12 @@ from pydantic import BaseModel
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
+from ..sse_handler import (
+    _clean_answer_json,
+    _fix_double_escaped,
+    _THOUGHT_JSON_SUB_RE,
+    _TOOL_CALL_JSON_SUB_RE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +127,13 @@ async def send_message(
             try:
                 db.add_message(request.session_id, "user", request.message)
                 response_text = await srv._get_chat_response(db, session, request)
+                # Clean LLM output artifacts (same pipeline as streaming path)
+                if response_text:
+                    response_text = _clean_answer_json(response_text)
+                    response_text = _TOOL_CALL_JSON_SUB_RE.sub("", response_text)
+                    response_text = _THOUGHT_JSON_SUB_RE.sub("", response_text)
+                    response_text = _fix_double_escaped(response_text)
+                    response_text = response_text.strip()
                 msg_id = db.add_message(request.session_id, "assistant", response_text)
                 return ChatResponse(
                     message_id=msg_id,

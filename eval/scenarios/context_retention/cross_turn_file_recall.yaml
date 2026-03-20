@@ -1,0 +1,37 @@
+id: cross_turn_file_recall
+name: "Cross-Turn File Recall"
+category: context_retention
+severity: critical
+description: |
+  User indexes a document in Turn 1, then asks about its content in Turn 2
+  without re-mentioning the document name. Agent must recall what was indexed.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - corpus_doc: product_comparison
+      path: "eval/corpus/documents/product_comparison.html"
+
+turns:
+  - turn: 1
+    objective: "Ask agent to list what documents are available/indexed"
+    ground_truth: null
+    success_criteria: "Agent lists the product comparison document or indicates a document has been indexed"
+
+  - turn: 2
+    objective: "Ask about pricing without naming the file: 'how much do the two products cost?'"
+    ground_truth:
+      doc_id: product_comparison
+      fact_ids: [price_a, price_b]
+      expected_answer: "StreamLine $49/month, ProFlow $79/month"
+    success_criteria: "Agent correctly states both prices from the indexed document"
+
+  - turn: 3
+    objective: "Follow-up with pronoun: 'which one is better value for money?'"
+    ground_truth:
+      doc_id: product_comparison
+    success_criteria: "Agent answers based on indexed document context, not hallucinated facts"
+
+expected_outcome: |
+  Agent recalls the indexed document across turns and answers without re-indexing.
