@@ -164,6 +164,8 @@ def create_app(db_path: str = None) -> FastAPI:
         logger.info("Document file monitor stopped")
         db.close()
         logger.info("Database connection closed")
+        memory_router_mod.close_store()
+        logger.info("Memory store connection closed")
 
     app = FastAPI(
         title="GAIA Agent UI API",

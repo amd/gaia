@@ -5791,11 +5791,7 @@ def _handle_memory_status():
         # Also query by_source (not in get_stats, do a direct query)
         by_source = {}
         try:
-            with store._lock:
-                rows = store._conn.execute(
-                    "SELECT source, COUNT(*) FROM knowledge GROUP BY source"
-                ).fetchall()
-            by_source = {row[0]: row[1] for row in rows}
+            by_source = store.get_source_counts()
         except Exception:
             pass
 
@@ -6076,11 +6072,8 @@ def _bootstrap_reset():
 
     try:
         # Count discovery items
-        with store._lock:
-            row = store._conn.execute(
-                "SELECT COUNT(*) FROM knowledge WHERE source = 'discovery'"
-            ).fetchone()
-        count = row[0] if row else 0
+        by_source = store.get_source_counts()
+        count = by_source.get("discovery", 0)
 
         if count == 0:
             print("No discovery items found in memory. Nothing to reset.")
@@ -6104,26 +6097,8 @@ def _bootstrap_reset():
             print("Reset cancelled.")
             return
 
-        # Delete discovery items (and clean up FTS)
-        with store._lock:
-            # Get IDs to delete from FTS
-            ids = [
-                r[0]
-                for r in store._conn.execute(
-                    "SELECT id FROM knowledge WHERE source = 'discovery'"
-                ).fetchall()
-            ]
-            for kid in ids:
-                store._conn.execute(
-                    "DELETE FROM knowledge_fts WHERE rowid = "
-                    "(SELECT rowid FROM knowledge WHERE id = ?)",
-                    (kid,),
-                )
-            deleted = store._conn.execute(
-                "DELETE FROM knowledge WHERE source = 'discovery'"
-            ).rowcount
-            store._conn.commit()
-
+        # Delete discovery items atomically (FTS + knowledge in one transaction)
+        deleted = store.delete_by_source("discovery")
         print(f"✅ Deleted {deleted} discovery item(s).")
 
     except Exception as e:
