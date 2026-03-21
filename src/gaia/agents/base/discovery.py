@@ -21,6 +21,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 try:
     import winreg  # Windows only
@@ -357,9 +358,12 @@ def _classify_remote(remote_url: str) -> str:
         for org in ["/amd/", "/microsoft/", "/google/", "/amazon/", "/meta/"]
     ):
         return "work"
-    # Personal GitHub indicators
-    if "github.com" in url_lower:
-        # If it's a personal-looking repo (single username, no org pattern)
+    # Personal GitHub indicators — parse the hostname to avoid substring spoofing
+    try:
+        hostname = urlparse(remote_url).hostname or ""
+    except Exception:
+        hostname = ""
+    if hostname == "github.com" or hostname.endswith(".github.com"):
         return "unclassified"
     return "unclassified"
 
