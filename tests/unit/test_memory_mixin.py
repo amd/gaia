@@ -12,11 +12,8 @@ All tests use in-memory SQLite or temp files — no external dependencies.
 The mixin is tested in isolation via a minimal host class (no real Agent).
 """
 
-import json
-import time
 import uuid
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -299,8 +296,6 @@ class TestSystemPrompt:
         Without the normalization fix, the OVERDUE comparison would silently
         catch TypeError and show 'DUE' instead of 'OVERDUE'.
         """
-        import sqlite3
-
         # Insert a past naive datetime directly — bypasses store() normalization
         past_naive = "2020-01-01T09:00:00"  # No timezone, clearly in the past
         mixin_host.memory_store._conn.execute(
