@@ -15,7 +15,7 @@ import json
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -2124,8 +2124,6 @@ class TestLogToolCallSerialization:
         history = store.get_tool_history("custom_tool")
         assert len(history) == 1
         # Verify the serialized form used str() fallback
-        import json
-
         args = json.loads(
             store._conn.execute(
                 "SELECT args FROM tool_history WHERE tool_name=?", ("custom_tool",)
@@ -2664,8 +2662,6 @@ class TestRebuildFtsAtomicity:
 
     def test_rebuild_fts_rollback_on_failure_leaves_search_intact(self, tmp_path):
         """If rebuild_fts INSERT fails, rollback preserves the original FTS index."""
-        import sqlite3
-
         store = MemoryStore(tmp_path / "mem_rebuild.db")
         kid = store.store(category="fact", content="RebuildRollback unique entry xyz")
 
@@ -3310,8 +3306,6 @@ class TestLogToolCallArgsTruncation:
             "ORDER BY id DESC LIMIT 1"
         ).fetchone()
         assert row is not None
-        import json
-
         stored = json.loads(row[0])
         assert stored["path"] == "/tmp/file.txt", "Small args must be stored intact"
 

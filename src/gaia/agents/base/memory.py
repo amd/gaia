@@ -32,6 +32,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from gaia.agents.base.memory_store import (
+    MAX_CONTENT_LENGTH,
+    VALID_CATEGORIES,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -120,6 +125,12 @@ class MemoryMixin:
         self._memory_session_id = str(uuid4())
         self._memory_context = context
         self._auto_extract_enabled = True
+        # Stash for the process_query → _after_process_query handoff.
+        # process_query() sets this to the clean user text before prepending
+        # dynamic context, so _after_process_query() stores the original message
+        # rather than the augmented version. Initialized here so the attribute
+        # always exists even if _after_process_query() is called out-of-order.
+        self._original_user_input: Optional[str] = None
         logger.info(
             "[MemoryMixin] initialized, session_id=%s context=%s",
             self._memory_session_id,
@@ -440,8 +451,10 @@ class MemoryMixin:
         if not hasattr(self, "_memory_store"):
             return
 
-        # Use original (pre-augmentation) user text for storage
-        clean_input = getattr(self, "_original_user_input", user_input)
+        # Use original (pre-augmentation) user text for storage.
+        # _original_user_input is initialized to None in init_memory(); use
+        # `or` so that None (not-yet-set) falls back to the passed user_input.
+        clean_input = self._original_user_input or user_input
 
         # 1. Store conversation turns
         try:
@@ -511,10 +524,23 @@ class MemoryMixin:
         """Register the 5 memory tools with the agent's tool registry.
 
         Call this from _register_tools() in your agent subclass.
+
+        KNOWN ARCHITECTURAL LIMITATION — global _TOOL_REGISTRY:
+        The @tool decorator registers into a module-level global dict in
+        gaia.agents.base.tools. Each call to register_memory_tools() overwrites
+        the previous closures. In single-agent-per-process deployments (the
+        current norm) this is harmless. However, if two MemoryMixin agents are
+        instantiated in the same process (e.g., RoutingAgent spawning multiple
+        agents), the second registration will overwrite the first agent's memory
+        tool closures, silently redirecting them to the second agent's store.
+
+        Mitigation: a per-agent tool registry (rather than the global dict) is
+        the correct long-term fix. Until then, avoid running two MemoryMixin
+        agents concurrently in the same process.
         """
         from gaia.agents.base.tools import tool
 
-        mixin = self  # Capture for closures
+        mixin = self  # Capture for closures — see KNOWN ARCHITECTURAL LIMITATION above
 
         @tool
         def remember(
@@ -533,12 +559,11 @@ class MemoryMixin:
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
 
-            # Validate category — must match _VALID_CATEGORIES in the REST API router
-            valid = {"fact", "preference", "error", "skill", "note", "reminder"}
-            if category not in valid:
+            # Validate category against the single source of truth in memory_store
+            if category not in VALID_CATEGORIES:
                 return {
                     "status": "error",
-                    "message": f"Invalid category. Use: {sorted(valid)}",
+                    "message": f"Invalid category. Use: {sorted(VALID_CATEGORIES)}",
                 }
 
             # Validate due_at
@@ -555,10 +580,10 @@ class MemoryMixin:
             ctx = context or mixin._memory_context
             sens = sensitive.lower() == "true" if sensitive else False
 
-            was_truncated = len(fact) > 2000
+            was_truncated = len(fact) > MAX_CONTENT_LENGTH
             knowledge_id = mixin._memory_store.store(
                 category=category,
-                content=fact[:2000],
+                content=fact[:MAX_CONTENT_LENGTH],
                 domain=domain or None,
                 due_at=due_at or None,
                 source="tool",
@@ -568,7 +593,7 @@ class MemoryMixin:
             )
             msg = f"Remembered: {fact[:80]}"
             if was_truncated:
-                msg += " (note: content was truncated to 2000 chars)"
+                msg += f" (note: content was truncated to {MAX_CONTENT_LENGTH} chars)"
             return {
                 "status": "stored",
                 "knowledge_id": knowledge_id,
@@ -643,14 +668,12 @@ class MemoryMixin:
                         "status": "error",
                         "message": "content must not be empty or whitespace-only.",
                     }
-                kwargs["content"] = content[:2000]
+                kwargs["content"] = content[:MAX_CONTENT_LENGTH]
             if category:
-                # Validate category — must stay aligned with remember() and REST API
-                _valid = {"fact", "preference", "error", "skill", "note", "reminder"}
-                if category not in _valid:
+                if category not in VALID_CATEGORIES:
                     return {
                         "status": "error",
-                        "message": f"Invalid category. Use: {sorted(_valid)}",
+                        "message": f"Invalid category. Use: {sorted(VALID_CATEGORIES)}",
                     }
                 kwargs["category"] = category
             if domain:

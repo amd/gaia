@@ -15,9 +15,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["memory"])
 
-# Valid categories for knowledge entries (mirrors MemoryMixin remember tool)
-_VALID_CATEGORIES = {"fact", "preference", "error", "skill", "note", "reminder"}
-
+# Single source of truth imported from the data layer so that all three
+# validation sites (remember tool, update_memory tool, REST router) stay
+# in sync automatically when categories are added or removed.
+from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
 
 # ---------------------------------------------------------------------------
 # Pydantic Models
@@ -113,6 +114,11 @@ class KnowledgeUpdate(BaseModel):
 # MemoryStore access
 # ---------------------------------------------------------------------------
 
+# Module-level singleton — double-checked locking pattern for thread safety.
+# NOTE: In test suites, call close_store() in teardown fixtures so the
+# singleton is reset between tests and each test gets a fresh DB connection.
+# Future improvement: accept MemoryStore via FastAPI Depends() for full
+# dependency injection and easier per-test isolation.
 _store = None
 _store_lock = threading.Lock()
 

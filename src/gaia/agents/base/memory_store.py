@@ -58,9 +58,9 @@ def _sanitize_fts5_query(query: str, use_and: bool = True) -> Optional[str]:
     if not query or not query.strip():
         return None
 
-    # Cap length to bound regex work — FTS5 queries beyond 500 chars are
-    # pathologically long and signal bad input rather than a real search.
-    query = query[:500]
+    # Cap length to bound regex work — FTS5 queries beyond MAX_FTS_QUERY_LENGTH
+    # chars are pathologically long and signal bad input rather than a real search.
+    query = query[:MAX_FTS_QUERY_LENGTH]
 
     # Replace FTS5 special chars with spaces, keep alphanumeric and underscores
     sanitized = re.sub(r"[^\w\s]", " ", query)
@@ -76,6 +76,39 @@ def _sanitize_fts5_query(query: str, use_and: bool = True) -> Optional[str]:
         return operator.join(words)
 
     return sanitized
+
+
+# ============================================================================
+# Public constants — imported by memory.py and ui/routers/memory.py so that
+# category validation and content limits stay in sync across all layers without
+# any of them needing to hard-code the same values independently.
+# ============================================================================
+
+#: Valid knowledge categories.  The single source of truth — import this
+#: rather than redefining the set in tool closures or REST validators.
+VALID_CATEGORIES: frozenset = frozenset(
+    {"fact", "preference", "error", "skill", "note", "reminder"}
+)
+
+#: Maximum stored content length (chars).  Longer content is truncated by
+#: callers before reaching store() so the database stays compact.
+MAX_CONTENT_LENGTH: int = 2000
+
+#: Maximum conversation turn length (chars) stored / injected into prompts.
+MAX_TURN_LENGTH: int = 4000
+
+#: Maximum FTS5 query length (chars).  Longer queries are pathological input.
+MAX_FTS_QUERY_LENGTH: int = 500
+
+#: Minimum word-overlap ratio (Szymkiewicz-Simpson) to treat two entries as
+#: duplicates in the same category+context+entity scope.
+DEDUP_OVERLAP_THRESHOLD: float = 0.8
+
+#: Confidence bump applied to a knowledge entry each time it is recalled.
+CONFIDENCE_BUMP_PER_RECALL: float = 0.02
+
+#: Entries below this confidence are eligible for pruning.
+LOW_CONFIDENCE_PRUNE_THRESHOLD: float = 0.1
 
 
 def _word_overlap(text1: str, text2: str) -> float:
@@ -338,8 +371,8 @@ class MemoryStore:
         """
         if not content or not content.strip():
             return  # Skip empty turns
-        if len(content) > 4000:
-            content = content[:4000]
+        if len(content) > MAX_TURN_LENGTH:
+            content = content[:MAX_TURN_LENGTH]
         now = _now_iso()
         with self._lock:
             try:
@@ -551,9 +584,9 @@ class MemoryStore:
             raise ValueError("MemoryStore.store(): content must be non-empty")
 
         # Truncate very long content to prevent context overflow when injected
-        # into the system prompt. 2000 chars ≈ 500 tokens — enough for any fact.
-        if len(content) > 2000:
-            content = content[:2000]
+        # into the system prompt. MAX_CONTENT_LENGTH chars ≈ 500 tokens — enough for any fact.
+        if len(content) > MAX_CONTENT_LENGTH:
+            content = content[:MAX_CONTENT_LENGTH]
 
         # Clamp confidence to [0.0, 1.0].  Programmatic callers (e.g. scripts
         # running eval or migration) can accidentally pass values outside this
@@ -718,7 +751,7 @@ class MemoryStore:
             for row in cursor.fetchall():
                 existing_id, existing_content = row[0], row[1]
                 overlap = _word_overlap(content, existing_content)
-                if overlap >= 0.8:
+                if overlap >= DEDUP_OVERLAP_THRESHOLD:
                     logger.debug(
                         "[MemoryStore] dedup match: overlap=%.2f id=%s",
                         overlap,
@@ -815,13 +848,15 @@ class MemoryStore:
                     for r in results:
                         self._conn.execute(
                             "UPDATE knowledge SET "
-                            "confidence = MIN(confidence + 0.02, 1.0), "
+                            "confidence = MIN(confidence + ?, 1.0), "
                             "last_used = ?, "
                             "use_count = use_count + 1 "
                             "WHERE id = ?",
-                            (now, r["id"]),
+                            (CONFIDENCE_BUMP_PER_RECALL, now, r["id"]),
                         )
-                        r["confidence"] = min(r["confidence"] + 0.02, 1.0)
+                        r["confidence"] = min(
+                            r["confidence"] + CONFIDENCE_BUMP_PER_RECALL, 1.0
+                        )
                         r["last_used"] = now
                     self._conn.commit()
                 except Exception:
@@ -1027,8 +1062,8 @@ class MemoryStore:
         if content is not None:
             if not content.strip():
                 raise ValueError("update(): content must be non-empty")
-            if len(content) > 2000:
-                content = content[:2000]
+            if len(content) > MAX_CONTENT_LENGTH:
+                content = content[:MAX_CONTENT_LENGTH]
             sets.append("content = ?")
             params.append(content)
         if category is not None:
@@ -1130,16 +1165,16 @@ class MemoryStore:
         """Log a tool call to tool_history."""
         now = _now_iso()
         args_json = json.dumps(args, default=str) if args else None
-        # Truncate all text columns to 500 chars.  Tool args, results, and
-        # error messages can all be arbitrarily large (e.g. write_file called
-        # with 100 KB content).  Storing the full payload bloats the database
-        # without adding search or observability value.
-        if args_json and len(args_json) > 500:
-            args_json = args_json[:500]
-        if result_summary and len(result_summary) > 500:
-            result_summary = result_summary[:500]
-        if error and len(error) > 500:
-            error = error[:500]
+        # Truncate all text columns to MAX_FTS_QUERY_LENGTH chars.  Tool args,
+        # results, and error messages can all be arbitrarily large (e.g.
+        # write_file called with 100 KB content).  Storing the full payload
+        # bloats the database without adding search or observability value.
+        if args_json and len(args_json) > MAX_FTS_QUERY_LENGTH:
+            args_json = args_json[:MAX_FTS_QUERY_LENGTH]
+        if result_summary and len(result_summary) > MAX_FTS_QUERY_LENGTH:
+            result_summary = result_summary[:MAX_FTS_QUERY_LENGTH]
+        if error and len(error) > MAX_FTS_QUERY_LENGTH:
+            error = error[:MAX_FTS_QUERY_LENGTH]
 
         with self._lock:
             try:
@@ -1824,9 +1859,9 @@ class MemoryStore:
                 knowledge_deleted = self._conn.execute(
                     """
                     DELETE FROM knowledge
-                    WHERE confidence < 0.1 AND last_used IS NOT NULL AND last_used < ?
+                    WHERE confidence < ? AND last_used IS NOT NULL AND last_used < ?
                     """,
-                    (cutoff,),
+                    (LOW_CONFIDENCE_PRUNE_THRESHOLD, cutoff),
                 ).rowcount
 
                 # Clean up FTS for pruned knowledge
