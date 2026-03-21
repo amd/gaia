@@ -626,3 +626,55 @@ class TestUpdateKnowledgeInputValidation:
             f"/api/memory/knowledge/{kid}", json={"content": "New content"}
         )
         assert resp.status_code == 200
+
+
+class TestListKnowledgeSensitiveDefault:
+    """Sensitive items must be excluded from list_knowledge by default."""
+
+    def test_sensitive_items_excluded_by_default(self, client, test_store):
+        """GET /api/memory/knowledge returns no sensitive items by default."""
+        test_store.store(
+            category="fact",
+            content="Non-sensitive item for default filter test",
+            sensitive=False,
+        )
+        test_store.store(
+            category="fact",
+            content="Sensitive item that should be hidden by default",
+            sensitive=True,
+        )
+        resp = client.get("/api/memory/knowledge")
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert all(
+            not item.get("sensitive") for item in items
+        ), "No sensitive items should appear without include_sensitive=true"
+
+    def test_sensitive_items_included_with_flag(self, client, test_store):
+        """GET /api/memory/knowledge?include_sensitive=true returns sensitive items."""
+        test_store.store(
+            category="fact",
+            content="Sensitive item visible with include_sensitive flag",
+            sensitive=True,
+        )
+        resp = client.get("/api/memory/knowledge?include_sensitive=true")
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert any(
+            item.get("sensitive") for item in items
+        ), "Sensitive items must appear when include_sensitive=true"
+
+    def test_sensitive_true_filter_shows_only_sensitive(self, client, test_store):
+        """GET /api/memory/knowledge?sensitive=true returns only sensitive items."""
+        test_store.store(
+            category="fact", content="Non-sensitive baseline entry", sensitive=False
+        )
+        test_store.store(
+            category="fact", content="Sensitive-only filter test entry", sensitive=True
+        )
+        resp = client.get("/api/memory/knowledge?sensitive=true")
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert all(
+            item.get("sensitive") for item in items
+        ), "Only sensitive items should appear when sensitive=true"

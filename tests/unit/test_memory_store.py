@@ -2999,6 +2999,7 @@ class TestWalCheckpointInsideLock:
         """prune() swallows checkpoint exceptions (SQLITE_BUSY) — test via _MemoryStore__prune."""
         # Verify the checkpoint try/except is present by checking the source code
         import inspect
+
         from gaia.agents.base.memory_store import MemoryStore
 
         source = inspect.getsource(MemoryStore.prune)
@@ -3246,6 +3247,7 @@ class TestSearchConfidenceBumpRollback:
         # We can't monkey-patch sqlite3 commit, so instead we verify the
         # try/except/rollback pattern is in place via source inspection
         import inspect
+
         from gaia.agents.base.memory_store import MemoryStore
 
         source = inspect.getsource(MemoryStore.search)
@@ -3336,6 +3338,7 @@ class TestStoreTurnRollbackPattern:
     def test_store_turn_rollback_guard_present(self):
         """store_turn() source code contains rollback guard."""
         import inspect
+
         from gaia.agents.base.memory_store import MemoryStore
 
         source = inspect.getsource(MemoryStore.store_turn)
@@ -3403,6 +3406,89 @@ class TestUpdateConfidenceRollback:
             "SELECT confidence FROM knowledge WHERE id = ?", (kid,)
         ).fetchone()
         assert row[0] == 0.0, "Confidence must not go below 0.0"
+
+
+class TestGetSourceCountsAndDeleteBySource:
+    """get_source_counts() and delete_by_source() public API methods."""
+
+    def test_get_source_counts_returns_counts_by_source(self, store):
+        """get_source_counts() groups knowledge by source and counts each."""
+        store.store(
+            category="fact",
+            content="alpha bravo charlie delta echo foxtrot golf",
+            source="tool",
+        )
+        store.store(
+            category="fact",
+            content="november oscar papa quebec romeo sierra tango",
+            source="user",
+        )
+        store.store(
+            category="fact",
+            content="yankee zulu crimson violet indigo magenta amber",
+            source="user",
+        )
+        counts = store.get_source_counts()
+        assert counts.get("tool", 0) >= 1
+        assert counts.get("user", 0) >= 2
+
+    def test_get_source_counts_empty_store(self, store):
+        """get_source_counts() returns an empty dict when no knowledge exists."""
+        counts = store.get_source_counts()
+        assert isinstance(counts, dict)
+
+    def test_delete_by_source_removes_matching_rows(self, store):
+        """delete_by_source() removes all knowledge with the given source."""
+        store.store(
+            category="fact",
+            content="DeleteBySource discovery item alpha bravo charlie delta",
+            source="discovery",
+        )
+        store.store(
+            category="fact",
+            content="DeleteBySource discovery item echo foxtrot golf hotel",
+            source="discovery",
+        )
+        store.store(
+            category="fact",
+            content="DeleteBySource user item should be kept intact",
+            source="user",
+        )
+        deleted = store.delete_by_source("discovery")
+        assert deleted == 2
+        counts = store.get_source_counts()
+        assert counts.get("discovery", 0) == 0
+        assert counts.get("user", 0) >= 1
+
+    def test_delete_by_source_cleans_up_fts(self, store):
+        """delete_by_source() removes FTS entries for deleted rows."""
+        kid = store.store(
+            category="fact",
+            content="DeleteBySource fts cleanup test bravo charlie delta echo",
+            source="discovery",
+        )
+        rowid = store._conn.execute(
+            "SELECT rowid FROM knowledge WHERE id = ?", (kid,)
+        ).fetchone()[0]
+        store.delete_by_source("discovery")
+        fts_row = store._conn.execute(
+            "SELECT rowid FROM knowledge_fts WHERE rowid = ?", (rowid,)
+        ).fetchone()
+        assert fts_row is None, "FTS entry must be removed by delete_by_source()"
+
+    def test_delete_by_source_nonexistent_returns_zero(self, store):
+        """delete_by_source() returns 0 when no rows match the source."""
+        deleted = store.delete_by_source("nonexistent_source_xyz")
+        assert deleted == 0
+
+    def test_delete_by_source_rollback_guard_in_source(self):
+        """delete_by_source() source contains try/except/rollback."""
+        import inspect
+
+        from gaia.agents.base.memory_store import MemoryStore
+
+        source = inspect.getsource(MemoryStore.delete_by_source)
+        assert "rollback" in source, "delete_by_source() must have rollback guard"
 
 
 class TestApplyConfidenceDecayRollback:

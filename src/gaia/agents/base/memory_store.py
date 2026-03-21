@@ -202,7 +202,12 @@ CREATE INDEX IF NOT EXISTS idx_tool_success ON tool_history(success);
 CREATE INDEX IF NOT EXISTS idx_tool_ts ON tool_history(timestamp DESC);
 """
 
-# Sync triggers created separately (can't use IF NOT EXISTS on triggers
+# Sync triggers for conversations_fts (external-content FTS5 table).
+# Only INSERT and DELETE triggers are defined because conversation turns are
+# append-only — store_turn() only ever INSERTs, never UPDATEs existing rows.
+# If UPDATE support is added in the future, a corresponding AFTER UPDATE
+# trigger must be added here to keep the FTS index in sync.
+# Triggers are created separately (can't use IF NOT EXISTS on triggers
 # in all SQLite versions, so we catch the error).
 _TRIGGER_SQL = [
     """
@@ -1625,6 +1630,40 @@ class MemoryStore:
     # ==================================================================
     # Housekeeping
     # ==================================================================
+
+    def get_source_counts(self) -> Dict[str, int]:
+        """Return knowledge entry counts grouped by source (tool, user, discovery, …)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT source, COUNT(*) FROM knowledge GROUP BY source"
+            ).fetchall()
+        return {row[0]: row[1] for row in rows}
+
+    def delete_by_source(self, source: str) -> int:
+        """Delete all knowledge entries with the given source. Returns deleted count.
+
+        Atomically cleans up the FTS5 index and knowledge table in a single
+        transaction — avoids the knowledge/FTS divergence that manual per-ID
+        deletion without a wrapping transaction would risk.
+        """
+        with self._lock:
+            try:
+                # FTS cleanup: delete all FTS entries for matching knowledge rows
+                self._conn.execute(
+                    """
+                    DELETE FROM knowledge_fts
+                    WHERE rowid IN (SELECT rowid FROM knowledge WHERE source = ?)
+                    """,
+                    (source,),
+                )
+                deleted = self._conn.execute(
+                    "DELETE FROM knowledge WHERE source = ?", (source,)
+                ).rowcount
+                self._conn.commit()
+                return deleted
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def get_entities(self, limit: int = 100) -> List[Dict]:
         """List unique entities with knowledge counts and last_updated.

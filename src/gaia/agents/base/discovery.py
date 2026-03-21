@@ -19,9 +19,13 @@ import re
 import shutil
 import sqlite3
 import tempfile
-import winreg
 from pathlib import Path
 from typing import Dict, List, Optional
+
+try:
+    import winreg  # Windows only
+except ImportError:
+    winreg = None  # Linux / macOS
 
 logger = logging.getLogger(__name__)
 
@@ -695,6 +699,9 @@ class SystemDiscovery:
         Returns:
             List of discovered fact dicts with app name and category.
         """
+        if winreg is None:
+            return []  # Not on Windows
+
         results: List[Dict] = []
         seen_apps: set = set()
 
@@ -736,6 +743,8 @@ class SystemDiscovery:
         results: List[Dict],
     ) -> None:
         """Scan a single registry Uninstall key for installed apps."""
+        if winreg is None:
+            return  # Not on Windows
         try:
             key = winreg.OpenKey(hive, key_path)
         except OSError:
@@ -1178,6 +1187,10 @@ class SystemDiscovery:
     def _scan_credential_manager(self, seen_emails: set, results: List[Dict]) -> None:
         """Scan Windows Credential Manager for email-related credentials."""
         import subprocess
+        import sys
+
+        if sys.platform != "win32":
+            return
 
         try:
             output = subprocess.check_output(
@@ -1258,6 +1271,8 @@ class SystemDiscovery:
 
     def _scan_outlook_registry(self, seen_emails: set, results: List[Dict]) -> None:
         """Scan Outlook registry keys for email account addresses."""
+        if winreg is None:
+            return  # Not on Windows
         outlook_paths = [
             r"SOFTWARE\Microsoft\Office\16.0\Outlook\Profiles",
             r"SOFTWARE\Microsoft\Office\15.0\Outlook\Profiles",
@@ -1290,6 +1305,8 @@ class SystemDiscovery:
         _depth: int = 0,
     ) -> None:
         """Recursively walk registry keys looking for email addresses."""
+        if winreg is None:
+            return  # Not on Windows
         if _depth > max_depth:
             return
 

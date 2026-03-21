@@ -129,6 +129,23 @@ def _get_store():
     return _store
 
 
+def close_store() -> None:
+    """Close the singleton MemoryStore connection.
+
+    Called from the FastAPI lifespan shutdown hook to checkpoint the WAL
+    and release the SQLite file handle cleanly before process exit.
+    """
+    global _store
+    with _store_lock:
+        if _store is not None:
+            try:
+                _store.close()
+            except Exception:
+                pass
+            finally:
+                _store = None
+
+
 # ---------------------------------------------------------------------------
 # Dashboard
 # ---------------------------------------------------------------------------
@@ -157,6 +174,10 @@ def list_knowledge(
     context: Optional[str] = None,
     entity: Optional[str] = None,
     sensitive: Optional[bool] = None,
+    include_sensitive: bool = Query(
+        False,
+        description="Include sensitive items in results. Defaults to False.",
+    ),
     search: Optional[str] = Query(None, max_length=500),
     sort_by: str = Query(
         "updated_at",
@@ -166,12 +187,24 @@ def list_knowledge(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
 ) -> Dict:
-    """Paginated, filterable, searchable knowledge entries."""
+    """Paginated, filterable, searchable knowledge entries.
+
+    Sensitive items are excluded by default. Pass include_sensitive=true
+    to include them, or sensitive=true to show only sensitive items.
+    """
+    # Exclude sensitive items unless the caller explicitly opts in.
+    # sensitive=True overrides to show only sensitive items.
+    # sensitive=False keeps the non-sensitive-only filter.
+    # sensitive=None + include_sensitive=False → exclude sensitive (safe default).
+    # sensitive=None + include_sensitive=True  → no filter (show all).
+    effective_sensitive = sensitive
+    if sensitive is None and not include_sensitive:
+        effective_sensitive = False
     return _get_store().get_all_knowledge(
         category=category,
         context=context,
         entity=entity,
-        sensitive=sensitive,
+        sensitive=effective_sensitive,
         search=search,
         sort_by=sort_by,
         order=order,
