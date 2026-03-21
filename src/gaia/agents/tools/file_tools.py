@@ -62,16 +62,26 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
             name="search_file",
-            description="Search for files by name/pattern. By default does a QUICK search of common locations (CWD, Documents, Downloads, Desktop). Only set deep_search=True if quick search found nothing AND user confirms they want a deeper search.",
+            description=(
+                "Search for files by filename keywords. Searches CWD (recursively) and common folders. "
+                "RULE: Use document-type keywords, NOT the user's question topic. "
+                "HR/policy questions → try 'handbook', 'employee', 'policy', 'HR'. "
+                "Sales/finance questions → try 'sales', 'budget', 'revenue', 'report'. "
+                "REQUIRED STRATEGY: "
+                "1. First call: use doc-type keyword (e.g. 'handbook' for PTO/remote work/HR questions). "
+                "2. If no results: try alternate keywords ('policy', 'employee', 'manual', 'guide'). "
+                "3. If 2+ searches fail: call browse_files to see all available files. "
+                "NEVER give up after just 1-2 failed searches."
+            ),
             parameters={
                 "file_pattern": {
                     "type": "str",
-                    "description": "File name pattern to search for (e.g., 'oil', 'manual', '*.pdf'). Supports partial matches.",
+                    "description": "Filename keyword(s) to search. Use document-type words: 'handbook', 'policy', 'report', 'manual'. NOT question topics like 'PTO' or 'remote work'. Supports plain text, globs (*.pdf), regex (employ.*book), OR syntax ('handbook OR policy').",
                     "required": True,
                 },
                 "deep_search": {
                     "type": "bool",
-                    "description": "If True, search ALL drives thoroughly (slow). Only use after quick search found nothing and user requests it. Default: False",
+                    "description": "If True, extends search to all drives (slower). Use if CWD+common-folders search found nothing. Default: False",
                     "required": False,
                 },
                 "file_types": {
@@ -109,32 +119,94 @@ class FileSearchToolsMixin:
                         ".json",
                         ".xlsx",
                         ".xls",
+                        ".py",
+                        ".js",
+                        ".ts",
+                        ".java",
+                        ".cpp",
+                        ".c",
+                        ".h",
+                        ".go",
+                        ".rs",
+                        ".rb",
+                        ".sh",
                     }
+
+                import re as _re
 
                 matching_files = []
                 pattern_lower = file_pattern.lower()
                 searched_locations = []
 
-                # Detect if the pattern is a glob (contains * or ?)
-                is_glob = "*" in file_pattern or "?" in file_pattern
+                # Detect pattern type: regex, glob, or plain text.
+                # Regex is checked FIRST so patterns like "employ.*book" are treated
+                # as regex (contains ".") rather than glob (contains "*").
+                _REGEX_META = set(r".+[](){}^$|\\")
+                is_regex = bool(_REGEX_META & set(file_pattern))
+                _compiled_re = None
+                if is_regex:
+                    try:
+                        _compiled_re = _re.compile(pattern_lower, _re.IGNORECASE)
+                    except _re.error:
+                        is_regex = False  # Fall back if invalid regex
+                # Glob: simple wildcards only when not already a regex pattern
+                is_glob = not is_regex and ("*" in file_pattern or "?" in file_pattern)
 
-                # For multi-word queries, split into individual words
-                # so "operations manual" matches "Operations-Manual" in filenames
-                query_words = pattern_lower.split() if not is_glob else []
+                # For multi-word queries, support natural language patterns like
+                # "employee handbook OR policy manual" → split on OR and match any alternative.
+                # Each alternative is a set of words that must ALL appear in the filename.
+                # Stop words ("the", "a", "an") are stripped from each alternative.
+                _QUERY_STOP_WORDS = {"the", "a", "an"}
+                if (
+                    not is_glob
+                    and not is_regex
+                    and _re.search(r"\bor\b", pattern_lower)
+                ):
+                    _alternatives = [
+                        [w for w in alt.strip().split() if w not in _QUERY_STOP_WORDS]
+                        for alt in _re.split(r"\bor\b", pattern_lower)
+                        if alt.strip()
+                    ]
+                else:
+                    _alternatives = None
+                query_words = (
+                    pattern_lower.split() if not is_glob and not is_regex else []
+                )
 
                 def matches_pattern_and_type(file_path: Path) -> bool:
                     """Check if file matches pattern and is a document type."""
+                    # Match against both filename and stem (without extension)
                     name_lower = file_path.name.lower()
+                    stem_lower = file_path.stem.lower()
+                    # Normalize separators so "employ.*book" matches "employee_handbook"
+                    name_normalized = _re.sub(r"[_\-.]", "", name_lower)
                     if is_glob:
-                        # Use fnmatch for glob patterns like *.pdf, report*.docx
                         name_match = fnmatch.fnmatch(name_lower, pattern_lower)
+                    elif is_regex and _compiled_re:
+                        # Regex: try against filename, stem, and normalized form
+                        name_match = bool(
+                            _compiled_re.search(name_lower)
+                            or _compiled_re.search(stem_lower)
+                            or _compiled_re.search(name_normalized)
+                        )
+                    elif _alternatives:
+                        # OR alternation: match if ANY alternative's words all appear
+                        name_match = any(
+                            all(w in name_lower or w in name_normalized for w in alt)
+                            for alt in _alternatives
+                            if alt
+                        )
                     elif len(query_words) > 1:
-                        # Multi-word query: all words must appear in filename
-                        # (handles hyphens, underscores, camelCase separators)
-                        name_match = all(w in name_lower for w in query_words)
+                        # Multi-word: all words must appear in filename or stem
+                        name_match = all(
+                            w in name_lower or w in name_normalized for w in query_words
+                        )
                     else:
-                        # Single word: simple substring match
-                        name_match = pattern_lower in name_lower
+                        # Single word: substring match on filename or stem
+                        name_match = (
+                            pattern_lower in name_lower
+                            or pattern_lower in name_normalized
+                        )
                     type_match = file_path.suffix.lower() in doc_extensions
                     return name_match and type_match
 
@@ -150,12 +222,35 @@ class FileSearchToolsMixin:
                         if depth > max_depth or len(matching_files) >= 20:
                             return
 
+                        # Directories to skip — build artifacts, package caches,
+                        # version control internals, and OS noise that contain
+                        # thousands of files unlikely to be user documents.
+                        _SKIP_DIRS = {
+                            "node_modules",
+                            ".git",
+                            ".venv",
+                            "venv",
+                            "__pycache__",
+                            ".tox",
+                            "dist",
+                            "build",
+                            ".cache",
+                            ".npm",
+                            ".yarn",
+                            "site-packages",
+                            ".mypy_cache",
+                            ".pytest_cache",
+                        }
+
                         try:
                             for item in current_path.iterdir():
                                 # Skip system/hidden directories
                                 if item.name.startswith(
                                     (".", "$", "Windows", "Program Files")
                                 ):
+                                    continue
+                                # Skip build/package directories
+                                if item.is_dir() and item.name in _SKIP_DIRS:
                                     continue
 
                                 if item.is_file():
@@ -591,7 +686,12 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
             name="search_file_content",
-            description="Search for text patterns within files on disk (like grep). Searches actual file contents, not indexed documents.",
+            description=(
+                "Search for text patterns within files on disk (like grep). "
+                "Searches actual file contents, not indexed documents. "
+                "Use context_lines=5 when you need to see surrounding content after finding a section header "
+                "(e.g., search 'Section 52' with context_lines=5 to see the content below the heading)."
+            ),
             parameters={
                 "pattern": {
                     "type": "str",
@@ -613,6 +713,11 @@ class FileSearchToolsMixin:
                     "description": "Whether search should be case-sensitive (default: False)",
                     "required": False,
                 },
+                "context_lines": {
+                    "type": "int",
+                    "description": "Lines of context to show before and after each match (like grep -C). Default: 0",
+                    "required": False,
+                },
             },
         )
         def search_file_content(
@@ -620,6 +725,7 @@ class FileSearchToolsMixin:
             directory: str = ".",
             file_pattern: str = None,
             case_sensitive: bool = False,
+            context_lines: int = 0,
         ) -> Dict[str, Any]:
             """
             Search for text patterns within files (grep-like functionality).
@@ -663,6 +769,7 @@ class FileSearchToolsMixin:
                 matches = []
                 files_searched = 0
                 search_pattern = pattern if case_sensitive else pattern.lower()
+                ctx = max(0, int(context_lines))
 
                 def search_file(file_path: Path):
                     """Search within a single file."""
@@ -670,20 +777,52 @@ class FileSearchToolsMixin:
                         with open(
                             file_path, "r", encoding="utf-8", errors="ignore"
                         ) as f:
-                            for line_num, line in enumerate(f, 1):
-                                search_line = line if case_sensitive else line.lower()
-                                if search_pattern in search_line:
-                                    matches.append(
-                                        {
-                                            "file": str(file_path),
-                                            "line": line_num,
-                                            "content": line.strip()[
-                                                :200
-                                            ],  # Limit line length
-                                        }
+                            all_lines = f.readlines() if ctx > 0 else None
+                            if all_lines is None:
+                                for line_num, line in enumerate(
+                                    open(
+                                        file_path,
+                                        "r",
+                                        encoding="utf-8",
+                                        errors="ignore",
+                                    ),
+                                    1,
+                                ):
+                                    search_line = (
+                                        line if case_sensitive else line.lower()
                                     )
-                                    if len(matches) >= 100:  # Limit total matches
-                                        return False
+                                    if search_pattern in search_line:
+                                        matches.append(
+                                            {
+                                                "file": str(file_path),
+                                                "line": line_num,
+                                                "content": line.strip()[:200],
+                                            }
+                                        )
+                                        if len(matches) >= 100:
+                                            return False
+                            else:
+                                for line_num, line in enumerate(all_lines, 1):
+                                    search_line = (
+                                        line if case_sensitive else line.lower()
+                                    )
+                                    if search_pattern in search_line:
+                                        start = max(0, line_num - 1 - ctx)
+                                        end = min(len(all_lines), line_num + ctx)
+                                        ctx_lines = [
+                                            all_lines[i].rstrip()[:200]
+                                            for i in range(start, end)
+                                        ]
+                                        matches.append(
+                                            {
+                                                "file": str(file_path),
+                                                "line": line_num,
+                                                "content": line.strip()[:200],
+                                                "context": ctx_lines,
+                                            }
+                                        )
+                                        if len(matches) >= 100:
+                                            return False
                         return True
                     except Exception:
                         return True  # Continue searching
@@ -1338,7 +1477,13 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
             name="analyze_data_file",
-            description="Parse and analyze CSV, Excel, or other tabular data files. Computes statistics, identifies categories, and summarizes data. Perfect for analyzing bank statements, expense reports, and financial data.",
+            description=(
+                "Parse and analyze CSV, Excel, or tabular data files with full row-level aggregation. "
+                "Reads the ENTIRE file (all rows) and computes statistics, group-by aggregations, and top-N rankings. "
+                "Use this tool for: best-selling product by revenue, top salesperson by sales, "
+                "total revenue by category, GROUP BY queries on any column, date-filtered aggregations. "
+                "Perfect for sales data, financial reports, bank statements, and any CSV with numeric metrics."
+            ),
             parameters={
                 "file_path": {
                     "type": "str",
@@ -1347,7 +1492,7 @@ class FileSearchToolsMixin:
                 },
                 "analysis_type": {
                     "type": "str",
-                    "description": "Type of analysis: 'summary' (overview), 'spending' (categorize expenses), 'trends' (time-based patterns), 'full' (all analyses). Default: 'summary'",
+                    "description": "Type of analysis: 'summary' (column stats), 'spending' (categorize expenses), 'trends' (time patterns), 'full' (all). Default: 'summary'",
                     "required": False,
                 },
                 "columns": {
@@ -1355,10 +1500,24 @@ class FileSearchToolsMixin:
                     "description": "Comma-separated column names to focus analysis on. If not specified, all columns are analyzed.",
                     "required": False,
                 },
+                "group_by": {
+                    "type": "str",
+                    "description": "Column name to group rows by, then sum numeric columns per group and rank by the first numeric column. Example: group_by='product' with columns='revenue' returns revenue per product sorted descending. Use for 'top product by revenue', 'best salesperson', etc.",
+                    "required": False,
+                },
+                "date_range": {
+                    "type": "str",
+                    "description": "Filter rows by date before aggregating. Formats: '2025-03' (one month), '2025-Q1' (Q1 = Jan-Mar), '2025-01 to 2025-03' (range). Requires a date/time column in the file.",
+                    "required": False,
+                },
             },
         )
         def analyze_data_file(
-            file_path: str, analysis_type: str = "summary", columns: str = None
+            file_path: str,
+            analysis_type: str = "summary",
+            columns: str = None,
+            group_by: str = None,
+            date_range: str = None,
         ) -> Dict[str, Any]:
             """
             Parse and analyze tabular data files with multiple analysis modes.
@@ -1378,12 +1537,24 @@ class FileSearchToolsMixin:
                 fp = Path(file_path)
 
                 if not fp.exists():
-                    return {
-                        "status": "error",
-                        "error": f"File not found: {file_path}",
-                        "has_errors": True,
-                        "operation": "analyze_data_file",
-                    }
+                    # Fuzzy fallback: search indexed documents by basename
+                    resolved = None
+                    basename = fp.name.lower()
+                    if hasattr(self, "rag") and self.rag and self.rag.indexed_files:
+                        for indexed_path in self.rag.indexed_files:
+                            if Path(indexed_path).name.lower() == basename:
+                                resolved = Path(indexed_path)
+                                break
+                    if resolved and resolved.exists():
+                        fp = resolved
+                    else:
+                        return {
+                            "status": "error",
+                            "error": f"File not found: {file_path}",
+                            "has_errors": True,
+                            "operation": "analyze_data_file",
+                            "hint": "Use list_indexed_documents to get the correct file path.",
+                        }
 
                 supported_extensions = {".csv", ".tsv", ".xlsx", ".xls"}
                 if fp.suffix.lower() not in supported_extensions:
@@ -1397,8 +1568,8 @@ class FileSearchToolsMixin:
                         "operation": "analyze_data_file",
                     }
 
-                # Read the file
-                rows, all_columns, read_error = _read_tabular_file(file_path)
+                # Read the file (use resolved fp path in case of fallback)
+                rows, all_columns, read_error = _read_tabular_file(str(fp))
 
                 if read_error:
                     return {
@@ -1416,6 +1587,75 @@ class FileSearchToolsMixin:
                         "columns": all_columns,
                         "message": "File is empty or contains only headers.",
                     }
+
+                # --- Date range filtering ---
+                if date_range:
+                    from dateutil import parser as date_parser
+
+                    # Find a date column
+                    date_col_candidates = [
+                        c
+                        for c in all_columns
+                        if any(
+                            kw in c.lower()
+                            for kw in ("date", "time", "posted", "period")
+                        )
+                    ]
+                    if date_col_candidates:
+                        date_col_filter = date_col_candidates[0]
+                        # Parse date_range into (start_year_month, end_year_month) as "YYYY-MM"
+                        dr = date_range.strip()
+                        start_ym, end_ym = None, None
+                        if " to " in dr:
+                            parts = dr.split(" to ", 1)
+                            start_ym = parts[0].strip()[:7]  # truncate to YYYY-MM
+                            end_ym = parts[1].strip()[:7]
+                        elif ":" in dr and not dr.startswith("Q"):
+                            # Handle "YYYY-MM-DD:YYYY-MM-DD" or "YYYY-MM:YYYY-MM"
+                            parts = dr.split(":", 1)
+                            start_ym = parts[0].strip()[:7]  # truncate to YYYY-MM
+                            end_ym = parts[1].strip()[:7]
+                        elif dr.upper().endswith(("-Q1", "-Q2", "-Q3", "-Q4")):
+                            year = dr[:4]
+                            quarter = dr[-2:].upper()
+                            q_map = {
+                                "Q1": ("01", "03"),
+                                "Q2": ("04", "06"),
+                                "Q3": ("07", "09"),
+                                "Q4": ("10", "12"),
+                            }
+                            m_start, m_end = q_map.get(quarter, ("01", "03"))
+                            start_ym = f"{year}-{m_start}"
+                            end_ym = f"{year}-{m_end}"
+                        else:
+                            # Single month/year — treat as exact match
+                            start_ym = dr[:7]
+                            end_ym = dr[:7]
+
+                        filtered = []
+                        for row in rows:
+                            dv = row.get(date_col_filter)
+                            if dv is None or str(dv).strip() == "":
+                                continue
+                            try:
+                                if isinstance(dv, datetime):
+                                    dt = dv
+                                else:
+                                    dt = date_parser.parse(str(dv), fuzzy=True)
+                                row_ym = dt.strftime("%Y-%m")
+                                if start_ym <= row_ym <= end_ym:
+                                    filtered.append(row)
+                            except (ValueError, TypeError, OverflowError):
+                                continue
+                        rows = filtered
+                        if not rows:
+                            return {
+                                "status": "success",
+                                "file": fp.name,
+                                "row_count": 0,
+                                "date_filter_applied": date_range,
+                                "message": f"No rows matched date range: {date_range}",
+                            }
 
                 # Filter columns if specified
                 focus_columns = all_columns
@@ -1441,6 +1681,8 @@ class FileSearchToolsMixin:
                     "columns": all_columns,
                     "column_count": len(all_columns),
                 }
+                if date_range:
+                    result["date_filter_applied"] = date_range
 
                 # Infer column types
                 column_types = {}
@@ -1855,6 +2097,55 @@ class FileSearchToolsMixin:
                         )
 
                     result["trends_analysis"] = trends
+
+                # --- GROUP BY aggregation ---
+                if group_by:
+                    if group_by not in all_columns:
+                        result["group_by_error"] = (
+                            f"Column '{group_by}' not found. Available: {', '.join(all_columns)}"
+                        )
+                    else:
+                        # Determine which numeric columns to aggregate
+                        agg_columns = focus_columns if columns else all_columns
+                        numeric_agg_cols = [
+                            c
+                            for c in agg_columns
+                            if column_types.get(c) == "numeric" and c != group_by
+                        ]
+                        # Group and sum
+                        group_sums: Dict[str, Dict[str, float]] = {}
+                        group_counts: Dict[str, int] = {}
+                        for row in rows:
+                            key = str(row.get(group_by, "")).strip() or "(empty)"
+                            if key not in group_sums:
+                                group_sums[key] = {c: 0.0 for c in numeric_agg_cols}
+                                group_counts[key] = 0
+                            group_counts[key] += 1
+                            for c in numeric_agg_cols:
+                                raw = row.get(c)
+                                if raw is not None and str(raw).strip():
+                                    group_sums[key][c] += _parse_numeric(raw)
+                        # Sort by first numeric column descending
+                        sort_col = numeric_agg_cols[0] if numeric_agg_cols else None
+                        sorted_groups = sorted(
+                            group_sums.items(),
+                            key=lambda kv: kv[1].get(sort_col, 0) if sort_col else 0,
+                            reverse=True,
+                        )
+                        group_by_result = []
+                        for grp_key, grp_sums in sorted_groups[:25]:
+                            entry: Dict[str, Any] = {
+                                group_by: grp_key,
+                                "row_count": group_counts[grp_key],
+                            }
+                            for c in numeric_agg_cols:
+                                entry[f"{c}_total"] = round(grp_sums[c], 2)
+                            group_by_result.append(entry)
+                        result["group_by"] = group_by
+                        result["group_by_sort_column"] = sort_col
+                        result["group_by_results"] = group_by_result
+                        if group_by_result:
+                            result["top_1"] = group_by_result[0]
 
                 # Limit output size for LLM context
                 # Truncate sample_rows if too many columns

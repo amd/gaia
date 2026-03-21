@@ -1111,11 +1111,18 @@ class RAGToolsMixin:
 
         @tool(
             name="index_document",
-            description="Add a document to the RAG index",
+            description=(
+                "Add a document to the RAG index so its contents can be queried. "
+                "IMPORTANT: After successfully indexing a document, you MUST call "
+                "query_specific_file (or query_documents) to retrieve the relevant "
+                "information before answering the user's question. "
+                "Never answer from memory/knowledge after indexing — always query the "
+                "indexed document to get the actual content."
+            ),
             parameters={
                 "file_path": {
                     "type": "str",
-                    "description": "Path to the document (PDF) to index",
+                    "description": "Path to the document (PDF, markdown, text) to index",
                     "required": True,
                 }
             },
@@ -1140,8 +1147,13 @@ class RAGToolsMixin:
                 # docs) and after each successful index_document call.  This prevents
                 # the LLM from calling the tool redundantly within a single request.
                 # The hash-based RAG cache prevents re-processing across requests.
-                if file_path in self.indexed_files or real_file_path in self.indexed_files:
-                    logger.debug("Skipping re-index for already-indexed file: %s", file_path)
+                if (
+                    file_path in self.indexed_files
+                    or real_file_path in self.indexed_files
+                ):
+                    logger.debug(
+                        "Skipping re-index for already-indexed file: %s", file_path
+                    )
                     return {
                         "status": "success",
                         "message": f"Already indexed: {Path(file_path).name}",
@@ -1191,10 +1203,17 @@ class RAGToolsMixin:
                         "reindexed": result.get("reindexed", False),
                     }
                 else:
+                    err = result.get("error", f"Failed to index: {file_path}")
+                    hint = (
+                        "The file is empty (0 bytes) — tell the user there is no content to read."
+                        if "empty" in err.lower()
+                        else "Indexing failed. Tell the user the error and suggest they check the file."
+                    )
                     return {
                         "status": "error",
-                        "error": result.get("error", f"Failed to index: {file_path}"),
+                        "error": err,
                         "file_name": result.get("file_name", Path(file_path).name),
+                        "hint": hint,
                     }
             except Exception as e:
                 logger.error(f"Error indexing document: {e}")
@@ -1222,10 +1241,22 @@ class RAGToolsMixin:
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
                     }
                 docs = list(self.rag.indexed_files)
+                count = len(docs)
+                file_entries = [
+                    {"name": str(Path(d).name), "path": str(d)} for d in docs
+                ]
+                if count == 0:
+                    display_msg = "No documents are indexed yet."
+                else:
+                    names = ", ".join(str(Path(d).name) for d in docs)
+                    display_msg = (
+                        f"Currently indexing {count} document(s) in RAG: {names}"
+                    )
                 return {
                     "status": "success",
-                    "documents": [str(Path(d).name) for d in docs],
-                    "count": len(docs),
+                    "display_message": display_msg,
+                    "files": file_entries,
+                    "count": count,
                     "total_chunks": len(self.rag.chunks),
                 }
             except Exception as e:

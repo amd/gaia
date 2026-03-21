@@ -397,6 +397,34 @@ const WIN_PATH_RE = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]]+[\\\/])*[^\s*?"<>|,;)}\]]*
 /** Regex to detect Windows directory paths like C:\Users\...\folder\ */
 const WIN_DIR_RE = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]]+[\\\/])+/gi;
 
+/** Image file extensions that should be rendered inline. */
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
+
+/** Inline image rendered via the /api/files/image endpoint. */
+function InlineImage({ path }: { path: string }) {
+    const [error, setError] = useState(false);
+    const src = `/api/files/image?path=${encodeURIComponent(path)}`;
+
+    if (error) {
+        // Fall back to a file link if the image can't be served
+        return <FilePathLink path={path} />;
+    }
+
+    return (
+        <span className="inline-image-wrap">
+            <img
+                src={src}
+                alt={path.split(/[/\\]/).pop() || 'image'}
+                className="inline-image"
+                onError={() => setError(true)}
+            />
+            <span className="inline-image-caption">
+                <FilePathLink path={path} />
+            </span>
+        </span>
+    );
+}
+
 function FilePathLink({ path }: { path: string }) {
     const handleClick = (e: React.MouseEvent) => {
         e.preventDefault();
@@ -419,7 +447,7 @@ function FilePathLink({ path }: { path: string }) {
     );
 }
 
-/** Split text into segments, replacing file paths with clickable links. */
+/** Split text into segments, replacing file paths with clickable links (or inline images). */
 function linkifyFilePaths(text: string): React.ReactNode {
     // Combine both regexes: match files first, then directories
     const combined = new RegExp(`(${WIN_PATH_RE.source}|${WIN_DIR_RE.source})`, 'gi');
@@ -432,7 +460,14 @@ function linkifyFilePaths(text: string): React.ReactNode {
         if (match.index > lastIndex) {
             parts.push(text.slice(lastIndex, match.index));
         }
-        parts.push(<FilePathLink key={match.index} path={match[0]} />);
+
+        const matchedPath = match[0];
+        const extLower = matchedPath.slice(matchedPath.lastIndexOf('.')).toLowerCase();
+        if (IMAGE_EXTS.has(extLower)) {
+            parts.push(<InlineImage key={match.index} path={matchedPath} />);
+        } else {
+            parts.push(<FilePathLink key={match.index} path={matchedPath} />);
+        }
         lastIndex = combined.lastIndex;
     }
 

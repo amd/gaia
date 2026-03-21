@@ -1,0 +1,36 @@
+id: vague_request_clarification
+name: "Vague Request -- Clarification"
+category: error_recovery
+severity: medium
+description: |
+  Two documents are indexed. User makes an ambiguous request ("summarize the
+  document") without specifying which one. Agent should ask for clarification
+  rather than arbitrarily picking one.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask 'Summarize the document.'"
+    ground_truth:
+      expected_behavior: "Agent asks which document the user means since two are indexed"
+    success_criteria: "Agent asks for clarification about which document to summarize. FAIL if agent picks one document without asking."
+
+  - turn: 2
+    objective: "Reply 'the financial one'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_ids: [q3_revenue, yoy_growth]
+      expected_answer: "Q3 revenue $14.2M, YoY growth 23% from $11.5M, CEO projects 15-18% Q4 growth"
+    success_criteria: "Agent correctly identifies acme_q3_report as 'the financial one' and provides a summary including Q3 revenue ($14.2M) and YoY growth (23%)"
+
+expected_outcome: |
+  Agent recognizes ambiguity when multiple documents are indexed and asks for
+  clarification before proceeding. After disambiguation, it summarizes correctly.

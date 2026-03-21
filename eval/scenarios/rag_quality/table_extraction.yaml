@@ -1,0 +1,44 @@
+id: table_extraction
+name: "Table/CSV Data Extraction"
+category: rag_quality
+severity: high
+description: |
+  Agent must correctly parse and extract structured data from a CSV file.
+  Tests the ability to find specific rows, aggregate values, and identify
+  top performers from tabular data.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: sales_data
+      path: "eval/corpus/documents/sales_data_2025.csv"
+
+turns:
+  - turn: 1
+    objective: "Ask 'What was the best-selling product in March 2025?'"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: top_product_march
+      expected_answer: "Widget Pro X with 142 units and $28,400 revenue"
+    success_criteria: "Agent identifies Widget Pro X as the top product in March with 142 units and $28,400"
+
+  - turn: 2
+    objective: "Ask 'What was total Q1 revenue?'"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: q1_total_revenue
+      expected_answer: "$342,150"
+    success_criteria: "Agent states total Q1 revenue was $342,150"
+
+  - turn: 3
+    objective: "Ask 'Who was the top salesperson and what was their revenue?'"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: top_salesperson
+      expected_answer: "Sarah Chen with $70,000"
+    success_criteria: "Agent identifies Sarah Chen as top salesperson with $70,000 in revenue"
+
+expected_outcome: |
+  Agent correctly parses CSV data and extracts specific facts including
+  product names, unit counts, revenue figures, and salesperson rankings.

@@ -17,15 +17,17 @@ import sys
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
 from ..sse_handler import (
-    _clean_answer_json,
-    _fix_double_escaped,
+    _RAG_RESULT_JSON_SUB_RE,
     _THOUGHT_JSON_SUB_RE,
     _TOOL_CALL_JSON_SUB_RE,
+    _clean_answer_json,
+    _fix_double_escaped,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,9 +72,11 @@ async def send_message(
     sid = request.session_id
     session_lock = session_locks.setdefault(sid, asyncio.Lock())
 
-    # Acquire session lock with timeout → 409 if the session is already busy
+    # Acquire session lock with timeout → 409 if the session is already busy.
+    # 30 s gives streaming responses time to fully release before the next
+    # turn arrives (important for eval runner and multi-turn tests).
     try:
-        await asyncio.wait_for(session_lock.acquire(), timeout=0.5)
+        await asyncio.wait_for(session_lock.acquire(), timeout=30.0)
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=409,
@@ -81,9 +85,11 @@ async def send_message(
         )
 
     # ── Global concurrency gate ──────────────────────────────────────
-    # If the semaphore is full, release the session lock before raising
+    # Queue rather than immediately reject: wait up to 60 s for a slot.
+    # This prevents spurious 429s for sequential workloads (eval runner,
+    # multi-turn conversations) where the prior request is just wrapping up.
     try:
-        await asyncio.wait_for(chat_semaphore.acquire(), timeout=0.5)
+        await asyncio.wait_for(chat_semaphore.acquire(), timeout=60.0)
     except asyncio.TimeoutError:
         session_lock.release()
         raise HTTPException(
@@ -102,26 +108,34 @@ async def send_message(
 
     try:
         if request.stream:
-            # Transfer both locks to the streaming generator so they are
-            # held for the full duration of the stream and released on exit.
-            async def _guarded_stream():
+            # Use BackgroundTask to ensure locks are released even if the client
+            # disconnects mid-stream (async generator finally block is unreliable
+            # when FastAPI/Starlette drops the connection before first yield).
+            async def _release_stream_resources():
                 try:
-                    db.add_message(request.session_id, "user", request.message)
-                    async for chunk in srv._stream_chat_response(db, session, request):
-                        yield chunk
-                finally:
                     session_lock.release()
+                except RuntimeError:
+                    pass
+                try:
                     chat_semaphore.release()
+                except ValueError:
+                    pass
+
+            async def _stream():
+                db.add_message(request.session_id, "user", request.message)
+                async for chunk in srv._stream_chat_response(db, session, request):
+                    yield chunk
 
             sem_released = True
             return StreamingResponse(
-                _guarded_stream(),
+                _stream(),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
                     "X-Accel-Buffering": "no",
                 },
+                background=BackgroundTask(_release_stream_resources),
             )
         else:
             try:
@@ -132,6 +146,7 @@ async def send_message(
                     response_text = _clean_answer_json(response_text)
                     response_text = _TOOL_CALL_JSON_SUB_RE.sub("", response_text)
                     response_text = _THOUGHT_JSON_SUB_RE.sub("", response_text)
+                    response_text = _RAG_RESULT_JSON_SUB_RE.sub("", response_text)
                     response_text = _fix_double_escaped(response_text)
                     response_text = response_text.strip()
                 msg_id = db.add_message(request.session_id, "assistant", response_text)

@@ -1,8 +1,8 @@
 """
 Scorecard generator — builds scorecard.json + summary.md from scenario results.
 """
-from datetime import datetime
 
+from datetime import datetime
 
 WEIGHTS = {
     "correctness": 0.25,
@@ -30,7 +30,9 @@ def build_scorecard(run_id, results, config):
     blocked = sum(1 for r in results if r.get("status") == "BLOCKED_BY_ARCHITECTURE")
     errored = total - passed - failed - blocked
 
-    scores = [r.get("overall_score", 0) for r in results if r.get("overall_score") is not None]
+    scores = [
+        r.get("overall_score", 0) for r in results if r.get("overall_score") is not None
+    ]
     avg_score = sum(scores) / len(scores) if scores else 0.0
 
     # By category
@@ -38,7 +40,13 @@ def build_scorecard(run_id, results, config):
     for r in results:
         cat = r.get("category", "unknown")
         if cat not in by_category:
-            by_category[cat] = {"passed": 0, "failed": 0, "blocked": 0, "errored": 0, "scores": []}
+            by_category[cat] = {
+                "passed": 0,
+                "failed": 0,
+                "blocked": 0,
+                "errored": 0,
+                "scores": [],
+            }
         status = r.get("status", "ERRORED")
         if status == "PASS":
             by_category[cat]["passed"] += 1
@@ -53,7 +61,9 @@ def build_scorecard(run_id, results, config):
 
     for cat in by_category:
         cat_scores = by_category[cat].pop("scores", [])
-        by_category[cat]["avg_score"] = sum(cat_scores) / len(cat_scores) if cat_scores else 0.0
+        by_category[cat]["avg_score"] = (
+            sum(cat_scores) / len(cat_scores) if cat_scores else 0.0
+        )
 
     total_cost = sum(
         r.get("cost_estimate", {}).get("estimated_usd", 0) for r in results
@@ -113,7 +123,11 @@ def write_summary_md(scorecard):
 
     lines += ["", "## Scenarios"]
     for r in scorecard.get("scenarios", []):
-        icon = {"PASS": "\u2705", "FAIL": "\u274c", "BLOCKED_BY_ARCHITECTURE": "\U0001f6ab"}.get(r.get("status"), "\u26a0\ufe0f")
+        icon = {
+            "PASS": "\u2705",
+            "FAIL": "\u274c",
+            "BLOCKED_BY_ARCHITECTURE": "\U0001f6ab",
+        }.get(r.get("status"), "\u26a0\ufe0f")
         lines.append(
             f"- {icon} **{r.get('scenario_id', '?')}** — {r.get('status', '?')} "
             f"({r.get('overall_score', 0):.1f}/10)"
@@ -121,6 +135,9 @@ def write_summary_md(scorecard):
         if r.get("root_cause"):
             lines.append(f"  - Root cause: {r['root_cause']}")
 
-    lines += ["", f"**Cost:** ${scorecard.get('cost', {}).get('estimated_total_usd', 0):.4f}"]
+    lines += [
+        "",
+        f"**Cost:** ${scorecard.get('cost', {}).get('estimated_total_usd', 0):.4f}",
+    ]
 
     return "\n".join(lines) + "\n"

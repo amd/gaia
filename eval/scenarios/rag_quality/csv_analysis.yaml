@@ -1,0 +1,44 @@
+id: csv_analysis
+name: "CSV Aggregation and Analysis"
+category: rag_quality
+severity: high
+description: |
+  Tests the agent's ability to perform aggregation and analysis on CSV data.
+  Requires identifying top performers, computing totals, and filtering by
+  time period and metric.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: sales_data
+      path: "eval/corpus/documents/sales_data_2025.csv"
+
+turns:
+  - turn: 1
+    objective: "Ask 'Who is the top salesperson by total revenue?'"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: top_salesperson
+      expected_answer: "Sarah Chen with $70,000"
+    success_criteria: "Agent identifies Sarah Chen as the top salesperson with $70,000 in total revenue"
+
+  - turn: 2
+    objective: "Ask 'What was total Q1 revenue across all salespeople?'"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: q1_total_revenue
+      expected_answer: "$342,150"
+    success_criteria: "Agent states total Q1 revenue was $342,150"
+
+  - turn: 3
+    objective: "Ask 'What was the best-selling product in March by units sold?'"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: top_product_march
+      expected_answer: "Widget Pro X with 142 units"
+    success_criteria: "Agent identifies Widget Pro X as the best-selling product in March with 142 units"
+
+expected_outcome: |
+  Agent correctly aggregates and analyzes CSV data, identifying top performers
+  and computing totals across rows and columns.

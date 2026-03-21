@@ -13,6 +13,9 @@ feature access. The Basic tier is ideal for individuals and small teams. The
 Professional tier is designed for growing companies that need advanced features.
 The Enterprise tier provides dedicated support and custom integrations.
 
+Our flagship standalone offering, Widget Alpha, costs $99/month and includes all
+Professional-tier features plus priority onboarding.
+
 Pricing is reviewed annually and may be adjusted with 30 days' notice to customers.
 All prices are listed in USD and exclude applicable taxes.
 
@@ -34,7 +37,7 @@ using TLS 1.3.
 ## Section C: Support Policy
 
 Technical support is available via email for all plans. Professional and Enterprise
-customers also receive chat support during business hours (9 AM – 6 PM PT). Enterprise
+customers also receive chat support during business hours (9 AM - 6 PM PT). Enterprise
 customers receive 24/7 phone support and a dedicated customer success manager.
 
 Response time SLAs: Basic = 2 business days; Professional = 4 business hours;
@@ -74,6 +77,9 @@ feature access. The Basic tier is ideal for individuals and small teams. The
 Professional tier is designed for growing companies that need advanced features.
 The Enterprise tier provides dedicated support and custom integrations.
 
+Our flagship standalone offering, Widget Alpha, costs $99/month and includes all
+Professional-tier features plus priority onboarding.
+
 Pricing is reviewed annually and may be adjusted with 30 days' notice to customers.
 All prices are listed in USD and exclude applicable taxes.
 
@@ -95,7 +101,7 @@ using TLS 1.3.
 ## Section C: Support Policy
 
 Technical support is available via email for all plans. Professional and Enterprise
-customers also receive chat support during business hours (9 AM – 6 PM PT). Enterprise
+customers also receive chat support during business hours (9 AM - 6 PM PT). Enterprise
 customers receive 24/7 phone support and a dedicated customer success manager.
 
 Response time SLAs: Basic = 2 business days; Professional = 4 business hours;
@@ -135,6 +141,9 @@ feature access. The Basic tier is ideal for individuals and small teams. The
 Professional tier is designed for growing companies that need advanced features.
 The Enterprise tier provides dedicated support and custom integrations.
 
+Our flagship standalone offering, Widget Alpha, costs $99/month and includes all
+Professional-tier features plus priority onboarding.
+
 Pricing is reviewed annually and may be adjusted with 30 days' notice to customers.
 All prices are listed in USD and exclude applicable taxes.
 
@@ -156,7 +165,7 @@ using TLS 1.3.
 ## Section C: Support Policy
 
 Technical support is available via email for all plans. Professional and Enterprise
-customers also receive chat support during business hours (9 AM – 6 PM PT). Enterprise
+customers also receive chat support during business hours (9 AM - 6 PM PT). Enterprise
 customers receive 24/7 phone support and a dedicated customer success manager.
 
 Response time SLAs: Basic = 2 business days; Professional = 4 business hours;

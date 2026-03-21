@@ -25,12 +25,10 @@ import requests
 from mcp.server.fastmcp import FastMCP
 
 from gaia.ui.sse_handler import (
-    _ANSWER_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
     _THOUGHT_JSON_SUB_RE,
     _TOOL_CALL_JSON_SUB_RE,
     _TRAILING_CODE_FENCE_RE,
-    _clean_answer_json,
 )
 
 logger = logging.getLogger(__name__)

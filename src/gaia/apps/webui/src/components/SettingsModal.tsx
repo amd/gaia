@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { X } from 'lucide-react';
+import { X, Plus, Trash2, Power } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import type { SystemStatus } from '../types';
+import type { SystemStatus, MCPServerInfo, MCPCatalogEntry } from '../types';
 import './SettingsModal.css';
 
 export function SettingsModal() {
@@ -153,6 +153,9 @@ export function SettingsModal() {
                         )}
                     </section>
 
+                    {/* MCP Servers */}
+                    <MCPServersSection />
+
                     {/* About */}
                     <section className="settings-section">
                         <h4>About</h4>
@@ -186,6 +189,260 @@ export function SettingsModal() {
         </div>
     );
 }
+
+// ── MCP Servers Section ──────────────────────────────────────────────────────
+
+function MCPServersSection() {
+    const [servers, setServers] = useState<MCPServerInfo[]>([]);
+    const [catalog, setCatalog] = useState<MCPCatalogEntry[]>([]);
+    const [loadingServers, setLoadingServers] = useState(true);
+    const [showAddForm, setShowAddForm] = useState(false);
+    const [addMode, setAddMode] = useState<'catalog' | 'custom'>('catalog');
+    const [selectedCatalogEntry, setSelectedCatalogEntry] = useState<MCPCatalogEntry | null>(null);
+    const [formName, setFormName] = useState('');
+    const [formCommand, setFormCommand] = useState('');
+    const [formArgs, setFormArgs] = useState('');
+    const [formEnv, setFormEnv] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const loadServers = useCallback(async () => {
+        try {
+            const result = await api.listMCPServers();
+            setServers(result.servers);
+        } catch (err) {
+            log.system.error('Failed to load MCP servers', err);
+        } finally {
+            setLoadingServers(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadServers();
+        api.getMCPCatalog()
+            .then((r) => setCatalog(r.catalog))
+            .catch((err) => log.system.error('Failed to load MCP catalog', err));
+    }, [loadServers]);
+
+    const toggleServer = async (server: MCPServerInfo) => {
+        try {
+            if (server.enabled) {
+                await api.disableMCPServer(server.name);
+            } else {
+                await api.enableMCPServer(server.name);
+            }
+            await loadServers();
+        } catch (err) {
+            log.system.error(`Failed to toggle MCP server ${server.name}`, err);
+        }
+    };
+
+    const deleteServer = async (name: string) => {
+        try {
+            await api.removeMCPServer(name);
+            await loadServers();
+        } catch (err) {
+            log.system.error(`Failed to remove MCP server ${name}`, err);
+        }
+    };
+
+    const onCatalogSelect = (entry: MCPCatalogEntry) => {
+        setSelectedCatalogEntry(entry);
+        setFormName(entry.name);
+        setFormCommand(entry.command);
+        setFormArgs(entry.args.join(' '));
+        // Pre-fill env keys with empty values so user can fill them in
+        const envLines = Object.keys(entry.env || {}).map((k) => `${k}=`).join('\n');
+        setFormEnv(envLines);
+    };
+
+    const resetForm = () => {
+        setFormName('');
+        setFormCommand('');
+        setFormArgs('');
+        setFormEnv('');
+        setSelectedCatalogEntry(null);
+        setError(null);
+    };
+
+    const submitAdd = async () => {
+        if (!formName.trim() || !formCommand.trim()) {
+            setError('Name and command are required.');
+            return;
+        }
+        setSaving(true);
+        setError(null);
+        try {
+            const args = formArgs.trim() ? formArgs.trim().split(/\s+/) : [];
+            const env: Record<string, string> = {};
+            for (const line of formEnv.split('\n')) {
+                const eq = line.indexOf('=');
+                if (eq > 0) {
+                    const key = line.slice(0, eq).trim();
+                    const val = line.slice(eq + 1).trim();
+                    if (key) env[key] = val;
+                }
+            }
+            await api.addMCPServer({
+                name: formName.trim(),
+                command: formCommand.trim(),
+                args,
+                env: Object.keys(env).length > 0 ? env : undefined,
+            });
+            resetForm();
+            setShowAddForm(false);
+            await loadServers();
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : 'Failed to add server');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <section className="settings-section">
+            <div className="mcp-section-header">
+                <h4>MCP Servers</h4>
+                <button
+                    className="mcp-add-btn"
+                    onClick={() => { setShowAddForm((v) => !v); resetForm(); }}
+                    aria-label="Add MCP server"
+                >
+                    <Plus size={14} />
+                    Add
+                </button>
+            </div>
+            <p className="mcp-subtitle">Connect external tools to extend agent capabilities.</p>
+
+            {loadingServers ? (
+                <p className="loading-text">Loading servers...</p>
+            ) : (
+                <div className="mcp-server-list">
+                    {servers.length === 0 && !showAddForm && (
+                        <p className="mcp-empty">No MCP servers configured.</p>
+                    )}
+                    {servers.map((server) => (
+                        <div key={server.name} className={`mcp-server-row${server.enabled ? '' : ' mcp-server-disabled'}`}>
+                            <div className="mcp-server-info">
+                                <span className="mcp-server-name">{server.name}</span>
+                                <span className="mcp-server-cmd">{server.command} {server.args.slice(0, 2).join(' ')}{server.args.length > 2 ? ' …' : ''}</span>
+                            </div>
+                            <div className="mcp-server-actions">
+                                <button
+                                    className={`mcp-toggle-btn${server.enabled ? ' mcp-toggle-on' : ''}`}
+                                    onClick={() => toggleServer(server)}
+                                    title={server.enabled ? 'Disable server' : 'Enable server'}
+                                    aria-label={server.enabled ? `Disable ${server.name}` : `Enable ${server.name}`}
+                                >
+                                    <Power size={13} />
+                                </button>
+                                <button
+                                    className="mcp-delete-btn"
+                                    onClick={() => deleteServer(server.name)}
+                                    title="Remove server"
+                                    aria-label={`Remove ${server.name}`}
+                                >
+                                    <Trash2 size={13} />
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {showAddForm && (
+                <div className="mcp-add-form">
+                    <div className="mcp-add-mode-tabs">
+                        <button
+                            className={`mcp-mode-tab${addMode === 'catalog' ? ' active' : ''}`}
+                            onClick={() => { setAddMode('catalog'); resetForm(); }}
+                        >
+                            From catalog
+                        </button>
+                        <button
+                            className={`mcp-mode-tab${addMode === 'custom' ? ' active' : ''}`}
+                            onClick={() => { setAddMode('custom'); resetForm(); }}
+                        >
+                            Custom
+                        </button>
+                    </div>
+
+                    {addMode === 'catalog' && (
+                        <div className="mcp-catalog-list">
+                            {catalog.map((entry) => (
+                                <button
+                                    key={entry.name}
+                                    className={`mcp-catalog-entry${selectedCatalogEntry?.name === entry.name ? ' selected' : ''}`}
+                                    onClick={() => onCatalogSelect(entry)}
+                                >
+                                    <div className="mcp-catalog-entry-top">
+                                        <span className="mcp-catalog-name">{entry.display_name}</span>
+                                        <span className="mcp-catalog-tier">Tier {entry.tier}</span>
+                                    </div>
+                                    <span className="mcp-catalog-desc">{entry.description}</span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="mcp-form-fields">
+                        <label className="mcp-field">
+                            <span>Name</span>
+                            <input
+                                type="text"
+                                value={formName}
+                                onChange={(e) => setFormName(e.target.value)}
+                                placeholder="e.g. github"
+                                className="mcp-input"
+                            />
+                        </label>
+                        <label className="mcp-field">
+                            <span>Command</span>
+                            <input
+                                type="text"
+                                value={formCommand}
+                                onChange={(e) => setFormCommand(e.target.value)}
+                                placeholder="e.g. npx"
+                                className="mcp-input"
+                            />
+                        </label>
+                        <label className="mcp-field">
+                            <span>Arguments</span>
+                            <input
+                                type="text"
+                                value={formArgs}
+                                onChange={(e) => setFormArgs(e.target.value)}
+                                placeholder="-y @modelcontextprotocol/server-github"
+                                className="mcp-input"
+                            />
+                        </label>
+                        <label className="mcp-field">
+                            <span>Env vars <span className="mcp-field-hint">(KEY=value, one per line)</span></span>
+                            <textarea
+                                value={formEnv}
+                                onChange={(e) => setFormEnv(e.target.value)}
+                                placeholder="GITHUB_TOKEN=ghp_xxx"
+                                className="mcp-textarea"
+                                rows={2}
+                            />
+                        </label>
+                        {error && <p className="mcp-error">{error}</p>}
+                        <div className="mcp-form-actions">
+                            <button className="btn-secondary" onClick={() => { setShowAddForm(false); resetForm(); }}>
+                                Cancel
+                            </button>
+                            <button className="btn-primary" onClick={submitAdd} disabled={saving}>
+                                {saving ? 'Adding…' : 'Add Server'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </section>
+    );
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function StatusRow({ label, value, ok, hint }: { label: string; value: string; ok: boolean; hint?: string }) {
     return (

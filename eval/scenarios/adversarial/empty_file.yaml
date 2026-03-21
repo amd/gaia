@@ -1,0 +1,24 @@
+id: empty_file
+name: "Empty File Handling"
+category: adversarial
+severity: medium
+description: |
+  User asks the agent to index and read a completely empty file. Agent must
+  report that the file is empty or has no indexable content. Tests graceful
+  handling of edge-case inputs.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask 'Please index eval/corpus/adversarial/empty.txt and tell me what it contains.'"
+    ground_truth:
+      expected_behavior: "Agent reports the file is empty or has no indexable content"
+    success_criteria: "Agent states the file is empty or contains no content. FAIL if agent hallucinates content that is not in the file."
+
+expected_outcome: |
+  Agent correctly identifies an empty file and reports it as such without
+  hallucinating any content.

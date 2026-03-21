@@ -1,0 +1,41 @@
+id: sd_graceful_degradation
+name: "SD Tool -- Graceful Degradation"
+category: vision
+severity: medium
+description: |
+  Tests that the ChatAgent's SD tools (generate_image, list_sd_models) are
+  registered and that the agent handles image generation requests gracefully —
+  either generating an image or explaining why it couldn't.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask whether the agent can generate images"
+    user_message: "Can you generate an AI image from a text description?"
+    ground_truth:
+      expected_behavior: "Agent confirms it has image generation capability (generate_image tool available)"
+    success_criteria: |
+      Agent says yes, it can generate images from text. It should mention
+      Stable Diffusion or image generation capability.
+      PASS if agent confirms image generation capability.
+      FAIL if agent says it cannot generate images at all.
+
+  - turn: 2
+    objective: "Ask agent to generate an image"
+    user_message: "Generate an image of a sunset over mountains."
+    ground_truth:
+      expected_behavior: "Agent calls generate_image tool OR reports gracefully if SD not available"
+    success_criteria: |
+      Agent either: (a) calls generate_image and reports the result/file path,
+      OR (b) attempts it and reports the error gracefully (SD model not loaded).
+      PASS for either outcome — graceful handling is the key requirement.
+      FAIL if agent claims image generation is entirely unavailable when T1 said it was.
+
+expected_outcome: |
+  Agent confirms image generation capability in T1. In T2, agent attempts
+  generate_image and either succeeds or reports the error gracefully.
+  SDToolsMixin is correctly integrated into ChatAgent.

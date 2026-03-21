@@ -16,15 +16,18 @@ patches take effect.
 import asyncio
 import json
 import logging
+import re as _re
 from pathlib import Path
 
 from .database import ChatDatabase
 from .models import ChatRequest
 from .sse_handler import (
-    _clean_answer_json,
-    _fix_double_escaped,
+    _ANSWER_JSON_SUB_RE,
+    _RAG_RESULT_JSON_SUB_RE,
     _THOUGHT_JSON_SUB_RE,
     _TOOL_CALL_JSON_SUB_RE,
+    _clean_answer_json,
+    _fix_double_escaped,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,14 +104,15 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
     """Derive allowed filesystem paths from document locations.
 
     Collects the unique parent directories of all RAG document paths.
-    Falls back to the user home directory only when no document paths
-    are provided, to avoid granting unnecessary broad access.
+    Falls back to the current working directory when no document paths
+    are provided, to avoid granting unnecessarily broad access across
+    unrelated projects on the same machine.
     """
     dirs = set()
     for fp in rag_file_paths:
         dirs.add(str(Path(fp).parent))
     if not dirs:
-        dirs.add(str(Path.home()))
+        dirs.add(str(Path.cwd()))
     return list(dirs)
 
 
@@ -165,6 +169,7 @@ async def _get_chat_response(
             rag_documents=rag_file_paths,
             library_documents=library_paths,
             allowed_paths=allowed,
+            ui_session_id=request.session_id,
         )
         agent = ChatAgent(config)
 
@@ -278,6 +283,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     rag_documents=[],  # Index manually below (session docs only)
                     library_documents=library_paths,  # Available for on-demand indexing
                     allowed_paths=allowed,
+                    ui_session_id=session_id,
                 )
 
                 # -- Phase 2: LLM connection --
@@ -631,12 +637,33 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         # Clean LLM output artifacts before DB storage.
         # Apply all canonical patterns so stored content is always clean
         # regardless of which streaming path was taken.
+        # Order matters: strip embedded JSON blobs BEFORE _clean_answer_json so
+        # that stray closing braces from tool/RAG JSON don't confuse the answer extractor.
         if full_response:
-            full_response = _clean_answer_json(full_response)
             full_response = _TOOL_CALL_JSON_SUB_RE.sub("", full_response)
             full_response = _THOUGHT_JSON_SUB_RE.sub("", full_response)
+            full_response = _RAG_RESULT_JSON_SUB_RE.sub("", full_response)
+            # _clean_answer_json handles pure {"answer": "..."} responses (whole string).
+            full_response = _clean_answer_json(full_response)
+            # _ANSWER_JSON_SUB_RE handles mixed content where {"answer": "..."} is
+            # embedded after plain text — strips the duplicate JSON wrapper.
+            full_response = _ANSWER_JSON_SUB_RE.sub("", full_response)
             full_response = _fix_double_escaped(full_response)
+            # Strip trailing JSON artifact sequences (3+ closing braces = nested tool result leak)
+            full_response = _re.sub(r"\}{3,}\s*$", "", full_response).strip()
+            # Strip trailing code-fence artifacts (e.g. "}\n```" left after JSON extraction)
+            full_response = _re.sub(r"[\n\s]*`{3,}\s*$", "", full_response).strip()
             full_response = full_response.strip()
+
+        # Guard: if cleaning reduced the response to JSON/code artifacts only
+        # (e.g. "}", "}}", "}\n", "}\n```", backtick-only), fall back to the agent's
+        # direct result which is unaffected by streaming fragmentation.
+        if full_response and _re.fullmatch(r'[\s{}\[\]",:` ]+', full_response):
+            logger.warning(
+                "Streaming response reduced to JSON artifacts %r — using agent result",
+                full_response[:40],
+            )
+            full_response = result_holder.get("answer", "") or ""
 
         # Save complete response to DB (including captured agent steps)
         if full_response:

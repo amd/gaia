@@ -58,6 +58,18 @@ _ANSWER_JSON_SUB_RE = re.compile(
 # Regex to remove <think>...</think> tags that some models output.
 _THINK_TAG_SUB_RE = re.compile(r"<think>[\s\S]*?</think>")
 
+# Regex to strip RAG/tool result JSON blobs that Qwen3 sometimes leaks into
+# its text output. Pattern: {"status": "success", ..., "chunks": [...], ...}
+# or {"chunks": [...], "scores": [...]} — these are tool results, not LLM prose.
+# We strip them to avoid corrupting the DB-stored assistant message with raw
+# JSON that downstream turns will misread as factual content.
+# Note: chunks array contains nested objects like [{"text":"...", "score":...}]
+# so we use [\s\S]*? with a lookahead to stop at the outer closing brace.
+_RAG_RESULT_JSON_SUB_RE = re.compile(
+    r'\s*\{[^{}]*"chunks"\s*:\s*\[[\s\S]*?\][^{}]*\}(?:\}*)',
+    re.DOTALL,
+)
+
 # Regex to remove trailing unclosed code fences (``` at end of response).
 _TRAILING_CODE_FENCE_RE = re.compile(r"\n?```\s*$")
 

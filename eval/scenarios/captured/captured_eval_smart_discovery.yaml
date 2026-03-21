@@ -1,0 +1,30 @@
+id: captured_eval_smart_discovery
+category: captured
+description: 'Captured from session: Eval: smart_discovery'
+persona: A user who had this real conversation with GAIA.
+setup:
+  index_documents: []
+turns:
+- turn: 1
+  objective: '[REVIEW] What''s the PTO policy for first-year employees? I need to
+    know how many days we get.'
+  user_message: What's the PTO policy for first-year employees? I need to know how
+    many days we get.
+  expected_tools:
+  - list_indexed_documents
+  - search_file
+  - index_document
+  - query_specific_file
+  success_criteria:
+    must_contain: []
+    agent_response_preview: '}}
+
+      ```}
+
+      ```}
+
+      ``````'
+captured_from:
+  session_id: 29c211c7-31b5-4084-bb3f-1825c0210942
+  title: 'Eval: smart_discovery'
+  captured_at: '2026-03-20T16:21:18.080736'

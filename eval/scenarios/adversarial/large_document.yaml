@@ -1,0 +1,35 @@
+id: large_document
+name: "Buried Fact in Large Document"
+category: adversarial
+severity: high
+description: |
+  A specific fact is buried deep within a large document. Tests whether the
+  RAG system can retrieve a precise detail from Section 52 of a lengthy
+  compliance report rather than giving up or hallucinating.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: large_report
+      path: "eval/corpus/documents/large_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask 'What was the compliance finding in Section 52?'"
+    ground_truth:
+      doc_id: large_report
+      fact_id: buried_fact
+      expected_answer: "Three minor non-conformities in supply chain documentation"
+    success_criteria: "Agent retrieves the exact finding: three minor non-conformities in supply chain documentation. FAIL if agent says it cannot find the information or hallucinates a different answer."
+
+  - turn: 2
+    objective: "Ask 'Were there any major non-conformities?'"
+    ground_truth:
+      doc_id: large_report
+      expected_answer: "No, only minor non-conformities were mentioned"
+    success_criteria: "Agent states there were no major non-conformities (only minor ones). FAIL if agent invents major findings."
+
+expected_outcome: |
+  Agent retrieves a fact buried deep in a large document via RAG and correctly
+  distinguishes between what the document says (minor) and what it does not say (major).

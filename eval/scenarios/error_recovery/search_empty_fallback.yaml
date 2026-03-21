@@ -1,0 +1,39 @@
+id: search_empty_fallback
+name: "Search Empty -- Fallback Strategy"
+category: error_recovery
+severity: high
+description: |
+  No documents are pre-indexed. Agent must discover and index a file on its own.
+  If the initial search returns empty results, the agent should try alternative
+  search terms or browse the file system rather than giving up.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask 'Find the Acme Corp API reference file and tell me how authentication works.'"
+    ground_truth:
+      doc_id: api_docs
+      fact_id: auth_method
+      expected_answer: "Bearer token via the Authorization header"
+    success_criteria: |
+      Agent searches for the Acme API reference, discovers api_reference.py,
+      indexes it, and reports the authentication method (Bearer token).
+      FAIL if agent gives up after the first empty search result without
+      trying alternative search terms or browse_files.
+
+  - turn: 2
+    objective: "Ask 'What about the Python source file with the authentication code?'"
+    ground_truth:
+      doc_id: api_docs
+      fact_id: auth_method
+      expected_answer: "Bearer token via the Authorization header"
+    success_criteria: "Agent recognizes it already has api_reference.py indexed and answers without re-searching"
+
+expected_outcome: |
+  Agent demonstrates resilience when initial searches return empty results.
+  It tries fallback strategies (alternative queries, file browsing) to discover
+  the requested document.

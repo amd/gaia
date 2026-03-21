@@ -17,7 +17,6 @@ import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -79,9 +78,10 @@ class TestNonStreamingHistoryLimits:
         # ChatAgent/ChatAgentConfig are lazy-imported inside _do_chat(), so
         # patch them at their source module (gaia.agents.chat.agent) which
         # is the target of "from gaia.agents.chat.agent import ChatAgent, ..."
-        with patch(
-            "gaia.agents.chat.agent.ChatAgent", return_value=FakeAgent()
-        ), patch("gaia.agents.chat.agent.ChatAgentConfig"):
+        with (
+            patch("gaia.agents.chat.agent.ChatAgent", return_value=FakeAgent()),
+            patch("gaia.agents.chat.agent.ChatAgentConfig"),
+        ):
             _run_sync(_get_chat_response(db, session, request))
 
         return captured_history
@@ -188,44 +188,45 @@ class TestStreamingPathConstants:
         # Should contain "_MAX_HISTORY_PAIRS = 5" (not 2)
         assert "_MAX_HISTORY_PAIRS = 5" in src, (
             "Streaming path: _MAX_HISTORY_PAIRS should be 5. "
-            "Found in source: "
-            + str(re.findall(r"_MAX_HISTORY_PAIRS\s*=\s*\d+", src))
+            "Found in source: " + str(re.findall(r"_MAX_HISTORY_PAIRS\s*=\s*\d+", src))
         )
 
     def test_max_msg_chars_is_2000(self):
         src = self._source()
         # Should contain "_MAX_MSG_CHARS = 2000" (not 500)
-        assert "_MAX_MSG_CHARS = 2000" in src, (
-            "Streaming path: _MAX_MSG_CHARS should be 2000. "
-            "Found in source: "
-            + str(re.findall(r"_MAX_MSG_CHARS\s*=\s*\d+", src))
+        assert (
+            "_MAX_MSG_CHARS = 2000" in src
+        ), "Streaming path: _MAX_MSG_CHARS should be 2000. " "Found in source: " + str(
+            re.findall(r"_MAX_MSG_CHARS\s*=\s*\d+", src)
         )
 
     def test_old_value_2_not_present_for_history_pairs(self):
         src = self._source()
         old_occurrences = re.findall(r"_MAX_HISTORY_PAIRS\s*=\s*2\b", src)
-        assert not old_occurrences, (
-            f"Stale _MAX_HISTORY_PAIRS = 2 still present: {old_occurrences}"
-        )
+        assert (
+            not old_occurrences
+        ), f"Stale _MAX_HISTORY_PAIRS = 2 still present: {old_occurrences}"
 
     def test_old_value_500_not_present_for_msg_chars(self):
         src = self._source()
         old_occurrences = re.findall(r"_MAX_MSG_CHARS\s*=\s*500\b", src)
-        assert not old_occurrences, (
-            f"Stale _MAX_MSG_CHARS = 500 still present: {old_occurrences}"
-        )
+        assert (
+            not old_occurrences
+        ), f"Stale _MAX_MSG_CHARS = 500 still present: {old_occurrences}"
 
     def test_non_streaming_max_pairs_is_5(self):
         src = self._source()
         # Non-streaming uses _MAX_PAIRS (different name)
-        assert "_MAX_PAIRS = 5" in src, (
-            "Non-streaming path: _MAX_PAIRS should be 5. "
-            "Found: " + str(re.findall(r"_MAX_PAIRS\s*=\s*\d+", src))
+        assert (
+            "_MAX_PAIRS = 5" in src
+        ), "Non-streaming path: _MAX_PAIRS should be 5. " "Found: " + str(
+            re.findall(r"_MAX_PAIRS\s*=\s*\d+", src)
         )
 
     def test_non_streaming_max_chars_is_2000(self):
         src = self._source()
-        assert "_MAX_CHARS = 2000" in src, (
-            "Non-streaming path: _MAX_CHARS should be 2000. "
-            "Found: " + str(re.findall(r"_MAX_CHARS\s*=\s*\d+", src))
+        assert (
+            "_MAX_CHARS = 2000" in src
+        ), "Non-streaming path: _MAX_CHARS should be 2000. " "Found: " + str(
+            re.findall(r"_MAX_CHARS\s*=\s*\d+", src)
         )

@@ -153,6 +153,11 @@ class MCPClientManager:
                 logger.debug(f"Skipping already-connected server: {name}")
                 continue
 
+            # Skip servers explicitly disabled via the UI
+            if server_config.get("disabled", False):
+                logger.debug(f"Skipping disabled server: {name}")
+                continue
+
             try:
                 # Check transport type - only stdio is supported
                 transport_type = server_config.get("type", "stdio")

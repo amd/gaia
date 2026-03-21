@@ -1,0 +1,36 @@
+id: captured_eval_cross_turn_file_recall
+category: captured
+description: 'Captured from session: Eval: cross_turn_file_recall'
+persona: A user who had this real conversation with GAIA.
+setup:
+  index_documents:
+  - C:/Users/14255/Work/gaia4/eval/corpus/documents/product_comparison.html
+turns:
+- turn: 1
+  objective: '[REVIEW] hey what docs do you have loaded up?'
+  user_message: hey what docs do you have loaded up?
+  expected_tools:
+  - index_documents
+  success_criteria:
+    must_contain: []
+    agent_response_preview: '**Currently Indexed Documents:**
+
+
+      - product_comparison.html
+
+      ```'
+- turn: 2
+  objective: '[REVIEW] how much do the two products cost?'
+  user_message: how much do the two products cost?
+  expected_tools:
+  - index_documents
+  - query_specific_file
+  success_criteria:
+    must_contain: []
+    agent_response_preview: '}
+
+      ``````'
+captured_from:
+  session_id: 7855ef89-1804-493f-a125-e405aa8ff59a
+  title: 'Eval: cross_turn_file_recall'
+  captured_at: '2026-03-20T16:21:40.135563'

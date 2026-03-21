@@ -1,0 +1,36 @@
+id: cross_section_rag
+name: "Cross-Section RAG Synthesis"
+category: rag_quality
+severity: high
+description: |
+  Agent must retrieve facts from different sections of the same document and
+  synthesize them into a computed answer. Requires combining Q3 revenue with
+  the CEO's projected growth rate to produce a Q4 revenue range estimate.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask 'Given Q3 revenue of $14.2M and the CEO's projected growth of 15-18%, what revenue range should we expect in Q4?'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_ids: [q3_revenue, ceo_outlook]
+      expected_answer: "Approximately $16.3M to $16.8M (14.2 * 1.15 = 16.33, 14.2 * 1.18 = 16.76)"
+    success_criteria: "Agent retrieves both Q3 revenue and CEO growth projection, then computes a range approximately $16.3M-$16.8M. FAIL if agent only states one fact without synthesis."
+
+  - turn: 2
+    objective: "Ask 'What was the previous year's Q3 revenue, and how does the projected Q4 compare to that?'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: yoy_growth
+      expected_answer: "Previous Q3 was $11.5M. Projected Q4 ($16.3M-$16.8M) would be 42-46% higher than last year's Q3."
+    success_criteria: "Agent states Q3 2024 was $11.5M and provides a meaningful comparison to the projected Q4 range"
+
+expected_outcome: |
+  Agent synthesizes multiple facts from different document sections and performs
+  basic arithmetic to produce a computed answer.

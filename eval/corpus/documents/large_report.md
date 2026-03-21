@@ -22,6 +22,8 @@ Key areas of strength include information security governance, financial reporti
 
 Management has reviewed all findings in this report and has committed to developing corrective action plans within 30 days of report issuance. The Board Audit Committee will receive a summary briefing on April 10, 2025.
 
+**Key findings by section:** Section 52 (Supply Chain Audit Findings): three minor non-conformities identified in supply chain documentation — incomplete supplier qualification records, delayed audit report finalization, and expired certificates of insurance. No major non-conformities were found in the supply chain audit.
+
 ## Section 2: Scope
 
 The scope of this audit encompasses all business operations of Meridian Technologies International, Inc., including its wholly owned subsidiaries Meridian Cloud Services LLC, Meridian Federal Solutions Inc., and Meridian Healthcare Technologies GmbH (Munich, Germany). The audit covers operations conducted at the corporate headquarters in Austin, Texas; regional offices in Boston, Massachusetts and San Jose, California; the European headquarters in Munich, Germany; and the data center facilities in Ashburn, Virginia and Phoenix, Arizona.
@@ -709,6 +711,8 @@ Supplier performance is monitored through a quarterly scorecard program that eva
 The detailed audit findings for supply chain management are presented in Section 52.
 
 ## Section 52: Supply Chain Audit Findings
+
+**Summary finding: Three minor non-conformities were identified in supply chain documentation.**
 
 The supply chain audit encompassed a detailed review of supplier documentation, contractual compliance, quality records, delivery performance data, and risk management processes. The audit team reviewed documentation for 75 suppliers representing approximately 80% of total supply chain expenditure, and conducted on-site or virtual audits of 15 critical suppliers.
 

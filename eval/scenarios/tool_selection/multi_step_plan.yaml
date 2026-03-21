@@ -1,0 +1,38 @@
+id: multi_step_plan
+name: "Multi-Step Plan -- Complex Request"
+category: tool_selection
+severity: medium
+description: |
+  User makes a compound request requiring the agent to retrieve multiple facts
+  from one document, then augment with facts from a second document. Tests the
+  agent's ability to plan and execute a multi-step retrieval strategy.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask 'Can you give me a quick HR briefing -- PTO policy, remote work rules, and whether contractors get benefits?'"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_ids: [pto_days, remote_work, contractor_benefits]
+      expected_answer: "15 days PTO for first-year employees; up to 3 days/week remote with manager approval (fully remote needs VP); contractors NOT eligible for benefits"
+    success_criteria: "Agent retrieves all three facts from the employee handbook: 15 days PTO, 3-day remote policy, and contractor exclusion. FAIL if any fact is missing."
+
+  - turn: 2
+    objective: "Ask 'Now add the Q3 financial highlight to that briefing.'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million Q3 revenue"
+    success_criteria: "Agent queries acme_q3_report and adds Q3 revenue ($14.2M) to the briefing context"
+
+expected_outcome: |
+  Agent executes a multi-step plan: retrieves 3 facts from one document,
+  then augments with a fact from a second document, producing a coherent briefing.

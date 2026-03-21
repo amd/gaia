@@ -116,6 +116,28 @@ export interface IndexFolderResponse {
     errors: string[];
 }
 
+// ── MCP Server Types ──────────────────────────────────────────────────────
+
+export interface MCPServerInfo {
+    name: string;
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+    enabled: boolean;
+}
+
+export interface MCPCatalogEntry {
+    name: string;
+    display_name: string;
+    description: string;
+    category: string;
+    tier: number;
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+    requires_config: string[];
+}
+
 // ── Mobile Access / Tunnel Types ─────────────────────────────────────────
 
 /** Status of the ngrok tunnel for mobile access. */

@@ -1,0 +1,42 @@
+id: vlm_graceful_degradation
+name: "VLM Tool -- Graceful Degradation"
+category: vision
+severity: medium
+description: |
+  Tests that the ChatAgent's VLM tools (analyze_image, answer_question_about_image)
+  are registered and that the agent handles image analysis requests gracefully —
+  either by attempting the tool or by providing a clear, non-crashing response.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask whether the agent can analyze images"
+    user_message: "Can you analyze images or describe what's in a photo?"
+    ground_truth:
+      expected_behavior: "Agent confirms it has image analysis capability (analyze_image tool available)"
+    success_criteria: |
+      Agent says yes, it can analyze images / describe photos. It should mention
+      analyze_image or image analysis capability. No tool call needed.
+      PASS if agent confirms image analysis capability.
+      FAIL if agent says it has no image analysis capability whatsoever.
+
+  - turn: 2
+    objective: "Ask agent to analyze an image file"
+    user_message: "Please analyze the image at C:/Windows/Web/Wallpaper/Theme1/img1.jpg"
+    ground_truth:
+      expected_behavior: "Agent attempts analyze_image tool OR reports gracefully if file inaccessible"
+    success_criteria: |
+      Agent either: (a) calls analyze_image tool with the given path and reports result,
+      OR (b) reports that the file could not be found / is not accessible without crashing.
+      PASS for either outcome — graceful handling is the key requirement.
+      FAIL only if agent crashes, throws uncaught exception, or claims image analysis
+      is entirely unavailable when it clearly said it could analyze images in T1.
+
+expected_outcome: |
+  Agent confirms image analysis capability in T1. In T2, agent handles the image
+  analysis request gracefully — either attempting the tool or reporting the
+  file access issue clearly. VLMToolsMixin is correctly integrated into ChatAgent.

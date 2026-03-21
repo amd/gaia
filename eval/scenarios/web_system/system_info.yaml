@@ -1,0 +1,26 @@
+id: system_info
+name: "System Info Tool"
+category: web_system
+severity: low
+description: |
+  Tests that get_system_info tool is registered and returns correct OS/hardware info.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask for system information"
+    user_message: "What OS and hardware specs does this computer have?"
+    ground_truth:
+      expected_behavior: "Agent calls get_system_info and reports OS, CPU, memory information"
+    success_criteria: |
+      Agent calls get_system_info tool and reports the OS type (Windows/Linux/macOS),
+      CPU count or percentage, and memory information.
+      PASS if agent uses get_system_info and provides hardware details.
+      FAIL if agent says it cannot access system info or refuses to try.
+
+expected_outcome: |
+  Agent calls get_system_info and provides OS and hardware details.
