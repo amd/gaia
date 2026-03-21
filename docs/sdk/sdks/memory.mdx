@@ -1,0 +1,691 @@
+---
+title: "Memory SDK"
+description: "Add persistent memory to any GAIA agent with MemoryMixin, MemoryStore, and SystemDiscovery"
+icon: "brain"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/base/memory.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py) · [`src/gaia/agents/base/memory_store.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py) · [`src/gaia/agents/base/discovery.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/discovery.py)
+</Info>
+
+<Note>
+**Import:** `from gaia.agents.base.memory import MemoryMixin`
+**Import:** `from gaia.agents.base.memory_store import MemoryStore`
+**Import:** `from gaia.agents.base.discovery import SystemDiscovery`
+</Note>
+
+**See also:** [User Guide](/guides/memory) · [Agent System](/sdk/core/agent-system) · [Tool Decorator](/sdk/core/tools)
+
+---
+
+## Architecture
+
+The memory system has three layers:
+
+| Layer | Class | File | Purpose |
+|-------|-------|------|---------|
+| **Agent integration** | `MemoryMixin` | `memory.py` | Hooks memory into the Agent lifecycle (system prompt, tool logging, conversation storage) |
+| **Data layer** | `MemoryStore` | `memory_store.py` | Pure SQLite + FTS5 storage with search, dedup, and decay. No agent dependencies. |
+| **Bootstrap** | `SystemDiscovery` | `discovery.py` | Local system scanner for day-zero onboarding. Returns facts for user review. |
+
+```
+Agent
+  ├── MemoryMixin (hooks into prompt, tool exec, post-query)
+  │     └── MemoryStore (SQLite: ~/.gaia/memory.db)
+  │           ├── conversations table
+  │           ├── knowledge table (FTS5)
+  │           └── tool_history table
+  └── SystemDiscovery (file system, git, apps, browser scans)
+```
+
+---
+
+## MemoryMixin
+
+The primary integration point. Add this mixin to any Agent subclass to give it persistent memory.
+
+### Inheritance Order
+
+`MemoryMixin` **must** come before `Agent` in the class declaration. This is required because MemoryMixin overrides `process_query` and `_execute_tool`, both of which call `super()` to reach the Agent base class. If Agent is listed first, both overrides are silently shadowed.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.memory import MemoryMixin
+
+# Correct -- MemoryMixin before Agent
+class MyAgent(MemoryMixin, Agent):
+    def __init__(self, **kwargs):
+        self.init_memory()              # Before super().__init__()
+        super().__init__(**kwargs)
+
+    def _register_tools(self):
+        super()._register_tools()
+        self.register_memory_tools()    # Exposes 5 tools to the LLM
+```
+
+<Warning>
+  If you put `Agent` before `MemoryMixin` in the class declaration, tool logging and dynamic context injection will silently fail. Python's MRO requires the mixin to appear first.
+</Warning>
+
+### init_memory()
+
+Initialize the memory subsystem. Call this **before** `super().__init__()`.
+
+```python
+def init_memory(
+    self,
+    db_path: Optional[Path] = None,
+    context: str = "global"
+) -> None:
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `db_path` | `Path` | `~/.gaia/memory.db` | Path to the SQLite database file |
+| `context` | `str` | `"global"` | Active context scope (e.g., `"work"`, `"personal"`, `"global"`) |
+
+### get_memory_system_prompt()
+
+Returns the **stable frozen prefix** for the system prompt. Contains preferences, facts, and known errors -- nothing time-sensitive. This method is called automatically by `Agent._get_mixin_prompts()`.
+
+```python
+def get_memory_system_prompt(self) -> str
+```
+
+The output stays frozen for the entire session so the LLM inference engine can reuse its KV cache across turns. Example output:
+
+```
+=== MEMORY ===
+Preferences:
+  - tone: professional but friendly
+  - code_style: black formatter, 88 char lines
+
+Known facts:
+  - Project uses React 19 with app router (confidence: 0.82)
+  - User's name is Alex, role is tech lead (confidence: 0.95)
+
+Known errors to avoid:
+  - execute_code: "import torch" fails -- torch not installed on this machine
+```
+
+**Filters applied:**
+- Includes items from `global` context + active context
+- Excludes items where `sensitive=1`
+- Sorted by confidence descending
+- Hard limits: max 10 preferences, 5 facts, 5 errors
+
+### get_memory_dynamic_context()
+
+Returns the **per-turn dynamic context** that is prepended to the user message each turn. Contains the current time and upcoming/overdue items.
+
+```python
+def get_memory_dynamic_context(self) -> str
+```
+
+This is injected into the user message (not the system prompt) so the frozen prefix is preserved for KV-cache reuse. Example output:
+
+```
+[GAIA Memory Context]
+Current time: 2026-03-25T10:30:00-0700 (Tuesday)
+
+Upcoming/overdue:
+  - [DUE Mar 27] Online course starts next week
+  - [OVERDUE Mar 24] Follow up on deployment review
+After mentioning a time-sensitive item, call update_memory to set reminded_at so you don't repeat yourself.
+```
+
+Returns an empty string if no time-sensitive items are active.
+
+### register_memory_tools()
+
+Registers the 5 LLM-facing memory tools with the agent's tool registry. Call this from your agent's `_register_tools()` method.
+
+```python
+def register_memory_tools(self) -> None
+```
+
+Registers: `remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`.
+
+### set_memory_context()
+
+Switch the active context mid-session. Affects system prompt filtering and the default context for new `remember` calls.
+
+```python
+def set_memory_context(self, context: str) -> None
+```
+
+```python
+agent.set_memory_context("work")      # Switch to work context
+agent.set_memory_context("personal")  # Switch to personal context
+```
+
+### reset_memory_session()
+
+Start a fresh memory session. Generates a new session ID and applies confidence decay to unused knowledge.
+
+```python
+def reset_memory_session(self) -> None
+```
+
+Confidence decay multiplies the confidence of items not accessed in 30+ days by 0.9. This is called once per session start to keep knowledge fresh.
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `memory_store` | `MemoryStore` | Direct access to the underlying data layer |
+| `memory_session_id` | `str` | Current session UUID |
+| `memory_context` | `str` | Current active context (e.g., `"work"`, `"global"`) |
+
+### Lifecycle Hooks
+
+MemoryMixin hooks into the Agent lifecycle at 3 points. These are automatic -- you do not call them directly.
+
+**Hook 1: `process_query()` override**
+
+Prepends per-turn dynamic context (time + upcoming items) to the user message. Saves the original user input so `_after_process_query` can store the clean version without the context prefix.
+
+**Hook 2: `_execute_tool()` override**
+
+Wraps every non-memory tool call to auto-log it to `tool_history`. If a tool fails, the error is automatically stored as knowledge (`category="error"`) for future avoidance. Memory tools (remember, recall, etc.) are excluded from logging to avoid noise and recursion.
+
+**Hook 3: `_after_process_query()` callback**
+
+Called after `process_query()` completes. Stores both conversation turns (user + assistant) in the conversations table and runs lightweight heuristic extraction (regex patterns for preferences and facts).
+
+---
+
+## KV-Cache Frozen Prefix Design
+
+The system prompt is deliberately split into two parts:
+
+| Part | Method | Where injected | Changes between turns? |
+|------|--------|----------------|----------------------|
+| **Stable prefix** | `get_memory_system_prompt()` | System prompt via `_get_mixin_prompts()` | No -- frozen for KV-cache reuse |
+| **Dynamic context** | `get_memory_dynamic_context()` | Prepended to user message each turn | Yes -- current time, upcoming items |
+
+This design allows LLM inference engines (like Lemonade Server) to cache the attention computations for the system prompt and reuse them across conversation turns. Only the small dynamic section (typically 2-5 lines) changes per turn.
+
+```python
+# Simplified flow inside MemoryMixin.process_query():
+def process_query(self, user_input, **kwargs):
+    self._original_user_input = user_input           # Save clean version
+    dynamic = self.get_memory_dynamic_context()       # Time + upcoming
+    augmented = f"{dynamic}\n\n{user_input}" if dynamic else user_input
+    return super().process_query(augmented, **kwargs)  # System prompt stays frozen
+```
+
+---
+
+## MemoryStore
+
+The pure data layer. Agent-agnostic -- no imports from `gaia.agents`. Thread-safe via `threading.Lock`. Uses WAL mode for concurrent reads.
+
+### Constructor
+
+```python
+class MemoryStore:
+    def __init__(self, db_path: Path = None):
+        """Open or create the database.
+        Default path: ~/.gaia/memory.db
+        Uses WAL mode. Thread-safe."""
+```
+
+### Database Schema
+
+Three tables in a single SQLite file:
+
+- **`conversations`** -- every conversation turn, persistent across sessions, with FTS5 index
+- **`knowledge`** -- persistent facts, preferences, errors, skills with FTS5 index, confidence scoring, context scoping, entity linking, temporal fields (`due_at`, `reminded_at`)
+- **`tool_history`** -- every tool call the agent makes, auto-logged with success/failure, duration, error messages
+
+### Knowledge Methods
+
+#### store()
+
+```python
+def store(
+    self,
+    category: str,              # 'fact' | 'preference' | 'error' | 'skill' | 'note' | 'reminder'
+    content: str,               # Human-readable description
+    domain: str = None,         # Optional grouping (e.g., 'python', 'deployment')
+    metadata: dict = None,      # JSON blob for structured data
+    confidence: float = 0.5,    # 0.0 to 1.0
+    due_at: str = None,         # ISO 8601 for time-sensitive items
+    source: str = "tool",       # 'tool' | 'heuristic' | 'error_auto' | 'user' | 'discovery'
+    context: str = "global",    # Context scope
+    sensitive: bool = False,    # Exclude from system prompt if True
+    entity: str = None,         # Entity reference (e.g., 'person:sarah_chen')
+) -> str:                       # Returns knowledge_id (UUID)
+```
+
+**Deduplication:** If a new entry has >80% word overlap (Szymkiewicz-Simpson coefficient) with an existing entry in the same `category` + `context`, the existing entry is updated with the newer content. The newer fact is assumed to be more current.
+
+**Validation:** `content` must be non-empty (raises `ValueError` otherwise). Content longer than 2000 characters is silently truncated. `due_at`, if provided, is normalized to timezone-aware ISO 8601.
+
+#### search()
+
+```python
+def search(
+    self,
+    query: str,                     # FTS5 search query
+    category: str = None,           # Filter by category
+    context: str = None,            # Filter by context
+    entity: str = None,             # Filter by entity
+    include_sensitive: bool = False, # Include sensitive items
+    top_k: int = 5,                 # Max results
+) -> List[Dict]:
+```
+
+Uses FTS5 with AND semantics by default. If zero results, falls back to OR. BM25 ranking. Bumps confidence +0.02 on each recalled item.
+
+#### get_by_category()
+
+```python
+def get_by_category(
+    self,
+    category: str,
+    context: str = None,
+    limit: int = 10,
+) -> List[Dict]:
+```
+
+#### get_by_entity()
+
+```python
+def get_by_entity(
+    self,
+    entity: str,          # e.g., 'person:sarah_chen'
+    limit: int = 20,
+) -> List[Dict]:
+```
+
+Returns all knowledge linked to a specific entity.
+
+#### get_upcoming()
+
+```python
+def get_upcoming(
+    self,
+    within_days: int = 7,
+    include_overdue: bool = True,
+    context: str = None,
+    limit: int = 10,
+) -> List[Dict]:
+```
+
+Returns time-sensitive items due within N days or overdue. Filters out items that have already been reminded about (unless the due date has passed since the last reminder).
+
+#### update()
+
+```python
+def update(
+    self,
+    knowledge_id: str,
+    content: str = None,
+    category: str = None,
+    domain: str = None,
+    metadata: dict = None,
+    context: str = None,
+    sensitive: bool = None,
+    entity: str = None,
+    due_at: str = None,
+    reminded_at: str = None,
+) -> bool:                  # False if ID not found
+```
+
+Only provided fields are changed. Sets `updated_at` to the current time.
+
+#### delete()
+
+```python
+def delete(self, knowledge_id: str) -> bool
+```
+
+#### apply_confidence_decay()
+
+```python
+def apply_confidence_decay(
+    self,
+    days_threshold: int = 30,
+    decay_factor: float = 0.9,
+) -> int:                   # Returns number of entries decayed
+```
+
+Multiplies confidence by `decay_factor` for items not accessed in `days_threshold` days. Called once per session start via `reset_memory_session()`.
+
+### Conversation Methods
+
+```python
+def store_turn(self, session_id: str, role: str, content: str,
+               context: str = "global") -> None
+
+def get_history(self, session_id: str = None, context: str = None,
+                limit: int = 20) -> List[Dict]
+
+def search_conversations(self, query: str, context: str = None,
+                         limit: int = 10) -> List[Dict]
+
+def get_recent_conversations(self, days: int = 7, context: str = None,
+                             limit: int = 50) -> List[Dict]
+```
+
+### Tool History Methods
+
+```python
+def log_tool_call(self, session_id: str, tool_name: str,
+                  args: dict, result_summary: str,
+                  success: bool, error: str = None,
+                  duration_ms: int = None) -> None
+
+def get_tool_errors(self, tool_name: str = None,
+                    limit: int = 10) -> List[Dict]
+
+def get_tool_stats(self, tool_name: str) -> Dict
+    # Returns: {total_calls, success_rate, avg_duration_ms, last_error}
+```
+
+### Dashboard Methods
+
+Aggregate queries for the Memory Dashboard UI:
+
+```python
+def get_stats(self) -> Dict
+    # Returns counts by category, context, entity, conversations, tools, temporal
+
+def get_all_knowledge(self, category=None, context=None, entity=None,
+                      sensitive=None, search=None, sort_by="updated_at",
+                      order="desc", offset=0, limit=50) -> Dict
+    # Returns: {"items": [...], "total": 142, "offset": 0, "limit": 50}
+
+def get_tool_summary(self) -> List[Dict]
+    # Per-tool stats: total_calls, success_rate, avg_duration_ms, last_error
+
+def get_activity_timeline(self, days: int = 30) -> List[Dict]
+    # Daily activity counts for the last N days
+
+def get_recent_errors(self, limit: int = 20) -> List[Dict]
+
+def prune(self, days: int = 90) -> Dict
+    # Delete tool_history and conversations older than N days.
+    # Also prunes low-confidence knowledge (confidence < 0.1) last used > N days ago.
+    # Returns: {"tool_history_deleted": N, "conversations_deleted": N, "knowledge_deleted": N}
+    # Called automatically on agent startup via init_memory().
+
+def rebuild_fts(self) -> None
+    # Rebuild all FTS5 indexes from source tables.
+    # Use if search results seem wrong or incomplete.
+    # Also available via POST /api/memory/rebuild-fts
+```
+
+---
+
+## SystemDiscovery
+
+Local system scanner for day-zero bootstrap. Returns lists of discovered facts for user review -- nothing is stored directly.
+
+```python
+from gaia.agents.base.discovery import SystemDiscovery
+
+discovery = SystemDiscovery()
+results = discovery.scan_all()
+# results is a Dict[str, List[Dict]] — source name → list of discovered facts
+# Example: {"file_system": [...], "git_repos": [...], "installed_apps": [...]}
+
+# To iterate all findings:
+findings = []
+for source_name, items in results.items():
+    findings.extend(items)
+
+# Each item dict:
+# {content, category, context, entity, sensitive, confidence, source, approved}
+```
+
+### Methods
+
+| Method | What it reads | What it returns |
+|--------|--------------|-----------------|
+| `scan_file_system(paths)` | Folder names + file extensions in project directories | Project names, languages used |
+| `scan_git_repos(paths)` | `.git/config` files -- remotes, branch names | Repo names, languages, remote URLs |
+| `scan_installed_apps()` | Windows registry, Start Menu shortcuts | App inventory |
+| `scan_browser_bookmarks()` | Chrome/Edge/Firefox bookmark files | Categorized sites and interests |
+| `scan_browser_history(days)` | Browser history DBs (URLs only, no page content) | Top domains (all flagged sensitive) |
+| `scan_email_accounts()` | Windows credential store -- addresses only | Email addresses (all flagged sensitive) |
+
+Each method returns dicts like:
+
+```python
+{
+    "content": "Project 'gaia' -- Python/TypeScript, github.com/amd/gaia",
+    "category": "fact",
+    "context": "work",
+    "entity": "project:gaia",
+    "sensitive": False,
+    "confidence": 0.4,       # Lower than user-stated (inferred)
+    "source": "discovery",
+    "approved": None,        # Set by user review: True/False
+}
+```
+
+<Note>
+  Discovery never reads file contents, email content, or browser page content. It reads names, extensions, URLs, and metadata only. All browser history and email items are auto-flagged as sensitive.
+</Note>
+
+---
+
+## Code Examples
+
+### Minimal Agent with Memory
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.memory import MemoryMixin
+
+
+class RememberBot(MemoryMixin, Agent):
+    """A simple agent that remembers everything."""
+
+    def __init__(self):
+        self.init_memory(context="global")
+        super().__init__(
+            name="RememberBot",
+            system_prompt="You are a helpful assistant with persistent memory.",
+        )
+
+    def _register_tools(self):
+        super()._register_tools()
+        self.register_memory_tools()
+
+
+# Usage
+agent = RememberBot()
+result = agent.process_query("My name is Alex and I prefer concise answers")
+# Memory auto-extracts: fact("My name is Alex"), preference("prefer concise answers")
+# Next session, system prompt includes these automatically
+```
+
+### Switching Contexts
+
+```python
+class WorkPersonalAgent(MemoryMixin, Agent):
+    def __init__(self, context="work"):
+        self.init_memory(context=context)
+        super().__init__(name="DualContext")
+
+    def _register_tools(self):
+        super()._register_tools()
+        self.register_memory_tools()
+
+
+agent = WorkPersonalAgent(context="work")
+agent.process_query("Remember: deploy with kubectl apply -f prod.yaml")
+# Stored in 'work' context
+
+agent.set_memory_context("personal")
+agent.process_query("Remember: dentist appointment Thursday at 2pm")
+# Stored in 'personal' context
+
+agent.set_memory_context("work")
+# System prompt now shows work items only (plus global)
+# Personal items are invisible until context switches back
+```
+
+### Accessing the Store Directly
+
+```python
+from gaia.agents.base.memory_store import MemoryStore
+
+store = MemoryStore()  # Uses ~/.gaia/memory.db
+
+# Store a fact
+kid = store.store(
+    category="fact",
+    content="Project uses Python 3.12 with uv",
+    context="work",
+    entity="project:gaia",
+)
+
+# Search
+results = store.search("Python version", context="work")
+
+# Get everything about an entity
+gaia_facts = store.get_by_entity("project:gaia")
+
+# Get upcoming items
+upcoming = store.get_upcoming(within_days=7)
+
+# Dashboard stats
+stats = store.get_stats()
+print(f"Total memories: {stats['knowledge']['total']}")
+print(f"Tool success rate: {stats['tools']['overall_success_rate']:.0%}")
+
+# Cleanup
+store.close()
+```
+
+### Custom DB Path
+
+```python
+from pathlib import Path
+
+class TestAgent(MemoryMixin, Agent):
+    def __init__(self):
+        self.init_memory(
+            db_path=Path("./test_memory.db"),
+            context="testing",
+        )
+        super().__init__(name="TestAgent")
+
+    def _register_tools(self):
+        super()._register_tools()
+        self.register_memory_tools()
+```
+
+---
+
+## Memory Tools Reference
+
+These 5 tools are registered by `register_memory_tools()` and exposed to the LLM:
+
+<CardGroup cols={2}>
+  <Card title="remember" icon="plus">
+    Store a fact, preference, error, skill, note, or reminder. Supports `category`, `domain`, `due_at`, `context`, `sensitive`, `entity`.
+  </Card>
+
+  <Card title="recall" icon="magnifying-glass">
+    Search memory by query (FTS5), category, context, or entity. Returns results with IDs for use with update/forget.
+  </Card>
+
+  <Card title="update_memory" icon="pen">
+    Modify an existing entry by ID. Only non-empty fields change. Use `reminded_at="now"` after mentioning time-sensitive items.
+  </Card>
+
+  <Card title="forget" icon="trash">
+    Delete a specific memory entry by ID.
+  </Card>
+</CardGroup>
+
+<Card title="search_past_conversations" icon="clock-rotate-left">
+  Search conversation history by keywords, time range, or both. Returns matching turns with timestamps and session IDs.
+</Card>
+
+These map to CRUD operations: `remember` = create, `recall` = read, `update_memory` = update, `forget` = delete, plus `search_past_conversations` for history.
+
+---
+
+## Knowledge Sources
+
+| Source | How created | Default confidence |
+|--------|------------|-------------------|
+| `tool` | LLM called `remember()` | 0.5 |
+| `heuristic` | Auto-extracted via regex patterns | 0.3 |
+| `error_auto` | Auto-stored from tool failure | 0.5 |
+| `user` | Manually created via dashboard | 0.8 |
+| `discovery` | System scan during bootstrap | 0.4 |
+
+---
+
+## API Reference
+
+### MemoryMixin Methods
+
+| Method | Description |
+|--------|-------------|
+| `init_memory(db_path, context)` | Initialize memory subsystem |
+| `get_memory_system_prompt()` | Stable frozen prefix for system prompt |
+| `get_memory_dynamic_context()` | Per-turn time + upcoming items |
+| `register_memory_tools()` | Register 5 LLM-facing tools |
+| `set_memory_context(context)` | Switch active context |
+| `reset_memory_session()` | New session ID + confidence decay |
+
+### MemoryStore Methods
+
+| Method | Description |
+|--------|-------------|
+| `store(category, content, ...)` | Store knowledge with dedup |
+| `search(query, category, ...)` | FTS5 search with BM25 ranking |
+| `get_by_category(category, ...)` | Filter by category |
+| `get_by_entity(entity, ...)` | Get all knowledge about an entity |
+| `get_upcoming(within_days, ...)` | Time-sensitive items |
+| `update(knowledge_id, ...)` | Update existing entry |
+| `delete(knowledge_id)` | Delete entry |
+| `apply_confidence_decay(...)` | Decay unused knowledge |
+| `store_turn(session_id, ...)` | Store conversation turn |
+| `get_history(session_id, ...)` | Get turns for a session |
+| `search_conversations(query, ...)` | FTS5 conversation search |
+| `get_recent_conversations(days, ...)` | Time-based conversation retrieval |
+| `log_tool_call(session_id, ...)` | Log a tool execution |
+| `get_tool_errors(tool_name, ...)` | Recent tool errors |
+| `get_tool_stats(tool_name)` | Per-tool success rate and duration |
+| `get_stats()` | Aggregate dashboard statistics |
+| `get_all_knowledge(...)` | Paginated knowledge browser |
+| `get_entities()` | List all unique entities with counts |
+| `get_contexts()` | List all contexts with counts |
+| `get_tool_summary()` | Per-tool stats for dashboard |
+| `get_tool_history(tool_name, limit)` | Recent call history for one tool |
+| `get_sessions(limit)` | List conversation sessions with previews |
+| `get_activity_timeline(days)` | Daily activity counts |
+| `get_recent_errors(limit)` | Recent errors across all tools |
+| `prune(days)` | Delete old history and low-confidence knowledge |
+| `rebuild_fts()` | Rebuild FTS5 indexes if search seems wrong |
+| `close()` | Close the database connection |
+
+---
+
+## Related
+
+- **[User Guide](/guides/memory)** -- What agent memory does, CLI commands, dashboard walkthrough
+- **[Agent System](/sdk/core/agent-system)** -- Base Agent class that MemoryMixin extends
+- **[Tool Decorator](/sdk/core/tools)** -- How the 5 memory tools are registered
+- **[Agent UI](/guides/agent-ui)** -- Desktop interface with Memory Dashboard
+- **[Agent SDK](/sdk/sdks/chat)** -- Chat SDK for building conversational agents
+
+---
+
+<small style="color: #666;">
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

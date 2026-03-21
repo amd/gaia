@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link, Brain } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore } from '../stores/notificationStore';
@@ -124,8 +124,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
-        agentSteps, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps,
-        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
+        agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
+        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, setShowMemoryDashboard, isLoadingMessages, setLoadingMessages,
+        systemStatus,
     } = useChatStore();
 
     const session = sessions.find((s) => s.id === sessionId);
@@ -1008,6 +1009,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     </button>
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files" aria-label="Browse files">
                         <FolderSearch size={15} />
+                    </button>
+                    <button className="btn-icon-sm" onClick={() => setShowMemoryDashboard(true)} title="Memory" aria-label="Open memory dashboard">
+                        <Brain size={15} />
                     </button>
                     <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export chat">
                         <Download size={15} />
