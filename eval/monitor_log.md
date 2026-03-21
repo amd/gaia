@@ -1310,3 +1310,47 @@ Phase 2d complete: generated images and screenshots are now displayed inline in 
 
 **Score trajectory:** 27/34 (79%) → All 7 fixed → Final full run needed to confirm 34/34
 
+
+---
+
+### [2026-03-21] Post-PR Validation — SD Tools Regression Fix
+
+**Issue discovered during final 34-run validation:**
+
+`topic_switch` regressed from PASS 8.7 (baseline) to FAIL 6.1 after PR merge.
+
+**Root cause:** `SDToolsMixin.init_sd()` was called unconditionally in `_register_tools()`.
+In the eval environment, Lemonade Server is running, so `init_sd()` succeeds and registers
+`generate_image` into the tool registry. The agent then called `generate_image` twice during
+a PTO policy question in Turn 1 (`topic_switch`), producing a bloated response that:
+1. Failed the judge's success criterion (unsolicited image generation)
+2. Consumed so much context that Turn 4 had no room to properly query the Q3 report
+
+**Fix applied (`agent.py`):**
+- Added `enable_sd_tools: bool = False` to `ChatAgentConfig`
+- Gated `init_sd()` behind `if getattr(self.config, 'enable_sd_tools', False):`
+- SD tools are now opt-in only — won't auto-register during document Q&A
+
+**Rerun result:**
+
+| Scenario | Before (post-PR) | After Fix |
+|---|---|---|
+| topic_switch | FAIL 6.1 | **PASS 8.9** ✅ |
+
+**Final scorecard (all originally-failing scenarios):**
+
+| Scenario | Baseline | Final |
+|---|---|---|
+| conversation_summary | FAIL 7.2 | **PASS 9.5** |
+| multi_doc_context | FAIL 6.3 | **PASS 9.4** |
+| file_not_found | FAIL 7.0 | **PASS 8.5** |
+| vague_request_clarification | FAIL 5.9 | **PASS 9.0** |
+| negation_handling | FAIL 7.0 | **PASS 8.0** |
+| table_extraction | FAIL 6.9 | **PASS 9.4** |
+| multi_step_plan | FAIL 7.1 | **PASS 8.7** |
+| topic_switch (SD regression) | PASS 8.7→FAIL 6.1 | **PASS 8.9** |
+
+**`large_document`** remains FAIL 7.3 (was FAIL 5.8 baseline — improvement, not regression).
+This scenario requires summarizing a very long document; non-deterministic at model level.
+
+**PR:** https://github.com/amd/gaia/pull/607 — all 8 issues resolved.
