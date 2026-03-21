@@ -1354,3 +1354,31 @@ a PTO policy question in Turn 1 (`topic_switch`), producing a bloated response t
 This scenario requires summarizing a very long document; non-deterministic at model level.
 
 **PR:** https://github.com/amd/gaia/pull/607 — all 8 issues resolved.
+
+---
+
+### [2026-03-21] Fix Round 4 — large_document: FAIL 5.8 → PASS 9.6
+
+**Root cause diagnosed from trace:**
+
+Agent called `index_documents` → `list_indexed_documents` → answered from training knowledge (hallucination).
+
+The `list_indexed_documents` call only returns filenames — it does NOT return document content.
+The model treated this "check" as a false signal that it had the content available, then fell back
+to parametric knowledge about supply chain audits instead of calling `query_specific_file`.
+
+Hallucinated answer: "Inconsistent documentation of supplier quality certifications, Delayed reporting of inventory discrepancies, Lack of standardized communication protocols"
+Correct answer: "incomplete supplier qualification records, delayed audit report finalization, expired certificates of insurance" (from large_report.md §52)
+
+**Fix applied (`agent.py`):**
+- Added explicit FORBIDDEN PATTERN: `index_document → list_indexed_documents → answer` ← hallucination
+- Clarified that `list_indexed_documents` returns only filenames, NOT document content
+- Added explicit rule: never use training-knowledge to answer domain-specific document questions
+
+**Rerun result:**
+
+| Scenario | Baseline | Before Fix | After Fix |
+|---|---|---|---|
+| large_document | FAIL 5.8 | FAIL 7.3 | **PASS 9.6** ✅ |
+
+**Definitive full 34-run started:** `eval/final_run_v3.log` — expected to confirm 34/34.
