@@ -72,6 +72,9 @@ class ChatAgentConfig:
     # Session persistence (UI session ID for cross-turn document retention)
     ui_session_id: Optional[str] = None
 
+    # Optional capability flags (disabled by default to keep document Q&A focused)
+    enable_sd_tools: bool = False  # Stable Diffusion image generation
+
 
 class ChatAgent(
     Agent,
@@ -1192,12 +1195,14 @@ The link format is: https://github.com/amd/gaia/issues/new?template=feature_requ
             logger.debug("VLM tools not available (VLM model not loaded): %s", _vlm_err)
 
         # SD tools — generate_image, list_sd_models, get_generation_history
-        # Registers via init_sd(); gracefully skipped if SD endpoint not available.
-        try:
-            self.init_sd()
-            logger.debug("SD tools registered (generate_image, list_sd_models)")
-        except Exception as _sd_err:
-            logger.debug("SD tools not available (SD model not loaded): %s", _sd_err)
+        # Only registered when explicitly enabled via config.enable_sd_tools=True.
+        # Off by default to prevent image generation being called for document Q&A.
+        if getattr(self.config, "enable_sd_tools", False):
+            try:
+                self.init_sd()
+                logger.debug("SD tools registered (generate_image, list_sd_models)")
+            except Exception as _sd_err:
+                logger.debug("SD tools not available (SD model not loaded): %s", _sd_err)
 
         # ── Phase 3: Web & System tools ──────────────────────────────────────────
 
