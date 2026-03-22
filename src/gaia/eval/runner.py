@@ -164,7 +164,9 @@ def preflight_check(backend_url):
         errors.append(f"MCP config not found: {MCP_CONFIG}")
 
     # Check claude CLI
-    result = subprocess.run(["claude", "--version"], capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        ["claude", "--version"], capture_output=True, text=True, check=False
+    )
     if result.returncode != 0:
         errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
 
