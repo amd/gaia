@@ -3,9 +3,10 @@ name: "SD Tool -- Graceful Degradation"
 category: vision
 severity: medium
 description: |
-  Tests that the ChatAgent's SD tools (generate_image, list_sd_models) are
-  registered and that the agent handles image generation requests gracefully —
-  either generating an image or explaining why it couldn't.
+  Tests that the ChatAgent handles image generation requests gracefully —
+  either using the generate_image tool (if enabled) or clearly explaining
+  it doesn't have image generation capability. SD tools are opt-in via
+  ChatAgentConfig.enable_sd_tools=True, so they are not available by default.
 
 persona: casual_user
 
@@ -17,25 +18,27 @@ turns:
     objective: "Ask whether the agent can generate images"
     user_message: "Can you generate an AI image from a text description?"
     ground_truth:
-      expected_behavior: "Agent confirms it has image generation capability (generate_image tool available)"
+      expected_behavior: "Agent responds honestly about its image generation capability"
     success_criteria: |
-      Agent says yes, it can generate images from text. It should mention
-      Stable Diffusion or image generation capability.
-      PASS if agent confirms image generation capability.
-      FAIL if agent says it cannot generate images at all.
+      PASS if agent either:
+        (a) confirms it can generate images and offers to try (if SD tools are enabled), OR
+        (b) clearly explains it does not have image generation tools available in this session.
+      FAIL if agent hallucinates (claims to generate an image without calling any tool),
+      or gives an unhelpful non-answer.
 
   - turn: 2
-    objective: "Ask agent to generate an image"
-    user_message: "Generate an image of a sunset over mountains."
+    objective: "Ask agent to generate an image of a sunset"
+    user_message: "Please generate an image of a sunset over mountains."
     ground_truth:
-      expected_behavior: "Agent calls generate_image tool OR reports gracefully if SD not available"
+      expected_behavior: "Agent handles the request honestly — tries the tool or explains unavailability"
     success_criteria: |
-      Agent either: (a) calls generate_image and reports the result/file path,
-      OR (b) attempts it and reports the error gracefully (SD model not loaded).
-      PASS for either outcome — graceful handling is the key requirement.
-      FAIL if agent claims image generation is entirely unavailable when T1 said it was.
+      PASS if agent either:
+        (a) calls generate_image and reports the result or a graceful error, OR
+        (b) explains that image generation is not available in this session and suggests
+            alternatives (e.g., enabling SD tools, using a dedicated SD agent).
+      FAIL if agent pretends to generate an image without calling any tool, or
+      gives contradictory answers between T1 and T2.
 
 expected_outcome: |
-  Agent confirms image generation capability in T1. In T2, agent attempts
-  generate_image and either succeeds or reports the error gracefully.
-  SDToolsMixin is correctly integrated into ChatAgent.
+  Agent behaves honestly about its capabilities. If SD tools are not enabled,
+  the agent clearly says so and remains helpful. Consistency between T1 and T2 is required.
