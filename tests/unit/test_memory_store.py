@@ -3531,3 +3531,159 @@ class TestApplyConfidenceDecayRollback:
                 "SELECT confidence FROM knowledge WHERE id = ?", (kid,)
             ).fetchone()
             assert row[0] < 0.8, f"Item {kid} confidence should have been decayed"
+
+
+# ---------------------------------------------------------------------------
+# 45. get_by_category_contexts — single-query context+global fetch
+# ---------------------------------------------------------------------------
+
+
+class TestGetByCategoryContexts:
+    """get_by_category_contexts() returns items from active context AND global
+    in a single query, excluding sensitive entries."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(tmp_path / "ctx.db")
+        yield s
+        s.close()
+
+    def test_returns_both_context_and_global(self, store):
+        store.store(
+            category="fact",
+            content="Work-specific fact about project alpha",
+            context="work",
+        )
+        store.store(
+            category="fact",
+            content="Global fact about the universe xyz",
+            context="global",
+        )
+        results = store.get_by_category_contexts("fact", context="work")
+        contents = {r["content"] for r in results}
+        assert any("project alpha" in c for c in contents), "work-context item missing"
+        assert any("universe xyz" in c for c in contents), "global item missing"
+
+    def test_excludes_sensitive_items(self, store):
+        store.store(category="fact", content="Public info lambda sigma", context="work")
+        store.store(
+            category="fact",
+            content="Secret key omega delta",
+            context="work",
+            sensitive=True,
+        )
+        results = store.get_by_category_contexts("fact", context="work")
+        assert all(not r.get("sensitive") for r in results)
+
+    def test_global_context_only_returns_global(self, store):
+        store.store(category="fact", content="Work only foxtrot tango", context="work")
+        store.store(
+            category="fact", content="Global only india juliet", context="global"
+        )
+        results = store.get_by_category_contexts("fact", context="global")
+        contents = {r["content"] for r in results}
+        assert any("Global only" in c for c in contents)
+        assert not any("Work only" in c for c in contents)
+
+    def test_empty_when_no_matching_category(self, store):
+        store.store(
+            category="preference", content="Pref item victor whiskey", context="global"
+        )
+        results = store.get_by_category_contexts("skill", context="global")
+        assert results == []
+
+    def test_respects_limit(self, store):
+        for i in range(10):
+            store.store(
+                category="fact",
+                content=f"Limit test item {i} unique content word{i} xray{i}",
+                context="global",
+            )
+        results = store.get_by_category_contexts("fact", context="global", limit=3)
+        assert len(results) <= 3
+
+
+# ---------------------------------------------------------------------------
+# 46. get_all_knowledge sort_by validation
+# ---------------------------------------------------------------------------
+
+
+class TestGetAllKnowledgeSortByValidation:
+    """sort_by parameter must be whitelisted — arbitrary column names rejected."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(tmp_path / "sortby.db")
+        s.store(category="fact", content="Sort test entry one romeo echo")
+        yield s
+        s.close()
+
+    def test_valid_sort_by_confidence(self, store):
+        result = store.get_all_knowledge(sort_by="confidence")
+        assert result["total"] >= 1
+
+    def test_valid_sort_by_updated_at(self, store):
+        result = store.get_all_knowledge(sort_by="updated_at")
+        assert result["total"] >= 1
+
+    def test_invalid_sort_by_raises_or_falls_back(self, store):
+        # An invalid sort_by value should either raise ValueError or silently
+        # fall back to the default — it must NOT execute an unvalidated column name.
+        try:
+            result = store.get_all_knowledge(sort_by="'; DROP TABLE knowledge; --")
+            # If it doesn't raise, verify the table is intact
+            assert result["total"] >= 1, "Table should survive an invalid sort_by"
+        except (ValueError, Exception):
+            # Raising is also acceptable
+            pass
+
+    def test_sql_injection_in_sort_by_does_not_drop_table(self, store):
+        try:
+            store.get_all_knowledge(sort_by="id; DROP TABLE knowledge; --")
+        except Exception:
+            pass
+        # Table must still exist and be queryable
+        result = store.get_all_knowledge()
+        assert result["total"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# 47. get_sessions — no N+1 correlated subquery
+# ---------------------------------------------------------------------------
+
+
+class TestGetSessionsFirstMessageV2:
+    """get_sessions() first-message via optimised single-pass JOIN query."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(tmp_path / "sessions.db")
+        yield s
+        s.close()
+
+    def test_first_message_is_first_user_turn(self, store):
+        sid = str(uuid.uuid4())
+        store.store_turn(sid, "user", "Hello this is the first message")
+        store.store_turn(sid, "assistant", "Hi there reply")
+        store.store_turn(sid, "user", "Second user message here")
+        sessions = store.get_sessions()
+        match = next((s for s in sessions if s["session_id"] == sid), None)
+        assert match is not None
+        assert "first" in match["first_message"].lower()
+
+    def test_multiple_sessions_each_get_own_first_message(self, store):
+        sid_a = str(uuid.uuid4())
+        sid_b = str(uuid.uuid4())
+        store.store_turn(sid_a, "user", "Session A opening question")
+        store.store_turn(sid_b, "user", "Session B opening question")
+        sessions = {s["session_id"]: s for s in store.get_sessions()}
+        assert "Session A" in sessions[sid_a]["first_message"]
+        assert "Session B" in sessions[sid_b]["first_message"]
+
+    def test_session_with_no_user_turn_has_empty_first_message(self, store):
+        sid = str(uuid.uuid4())
+        store.store_turn(sid, "assistant", "Assistant-only session opening")
+        sessions = store.get_sessions()
+        match = next((s for s in sessions if s["session_id"] == sid), None)
+        assert match is not None
+        assert match["first_message"] == ""

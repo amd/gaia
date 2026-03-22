@@ -293,6 +293,10 @@ class MemoryStore:
         """Create tables, indexes, triggers, and set WAL mode."""
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
+            # Allow up to 5 s of retries before raising SQLITE_BUSY.  This
+            # prevents spurious errors when the dashboard REST singleton and
+            # the ChatAgent instance share the same WAL file concurrently.
+            self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(_SCHEMA_SQL)
 
             # Create triggers (ignore if already exist)
@@ -939,6 +943,37 @@ class MemoryStore:
 
         with self._lock:
             cursor = self._conn.execute(sql, tuple(params))
+            return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
+
+    def get_by_category_contexts(
+        self, category: str, context: str, limit: int = 10
+    ) -> List[Dict]:
+        """Get non-sensitive knowledge by category for a specific context AND global.
+
+        Single query that replaces two sequential get_by_category() calls in
+        _get_context_items() — avoids the 2-round-trips-per-category overhead
+        during system prompt construction.
+        """
+        if context == "global":
+            contexts = ("global",)
+            sql = f"""
+                SELECT {self._KNOWLEDGE_COLS} FROM knowledge
+                WHERE category = ? AND context = ? AND sensitive = 0
+                ORDER BY confidence DESC, updated_at DESC
+                LIMIT ?
+            """
+            params = (category, "global", limit)
+        else:
+            sql = f"""
+                SELECT {self._KNOWLEDGE_COLS} FROM knowledge
+                WHERE category = ? AND context IN (?, 'global') AND sensitive = 0
+                ORDER BY confidence DESC, updated_at DESC
+                LIMIT ?
+            """
+            params = (category, context, limit)
+
+        with self._lock:
+            cursor = self._conn.execute(sql, params)
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
     def get_by_entity(self, entity: str, limit: int = 20) -> List[Dict]:
@@ -1767,21 +1802,30 @@ class MemoryStore:
             ]
 
     def get_sessions(self, limit: int = 20) -> List[Dict]:
-        """List conversation sessions with turn counts and first message preview."""
+        """List conversation sessions with turn counts and first message preview.
+
+        Uses a single-pass query with a LEFT JOIN to the minimum user-turn ID
+        per session, avoiding an N+1 correlated subquery.
+        """
         with self._lock:
             cursor = self._conn.execute(
                 """
-                SELECT session_id,
+                SELECT c.session_id,
                        COUNT(*) as turn_count,
-                       MIN(timestamp) as started_at,
-                       MAX(timestamp) as last_activity,
-                       (SELECT content FROM conversations c2
-                        WHERE c2.session_id = conversations.session_id
-                          AND c2.role = 'user'
-                        ORDER BY c2.id ASC
-                        LIMIT 1) as first_message
-                FROM conversations
-                GROUP BY session_id
+                       MIN(c.timestamp) as started_at,
+                       MAX(c.timestamp) as last_activity,
+                       first_user.content as first_message
+                FROM conversations c
+                LEFT JOIN (
+                    SELECT session_id, content
+                    FROM conversations
+                    WHERE id IN (
+                        SELECT MIN(id) FROM conversations
+                        WHERE role = 'user'
+                        GROUP BY session_id
+                    )
+                ) first_user ON first_user.session_id = c.session_id
+                GROUP BY c.session_id
                 ORDER BY last_activity DESC
                 LIMIT ?
                 """,

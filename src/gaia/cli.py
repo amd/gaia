@@ -5877,17 +5877,21 @@ def _handle_memory_bootstrap(args):
         --reset      Clear source='discovery' items
         (default)    Run chat-only then discover
     """
-    if args.reset:
-        _bootstrap_reset()
-    elif args.chat_only:
-        _bootstrap_chat()
-    elif args.discover:
-        _bootstrap_discover()
-    else:
-        # Default: run both phases
-        _bootstrap_chat()
-        print()
-        _bootstrap_discover()
+    try:
+        if args.reset:
+            _bootstrap_reset()
+        elif args.chat_only:
+            _bootstrap_chat()
+        elif args.discover:
+            _bootstrap_discover()
+        else:
+            # Default: run both phases
+            _bootstrap_chat()
+            print()
+            _bootstrap_discover()
+    except RuntimeError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
 
 
 # ---- Bootstrap: conversational onboarding ----
@@ -5937,8 +5941,7 @@ def _bootstrap_chat():
     try:
         store = MemoryStore()
     except Exception as e:
-        print(f"❌ Error opening memory database: {e}")
-        sys.exit(1)
+        raise RuntimeError(f"Error opening memory database: {e}") from e
 
     stored_count = 0
     try:
@@ -5985,14 +5988,12 @@ def _bootstrap_discover():
     try:
         discovery = SystemDiscovery()
     except Exception as e:
-        print(f"❌ Error initializing system discovery: {e}")
-        sys.exit(1)
+        raise RuntimeError(f"Error initializing system discovery: {e}") from e
 
     try:
         all_results = discovery.scan_all()
     except Exception as e:
-        print(f"❌ Error during system scan: {e}")
-        sys.exit(1)
+        raise RuntimeError(f"Error during system scan: {e}") from e
 
     # Flatten and count
     findings = []
@@ -6011,8 +6012,7 @@ def _bootstrap_discover():
     try:
         store = MemoryStore()
     except Exception as e:
-        print(f"❌ Error opening memory database: {e}")
-        sys.exit(1)
+        raise RuntimeError(f"Error opening memory database: {e}") from e
 
     approved_count = 0
     skipped_count = 0
@@ -6067,8 +6067,7 @@ def _bootstrap_reset():
     try:
         store = MemoryStore()
     except Exception as e:
-        print(f"❌ Error opening memory database: {e}")
-        sys.exit(1)
+        raise RuntimeError(f"Error opening memory database: {e}") from e
 
     try:
         # Count discovery items
@@ -6102,8 +6101,7 @@ def _bootstrap_reset():
         print(f"✅ Deleted {deleted} discovery item(s).")
 
     except Exception as e:
-        print(f"❌ Error during reset: {e}")
-        sys.exit(1)
+        raise RuntimeError(f"Error during reset: {e}") from e
     finally:
         store.close()
 

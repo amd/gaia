@@ -292,30 +292,15 @@ class MemoryMixin:
     def _get_context_items(
         self, category: str, context: str, limit: int = 10
     ) -> List[Dict]:
-        """Get knowledge items for active context + global, excluding sensitive."""
-        store = self._memory_store
-        items = []
+        """Get non-sensitive knowledge items for active context + global.
 
-        # Get from active context
-        if context != "global":
-            ctx_items = store.get_by_category(category, context=context, limit=limit)
-            items.extend([i for i in ctx_items if not i.get("sensitive")])
-
-        # Get from global
-        global_items = store.get_by_category(category, context="global", limit=limit)
-        items.extend([i for i in global_items if not i.get("sensitive")])
-
-        # Deduplicate by ID (in case context == "global")
-        seen = set()
-        unique = []
-        for item in items:
-            if item["id"] not in seen:
-                seen.add(item["id"])
-                unique.append(item)
-
-        # Sort by confidence descending, limit
-        unique.sort(key=lambda x: x.get("confidence", 0), reverse=True)
-        return unique[:limit]
+        Uses a single DB query (get_by_category_contexts) instead of two
+        sequential get_by_category() calls, halving the DB round-trips when
+        building the system prompt.
+        """
+        return self._memory_store.get_by_category_contexts(
+            category, context, limit=limit
+        )
 
     # ------------------------------------------------------------------
     # Hook 2: process_query Override (dynamic context injection)
@@ -639,6 +624,11 @@ class MemoryMixin:
                 )
                 results = page.get("items", [])
 
+            # Never expose sensitive items to the LLM through the recall tool.
+            # Sensitive entries (API keys, credentials, etc.) are stored for
+            # internal use only and must not appear in tool output.
+            results = [r for r in results if not r.get("sensitive")]
+
             return {
                 "status": "found" if results else "empty",
                 "count": len(results),
@@ -711,7 +701,7 @@ class MemoryMixin:
             if not kwargs:
                 return {"status": "error", "message": "No fields to update."}
 
-            content_truncated = content and len(content) > 2000
+            content_truncated = content and len(content) > MAX_CONTENT_LENGTH
             success = mixin._memory_store.update(knowledge_id, **kwargs)
             if success:
                 result = {"status": "updated", "knowledge_id": knowledge_id}
