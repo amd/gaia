@@ -175,7 +175,8 @@ class TestResolveRagPaths:
         rag_paths, _ = _resolve_rag_paths(mock_db, ["doc1"])
         assert rag_paths == []
 
-    def test_without_document_ids_returns_library(self, mock_db):
+    def test_without_document_ids_returns_empty(self, mock_db):
+        """No session-specific docs → returns ([], []) to prevent cross-session contamination."""
         mock_db.list_documents.return_value = [
             {"filepath": "/lib/x.pdf"},
             {"filepath": "/lib/y.md"},
@@ -183,9 +184,10 @@ class TestResolveRagPaths:
 
         rag_paths, library_paths = _resolve_rag_paths(mock_db, [])
         assert rag_paths == []
-        assert library_paths == ["/lib/x.pdf", "/lib/y.md"]
+        assert library_paths == []
 
     def test_without_document_ids_skips_no_filepath(self, mock_db):
+        """No session-specific docs → returns ([], []) regardless of global library contents."""
         mock_db.list_documents.return_value = [
             {"filepath": "/lib/x.pdf"},
             {"id": "orphan"},  # no filepath key
@@ -193,7 +195,7 @@ class TestResolveRagPaths:
         ]
 
         _, library_paths = _resolve_rag_paths(mock_db, [])
-        assert library_paths == ["/lib/x.pdf"]
+        assert library_paths == []
 
     def test_empty_document_ids_empty_library(self, mock_db):
         mock_db.list_documents.return_value = []
@@ -202,11 +204,11 @@ class TestResolveRagPaths:
         assert library_paths == []
 
     def test_none_document_ids_treated_as_empty(self, mock_db):
-        """None is falsy like [], so it falls through to library path."""
+        """None is falsy like [], so both return lists are empty."""
         mock_db.list_documents.return_value = [{"filepath": "/lib/a.pdf"}]
         rag_paths, library_paths = _resolve_rag_paths(mock_db, None)
         assert rag_paths == []
-        assert library_paths == ["/lib/a.pdf"]
+        assert library_paths == []
 
     def test_document_with_filepath_none_skipped(self, mock_db):
         """filepath=None is falsy and should be skipped."""
@@ -221,10 +223,10 @@ class TestResolveRagPaths:
 class TestComputeAllowedPaths:
     """Tests for _compute_allowed_paths()."""
 
-    def test_empty_paths_returns_home(self):
+    def test_empty_paths_returns_cwd(self):
         result = _compute_allowed_paths([])
         assert len(result) == 1
-        assert result[0] == str(Path.home())
+        assert result[0] == str(Path.cwd())
 
     def test_single_file_returns_parent_dir(self):
         result = _compute_allowed_paths(["/docs/project/report.pdf"])

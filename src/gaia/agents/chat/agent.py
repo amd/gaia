@@ -1238,7 +1238,9 @@ The link format is: https://github.com/amd/gaia/issues/new?template=feature_requ
                 self.init_sd()
                 logger.debug("SD tools registered (generate_image, list_sd_models)")
             except Exception as _sd_err:
-                logger.debug("SD tools not available (SD model not loaded): %s", _sd_err)
+                logger.debug(
+                    "SD tools not available (SD model not loaded): %s", _sd_err
+                )
 
         # ── Phase 3: Web & System tools ──────────────────────────────────────────
 
@@ -1506,7 +1508,11 @@ The link format is: https://github.com/amd/gaia/issues/new?template=feature_requ
                     import subprocess
 
                     result = subprocess.run(
-                        ["wmctrl", "-l"], capture_output=True, text=True, timeout=5, check=False
+                        ["wmctrl", "-l"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        check=False,
                     )
                     if result.returncode == 0:
                         for line in result.stdout.strip().splitlines():
