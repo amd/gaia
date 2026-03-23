@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useEffect, useRef } from 'react';
-import { Lock, Zap, FileText, DollarSign, Terminal } from 'lucide-react';
-import { useChatStore } from '../stores/chatStore';
+import { Lock, Zap, FileText, DollarSign } from 'lucide-react';
 import './WelcomeScreen.css';
 
 interface WelcomeScreenProps {
@@ -41,18 +40,12 @@ const SUGGESTIONS = [
 ];
 
 export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
-    const { systemStatus } = useChatStore();
     const [displayedText, setDisplayedText] = useState('');
     const [typingComplete, setTypingComplete] = useState(false);
     const [subtitleText, setSubtitleText] = useState('');
     const [subtitleComplete, setSubtitleComplete] = useState(false);
     const [phase, setPhase] = useState<'title' | 'subtitle' | 'done'>('title');
     const [showContent, setShowContent] = useState(false);
-
-    // Determine if a setup hint should be shown to guide first-time users.
-    // Only show hints when backend is reachable (systemStatus is not null).
-    const notInitialized = systemStatus !== null && !systemStatus.initialized;
-    const noModel = systemStatus !== null && systemStatus.lemonade_running && !systemStatus.model_loaded;
 
     // Title typing effect
     useEffect(() => {
@@ -148,25 +141,6 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
                         codeHint="> license: MIT"
                         expandedDesc="No API keys, no subscriptions, no hidden costs. Fully open-source." />
                 </div>
-
-                {/* First-run setup hints */}
-                {notInitialized && (
-                    <div className="welcome-setup-hint">
-                        <Terminal size={14} />
-                        <span>
-                            <strong>First time?</strong> Run <code>gaia init --profile chat</code> in a terminal to
-                            install Lemonade Server and download the required AI models (~25&nbsp;GB).
-                        </span>
-                    </div>
-                )}
-                {!notInitialized && noModel && (
-                    <div className="welcome-setup-hint">
-                        <Terminal size={14} />
-                        <span>
-                            No model loaded. Run <code>gaia init --profile chat</code> to download models (~25&nbsp;GB).
-                        </span>
-                    </div>
-                )}
 
                 <button className="btn-primary start-btn" onClick={onNewTask}>
                     Start a New Task

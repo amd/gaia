@@ -19,6 +19,10 @@ from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentR
 
 **See also:** [User Guide](/guides/agent-ui) | [Agent SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server)
 
+<Warning>
+  **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Qwen3-Coder-30B-A3B-Instruct-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
+</Warning>
+
 ---
 
 ## Overview
@@ -276,20 +280,6 @@ class SystemStatus(BaseModel):
     memory_available_gb: float = 0.0
     initialized: bool = False
     version: str = "0.1.0"
-    # Extended Lemonade info
-    lemonade_version: Optional[str] = None
-    model_size_gb: Optional[float] = None
-    model_device: Optional[str] = None       # e.g. "npu", "igpu", "cpu"
-    model_context_size: Optional[int] = None
-    model_labels: Optional[List[str]] = None
-    gpu_name: Optional[str] = None
-    gpu_vram_gb: Optional[float] = None
-    # Last inference stats
-    tokens_per_second: Optional[float] = None
-    time_to_first_token: Optional[float] = None
-    # Device compatibility (Windows only — Linux/macOS coming soon)
-    device_supported: bool = True            # False on unsupported OS or hardware
-    processor_name: Optional[str] = None     # Detected CPU or GPU name
 ```
 
 ### Sessions
@@ -352,28 +342,15 @@ class SourceInfo(BaseModel):
 ### Messages
 
 ```python
-class AgentStepResponse(BaseModel):
-    """A single step in the agent's execution history (persisted with the message)."""
-    id: int
-    type: str              # "thinking" | "tool" | "plan" | "status" | "error"
-    label: str             # Human-readable step description
-    detail: Optional[str] = None   # Additional detail text
-    tool: Optional[str] = None     # Tool function name (for type="tool")
-    result: Optional[str] = None   # Tool result summary
-    success: Optional[bool] = None
-    active: bool = False
-    planSteps: Optional[List[str]] = None  # For type="plan"
-    timestamp: int = 0     # Unix ms
-
 class MessageResponse(BaseModel):
     """Individual message in a session."""
     id: int
     session_id: str
-    role: str              # "user", "assistant", or "system"
+    role: str             # "user", "assistant", or "system"
     content: str
     created_at: str
     rag_sources: Optional[List[SourceInfo]] = None
-    agent_steps: Optional[List[AgentStepResponse]] = None  # Tool execution history
+    agent_steps: Optional[List[AgentStepResponse]] = None
 
 class MessageListResponse(BaseModel):
     messages: List[MessageResponse]
@@ -393,8 +370,7 @@ class DocumentResponse(BaseModel):
     indexed_at: str
     last_accessed_at: Optional[str] = None
     sessions_using: int = 0
-    indexing_status: str = "complete"
-    # "pending" | "indexing" | "complete" | "failed" | "cancelled" | "missing"
+    indexing_status: str = "complete"  # pending | indexing | complete | failed | cancelled | missing
 
 class DocumentListResponse(BaseModel):
     documents: List[DocumentResponse]
@@ -430,22 +406,9 @@ class AttachDocumentRequest(BaseModel):
       "disk_space_gb": 128.5,
       "memory_available_gb": 12.3,
       "initialized": true,
-      "version": "0.1.0",
-      "lemonade_version": "0.18.0",
-      "model_size_gb": 17.4,
-      "model_device": "npu",
-      "model_context_size": 32768,
-      "model_labels": ["chat", "code"],
-      "gpu_name": "AMD Radeon 8060S",
-      "gpu_vram_gb": 64.0,
-      "tokens_per_second": 42.3,
-      "time_to_first_token": 0.85,
-      "device_supported": true,
-      "processor_name": "AMD Ryzen AI MAX+ 395 w/ Radeon 8060S"
+      "version": "0.1.0"
     }
     ```
-
-    `device_supported` is `false` when the OS is not Windows (Linux/macOS support coming soon) or no supported hardware was detected (no AMD Ryzen AI Max and no AMD Radeon GPU with ≥ 24 GB VRAM). The UI displays a **dismissible** warning banner when `false` — no functionality is blocked. Always `true` when `GAIA_SKIP_DEVICE_CHECK` is set or when `LEMONADE_BASE_URL` points to a non-localhost server (remote inference, no local hardware requirements).
   </Accordion>
 
   <Accordion title="GET /api/health">
@@ -902,8 +865,8 @@ from gaia.rag.sdk import RAGSDK, RAGConfig
 
 config = RAGConfig()
 rag = RAGSDK(config)
-result = rag.index_file(filepath)
-chunk_count = result.get("chunk_count", 0)
+result = rag.index_document(filepath)
+chunk_count = result.get("num_chunks", 0)
 ```
 
 ---
@@ -916,16 +879,16 @@ GAIA Agent UI is also available as an npm package for quick installation:
 npm install -g @amd-gaia/agent-ui
 ```
 
-This provides the `gaia` CLI command:
+This provides the `gaia-ui` CLI command:
 
 ```bash
-gaia              # Start Python backend + open browser
-gaia --serve      # Serve frontend only (Node.js static server)
-gaia --port 8080  # Custom port
-gaia --version    # Show version
+gaia-ui              # Start Python backend + open browser
+gaia-ui --serve      # Serve frontend only (Node.js static server)
+gaia-ui --port 8080  # Custom port
+gaia-ui --version    # Show version
 ```
 
-On first run, `gaia` automatically installs the Python backend (uv, Python 3.12, amd-gaia) if not already present.
+On first run, `gaia-ui` automatically installs the Python backend (uv, Python 3.12, amd-gaia) if not already present. On subsequent runs, it auto-updates if the version doesn't match.
 
 ### Package Contents
 

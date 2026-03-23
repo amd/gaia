@@ -1,21 +1,19 @@
 /* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
-/* Connection status banner -- terminal alert style */
+/* Connection status banner -- refined alert style */
 
 .connection-banner {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 20px;
+    padding: 10px 24px;
     font-size: 12px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    line-height: 1.4;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    line-height: 1.5;
     flex-shrink: 0;
-    animation: slideDown 150ms var(--ease);
+    animation: slideDown 200ms var(--ease);
     z-index: 40;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
 }
 
 .connection-banner--error {
@@ -37,15 +35,15 @@
 }
 
 [data-theme="dark"] .connection-banner--error {
-    background: #120808;
+    background: rgba(237, 28, 36, 0.06);
     color: #fca5a5;
-    border-bottom: 1px solid #2a0e0e;
+    border-bottom: 1px solid rgba(237, 28, 36, 0.15);
 }
 
 [data-theme="dark"] .connection-banner--warning {
-    background: #120e05;
+    background: rgba(232, 168, 48, 0.06);
     color: #fcd34d;
-    border-bottom: 1px solid #2a1e08;
+    border-bottom: 1px solid rgba(232, 168, 48, 0.15);
 }
 
 [data-theme="dark"] .connection-banner--device {
@@ -63,8 +61,6 @@
 .connection-banner__text {
     flex: 1;
     min-width: 0;
-    text-transform: none;
-    letter-spacing: 0;
 }
 
 .connection-banner__hint {
@@ -75,14 +71,14 @@
 
 .connection-banner__hint code {
     font-family: var(--font-mono);
-    padding: 1px 5px;
-    border-radius: 2px;
-    background: rgba(0, 0, 0, 0.08);
+    padding: 2px 7px;
+    border-radius: var(--radius-sm);
+    background: rgba(0, 0, 0, 0.06);
     font-size: 11px;
 }
 
 [data-theme="dark"] .connection-banner__hint code {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.06);
 }
 
 .connection-banner__link {
@@ -96,13 +92,13 @@
 
 .connection-banner__dismiss {
     flex-shrink: 0;
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 2px;
-    opacity: 0.6;
+    border-radius: var(--radius-sm);
+    opacity: 0.5;
     transition: opacity var(--duration-fast) var(--ease);
 }
 .connection-banner__dismiss:hover {
@@ -111,13 +107,13 @@
 
 .connection-banner__retry {
     flex-shrink: 0;
-    padding: 4px 12px;
-    border-radius: 2px;
+    padding: 5px 14px;
+    border-radius: var(--radius-md);
     font-size: 11px;
     font-weight: 600;
     font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 1px;
     transition: all var(--duration) var(--ease);
 }
 

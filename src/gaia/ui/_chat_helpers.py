@@ -247,8 +247,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
     session_id = request.session_id
     try:
-        # Create SSE handler first and emit immediate feedback BEFORE the
-        # slow ChatAgent construction (RAG indexing, LLM connection can take 10-30s)
+        # Create SSE handler for streaming events
         sse_handler = SSEOutputHandler()
         # Register so /api/chat/confirm-tool can find this handler.
         _active_sse_handlers[session_id] = sse_handler
@@ -442,13 +441,6 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 _MAX_MSG_CHARS = 2000
                 if history_pairs:
                     recent = history_pairs[-_MAX_HISTORY_PAIRS:]
-                    sse_handler._emit(
-                        {
-                            "type": "status",
-                            "status": "info",
-                            "message": f"Restoring {len(recent)} previous message(s)",
-                        }
-                    )
                     for user_msg, assistant_msg in recent:
                         if hasattr(agent, "conversation_history"):
                             # Truncate to keep context manageable

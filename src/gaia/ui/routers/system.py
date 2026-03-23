@@ -27,6 +27,8 @@ async def system_status():
     status = SystemStatus()
 
     # Check Lemonade Server
+    # Use a generous timeout (10s) because when the LLM is handling many
+    # parallel requests it may take a while to respond to the health check.
     try:
         import httpx
 
