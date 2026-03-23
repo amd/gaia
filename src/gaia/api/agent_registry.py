@@ -138,23 +138,139 @@ class AgentRegistry:
             logger.error(f"Failed to load custom JSON agent from {file_path}: {e}")
 
     def _load_yaml_agent(self, file_path: Path):
-        """Load agent definition from a YAML file (.yml or .yaml)."""
+        """
+        Load agent definition from a YAML file (.yml or .yaml).
+
+        Supports two formats:
+        1. Simple YAML with nested persona dict (legacy)
+        2. Frontmatter + markdown body (SKILLS.md style)
+
+        Frontmatter format:
+        ---
+        name: Agent Name
+        description: Agent description
+        id: agent-id
+        tools: [tool1, tool2]
+        init_params: {max_steps: 50}
+        ---
+
+        # System Prompt (markdown body after frontmatter)
+        You are a helpful agent...
+
+        ## Persona
+        **Style:** Friendly
+        **Voice:** Professional
+        """
         try:
             with open(file_path, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f)
+                content = f.read()
 
-            if not config:
-                logger.warning(f"YAML agent file {file_path} is empty")
-                return
+            # Check for frontmatter (--- delimiters)
+            match = re.search(r"^---\s*\n(.*?)\n---\s*\n(.*)$", content, re.DOTALL)
 
-            model_id = config.get("id") or file_path.stem
-            self._register_custom_agent(model_id, config)
-            logger.info(f"Loaded custom YAML agent: {model_id}")
-            logger.debug(f"YAML agent {model_id} config: {config}")  # Debug log
+            if match:
+                # Frontmatter + markdown body format (SKILLS.md style)
+                frontmatter_text = match.group(1)
+                body_content = match.group(2).strip()
+
+                # Parse frontmatter as YAML
+                frontmatter = yaml.safe_load(frontmatter_text)
+                if not frontmatter:
+                    logger.warning(f"YAML frontmatter empty in {file_path}")
+                    return
+
+                # Build config from frontmatter
+                config = {
+                    "id": frontmatter.get("id", file_path.stem),
+                    "name": frontmatter.get("name", file_path.stem),
+                    "description": frontmatter.get("description", "Custom Configurable Agent"),
+                    "tools": frontmatter.get("tools", ["*"]),
+                    "init_params": frontmatter.get("init_params", {}),
+                }
+
+                # Parse system prompt and persona from markdown body
+                config["system_prompt"], config["persona"] = self._parse_markdown_body(body_content)
+
+                model_id = config["id"]
+                self._register_custom_agent(model_id, config)
+                logger.info(f"Loaded custom YAML agent (frontmatter): {model_id}")
+                logger.debug(f"YAML agent {model_id} config: {config}")
+
+            else:
+                # Legacy simple YAML format
+                config = yaml.safe_load(content)
+                if not config:
+                    logger.warning(f"YAML agent file {file_path} is empty")
+                    return
+
+                model_id = config.get("id") or file_path.stem
+                self._register_custom_agent(model_id, config)
+                logger.info(f"Loaded custom YAML agent: {model_id}")
+                logger.debug(f"YAML agent {model_id} config: {config}")
+
         except yaml.YAMLError as e:
             logger.error(f"Failed to parse YAML agent file {file_path}: {e}")
         except Exception as e:
             logger.error(f"Failed to load custom YAML agent from {file_path}: {e}")
+
+    def _parse_markdown_body(self, body: str) -> tuple:
+        """
+        Parse markdown body into system_prompt and persona dict.
+
+        Args:
+            body: Markdown content after frontmatter
+
+        Returns:
+            Tuple of (system_prompt_text, persona_dict)
+        """
+        system_prompt = ""
+        persona = {}
+
+        # Split by ## Persona section
+        persona_match = re.search(r"\n##\s*Persona\s*\n", body, re.IGNORECASE)
+
+        if persona_match:
+            # System prompt is everything before ## Persona
+            system_prompt = body[:persona_match.start()].strip()
+            persona_text = body[persona_match.end():].strip()
+
+            # Parse persona sections (**Field:** value format)
+            # Split on newlines that precede **Field:** pattern
+            sections = re.split(r"\n(?=\*\*)", persona_text)
+
+            for section in sections:
+                match = re.match(r"\*\*([A-Za-z_]+):\*\*\s*(.+)", section, re.DOTALL)
+                if match:
+                    field_name = match.group(1).lower()
+                    field_value = match.group(2).strip()
+
+                    # Map field names to standard persona keys
+                    field_mapping = {
+                        "style": "style",
+                        "focus": "focus",
+                        "background": "background",
+                        "expertise": "expertise",
+                        "voice": "voice",
+                        "communication": "communication",
+                    }
+
+                    if field_name in field_mapping:
+                        # Handle expertise as list if it starts with -
+                        if field_name == "expertise" and field_value.startswith("-"):
+                            # Parse as bullet list
+                            expertise_items = [
+                                line.strip()[2:].strip()
+                                for line in field_value.split("\n")
+                                if line.strip().startswith("-")
+                            ]
+                            persona[field_mapping[field_name]] = expertise_items
+                        else:
+                            persona[field_mapping[field_name]] = field_value
+        else:
+            # No persona section - entire body is system prompt
+            system_prompt = body.strip()
+
+        return system_prompt, persona
 
     def _load_markdown_agent(self, file_path: Path):
         """Load agent definition from a Markdown file with YAML-like frontmatter."""
@@ -193,11 +309,17 @@ class AgentRegistry:
             logger.error(f"Failed to load custom Markdown agent from {file_path}: {e}")
 
     def _register_custom_agent(self, model_id: str, config: Dict[str, Any]):
-        """Register a custom agent configuration."""
-        # Extract persona fields for direct injection
+        """
+        Register a custom agent configuration.
+
+        Args:
+            model_id: Unique identifier for the agent
+            config: Agent configuration dict with name, description, system_prompt, tools, persona
+        """
+        # Extract persona (already consolidated in _load_yaml_agent)
         persona = config.get("persona", {})
 
-        # Map to ConfigurableAgent class
+        # Map to ConfigurableAgent class with unified persona structure
         self._custom_agents[model_id] = {
             "type": "configurable",
             "config": {
@@ -205,12 +327,8 @@ class AgentRegistry:
                 "description": config.get("description", "Custom Configurable Agent"),
                 "system_prompt": config.get("system_prompt", ""),
                 "tools": config.get("tools", ["*"]),
-                # Persona fields - these get injected into LLM context
+                # Unified persona dict - all fields consolidated
                 "persona": persona,
-                "voice_characteristics": config.get("voice_characteristics"),
-                "background": config.get("background"),
-                "expertise": config.get("expertise"),
-                "communication_style": config.get("communication_style"),
                 "init_params": config.get("init_params", {})
             }
         }
@@ -278,12 +396,8 @@ class AgentRegistry:
                 init_params["description"] = agent_config["description"]
                 init_params["system_prompt"] = agent_config["system_prompt"]
                 init_params["tools"] = agent_config["tools"]
-                # Persona context injection - CRITICAL FIX
+                # Unified persona dict - all fields consolidated
                 init_params["persona"] = agent_config.get("persona")
-                init_params["voice_characteristics"] = agent_config.get("voice_characteristics")
-                init_params["background"] = agent_config.get("background")
-                init_params["expertise"] = agent_config.get("expertise")
-                init_params["communication_style"] = agent_config.get("communication_style")
             else:
                 # Handle hardcoded agents
                 agent_class = self._load_agent_class(config["class_name"])

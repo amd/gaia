@@ -1,0 +1,23 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.11, pytest-8.4.2, pluggy-1.6.0
+rootdir: C:\Users\antmi\gaia
+configfile: pyproject.toml
+plugins: anyio-4.10.0, Faker-37.8.0, langsmith-0.4.30, asyncio-1.2.0, cov-7.0.0, mock-3.15.1, requests-mock-1.12.1, typeguard-4.4.4
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 0 items / 1 error
+
+=================================== ERRORS ====================================
+___________ ERROR collecting tests/unit/test_configurable_agent.py ____________
+ImportError while importing test module 'C:\Users\antmi\gaia\tests\unit\test_configurable_agent.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+..\miniforge3\Lib\importlib\__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\unit\test_configurable_agent.py:10: in <module>
+    from gaia.agents.base.configurable import ConfigurableAgent
+E   ModuleNotFoundError: No module named 'gaia'
+=========================== short test summary info ===========================
+ERROR tests/unit/test_configurable_agent.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+============================== 1 error in 0.14s ===============================
