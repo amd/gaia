@@ -579,6 +579,176 @@ class TestSystemStatus:
         assert data["context_size_sufficient"] is True
         assert data["model_device"] == "amd_npu"
 
+    @patch("httpx.AsyncClient")
+    def test_system_status_wrong_model_loaded(self, mock_httpx_cls, client):
+        """expected_model_loaded is False when a different model is running."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "SomeOtherModel-7B-GGUF",
+            "version": "9.3.0",
+            "all_models_loaded": [
+                {
+                    "model_name": "SomeOtherModel-7B-GGUF",
+                    "type": "llm",
+                    "device": "cpu",
+                    "recipe_options": {"ctx_size": 32768},
+                }
+            ],
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            return make_response(200, {"data": []})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["model_loaded"] == "SomeOtherModel-7B-GGUF"
+        assert data["expected_model_loaded"] is False
+        assert data["default_model_name"] == "Qwen3.5-35B-A3B-GGUF"
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_expected_model_loaded(self, mock_httpx_cls, client):
+        """expected_model_loaded is True when the default model is running."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+            "version": "9.3.0",
+            "all_models_loaded": [
+                {
+                    "model_name": "Qwen3.5-35B-A3B-GGUF",
+                    "type": "llm",
+                    "device": "amd_npu",
+                    "recipe_options": {"ctx_size": 32768},
+                }
+            ],
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            return make_response(200, {"data": []})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["expected_model_loaded"] is True
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_wrong_model_and_small_context(self, mock_httpx_cls, client):
+        """Both expected_model_loaded=False and context_size_sufficient=False when
+        the wrong model is loaded with an insufficient context window."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "TinyModel-0.5B-GGUF",
+            "version": "9.3.0",
+            "all_models_loaded": [
+                {
+                    "model_name": "TinyModel-0.5B-GGUF",
+                    "type": "llm",
+                    "device": "cpu",
+                    "recipe_options": {"ctx_size": 4096},
+                }
+            ],
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            return make_response(200, {"data": []})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["model_loaded"] == "TinyModel-0.5B-GGUF"
+        assert data["expected_model_loaded"] is False
+        assert data["context_size_sufficient"] is False
+        assert data["model_context_size"] == 4096
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_custom_model_respected(self, mock_httpx_cls, client):
+        """expected_model_loaded is True when the loaded model matches the
+        custom_model override stored in settings."""
+        # Store a custom model override
+        client.put(
+            "/api/settings",
+            json={"custom_model": "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated"},
+        )
+
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated",
+            "version": "9.3.0",
+            "all_models_loaded": [
+                {
+                    "model_name": "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated",
+                    "type": "llm",
+                    "device": "amd_npu",
+                    "recipe_options": {"ctx_size": 32768},
+                }
+            ],
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            return make_response(200, {"data": []})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["expected_model_loaded"] is True
+        assert data["default_model_name"] == "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated"
+
 
 class TestSessionEndpoints:
     """Tests for /api/sessions/* endpoints."""

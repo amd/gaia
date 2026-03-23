@@ -28,7 +28,7 @@ _MIN_CONTEXT_SIZE = 32768
 
 
 @router.get("/api/system/status", response_model=SystemStatus)
-async def system_status():
+async def system_status(db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
     status = SystemStatus()
 
@@ -108,6 +108,18 @@ async def system_status():
                                     status.model_context_size = ctx
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
+
+                # Validate that the loaded model matches what GAIA Chat expects.
+                # Respects custom_model override if the user has configured one.
+                if status.model_loaded:
+                    custom_model = db.get_setting("custom_model")
+                    expected = (custom_model or _DEFAULT_MODEL_NAME).lower()
+                    status.expected_model_loaded = (
+                        status.model_loaded.lower() == expected
+                    )
+                    # Surface the actual expected name in the response so the
+                    # frontend can name it precisely in the warning banner.
+                    status.default_model_name = custom_model or _DEFAULT_MODEL_NAME
 
                 # When no LLM is loaded, check if the default model is downloaded.
                 # Uses show_all=true to see models that are in the catalog but not

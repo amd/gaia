@@ -44,6 +44,7 @@ class SystemStatus(BaseModel):
     model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
     default_model_name: str = "Qwen3.5-35B-A3B-GGUF"  # Required model for GAIA Chat
     lemonade_url: str = "http://localhost:8000"  # Lemonade web UI base URL
+    expected_model_loaded: bool = True  # False if a different model is loaded
 
 
 # ── Settings ────────────────────────────────────────────────────────────────

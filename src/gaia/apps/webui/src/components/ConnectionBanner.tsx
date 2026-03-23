@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { AlertTriangle, Download, Layers, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Cpu, Download, Layers, WifiOff, X } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useChatStore } from '../stores/chatStore';
 import './ConnectionBanner.css';
@@ -11,8 +11,8 @@ const MIN_CONTEXT_SIZE = 32768;
 
 /**
  * Banner shown when the backend is unreachable, Lemonade Server is not running,
- * the required model is not downloaded, or the context window is too small.
- * Provides clear messaging and actionable hints for the user.
+ * the required model is not downloaded, the wrong model is loaded, or the
+ * context window is too small. Provides clear messaging and actionable hints.
  */
 export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
     const { backendConnected, systemStatus } = useChatStore();
@@ -23,11 +23,13 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
     const prevLemonadeRef = useRef(systemStatus?.lemonade_running);
     const prevModelDownloadedRef = useRef(systemStatus?.model_downloaded);
     const prevContextSufficientRef = useRef(systemStatus?.context_size_sufficient);
+    const prevExpectedModelRef = useRef(systemStatus?.expected_model_loaded);
 
     useEffect(() => {
         const lemonade = systemStatus?.lemonade_running;
         const modelDownloaded = systemStatus?.model_downloaded;
         const contextSufficient = systemStatus?.context_size_sufficient;
+        const expectedModel = systemStatus?.expected_model_loaded;
 
         let shouldReset = false;
 
@@ -42,6 +44,10 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         if (prevContextSufficientRef.current !== contextSufficient) {
             prevContextSufficientRef.current = contextSufficient;
             if (contextSufficient === false) shouldReset = true;
+        }
+        if (prevExpectedModelRef.current !== expectedModel) {
+            prevExpectedModelRef.current = expectedModel;
+            if (expectedModel === false) shouldReset = true;
         }
 
         if (shouldReset) setDismissed(false);
@@ -129,6 +135,60 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                         </a>{' '}
                         to download it, or run:{' '}
                         <code>lemonade-server pull {modelName}</code>
+                    </span>
+                </div>
+                {onRetry && (
+                    <button className="connection-banner__retry" onClick={onRetry}>
+                        Check again
+                    </button>
+                )}
+                <button
+                    className="connection-banner__dismiss"
+                    onClick={() => setDismissed(true)}
+                    aria-label="Dismiss"
+                >
+                    <X size={14} />
+                </button>
+            </div>
+        );
+    }
+
+    // Case 5: A model is loaded but it is not the expected one.
+    // Show a combined message when the context window is also too small, since
+    // loading the correct model will likely fix both issues at once.
+    if (
+        systemStatus &&
+        systemStatus.lemonade_running &&
+        systemStatus.model_loaded &&
+        systemStatus.expected_model_loaded === false
+    ) {
+        const currentModel = systemStatus.model_loaded;
+        const expectedModel = systemStatus.default_model_name ?? 'Qwen3.5-35B-A3B-GGUF';
+        const lemonadeUI = systemStatus.lemonade_url ?? 'http://localhost:8000';
+        const contextAlsoSmall = systemStatus.context_size_sufficient === false;
+        return (
+            <div className="connection-banner connection-banner--warning" role="status">
+                <div className="connection-banner__icon">
+                    <Cpu size={16} />
+                </div>
+                <div className="connection-banner__text">
+                    Unexpected model loaded: <strong>{currentModel}</strong>.{' '}
+                    GAIA Chat requires <strong>{expectedModel}</strong>.
+                    {contextAlsoSmall && (
+                        <>{' '}The context window is also too small.</>
+                    )}{' '}
+                    <span className="connection-banner__hint">
+                        In{' '}
+                        <a
+                            className="connection-banner__link"
+                            href={lemonadeUI}
+                            target="_blank"
+                            rel="noreferrer"
+                        >
+                            Lemonade
+                        </a>
+                        , load <strong>{expectedModel}</strong>, or run:{' '}
+                        <code>lemonade-server serve --model {expectedModel}</code>
                     </span>
                 </div>
                 {onRetry && (

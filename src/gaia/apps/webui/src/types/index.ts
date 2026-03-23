@@ -104,6 +104,7 @@ export interface SystemStatus {
     model_downloaded: boolean | null;
     default_model_name: string | null;
     lemonade_url: string | null;
+    expected_model_loaded: boolean;
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────
