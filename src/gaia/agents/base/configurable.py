@@ -40,7 +40,7 @@ class ConfigurableAgent(Agent):
         system_prompt: str,
         tools: List[str] = None,
         persona: Optional[Dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize the ConfigurableAgent.
@@ -95,7 +95,9 @@ class ConfigurableAgent(Agent):
                 f"Available: {sorted(available_tools)}"
             )
 
-        logger.debug(f"Agent {self.agent_name} registered tools: {self.requested_tools}")
+        logger.debug(
+            f"Agent {self.agent_name} registered tools: {self.requested_tools}"
+        )
 
     def _get_system_prompt(self) -> str:
         """
@@ -118,33 +120,37 @@ class ConfigurableAgent(Agent):
 
         if self.persona:
             # Unified persona dict - all fields handled consistently
-            if self.persona.get('style'):
-                value = self.persona['style']
+            if self.persona.get("style"):
+                value = self.persona["style"]
                 persona_sections.append(f"**Style:** {value}")
-            if self.persona.get('focus'):
-                value = self.persona['focus']
+            if self.persona.get("focus"):
+                value = self.persona["focus"]
                 persona_sections.append(f"**Focus:** {value}")
-            if self.persona.get('background'):
-                value = self.persona['background']
+            if self.persona.get("background"):
+                value = self.persona["background"]
                 persona_sections.append(f"**Background:** {value}")
-            if self.persona.get('expertise'):
-                expertise = self.persona['expertise']
+            if self.persona.get("expertise"):
+                expertise = self.persona["expertise"]
                 if isinstance(expertise, list):
-                    expertise = ', '.join(str(e) for e in expertise)
+                    expertise = ", ".join(str(e) for e in expertise)
                 persona_sections.append(f"**Expertise:** {expertise}")
-            if self.persona.get('voice'):
-                value = self.persona['voice']
+            if self.persona.get("voice"):
+                value = self.persona["voice"]
                 persona_sections.append(f"**Voice:** {value}")
-            if self.persona.get('communication'):
-                value = self.persona['communication']
+            if self.persona.get("communication"):
+                value = self.persona["communication"]
                 persona_sections.append(f"**Communication:** {value}")
 
         # Add persona section if we have any persona fields
         if persona_sections:
             parts.append("\n## AGENT PERSONA\n" + "\n".join(persona_sections))
-            logger.debug(f"Injected {len(persona_sections)} persona sections for {self.agent_name}")
+            logger.debug(
+                f"Injected {len(persona_sections)} persona sections for {self.agent_name}"
+            )
         else:
-            logger.debug(f"No persona fields for {self.agent_name}, using base prompt only")
+            logger.debug(
+                f"No persona fields for {self.agent_name}, using base prompt only"
+            )
 
         return "\n\n".join(parts)
 
@@ -209,7 +215,7 @@ class ConfigurableAgent(Agent):
             return {
                 "status": "error",
                 "error": f"Tool '{tool_name}' is not available. "
-                         f"Available tools: {', '.join(self.requested_tools)}"
+                f"Available tools: {', '.join(self.requested_tools)}",
             }
 
         # Call parent class execution logic

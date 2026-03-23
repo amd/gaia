@@ -53,13 +53,13 @@ Without these tests:
 ================================================================================
 """
 
-import pytest
-from pathlib import Path
 import tempfile
+from pathlib import Path
+
 import yaml
 
-from gaia.api.agent_registry import AgentRegistry
 from gaia.agents.base.configurable import ConfigurableAgent
+from gaia.api.agent_registry import AgentRegistry
 
 
 class TestPersonaFieldExtraction:
@@ -81,8 +81,8 @@ class TestPersonaFieldExtraction:
                 "background": "PhD researcher with 10 years experience",
                 "expertise": ["data analysis", "research"],
                 "voice": "Precise, measured language",
-                "communication": "Professional and thorough"
-            }
+                "communication": "Professional and thorough",
+            },
         }
 
         registry._register_custom_agent("test-agent", config)
@@ -92,7 +92,9 @@ class TestPersonaFieldExtraction:
         assert "persona" in stored
         assert stored["persona"]["style"] == "Analytical"
         assert stored["persona"]["focus"] == "Information gathering"
-        assert stored["persona"]["background"] == "PhD researcher with 10 years experience"
+        assert (
+            stored["persona"]["background"] == "PhD researcher with 10 years experience"
+        )
         assert stored["persona"]["expertise"] == ["data analysis", "research"]
         assert stored["persona"]["voice"] == "Precise, measured language"
         assert stored["persona"]["communication"] == "Professional and thorough"
@@ -109,8 +111,8 @@ class TestPersonaFieldExtraction:
                 "voice": "Friendly and warm",
                 "background": "You are a helpful assistant.",
                 "expertise": ["customer service", "support"],
-                "communication": "Empathetic and patient"
-            }
+                "communication": "Empathetic and patient",
+            },
         }
 
         registry._register_custom_agent("test-agent-2", config)
@@ -130,7 +132,7 @@ class TestPersonaFieldExtraction:
             "id": "minimal-agent",
             "name": "Minimal Agent",
             "system_prompt": "You are minimal.",
-            "tools": []
+            "tools": [],
         }
 
         registry._register_custom_agent("minimal-agent", config)
@@ -153,8 +155,8 @@ class TestPersonaFieldPassing:
             "persona": {
                 "style": "Creative",
                 "focus": "Storytelling",
-                "expertise": ["fiction", "narrative design"]
-            }
+                "expertise": ["fiction", "narrative design"],
+            },
         }
 
         registry._register_custom_agent("persona-agent", config)
@@ -178,8 +180,8 @@ class TestPersonaFieldPassing:
                 "voice": "Deep, resonant voice with dramatic pauses",
                 "communication": "Theatrical and engaging",
                 "style": "Dramatic",
-                "background": "Trained actor with 10 years stage experience"
-            }
+                "background": "Trained actor with 10 years stage experience",
+            },
         }
 
         registry._register_custom_agent("voice-agent", config)
@@ -188,7 +190,10 @@ class TestPersonaFieldPassing:
         assert agent.persona["voice"] == "Deep, resonant voice with dramatic pauses"
         assert agent.persona["communication"] == "Theatrical and engaging"
         assert agent.persona["style"] == "Dramatic"
-        assert agent.persona["background"] == "Trained actor with 10 years stage experience"
+        assert (
+            agent.persona["background"]
+            == "Trained actor with 10 years stage experience"
+        )
 
     def test_get_agent_passes_mixed_persona(self):
         """Verify get_agent handles mixed persona fields."""
@@ -202,8 +207,8 @@ class TestPersonaFieldPassing:
                 "style": "Technical",
                 "focus": "Problem solving",
                 "voice": "Clear and precise",
-                "background": "Software engineer with 20 years experience"
-            }
+                "background": "Software engineer with 20 years experience",
+            },
         }
 
         registry._register_custom_agent("mixed-agent", config)
@@ -213,7 +218,9 @@ class TestPersonaFieldPassing:
         assert agent.persona["style"] == "Technical"
         assert agent.persona["focus"] == "Problem solving"
         assert agent.persona["voice"] == "Clear and precise"
-        assert agent.persona["background"] == "Software engineer with 20 years experience"
+        assert (
+            agent.persona["background"] == "Software engineer with 20 years experience"
+        )
 
 
 class TestPersonaInjectionInSystemPrompt:
@@ -231,8 +238,8 @@ class TestPersonaInjectionInSystemPrompt:
                 "background": "PhD researcher with 15 years experience",
                 "expertise": ["research", "analysis"],
                 "voice": "Precise, measured language",
-                "communication": "Professional and citation-focused"
-            }
+                "communication": "Professional and citation-focused",
+            },
         )
 
         prompt = agent._get_system_prompt()
@@ -255,23 +262,24 @@ class TestPersonaInjectionInSystemPrompt:
                 "voice": "Warm and friendly tone",
                 "background": "Helpful assistant with customer service background",
                 "expertise": ["support", "troubleshooting"],
-                "communication": "Patient and empathetic"
-            }
+                "communication": "Patient and empathetic",
+            },
         )
 
         prompt = agent._get_system_prompt()
 
         assert "**Voice:** Warm and friendly tone" in prompt
-        assert "**Background:** Helpful assistant with customer service background" in prompt
+        assert (
+            "**Background:** Helpful assistant with customer service background"
+            in prompt
+        )
         assert "**Expertise:** support, troubleshooting" in prompt
         assert "**Communication:** Patient and empathetic" in prompt
 
     def test_system_prompt_handles_empty_persona(self):
         """Verify _get_system_prompt works with no persona fields."""
         agent = ConfigurableAgent(
-            name="Minimal Agent",
-            description="Test",
-            system_prompt="You are minimal."
+            name="Minimal Agent", description="Test", system_prompt="You are minimal."
         )
 
         prompt = agent._get_system_prompt()
@@ -339,11 +347,7 @@ class TestPersonaEdgeCases:
             name="Test",
             description="Test",
             system_prompt="Base",
-            persona={
-                "style": None,
-                "focus": "",
-                "background": None
-            }
+            persona={"style": None, "focus": "", "background": None},
         )
 
         prompt = agent._get_system_prompt()
@@ -358,11 +362,7 @@ class TestPersonaEdgeCases:
             name="Test",
             description="Test",
             system_prompt="Base",
-            persona={
-                "style": "",
-                "voice": "",
-                "communication": ""
-            }
+            persona={"style": "", "voice": "", "communication": ""},
         )
 
         prompt = agent._get_system_prompt()
@@ -374,9 +374,7 @@ class TestPersonaEdgeCases:
             name="Test",
             description="Test",
             system_prompt="Base",
-            persona={
-                "expertise": ["research", "analysis", "testing"]
-            }
+            persona={"expertise": ["research", "analysis", "testing"]},
         )
 
         prompt = agent._get_system_prompt()
@@ -392,7 +390,7 @@ class TestToolExecutionFiltering:
             name="Test",
             description="Test",
             system_prompt="Base",
-            tools=["allowed_tool"]
+            tools=["allowed_tool"],
         )
 
         # Try to execute a tool that's not configured
@@ -411,15 +409,12 @@ class TestToolExecutionFiltering:
             name="Test",
             description="Test",
             system_prompt="Base",
-            tools=["tool_a", "tool_b"]
+            tools=["tool_a", "tool_b"],
         )
 
         # Wildcard should allow all
         agent_wildcard = ConfigurableAgent(
-            name="Test Wildcard",
-            description="Test",
-            system_prompt="Base",
-            tools=["*"]
+            name="Test Wildcard", description="Test", system_prompt="Base", tools=["*"]
         )
 
         # Wildcard agent would allow any tool (tested via "*" check)

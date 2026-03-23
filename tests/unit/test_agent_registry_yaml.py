@@ -12,8 +12,6 @@ Tests verify that custom agents can be loaded from:
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from gaia.api.agent_registry import AgentRegistry
 
 
@@ -76,7 +74,9 @@ init_params:
             assert "gaia-advanced" in registry._custom_agents
             agent_config = registry._custom_agents["gaia-advanced"]
             assert agent_config["config"]["name"] == "AdvancedAgent"
-            assert agent_config["config"]["persona"]["style"] == "Analytical and thorough"
+            assert (
+                agent_config["config"]["persona"]["style"] == "Analytical and thorough"
+            )
             assert agent_config["config"]["init_params"]["max_steps"] == 50
 
     def test_load_yaml_agent_with_comments(self):
