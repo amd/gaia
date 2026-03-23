@@ -11,6 +11,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from .._chat_helpers import evict_session_agent
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import (
@@ -21,7 +22,6 @@ from ..models import (
     SessionResponse,
     UpdateSessionRequest,
 )
-from .._chat_helpers import evict_session_agent
 from ..utils import message_to_response, session_to_response
 
 logger = logging.getLogger(__name__)

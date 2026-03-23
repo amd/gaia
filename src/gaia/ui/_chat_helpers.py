@@ -50,7 +50,9 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 # requests, and the per-session session_lock prevents concurrent turns within
 # the same session.  Together they guarantee the cache dict and each agent are
 # accessed by at most one thread at a time — no per-entry locking needed.
-_agent_cache: dict = {}  # session_id -> {"agent": ChatAgent, "model_id": str, "document_ids": list}
+_agent_cache: dict = (
+    {}
+)  # session_id -> {"agent": ChatAgent, "model_id": str, "document_ids": list}
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
@@ -67,7 +69,9 @@ def _get_cached_agent(session_id: str, model_id: str):
         if entry["model_id"] != model_id:
             # Model changed — the cached agent used a different LLM; discard it.
             del _agent_cache[session_id]
-            logger.debug("Agent cache miss (model change) for session %s", session_id[:8])
+            logger.debug(
+                "Agent cache miss (model change) for session %s", session_id[:8]
+            )
             return None
         return entry["agent"]
 
@@ -85,11 +89,15 @@ def _store_agent(session_id: str, model_id: str, document_ids: list, agent) -> N
             "agent": agent,
         }
         logger.debug(
-            "Cached agent for session %s (cache size: %d)", session_id[:8], len(_agent_cache)
+            "Cached agent for session %s (cache size: %d)",
+            session_id[:8],
+            len(_agent_cache),
         )
 
 
-def _index_rag_with_progress(agent, fpath_list, sse_handler, *, rebuild_per_doc=False, label="document(s)"):
+def _index_rag_with_progress(
+    agent, fpath_list, sse_handler, *, rebuild_per_doc=False, label="document(s)"
+):
     """Index *fpath_list* with SSE progress events.
 
     Emits tool_start, per-doc status, and tool_result events.
@@ -343,7 +351,9 @@ async def _get_chat_response(
                             agent.rebuild_system_prompt()
                     except Exception as _idx_err:
                         logger.warning("Failed to index %s: %s", fpath, _idx_err)
-            logger.debug("Agent cache hit (non-streaming) for session %s", session_id[:8])
+            logger.debug(
+                "Agent cache hit (non-streaming) for session %s", session_id[:8]
+            )
         else:
             config = ChatAgentConfig(
                 model_id=model_id,
@@ -423,8 +433,21 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         sse_handler = SSEOutputHandler()
         # Register so /api/chat/confirm-tool can find this handler.
         _active_sse_handlers[session_id] = sse_handler
-        sse_handler._emit(
-            {"type": "status", "status": "info", "message": "Connecting to LLM..."}
+
+        # ── Immediate browser feedback ────────────────────────────────────
+        # Yield "Connecting to LLM..." directly (not via the queue) so the
+        # browser sees it *before* the producer thread starts — giving instant
+        # visual feedback even if agent construction or LemonadeManager take
+        # several seconds on first turn.
+        #
+        # The padding comment that follows forces Chromium / Electron to flush
+        # its internal receive buffer.  With small SSE events (< ~512 bytes),
+        # Chromium's fetch ReadableStream holds chunks until the buffer fills or
+        # the stream closes.  Without this, the browser sees nothing for the
+        # entire duration and then gets a batch-dump of all events at the end.
+        yield (
+            'data: {"type":"status","status":"info","message":"Connecting to LLM..."}\n\n'
+            ": " + "x" * 512 + "\n\n"
         )
 
         # Build conversation history
@@ -467,6 +490,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             try:
                 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
+                t0 = _time.monotonic()
+
                 # ── Agent cache check ─────────────────────────────────────────
                 # Reuse an existing ChatAgent if one exists for this session.
                 # On a cache hit we still call _register_tools() so _TOOL_REGISTRY
@@ -503,7 +528,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             label="new document(s)",
                         )
 
-                    logger.debug("Agent cache hit (streaming) for session %s", session_id[:8])
+                    logger.info(
+                        "PERF agent cache hit (streaming) session=%s setup=%.3fs",
+                        session_id[:8],
+                        _time.monotonic() - t0,
+                    )
 
                 else:
                     # -- Cache miss: full construction --
@@ -521,7 +550,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         ui_session_id=session_id,
                     )
 
+                    t_construct = _time.monotonic()
                     agent = ChatAgent(config)
+                    logger.info(
+                        "PERF ChatAgent constructed session=%s took=%.3fs",
+                        session_id[:8],
+                        _time.monotonic() - t_construct,
+                    )
                     agent.console = sse_handler  # Assign early so tool events flow
 
                     # Early-exit if consumer disconnected
@@ -536,7 +571,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     # The hash-based cache (RAGSDK) guarantees no re-processing
                     # unless file content has actually changed.
                     if rag_file_paths and agent.rag:
+                        t_rag = _time.monotonic()
                         _index_rag_with_progress(agent, rag_file_paths, sse_handler)
+                        logger.info(
+                            "PERF RAG indexing session=%s took=%.3fs",
+                            session_id[:8],
+                            _time.monotonic() - t_rag,
+                        )
 
                     # -- Phase 3b: Silently pre-index library docs from cache --
                     # Library docs that are already on disk are loaded from the
@@ -554,7 +595,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                     preindexed += 1
                             except Exception as lib_err:
                                 logger.debug(
-                                    "Library pre-index skipped for %s: %s", fpath, lib_err
+                                    "Library pre-index skipped for %s: %s",
+                                    fpath,
+                                    lib_err,
                                 )
                         if preindexed:
                             agent.rebuild_system_prompt()
@@ -564,6 +607,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
                     # Cache the agent for subsequent turns in this session.
                     _store_agent(session_id, model_id, document_ids, agent)
+                    logger.info(
+                        "PERF total setup (cache miss) session=%s took=%.3fs",
+                        session_id[:8],
+                        _time.monotonic() - t0,
+                    )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -597,7 +645,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     return
 
                 # -- Phase 5: Query processing --
+                t_query = _time.monotonic()
                 result = agent.process_query(request.message)
+                logger.info(
+                    "PERF process_query session=%s took=%.3fs",
+                    session_id[:8],
+                    _time.monotonic() - t_query,
+                )
                 if isinstance(result, dict):
                     val = result.get("result")
                     result_holder["answer"] = (
@@ -750,16 +804,22 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         }
                     )
 
-                yield f"data: {json.dumps(event)}\n\n"
+                # Pad each event so Chromium's receive buffer flushes immediately.
+                # Events < 512 bytes are held by Chromium until the buffer fills.
+                event_data = f"data: {json.dumps(event)}\n\n"
+                if len(event_data) < 512:
+                    event_data += ": " + "x" * (512 - len(event_data) - 4) + "\n\n"
+                yield event_data
 
             except queue.Empty:
                 if not producer.is_alive():
                     break
-                # Send SSE comment as keepalive every ~5s (25 cycles x 0.2s)
-                # to prevent proxies/browsers from closing idle connections
+                # Send a padded keepalive every ~5s (25 cycles × 0.2s).
+                # The padding flushes Chromium's receive buffer so any events
+                # already sent but not yet dispatched arrive immediately.
                 idle_cycles += 1
                 if idle_cycles % 25 == 0:
-                    yield ": keepalive\n\n"
+                    yield ": keepalive " + "x" * 490 + "\n\n"
                 continue
 
         # Signal cancellation (handles client disconnect) then wait for producer
@@ -866,6 +926,18 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
         else:
+            # Log details to help diagnose: cold start, empty LLM response, filtered artifacts
+            logger.warning(
+                "Empty response for session %s — result_holder answer=%r error=%r captured_steps=%d",
+                session_id[:8],
+                (
+                    result_holder.get("answer", "")[:80]
+                    if result_holder.get("answer")
+                    else None
+                ),
+                result_holder.get("error"),
+                len(captured_steps),
+            )
             error_msg = "I wasn't able to generate a response. Please make sure Lemonade Server is running and try again."
             db.add_message(request.session_id, "assistant", error_msg)
             error_data = json.dumps({"type": "error", "content": error_msg})

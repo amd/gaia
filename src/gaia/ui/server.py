@@ -146,6 +146,22 @@ def create_app(db_path: str = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage startup/shutdown lifecycle for background services."""
+        # Pre-warm LemonadeManager so the first user message skips HTTP calls.
+        # Runs in a thread-pool worker to avoid blocking the event loop.
+        async def _prewarm_lemonade():
+            try:
+                from gaia.llm.lemonade_manager import LemonadeManager
+
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None, lambda: LemonadeManager.ensure_ready(quiet=True)
+                )
+                logger.info("LemonadeManager pre-warmed")
+            except Exception as exc:  # server may not be running yet — that's fine
+                logger.debug("LemonadeManager pre-warm skipped: %s", exc)
+
+        asyncio.create_task(_prewarm_lemonade())
+
         # Start document file monitor for auto re-indexing
         monitor = DocumentMonitor(
             db=db,
