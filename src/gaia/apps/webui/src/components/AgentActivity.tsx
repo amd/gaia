@@ -96,11 +96,21 @@ interface AgentActivityProps {
 
 /** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
 export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActivityProps) {
-    // Default to expanded so all activity is visible
-    const [expanded, setExpanded] = useState(true);
+    // Always start collapsed — thinking text is shown via ThinkingIndicator
+    // in the message header. Users can expand to see details if they want.
+    const [expanded, setExpanded] = useState(false);
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
     const prevStepCountRef = useRef(0);
     const collapseTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+    const prevIsActiveRef = useRef(isActive);
+
+    // Auto-collapse when activity completes (thinking done → answer streaming)
+    useEffect(() => {
+        if (prevIsActiveRef.current && !isActive) {
+            setExpanded(false);
+        }
+        prevIsActiveRef.current = isActive;
+    }, [isActive]);
 
     // Cleanup timers on unmount
     useEffect(() => {
@@ -112,13 +122,16 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
 
     // ── Consolidate display steps ────────────────────────────────────
     // Merge consecutive thinking/status steps into one.
+    // IMPORTANT: Use concatenation for detail fields (not `||`) to
+    // preserve accumulated thinking text across multiple steps.
     const displaySteps = useMemo(() => {
         const result: AgentStep[] = [];
         for (const step of steps) {
             const prev = result[result.length - 1];
-            // Merge consecutive thinking steps
+            // Merge consecutive thinking steps — concatenate details
             if (step.type === 'thinking' && prev && prev.type === 'thinking') {
-                result[result.length - 1] = { ...step, detail: step.detail || prev.detail };
+                const merged = (prev.detail || '') + (step.detail || '');
+                result[result.length - 1] = { ...step, detail: merged || prev.detail };
                 continue;
             }
             // Merge consecutive status steps
@@ -126,23 +139,17 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                 result[result.length - 1] = { ...step, label: step.label || prev.label };
                 continue;
             }
-            // Absorb thinking into adjacent status
+            // Absorb thinking into adjacent status — keep thinking detail
             if (step.type === 'thinking' && prev && prev.type === 'status' && prev.active !== false) {
-                result[result.length - 1] = { ...prev, detail: step.detail || prev.detail, active: step.active };
+                result[result.length - 1] = { ...prev, type: 'thinking', detail: step.detail || prev.detail, active: step.active };
                 continue;
             }
-            // Absorb status into adjacent thinking
+            // Absorb status into adjacent thinking — preserve thinking detail
             if (step.type === 'status' && prev && prev.type === 'thinking') {
-                result[result.length - 1] = { ...prev, label: step.label || prev.label, detail: step.detail || prev.detail, active: step.active ?? prev.active };
+                result[result.length - 1] = { ...prev, label: step.label || prev.label, active: step.active ?? prev.active };
                 continue;
             }
             result.push(step);
-        }
-        // Filter: hide thinking steps that appear after the first tool step.
-        // These are LLM post-tool internal reasoning that should not be shown to users.
-        const firstToolIdx = result.findIndex((s) => s.type === 'tool');
-        if (firstToolIdx >= 0) {
-            return result.filter((s, i) => s.type !== 'thinking' || i < firstToolIdx);
         }
         return result;
     }, [steps]);
@@ -185,33 +192,11 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     // Don't render until there are real steps to show
     if (displaySteps.length === 0) return null;
 
-    // Build summary text
-    const activeStep = displaySteps.find((s) => s.active);
-    let summaryText: string;
-
-    if (isActive && activeStep) {
-        if (activeStep.type === 'tool' && activeStep.tool) {
-            summaryText = getToolMeta(activeStep.tool).activeLabel;
-        } else if (activeStep.type === 'thinking') {
-            summaryText = activeStep.detail || activeStep.label || 'Thinking...';
-        } else {
-            summaryText = activeStep.label || 'Working...';
-        }
-    } else if (isActive) {
-        summaryText = 'Thinking...';
-    } else {
-        const uniqueTools = [...new Set(toolSteps.map((s) => s.tool).filter(Boolean) as string[])];
-        if (uniqueTools.length > 0) {
-            const toolLabels = uniqueTools.slice(0, 3).map((t) => getToolMeta(t).label);
-            summaryText = toolLabels.join(', ');
-            if (uniqueTools.length > 3) summaryText += ` +${uniqueTools.length - 3} more`;
-        } else {
-            summaryText = `${displaySteps.length} step${displaySteps.length !== 1 ? 's' : ''}`;
-        }
-        if (toolSteps.length > 0) {
-            summaryText += ` \u00b7 ${toolSteps.length} tool${toolSteps.length !== 1 ? 's' : ''}`;
-        }
-    }
+    // Build summary — always use stable step count so the bar doesn't
+    // visually change when transitioning from thinking to answer streaming.
+    const stepCount = displaySteps.length;
+    const summaryText = `${stepCount} step${stepCount !== 1 ? 's' : ''}`
+        + (toolSteps.length > 0 ? ` \u00b7 ${toolSteps.length} tool${toolSteps.length !== 1 ? 's' : ''}` : '');
 
     return (
         <div className={`agent-activity ${variant} ${isActive ? 'active' : 'done'} ${hasErrors ? 'has-errors' : ''}`}>
@@ -223,11 +208,7 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                 aria-label={expanded ? 'Collapse agent activity' : 'Expand agent activity'}
             >
                 <div className="agent-summary-left">
-                    {isActive ? (
-                        <div className="agent-spinner-wrap">
-                            <Loader2 size={14} className="agent-spinner" />
-                        </div>
-                    ) : hasErrors ? (
+                    {hasErrors ? (
                         <AlertCircle size={14} className="agent-icon-error" />
                     ) : (
                         <Zap size={14} className="agent-icon-done" />
@@ -239,35 +220,123 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                 </div>
             </button>
 
-            {/* Flow content — thinking text + inline tool cards */}
-            {expanded && displaySteps.length > 0 && (
-                <div className="agent-flow">
-                    {displaySteps.map((step) => {
-                        if (step.type === 'thinking' || step.type === 'status') {
-                            return <FlowThought key={step.id} step={step} />;
-                        }
-                        if (step.type === 'tool') {
-                            return (
-                                <FlowToolCard
-                                    key={step.id}
-                                    step={step}
-                                    isExpanded={expandedTools.has(step.id)}
-                                    onToggle={() => toggleTool(step.id)}
-                                />
-                            );
-                        }
-                        if (step.type === 'plan') {
-                            return <FlowPlan key={step.id} step={step} />;
-                        }
-                        if (step.type === 'error') {
-                            return <FlowError key={step.id} step={step} />;
-                        }
-                        return null;
-                    })}
+            {/* Flow content — thinking text + inline tool cards.
+                Uses a wrapper div that's always mounted so CSS can animate
+                the height transition on collapse/expand. */}
+            {displaySteps.length > 0 && (
+                <div className={`agent-flow-wrap ${expanded ? 'flow-expanded' : 'flow-collapsed'}`}>
+                    <div className="agent-flow">
+                        {displaySteps.map((step) => {
+                            if (step.type === 'thinking') {
+                                return <FlowThought key={step.id} step={step} />;
+                            }
+                            if (step.type === 'status') {
+                                return <FlowStatus key={step.id} step={step} />;
+                            }
+                            if (step.type === 'tool') {
+                                return (
+                                    <FlowToolCard
+                                        key={step.id}
+                                        step={step}
+                                        isExpanded={expandedTools.has(step.id)}
+                                        onToggle={() => toggleTool(step.id)}
+                                    />
+                                );
+                            }
+                            if (step.type === 'plan') {
+                                return <FlowPlan key={step.id} step={step} />;
+                            }
+                            if (step.type === 'error') {
+                                return <FlowError key={step.id} step={step} />;
+                            }
+                            return null;
+                        })}
+                    </div>
                 </div>
             )}
         </div>
     );
+}
+
+// ── Flow: Thinking text (hacker-style with red cursor) ────────────────────
+
+function FlowThought({ step }: { step: AgentStep }) {
+    const text = step.detail || step.label || '';
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    // Auto-scroll to keep cursor visible as text streams in
+    useEffect(() => {
+        if (step.active && containerRef.current) {
+            containerRef.current.scrollTop = containerRef.current.scrollHeight;
+        }
+    }, [text, step.active]);
+
+    if (!text) return null;
+
+    return (
+        <div ref={containerRef} className="flow-thought-hacker">
+            <span>{text}</span>
+            {step.active && <span className="flow-thought-cursor" />}
+        </div>
+    );
+}
+
+// ── Flow: Status text (no cursor, simple text) ────────────────────────────
+
+function FlowStatus({ step }: { step: AgentStep }) {
+    const text = step.detail || step.label || '';
+    if (!text) return null;
+    return (
+        <div className={`flow-thought ${step.active ? 'active' : ''}`}>
+            <span className="flow-thought-text">{text}</span>
+        </div>
+    );
+}
+
+// ── Path Linkification (for tool results) ────────────────────────────────
+
+/** Detect Windows absolute paths in text and make them clickable. */
+function linkifyPaths(text: string): React.ReactNode {
+    // Match Windows absolute paths: C:\...\file.ext or C:\...\folder\
+    // Also match paths in parentheses: (C:\Users\...)
+    const pathRe = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]]+[\\\/])*[^\s*?"<>|,;)}\]]*/gi;
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = pathRe.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+            parts.push(text.slice(lastIndex, match.index));
+        }
+        const rawMatch = match[0];
+        const filePath = rawMatch.replace(/[)}\]]+$/, ''); // trim trailing brackets
+        const handleClick = () => {
+            api.openFileOrFolder(filePath).catch((err) => log.ui.error('Failed to open path', err));
+        };
+        parts.push(
+            <span
+                key={match.index}
+                className="tool-result-path"
+                onClick={handleClick}
+                title={`Open: ${filePath}`}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleClick(); }}
+            >
+                <FolderOpen size={10} style={{ flexShrink: 0, opacity: 0.7 }} />
+                {filePath}
+            </span>
+        );
+        // Advance past the full raw match; push trimmed trailing brackets as plain text
+        if (filePath.length < rawMatch.length) {
+            parts.push(rawMatch.slice(filePath.length));
+        }
+        lastIndex = match.index + rawMatch.length;
+    }
+
+    if (parts.length === 0) return text;
+    if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+    return <>{parts}</>;
 }
 
 // ── Flow: File list from file search tools ───────────────────────────────
@@ -308,69 +377,6 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
             )}
         </div>
     );
-}
-
-// ── Flow: Thinking text ──────────────────────────────────────────────────
-
-function FlowThought({ step }: { step: AgentStep }) {
-    const text = step.detail || step.label || '';
-    if (!text) return null;
-
-    // Show the actual thinking text — never replace with generic labels
-    const displayText = text;
-
-    return (
-        <div className={`flow-thought ${step.active ? 'active' : ''}`}>
-            {step.active && <Loader2 size={11} className="flow-thought-spinner" />}
-            <span className="flow-thought-text">{displayText}</span>
-        </div>
-    );
-}
-
-// ── Path Linkification (for tool results) ────────────────────────────────
-
-/** Detect Windows absolute paths in text and make them clickable. */
-function linkifyPaths(text: string): React.ReactNode {
-    // Match Windows absolute paths: C:\...\file.ext or C:\...\folder\
-    // Also match paths in parentheses: (C:\Users\...)
-    const pathRe = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]]+[\\\/])*[^\s*?"<>|,;)}\]]*/gi;
-    const parts: React.ReactNode[] = [];
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = pathRe.exec(text)) !== null) {
-        if (match.index > lastIndex) {
-            parts.push(text.slice(lastIndex, match.index));
-        }
-        const rawMatch = match[0];
-        const filePath = rawMatch.replace(/[)}]+$/, ''); // trim trailing ) and } only
-        const handleClick = () => {
-            api.openFileOrFolder(filePath).catch((err) => log.ui.error('Failed to open path', err));
-        };
-        parts.push(
-            <span
-                key={match.index}
-                className="tool-result-path"
-                onClick={handleClick}
-                title={`Open: ${filePath}`}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleClick(); }}
-            >
-                <FolderOpen size={10} style={{ flexShrink: 0, opacity: 0.7 }} />
-                {filePath}
-            </span>
-        );
-        // Advance past the full raw match; push trimmed trailing brackets as plain text
-        if (filePath.length < rawMatch.length) {
-            parts.push(rawMatch.slice(filePath.length));
-        }
-        lastIndex = match.index + rawMatch.length;
-    }
-
-    if (parts.length === 0) return text;
-    if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-    return <>{parts}</>;
 }
 
 // ── Flow: Tool Card ──────────────────────────────────────────────────────
@@ -449,6 +455,7 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
                     {step.retrievalChunks && step.retrievalChunks.length > 0 && (
                         <ChunksView chunks={step.retrievalChunks} />
                     )}
+                    {/* File list from file search tools */}
                     {step.fileList && step.fileList.files.length > 0 && (
                         <FileListView fileList={step.fileList} />
                     )}

@@ -37,6 +37,12 @@
   background: var(--bg-secondary);
 }
 
+[data-theme="dark"] .agent-chat-header {
+  background: rgba(10, 10, 18, 0.88);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+}
+
 .agent-chat-header-left {
   display: flex;
   align-items: center;
@@ -67,7 +73,7 @@
   color: var(--text-primary);
 }
 .agent-chat-clear.confirm {
-  color: #ef4444;
+  color: var(--accent-danger);
   background: rgba(239, 68, 68, 0.1);
   border-radius: var(--radius-sm);
 }
@@ -123,7 +129,13 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.agent-chat-messages::-webkit-scrollbar { width: 5px; }
+.agent-chat-messages::-webkit-scrollbar-track { background: transparent; }
+.agent-chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+.agent-chat-messages::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── Empty State ─────────────────────────────────────────────────────── */
 .agent-chat-empty {
@@ -237,7 +249,7 @@
 
 /* Error message styling */
 .agent-msg-error .agent-msg-content {
-  color: #ef4444;
+  color: var(--accent-danger);
   font-family: var(--font-mono);
   font-size: 12px;
 }
@@ -297,7 +309,7 @@
   color: var(--accent-green);
 }
 .tool-failure {
-  color: #ef4444;
+  color: var(--accent-danger);
 }
 
 .agent-tool-call-detail {
@@ -326,7 +338,7 @@
   margin: 0;
   padding: 6px 8px;
   background: var(--bg-tertiary);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.4;
