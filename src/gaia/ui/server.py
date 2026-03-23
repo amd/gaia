@@ -167,6 +167,32 @@ def create_app(db_path: str = None) -> FastAPI:
 
         asyncio.create_task(_prewarm_lemonade())
 
+        # Pre-import heavy modules so first-message lazy imports are already cached.
+        # faiss, sentence_transformers, and the ChatAgent module tree each add
+        # ~0.5-1s of import time the first time they are touched.
+        async def _preload_modules():
+            try:
+                loop = asyncio.get_event_loop()
+
+                def _do_imports():
+                    import faiss  # noqa: F401
+                    import sentence_transformers  # noqa: F401
+                    from gaia.agents.chat.agent import (
+                        ChatAgent,
+                        ChatAgentConfig,
+                    )  # noqa: F401
+                    from gaia.rag.sdk import RAGSDK  # noqa: F401
+                    from gaia.mcp.client.mcp_client_manager import (
+                        MCPClientManager,
+                    )  # noqa: F401
+
+                await loop.run_in_executor(None, _do_imports)
+                logger.info("Heavy modules pre-loaded")
+            except Exception as exc:
+                logger.debug("Module pre-load skipped: %s", exc)
+
+        asyncio.create_task(_preload_modules())
+
         # Start document file monitor for auto re-indexing
         monitor = DocumentMonitor(
             db=db,
