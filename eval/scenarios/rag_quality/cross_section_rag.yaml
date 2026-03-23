@@ -16,7 +16,7 @@ setup:
 
 turns:
   - turn: 1
-    objective: "Ask 'Given Q3 revenue of $14.2M and the CEO's projected growth of 15-18%, what revenue range should we expect in Q4?'"
+    objective: "Ask 'Based on the Q3 report, what revenue range should we expect in Q4 given the CEO's growth projection?'"
     ground_truth:
       doc_id: acme_q3_report
       fact_ids: [q3_revenue, ceo_outlook]

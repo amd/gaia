@@ -43,12 +43,17 @@ turns:
   - turn: 4
     objective: "Ask 'which document has all this info?'"
     ground_truth:
+      # No fact_id: this tests session/UI awareness (which doc is indexed), not a manifest fact.
+      # doc_id is present to identify which document the expected_answer refers to.
+      doc_id: acme_q3_report
       expected_answer: "acme_q3_report.md"
     success_criteria: "Agent identifies acme_q3_report as the source document"
 
   - turn: 5
     objective: "Ask 'summarize what you have told me so far'"
     ground_truth:
+      doc_id: acme_q3_report
+      fact_ids: [q3_revenue, yoy_growth, ceo_outlook]
       expected_answer: "Q3 revenue $14.2M, YoY growth 23% from $11.5M, CEO projects 15-18% Q4 growth"
     success_criteria: "Agent recalls all three facts from earlier turns: $14.2M revenue, 23% growth, and 15-18% Q4 outlook. FAIL if any fact is missing or incorrect."
 

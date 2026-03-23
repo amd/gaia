@@ -36,6 +36,9 @@ turns:
   - turn: 3
     objective: "Ask 'which document did each of those answers come from?'"
     ground_truth:
+      # Note: intentionally no doc_id — this is a synthesis turn referencing both
+      # employee_handbook and acme_q3_report simultaneously. The expected_answer
+      # covers document attribution metadata, not a single manifest fact.
       expected_answer: "PTO policy from employee_handbook.md, Q3 revenue from acme_q3_report.md"
     success_criteria: "Agent correctly attributes PTO to employee handbook and revenue to Q3 report. FAIL if agent confuses which fact came from which document."
 

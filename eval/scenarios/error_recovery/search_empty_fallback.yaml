@@ -29,8 +29,7 @@ turns:
     objective: "Ask 'I saw api_reference.py has Python functions — can you show me more about the get_auth_token function?'"
     ground_truth:
       doc_id: api_docs
-      fact_id: auth_method
-      expected_answer: "Bearer token via the Authorization header"
+      expected_behavior: "Agent queries the already-indexed api_reference.py and describes the get_auth_token function, including Bearer token authentication via the Authorization header"
     success_criteria: |
       Agent uses the already-indexed api_reference.py to answer.
       PASS if the agent queries api_reference.py (already indexed from Turn 1) and

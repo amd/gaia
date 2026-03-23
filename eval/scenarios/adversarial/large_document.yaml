@@ -27,7 +27,8 @@ turns:
     objective: "Ask 'Were there any major non-conformities?'"
     ground_truth:
       doc_id: large_report
-      expected_answer: "No, only minor non-conformities were mentioned"
+      fact_id: major_nonconformities
+      expected_answer: null
     success_criteria: "Agent states there were no major non-conformities (only minor ones). FAIL if agent invents major findings."
 
 expected_outcome: |

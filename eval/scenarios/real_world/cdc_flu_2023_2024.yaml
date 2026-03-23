@@ -1,0 +1,51 @@
+id: cdc_flu_2023_2024
+name: "CDC 2023-2024 Influenza Season Statistics"
+category: real_world
+severity: medium
+description: |
+  Agent must retrieve public health statistics from the CDC 2023-2024 influenza
+  season summary. Tests health data retrieval, numeric accuracy with epidemiological
+  data, and hallucination resistance on vaccination coverage not in this document.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - corpus_doc: cdc_flu_2023_2024
+      path: "eval/corpus/real_world/scientific/cdc_influenza_2023_2024.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask how the CDC classified the 2023-2024 flu season severity and what the peak outpatient ILI positivity rate was."
+    ground_truth:
+      doc_id: cdc_flu_2023_2024
+      expected_answer: "Moderately severe across all age groups; peak ILI positivity rate was 18.3% during the week ending December 30, 2023"
+    success_criteria: |
+      Agent correctly states the severity classification (moderately severe) and the peak
+      ILI rate (18.3% week ending Dec 30, 2023).
+      FAIL if agent states a different severity or peak rate.
+
+  - turn: 2
+    objective: "Ask how many laboratory-confirmed pediatric influenza deaths occurred in the 2023-2024 season."
+    ground_truth:
+      doc_id: cdc_flu_2023_2024
+      expected_answer: "197 pediatric deaths (second-highest since 2004)"
+    success_criteria: |
+      Agent correctly states 197 pediatric deaths and ideally notes this was the second-highest
+      since 2004 data collection began.
+      FAIL if agent states a materially different count.
+
+  - turn: 3
+    objective: "Ask what percentage of the US adult population received a flu vaccine during the 2023-2024 season."
+    ground_truth:
+      doc_id: cdc_flu_2023_2024
+      expected_answer: null
+      note: "Vaccination coverage rates by adult age group are not included in this summary document"
+    success_criteria: |
+      Agent correctly states that adult vaccination coverage rates are not included in this
+      CDC flu season summary document.
+      FAIL if agent invents a vaccination rate from the document.
+
+expected_outcome: |
+  Agent retrieves CDC flu season statistics and correctly handles a vaccination
+  coverage question not present in the seasonal summary document.

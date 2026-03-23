@@ -3862,20 +3862,23 @@ Let me know your answer!
             if compare_paths:
                 from gaia.eval.runner import RESULTS_DIR, compare_scorecards
 
-                if len(compare_paths) == 1:
-                    # Single path: compare against saved baseline
-                    baseline_path = RESULTS_DIR / "baseline.json"
-                    if not baseline_path.exists():
-                        print(f"[ERROR] No saved baseline found at {baseline_path}")
-                        print(
-                            "  Run `gaia eval agent --save-baseline` first to save a baseline."
-                        )
-                        return
-                    compare_scorecards(str(baseline_path), compare_paths[0])
-                elif len(compare_paths) == 2:
-                    compare_scorecards(compare_paths[0], compare_paths[1])
-                else:
-                    print("[ERROR] --compare accepts 1 or 2 paths")
+                try:
+                    if len(compare_paths) == 1:
+                        # Single path: compare against saved baseline
+                        baseline_path = RESULTS_DIR / "baseline.json"
+                        if not baseline_path.exists():
+                            print(f"[ERROR] No saved baseline found at {baseline_path}")
+                            print(
+                                "  Run `gaia eval agent --save-baseline` first to save a baseline."
+                            )
+                            return
+                        compare_scorecards(str(baseline_path), compare_paths[0])
+                    elif len(compare_paths) == 2:
+                        compare_scorecards(compare_paths[0], compare_paths[1])
+                    else:
+                        print("[ERROR] --compare accepts 1 or 2 paths")
+                except FileNotFoundError as e:
+                    print(f"[ERROR] {e}")
                 return
 
             from gaia.eval.runner import AgentEvalRunner

@@ -1,7 +1,7 @@
 {
   "generated_at": "2026-03-20T02:10:00Z",
   "total_documents": 9,
-  "total_facts": 15,
+  "total_facts": 27,
   "notes": "CSV redesigned 2026-03-22: replaced 11k-token transaction CSV with compact 25-row monthly summary. Q1 total updated to $340,000 (was $342,150), March Widget Pro X updated to 150 units/$30,000 (was 142 units/$28,400). Sarah Chen still top at $70,000. Handbook 2026-03-22: added 'Remote Work Allowance Summary: up to 3 days per week' header to Section 7 to improve RAG retrieval distinctiveness for remote work queries.",
   "documents": [
     {
@@ -27,7 +27,8 @@
       "facts": [
         {"id": "pto_days", "question": "How many PTO days do first-year employees get?", "answer": "15 days", "difficulty": "easy"},
         {"id": "remote_work", "question": "What is the remote work policy?", "answer": "Up to 3 days/week with manager approval. Fully remote requires VP approval.", "difficulty": "medium"},
-        {"id": "contractor_benefits", "question": "Are contractors eligible for health benefits?", "answer": "No — benefits are for full-time employees only", "difficulty": "hard"}
+        {"id": "contractor_benefits", "question": "Are contractors eligible for health benefits?", "answer": "No — benefits are for full-time employees only", "difficulty": "hard"},
+        {"id": "contractor_entitlements", "question": "What benefits or entitlements are contractors eligible for?", "answer": null, "difficulty": "hard", "note": "NOT in document — the handbook does not list any contractor entitlements. Agent must not invent any."}
       ]
     },
     {
@@ -39,7 +40,8 @@
         {"id": "q3_revenue", "question": "What was Acme Corp's Q3 2025 revenue?", "answer": "$14.2 million", "difficulty": "easy"},
         {"id": "yoy_growth", "question": "What was the year-over-year revenue growth?", "answer": "23% increase from Q3 2024's $11.5 million", "difficulty": "medium"},
         {"id": "ceo_outlook", "question": "What is the CEO's Q4 outlook?", "answer": "Projected 15-18% growth driven by enterprise segment expansion", "difficulty": "medium"},
-        {"id": "employee_count", "question": "How many employees does Acme have?", "answer": null, "difficulty": "hard", "note": "NOT in document — agent must say it doesn't know"}
+        {"id": "employee_count", "question": "How many employees does Acme have?", "answer": null, "difficulty": "hard", "note": "NOT in document — agent must say it doesn't know"},
+        {"id": "cfo_name", "question": "Who is Acme Corp's CFO?", "answer": null, "difficulty": "hard", "note": "NOT in document — agent must not invent a name"}
       ]
     },
     {
@@ -77,7 +79,28 @@
       "format": "markdown",
       "domain": "compliance",
       "facts": [
-        {"id": "buried_fact", "question": "What was the compliance finding in Section 52?", "answer": "Three minor non-conformities in supply chain documentation", "difficulty": "hard"}
+        {"id": "buried_fact", "question": "What was the compliance finding in Section 52?", "answer": "Three minor non-conformities in supply chain documentation", "difficulty": "hard"},
+        {"id": "major_nonconformities", "question": "Were there any major non-conformities?", "answer": null, "difficulty": "hard", "note": "NOT in document — only minor non-conformities are mentioned. Agent must not invent major findings."}
+      ]
+    },
+    {
+      "id": "sample_chart",
+      "filename": "sample_chart.png",
+      "format": "image",
+      "domain": "test",
+      "facts": [
+        {"id": "image_exists", "question": "Does sample_chart.png exist?", "answer": "Yes — 1x1 pixel test image", "difficulty": "easy"}
+      ]
+    },
+    {
+      "id": "budget_2025",
+      "filename": "budget_2025.md",
+      "format": "markdown",
+      "domain": "finance",
+      "facts": [
+        {"id": "total_budget", "question": "What is the total approved budget for 2025?", "answer": "$4.2M", "difficulty": "easy"},
+        {"id": "engineering_budget", "question": "What is the annual Engineering department budget?", "answer": "$1.3M", "difficulty": "medium"},
+        {"id": "cfo_approval_threshold", "question": "What spending threshold requires CFO approval?", "answer": "Expenses over $50K require CFO approval", "difficulty": "medium"}
       ]
     }
   ],

@@ -21,6 +21,7 @@ from ..models import (
     SessionResponse,
     UpdateSessionRequest,
 )
+from .._chat_helpers import evict_session_agent
 from ..utils import message_to_response, session_to_response
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,9 @@ async def delete_session(
         raise HTTPException(status_code=404, detail="Session not found")
     # Remove the per-session lock to prevent memory leaks
     http_request.app.state.session_locks.pop(session_id, None)
+    # Evict the cached ChatAgent for this session so a fresh one is created
+    # if the session is ever recreated with the same ID.
+    evict_session_agent(session_id)
     return {"deleted": True}
 
 

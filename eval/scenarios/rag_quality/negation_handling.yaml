@@ -29,14 +29,15 @@ turns:
     ground_truth:
       doc_id: employee_handbook
       fact_id: contractor_benefits
-      expected_answer: "No — contractors are not eligible for any benefits including dental and vision"
-    success_criteria: "Agent maintains that contractors are not eligible for any benefits. FAIL if agent says dental/vision are different from health."
+      expected_answer: "No — benefits are for full-time employees only"
+    success_criteria: "Agent maintains that contractors are not eligible for company benefits. FAIL if agent claims dental/vision are available to contractors separately from health benefits."
 
   - turn: 3
     objective: "Ask 'What ARE contractors eligible for?'"
     ground_truth:
       doc_id: employee_handbook
-      expected_answer: "The document does not specify any benefits that contractors are eligible for"
+      fact_id: contractor_entitlements
+      expected_answer: null
     success_criteria: "Agent either states what contractors are eligible for (if in document) or honestly says the document does not specify contractor entitlements. FAIL if agent invents benefits."
 
 expected_outcome: |

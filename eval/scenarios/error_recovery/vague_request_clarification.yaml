@@ -27,7 +27,7 @@ turns:
     objective: "Reply 'the financial one'"
     ground_truth:
       doc_id: acme_q3_report
-      fact_ids: [q3_revenue, yoy_growth]
+      fact_ids: [q3_revenue, yoy_growth, ceo_outlook]
       expected_answer: "Q3 revenue $14.2M, YoY growth 23% from $11.5M, CEO projects 15-18% Q4 growth"
     success_criteria: "Agent correctly identifies acme_q3_report as 'the financial one' and provides a summary including Q3 revenue ($14.2M) and YoY growth (23%)"
 

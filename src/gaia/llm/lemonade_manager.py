@@ -10,6 +10,7 @@ Operates at the LLM level (not agent level) for flexibility with community agent
 import os
 import sys
 import threading
+import time
 from enum import Enum
 from typing import Optional
 
@@ -54,6 +55,12 @@ class LemonadeManager:
     _context_size: int = 0
     _lock = threading.Lock()
     _log = get_logger(__name__)
+
+    # Rate-limit the per-turn context re-check that fires when context_size==0.
+    # Without this, every single message triggers 2 HTTP calls to /health and
+    # /models just to re-validate context size — even for "cool" or "no" replies.
+    _last_recheck_time: float = 0.0
+    _RECHECK_INTERVAL: float = 30.0  # seconds between re-checks
 
     @classmethod
     def is_lemonade_installed(cls) -> bool:
@@ -203,7 +210,21 @@ class LemonadeManager:
                     )
                     return True
                 else:
-                    # Context size may be cached from before models were loaded
+                    # Context size is below minimum — may be cached from before
+                    # models were loaded.  Rate-limit re-checks: without this guard,
+                    # every single chat message triggers 2 HTTP calls (/health +
+                    # /models) just to re-validate context size, adding 40-200 ms of
+                    # blocking overhead even for trivial replies like "cool".
+                    now = time.monotonic()
+                    if now - cls._last_recheck_time < cls._RECHECK_INTERVAL:
+                        cls._log.debug(
+                            "Skipping context re-check (%.1fs ago, interval=%.1fs)",
+                            now - cls._last_recheck_time,
+                            cls._RECHECK_INTERVAL,
+                        )
+                        return True
+                    cls._last_recheck_time = now
+
                     # Re-check current status to see if models are loaded now
                     try:
                         if base_url:
@@ -229,6 +250,17 @@ class LemonadeManager:
                             "image" not in model.get("labels", [])
                             for model in status.loaded_models
                         )
+
+                        # If models are loaded but the server doesn't report context_size
+                        # (returns 0 — common with Lemonade 10+), treat it as sufficient
+                        # so the fast path is taken on subsequent calls.
+                        if cls._context_size == 0 and llm_models_loaded:
+                            cls._log.debug(
+                                "LLM models loaded but context_size not reported by server; "
+                                "assuming context is sufficient (min=%d)",
+                                min_context_size,
+                            )
+                            cls._context_size = min_context_size
 
                         # Only warn if context_size is non-zero (0 means no model loaded or still loading)
                         if (
@@ -442,4 +474,5 @@ class LemonadeManager:
             cls._initialized = False
             cls._base_url = None
             cls._context_size = 0
+            cls._last_recheck_time = 0.0
             cls._log.debug("LemonadeManager state reset")

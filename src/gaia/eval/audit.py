@@ -1,3 +1,6 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """
 Architecture audit for GAIA Agent Eval.
 Deterministic checks — no LLM calls needed.
@@ -13,15 +16,27 @@ GAIA_ROOT = Path(__file__).parent.parent.parent.parent  # src/gaia/eval/ -> repo
 def audit_chat_helpers() -> dict:
     """Read _chat_helpers.py and extract key constants."""
     path = GAIA_ROOT / "src" / "gaia" / "ui" / "_chat_helpers.py"
-    source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source)
+    try:
+        source = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
 
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {}
+
+    # Only captures constants whose names start with _MAX.
+    # If _chat_helpers.py adds non-_MAX constants that affect eval behavior,
+    # extend the prefix check here (e.g., add "_MIN" or "_DEFAULT").
     constants = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id.startswith("_MAX"):
-                    if isinstance(node.value, ast.Constant):
+                    if isinstance(node.value, ast.Constant) and isinstance(
+                        node.value.value, int
+                    ):
                         constants[target.id] = node.value.value
     return constants
 
@@ -34,7 +49,10 @@ def audit_agent_persistence(chat_helpers_path: Path = None) -> str:
     """
     if chat_helpers_path is None:
         chat_helpers_path = GAIA_ROOT / "src" / "gaia" / "ui" / "_chat_helpers.py"
-    source = chat_helpers_path.read_text(encoding="utf-8")
+    try:
+        source = chat_helpers_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return "unknown"
     # ChatAgent( inside _chat_helpers.py means it's created per-request call
     if "ChatAgent(" in source:
         return "stateless_per_message"
@@ -49,7 +67,10 @@ def audit_tool_results_in_history(chat_helpers_path: Path = None) -> bool:
     """
     if chat_helpers_path is None:
         chat_helpers_path = GAIA_ROOT / "src" / "gaia" / "ui" / "_chat_helpers.py"
-    source = chat_helpers_path.read_text(encoding="utf-8")
+    try:
+        source = chat_helpers_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
     # Check for agent_steps content being added to the messages/history structure
     return "agent_steps" in source and (
         "messages" in source or "history" in source
@@ -67,7 +88,7 @@ def run_audit() -> dict:
     blocked_scenarios = []
     recommendations = []
 
-    if history_pairs != "unknown" and int(history_pairs) < 5:
+    if history_pairs != "unknown" and history_pairs < 5:
         recommendations.append(
             {
                 "id": "increase_history_pairs",
@@ -77,7 +98,7 @@ def run_audit() -> dict:
             }
         )
 
-    if max_msg_chars != "unknown" and int(max_msg_chars) < 1000:
+    if max_msg_chars != "unknown" and max_msg_chars < 1000:
         recommendations.append(
             {
                 "id": "increase_truncation",

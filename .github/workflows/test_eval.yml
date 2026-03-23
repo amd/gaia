@@ -85,6 +85,7 @@ jobs:
           node-version: '18'
           
       - name: Test webapp functionality
+        shell: pwsh
         run: |
           cd src/gaia/eval/webapp
           # Install dependencies
@@ -94,19 +95,21 @@ jobs:
           # Test that server can start (Windows-compatible version)
           $env:PORT = 3456  # Use non-default port to avoid conflicts
           $process = Start-Process node -ArgumentList "server.js" -PassThru -ErrorAction Stop
-          Start-Sleep -Seconds 3
-          if ($process.HasExited) {
-            Write-Error "Server failed to start or crashed immediately"
-            exit 1
-          }
-          # Try to connect to the server
           try {
+            Start-Sleep -Seconds 3
+            if ($process.HasExited) {
+              Write-Error "Server failed to start or crashed immediately"
+              exit 1
+            }
+            # Try to connect to the server
             $response = Invoke-WebRequest -Uri "http://localhost:3456" -TimeoutSec 5 -UseBasicParsing
             Write-Output "Server responded with status: $($response.StatusCode)"
+            Write-Output "Webapp server test passed"
           } catch {
-            Write-Error "Server did not respond to HTTP request"
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            Write-Error "Server did not respond to HTTP request: $_"
             exit 1
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
           }
-          Stop-Process -Id $process.Id -Force
-          Write-Output "Webapp server test passed"

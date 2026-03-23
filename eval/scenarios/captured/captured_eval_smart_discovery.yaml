@@ -1,7 +1,8 @@
 id: captured_eval_smart_discovery
+name: "Captured: Smart Document Discovery"
 category: captured
 description: 'Captured from session: Eval: smart_discovery'
-persona: A user who had this real conversation with GAIA.
+persona: casual_user
 setup:
   index_documents: []
 turns:
@@ -11,19 +12,14 @@ turns:
   user_message: What's the PTO policy for first-year employees? I need to know how
     many days we get.
   expected_tools:
-  - list_indexed_documents
-  - search_file
+  - search_files
   - index_document
   - query_specific_file
-  success_criteria:
-    must_contain: []
-    agent_response_preview: '}}
-
-      ```}
-
-      ```}
-
-      ``````'
+  ground_truth:
+    doc_id: employee_handbook
+    fact_id: pto_days
+    expected_answer: "15 days"
+  success_criteria: "Agent states first-year employees receive 15 PTO days"
 captured_from:
   session_id: 29c211c7-31b5-4084-bb3f-1825c0210942
   title: 'Eval: smart_discovery'

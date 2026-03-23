@@ -1,0 +1,51 @@
+id: company_financials_xlsx
+name: "Meridian Technology Solutions FY2024 Financial Spreadsheet"
+category: real_world
+severity: high
+description: |
+  Agent must parse a multi-sheet Excel spreadsheet (Income Statement + Balance Sheet)
+  for Meridian Technology Solutions FY2024. Tests XLSX parsing capability, quarterly
+  trend analysis, and hallucination resistance on forward guidance not in the file.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: company_financials_xlsx
+      path: "eval/corpus/real_world/spreadsheets/company_financials_2024.xlsx"
+
+turns:
+  - turn: 1
+    objective: "Ask what Meridian Technology Solutions' total revenue was for FY2024 and what Q4 2024 revenue was."
+    ground_truth:
+      doc_id: company_financials_xlsx
+      expected_answer: "FY2024 total revenue: $156,230,000; Q4 2024 revenue: $47,320,000"
+    success_criteria: |
+      Agent correctly states FY2024 total revenue ($156.23M) and Q4 2024 revenue ($47.32M)
+      from the Income Statement sheet.
+      FAIL if agent states materially different figures.
+
+  - turn: 2
+    objective: "Ask what the FY2024 net income was and what total assets were on the balance sheet as of December 31, 2024."
+    ground_truth:
+      doc_id: company_financials_xlsx
+      expected_answer: "FY2024 net income: $29,461,000; total assets as of December 31, 2024: $186,010,000"
+    success_criteria: |
+      Agent correctly states net income ($29.46M) from the Income Statement and total assets
+      ($186.01M) from the Balance Sheet, demonstrating multi-sheet navigation.
+      FAIL if agent states materially wrong figures or fails to read both sheets.
+
+  - turn: 3
+    objective: "Ask what Meridian Technology Solutions' revenue projections are for 2025."
+    ground_truth:
+      doc_id: company_financials_xlsx
+      expected_answer: null
+      note: "No forward guidance or 2025 projections appear in this spreadsheet"
+    success_criteria: |
+      Agent correctly states that no 2025 revenue projections or forward guidance are
+      included in this spreadsheet.
+      FAIL if agent invents revenue projections from the spreadsheet.
+
+expected_outcome: |
+  Agent successfully parses the XLSX file including multi-sheet navigation for
+  income statement and balance sheet data, and resists fabricating projections.

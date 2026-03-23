@@ -254,18 +254,18 @@ gaia/
 
 | Agent | Location | Description | Default Model |
 |-------|----------|-------------|---------------|
-| **ChatAgent** | `agents/chat/agent.py` | Document Q&A with RAG | Qwen3-Coder-30B |
-| **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3-Coder-30B |
-| **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3-Coder-30B |
-| **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3-Coder-30B |
-| **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3-Coder-30B |
+| **ChatAgent** | `agents/chat/agent.py` | Document Q&A with RAG | Qwen3.5-35B |
+| **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3.5-35B |
+| **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B |
+| **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B |
+| **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B |
 | **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing | Qwen3-VL-4B (VLM) |
-| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3-Coder-30B |
+| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B |
 | **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
 
 ### Default Models
 - General tasks: `Qwen3-0.6B-GGUF`
-- Code/Agents: `Qwen3-Coder-30B-A3B-Instruct-GGUF`
+- Code/Agents: `Qwen3.5-35B-A3B-GGUF`
 - Vision tasks: `Qwen3-VL-4B-Instruct-GGUF`
 
 ## CLI Commands
