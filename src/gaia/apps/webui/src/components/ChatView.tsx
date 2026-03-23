@@ -646,23 +646,34 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                // Permission request — push to notification store for the
-                // PermissionPrompt overlay, which calls confirmTool() on response.
+                // Permission request — check always-allow list, then push to
+                // notification store for the PermissionPrompt overlay.
                 if (event.type === 'permission_request') {
+                    const toolName = event.tool || '';
+                    const alwaysAllowed: string[] = JSON.parse(
+                        localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
+                    );
+                    if (alwaysAllowed.includes(toolName)) {
+                        api.confirmTool(sessionId, true).catch(
+                            (err) => console.error('[ChatView] auto-confirm failed:', err)
+                        );
+                        return;
+                    }
                     const { addNotification: addNotif } = useNotificationStore.getState();
                     addNotif({
-                        id: `perm-${Date.now()}`,
+                        id: event.confirm_id ?? `perm-${Date.now()}`,
                         type: 'permission_request',
                         agentId: sessionId,
-                        agentName: 'GAIA Agent',
-                        title: `Tool: ${event.tool}`,
-                        message: `The agent wants to run "${event.tool}". Allow?`,
+                        agentName: 'GAIA',
+                        title: `Allow ${toolName}?`,
+                        message: `The agent wants to execute: ${toolName}`,
                         timestamp: Date.now(),
                         read: false,
                         dismissed: false,
                         priority: 'high',
-                        tool: event.tool,
-                        toolArgs: event.args,
+                        tool: toolName,
+                        toolArgs: event.args as Record<string, unknown> | undefined,
+                        timeoutSeconds: event.timeout_seconds ?? 60,
                     });
                     return;
                 }

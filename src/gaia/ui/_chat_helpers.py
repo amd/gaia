@@ -232,12 +232,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
     from gaia.ui.sse_handler import SSEOutputHandler
 
+    session_id = request.session_id
     try:
         # Create SSE handler first and emit immediate feedback BEFORE the
         # slow ChatAgent construction (RAG indexing, LLM connection can take 10-30s)
         sse_handler = SSEOutputHandler()
         # Register so /api/chat/confirm-tool can find this handler.
-        session_id = request.session_id
         _active_sse_handlers[session_id] = sse_handler
         sse_handler._emit(
             {"type": "status", "status": "info", "message": "Connecting to LLM..."}

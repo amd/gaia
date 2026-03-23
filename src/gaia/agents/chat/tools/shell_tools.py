@@ -170,7 +170,9 @@ DANGEROUS_PS_PATTERNS = (
 # - ` and $() are command substitution
 # Note: bare & is matched as word-boundary to avoid false positives
 # inside quoted PowerShell strings (e.g. @{N='...'}).
-DANGEROUS_SHELL_OPERATORS = re.compile(r"(?:&&|&(?=\s|$)|>>|>[^&]|<[^<]|\|\||;|`|\$\()")
+DANGEROUS_SHELL_OPERATORS = re.compile(
+    r"(?:&&|&(?=\s|$)|>>|>(?:[^&>]|$)|<(?:[^<]|$)|\|\||;|`|\$\()"
+)
 
 
 class ShellToolsMixin:
@@ -286,6 +288,30 @@ class ShellToolsMixin:
                 }
         # Special handling for powershell - only allow read-only cmdlets
         elif cmd_base in ("powershell", "powershell.exe"):
+            # Block dangerous execution flags that can bypass cmdlet filtering
+            _BLOCKED_PS_FLAGS = {
+                "-encodedcommand",
+                "-enc",
+                "-file",
+                "-f",
+                "-executionpolicy",
+                "-ex",
+                "-ep",
+                "-noprofile",
+                "-nop",
+                "-windowstyle",
+                "-w",
+                "-noninteractive",
+                "-noni",
+            }
+            if any(part.lower() in _BLOCKED_PS_FLAGS for part in cmd_parts[1:]):
+                return {
+                    "status": "error",
+                    "error": "PowerShell execution flags like -EncodedCommand, -File, and -ExecutionPolicy are not allowed.",
+                    "has_errors": True,
+                    "hint": "Use -Command to pass a readable cmdlet string",
+                    "examples": 'powershell -Command "Get-WmiObject Win32_Processor | Select-Object Name"',
+                }
             # Extract the PowerShell command text
             ps_cmd = ""
             for i, part in enumerate(cmd_parts):
