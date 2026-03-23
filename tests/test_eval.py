@@ -853,14 +853,22 @@ class TestManifestCrossReference:
 
     def test_scenario_doc_ids_exist_in_manifest(self):
         """Every doc_id referenced in scenario ground_truth must exist in the merged manifest."""
-        from gaia.eval.runner import find_scenarios
+        from gaia.eval.runner import REAL_WORLD_MANIFEST, SCENARIOS_DIR, find_scenarios
 
         manifest = self._load_merged_manifest()
         all_doc_ids = {doc["id"] for doc in manifest.get("documents", [])}
+        real_world_scenarios_dir = SCENARIOS_DIR / "real_world"
+        real_world_manifest_present = REAL_WORLD_MANIFEST.exists()
 
         scenarios = find_scenarios()
         missing = []
         for path, data in scenarios:
+            # Skip real_world scenarios when their manifest isn't present (e.g. in CI)
+            if (
+                not real_world_manifest_present
+                and str(path).startswith(str(real_world_scenarios_dir))
+            ):
+                continue
             for turn in data.get("turns", []):
                 gt = turn.get("ground_truth") or {}
                 doc_id = gt.get("doc_id")
@@ -876,6 +884,8 @@ class TestManifestCrossReference:
 
     def test_scenario_fact_ids_exist_in_manifest(self):
         """Every fact_id referenced in scenarios must exist in the merged manifest."""
+        from gaia.eval.runner import REAL_WORLD_MANIFEST, SCENARIOS_DIR, find_scenarios
+
         manifest = self._load_merged_manifest()
         # Real-world manifest facts don't have 'id' fields — only index by (doc_id, fact_id)
         # for documents where facts have IDs.
@@ -885,12 +895,18 @@ class TestManifestCrossReference:
             for fact in doc.get("facts", [])
             if "id" in fact
         }
-
-        from gaia.eval.runner import find_scenarios
+        real_world_scenarios_dir = SCENARIOS_DIR / "real_world"
+        real_world_manifest_present = REAL_WORLD_MANIFEST.exists()
 
         scenarios = find_scenarios()
         missing = []
         for path, data in scenarios:
+            # Skip real_world scenarios when their manifest isn't present (e.g. in CI)
+            if (
+                not real_world_manifest_present
+                and str(path).startswith(str(real_world_scenarios_dir))
+            ):
+                continue
             for turn in data.get("turns", []):
                 gt = turn.get("ground_truth") or {}
                 doc_id = gt.get("doc_id")
