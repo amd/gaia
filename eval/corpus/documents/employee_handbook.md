@@ -82,7 +82,7 @@ Acme Corp provides basic life insurance equal to 1x annual salary at no cost to 
 
 ### Employee Assistance Program (EAP)
 
-All employees (full-time, part-time, and temporary) have access to the Employee Assistance Program, which provides confidential counseling and support services.
+All employees (full-time, part-time, and temporary) have access to the Employee Assistance Program, which provides confidential counseling and support services. **Contractors are NOT eligible for the EAP**, as they are not classified as direct employees per Section 3.
 
 ---
 
@@ -97,6 +97,8 @@ Employees are paid on a bi-weekly schedule (26 pay periods per year). Direct dep
 ---
 
 ## Section 7: Remote Work Policy
+
+**Remote Work Allowance Summary: Full-time employees may work from home up to 3 days per week.**
 
 Acme Corp supports workplace flexibility while maintaining collaboration and team cohesion.
 

@@ -28,16 +28,18 @@ logger = logging.getLogger(__name__)
 
 # Regex to detect raw tool-call JSON that LLMs sometimes emit as text content.
 # Matches patterns like: {"tool": "search_file", "tool_args": {...}}
+# Also handles unquoted tool names (malformed JSON): {"tool":search_file,"tool_args":{...}}
 _TOOL_CALL_JSON_RE = re.compile(
-    r'^\s*\{["\s]*tool["\s]*:\s*"[^"]+"\s*,\s*["\s]*tool_args["\s]*:\s*\{[^}]*\}\s*\}\s*$',
+    r'^\s*\{["\s]*tool["\s]*:\s*"?[^",{}\s]+"?\s*,\s*["\s]*tool_args["\s]*:\s*\{[^}]*\}\s*\}\s*$',
 )
 
 # Regex for use with re.sub() to strip tool-call JSON from mixed content.
 # Unlike _TOOL_CALL_JSON_RE (which matches whole strings), this variant
 # matches tool-call JSON embedded anywhere within larger text and uses
 # [^}]* for inner args to avoid over-matching past the closing braces.
+# Also handles unquoted tool names (malformed JSON from some LLM quantizations).
 _TOOL_CALL_JSON_SUB_RE = re.compile(
-    r'\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}'
+    r'\s*\{\s*"?tool"?\s*:\s*"?[^",{}\s]+"?\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}'
 )
 
 # Regex to remove {"thought": "..."} JSON blocks from LLM output.
@@ -66,7 +68,7 @@ _THINK_TAG_SUB_RE = re.compile(r"<think>[\s\S]*?</think>")
 # Note: chunks array contains nested objects like [{"text":"...", "score":...}]
 # so we use [\s\S]*? with a lookahead to stop at the outer closing brace.
 _RAG_RESULT_JSON_SUB_RE = re.compile(
-    r'\s*\{[^{}]*"chunks"\s*:\s*\[[\s\S]*?\][^{}]*\}(?:\}*)',
+    r'[}\s`]*\{[^{}]*"chunks"\s*:\s*\[[\s\S]*?\][^{}]*\}[}\s`]*',
     re.DOTALL,
 )
 
@@ -352,6 +354,10 @@ class SSEOutputHandler(OutputHandler):
             # can still contain the wrapper.  Stripping here ensures the "answer"
             # SSE event always carries clean text, not a re-wrapped JSON blob.
             answer = _ANSWER_JSON_SUB_RE.sub("", answer).strip()
+            answer = _RAG_RESULT_JSON_SUB_RE.sub("", answer).strip()
+            # Strip any tool-call JSON blobs (including unquoted tool names) that
+            # leaked into the final answer text.
+            answer = _TOOL_CALL_JSON_SUB_RE.sub("", answer).strip()
         self._emit(
             {
                 "type": "answer",
@@ -520,28 +526,39 @@ class SSEOutputHandler(OutputHandler):
                     return
 
             # Case 3: Buffer has "tool" embedded after normal text (e.g., "I'll help.\n{"tool":...")
-            # Split at the JSON start and emit the text portion, buffer the JSON portion.
+            # Suppress the planning text before the JSON (system prompt forbids pre-tool
+            # reasoning text) and discard the tool-call JSON itself.
             elif '"tool"' in stripped and '{"tool"' in self._stream_buffer:
                 json_idx = self._stream_buffer.find('{"tool"')
                 if json_idx > 0:
-                    # Emit the text before the JSON
-                    text_before = self._stream_buffer[:json_idx]
+                    # Suppress text_before — it's pre-tool planning text that the system
+                    # prompt explicitly forbids ("NEVER output planning text before a tool call").
+                    # The tool will execute and its result will be shown instead.
                     json_part = self._stream_buffer[json_idx:]
-                    self._emit({"type": "chunk", "content": text_before})
                     self._stream_buffer = json_part
                     # Check if the JSON part is complete
                     json_stripped = json_part.strip()
                     if json_stripped.endswith("}"):
                         if _TOOL_CALL_JSON_RE.match(json_stripped):
                             logger.debug(
-                                "Filtered embedded tool-call JSON: %s",
+                                "Filtered embedded tool-call JSON (and preceding planning text): %s",
                                 json_stripped[:100],
                             )
                             self._stream_buffer = ""
                             return
+                        # JSON didn't match tool-call pattern — emit it as content
                         self._emit({"type": "chunk", "content": json_part})
                         self._stream_buffer = ""
                     return
+
+            # Case 3.5: Buffer contains "chunks" — RAG tool-result JSON leaking
+            # into the response stream.  Strip it out and emit the clean text.
+            elif '"chunks"' in stripped:
+                cleaned = _RAG_RESULT_JSON_SUB_RE.sub("", self._stream_buffer).strip()
+                if cleaned:
+                    self._emit({"type": "chunk", "content": cleaned})
+                self._stream_buffer = ""
+                return
 
             # Not tool-call JSON — emit the buffered content
             self._emit({"type": "chunk", "content": self._stream_buffer})

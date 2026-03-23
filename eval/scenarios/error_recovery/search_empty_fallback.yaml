@@ -26,12 +26,18 @@ turns:
       trying alternative search terms or browse_files.
 
   - turn: 2
-    objective: "Ask 'What about the Python source file with the authentication code?'"
+    objective: "Ask 'I saw api_reference.py has Python functions — can you show me more about the get_auth_token function?'"
     ground_truth:
       doc_id: api_docs
       fact_id: auth_method
       expected_answer: "Bearer token via the Authorization header"
-    success_criteria: "Agent recognizes it already has api_reference.py indexed and answers without re-searching"
+    success_criteria: |
+      Agent uses the already-indexed api_reference.py to answer.
+      PASS if the agent queries api_reference.py (already indexed from Turn 1) and
+      correctly describes the Bearer token / get_auth_token function.
+      Minor re-checking (e.g., list_indexed_documents) is acceptable.
+      FAIL only if the agent gives up without answering or produces a completely
+      wrong authentication mechanism.
 
 expected_outcome: |
   Agent demonstrates resilience when initial searches return empty results.

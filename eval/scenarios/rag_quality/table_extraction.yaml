@@ -20,16 +20,16 @@ turns:
     ground_truth:
       doc_id: sales_data
       fact_id: top_product_march
-      expected_answer: "Widget Pro X with 142 units and $28,400 revenue"
-    success_criteria: "Agent identifies Widget Pro X as the top product in March with 142 units and $28,400"
+      expected_answer: "Widget Pro X with 150 units and $30,000 revenue"
+    success_criteria: "Agent identifies Widget Pro X as the top product in March with 150 units and $30,000"
 
   - turn: 2
     objective: "Ask 'What was total Q1 revenue?'"
     ground_truth:
       doc_id: sales_data
       fact_id: q1_total_revenue
-      expected_answer: "$342,150"
-    success_criteria: "Agent states total Q1 revenue was $342,150"
+      expected_answer: "$340,000"
+    success_criteria: "Agent states total Q1 revenue was $340,000"
 
   - turn: 3
     objective: "Ask 'Who was the top salesperson and what was their revenue?'"

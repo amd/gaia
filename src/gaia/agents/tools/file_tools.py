@@ -768,8 +768,23 @@ class FileSearchToolsMixin:
 
                 matches = []
                 files_searched = 0
-                search_pattern = pattern if case_sensitive else pattern.lower()
                 ctx = max(0, int(context_lines))
+
+                # Support regex (like real grep) — fall back to plain substring if invalid
+                import re as _re
+
+                _flags = 0 if case_sensitive else _re.IGNORECASE
+                try:
+                    _regex = _re.compile(pattern, _flags)
+                    _use_regex = True
+                except _re.error:
+                    _use_regex = False
+                    _search_plain = pattern if case_sensitive else pattern.lower()
+
+                def _line_matches(line: str) -> bool:
+                    if _use_regex:
+                        return bool(_regex.search(line))
+                    return _search_plain in (line if case_sensitive else line.lower())
 
                 def search_file(file_path: Path):
                     """Search within a single file."""
@@ -788,10 +803,7 @@ class FileSearchToolsMixin:
                                     ),
                                     1,
                                 ):
-                                    search_line = (
-                                        line if case_sensitive else line.lower()
-                                    )
-                                    if search_pattern in search_line:
+                                    if _line_matches(line):
                                         matches.append(
                                             {
                                                 "file": str(file_path),
@@ -803,10 +815,7 @@ class FileSearchToolsMixin:
                                             return False
                             else:
                                 for line_num, line in enumerate(all_lines, 1):
-                                    search_line = (
-                                        line if case_sensitive else line.lower()
-                                    )
-                                    if search_pattern in search_line:
+                                    if _line_matches(line):
                                         start = max(0, line_num - 1 - ctx)
                                         end = min(len(all_lines), line_num + ctx)
                                         ctx_lines = [
@@ -844,6 +853,24 @@ class FileSearchToolsMixin:
                     files_searched += 1
                     if not search_file(file_path):
                         break  # Hit match limit
+
+                # Dual-mode fallback: if regex compiled but returned 0 results,
+                # retry as plain text. Handles patterns like "$14.2M" where "$"
+                # is a regex end-of-line anchor but the user meant a literal.
+                if _use_regex and not matches:
+                    _use_regex = False
+                    _search_plain = pattern if case_sensitive else pattern.lower()
+                    for _fp2 in directory.rglob("*"):
+                        if not _fp2.is_file():
+                            continue
+                        if file_pattern:
+                            if not fnmatch.fnmatch(_fp2.name, file_pattern):
+                                continue
+                        else:
+                            if _fp2.suffix.lower() not in text_extensions:
+                                continue
+                        if not search_file(_fp2):
+                            break
 
                 if matches:
                     return {
@@ -1598,7 +1625,15 @@ class FileSearchToolsMixin:
                         for c in all_columns
                         if any(
                             kw in c.lower()
-                            for kw in ("date", "time", "posted", "period")
+                            for kw in (
+                                "date",
+                                "time",
+                                "posted",
+                                "period",
+                                "month",
+                                "year",
+                                "quarter",
+                            )
                         )
                     ]
                     if date_col_candidates:
@@ -2125,8 +2160,27 @@ class FileSearchToolsMixin:
                                 raw = row.get(c)
                                 if raw is not None and str(raw).strip():
                                     group_sums[key][c] += _parse_numeric(raw)
-                        # Sort by first numeric column descending
-                        sort_col = numeric_agg_cols[0] if numeric_agg_cols else None
+                        # Sort by the most "revenue-like" numeric column first.
+                        # Try keywords in priority order so "revenue" beats "unit_price".
+                        _SORT_PRIORITY = (
+                            "revenue",
+                            "sales",
+                            "total",
+                            "amount",
+                            "gross",
+                            "net",
+                            "value",
+                        )
+                        sort_col = None
+                        for _kw in _SORT_PRIORITY:
+                            _match = next(
+                                (c for c in numeric_agg_cols if _kw in c.lower()), None
+                            )
+                            if _match:
+                                sort_col = _match
+                                break
+                        if sort_col is None:
+                            sort_col = numeric_agg_cols[0] if numeric_agg_cols else None
                         sorted_groups = sorted(
                             group_sums.items(),
                             key=lambda kv: kv[1].get(sort_col, 0) if sort_col else 0,

@@ -2,7 +2,7 @@
   "generated_at": "2026-03-20T02:10:00Z",
   "total_documents": 9,
   "total_facts": 15,
-  "notes": "Sarah Chen top_salesperson amount adjusted from spec $67,200 to $70,000 — spec was mathematically inconsistent (Q1=$342,150 / 5 salespeople = $68,430 average > $67,200, making top salesperson impossible).",
+  "notes": "CSV redesigned 2026-03-22: replaced 11k-token transaction CSV with compact 25-row monthly summary. Q1 total updated to $340,000 (was $342,150), March Widget Pro X updated to 150 units/$30,000 (was 142 units/$28,400). Sarah Chen still top at $70,000. Handbook 2026-03-22: added 'Remote Work Allowance Summary: up to 3 days per week' header to Section 7 to improve RAG retrieval distinctiveness for remote work queries.",
   "documents": [
     {
       "id": "product_comparison",
@@ -48,8 +48,8 @@
       "format": "csv",
       "domain": "sales",
       "facts": [
-        {"id": "top_product_march", "question": "What was the best-selling product in March 2025?", "answer": "Widget Pro X with 142 units and $28,400 revenue", "difficulty": "medium"},
-        {"id": "q1_total_revenue", "question": "What was total Q1 2025 revenue?", "answer": "$342,150", "difficulty": "medium"},
+        {"id": "top_product_march", "question": "What was the best-selling product in March 2025?", "answer": "Widget Pro X with 150 units and $30,000 revenue", "difficulty": "medium"},
+        {"id": "q1_total_revenue", "question": "What was total Q1 2025 revenue?", "answer": "$340,000", "difficulty": "medium"},
         {"id": "top_salesperson", "question": "Who was the top salesperson by revenue?", "answer": "Sarah Chen with $70,000", "difficulty": "medium"}
       ]
     },

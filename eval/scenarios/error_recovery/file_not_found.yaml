@@ -14,18 +14,24 @@ setup:
 
 turns:
   - turn: 1
-    objective: "Ask 'Please index and read /nonexistent/fake_document.pdf'"
+    objective: "Ask 'Please index and read /home/projects/reports/quarterly_review_2024.pdf'"
     ground_truth:
-      expected_behavior: "Agent reports the file does not exist with a helpful error message"
-    success_criteria: "Agent clearly states the file was not found or does not exist. FAIL if agent crashes, hangs, or hallucinates content from the nonexistent file."
+      expected_behavior: "Agent attempts to access the file, receives a file-not-found error, and reports it gracefully"
+    success_criteria: |
+      PASS if agent attempts index_document (or similar tool) and then clearly reports the file
+      was not found or could not be accessed. PARTIAL PASS (score 7-8) if agent skips the tool call
+      but still correctly states the file does not exist without hallucinating content.
+      FAIL if agent crashes, hangs, or invents/fabricates content from the nonexistent file.
+      NOTE: Full marks require an actual tool attempt — the test validates error-handling, not just
+      string-matching on path names.
 
   - turn: 2
-    objective: "Ask 'OK, what about the employee handbook?'"
+    objective: "Ask 'OK, what about the employee handbook? How many PTO days do first-year employees get?'"
     ground_truth:
       doc_id: employee_handbook
       fact_id: pto_days
       expected_answer: "15 days"
-    success_criteria: "Agent recovers from the previous error, finds and indexes employee_handbook.md, and answers correctly about PTO (15 days)"
+    success_criteria: "Agent recovers from the previous error, finds and indexes employee_handbook.md, and answers that first-year employees get 15 PTO days"
 
 expected_outcome: |
   Agent handles file-not-found errors gracefully with a helpful message,

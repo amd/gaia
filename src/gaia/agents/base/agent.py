@@ -6,6 +6,7 @@ Generic Agent class for building domain-specific agents.
 
 # Standard library imports
 import abc
+import ast
 import datetime
 import inspect
 import json
@@ -1551,6 +1552,12 @@ You must respond ONLY in valid JSON. No text before { or after }.
         final_answer = None
         error_count = 0
         tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
+        tool_call_log = (
+            []
+        )  # Full unbounded log of all tool calls this turn (for workflow guards)
+        query_result_cache: dict[str, int] = (
+            {}
+        )  # result_hash → call count (result-based dedup)
         last_error = None  # Track the last error to handle it properly
         previous_outputs = []  # Track previous tool outputs (truncated for context)
         step_results = []  # Track full tool results for parameter substitution
@@ -2313,6 +2320,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 # Check for repeated tool calls (allow up to 3 identical calls)
                 current_call = (tool_name, str(tool_args))
                 tool_call_history.append(current_call)
+                tool_call_log.append(
+                    current_call
+                )  # Full unbounded log for workflow guards
 
                 # Keep only last 5 calls for loop detection
                 if len(tool_call_history) > 5:
@@ -2344,6 +2354,33 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                 # Stop progress indicator
                 self.console.stop_progress()
+
+                # Result-based dedup: if this tool (query family) returns the same result
+                # it returned in a prior call, inject a correction so the agent stops looping.
+                _QUERY_TOOLS = (
+                    "query_documents",
+                    "query_specific_file",
+                    "query_indexed_documents",
+                )
+                if tool_name in _QUERY_TOOLS:
+                    result_key = f"{tool_name}:{hash(str(tool_result))}"
+                    query_result_cache[result_key] = (
+                        query_result_cache.get(result_key, 0) + 1
+                    )
+                    if query_result_cache[result_key] >= 2:
+                        logger.debug(
+                            "[DEDUP] Same query result returned %d times — injecting stop signal",
+                            query_result_cache[result_key],
+                        )
+                        dedup_msg = (
+                            f"[SYSTEM] You have received this same result from {tool_name} "
+                            f"{query_result_cache[result_key]} times. "
+                            "Querying again will not yield new information. "
+                            "STOP querying and answer directly from what you have retrieved, "
+                            "OR check your prior turn responses for relevant data, "
+                            "OR state that the information was not found in the document."
+                        )
+                        messages.append({"role": "user", "content": dedup_msg})
 
                 # Handle domain-specific post-processing
                 self._post_process_tool_result(tool_name, tool_args, tool_result)
@@ -2431,7 +2468,371 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
-                final_answer = parsed["answer"]
+                answer_candidate = parsed["answer"]
+                # Guard against incomplete workflows: detect when the LLM outputs
+                # planning text ("Let me now search...") as a final answer after
+                # calling index_document but before issuing a query tool call.
+                # This is a known failure pattern — the agent stops mid-workflow.
+                _INDEX_TOOLS = (
+                    "index_document",
+                    "index_documents",
+                    "index_dir",
+                    "index_folder",
+                )
+                _PLANNING_PHRASES = (
+                    "let me now",
+                    "i'll now",
+                    "i will now search",
+                    "i will now query",
+                    "i'll check",
+                    "let me check",
+                    "let me search",
+                    "let me query",
+                    "now search within",
+                    "search within this",
+                    "now search for",
+                    "query it now",
+                    "search the document",
+                    "let me look",
+                    "i'll look",
+                    "i will look",
+                    "let me retrieve",
+                    "i'll retrieve",
+                    "let me find",
+                )
+                last_was_index = bool(
+                    tool_call_history
+                    and any(
+                        tool_call_history[-1][0].lower().startswith(p)
+                        for p in _INDEX_TOOLS
+                    )
+                )
+                # Post-index query guard: catch when the agent indexed a document but
+                # answers from LLM memory without querying it first. This is a
+                # hallucination pattern — the agent returns confident-sounding wrong
+                # answers because it never retrieved the document's actual content.
+                _QUERY_TOOLS = (
+                    "query_specific_file",
+                    "query_documents",
+                    "query_indexed_documents",
+                    "search_indexed_chunks",
+                )
+                last_index_pos = -1
+                for _pos, (_tname, _) in enumerate(tool_call_log):
+                    if any(_tname.lower().startswith(_p) for _p in _INDEX_TOOLS):
+                        last_index_pos = _pos
+                query_after_index = any(
+                    _pos > last_index_pos
+                    and any(_tname.lower().startswith(_q) for _q in _QUERY_TOOLS)
+                    for _pos, (_tname, _) in enumerate(tool_call_log)
+                )
+                if (
+                    last_index_pos >= 0
+                    and not query_after_index
+                    and steps_taken < steps_limit - 1
+                ):
+                    logger.debug(
+                        "[WORKFLOW] Post-index answer without query — forcing query tool call: %s",
+                        answer_candidate[:80],
+                    )
+                    # Deterministic fix: extract the file path from the last index_document
+                    # call and execute query_specific_file directly, bypassing the LLM.
+                    # This is more reliable than sending a correction and hoping the LLM
+                    # complies, since the LLM may loop on the same hallucination.
+                    _last_indexed_file = None
+                    for _tname, _targs_str in reversed(tool_call_log):
+                        if any(_tname.lower().startswith(_p) for _p in _INDEX_TOOLS):
+                            try:
+                                # tool_call_log stores str(tool_args) which is Python repr
+                                # (single-quoted keys), NOT JSON — use ast.literal_eval
+                                if isinstance(_targs_str, str):
+                                    try:
+                                        _targs = ast.literal_eval(_targs_str)
+                                    except (ValueError, SyntaxError):
+                                        _targs = json.loads(_targs_str)
+                                else:
+                                    _targs = _targs_str
+                                _last_indexed_file = (
+                                    _targs.get("file_path")
+                                    or _targs.get("path")
+                                    or _targs.get("document_path")
+                                )
+                            except Exception:
+                                pass
+                            break
+                    if _last_indexed_file:
+                        # Inject a fake assistant tool-call so the conversation shows
+                        # the query happening, then execute it and inject the result.
+                        _forced_query = (
+                            user_input[:120]
+                            if user_input
+                            else "summary overview key facts"
+                        )
+                        _forced_tool_call = {
+                            "thought": "I indexed the document but must query it before answering.",
+                            "tool": "query_specific_file",
+                            "tool_args": {
+                                "file_path": _last_indexed_file,
+                                "query": _forced_query,
+                            },
+                        }
+                        conversation.append(
+                            {"role": "assistant", "content": _forced_tool_call}
+                        )
+                        _forced_result = self._execute_tool(
+                            "query_specific_file",
+                            {"file_path": _last_indexed_file, "query": _forced_query},
+                        )
+                        tool_call_log.append(
+                            ("query_specific_file", str(_forced_tool_call["tool_args"]))
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": f"Tool result: {_forced_result}",
+                            }
+                        )
+                        logger.debug(
+                            "[WORKFLOW] Forced query result injected, resuming loop."
+                        )
+                    else:
+                        # No file path extractable — fall back to correction message
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: You indexed a document but answered without querying it. "
+                                    "You MUST call query_specific_file or query_documents NOW. "
+                                    "Output a query tool call immediately."
+                                ),
+                            }
+                        )
+                    continue
+
+                # Universal planning-text guard: catch any short response that is
+                # only an intent sentence ("I'll check...", "Let me query...") with
+                # no actual answer, regardless of whether tools were already called.
+                # This covers three cases:
+                #   1. post-index planning (index_document → "Let me now search...")
+                #   2. no-tool planning on follow-up turns ("I'll check the remote work policy")
+                #   3. post-tool planning after getting results ("I need more info... Let me query")
+                is_planning_text = len(answer_candidate) < 500 and any(
+                    phrase in answer_candidate.lower() for phrase in _PLANNING_PHRASES
+                )
+                if is_planning_text and steps_taken < steps_limit - 1:
+                    # Inject a correction message and continue the loop to force the answer
+                    logger.debug(
+                        "[WORKFLOW] Blocking planning-only response as final answer: %s",
+                        answer_candidate[:80],
+                    )
+                    correction = (
+                        "You produced planning text instead of an answer. "
+                        "You already have the data from the tool results above — "
+                        "output the final answer NOW based on what you retrieved. "
+                        "Do not call another tool. Just answer the question directly."
+                    )
+                    if last_was_index:
+                        correction = (
+                            "You indexed the document but haven't answered the question yet. "
+                            "Call query_specific_file or query_documents NOW to retrieve the "
+                            "actual content. Output a tool call JSON — not planning text."
+                        )
+                    elif not tool_call_history:
+                        correction = (
+                            "You said you would look that up but called no tools. "
+                            "Call the appropriate tool RIGHT NOW. "
+                            "Output a JSON tool call — not another planning sentence."
+                        )
+                    messages.append({"role": "user", "content": correction})
+                    continue  # Don't set final_answer — loop again to force the query
+
+                # Tool-syntax artifact guard: catch responses that are just a tool-call label
+                # like "[tool:query_specific_file]" — Qwen3 confusion where the model writes
+                # the tool invocation syntax as its answer text instead of calling it.
+                _TOOL_ARTIFACT_PATTERN = re.compile(
+                    r"^\s*\[tool:[a-zA-Z_]+\]\s*$", re.MULTILINE
+                )
+                if (
+                    _TOOL_ARTIFACT_PATTERN.match(answer_candidate.strip())
+                    and steps_taken < steps_limit - 1
+                ):
+                    logger.debug(
+                        "[WORKFLOW] Blocking tool-syntax artifact as final answer: %s",
+                        answer_candidate[:80],
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "SYSTEM: Your response is just a tool call label (e.g. '[tool:query_specific_file]'), "
+                                "not an actual answer. You have already gathered the information you need from your "
+                                "previous tool calls. Write a complete prose answer to the user's question using "
+                                "the information already retrieved."
+                            ),
+                        }
+                    )
+                    continue
+
+                # Raw JSON hallucination guard: catch responses that contain fake tool-output
+                # JSON blobs instead of actual prose answers. This is a failure mode where
+                # the LLM writes what it imagines a tool would return rather than calling it.
+                _RAW_JSON_PATTERNS = [
+                    r'```json\s*\{[^`]*"status"\s*:',
+                    r'```json\s*\{[^`]*"documents"\s*:',
+                    r'```json\s*\{[^`]*"chunks"\s*:',
+                    r'\{\s*"status"\s*:\s*"success"',
+                    r'\{\s*"documents"\s*:\s*\[',
+                ]
+                is_raw_json = any(
+                    re.search(p, answer_candidate, re.DOTALL)
+                    for p in _RAW_JSON_PATTERNS
+                )
+                if is_raw_json and steps_taken < steps_limit - 1:
+                    logger.debug(
+                        "[WORKFLOW] Blocking raw-JSON hallucination as final answer: %s",
+                        answer_candidate[:120],
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "SYSTEM: Your response contains raw JSON that looks like a fabricated "
+                                "tool output. Do NOT write JSON in your response. If you need data, "
+                                "call the actual tool. Otherwise, write your answer in plain prose. "
+                                "Provide a clean prose answer to the user's question now."
+                            ),
+                        }
+                    )
+                    continue
+
+                # Capability-claim-without-attempt guard: catch responses that declare
+                # a tool's availability or unavailability (e.g. "I can generate images
+                # when the --sd flag is active") without having tried the tool first.
+                # This fires for generate_image only — the most common failure pattern.
+                # If the tool was already attempted (successfully or not), the claim is
+                # based on real evidence and should be allowed through.
+                _CAPABILITY_CLAIM_PATTERNS = [
+                    r"--sd\b",
+                    r"\bsd flag\b",
+                    r"stable diffusion.*active",
+                    r"stable diffusion.*when",
+                    r"image generation.*flag",
+                    r"generate images when",
+                    r"can generate images",
+                    r"i can.*create.*image",
+                    r"when.*--sd",
+                ]
+                _SD_TOOLS = ("generate_image",)
+                has_tried_capability_tool = any(
+                    any(_tname.lower().startswith(_s) for _s in _SD_TOOLS)
+                    for _tname, _ in tool_call_log
+                )
+                is_capability_claim = any(
+                    re.search(_p, answer_candidate, re.IGNORECASE)
+                    for _p in _CAPABILITY_CLAIM_PATTERNS
+                )
+                # Even when generate_image was attempted, block if the response
+                # STILL makes a conditional capability claim without acknowledging
+                # the actual tool outcome (error or success).
+                _SD_OUTCOME_ACKNOWLEDGMENT = [
+                    r"not available",
+                    r"unavailable",
+                    r"not.*active",
+                    r"not.*enabled",
+                    r"can't generate",
+                    r"cannot generate",
+                    r"unable to generate",
+                    r"tried.*generat",
+                    r"attempted.*generat",
+                    r"generat.*error",
+                    r"generat.*fail",
+                    r"image.*generat.*not",
+                    r"success",
+                    r"generated.*image",
+                    r"here.*image",
+                ]
+                outcome_acknowledged = has_tried_capability_tool and any(
+                    re.search(_p, answer_candidate, re.IGNORECASE)
+                    for _p in _SD_OUTCOME_ACKNOWLEDGMENT
+                )
+                _should_block_sd = (
+                    is_capability_claim
+                    and not outcome_acknowledged
+                    and steps_taken < steps_limit - 1
+                )
+                if _should_block_sd:
+                    logger.debug(
+                        "[WORKFLOW] Blocking SD capability claim%s: %s",
+                        " (post-attempt)" if has_tried_capability_tool else "",
+                        answer_candidate[:80],
+                    )
+                    # Extract what the user asked for from the last user message
+                    _last_user_msg = next(
+                        (
+                            m.get("content", "")
+                            for m in reversed(messages)
+                            if m.get("role") == "user"
+                            and isinstance(m.get("content"), str)
+                        ),
+                        "the requested image",
+                    )
+                    if not has_tried_capability_tool:
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: STOP. Do NOT write text. You must output a JSON tool call. "
+                                    "You attempted to describe image generation capability without calling "
+                                    "the tool. The ONLY valid next response is a generate_image tool call. "
+                                    "Output this JSON right now (replace the prompt with what the user asked for):\n"
+                                    '{"tool": "generate_image", "tool_args": {"prompt": "high quality photorealistic image, '
+                                    + _last_user_msg[:80].replace('"', "'")
+                                    + '"}}\n'
+                                    "Do not write anything else. Just the JSON above."
+                                ),
+                            }
+                        )
+                    else:
+                        # Tool was tried — force acknowledgment of the actual outcome
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: You called generate_image and received a result. "
+                                    "Your response must describe what ACTUALLY happened — either "
+                                    "the image was generated successfully, or the tool returned an error. "
+                                    "Do NOT say 'I can generate images when --sd is active'. "
+                                    "Describe the actual tool outcome now."
+                                ),
+                            }
+                        )
+                    continue
+
+                # Post-failure verbosity guard: when generate_image was called and
+                # failed, the LLM often apologises and explains "what it would have done"
+                # with prompt-engineering tips. Intercept and replace with a clean response.
+                if has_tried_capability_tool:
+                    _SD_POST_FAILURE_VERBOSE = [
+                        r"would have done",
+                        r"what i would",
+                        r"prompt enhancement",
+                        r"i apologize for the confusion",
+                        r"let me explain what",
+                        r"enhance.*prompt",
+                        r"prompt.*technique",
+                        r"following.*research",
+                    ]
+                    _is_verbose_sd_failure = any(
+                        re.search(_p, answer_candidate, re.IGNORECASE)
+                        for _p in _SD_POST_FAILURE_VERBOSE
+                    )
+                    if _is_verbose_sd_failure:
+                        answer_candidate = (
+                            "Image generation is not available in this session — "
+                            "start GAIA with the `--sd` flag to enable it."
+                        )
+
+                final_answer = answer_candidate
                 self.execution_state = self.STATE_COMPLETION
                 self.console.print_final_answer(final_answer, streaming=self.streaming)
                 break

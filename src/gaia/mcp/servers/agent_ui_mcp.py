@@ -25,6 +25,7 @@ import requests
 from mcp.server.fastmcp import FastMCP
 
 from gaia.ui.sse_handler import (
+    _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
     _THOUGHT_JSON_SUB_RE,
     _TOOL_CALL_JSON_SUB_RE,
@@ -152,8 +153,12 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     # server reads the raw SSE stream so it needs to clean up as well.
     full_content = _TOOL_CALL_JSON_SUB_RE.sub("", full_content)
     full_content = _THOUGHT_JSON_SUB_RE.sub("", full_content)
+    full_content = _RAG_RESULT_JSON_SUB_RE.sub("", full_content)
     full_content = _TRAILING_CODE_FENCE_RE.sub("", full_content)
     full_content = _THINK_TAG_SUB_RE.sub("", full_content)
+    import re as _re
+
+    full_content = _re.sub(r"^[}\s`]+", "", full_content)
     full_content = full_content.strip()
 
     return {

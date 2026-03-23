@@ -13,9 +13,9 @@ setup:
 turns:
   - turn: 1
     objective: "Ask agent to fetch a webpage"
-    user_message: "Fetch the content from https://example.com and tell me what it says."
+    user_message: "Fetch the content from http://example.com and tell me what it says."
     ground_truth:
-      expected_behavior: "Agent calls fetch_webpage with https://example.com and returns the text content"
+      expected_behavior: "Agent calls fetch_webpage with http://example.com and returns the text content"
     success_criteria: |
       Agent calls fetch_webpage with the given URL. The page returns content about
       "Example Domain". Agent reports the fetched content to the user.
@@ -23,5 +23,5 @@ turns:
       FAIL if agent claims it cannot fetch webpages at all.
 
 expected_outcome: |
-  Agent calls fetch_webpage on https://example.com and reports the text content
+  Agent calls fetch_webpage on http://example.com and reports the text content
   (which should include "Example Domain" from the IANA example page).

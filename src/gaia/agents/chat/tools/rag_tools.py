@@ -99,11 +99,13 @@ class RAGToolsMixin:
                 if not self.rag or not self.rag.index or len(self.rag.chunks) == 0:
                     return {
                         "status": "no_documents",
-                        "message": "No documents are indexed. Answer the user's question using your general knowledge.",
+                        "message": "No documents are currently indexed.",
                         "instruction": (
-                            "There are no documents indexed to search. "
-                            "Please answer the user's question using your general knowledge instead. "
-                            "Do NOT apologize or say you can't help - just answer naturally."
+                            "No documents are indexed yet. "
+                            "For domain-specific questions (HR policies, PTO, remote work, company procedures, "
+                            "financial data, project plans, technical specs): use the SMART DISCOVERY WORKFLOW — "
+                            "use search_file to find relevant files, index_document to index them, then query_specific_file to answer. "
+                            "For general knowledge questions (math, science, geography), answer directly from knowledge."
                         ),
                     }
 
@@ -1486,6 +1488,8 @@ Document to summarize: {Path(target_file).name}
 Document content:
 {full_text}
 
+CRITICAL GROUNDING RULE: Only include information that is explicitly present in the document content above. Do NOT add, infer, or extrapolate any facts, figures, or details that do not appear verbatim or near-verbatim in the document text. If a metric (e.g., net income, cash flow, retention rate) is not mentioned in the document, do not include it.
+
 Generate a well-structured summary with the following format:
 
 # Document Summary: {Path(target_file).name}
@@ -1496,13 +1500,13 @@ Generate a well-structured summary with the following format:
 - **Total Words**: ~{total_words:,}
 
 ## Overview
-[2-3 sentence overview of what this document is]
+[2-3 sentence overview of what this document is — only from document content]
 
 ## Key Content
-[Main content organized by topics/sections - reference page numbers where applicable]
+[Main content organized by topics/sections — only facts from the document, reference page numbers where applicable]
 
 ## Key Takeaways
-[Bullet points of the most important points]
+[Bullet points of the most important points — only from the document, no extrapolation]
 
 Use the {summary_type} style for the content sections."""
 
@@ -1546,6 +1550,8 @@ Use the {summary_type} style for the content sections."""
 Section content:
 {section_text}
 
+CRITICAL GROUNDING RULE: Only summarize information explicitly present in the section content above. Do NOT add, infer, or extrapolate any facts, figures, or details not in this section.
+
 Generate a summary of this section:"""
 
                     try:
@@ -1581,6 +1587,8 @@ Generate a summary of this section:"""
 
 Section summaries:
 {combined_text}
+
+CRITICAL GROUNDING RULE: Only synthesize information that appears in the section summaries above. Do NOT add, infer, or extrapolate any facts, figures, or details not present in the summaries. Every claim in your output must be traceable to one of the section summaries.
 
 Synthesize these into a single, well-structured summary using this format:
 

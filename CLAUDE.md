@@ -530,3 +530,9 @@ Specialized agents are available in `.claude/agents/` for specific tasks (23 age
 - **ui-ux-designer** (opus) - User-centered design, accessibility
 
 When invoking a proactive agent from `.claude/agents/`, indicate which agent you are using in your response.
+
+## Learned Skills
+
+**Read these before starting related tasks:**
+
+- `.claude/skills/gaia-eval-benchmark.md` - How to run, audit, and trust/distrust the GAIA Agent UI eval benchmark; covers RAG cache integrity, response rendering bugs, eval judge leniency, and MCP session inspection (tags: eval, rag, mcp, gaia-agent-ui, debugging, hallucination, ci-cd, testing)

@@ -494,10 +494,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
                 # Capture answer content for DB storage
                 if event_type == "answer":
-                    # Only use the answer event if no chunks were streamed,
-                    # otherwise the accumulated chunks are the full response.
+                    # Always use the answer event to override accumulated chunks.
+                    # print_final_answer emits a clean, artifact-free final answer,
+                    # while chunks include all intermediate streaming text (planning
+                    # sentences, tool call noise, etc.).  Using the answer event
+                    # ensures DB storage matches what the MCP client receives.
                     answer_content = event.get("content", "")
-                    if not full_response:
+                    if answer_content:
                         full_response = answer_content
                 elif event_type == "chunk":
                     full_response += event.get("content", "")

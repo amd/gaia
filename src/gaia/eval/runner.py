@@ -87,7 +87,8 @@ Backend: {backend_url}
 1. Call system_status() — if error, return status="INFRA_ERROR"
 2. Call create_session("Eval: {{scenario_id}}")
 3. For each document in scenario setup.index_documents:
-   Call index_document with absolute path from DOCUMENT PATHS above
+   Call index_document(filepath=<absolute path>, session_id=<session_id from step 2>)
+   CRITICAL: Always pass the session_id so documents are linked to the session and visible to the agent.
    If chunk_count=0 or error AND scenario category != "adversarial": return status="SETUP_ERROR"
    For adversarial scenarios: 0 chunks is expected — continue
 
