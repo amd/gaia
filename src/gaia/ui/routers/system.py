@@ -59,22 +59,33 @@ async def system_status():
                 status.model_loaded = health_data.get("model_loaded") or None
                 status.lemonade_version = health_data.get("version")
 
-                # Extract device info AND actual loaded context size.
-                # The context size here reflects what the server was really started
-                # with (e.g. --ctx-size 16384), which may differ from the catalog
-                # default. We use this value for the sufficiency check below.
+                # Extract device info AND actual loaded context size from
+                # all_models_loaded. Some Lemonade versions omit the root-level
+                # model_loaded field and only expose the list, so when the root
+                # field is absent we fall back to the first non-embedding entry.
                 # Use case-insensitive match in case Lemonade normalises the name.
                 loaded_lower = (status.model_loaded or "").lower()
+                _llm_found = False
                 for m in health_data.get("all_models_loaded", []):
                     if m.get("type") == "embedding":
                         status.embedding_model_loaded = True
-                    elif m.get("model_name", "").lower() == loaded_lower:
-                        status.model_device = m.get("device")
-                        # Actual loaded context size (preferred over catalog default).
-                        # Use `is not None` so ctx_size=0 still triggers a warning.
-                        ctx = m.get("recipe_options", {}).get("ctx_size")
-                        if ctx is not None:
-                            status.model_context_size = ctx
+                    else:
+                        m_name = m.get("model_name", "")
+                        # Match by name when root field was present; otherwise
+                        # take the first LLM entry as the fallback.
+                        is_match = bool(loaded_lower) and m_name.lower() == loaded_lower
+                        is_fallback = not loaded_lower
+                        if (is_match or is_fallback) and not _llm_found:
+                            if not status.model_loaded:
+                                status.model_loaded = m_name
+                            status.model_device = m.get("device")
+                            # Actual loaded context size (preferred over catalog
+                            # default). Use `is not None` so ctx_size=0 triggers
+                            # a warning.
+                            ctx = m.get("recipe_options", {}).get("ctx_size")
+                            if ctx is not None:
+                                status.model_context_size = ctx
+                            _llm_found = True  # take only the first matching LLM
 
                 # Fallback: older Lemonade versions expose context_size at root level
                 if status.model_context_size is None:

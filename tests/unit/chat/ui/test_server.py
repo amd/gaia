@@ -525,6 +525,57 @@ class TestSystemStatus:
         assert data["model_context_size"] == 32768
         assert data["context_size_sufficient"] is True
 
+    @patch("httpx.AsyncClient")
+    def test_system_status_model_loaded_derived_from_all_models_loaded(
+        self, mock_httpx_cls, client
+    ):
+        """model_loaded is derived from all_models_loaded when root field is absent.
+
+        Some Lemonade versions do not include a root-level model_loaded field.
+        The UI must still detect the loaded model (and avoid showing the
+        'model not downloaded' banner).
+        """
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        # health has no root-level model_loaded — only all_models_loaded
+        health_data = {
+            "status": "ok",
+            # model_loaded intentionally absent
+            "version": "9.3.0",
+            "all_models_loaded": [
+                {
+                    "model_name": "Qwen3.5-35B-A3B-GGUF",
+                    "type": "llm",
+                    "device": "amd_npu",
+                    "recipe_options": {"ctx_size": 32768},
+                }
+            ],
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            return make_response(200, {"data": []})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        # Model should be detected even without root-level model_loaded
+        assert data["model_loaded"] == "Qwen3.5-35B-A3B-GGUF"
+        assert data["model_context_size"] == 32768
+        assert data["context_size_sufficient"] is True
+        assert data["model_device"] == "amd_npu"
+
 
 class TestSessionEndpoints:
     """Tests for /api/sessions/* endpoints."""
