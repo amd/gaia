@@ -864,9 +864,8 @@ class TestManifestCrossReference:
         missing = []
         for path, data in scenarios:
             # Skip real_world scenarios when their manifest isn't present (e.g. in CI)
-            if (
-                not real_world_manifest_present
-                and str(path).startswith(str(real_world_scenarios_dir))
+            if not real_world_manifest_present and str(path).startswith(
+                str(real_world_scenarios_dir)
             ):
                 continue
             for turn in data.get("turns", []):
@@ -902,9 +901,8 @@ class TestManifestCrossReference:
         missing = []
         for path, data in scenarios:
             # Skip real_world scenarios when their manifest isn't present (e.g. in CI)
-            if (
-                not real_world_manifest_present
-                and str(path).startswith(str(real_world_scenarios_dir))
+            if not real_world_manifest_present and str(path).startswith(
+                str(real_world_scenarios_dir)
             ):
                 continue
             for turn in data.get("turns", []):

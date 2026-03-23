@@ -747,7 +747,9 @@ class TestSystemStatus:
         resp = client.get("/api/system/status")
         data = resp.json()
         assert data["expected_model_loaded"] is True
-        assert data["default_model_name"] == "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated"
+        assert (
+            data["default_model_name"] == "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated"
+        )
 
 
 class TestSessionEndpoints:
