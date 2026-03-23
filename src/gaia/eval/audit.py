@@ -26,25 +26,34 @@ def audit_chat_helpers() -> dict:
     return constants
 
 
-def audit_agent_persistence(chat_router_path: Path = None) -> str:
-    """Check if ChatAgent is recreated per-request or persisted."""
-    if chat_router_path is None:
-        chat_router_path = GAIA_ROOT / "src" / "gaia" / "ui" / "routers" / "chat.py"
-    source = chat_router_path.read_text(encoding="utf-8")
-    # Check for agent creation inside the request handler vs module level
+def audit_agent_persistence(chat_helpers_path: Path = None) -> str:
+    """Check if ChatAgent is recreated per-request or persisted.
+
+    ChatAgent is instantiated in _chat_helpers.py (inside async request handlers),
+    not in routers/chat.py.
+    """
+    if chat_helpers_path is None:
+        chat_helpers_path = GAIA_ROOT / "src" / "gaia" / "ui" / "_chat_helpers.py"
+    source = chat_helpers_path.read_text(encoding="utf-8")
+    # ChatAgent( inside _chat_helpers.py means it's created per-request call
     if "ChatAgent(" in source:
-        # Heuristic: if ChatAgent is created inside an async def, it's per-request
         return "stateless_per_message"
     return "unknown"
 
 
 def audit_tool_results_in_history(chat_helpers_path: Path = None) -> bool:
-    """Check if tool results are included in conversation history."""
+    """Check if tool results are included in conversation history.
+
+    Looks for agent_steps being merged into the messages list passed to the LLM,
+    which is the pattern used to include tool results in multi-turn context.
+    """
     if chat_helpers_path is None:
         chat_helpers_path = GAIA_ROOT / "src" / "gaia" / "ui" / "_chat_helpers.py"
     source = chat_helpers_path.read_text(encoding="utf-8")
-    # Look for agent_steps or tool results being added to history
-    return "agent_steps" in source and "tool" in source.lower()
+    # Check for agent_steps content being added to the messages/history structure
+    return "agent_steps" in source and (
+        "messages" in source or "history" in source
+    ) and "role" in source
 
 
 def run_audit() -> dict:

@@ -26,12 +26,12 @@ turns:
 
   - turn: 2
     objective: "Ask agent to analyze an image file"
-    user_message: "Please analyze the image at C:/Windows/Web/Wallpaper/Theme1/img1.jpg"
+    user_message: "Please analyze the image at eval/corpus/documents/sample_chart.png and describe what you see."
     ground_truth:
-      expected_behavior: "Agent attempts analyze_image tool OR reports gracefully if file inaccessible"
+      expected_behavior: "Agent attempts analyze_image tool OR reports gracefully that the file could not be found"
     success_criteria: |
-      Agent either: (a) calls analyze_image tool with the given path and reports result,
-      OR (b) reports that the file could not be found / is not accessible without crashing.
+      Agent either: (a) calls analyze_image tool with the given path and reports result or a graceful error,
+      OR (b) reports that the file could not be found or is not accessible.
       PASS for either outcome — graceful handling is the key requirement.
       FAIL only if agent crashes, throws uncaught exception, or claims image analysis
       is entirely unavailable when it clearly said it could analyze images in T1.

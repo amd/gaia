@@ -14,12 +14,8 @@ WEIGHTS = {
     "error_recovery": 0.05,
 }
 
-
-def compute_weighted_score(scores):
-    """Compute weighted overall score from dimension scores."""
-    if not scores:
-        return 0.0
-    return sum(scores.get(dim, 0) * weight for dim, weight in WEIGHTS.items())
+# Statuses where the scenario was actually judged (not an infrastructure failure)
+_JUDGED_STATUSES = {"PASS", "FAIL", "BLOCKED_BY_ARCHITECTURE"}
 
 
 def build_scorecard(run_id, results, config):
@@ -28,10 +24,15 @@ def build_scorecard(run_id, results, config):
     passed = sum(1 for r in results if r.get("status") == "PASS")
     failed = sum(1 for r in results if r.get("status") == "FAIL")
     blocked = sum(1 for r in results if r.get("status") == "BLOCKED_BY_ARCHITECTURE")
-    errored = total - passed - failed - blocked
+    timeout = sum(1 for r in results if r.get("status") == "TIMEOUT")
+    budget_exceeded = sum(1 for r in results if r.get("status") == "BUDGET_EXCEEDED")
+    errored = total - passed - failed - blocked - timeout - budget_exceeded
 
+    # avg_score only counts judged scenarios (not infra failures with score=0)
     scores = [
-        r.get("overall_score", 0) for r in results if r.get("overall_score") is not None
+        r["overall_score"]
+        for r in results
+        if r.get("status") in _JUDGED_STATUSES and r.get("overall_score") is not None
     ]
     avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -78,6 +79,8 @@ def build_scorecard(run_id, results, config):
             "passed": passed,
             "failed": failed,
             "blocked": blocked,
+            "timeout": timeout,
+            "budget_exceeded": budget_exceeded,
             "errored": errored,
             "pass_rate": passed / total if total > 0 else 0.0,
             "avg_score": round(avg_score, 2),
@@ -106,6 +109,8 @@ def write_summary_md(scorecard):
         f"- **Passed:** {s.get('passed', 0)} \u2705",
         f"- **Failed:** {s.get('failed', 0)} \u274c",
         f"- **Blocked:** {s.get('blocked', 0)} \U0001f6ab",
+        f"- **Timeout:** {s.get('timeout', 0)} \u23f1",
+        f"- **Budget exceeded:** {s.get('budget_exceeded', 0)} \U0001f4b8",
         f"- **Errored:** {s.get('errored', 0)} \u26a0\ufe0f",
         f"- **Pass rate:** {s.get('pass_rate', 0)*100:.0f}%",
         f"- **Avg score:** {s.get('avg_score', 0):.1f}/10",

@@ -316,6 +316,9 @@ def run_scenario_subprocess(
             "elapsed_s": elapsed,
         }
 
+    # Inject category from scenario YAML — eval agent doesn't include this field
+    result.setdefault("category", scenario_data.get("category", "unknown"))
+
     # Write trace file
     traces_dir = run_dir / "traces"
     traces_dir.mkdir(exist_ok=True)
@@ -405,11 +408,13 @@ def run_fix_iteration(scorecard, run_dir, iteration):
         indent=2,
     )
 
-    prompt = fixer_template.format(
-        scorecard_path=str(scorecard_path).replace("\\", "/"),
-        summary_path=str(summary_path).replace("\\", "/"),
-        fix_log_path=str(fix_log_path).replace("\\", "/"),
-        failed_scenarios=failed_summary,
+    # Use str.replace instead of .format() to avoid KeyError when fixer.md
+    # contains curly braces in code blocks or JSON examples.
+    prompt = (
+        fixer_template.replace("{scorecard_path}", str(scorecard_path).replace("\\", "/"))
+        .replace("{summary_path}", str(summary_path).replace("\\", "/"))
+        .replace("{fix_log_path}", str(fix_log_path).replace("\\", "/"))
+        .replace("{failed_scenarios}", failed_summary)
     )
 
     claude_cmd = shutil.which("claude") or "claude"
@@ -736,6 +741,10 @@ class AgentEvalRunner:
 
             completed[sid] = result.get("status")
             progress_path.write_text(json.dumps(completed, indent=2), encoding="utf-8")
+
+        # Clean up progress file — all scenarios complete
+        if progress_path.exists():
+            progress_path.unlink()
 
         # Build baseline scorecard
         config = {

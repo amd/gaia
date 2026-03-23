@@ -13,6 +13,9 @@ on:
     branches: ["main"]
     paths:
       - 'src/gaia/eval/**'
+      - 'eval/scenarios/**'
+      - 'eval/corpus/**'
+      - 'eval/prompts/**'
       - 'tests/test_eval.py'
       - 'setup.py'
       - '.github/workflows/test_eval.yml'
@@ -21,6 +24,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/gaia/eval/**'
+      - 'eval/scenarios/**'
+      - 'eval/corpus/**'
+      - 'eval/prompts/**'
       - 'tests/test_eval.py'
       - 'setup.py'
       - '.github/workflows/test_eval.yml'
