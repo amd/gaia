@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { X, Plus, Trash2, Power } from 'lucide-react';
+import { X, AlertTriangle, ExternalLink } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import type { SystemStatus, MCPServerInfo, MCPCatalogEntry } from '../types';
+import type { SystemStatus, Settings } from '../types';
 import './SettingsModal.css';
 
 export function SettingsModal() {
@@ -14,18 +14,34 @@ export function SettingsModal() {
     const [status, setStatus] = useState<SystemStatus | null>(null);
     const [loading, setLoading] = useState(true);
 
+    // Custom model override state
+    const [settings, setSettings] = useState<Settings | null>(null);
+    const [customModelInput, setCustomModelInput] = useState('');
+    const [modelSaving, setModelSaving] = useState(false);
+    const [modelSaved, setModelSaved] = useState(false);
+    const [showModelWarning, setShowModelWarning] = useState(false);
+    const modelSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
     useEffect(() => {
         log.system.info('Checking system status...');
         const t = log.system.time();
-        api.getSystemStatus()
-            .then((s) => {
+
+        // Fetch system status and settings in parallel
+        Promise.all([
+            api.getSystemStatus(),
+            api.getSettings(),
+        ])
+            .then(([s, settingsData]) => {
                 setStatus(s);
+                setSettings(settingsData);
+                setCustomModelInput(settingsData.custom_model || '');
                 log.system.timed('System status received', t, {
                     lemonade: s.lemonade_running ? 'running' : 'stopped',
                     model: s.model_loaded || 'none',
                     embedding: s.embedding_model_loaded ? 'yes' : 'no',
                     disk: `${s.disk_space_gb}GB free`,
                     memory: `${s.memory_available_gb}GB available`,
+                    customModel: settingsData.custom_model || 'none',
                 });
                 if (!s.lemonade_running) {
                     log.system.warn('Lemonade Server is NOT running. Chat will not work. Start it with: lemonade-server serve');
@@ -39,6 +55,13 @@ export function SettingsModal() {
                 setStatus(null);
             })
             .finally(() => setLoading(false));
+    }, []);
+
+    // Cleanup timers
+    useEffect(() => {
+        return () => {
+            if (modelSavedTimerRef.current) clearTimeout(modelSavedTimerRef.current);
+        };
     }, []);
 
     // Two-click confirmation for clear-all (replaces window.confirm)
@@ -73,6 +96,69 @@ export function SettingsModal() {
         log.system.timed(`Cleared ${deleted}/${sessions.length} session(s)`, t);
         setShowSettings(false);
     }, [confirmClear, sessions, removeSession, setShowSettings]);
+
+    // Save custom model (with warning confirmation flow)
+    const handleModelSave = useCallback(async () => {
+        const trimmed = customModelInput.trim();
+        const isSettingNew = !!trimmed;
+        const currentlySet = !!settings?.custom_model;
+
+        // If setting a new model and warning hasn't been confirmed, show warning first
+        if (isSettingNew && !showModelWarning) {
+            setShowModelWarning(true);
+            return;
+        }
+
+        setShowModelWarning(false);
+        setModelSaving(true);
+        try {
+            // Send the trimmed value, or empty string to clear
+            // (null means "don't change" in the backend)
+            const updated = await api.updateSettings({
+                custom_model: trimmed || '',
+            });
+            setSettings(updated);
+            setCustomModelInput(updated.custom_model || '');
+            setModelSaved(true);
+            if (modelSavedTimerRef.current) clearTimeout(modelSavedTimerRef.current);
+            modelSavedTimerRef.current = setTimeout(() => setModelSaved(false), 3000);
+            log.system.info(
+                isSettingNew
+                    ? `Custom model set: ${trimmed}`
+                    : 'Custom model override cleared'
+            );
+        } catch (err) {
+            log.system.error('Failed to save custom model', err);
+        } finally {
+            setModelSaving(false);
+        }
+    }, [customModelInput, settings, showModelWarning]);
+
+    const handleModelClear = useCallback(async () => {
+        setCustomModelInput('');
+        setShowModelWarning(false);
+        setModelSaving(true);
+        try {
+            // Send empty string (not null) to explicitly clear the override.
+            // Null means "field not provided" in Pydantic, empty string means "clear it".
+            const updated = await api.updateSettings({ custom_model: '' });
+            setSettings(updated);
+            setModelSaved(true);
+            if (modelSavedTimerRef.current) clearTimeout(modelSavedTimerRef.current);
+            modelSavedTimerRef.current = setTimeout(() => setModelSaved(false), 3000);
+            log.system.info('Custom model override cleared');
+        } catch (err) {
+            log.system.error('Failed to clear custom model', err);
+        } finally {
+            setModelSaving(false);
+        }
+    }, []);
+
+    // Determine if the save button should be enabled
+    const inputTrimmed = customModelInput.trim();
+    const hasChanged = inputTrimmed !== (settings?.custom_model || '');
+    const canSave = hasChanged && !modelSaving;
+    const hasOverride = !!settings?.custom_model;
 
     const version = __APP_VERSION__;
 
@@ -153,8 +239,116 @@ export function SettingsModal() {
                         )}
                     </section>
 
-                    {/* MCP Servers */}
-                    <MCPServersSection />
+                    {/* Model Override */}
+                    <section className="settings-section">
+                        <h4>Model Override</h4>
+                        <div className="model-override">
+                            <p className="model-override-desc">
+                                Use a custom HuggingFace model instead of the default.
+                                Import and load the model in the{' '}
+                                <a href="http://localhost:8000" target="_blank" rel="noopener noreferrer" className="lemonade-link">
+                                    Lemonade App <ExternalLink size={11} />
+                                </a>{' '}
+                                first, then enter its name here.
+                            </p>
+                            <div className="model-input-row">
+                                <input
+                                    type="text"
+                                    className={`model-input ${hasOverride ? 'has-override' : ''}`}
+                                    value={customModelInput}
+                                    onChange={(e) => {
+                                        setCustomModelInput(e.target.value);
+                                        setShowModelWarning(false);
+                                    }}
+                                    placeholder="e.g. Qwen3-Coder-30B-A3B-Instruct-GGUF"
+                                    spellCheck={false}
+                                    disabled={modelSaving}
+                                />
+                                <div className="model-btn-group">
+                                    <button
+                                        className={`btn-model-save ${modelSaved ? 'saved' : ''}`}
+                                        onClick={handleModelSave}
+                                        disabled={!canSave}
+                                    >
+                                        {modelSaving ? 'Saving...' : modelSaved ? 'Saved' : 'Save'}
+                                    </button>
+                                    {hasOverride && (
+                                        <button
+                                            className="btn-model-clear"
+                                            onClick={handleModelClear}
+                                            disabled={modelSaving}
+                                        >
+                                            Clear
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Warning banner */}
+                            {showModelWarning && (
+                                <div className="model-warning">
+                                    <AlertTriangle size={16} />
+                                    <div className="model-warning-content">
+                                        <strong>Custom models are untested</strong>
+                                        <p>
+                                            This model has not been validated with GAIA and may produce
+                                            unexpected results or lack tool-calling support.
+                                            Make sure you have already imported and loaded the model in the{' '}
+                                            <a href="http://localhost:8000" target="_blank" rel="noopener noreferrer" className="lemonade-link-inline">
+                                                Lemonade App
+                                            </a>.
+                                        </p>
+                                        <button className="btn-model-confirm" onClick={handleModelSave}>
+                                            I understand, save anyway
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Active override with status indicators */}
+                            {hasOverride && !showModelWarning && (
+                                <div className="model-status-section">
+                                    <div className="model-active-override">
+                                        <span className="model-active-dot" />
+                                        Active override: <code>{settings?.custom_model}</code>
+                                    </div>
+                                    {settings?.model_status && (
+                                        <div className="model-status-indicators">
+                                            <StatusPill ok={settings.model_status.found} label={settings.model_status.found ? 'Found' : 'Not found'} />
+                                            <StatusPill ok={settings.model_status.downloaded} label={settings.model_status.downloaded ? 'Downloaded' : 'Not downloaded'} />
+                                            <StatusPill ok={settings.model_status.loaded} label={settings.model_status.loaded ? 'Loaded' : 'Not loaded'} />
+                                        </div>
+                                    )}
+                                    {settings?.model_status && !settings.model_status.found && (
+                                        <p className="model-status-hint">
+                                            Import this model in the{' '}
+                                            <a href="http://localhost:8000" target="_blank" rel="noopener noreferrer" className="lemonade-link-inline">
+                                                Lemonade App
+                                            </a>{' '}
+                                            to download and load it.
+                                        </p>
+                                    )}
+                                    {settings?.model_status && settings.model_status.found && !settings.model_status.downloaded && (
+                                        <p className="model-status-hint">
+                                            Model found but not downloaded. Install it in the{' '}
+                                            <a href="http://localhost:8000" target="_blank" rel="noopener noreferrer" className="lemonade-link-inline">
+                                                Lemonade App
+                                            </a>.
+                                        </p>
+                                    )}
+                                    {settings?.model_status && settings.model_status.downloaded && !settings.model_status.loaded && (
+                                        <p className="model-status-hint">
+                                            Model downloaded but not loaded. Load it in the{' '}
+                                            <a href="http://localhost:8000" target="_blank" rel="noopener noreferrer" className="lemonade-link-inline">
+                                                Lemonade App
+                                            </a>{' '}
+                                            or it will auto-load on next chat.
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </section>
 
                     {/* About */}
                     <section className="settings-section">
@@ -453,5 +647,14 @@ function StatusRow({ label, value, ok, hint }: { label: string; value: string; o
                 {hint && <span className="status-hint"><code>{hint}</code></span>}
             </div>
         </div>
+    );
+}
+
+function StatusPill({ ok, label }: { ok: boolean; label: string }) {
+    return (
+        <span className={`model-status-pill ${ok ? 'ok' : 'warn'}`}>
+            <span className="model-status-pill-dot" />
+            {label}
+        </span>
     );
 }

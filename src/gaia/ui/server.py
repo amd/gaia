@@ -212,6 +212,7 @@ def create_app(db_path: str = None) -> FastAPI:
     # Per-session locks prevent the same session from having multiple
     # concurrent requests, which would corrupt conversation state.
     app.state.session_locks: dict = {}  # session_id -> asyncio.Lock
+    app.state.upload_locks: dict = {}  # resolved filepath -> asyncio.Lock
 
     # ── Global Exception Handler ────────────────────────────────────────
     # Prevent stack traces from leaking to external users (CodeQL
