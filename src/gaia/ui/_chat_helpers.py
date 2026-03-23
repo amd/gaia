@@ -18,6 +18,8 @@ import json
 import logging
 import os
 import re as _re
+import threading
+import time as _time
 from pathlib import Path
 
 from .database import ChatDatabase
@@ -36,6 +38,147 @@ logger = logging.getLogger(__name__)
 # Active SSE handlers keyed by session_id.  The /api/chat/confirm-tool
 # endpoint looks up the handler here to resolve a pending confirmation.
 _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
+
+# ── Per-session ChatAgent cache ───────────────────────────────────────────────
+# Constructing a fresh ChatAgent on every message is expensive: it initialises
+# RAGSDK, MCPClientManager, runs LemonadeManager.ensure_ready() (HTTP calls),
+# registers all tools, composes the system prompt, and re-indexes session docs
+# even when nothing has changed.  Caching the agent per session_id lets us skip
+# all of that on follow-up turns.
+#
+# Thread-safety: the global chat_semaphore(1) in server.py serialises all chat
+# requests, and the per-session session_lock prevents concurrent turns within
+# the same session.  Together they guarantee the cache dict and each agent are
+# accessed by at most one thread at a time — no per-entry locking needed.
+_agent_cache: dict = {}  # session_id -> {"agent": ChatAgent, "model_id": str, "document_ids": list}
+_agent_cache_lock = threading.Lock()
+_MAX_CACHED_AGENTS = 10
+
+
+def _get_cached_agent(session_id: str, model_id: str):
+    """Return the cached ChatAgent for *session_id* if the model matches, else None.
+
+    Evicts the entry when the model has changed so a fresh agent is created.
+    """
+    with _agent_cache_lock:
+        entry = _agent_cache.get(session_id)
+        if entry is None:
+            return None
+        if entry["model_id"] != model_id:
+            # Model changed — the cached agent used a different LLM; discard it.
+            del _agent_cache[session_id]
+            logger.debug("Agent cache miss (model change) for session %s", session_id[:8])
+            return None
+        return entry["agent"]
+
+
+def _store_agent(session_id: str, model_id: str, document_ids: list, agent) -> None:
+    """Cache *agent* for *session_id*.  Evicts the oldest entry if over the limit."""
+    with _agent_cache_lock:
+        if session_id not in _agent_cache and len(_agent_cache) >= _MAX_CACHED_AGENTS:
+            oldest = next(iter(_agent_cache))
+            del _agent_cache[oldest]
+            logger.debug("Agent cache full; evicted session %s", oldest[:8])
+        _agent_cache[session_id] = {
+            "model_id": model_id,
+            "document_ids": list(document_ids or []),
+            "agent": agent,
+        }
+        logger.debug(
+            "Cached agent for session %s (cache size: %d)", session_id[:8], len(_agent_cache)
+        )
+
+
+def _index_rag_with_progress(agent, fpath_list, sse_handler, *, rebuild_per_doc=False, label="document(s)"):
+    """Index *fpath_list* with SSE progress events.
+
+    Emits tool_start, per-doc status, and tool_result events.
+    When *rebuild_per_doc* is True, calls agent.rebuild_system_prompt() after
+    each successfully indexed document (used for cache-hit incremental updates).
+    """
+    n = len(fpath_list)
+    sse_handler._emit(
+        {
+            "type": "tool_start",
+            "tool": "index_documents",
+            "detail": f"Indexing {n} {label} for RAG",
+        }
+    )
+    idx_start = _time.time()
+    doc_stats = []
+    total_chunks = 0
+    for i, fpath in enumerate(fpath_list, 1):
+        doc_name = Path(fpath).name
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "info",
+                "message": f"Indexing [{i}/{n}]: {doc_name}",
+            }
+        )
+        try:
+            result = agent.rag.index_document(fpath)
+            n_chunks = result.get("num_chunks", 0)
+            error = result.get("error")
+            if error:
+                logger.warning("RAG error for %s: %s", fpath, error)
+                doc_stats.append(f"  {doc_name} — ERROR: {error}")
+                sse_handler._emit(
+                    {
+                        "type": "status",
+                        "status": "warning",
+                        "message": f"Error indexing {doc_name}: {error}",
+                    }
+                )
+            else:
+                agent.indexed_files.add(fpath)
+                total_chunks += n_chunks
+                size_mb = result.get("file_size_mb", 0) or 0
+                file_size_bytes = int(size_mb * 1024 * 1024)
+                if size_mb >= 1:
+                    size_str = f"{size_mb:.1f} MB"
+                elif file_size_bytes >= 1024:
+                    size_str = f"{file_size_bytes // 1024} KB"
+                else:
+                    size_str = f"{file_size_bytes} B"
+                from_cache = result.get("from_cache", False)
+                doc_stats.append(
+                    f"  {doc_name} — {n_chunks} chunks, {size_str}"
+                    + (" (cached)" if from_cache else "")
+                )
+                if rebuild_per_doc:
+                    agent.rebuild_system_prompt()
+        except Exception as idx_err:
+            logger.warning("Failed to index %s: %s", fpath, idx_err)
+            doc_stats.append(f"  {doc_name} — FAILED: {idx_err}")
+            sse_handler._emit(
+                {
+                    "type": "status",
+                    "status": "warning",
+                    "message": f"Failed to index {doc_name}: {idx_err}",
+                }
+            )
+    idx_elapsed = round(_time.time() - idx_start, 1)
+    summary_lines = [
+        f"Indexed {n} {label} in {idx_elapsed}s",
+        f"Total: {total_chunks} chunks in index",
+        "",
+    ] + doc_stats
+    sse_handler._emit(
+        {
+            "type": "tool_result",
+            "title": "Index Documents",
+            "summary": "\n".join(summary_lines),
+            "success": True,
+        }
+    )
+
+
+def evict_session_agent(session_id: str) -> None:
+    """Remove a session's cached agent (call on session deletion or clear)."""
+    with _agent_cache_lock:
+        if _agent_cache.pop(session_id, None) is not None:
+            logger.debug("Evicted cached agent for session %s", session_id[:8])
 
 
 # ── Chat Helpers ─────────────────────────────────────────────────────────────
@@ -175,32 +318,62 @@ async def _get_chat_response(
             )
             model_id = custom_model
 
-        config = ChatAgentConfig(
-            model_id=model_id,
-            max_steps=10,
-            silent_mode=True,
-            debug=False,
-            rag_documents=rag_file_paths,
-            library_documents=library_paths,
-            allowed_paths=allowed,
-            ui_session_id=request.session_id,
-        )
-        agent = ChatAgent(config)
+        # ── Agent cache ──────────────────────────────────────────────────────
+        # Reuse an existing ChatAgent rather than constructing a fresh one.
+        # On a cache hit we still re-register tools (so _TOOL_REGISTRY points
+        # to this agent's self after another session may have overwritten it)
+        # but skip the heavyweight __init__ work: RAGSDK construction,
+        # MCPClientManager init, LemonadeManager.ensure_ready() HTTP calls,
+        # system-prompt composition, and session-doc re-indexing.
+        session_id = request.session_id
+        cached_agent = _get_cached_agent(session_id, model_id)
+
+        if cached_agent is not None:
+            agent = cached_agent
+            # Re-register tools so _TOOL_REGISTRY points at this agent's self.
+            agent._register_tools()
+            # Index any session docs that were attached since the agent was cached.
+            if rag_file_paths and agent.rag:
+                new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
+                for fpath in new_paths:
+                    try:
+                        result_idx = agent.rag.index_document(fpath)
+                        if result_idx.get("success"):
+                            agent.indexed_files.add(fpath)
+                            agent.rebuild_system_prompt()
+                    except Exception as _idx_err:
+                        logger.warning("Failed to index %s: %s", fpath, _idx_err)
+            logger.debug("Agent cache hit (non-streaming) for session %s", session_id[:8])
+        else:
+            config = ChatAgentConfig(
+                model_id=model_id,
+                max_steps=10,
+                silent_mode=True,
+                debug=False,
+                rag_documents=rag_file_paths,
+                library_documents=library_paths,
+                allowed_paths=allowed,
+                ui_session_id=session_id,
+            )
+            agent = ChatAgent(config)
+            _store_agent(session_id, model_id, document_ids, agent)
 
         # Restore conversation history (limited to prevent context overflow).
+        # Always re-inject from DB so the history is consistent with what was
+        # persisted — regardless of whether the agent was cached or fresh.
         # 5 pairs × 2 msgs × ~500 tokens ≈ 5 000 tokens — well within 32K.
         # 2000-char truncation preserves enough assistant context for cross-turn
         # recall, pronoun resolution, and multi-step planning.
         _MAX_PAIRS = 5
         _MAX_CHARS = 2000
+        agent.conversation_history = []
         for user_msg, assistant_msg in history_pairs[-_MAX_PAIRS:]:
-            if hasattr(agent, "conversation_history"):
-                u = user_msg[:_MAX_CHARS]
-                a = assistant_msg[:_MAX_CHARS]
-                if len(assistant_msg) > _MAX_CHARS:
-                    a += "... (truncated)"
-                agent.conversation_history.append({"role": "user", "content": u})
-                agent.conversation_history.append({"role": "assistant", "content": a})
+            u = user_msg[:_MAX_CHARS]
+            a = assistant_msg[:_MAX_CHARS]
+            if len(assistant_msg) > _MAX_CHARS:
+                a += "... (truncated)"
+            agent.conversation_history.append({"role": "user", "content": u})
+            agent.conversation_history.append({"role": "assistant", "content": a})
 
         result = agent.process_query(request.message)
         if isinstance(result, dict):
@@ -241,7 +414,6 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     frontend visibility into what the agent is doing.
     """
     import queue
-    import threading
 
     from gaia.ui.sse_handler import SSEOutputHandler
 
@@ -292,168 +464,133 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         result_holder = {"answer": "", "error": None}
 
         def _run_agent():
-            import time as _time
-
             try:
                 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
-                # -- Phase 1: Configure --
-                # Build config: session-specific docs auto-index,
-                # library docs passed as metadata for on-demand indexing.
-                config = ChatAgentConfig(
-                    model_id=model_id,
-                    max_steps=10,
-                    streaming=True,
-                    silent_mode=False,
-                    debug=False,
-                    rag_documents=[],  # Index manually below (session docs only)
-                    library_documents=library_paths,  # Available for on-demand indexing
-                    allowed_paths=allowed,
-                    ui_session_id=session_id,
-                )
+                # ── Agent cache check ─────────────────────────────────────────
+                # Reuse an existing ChatAgent if one exists for this session.
+                # On a cache hit we still call _register_tools() so _TOOL_REGISTRY
+                # points at this agent's self (another session may have overwritten
+                # it between turns).  We skip the heavyweight parts: ChatAgent
+                # __init__, RAGSDK construction, MCPClientManager init,
+                # LemonadeManager.ensure_ready() HTTP calls, system-prompt
+                # composition, and session-doc re-indexing for unchanged files.
+                cached_agent = _get_cached_agent(session_id, model_id)
 
-                # -- Phase 2: LLM connection --
-                agent = ChatAgent(config)
-                agent.console = sse_handler  # Assign early so tool events flow
+                if cached_agent is not None:
+                    # -- Cache hit --
+                    agent = cached_agent
+                    agent.console = sse_handler
+
+                    # Re-register tools: another session may have overwritten
+                    # _TOOL_REGISTRY with its own self-bound closures.
+                    agent._register_tools()
+
+                    # Early-exit if consumer disconnected
+                    if sse_handler.cancelled.is_set():
+                        return
+
+                    # Index any session docs newly attached since last turn.
+                    new_rag_paths = [
+                        p for p in rag_file_paths if p not in agent.indexed_files
+                    ]
+                    if new_rag_paths and agent.rag:
+                        _index_rag_with_progress(
+                            agent,
+                            new_rag_paths,
+                            sse_handler,
+                            rebuild_per_doc=True,
+                            label="new document(s)",
+                        )
+
+                    logger.debug("Agent cache hit (streaming) for session %s", session_id[:8])
+
+                else:
+                    # -- Cache miss: full construction --
+                    # Build config: session-specific docs auto-index,
+                    # library docs passed as metadata for on-demand indexing.
+                    config = ChatAgentConfig(
+                        model_id=model_id,
+                        max_steps=10,
+                        streaming=True,
+                        silent_mode=False,
+                        debug=False,
+                        rag_documents=[],  # Index manually below (session docs only)
+                        library_documents=library_paths,  # Available for on-demand indexing
+                        allowed_paths=allowed,
+                        ui_session_id=session_id,
+                    )
+
+                    agent = ChatAgent(config)
+                    agent.console = sse_handler  # Assign early so tool events flow
+
+                    # Early-exit if consumer disconnected
+                    if sse_handler.cancelled.is_set():
+                        return
+
+                    # -- Phase 3: RAG indexing --
+                    # Session-attached docs are indexed with full SSE progress events.
+                    # Library docs are silently pre-indexed from disk cache so the
+                    # system prompt shows them as "already indexed" — preventing the
+                    # LLM from calling index_document again on unchanged files.
+                    # The hash-based cache (RAGSDK) guarantees no re-processing
+                    # unless file content has actually changed.
+                    if rag_file_paths and agent.rag:
+                        _index_rag_with_progress(agent, rag_file_paths, sse_handler)
+
+                    # -- Phase 3b: Silently pre-index library docs from cache --
+                    # Library docs that are already on disk are loaded from the
+                    # hash-based RAG cache (no LLM/embedding re-computation for
+                    # unchanged files).  Adding them to agent.indexed_files causes
+                    # rebuild_system_prompt() to emit the ANTI-RE-INDEX RULE, so
+                    # the LLM will query them directly instead of re-indexing.
+                    if library_paths and agent.rag:
+                        preindexed = 0
+                        for fpath in library_paths:
+                            try:
+                                result = agent.rag.index_document(fpath)
+                                if result.get("success") and not result.get("error"):
+                                    agent.indexed_files.add(fpath)
+                                    preindexed += 1
+                            except Exception as lib_err:
+                                logger.debug(
+                                    "Library pre-index skipped for %s: %s", fpath, lib_err
+                                )
+                        if preindexed:
+                            agent.rebuild_system_prompt()
+                            logger.info(
+                                "Pre-indexed %d library doc(s) from cache", preindexed
+                            )
+
+                    # Cache the agent for subsequent turns in this session.
+                    _store_agent(session_id, model_id, document_ids, agent)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
                     return
 
-                # -- Phase 3: RAG indexing --
-                # Session-attached docs are indexed with full SSE progress events.
-                # Library docs are silently pre-indexed from disk cache so the
-                # system prompt shows them as "already indexed" — preventing the
-                # LLM from calling index_document again on unchanged files.
-                # The hash-based cache (RAGSDK) guarantees no re-processing
-                # unless file content has actually changed.
-                if rag_file_paths and agent.rag:
-                    sse_handler._emit(
-                        {
-                            "type": "tool_start",
-                            "tool": "index_documents",
-                            "detail": f"Indexing {len(rag_file_paths)} document(s) for RAG",
-                        }
-                    )
-                    idx_start = _time.time()
-                    doc_stats = []
-                    total_chunks = 0
-                    for i, fpath in enumerate(rag_file_paths, 1):
-                        doc_name = Path(fpath).name
-                        sse_handler._emit(
-                            {
-                                "type": "status",
-                                "status": "info",
-                                "message": f"Indexing [{i}/{len(rag_file_paths)}]: {doc_name}",
-                            }
-                        )
-                        try:
-                            result = agent.rag.index_document(fpath)
-                            n_chunks = result.get("num_chunks", 0)
-                            error = result.get("error")
-                            if error:
-                                logger.warning("RAG error for %s: %s", fpath, error)
-                                doc_stats.append(f"  {doc_name} — ERROR: {error}")
-                                sse_handler._emit(
-                                    {
-                                        "type": "status",
-                                        "status": "warning",
-                                        "message": f"Error indexing {doc_name}: {error}",
-                                    }
-                                )
-                            else:
-                                agent.indexed_files.add(fpath)
-                                total_chunks += n_chunks
-                                # Collect per-doc stats
-                                size_mb = result.get("file_size_mb", 0) or 0
-                                file_size_bytes = int(size_mb * 1024 * 1024)
-                                if size_mb >= 1:
-                                    size_str = f"{size_mb:.1f} MB"
-                                elif file_size_bytes >= 1024:
-                                    size_str = f"{file_size_bytes // 1024} KB"
-                                else:
-                                    size_str = f"{file_size_bytes} B"
-                                cached = result.get("from_cache", False)
-                                doc_stats.append(
-                                    f"  {doc_name} — {n_chunks} chunks, {size_str}"
-                                    + (" (cached)" if cached else "")
-                                )
-                        except Exception as idx_err:
-                            logger.warning("Failed to index %s: %s", fpath, idx_err)
-                            doc_stats.append(f"  {doc_name} — FAILED: {idx_err}")
-                            sse_handler._emit(
-                                {
-                                    "type": "status",
-                                    "status": "warning",
-                                    "message": f"Failed to index {doc_name}: {idx_err}",
-                                }
-                            )
-                    idx_elapsed = round(_time.time() - idx_start, 1)
-                    summary_lines = [
-                        f"Indexed {len(rag_file_paths)} document(s) in {idx_elapsed}s",
-                        f"Total: {total_chunks} chunks in index",
-                        "",
-                    ] + doc_stats
-                    sse_handler._emit(
-                        {
-                            "type": "tool_result",
-                            "title": "Index Documents",
-                            "summary": "\n".join(summary_lines),
-                            "success": True,
-                        }
-                    )
-
-                # -- Phase 3b: Silently pre-index library docs from cache --
-                # Library docs that are already on disk are loaded from the
-                # hash-based RAG cache (no LLM/embedding re-computation for
-                # unchanged files).  Adding them to agent.indexed_files causes
-                # rebuild_system_prompt() to emit the ANTI-RE-INDEX RULE, so
-                # the LLM will query them directly instead of re-indexing.
-                if library_paths and agent.rag:
-                    preindexed = 0
-                    for fpath in library_paths:
-                        try:
-                            result = agent.rag.index_document(fpath)
-                            if result.get("success") and not result.get("error"):
-                                agent.indexed_files.add(fpath)
-                                preindexed += 1
-                        except Exception as lib_err:
-                            logger.debug(
-                                "Library pre-index skipped for %s: %s", fpath, lib_err
-                            )
-                    if preindexed:
-                        agent.rebuild_system_prompt()
-                        logger.info(
-                            "Pre-indexed %d library doc(s) from cache", preindexed
-                        )
-
                 # -- Phase 4: Conversation history --
-                # Limit history to prevent context window overflow.
-                # With RAG chunks + tools + system prompt, the 32K context
-                # fills fast.  Keep the last 5 exchanges and truncate long
-                # assistant messages to ~2000 chars each.
-                # NOTE: Increasing from (2, 500) → (5, 2000) unblocks multi-turn
-                # scenarios: cross_turn_file_recall, pronoun_resolution,
-                # multi_doc_context, conversation_summary, multi_step_plan,
-                # vague_request_clarification, topic_switch.
+                # Always re-inject from DB so history is consistent regardless of
+                # whether the agent was cached or freshly constructed.  Clears any
+                # stale history accumulated in prior turns of a cached agent.
                 # 5 pairs × 2 msgs × ~500 tokens ≈ 5 000 tokens — well within 32K.
                 _MAX_HISTORY_PAIRS = 5
                 _MAX_MSG_CHARS = 2000
+                agent.conversation_history = []
                 if history_pairs:
                     recent = history_pairs[-_MAX_HISTORY_PAIRS:]
                     for user_msg, assistant_msg in recent:
-                        if hasattr(agent, "conversation_history"):
-                            # Truncate to keep context manageable
-                            u = user_msg[:_MAX_MSG_CHARS]
-                            a = assistant_msg[:_MAX_MSG_CHARS]
-                            if len(assistant_msg) > _MAX_MSG_CHARS:
-                                a += "... (truncated)"
-                            agent.conversation_history.append(
-                                {"role": "user", "content": u}
-                            )
-                            agent.conversation_history.append(
-                                {"role": "assistant", "content": a}
-                            )
+                        # Truncate to keep context manageable
+                        u = user_msg[:_MAX_MSG_CHARS]
+                        a = assistant_msg[:_MAX_MSG_CHARS]
+                        if len(assistant_msg) > _MAX_MSG_CHARS:
+                            a += "... (truncated)"
+                        agent.conversation_history.append(
+                            {"role": "user", "content": u}
+                        )
+                        agent.conversation_history.append(
+                            {"role": "assistant", "content": a}
+                        )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -483,13 +620,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         captured_steps = []  # Collect agent steps for DB persistence
         step_id = 0
         idle_cycles = 0
-        import time as _loop_time
-
-        _stream_start = _loop_time.time()
+        _stream_start = _time.time()
         _STREAM_TIMEOUT = 180  # 3 minutes max for entire streaming response
         while True:
             # Guard: total timeout for the streaming response
-            if _loop_time.time() - _stream_start > _STREAM_TIMEOUT:
+            if _time.time() - _stream_start > _STREAM_TIMEOUT:
                 logger.error("Streaming response timed out after %ds", _STREAM_TIMEOUT)
                 timeout_event = json.dumps(
                     {
@@ -689,18 +824,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
         # Save complete response to DB (including captured agent steps)
         if full_response:
-            msg_id = db.add_message(
-                request.session_id,
-                "assistant",
-                full_response,
-                agent_steps=captured_steps if captured_steps else None,
-            )
-            done_event: dict = {
-                "type": "done",
-                "message_id": msg_id,
-                "content": full_response,
-            }
             # Fetch last inference stats from Lemonade (non-blocking)
+            inference_stats = None
             try:
                 import httpx
 
@@ -711,7 +836,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     stats_resp = await stats_client.get(f"{base_url}/stats")
                     if stats_resp.status_code == 200:
                         stats_data = stats_resp.json()
-                        done_event["stats"] = {
+                        inference_stats = {
                             "tokens_per_second": round(
                                 stats_data.get("tokens_per_second", 0), 1
                             ),
@@ -723,6 +848,21 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         }
             except Exception:
                 pass
+
+            msg_id = db.add_message(
+                request.session_id,
+                "assistant",
+                full_response,
+                agent_steps=captured_steps if captured_steps else None,
+                inference_stats=inference_stats,
+            )
+            done_event: dict = {
+                "type": "done",
+                "message_id": msg_id,
+                "content": full_response,
+            }
+            if inference_stats:
+                done_event["stats"] = inference_stats
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
         else:

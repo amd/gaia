@@ -624,14 +624,38 @@
     height: 12px;
 }
 
-/* Inference stats footer */
+/* Inference stats footer — visible only on hover */
 .msg-stats {
     display: flex;
-    gap: 12px;
-    margin-top: 8px;
-    padding-top: 6px;
-    border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
-    font-size: 11px;
-    color: var(--text-tertiary, rgba(255,255,255,0.35));
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 6px;
+    padding-top: 5px;
+    border-top: 1px solid var(--border-subtle, rgba(128,128,128,0.12));
+    font-size: 10.5px;
+    color: var(--text-muted);
     font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+    opacity: 0;
+    transition: opacity 180ms var(--ease);
+    pointer-events: none;
+    user-select: none;
+}
+.msg:hover .msg-stats {
+    opacity: 1;
+    pointer-events: auto;
+    user-select: text;
+}
+/* Timestamp is slightly more muted than the other stats */
+.msg-stats-ts {
+    color: var(--text-muted);
+    opacity: 0.75;
+}
+.msg:hover .msg-stats-ts {
+    opacity: 1;
+}
+/* Separator dots between stat items */
+.msg-stats > span + span::before {
+    content: '·';
+    margin-right: 6px;
+    opacity: 0.4;
 }

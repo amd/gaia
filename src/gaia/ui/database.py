@@ -132,6 +132,19 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for agent_steps: %s", e)
 
+        # Add inference_stats column for persisting LLM performance metrics
+        try:
+            cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
+            ]
+            if "inference_stats" not in cols:
+                self._conn.execute("ALTER TABLE messages ADD COLUMN inference_stats TEXT")
+                self._conn.commit()
+                logger.info("Migrated messages table: added inference_stats column")
+        except Exception as e:
+            logger.debug("Migration check for inference_stats: %s", e)
+
         # Add indexing_status column for background indexing progress
         try:
             doc_cols = [
@@ -345,17 +358,19 @@ class ChatDatabase:
         agent_steps: List[Dict] = None,
         tokens_prompt: int = None,
         tokens_completion: int = None,
+        inference_stats: Dict = None,
     ) -> int:
         """Add a message to a session. Returns message ID."""
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
+        stats_json = json.dumps(inference_stats) if inference_stats else None
 
         with self._transaction():
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -365,6 +380,7 @@ class ChatDatabase:
                     steps_json,
                     tokens_prompt,
                     tokens_completion,
+                    stats_json,
                 ),
             )
 
@@ -403,6 +419,11 @@ class ChatDatabase:
                     msg["agent_steps"] = json.loads(msg["agent_steps"])
                 except (json.JSONDecodeError, TypeError):
                     msg["agent_steps"] = None
+            if msg.get("inference_stats"):
+                try:
+                    msg["inference_stats"] = json.loads(msg["inference_stats"])
+                except (json.JSONDecodeError, TypeError):
+                    msg["inference_stats"] = None
             messages.append(msg)
 
         return messages

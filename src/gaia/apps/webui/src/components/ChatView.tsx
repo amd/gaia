@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
@@ -214,6 +214,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         ...m,
                         // Map snake_case agent_steps from API to camelCase agentSteps
                         agentSteps: m.agentSteps || m.agent_steps || undefined,
+                        // Map inference_stats from API to stats field
+                        stats: m.stats || m.inference_stats || undefined,
                     }));
                     if (isInitial) {
                         setMessages(msgs);
@@ -853,6 +855,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             const msgs = (data.messages || []).map((m: any) => ({
                                 ...m,
                                 agentSteps: m.agentSteps || m.agent_steps || undefined,
+                                stats: m.stats || m.inference_stats || undefined,
                             }));
                             setMessages(msgs);
                             lastMsgCountRef.current = msgs.length;
@@ -1078,6 +1081,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const showEmptyState = !isLoadingMessages && messages.length === 0 && !isStreaming;
 
+    // Pre-compute per-message latency: time from preceding user message to each
+    // assistant message. O(N) single pass, avoids repeated backward scans in render.
+    const latencyByMsgId = useMemo(() => {
+        const map = new Map<number, number>();
+        let lastUserTime: number | undefined;
+        for (const msg of messages) {
+            if (msg.role === 'user' && msg.created_at) {
+                lastUserTime = new Date(msg.created_at).getTime();
+            } else if (msg.role === 'assistant' && msg.created_at && lastUserTime !== undefined) {
+                const assistTime = new Date(msg.created_at).getTime();
+                if (assistTime > lastUserTime) map.set(msg.id, assistTime - lastUserTime);
+                lastUserTime = undefined;
+            }
+        }
+        return map;
+    }, [messages]);
+
     return (
         <main
             className={`chat-view ${isDragOver ? 'drag-active' : ''}`}
@@ -1252,6 +1272,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         && msg.role === 'assistant'
                         && idx === messages.length - 1;
                     if (isStreamEndingMsg) return null;
+
+                    const latencyMs = latencyByMsgId.get(msg.id);
+
                     return (
                         <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
                             <MessageBubble
@@ -1260,6 +1283,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
                                 onDelete={!isStreaming ? handleDeleteMessage : undefined}
                                 onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
+                                latencyMs={latencyMs}
                             />
                         </div>
                     );

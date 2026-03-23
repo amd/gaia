@@ -26,6 +26,8 @@ interface MessageBubbleProps {
     onDelete?: (messageId: number) => void;
     /** Called when user clicks the resend button (user messages only). */
     onResend?: (message: Message) => void;
+    /** Total wall-clock latency in ms (time from user message to response completion). */
+    latencyMs?: number;
 }
 
 
@@ -273,7 +275,22 @@ function formatMsgTime(iso: string): string {
     return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-export function MessageBubble({ message, isStreaming, showTerminalCursor, agentSteps, agentStepsActive, onDelete, onResend }: MessageBubbleProps) {
+/** Format a full absolute timestamp for the stats tooltip. */
+function formatFullTimestamp(iso: string): string {
+    if (!iso) return '';
+    return new Date(iso).toLocaleString(undefined, {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
+    });
+}
+
+/** Format latency in ms to a human-readable string. */
+function formatLatency(ms: number): string {
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+}
+
+export function MessageBubble({ message, isStreaming, showTerminalCursor, agentSteps, agentStepsActive, onDelete, onResend, latencyMs }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     // Memoize the expensive LLM content cleaning (brace-depth parser) so it
     // doesn't re-run on every render — only when message content changes.
@@ -401,12 +418,26 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                         </div>
                     )}
                     <RenderedContent content={cleanedContent} showCursor={(isStreaming || showTerminalCursor) && !!cleanedContent && !agentStepsActive} />
-                    {message.role === 'assistant' && message.stats && !isStreaming && message.stats.tokens_per_second > 0 && (
-                        <div className="msg-stats">
-                            <span>{message.stats.tokens_per_second} tok/s</span>
-                            <span>{message.stats.output_tokens} tokens</span>
-                            {message.stats.time_to_first_token != null && (
-                                <span>{(message.stats.time_to_first_token * 1000).toFixed(0)}ms TTFT</span>
+                    {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
+                        <div className="msg-stats" aria-label="Message performance stats">
+                            {message.created_at && (
+                                <span className="msg-stats-ts" title="Message timestamp">
+                                    {formatFullTimestamp(message.created_at)}
+                                </span>
+                            )}
+                            {latencyMs != null && latencyMs > 0 && (
+                                <span title="Total response time">{formatLatency(latencyMs)}</span>
+                            )}
+                            {message.stats?.tokens_per_second != null && message.stats.tokens_per_second > 0 && (
+                                <span title="Tokens per second">{message.stats.tokens_per_second} tok/s</span>
+                            )}
+                            {message.stats?.time_to_first_token != null && message.stats.time_to_first_token > 0 && (
+                                <span title="Time to first token">{(message.stats.time_to_first_token * 1000).toFixed(0)}ms TTFT</span>
+                            )}
+                            {message.stats?.output_tokens != null && message.stats.output_tokens > 0 && (
+                                <span title="Input → output tokens">
+                                    {(message.stats.input_tokens ?? 0).toLocaleString()} → {message.stats.output_tokens.toLocaleString()} tokens
+                                </span>
                             )}
                         </div>
                     )}
