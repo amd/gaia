@@ -3,8 +3,6 @@
 
 """Unit tests for shell command guardrails in ShellToolsMixin._validate_command."""
 
-import pytest
-
 from gaia.agents.chat.tools.shell_tools import (
     DANGEROUS_SHELL_OPERATORS,
     ShellToolsMixin,
