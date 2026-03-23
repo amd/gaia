@@ -167,9 +167,11 @@ def create_app(db_path: str = None) -> FastAPI:
 
         asyncio.create_task(_prewarm_lemonade())
 
-        # Pre-import heavy modules so first-message lazy imports are already cached.
-        # faiss, sentence_transformers, and the ChatAgent module tree each add
-        # ~0.5-1s of import time the first time they are touched.
+        # Pre-import heavy pure-library modules so first-message imports are cached.
+        # Only import libraries with no Lemonade/LLM side-effects at module level.
+        # ChatAgent/RAGSDK/MCPClientManager are intentionally excluded: their import
+        # trees pull in gaia.apps.* modules that instantiate AgentSDK at module level,
+        # which calls LemonadeManager.ensure_ready() and can trigger a model switch.
         async def _preload_modules():
             try:
                 loop = asyncio.get_event_loop()
@@ -178,15 +180,6 @@ def create_app(db_path: str = None) -> FastAPI:
                     # pylint: disable=unused-import
                     import faiss  # noqa: F401
                     import sentence_transformers  # noqa: F401
-
-                    from gaia.agents.chat.agent import (  # noqa: F401
-                        ChatAgent,
-                        ChatAgentConfig,
-                    )
-                    from gaia.mcp.client.mcp_client_manager import (  # noqa: F401
-                        MCPClientManager,
-                    )
-                    from gaia.rag.sdk import RAGSDK  # noqa: F401
 
                 await loop.run_in_executor(None, _do_imports)
                 logger.info("Heavy modules pre-loaded")
