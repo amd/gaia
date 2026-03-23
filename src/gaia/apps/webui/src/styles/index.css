@@ -219,12 +219,13 @@ a:hover { text-decoration: underline; }
     display: flex;
     flex-direction: column;
     min-height: 0;
-    transition: opacity 250ms var(--ease), transform 250ms var(--ease);
+    transition: opacity 220ms var(--ease), transform 220ms var(--ease);
+    will-change: opacity, transform;
 }
 
 .view-container.view-transitioning {
     opacity: 0;
-    transform: translateY(6px);
+    transform: scale(0.984) translateY(10px);
 }
 
 /* Ambient background glow — subtle radial gradients for depth (dark mode only).

@@ -347,8 +347,28 @@
     margin-bottom: 4px;
 }
 
+/* Collapsible toggle variant — resets button defaults */
+.flow-plan-toggle {
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    margin-bottom: 0;
+}
+.flow-plan-toggle:hover {
+    opacity: 0.8;
+}
+
+.flow-plan-count {
+    font-size: 9px;
+    opacity: 0.7;
+    margin-left: 1px;
+}
+
 .flow-plan-list {
-    margin: 0 0 0 16px;
+    margin: 4px 0 0 16px;
     padding: 0;
     font-size: 11px;
     font-family: var(--font-mono);

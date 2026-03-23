@@ -384,7 +384,7 @@ function App() {
                         setIsViewTransitioning(false);
                     });
                 });
-            }, 250); // matches CSS transition duration
+            }, 220); // matches CSS transition duration
             return () => clearTimeout(timer);
         }
     }, [currentSessionId, displayedSessionId]);

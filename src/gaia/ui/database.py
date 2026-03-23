@@ -139,7 +139,9 @@ class ChatDatabase:
                 for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
             ]
             if "inference_stats" not in cols:
-                self._conn.execute("ALTER TABLE messages ADD COLUMN inference_stats TEXT")
+                self._conn.execute(
+                    "ALTER TABLE messages ADD COLUMN inference_stats TEXT"
+                )
                 self._conn.commit()
                 logger.info("Migrated messages table: added inference_stats column")
         except Exception as e:
@@ -783,30 +785,3 @@ class ChatDatabase:
                 "total_chunks": total_chunks,
                 "total_size_bytes": total_size,
             }
-
-    # ── Settings ──────────────────────────────────────────────────────
-
-    def get_setting(self, key: str, default: str = None) -> Optional[str]:
-        """Get a setting value by key."""
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT value FROM settings WHERE key = ?", (key,)
-            ).fetchone()
-            return row["value"] if row else default
-
-    def set_setting(self, key: str, value: Optional[str]) -> None:
-        """Set a setting value. Pass None to delete the key."""
-        with self._transaction():
-            if value is None:
-                self._conn.execute("DELETE FROM settings WHERE key = ?", (key,))
-            else:
-                self._conn.execute(
-                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                    (key, value),
-                )
-
-    def get_all_settings(self) -> dict:
-        """Return all settings as a key→value dict."""
-        with self._lock:
-            rows = self._conn.execute("SELECT key, value FROM settings").fetchall()
-            return {row["key"]: row["value"] for row in rows}

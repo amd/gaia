@@ -198,29 +198,83 @@
 .session-item {
     display: flex;
     align-items: center;
-    padding: 8px 10px;
+    padding: 8px 10px 8px 12px;
     border-radius: var(--radius-md);
     cursor: pointer;
     margin-bottom: 2px;
     position: relative;
-    transition: all var(--duration) var(--ease);
+    transition: background-color 220ms var(--ease), box-shadow 280ms var(--ease), transform var(--duration-fast) var(--ease);
     outline: none;
-    border-left: 2px solid transparent;
 }
+
+/* Animated left selection indicator */
+.session-item::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 20%;
+    width: 2px;
+    height: 60%;
+    background: linear-gradient(180deg, var(--amd-red-light) 0%, var(--amd-red) 60%);
+    border-radius: 0 2px 2px 0;
+    transform: scaleY(0);
+    transform-origin: center;
+    transition: transform 300ms var(--ease), opacity 200ms var(--ease), box-shadow 300ms var(--ease);
+    opacity: 0;
+}
+
 .session-item:hover {
     background: var(--bg-hover);
-    border-left-color: var(--border);
 }
+
+/* Hover indicator hint */
+.session-item:hover::before {
+    transform: scaleY(0.35);
+    opacity: 0.45;
+}
+
+/* Press / tap feedback */
+.session-item:active:not(.session-deleting) {
+    transform: scale(0.982);
+    transition-duration: 80ms;
+}
+
 .session-item.active {
     background: var(--bg-active);
-    font-weight: 500;
-    border-left: 2px solid var(--amd-red);
-    padding-left: 10px;
+    animation: sessionActivate 320ms var(--ease);
+}
+
+/* Bold-without-reflow: simulate weight via text-shadow so layout is stable */
+.session-item.active .session-title {
+    text-shadow: 0 0 0.4px var(--text-primary);
+}
+
+/* Active indicator — full height with glow */
+.session-item.active::before {
+    transform: scaleY(1);
+    opacity: 1;
+    box-shadow: 2px 0 10px rgba(237, 28, 36, 0.45);
 }
 
 [data-theme="dark"] .session-item.active {
     background: rgba(237, 28, 36, 0.08);
-    box-shadow: inset 0 0 24px rgba(237, 28, 36, 0.08);
+    box-shadow: inset 0 0 28px rgba(237, 28, 36, 0.07);
+    /* Run shared entrance + separate dark background/glow animation in parallel */
+    animation: sessionActivate 320ms var(--ease), sessionActivateDarkBg 380ms var(--ease);
+}
+
+/* Entrance animation — slide in from left with overshoot */
+@keyframes sessionActivate {
+    0%   { transform: translateX(-4px); opacity: 0.65; }
+    55%  { transform: translateX(1.5px); }
+    100% { transform: translateX(0); opacity: 1; }
+}
+
+/* Dark mode only: background flood-in with overshoot, runs alongside sessionActivate */
+@keyframes sessionActivateDarkBg {
+    0%   { background: transparent; box-shadow: none; }
+    55%  { background: rgba(237, 28, 36, 0.12); }
+    100% { background: rgba(237, 28, 36, 0.08); box-shadow: inset 0 0 28px rgba(237, 28, 36, 0.07); }
 }
 
 .session-item:focus-visible {

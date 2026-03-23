@@ -206,10 +206,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
         log.chat.info(`ChatView mounted for session=${sessionId}, loading messages...`);
         const t = log.chat.time();
         setLoadingMessages(true);
+        let cancelled = false;
 
         const loadMessages = (isInitial = false) => {
             api.getMessages(sessionId)
                 .then((data) => {
+                    if (cancelled) return;
                     const msgs = (data.messages || []).map((m: any) => ({
                         ...m,
                         // Map snake_case agent_steps from API to camelCase agentSteps
@@ -229,12 +231,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     }
                 })
                 .catch((err) => {
+                    if (cancelled) return;
                     if (isInitial) {
                         log.chat.error(`Failed to load messages for session=${sessionId}`, err);
                         setMessages([]);
                     }
                 })
-                .finally(() => { if (isInitial) setLoadingMessages(false); });
+                .finally(() => { if (!cancelled && isInitial) setLoadingMessages(false); });
         };
 
         loadMessages(true);
@@ -242,6 +245,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // Poll every 3s for messages added by external tools (MCP API, etc.)
         msgPollRef.current = setInterval(() => loadMessages(false), 3_000);
         return () => {
+            cancelled = true;
             if (msgPollRef.current) clearInterval(msgPollRef.current);
         };
     }, [sessionId, setMessages, setLoadingMessages]);
@@ -852,6 +856,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 setTimeout(() => {
                     api.getMessages(sessionId)
                         .then((data) => {
+                            if (useChatStore.getState().currentSessionId !== sessionId) return;
                             const msgs = (data.messages || []).map((m: any) => ({
                                 ...m,
                                 agentSteps: m.agentSteps || m.agent_steps || undefined,
@@ -952,7 +957,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 log.chat.error(`Failed to delete message ${messageId}`, err);
                 // Reload messages on error to restore accurate state
                 api.getMessages(sessionId)
-                    .then((data) => setMessages(data.messages || []))
+                    .then((data) => {
+                        if (useChatStore.getState().currentSessionId !== sessionId) return;
+                        setMessages(data.messages || []);
+                    })
                     .catch(() => {});
             }
         }, 250);
@@ -973,7 +981,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
             log.chat.error(`Failed to delete messages from ${message.id}`, err);
             // Reload messages on error
             api.getMessages(sessionId)
-                .then((data) => setMessages(data.messages || []))
+                .then((data) => {
+                    if (useChatStore.getState().currentSessionId !== sessionId) return;
+                    setMessages(data.messages || []);
+                })
                 .catch(() => {});
             return;
         }

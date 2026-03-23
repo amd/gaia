@@ -358,11 +358,9 @@ No documents are currently indexed.
         # Build the prompt with indexed documents section
         # NOTE: Base agent now provides JSON format rules, so we only add ChatAgent-specific guidance
         # Detect platform for shell command guidance
-        import platform as _platform
-
-        os_name = _platform.system()  # 'Windows', 'Linux', 'Darwin'
-        os_version = _platform.version()
-        machine = _platform.machine()
+        os_name = platform.system()  # 'Windows', 'Linux', 'Darwin'
+        os_version = platform.version()
+        machine = platform.machine()
         if os_name == "Windows":
             platform_hint = f"""
 **SYSTEM PLATFORM:** Windows ({os_version}, {machine})
@@ -483,6 +481,7 @@ Always format your responses using Markdown for readability:
             + indexed_docs_section
             + """
 **TOOL USAGE RULES:**
+**CRITICAL — INDEX BEFORE QUERYING:** If you are not certain a file is already indexed, ALWAYS call `index_document` before calling `query_specific_file`. Never assume a file is indexed just because the user mentioned it. When in doubt, index first. (`query_specific_file` will auto-index if the file exists on disk, but an explicit `index_document` call ensures proper session tracking and avoids silent failures.)
 - Answer greetings, general knowledge, and conversation directly — no tools needed.
 - If no documents are indexed, answer ALL questions using your knowledge. Do NOT call RAG tools on empty indexes.
 - Use tools ONLY when user asks about files, documents, or system info.

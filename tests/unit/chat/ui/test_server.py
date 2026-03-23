@@ -232,6 +232,7 @@ class TestSystemStatus:
             ],
         }
         models_data = {"data": [{"id": "Qwen3.5-35B-A3B-GGUF", "downloaded": True}]}
+
         # Map URL suffix → response
         async def mock_get(url, **kwargs):
             if "/health" in url:
@@ -349,7 +350,9 @@ class TestSystemStatus:
         assert data["model_downloaded"] is False
 
     @patch("httpx.AsyncClient")
-    def test_system_status_model_downloaded_but_not_loaded(self, mock_httpx_cls, client):
+    def test_system_status_model_downloaded_but_not_loaded(
+        self, mock_httpx_cls, client
+    ):
         """model_downloaded is True when default model is in catalog and downloaded."""
         mock_client = AsyncMock()
 

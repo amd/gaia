@@ -72,9 +72,11 @@ def audit_tool_results_in_history(chat_helpers_path: Path = None) -> bool:
     except FileNotFoundError:
         return False
     # Check for agent_steps content being added to the messages/history structure
-    return "agent_steps" in source and (
-        "messages" in source or "history" in source
-    ) and "role" in source
+    return (
+        "agent_steps" in source
+        and ("messages" in source or "history" in source)
+        and "role" in source
+    )
 
 
 def run_audit() -> dict:

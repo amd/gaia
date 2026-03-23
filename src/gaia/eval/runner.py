@@ -36,7 +36,9 @@ REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
 REAL_WORLD_MANIFEST = REAL_WORLD_CORPUS_DIR / "manifest.json"
 
 # Personas defined in eval/prompts/simulator.md.  validate_scenario enforces this list.
-_KNOWN_PERSONAS = frozenset({"casual_user", "power_user", "confused_user", "adversarial_user", "data_analyst"})
+_KNOWN_PERSONAS = frozenset(
+    {"casual_user", "power_user", "confused_user", "adversarial_user", "data_analyst"}
+)
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_BACKEND = "http://localhost:4200"
@@ -81,9 +83,7 @@ def validate_scenario(path: Path, data: dict) -> None:
     persona = data.get("persona")
     if persona is not None:
         if not isinstance(persona, str):
-            errors.append(
-                f"persona must be a string, got {type(persona).__name__}"
-            )
+            errors.append(f"persona must be a string, got {type(persona).__name__}")
         elif persona not in _KNOWN_PERSONAS:
             errors.append(
                 f"persona '{persona}' is not a known persona; "
@@ -109,7 +109,9 @@ def validate_scenario(path: Path, data: dict) -> None:
         # A non-None ground_truth dict OR a non-empty success_criteria string is required.
         # ground_truth: null (key present, value None) counts as absent.
         has_gt = isinstance(turn.get("ground_truth"), dict)
-        has_criteria = isinstance(turn.get("success_criteria"), str) and bool(turn.get("success_criteria", "").strip())
+        has_criteria = isinstance(turn.get("success_criteria"), str) and bool(
+            turn.get("success_criteria", "").strip()
+        )
         if not has_gt and not has_criteria:
             errors.append(
                 f"{prefix}: must have at least one of 'ground_truth' (non-null dict) "
@@ -135,7 +137,10 @@ def validate_scenario(path: Path, data: dict) -> None:
             )
 
     if errors:
-        raise ValueError(f"Scenario '{sid}' ({path.name}) has validation errors:\n  " + "\n  ".join(errors))
+        raise ValueError(
+            f"Scenario '{sid}' ({path.name}) has validation errors:\n  "
+            + "\n  ".join(errors)
+        )
 
 
 def _documents_exist(scenario_data: dict) -> bool:
@@ -391,8 +396,14 @@ def run_scenario_subprocess(
     # truth for all document types (standard + real-world) in a single context block.
     if REAL_WORLD_MANIFEST.exists():
         rw_manifest = json.loads(REAL_WORLD_MANIFEST.read_text(encoding="utf-8"))
-        merged_docs = manifest_data.get("documents", []) + rw_manifest.get("documents", [])
-        manifest_data = {**manifest_data, "documents": merged_docs, "total_documents": len(merged_docs)}
+        merged_docs = manifest_data.get("documents", []) + rw_manifest.get(
+            "documents", []
+        )
+        manifest_data = {
+            **manifest_data,
+            "documents": merged_docs,
+            "total_documents": len(merged_docs),
+        }
 
     prompt = build_scenario_prompt(scenario_data, manifest_data, backend_url)
 
@@ -481,7 +492,10 @@ def run_scenario_subprocess(
                         "overall_score": None,
                         "turns": [],
                         "error": f"Budget cap hit after ${cost:.3f} ({raw.get('num_turns', '?')} turns)",
-                        "cost_estimate": {"turns": raw.get("num_turns", 0), "estimated_usd": cost},
+                        "cost_estimate": {
+                            "turns": raw.get("num_turns", 0),
+                            "estimated_usd": cost,
+                        },
                     }
                 elif (
                     isinstance(raw, dict)
@@ -518,7 +532,9 @@ def run_scenario_subprocess(
                 result["elapsed_s"] = elapsed
                 score = result.get("overall_score")
                 score_str = f"{score:.1f}" if isinstance(score, (int, float)) else "n/a"
-                print(f"[DONE] {scenario_id} — {result.get('status')} {score_str}/10 ({elapsed:.0f}s)")
+                print(
+                    f"[DONE] {scenario_id} — {result.get('status')} {score_str}/10 ({elapsed:.0f}s)"
+                )
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"[ERROR] {scenario_id} — JSON parse error: {e}", file=sys.stderr)
                 result = {
@@ -553,7 +569,10 @@ def run_scenario_subprocess(
             computed = recompute_turn_score(turn["scores"])
             if computed >= 0:
                 reported = turn.get("overall_score")
-                if isinstance(reported, (int, float)) and abs(computed - reported) > 0.25:
+                if (
+                    isinstance(reported, (int, float))
+                    and abs(computed - reported) > 0.25
+                ):
                     print(
                         f"[WARN] {scenario_id} turn {turn.get('turn', '?')}: "
                         f"overwriting score {reported:.2f} → {computed:.2f}",
@@ -606,7 +625,9 @@ def run_scenario_subprocess(
         if fail_reason is None:
             sc = result.get("overall_score")
             if isinstance(sc, (int, float)) and sc < 6.0:
-                fail_reason = f"overall_score={sc:.2f} < 6.0 (rubric: FAIL if score < 6.0)"
+                fail_reason = (
+                    f"overall_score={sc:.2f} < 6.0 (rubric: FAIL if score < 6.0)"
+                )
         if fail_reason:
             print(
                 f"[WARN] {scenario_id} — overriding LLM status PASS→FAIL: {fail_reason}",
@@ -619,7 +640,8 @@ def run_scenario_subprocess(
         # Requiring full coverage prevents upgrading scenarios where some turns had no scores
         # (e.g. eval agent timed out before scoring them — those turns may be real failures).
         turns_with_correctness = [
-            t for t in result["turns"]
+            t
+            for t in result["turns"]
             if isinstance(t.get("scores", {}).get("correctness"), (int, float))
         ]
         sc = result.get("overall_score")
@@ -642,7 +664,8 @@ def run_scenario_subprocess(
     # this indicates a hallucinated architectural block that needs human review.
     elif result.get("status") == "BLOCKED_BY_ARCHITECTURE" and result.get("turns"):
         turns_with_correctness = [
-            t for t in result["turns"]
+            t
+            for t in result["turns"]
             if isinstance(t.get("scores", {}).get("correctness"), (int, float))
         ]
         sc = result.get("overall_score")
@@ -692,7 +715,11 @@ def aggregate_scorecard(results, run_id, run_dir, config, filename_prefix="score
     # or append "_summary" if the prefix does not contain "scorecard".
     if "scorecard" in filename_prefix:
         idx = filename_prefix.index("scorecard")
-        summary_stem = filename_prefix[:idx] + "summary" + filename_prefix[idx + len("scorecard"):]
+        summary_stem = (
+            filename_prefix[:idx]
+            + "summary"
+            + filename_prefix[idx + len("scorecard") :]
+        )
     else:
         summary_stem = f"{filename_prefix}_summary"
     summary_path = run_dir / f"{summary_stem}.md"
@@ -766,7 +793,9 @@ def run_fix_iteration(scorecard, run_dir, iteration):
     # Use str.replace instead of .format() to avoid KeyError when fixer.md
     # contains curly braces in code blocks or JSON examples.
     prompt = (
-        fixer_template.replace("{scorecard_path}", str(scorecard_path).replace("\\", "/"))
+        fixer_template.replace(
+            "{scorecard_path}", str(scorecard_path).replace("\\", "/")
+        )
         .replace("{summary_path}", str(summary_path).replace("\\", "/"))
         .replace("{fix_log_path}", str(fix_log_path).replace("\\", "/"))
         .replace("{failed_scenarios}", failed_summary)
@@ -883,8 +912,16 @@ def compare_scorecards(baseline_path, current_path):
         c_skipped = c.get("status") == "SKIPPED_NO_DOCUMENT"
         b_pass = b.get("status") == "PASS"
         c_pass = c.get("status") == "PASS"
-        b_score = b.get("overall_score") if isinstance(b.get("overall_score"), (int, float)) else 0
-        c_score = c.get("overall_score") if isinstance(c.get("overall_score"), (int, float)) else 0
+        b_score = (
+            b.get("overall_score")
+            if isinstance(b.get("overall_score"), (int, float))
+            else 0
+        )
+        c_score = (
+            c.get("overall_score")
+            if isinstance(c.get("overall_score"), (int, float))
+            else 0
+        )
         delta = c_score - b_score
 
         entry = {
@@ -957,7 +994,9 @@ def compare_scorecards(baseline_path, current_path):
             )
 
     if score_regressed:
-        print(f"\n[~] SCORE REGRESSION ({len(score_regressed)} scenario(s)) — PASS but score drop ≥{_SCORE_REGRESSION_THRESHOLD}:")
+        print(
+            f"\n[~] SCORE REGRESSION ({len(score_regressed)} scenario(s)) — PASS but score drop ≥{_SCORE_REGRESSION_THRESHOLD}:"
+        )
         for e in score_regressed:
             print(
                 f"    {e['scenario_id']:<40} {e['baseline_score']:.1f} → {e['current_score']:.1f} ({e['delta']:+.1f})"
@@ -1002,13 +1041,17 @@ def compare_scorecards(baseline_path, current_path):
             "SKIPPED_NO_DOCUMENT in one run; not a quality signal:"
         )
         for e in corpus_changed:
-            print(f"    {e['scenario_id']:<40} {e['baseline_status']} → {e['current_status']}")
+            print(
+                f"    {e['scenario_id']:<40} {e['baseline_status']} → {e['current_status']}"
+            )
 
     print(f"\n{'='*70}")
     if regressed:
         print(f"[WARN] {len(regressed)} regression(s) detected!")
     if score_regressed:
-        print(f"[WARN] {len(score_regressed)} score regression(s) detected (still passing but score dropped ≥{_SCORE_REGRESSION_THRESHOLD})!")
+        print(
+            f"[WARN] {len(score_regressed)} score regression(s) detected (still passing but score dropped ≥{_SCORE_REGRESSION_THRESHOLD})!"
+        )
     if not regressed and not score_regressed and improved:
         print(
             f"[OK]   Net improvement: {len(improved)} scenario(s) fixed, 0 regressions."
@@ -1122,11 +1165,15 @@ class AgentEvalRunner:
                 if not trace_path.exists():
                     # Progress file recorded completion but trace wasn't written —
                     # previous run crashed between the two writes. Re-run the scenario.
-                    print(f"[WARN] {sid} in progress file but trace missing — re-running")
+                    print(
+                        f"[WARN] {sid} in progress file but trace missing — re-running"
+                    )
                     del completed[sid]
                 else:
                     try:
-                        results.append(json.loads(trace_path.read_text(encoding="utf-8")))
+                        results.append(
+                            json.loads(trace_path.read_text(encoding="utf-8"))
+                        )
                         print(f"[SKIP] {sid} -- already completed (resume mode)")
                         continue
                     except (json.JSONDecodeError, OSError):
@@ -1138,7 +1185,9 @@ class AgentEvalRunner:
             # Real-world documents are not committed to git; skip gracefully
             # rather than failing with SETUP_ERROR or INFRA_ERROR.
             if not _documents_exist(scenario_data):
-                print(f"[SKIP] {sid} — corpus document(s) not on disk (real-world corpus not committed to git)")
+                print(
+                    f"[SKIP] {sid} — corpus document(s) not on disk (real-world corpus not committed to git)"
+                )
                 result = {
                     "scenario_id": sid,
                     "category": scenario_data.get("category", "unknown"),
@@ -1156,7 +1205,9 @@ class AgentEvalRunner:
                 )
                 results.append(result)
                 completed[sid] = "SKIPPED_NO_DOCUMENT"
-                progress_path.write_text(json.dumps(completed, indent=2), encoding="utf-8")
+                progress_path.write_text(
+                    json.dumps(completed, indent=2), encoding="utf-8"
+                )
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
@@ -1210,7 +1261,8 @@ class AgentEvalRunner:
                 break
 
             failed = [
-                s for s in current_scorecard["scenarios"]
+                s
+                for s in current_scorecard["scenarios"]
                 if s.get("status") not in ("PASS", "SKIPPED_NO_DOCUMENT")
             ]
             if not failed:
@@ -1237,7 +1289,9 @@ class AgentEvalRunner:
                     )
                     continue
                 scenario_path, scenario_data = scenario_lookup[sid]
-                effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
+                effective_timeout = _compute_effective_timeout(
+                    self.timeout, scenario_data
+                )
                 result = run_scenario_subprocess(
                     scenario_path,
                     scenario_data,

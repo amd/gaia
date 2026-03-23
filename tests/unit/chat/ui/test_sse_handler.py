@@ -867,13 +867,17 @@ class TestPrintStreamingText:
         assert handler._stream_buffer == ""
 
     def test_embedded_text_then_tool_json_split(self, handler):
-        """Text followed by tool JSON should emit text and filter JSON."""
+        """Pre-tool planning text and tool JSON are both suppressed.
+
+        When the buffer contains text followed by tool-call JSON, Case 3 of
+        print_streaming_text discards the pre-tool planning text (per system
+        prompt rules: "NEVER output planning text before a tool call") and
+        then filters the tool-call JSON itself.  No chunk event is emitted.
+        """
         mixed = 'I will search now.\n{"tool": "search_file", "tool_args": {"query": "test"}}'
         handler.print_streaming_text(mixed)
         events = _drain(handler)
-        assert len(events) == 1
-        assert events[0]["type"] == "chunk"
-        assert "I will search now." in events[0]["content"]
+        assert len(events) == 0
         assert handler._stream_buffer == ""
 
     def test_buffer_overflow_emits_content(self, handler):

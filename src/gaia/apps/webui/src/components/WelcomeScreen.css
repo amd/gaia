@@ -359,6 +359,29 @@
     font-family: var(--font-sans);
 }
 
+.welcome-setup-hint svg {
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.welcome-setup-hint code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.07);
+}
+
+[data-theme="dark"] .welcome-setup-hint {
+    background: #120e05;
+    border-color: #2a1e08;
+    color: #fcd34d;
+}
+
+[data-theme="dark"] .welcome-setup-hint code {
+    background: rgba(255, 255, 255, 0.08);
+}
+
 /* ── Start button: scale-in via content-revealed ──────────────── */
 .start-btn {
     margin-bottom: 36px;
@@ -425,6 +448,16 @@
     color: var(--amd-red);
     background: var(--amd-red-dim2);
     transform: translateY(-1px);
+}
+
+/* ── Copyright notice ────────────────────────────────────────── */
+.welcome-copyright {
+    margin-top: 32px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    opacity: 0.35;
+    letter-spacing: 0.3px;
 }
 
 /* ── Responsive ───────────────────────────────────────────────── */

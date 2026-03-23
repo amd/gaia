@@ -838,6 +838,18 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         lines = content.split("\n") if isinstance(content, str) else []
         return f"Read {len(lines)} lines from {data.get('filename', data.get('filepath', 'file'))}"
 
+    # list_indexed_documents results — has "documents" list + "count" + "total_chunks"
+    if "documents" in data and "count" in data and "total_chunks" in data:
+        count = data.get("count", 0)
+        if count == 0:
+            return "No documents indexed"
+        docs = data.get("documents", [])
+        names = [d.get("name", "?") for d in docs[:5] if isinstance(d, dict)]
+        result = f"{count} document(s) indexed: {', '.join(names)}"
+        if count > 5:
+            result += f" (+{count - 5} more)"
+        return result
+
     # Status-based results
     if "status" in data:
         status = data["status"]

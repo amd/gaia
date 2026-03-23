@@ -21,14 +21,23 @@ def build_scorecard(run_id, results, config):
     blocked = sum(1 for r in results if r.get("status") == "BLOCKED_BY_ARCHITECTURE")
     timeout = sum(1 for r in results if r.get("status") == "TIMEOUT")
     budget_exceeded = sum(1 for r in results if r.get("status") == "BUDGET_EXCEEDED")
-    infra_error = sum(1 for r in results if r.get("status") in ("INFRA_ERROR", "SETUP_ERROR"))
+    infra_error = sum(
+        1 for r in results if r.get("status") in ("INFRA_ERROR", "SETUP_ERROR")
+    )
     # SKIPPED_NO_DOCUMENT: corpus file absent from disk (e.g. real-world docs not committed)
     skipped = sum(1 for r in results if r.get("status") == "SKIPPED_NO_DOCUMENT")
     errored = sum(
-        1 for r in results
-        if r.get("status") not in (
-            "PASS", "FAIL", "BLOCKED_BY_ARCHITECTURE",
-            "TIMEOUT", "BUDGET_EXCEEDED", "INFRA_ERROR", "SETUP_ERROR",
+        1
+        for r in results
+        if r.get("status")
+        not in (
+            "PASS",
+            "FAIL",
+            "BLOCKED_BY_ARCHITECTURE",
+            "TIMEOUT",
+            "BUDGET_EXCEEDED",
+            "INFRA_ERROR",
+            "SETUP_ERROR",
             "SKIPPED_NO_DOCUMENT",
         )
     )
@@ -38,9 +47,14 @@ def build_scorecard(run_id, results, config):
     # rubric definition, so letting FAIL scenarios inflate avg_score is misleading.
     # The original score is preserved in each result dict (not mutated here).
     scores = [
-        min(r["overall_score"], 5.99) if r.get("status") == "FAIL" else r["overall_score"]
+        (
+            min(r["overall_score"], 5.99)
+            if r.get("status") == "FAIL"
+            else r["overall_score"]
+        )
         for r in results
-        if r.get("status") in _JUDGED_STATUSES and isinstance(r.get("overall_score"), (int, float))
+        if r.get("status") in _JUDGED_STATUSES
+        and isinstance(r.get("overall_score"), (int, float))
     ]
     avg_score = sum(scores) / len(scores) if scores else 0.0
 
@@ -78,7 +92,9 @@ def build_scorecard(run_id, results, config):
         else:
             by_category[cat]["errored"] += 1
         # Only accumulate scores for judged scenarios; cap FAIL scores at 5.99
-        if status in _JUDGED_STATUSES and isinstance(r.get("overall_score"), (int, float)):
+        if status in _JUDGED_STATUSES and isinstance(
+            r.get("overall_score"), (int, float)
+        ):
             sc = r["overall_score"]
             by_category[cat]["scores"].append(min(sc, 5.99) if status == "FAIL" else sc)
 
@@ -94,8 +110,13 @@ def build_scorecard(run_id, results, config):
 
     # Collect any statuses not in the known set — these indicate runner bugs or new status codes
     known_statuses = {
-        "PASS", "FAIL", "BLOCKED_BY_ARCHITECTURE",
-        "TIMEOUT", "BUDGET_EXCEEDED", "INFRA_ERROR", "SETUP_ERROR",
+        "PASS",
+        "FAIL",
+        "BLOCKED_BY_ARCHITECTURE",
+        "TIMEOUT",
+        "BUDGET_EXCEEDED",
+        "INFRA_ERROR",
+        "SETUP_ERROR",
         "SKIPPED_NO_DOCUMENT",
     }
     unrecognized = sorted(
@@ -123,7 +144,8 @@ def build_scorecard(run_id, results, config):
             # Denominator is judged count (not scores list) so PASS with null score still counts.
             "judged_pass_rate": (
                 passed / sum(1 for r in results if r.get("status") in _JUDGED_STATUSES)
-                if any(r.get("status") in _JUDGED_STATUSES for r in results) else 0.0
+                if any(r.get("status") in _JUDGED_STATUSES for r in results)
+                else 0.0
             ),
             "avg_score": round(avg_score, 2),
             "by_category": by_category,
@@ -135,6 +157,7 @@ def build_scorecard(run_id, results, config):
     }
     if unrecognized:
         import sys
+
         print(
             f"[WARN] scorecard: unrecognized status(es) bucketed as 'errored': {unrecognized}",
             file=sys.stderr,
@@ -177,8 +200,10 @@ def write_summary_md(scorecard):
 
     for cat, data in s.get("by_category", {}).items():
         infra = (
-            data.get("timeout", 0) + data.get("budget_exceeded", 0)
-            + data.get("infra_error", 0) + data.get("errored", 0)
+            data.get("timeout", 0)
+            + data.get("budget_exceeded", 0)
+            + data.get("infra_error", 0)
+            + data.get("errored", 0)
         )
         lines.append(
             f"| {cat} | {data.get('passed', 0)} | {data.get('failed', 0)} | "

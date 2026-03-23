@@ -123,9 +123,7 @@ async def system_status():
                             default_lower = _DEFAULT_MODEL_NAME.lower()
                             for m in catalog_resp.json().get("data", []):
                                 if m.get("id", "").lower() == default_lower:
-                                    status.model_downloaded = m.get(
-                                        "downloaded", False
-                                    )
+                                    status.model_downloaded = m.get("downloaded", False)
                                     break
                             # Model not found in catalog → treat as not downloaded
                             if status.model_downloaded is None:

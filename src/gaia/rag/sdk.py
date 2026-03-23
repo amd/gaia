@@ -965,12 +965,15 @@ These positions indicate where to split the text."""
                 # (contains at least one non-numeric string cell)
                 header = rows[0]
                 has_header = any(
-                    c.strip() and not c.strip().replace(".", "").replace("-", "").isdigit()
+                    c.strip()
+                    and not c.strip().replace(".", "").replace("-", "").isdigit()
                     for c in header
                 )
 
                 if has_header and len(rows) > 1:
-                    parts.append(f"Columns: {', '.join(c for c in header if c.strip())}")
+                    parts.append(
+                        f"Columns: {', '.join(c for c in header if c.strip())}"
+                    )
                     for row in rows[1:]:
                         row_parts = []
                         for i, cell in enumerate(row):

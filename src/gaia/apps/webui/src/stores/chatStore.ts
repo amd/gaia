@@ -161,7 +161,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (last.type !== 'thinking') return state;
             steps[steps.length - 1] = {
                 ...last,
-                detail: (last.detail || '') + content,
+                detail: (last.detail ? last.detail + '\n' : '') + content,
                 active: true,
             };
             return { agentSteps: steps };

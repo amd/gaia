@@ -542,6 +542,7 @@ class RAGToolsMixin:
                 )
 
                 # Find the file in indexed files (normalize slashes for cross-platform matching)
+                auto_indexed = False
                 norm_path = str(Path(file_path))
                 matching_files = [
                     f
@@ -560,20 +561,90 @@ class RAGToolsMixin:
                         if Path(str(f)).name == basename
                     ]
                     if len(matching_files) == 0:
-                        return {
-                            "status": "error",
-                            "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
-                        }
+                        # Auto-index the file if it exists on disk instead of failing.
+                        # This avoids the slow fail → plan → index → re-query cycle.
+                        if os.path.exists(file_path):
+                            resolved = os.path.realpath(file_path)
+                            # Enforce path restrictions same as index_document does
+                            if hasattr(
+                                self, "_is_path_allowed"
+                            ) and not self._is_path_allowed(resolved):
+                                return {
+                                    "status": "error",
+                                    "error": f"Access denied: '{resolved}' is not in allowed paths",
+                                }
+                            logger.info(
+                                f"[query_specific_file] '{basename}' not indexed — "
+                                f"auto-indexing '{resolved}' before querying"
+                            )
+                            idx_result = self.rag.index_document(resolved)
+                            if idx_result.get("success"):
+                                self.indexed_files.add(file_path)
+                                if (
+                                    hasattr(self, "current_session")
+                                    and self.current_session
+                                ):
+                                    if (
+                                        file_path
+                                        not in self.current_session.indexed_documents
+                                    ):
+                                        self.current_session.indexed_documents.append(
+                                            file_path
+                                        )
+                                        if hasattr(self, "session_manager"):
+                                            self.session_manager.save_session(
+                                                self.current_session
+                                            )
+                                if hasattr(self, "rebuild_system_prompt"):
+                                    self.rebuild_system_prompt()
+                                # Re-match after auto-indexing
+                                matching_files = [
+                                    f
+                                    for f in self.rag.indexed_files
+                                    if norm_path in str(f)
+                                    or file_path in str(f)
+                                    or Path(str(f)).name == basename
+                                ]
+                                auto_indexed = True
+                            else:
+                                return {
+                                    "status": "error",
+                                    "error": (
+                                        f"File '{file_path}' not in index and auto-indexing "
+                                        f"failed: {idx_result.get('error', 'unknown error')}"
+                                    ),
+                                }
+                        else:
+                            return {
+                                "status": "error",
+                                "error": (
+                                    f"File '{file_path}' not found in indexed documents "
+                                    f"and does not exist on disk. "
+                                    f"Use search_files to find it first."
+                                ),
+                            }
+                        # After auto-indexing, verify we have a match
+                        if not matching_files:
+                            return {
+                                "status": "error",
+                                "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
+                            }
                     elif len(matching_files) > 1:
                         ambiguous = [str(f) for f in matching_files]
                         return {
                             "status": "error",
                             "error": f"Ambiguous filename '{basename}' — multiple matches found: {ambiguous}. Use the full path.",
                         }
-                    logger.info(
-                        f"[query_specific_file] Path '{file_path}' not found directly; "
-                        f"resolved via basename to: {matching_files[0]}"
-                    )
+                    if auto_indexed:
+                        logger.info(
+                            f"[query_specific_file] Auto-indexed and resolved '{file_path}' "
+                            f"to: {matching_files[0]}"
+                        )
+                    else:
+                        logger.info(
+                            f"[query_specific_file] Path '{file_path}' not found directly; "
+                            f"resolved via basename to: {matching_files[0]}"
+                        )
 
                 # For now, use the first match
                 # TODO: Let user disambiguate if multiple matches
@@ -889,6 +960,7 @@ class RAGToolsMixin:
                     "message": f"Found {len(top_chunks)} relevant chunks in {Path(target_file).name}",
                     "chunks": formatted_chunks,
                     "file": str(target_file),
+                    "auto_indexed": auto_indexed,
                     "instruction": f"Use these chunks from {Path(target_file).name} to answer the question. Read through ALL {len(top_chunks)} chunks completely before answering.\n\nCRITICAL CITATION REQUIREMENT:\nYour answer MUST start with: 'According to {Path(target_file).name}, page X:' where X is the page number from the chunk's 'page' field.\n\nExample: If chunk has 'page': 2, say 'According to {Path(target_file).name}, page 2:'\nIf info from multiple pages, say 'According to {Path(target_file).name}, pages 2 and 5:'",
                 }
 

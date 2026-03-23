@@ -300,7 +300,8 @@
                 "group": "Evaluation Framework",
                 "pages": [
                   "reference/eval",
-                  "reference/eval/fix-code-testbench"
+                  "reference/eval/fix-code-testbench",
+                  "eval"
                 ]
               },
               "reference/dependency-management",

@@ -70,8 +70,15 @@ class TestEvalCLI:
         assert any(
             word in combined_output
             for word in [
-                "found", "processing", "evaluations", "skipping",
-                "no", "not found", "error", "evaluating", "install",
+                "found",
+                "processing",
+                "evaluations",
+                "skipping",
+                "no",
+                "not found",
+                "error",
+                "evaluating",
+                "install",
             ]
         ), f"Expected diagnostic output, got: {combined_output[:200]}"
 
@@ -282,7 +289,9 @@ class TestAgentEvalAudit:
 
         # File with ChatAgent( -> stateless_per_message
         f = tmp_path / "helpers.py"
-        f.write_text("async def handle():\n    agent = ChatAgent(config)\n    return agent\n")
+        f.write_text(
+            "async def handle():\n    agent = ChatAgent(config)\n    return agent\n"
+        )
         assert audit_agent_persistence(f) == "stateless_per_message"
 
         # File without ChatAgent( -> unknown
@@ -314,12 +323,12 @@ class TestAgentEvalAudit:
         from gaia.eval.audit import audit_chat_helpers
 
         constants = audit_chat_helpers()
-        assert constants.get("_MAX_HISTORY_PAIRS") == 5, (
-            "_MAX_HISTORY_PAIRS changed in _chat_helpers.py — update eval recommendations"
-        )
-        assert constants.get("_MAX_MSG_CHARS") == 2000, (
-            "_MAX_MSG_CHARS changed in _chat_helpers.py — update eval recommendations"
-        )
+        assert (
+            constants.get("_MAX_HISTORY_PAIRS") == 5
+        ), "_MAX_HISTORY_PAIRS changed in _chat_helpers.py — update eval recommendations"
+        assert (
+            constants.get("_MAX_MSG_CHARS") == 2000
+        ), "_MAX_MSG_CHARS changed in _chat_helpers.py — update eval recommendations"
 
 
 class TestAgentEvalRunner:
@@ -356,7 +365,9 @@ class TestAgentEvalRunner:
 
         scenarios = find_scenarios()
         ids = [data["id"] for _, data in scenarios]
-        assert len(ids) == len(set(ids)), f"Duplicate scenario IDs: {[x for x in ids if ids.count(x) > 1]}"
+        assert len(ids) == len(
+            set(ids)
+        ), f"Duplicate scenario IDs: {[x for x in ids if ids.count(x) > 1]}"
 
     def test_all_scenarios_have_required_fields(self):
         from gaia.eval.runner import find_scenarios
@@ -370,9 +381,10 @@ class TestAgentEvalRunner:
             assert "setup" in data, f"{path.name} missing 'setup'"
 
     def test_compare_scorecards_detects_regression(self, tmp_path):
+        import json
+
         from gaia.eval.runner import compare_scorecards
         from gaia.eval.scorecard import build_scorecard
-        import json
 
         def _sc(results):
             sc = build_scorecard("run", results, {})
@@ -381,12 +393,36 @@ class TestAgentEvalRunner:
             return p
 
         baseline_results = [
-            {"scenario_id": "a", "status": "PASS", "overall_score": 9.0, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "b", "status": "PASS", "overall_score": 8.0, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "PASS",
+                "overall_score": 9.0,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "b",
+                "status": "PASS",
+                "overall_score": 8.0,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         current_results = [
-            {"scenario_id": "a", "status": "PASS", "overall_score": 9.0, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "b", "status": "FAIL", "overall_score": 3.0, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "PASS",
+                "overall_score": 9.0,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "b",
+                "status": "FAIL",
+                "overall_score": 3.0,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         diff = compare_scorecards(_sc(baseline_results), _sc(current_results))
         assert len(diff["regressed"]) == 1
@@ -439,10 +475,22 @@ class TestAgentEvalRunner:
             return p
 
         baseline_results = [
-            {"scenario_id": "a", "status": "PASS", "overall_score": 9.0, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "PASS",
+                "overall_score": 9.0,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         current_results = [
-            {"scenario_id": "a", "status": "PASS", "overall_score": 6.5, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "PASS",
+                "overall_score": 6.5,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         diff = compare_scorecards(_sc(baseline_results), _sc(current_results))
         assert len(diff["score_regressed"]) == 1
@@ -462,10 +510,22 @@ class TestAgentEvalRunner:
             return p
 
         baseline_results = [
-            {"scenario_id": "a", "status": "PASS", "overall_score": 8.0, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "PASS",
+                "overall_score": 8.0,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         current_results = [
-            {"scenario_id": "a", "status": "PASS", "overall_score": 7.0, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "PASS",
+                "overall_score": 7.0,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         diff = compare_scorecards(_sc(baseline_results), _sc(current_results))
         assert len(diff["score_regressed"]) == 0
@@ -508,31 +568,50 @@ class TestScoreValidation:
         from gaia.eval.runner import recompute_turn_score
 
         # Missing error_recovery → should return -1.0
-        scores = {"correctness": 8, "tool_selection": 7, "context_retention": 9,
-                  "completeness": 8, "efficiency": 7, "personality": 8}
+        scores = {
+            "correctness": 8,
+            "tool_selection": 7,
+            "context_retention": 9,
+            "completeness": 8,
+            "efficiency": 7,
+            "personality": 8,
+        }
         assert recompute_turn_score(scores) == -1.0
 
     def test_recompute_turn_score_string_values(self):
         from gaia.eval.runner import recompute_turn_score
 
         # LLM returned score dimensions as strings → should return -1.0 (not crash)
-        scores = {"correctness": "8", "tool_selection": "7", "context_retention": "9",
-                  "completeness": "8", "efficiency": "7", "personality": "8",
-                  "error_recovery": "7"}
+        scores = {
+            "correctness": "8",
+            "tool_selection": "7",
+            "context_retention": "9",
+            "completeness": "8",
+            "efficiency": "7",
+            "personality": "8",
+            "error_recovery": "7",
+        }
         assert recompute_turn_score(scores) == -1.0
 
     def test_validate_turn_scores_no_warnings_when_dims_present(self):
         from gaia.eval.runner import _validate_turn_scores
 
         result = {
-            "turns": [{
-                "turn": 1,
-                "overall_score": 7.45,
-                "scores": {
-                    "correctness": 8, "tool_selection": 8, "context_retention": 7,
-                    "completeness": 7, "efficiency": 7, "personality": 7, "error_recovery": 7,
-                },
-            }]
+            "turns": [
+                {
+                    "turn": 1,
+                    "overall_score": 7.45,
+                    "scores": {
+                        "correctness": 8,
+                        "tool_selection": 8,
+                        "context_retention": 7,
+                        "completeness": 7,
+                        "efficiency": 7,
+                        "personality": 7,
+                        "error_recovery": 7,
+                    },
+                }
+            ]
         }
         # All dimension scores present → recompute succeeds → no warning
         warnings = _validate_turn_scores(result)
@@ -543,14 +622,17 @@ class TestScoreValidation:
         from gaia.eval.runner import _validate_turn_scores
 
         result = {
-            "turns": [{
-                "turn": 1,
-                "overall_score": 7.0,
-                "scores": {
-                    "correctness": 8, "tool_selection": 8,
-                    # missing: context_retention, completeness, efficiency, personality, error_recovery
-                },
-            }]
+            "turns": [
+                {
+                    "turn": 1,
+                    "overall_score": 7.0,
+                    "scores": {
+                        "correctness": 8,
+                        "tool_selection": 8,
+                        # missing: context_retention, completeness, efficiency, personality, error_recovery
+                    },
+                }
+            ]
         }
         warnings = _validate_turn_scores(result)
         assert len(warnings) == 1
@@ -570,7 +652,11 @@ class TestValidateScenario:
             "persona": "casual_user",
             "setup": {"index_documents": []},
             "turns": [
-                {"turn": 1, "objective": "Ask something", "ground_truth": {"expected_answer": "42"}},
+                {
+                    "turn": 1,
+                    "objective": "Ask something",
+                    "ground_truth": {"expected_answer": "42"},
+                },
             ],
         }
         validate_scenario(tmp_path / "test.yaml", data)  # should not raise
@@ -703,7 +789,10 @@ class TestValidateScenario:
                 {
                     "turn": 1,
                     "objective": "x",
-                    "success_criteria": {"must_contain": [], "agent_response_preview": "foo"},
+                    "success_criteria": {
+                        "must_contain": [],
+                        "agent_response_preview": "foo",
+                    },
                 }
             ],
         }
@@ -757,7 +846,9 @@ class TestManifestCrossReference:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         if REAL_WORLD_MANIFEST.exists():
             rw = json.loads(REAL_WORLD_MANIFEST.read_text(encoding="utf-8"))
-            manifest["documents"] = manifest.get("documents", []) + rw.get("documents", [])
+            manifest["documents"] = manifest.get("documents", []) + rw.get(
+                "documents", []
+            )
         return manifest
 
     def test_scenario_doc_ids_exist_in_manifest(self):
@@ -777,7 +868,11 @@ class TestManifestCrossReference:
                     missing.append(
                         f"{data['id']} turn {turn.get('turn', '?')}: doc_id='{doc_id}'"
                     )
-        assert not missing, "Scenario doc_id references not in merged manifest:\n  " + "\n  ".join(missing)
+        assert (
+            not missing
+        ), "Scenario doc_id references not in merged manifest:\n  " + "\n  ".join(
+            missing
+        )
 
     def test_scenario_fact_ids_exist_in_manifest(self):
         """Every fact_id referenced in scenarios must exist in the merged manifest."""
@@ -792,6 +887,7 @@ class TestManifestCrossReference:
         }
 
         from gaia.eval.runner import find_scenarios
+
         scenarios = find_scenarios()
         missing = []
         for path, data in scenarios:
@@ -810,7 +906,11 @@ class TestManifestCrossReference:
                         missing.append(
                             f"{data['id']} turn {turn.get('turn', '?')}: {doc_id}.{fid} (from fact_ids)"
                         )
-        assert not missing, "Scenario fact_id references not in merged manifest:\n  " + "\n  ".join(missing)
+        assert (
+            not missing
+        ), "Scenario fact_id references not in merged manifest:\n  " + "\n  ".join(
+            missing
+        )
 
 
 class TestBuildScenarioPrompt:
@@ -820,33 +920,51 @@ class TestBuildScenarioPrompt:
         return {
             "id": "test_s",
             "category": "rag_quality",
-            "setup": {"index_documents": [{"corpus_doc": "x", "path": "eval/corpus/documents/x.md"}]},
-            "turns": [{"turn": 1, "objective": "Ask something", "ground_truth": {"expected_answer": "42"}}],
+            "setup": {
+                "index_documents": [
+                    {"corpus_doc": "x", "path": "eval/corpus/documents/x.md"}
+                ]
+            },
+            "turns": [
+                {
+                    "turn": 1,
+                    "objective": "Ask something",
+                    "ground_truth": {"expected_answer": "42"},
+                }
+            ],
         }
 
     def test_prompt_contains_scenario_id(self):
         from gaia.eval.runner import build_scenario_prompt
 
-        prompt = build_scenario_prompt(self._make_scenario(), {}, "http://localhost:4200")
+        prompt = build_scenario_prompt(
+            self._make_scenario(), {}, "http://localhost:4200"
+        )
         assert "test_s" in prompt
 
     def test_prompt_contains_corpus_root(self):
-        from gaia.eval.runner import build_scenario_prompt, CORPUS_DIR
+        from gaia.eval.runner import CORPUS_DIR, build_scenario_prompt
 
-        prompt = build_scenario_prompt(self._make_scenario(), {}, "http://localhost:4200")
+        prompt = build_scenario_prompt(
+            self._make_scenario(), {}, "http://localhost:4200"
+        )
         corpus_root = str(CORPUS_DIR / "documents").replace("\\", "/")
         assert corpus_root in prompt
 
     def test_prompt_contains_backend_url(self):
         from gaia.eval.runner import build_scenario_prompt
 
-        prompt = build_scenario_prompt(self._make_scenario(), {}, "http://localhost:9999")
+        prompt = build_scenario_prompt(
+            self._make_scenario(), {}, "http://localhost:9999"
+        )
         assert "http://localhost:9999" in prompt
 
     def test_prompt_contains_scoring_rules(self):
         from gaia.eval.runner import build_scenario_prompt
 
-        prompt = build_scenario_prompt(self._make_scenario(), {}, "http://localhost:4200")
+        prompt = build_scenario_prompt(
+            self._make_scenario(), {}, "http://localhost:4200"
+        )
         # simulator.md content is inlined — verify key rubric elements are present
         assert "correctness" in prompt
         assert "PASS" in prompt
@@ -855,8 +973,12 @@ class TestBuildScenarioPrompt:
     def test_prompt_contains_manifest_json(self):
         from gaia.eval.runner import build_scenario_prompt
 
-        manifest = {"documents": [{"id": "test_doc", "filename": "test.md", "facts": []}]}
-        prompt = build_scenario_prompt(self._make_scenario(), manifest, "http://localhost:4200")
+        manifest = {
+            "documents": [{"id": "test_doc", "filename": "test.md", "facts": []}]
+        }
+        prompt = build_scenario_prompt(
+            self._make_scenario(), manifest, "http://localhost:4200"
+        )
         assert "test_doc" in prompt
 
 
@@ -872,8 +994,9 @@ class TestRunScenarioSubprocess:
         }
 
     def _run(self, mocker, stdout, returncode=0):
-        from gaia.eval.runner import run_scenario_subprocess
         import tempfile
+
+        from gaia.eval.runner import run_scenario_subprocess
 
         mock_proc = mocker.MagicMock()
         mock_proc.stdout = stdout
@@ -910,7 +1033,11 @@ class TestRunScenarioSubprocess:
         assert result["category"] == "rag_quality"
 
     def test_budget_exceeded_detected(self, mocker):
-        payload = {"subtype": "error_max_budget_usd", "total_cost_usd": 2.05, "num_turns": 3}
+        payload = {
+            "subtype": "error_max_budget_usd",
+            "total_cost_usd": 2.05,
+            "num_turns": 3,
+        }
         result = self._run(mocker, json.dumps(payload))
         assert result["status"] == "BUDGET_EXCEEDED"
         assert result["overall_score"] is None
@@ -922,7 +1049,13 @@ class TestRunScenarioSubprocess:
 
     def test_missing_status_field_defaulted(self, mocker):
         """Eval agent returning JSON without 'status' should be defaulted to ERRORED."""
-        payload = {"structured_output": {"scenario_id": "mock_scenario", "overall_score": 7.0, "turns": []}}
+        payload = {
+            "structured_output": {
+                "scenario_id": "mock_scenario",
+                "overall_score": 7.0,
+                "turns": [],
+            }
+        }
         result = self._run(mocker, json.dumps(payload))
         assert result["status"] == "ERRORED"
 
@@ -949,20 +1082,27 @@ class TestRunScenarioSubprocess:
                 "scenario_id": "mock_scenario",
                 "status": "PASS",
                 "overall_score": 9.0,
-                "turns": [{
-                    "turn": 1,
-                    "user_message": "hi",
-                    "agent_response": "ok",
-                    "agent_tools": [],
-                    "scores": {
-                        "correctness": 8, "tool_selection": 8, "context_retention": 7,
-                        "completeness": 7, "efficiency": 7, "personality": 7, "error_recovery": 7,
-                    },
-                    "overall_score": 5.0,  # wrong — should be 7.45
-                    "pass": True,
-                    "failure_category": None,
-                    "reasoning": "ok",
-                }],
+                "turns": [
+                    {
+                        "turn": 1,
+                        "user_message": "hi",
+                        "agent_response": "ok",
+                        "agent_tools": [],
+                        "scores": {
+                            "correctness": 8,
+                            "tool_selection": 8,
+                            "context_retention": 7,
+                            "completeness": 7,
+                            "efficiency": 7,
+                            "personality": 7,
+                            "error_recovery": 7,
+                        },
+                        "overall_score": 5.0,  # wrong — should be 7.45
+                        "pass": True,
+                        "failure_category": None,
+                        "reasoning": "ok",
+                    }
+                ],
                 "cost_estimate": {"turns": 1, "estimated_usd": 0.01},
             }
         }
@@ -979,20 +1119,42 @@ class TestRunScenarioSubprocess:
                 "overall_score": 3.0,  # LLM wrong value — should become mean of turns
                 "turns": [
                     {
-                        "turn": 1, "user_message": "hi", "agent_response": "ok", "agent_tools": [],
+                        "turn": 1,
+                        "user_message": "hi",
+                        "agent_response": "ok",
+                        "agent_tools": [],
                         "scores": {
-                            "correctness": 10, "tool_selection": 10, "context_retention": 10,
-                            "completeness": 10, "efficiency": 10, "personality": 10, "error_recovery": 10,
+                            "correctness": 10,
+                            "tool_selection": 10,
+                            "context_retention": 10,
+                            "completeness": 10,
+                            "efficiency": 10,
+                            "personality": 10,
+                            "error_recovery": 10,
                         },
-                        "overall_score": 10.0, "pass": True, "failure_category": None, "reasoning": "ok",
+                        "overall_score": 10.0,
+                        "pass": True,
+                        "failure_category": None,
+                        "reasoning": "ok",
                     },
                     {
-                        "turn": 2, "user_message": "bye", "agent_response": "bye", "agent_tools": [],
+                        "turn": 2,
+                        "user_message": "bye",
+                        "agent_response": "bye",
+                        "agent_tools": [],
                         "scores": {
-                            "correctness": 0, "tool_selection": 0, "context_retention": 0,
-                            "completeness": 0, "efficiency": 0, "personality": 0, "error_recovery": 0,
+                            "correctness": 0,
+                            "tool_selection": 0,
+                            "context_retention": 0,
+                            "completeness": 0,
+                            "efficiency": 0,
+                            "personality": 0,
+                            "error_recovery": 0,
                         },
-                        "overall_score": 0.0, "pass": False, "failure_category": "wrong_answer", "reasoning": "bad",
+                        "overall_score": 0.0,
+                        "pass": False,
+                        "failure_category": "wrong_answer",
+                        "reasoning": "bad",
                     },
                 ],
                 "cost_estimate": {"turns": 2, "estimated_usd": 0.02},
@@ -1009,11 +1171,19 @@ class TestRunScenarioSubprocess:
                 "scenario_id": "mock_scenario",
                 "status": "FAIL",
                 "overall_score": 7.5,  # LLM value — should be nullified since no turn scores
-                "turns": [{
-                    "turn": 1, "user_message": "hi", "agent_response": "ok", "agent_tools": [],
-                    "scores": {},  # empty — all dimensions missing → recompute returns -1
-                    "overall_score": None, "pass": False, "failure_category": "wrong_answer", "reasoning": "bad",
-                }],
+                "turns": [
+                    {
+                        "turn": 1,
+                        "user_message": "hi",
+                        "agent_response": "ok",
+                        "agent_tools": [],
+                        "scores": {},  # empty — all dimensions missing → recompute returns -1
+                        "overall_score": None,
+                        "pass": False,
+                        "failure_category": "wrong_answer",
+                        "reasoning": "bad",
+                    }
+                ],
                 "cost_estimate": {"turns": 1, "estimated_usd": 0.01},
             }
         }
@@ -1027,15 +1197,27 @@ class TestRunScenarioSubprocess:
                 "scenario_id": "mock_scenario",
                 "status": "PASS",  # LLM claims PASS — should be overridden
                 "overall_score": 7.0,
-                "turns": [{
-                    "turn": 1, "user_message": "hi", "agent_response": "wrong", "agent_tools": [],
-                    "scores": {
-                        "correctness": 2,  # < 4 → must FAIL per rubric
-                        "tool_selection": 8, "context_retention": 8,
-                        "completeness": 8, "efficiency": 8, "personality": 8, "error_recovery": 8,
-                    },
-                    "overall_score": 7.0, "pass": True, "failure_category": None, "reasoning": "wrong",
-                }],
+                "turns": [
+                    {
+                        "turn": 1,
+                        "user_message": "hi",
+                        "agent_response": "wrong",
+                        "agent_tools": [],
+                        "scores": {
+                            "correctness": 2,  # < 4 → must FAIL per rubric
+                            "tool_selection": 8,
+                            "context_retention": 8,
+                            "completeness": 8,
+                            "efficiency": 8,
+                            "personality": 8,
+                            "error_recovery": 8,
+                        },
+                        "overall_score": 7.0,
+                        "pass": True,
+                        "failure_category": None,
+                        "reasoning": "wrong",
+                    }
+                ],
                 "cost_estimate": {"turns": 1, "estimated_usd": 0.01},
             }
         }
@@ -1049,15 +1231,27 @@ class TestRunScenarioSubprocess:
                 "scenario_id": "mock_scenario",
                 "status": "PASS",  # LLM claims PASS — but recomputed score < 6.0
                 "overall_score": 8.0,  # will be replaced by mean of turn scores
-                "turns": [{
-                    "turn": 1, "user_message": "hi", "agent_response": "ok", "agent_tools": [],
-                    "scores": {
-                        "correctness": 4, "tool_selection": 4, "context_retention": 4,
-                        "completeness": 4, "efficiency": 4, "personality": 4, "error_recovery": 4,
-                    },
-                    "overall_score": 4.0,  # recomputed = 4.0 < 6.0
-                    "pass": True, "failure_category": None, "reasoning": "borderline",
-                }],
+                "turns": [
+                    {
+                        "turn": 1,
+                        "user_message": "hi",
+                        "agent_response": "ok",
+                        "agent_tools": [],
+                        "scores": {
+                            "correctness": 4,
+                            "tool_selection": 4,
+                            "context_retention": 4,
+                            "completeness": 4,
+                            "efficiency": 4,
+                            "personality": 4,
+                            "error_recovery": 4,
+                        },
+                        "overall_score": 4.0,  # recomputed = 4.0 < 6.0
+                        "pass": True,
+                        "failure_category": None,
+                        "reasoning": "borderline",
+                    }
+                ],
                 "cost_estimate": {"turns": 1, "estimated_usd": 0.01},
             }
         }
@@ -1074,17 +1268,34 @@ class TestRunScenarioSubprocess:
                 "overall_score": 8.0,
                 "turns": [
                     {  # turn 1: fully scored, good
-                        "turn": 1, "user_message": "hi", "agent_response": "ok", "agent_tools": [],
+                        "turn": 1,
+                        "user_message": "hi",
+                        "agent_response": "ok",
+                        "agent_tools": [],
                         "scores": {
-                            "correctness": 8, "tool_selection": 8, "context_retention": 8,
-                            "completeness": 8, "efficiency": 8, "personality": 8, "error_recovery": 8,
+                            "correctness": 8,
+                            "tool_selection": 8,
+                            "context_retention": 8,
+                            "completeness": 8,
+                            "efficiency": 8,
+                            "personality": 8,
+                            "error_recovery": 8,
                         },
-                        "overall_score": 8.0, "pass": True, "failure_category": None, "reasoning": "good",
+                        "overall_score": 8.0,
+                        "pass": True,
+                        "failure_category": None,
+                        "reasoning": "good",
                     },
                     {  # turn 2: no dimension scores (eval agent timed out before scoring)
-                        "turn": 2, "user_message": "more", "agent_response": "?", "agent_tools": [],
+                        "turn": 2,
+                        "user_message": "more",
+                        "agent_response": "?",
+                        "agent_tools": [],
                         "scores": {},
-                        "overall_score": None, "pass": False, "failure_category": None, "reasoning": "",
+                        "overall_score": None,
+                        "pass": False,
+                        "failure_category": None,
+                        "reasoning": "",
                     },
                 ],
                 "cost_estimate": {"turns": 2, "estimated_usd": 0.01},
@@ -1101,14 +1312,27 @@ class TestRunScenarioSubprocess:
                 "scenario_id": "mock_scenario",
                 "status": "FAIL",  # LLM false-FAIL — rubric says PASS
                 "overall_score": 8.0,
-                "turns": [{
-                    "turn": 1, "user_message": "hi", "agent_response": "correct", "agent_tools": [],
-                    "scores": {
-                        "correctness": 8, "tool_selection": 8, "context_retention": 8,
-                        "completeness": 8, "efficiency": 8, "personality": 8, "error_recovery": 8,
-                    },
-                    "overall_score": 8.0, "pass": True, "failure_category": None, "reasoning": "good",
-                }],
+                "turns": [
+                    {
+                        "turn": 1,
+                        "user_message": "hi",
+                        "agent_response": "correct",
+                        "agent_tools": [],
+                        "scores": {
+                            "correctness": 8,
+                            "tool_selection": 8,
+                            "context_retention": 8,
+                            "completeness": 8,
+                            "efficiency": 8,
+                            "personality": 8,
+                            "error_recovery": 8,
+                        },
+                        "overall_score": 8.0,
+                        "pass": True,
+                        "failure_category": None,
+                        "reasoning": "good",
+                    }
+                ],
                 "cost_estimate": {"turns": 1, "estimated_usd": 0.01},
             }
         }
@@ -1122,16 +1346,27 @@ class TestRunScenarioSubprocess:
                 "scenario_id": "mock_scenario",
                 "status": "PASS",
                 "overall_score": 8.0,
-                "turns": [{
-                    "turn": 1, "user_message": "hi", "agent_response": "wrong", "agent_tools": [],
-                    "scores": {
-                        "correctness": 2,  # < 4 → turn pass must be False
-                        "tool_selection": 8, "context_retention": 8,
-                        "completeness": 8, "efficiency": 8, "personality": 8, "error_recovery": 8,
-                    },
-                    "overall_score": 9.0, "pass": True,  # LLM says pass — wrong
-                    "failure_category": None, "reasoning": "wrong",
-                }],
+                "turns": [
+                    {
+                        "turn": 1,
+                        "user_message": "hi",
+                        "agent_response": "wrong",
+                        "agent_tools": [],
+                        "scores": {
+                            "correctness": 2,  # < 4 → turn pass must be False
+                            "tool_selection": 8,
+                            "context_retention": 8,
+                            "completeness": 8,
+                            "efficiency": 8,
+                            "personality": 8,
+                            "error_recovery": 8,
+                        },
+                        "overall_score": 9.0,
+                        "pass": True,  # LLM says pass — wrong
+                        "failure_category": None,
+                        "reasoning": "wrong",
+                    }
+                ],
                 "cost_estimate": {"turns": 1, "estimated_usd": 0.01},
             }
         }
@@ -1146,15 +1381,27 @@ class TestRunScenarioSubprocess:
                 "scenario_id": "mock_scenario",
                 "status": "PASS",  # will be overridden to FAIL due to correctness=0
                 "overall_score": 9.0,
-                "turns": [{
-                    "turn": 1, "user_message": "hi", "agent_response": "wrong", "agent_tools": [],
-                    "scores": {
-                        "correctness": 0,  # forces FAIL
-                        "tool_selection": 10, "context_retention": 10,
-                        "completeness": 10, "efficiency": 10, "personality": 10, "error_recovery": 10,
-                    },
-                    "overall_score": 9.0, "pass": True, "failure_category": None, "reasoning": "wrong",
-                }],
+                "turns": [
+                    {
+                        "turn": 1,
+                        "user_message": "hi",
+                        "agent_response": "wrong",
+                        "agent_tools": [],
+                        "scores": {
+                            "correctness": 0,  # forces FAIL
+                            "tool_selection": 10,
+                            "context_retention": 10,
+                            "completeness": 10,
+                            "efficiency": 10,
+                            "personality": 10,
+                            "error_recovery": 10,
+                        },
+                        "overall_score": 9.0,
+                        "pass": True,
+                        "failure_category": None,
+                        "reasoning": "wrong",
+                    }
+                ],
                 "cost_estimate": {"turns": 1, "estimated_usd": 0.01},
             }
         }
@@ -1171,14 +1418,27 @@ class TestRunScenarioSubprocess:
                 "scenario_id": "mock_scenario",
                 "status": "BLOCKED_BY_ARCHITECTURE",
                 "overall_score": 3.0,
-                "turns": [{
-                    "turn": 1, "user_message": "hi", "agent_response": "blocked", "agent_tools": [],
-                    "scores": {
-                        "correctness": 0, "tool_selection": 0, "context_retention": 0,
-                        "completeness": 0, "efficiency": 0, "personality": 0, "error_recovery": 0,
-                    },
-                    "overall_score": 0.0, "pass": False, "failure_category": "no_fallback", "reasoning": "arch",
-                }],
+                "turns": [
+                    {
+                        "turn": 1,
+                        "user_message": "hi",
+                        "agent_response": "blocked",
+                        "agent_tools": [],
+                        "scores": {
+                            "correctness": 0,
+                            "tool_selection": 0,
+                            "context_retention": 0,
+                            "completeness": 0,
+                            "efficiency": 0,
+                            "personality": 0,
+                            "error_recovery": 0,
+                        },
+                        "overall_score": 0.0,
+                        "pass": False,
+                        "failure_category": "no_fallback",
+                        "reasoning": "arch",
+                    }
+                ],
                 "cost_estimate": {"turns": 1, "estimated_usd": 0.01},
             }
         }
@@ -1194,10 +1454,34 @@ class TestScorecardByCategory:
         from gaia.eval.scorecard import build_scorecard
 
         results = [
-            {"scenario_id": "a", "status": "PASS", "overall_score": 9.0, "category": "x", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "b", "status": "PASS", "overall_score": 8.0, "category": "x", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "c", "status": "TIMEOUT", "overall_score": None, "category": "x", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "d", "status": "TIMEOUT", "overall_score": None, "category": "x", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "PASS",
+                "overall_score": 9.0,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "b",
+                "status": "PASS",
+                "overall_score": 8.0,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "c",
+                "status": "TIMEOUT",
+                "overall_score": None,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "d",
+                "status": "TIMEOUT",
+                "overall_score": None,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         sc = build_scorecard("run", results, {})
         summary = sc["summary"]
@@ -1211,8 +1495,20 @@ class TestScorecardByCategory:
         from gaia.eval.scorecard import build_scorecard
 
         results = [
-            {"scenario_id": "a", "status": "PASS", "overall_score": None, "category": "x", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "b", "status": "FAIL", "overall_score": 3.0, "category": "x", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "PASS",
+                "overall_score": None,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "b",
+                "status": "FAIL",
+                "overall_score": 3.0,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         sc = build_scorecard("run", results, {})
         # 1 PASS out of 2 judged = 50%
@@ -1223,9 +1519,27 @@ class TestScorecardByCategory:
         from gaia.eval.scorecard import build_scorecard
 
         results = [
-            {"scenario_id": "a", "status": "PASS", "overall_score": 8.0, "category": "x", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "b", "status": "BLOCKED_BY_ARCHITECTURE", "overall_score": 4.0, "category": "x", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "c", "status": "TIMEOUT", "overall_score": None, "category": "x", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "PASS",
+                "overall_score": 8.0,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "b",
+                "status": "BLOCKED_BY_ARCHITECTURE",
+                "overall_score": 4.0,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "c",
+                "status": "TIMEOUT",
+                "overall_score": None,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         sc = build_scorecard("run", results, {})
         # judged = PASS + BLOCKED = 2; passed = 1 → 50%
@@ -1238,13 +1552,33 @@ class TestScorecardByCategory:
         from gaia.eval.scorecard import build_scorecard
 
         results = [
-            {"scenario_id": "a", "status": "INFRA_ERROR", "overall_score": None, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "b", "status": "SETUP_ERROR", "overall_score": None, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "c", "status": "UNKNOWN_STATUS", "overall_score": None, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "INFRA_ERROR",
+                "overall_score": None,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "b",
+                "status": "SETUP_ERROR",
+                "overall_score": None,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "c",
+                "status": "UNKNOWN_STATUS",
+                "overall_score": None,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         sc = build_scorecard("run", results, {})
         cat = sc["summary"]["by_category"]["rag_quality"]
-        assert cat["infra_error"] == 2, "INFRA_ERROR+SETUP_ERROR should be in infra_error"
+        assert (
+            cat["infra_error"] == 2
+        ), "INFRA_ERROR+SETUP_ERROR should be in infra_error"
         assert cat["errored"] == 1, "Unknown status should be in errored only"
 
     def test_none_score_compare_scorecards_no_false_delta(self, tmp_path):
@@ -1252,8 +1586,24 @@ class TestScorecardByCategory:
         from gaia.eval.runner import compare_scorecards
         from gaia.eval.scorecard import build_scorecard
 
-        base = [{"scenario_id": "s1", "status": "TIMEOUT", "overall_score": None, "category": "x", "cost_estimate": {"estimated_usd": 0}}]
-        curr = [{"scenario_id": "s1", "status": "PASS", "overall_score": 8.0, "category": "x", "cost_estimate": {"estimated_usd": 0}}]
+        base = [
+            {
+                "scenario_id": "s1",
+                "status": "TIMEOUT",
+                "overall_score": None,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            }
+        ]
+        curr = [
+            {
+                "scenario_id": "s1",
+                "status": "PASS",
+                "overall_score": 8.0,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            }
+        ]
         bp = tmp_path / "base.json"
         cp = tmp_path / "curr.json"
         bp.write_text(json.dumps(build_scorecard("r1", base, {})))
@@ -1263,14 +1613,25 @@ class TestScorecardByCategory:
         assert len(result["improved"]) == 1
         assert result["improved"][0]["baseline_score"] == 0  # None mapped to 0
 
-
     def test_scorecard_warns_on_unrecognized_status(self):
         """An unrecognized status is bucketed as 'errored' and emits a warning."""
         from gaia.eval.scorecard import build_scorecard
 
         results = [
-            {"scenario_id": "a", "status": "PASS", "overall_score": 9.0, "category": "x", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "b", "status": "SKIPPED", "overall_score": None, "category": "x", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "PASS",
+                "overall_score": 9.0,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "b",
+                "status": "SKIPPED",
+                "overall_score": None,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         sc = build_scorecard("run", results, {})
         # Unrecognized status bucketed as errored
@@ -1284,8 +1645,20 @@ class TestScorecardByCategory:
         from gaia.eval.scorecard import build_scorecard
 
         results = [
-            {"scenario_id": "a", "status": "FAIL", "overall_score": 7.5, "category": "x", "cost_estimate": {"estimated_usd": 0}},
-            {"scenario_id": "b", "status": "PASS", "overall_score": 9.0, "category": "x", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "FAIL",
+                "overall_score": 7.5,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+            {
+                "scenario_id": "b",
+                "status": "PASS",
+                "overall_score": 9.0,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         sc = build_scorecard("run", results, {})
         # avg_score = (5.99 + 9.0) / 2 = 7.495, not (7.5 + 9.0) / 2 = 8.25
@@ -1298,7 +1671,13 @@ class TestScorecardByCategory:
         from gaia.eval.scorecard import build_scorecard
 
         results = [
-            {"scenario_id": "a", "status": None, "overall_score": None, "category": "x", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": None,
+                "overall_score": None,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         # Should not raise TypeError from sorted({None, ...})
         sc = build_scorecard("run", results, {})
@@ -1313,8 +1692,24 @@ class TestCompareScorecardEdgeCases:
         from gaia.eval.runner import compare_scorecards
         from gaia.eval.scorecard import build_scorecard
 
-        baseline = [{"scenario_id": "a", "status": "FAIL", "overall_score": 5.5, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}}]
-        current = [{"scenario_id": "a", "status": "FAIL", "overall_score": 1.0, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}}]
+        baseline = [
+            {
+                "scenario_id": "a",
+                "status": "FAIL",
+                "overall_score": 5.5,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            }
+        ]
+        current = [
+            {
+                "scenario_id": "a",
+                "status": "FAIL",
+                "overall_score": 1.0,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            }
+        ]
         b_sc = build_scorecard("b", baseline, {})
         c_sc = build_scorecard("c", current, {})
         p_b = tmp_path / "baseline.json"
@@ -1332,12 +1727,27 @@ class TestCompareScorecardEdgeCases:
         from gaia.eval.scorecard import build_scorecard
 
         # Intentionally omit scenario_id from one result
-        results = [{"status": "PASS", "overall_score": 9.0, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}}]
+        results = [
+            {
+                "status": "PASS",
+                "overall_score": 9.0,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            }
+        ]
         sc = build_scorecard("run", results, {})
         p = tmp_path / "bad.json"
         p.write_text(json.dumps(sc))
 
-        good_results = [{"scenario_id": "a", "status": "PASS", "overall_score": 9.0, "category": "rag_quality", "cost_estimate": {"estimated_usd": 0}}]
+        good_results = [
+            {
+                "scenario_id": "a",
+                "status": "PASS",
+                "overall_score": 9.0,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0},
+            }
+        ]
         good_sc = build_scorecard("run", good_results, {})
         p2 = tmp_path / "good.json"
         p2.write_text(json.dumps(good_sc))
@@ -1356,15 +1766,30 @@ class TestFixModeMerge:
         """Rerun results replace only the scenarios that were re-run; passing ones are preserved."""
         from gaia.eval.scorecard import build_scorecard
 
-        passing = {"scenario_id": "pass_a", "status": "PASS", "overall_score": 9.0,
-                   "category": "x", "cost_estimate": {"estimated_usd": 0}}
-        failing = {"scenario_id": "fail_b", "status": "FAIL", "overall_score": 2.0,
-                   "category": "x", "cost_estimate": {"estimated_usd": 0}}
+        passing = {
+            "scenario_id": "pass_a",
+            "status": "PASS",
+            "overall_score": 9.0,
+            "category": "x",
+            "cost_estimate": {"estimated_usd": 0},
+        }
+        failing = {
+            "scenario_id": "fail_b",
+            "status": "FAIL",
+            "overall_score": 2.0,
+            "category": "x",
+            "cost_estimate": {"estimated_usd": 0},
+        }
         current_scorecard = build_scorecard("r0", [passing, failing], {})
 
         # Simulate a rerun of fail_b that now passes
-        rerun_result = {"scenario_id": "fail_b", "status": "PASS", "overall_score": 8.5,
-                        "category": "x", "cost_estimate": {"estimated_usd": 0}}
+        rerun_result = {
+            "scenario_id": "fail_b",
+            "status": "PASS",
+            "overall_score": 8.5,
+            "category": "x",
+            "cost_estimate": {"estimated_usd": 0},
+        }
         rerun_map = {rerun_result["scenario_id"]: rerun_result}
 
         # Apply the same merge logic as fix-mode loop
@@ -1382,15 +1807,30 @@ class TestFixModeMerge:
         """If a previously PASS scenario regresses during rerun, it is still included."""
         from gaia.eval.scorecard import build_scorecard
 
-        passing = {"scenario_id": "pass_a", "status": "PASS", "overall_score": 9.0,
-                   "category": "x", "cost_estimate": {"estimated_usd": 0}}
-        failing = {"scenario_id": "fail_b", "status": "FAIL", "overall_score": 2.0,
-                   "category": "x", "cost_estimate": {"estimated_usd": 0}}
+        passing = {
+            "scenario_id": "pass_a",
+            "status": "PASS",
+            "overall_score": 9.0,
+            "category": "x",
+            "cost_estimate": {"estimated_usd": 0},
+        }
+        failing = {
+            "scenario_id": "fail_b",
+            "status": "FAIL",
+            "overall_score": 2.0,
+            "category": "x",
+            "cost_estimate": {"estimated_usd": 0},
+        }
         current_scorecard = build_scorecard("r0", [passing, failing], {})
 
         # Rerun of fail_b still fails
-        rerun_result = {"scenario_id": "fail_b", "status": "FAIL", "overall_score": 1.5,
-                        "category": "x", "cost_estimate": {"estimated_usd": 0}}
+        rerun_result = {
+            "scenario_id": "fail_b",
+            "status": "FAIL",
+            "overall_score": 1.5,
+            "category": "x",
+            "cost_estimate": {"estimated_usd": 0},
+        }
         rerun_map = {rerun_result["scenario_id"]: rerun_result}
 
         merged = []
@@ -1416,12 +1856,16 @@ class TestDocumentsExist:
         assert _documents_exist(data) is True
 
     def test_existing_file_returns_true(self, tmp_path):
-        from gaia.eval.runner import _documents_exist, REPO_ROOT
+        from gaia.eval.runner import REPO_ROOT, _documents_exist
 
         # Create a real file relative to REPO_ROOT so REPO_ROOT / path exists
         rel = Path("eval/corpus/documents/acme_q3_report.md")
         assert (REPO_ROOT / rel).exists(), "Known test fixture must exist"
-        data = {"setup": {"index_documents": [{"corpus_doc": "acme_q3_report", "path": str(rel)}]}}
+        data = {
+            "setup": {
+                "index_documents": [{"corpus_doc": "acme_q3_report", "path": str(rel)}]
+            }
+        }
         assert _documents_exist(data) is True
 
     def test_missing_file_returns_false(self):
@@ -1430,7 +1874,10 @@ class TestDocumentsExist:
         data = {
             "setup": {
                 "index_documents": [
-                    {"corpus_doc": "ghost", "path": "eval/corpus/real_world/does_not_exist.txt"}
+                    {
+                        "corpus_doc": "ghost",
+                        "path": "eval/corpus/real_world/does_not_exist.txt",
+                    }
                 ]
             }
         }
