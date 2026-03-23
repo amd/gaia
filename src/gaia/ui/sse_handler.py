@@ -42,7 +42,10 @@ _TOOL_CALL_JSON_RE = re.compile(
 # matches tool-call JSON embedded anywhere within larger text and uses
 # [^}]* for inner args to avoid over-matching past the closing braces.
 _TOOL_CALL_JSON_SUB_RE = re.compile(
-    r'\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}'
+    r'\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{'
+    r"[^{}]*(?:\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}[^{}]*)*"
+    r"\}\s*\}",
+    re.DOTALL,
 )
 
 # Regex to remove {"thought": "..."} JSON blocks from LLM output.
@@ -331,7 +334,10 @@ class SSEOutputHandler(OutputHandler):
         self, answer: str, streaming: bool = True
     ):  # pylint: disable=unused-argument
         if answer:
-            answer = _THINK_TAG_SUB_RE.sub("", answer).strip()
+            answer = _THINK_TAG_SUB_RE.sub("", answer)
+            answer = _TOOL_CALL_JSON_SUB_RE.sub("", answer)
+            answer = _THOUGHT_JSON_SUB_RE.sub("", answer)
+            answer = answer.strip()
         self._emit(
             {
                 "type": "answer",
@@ -545,8 +551,11 @@ class SSEOutputHandler(OutputHandler):
         if end_of_stream and self._stream_buffer:
             # Flush any remaining buffer at end of stream
             stripped = self._stream_buffer.strip()
-            if not _TOOL_CALL_JSON_RE.match(stripped) and not _ANSWER_JSON_RE.search(
-                stripped
+            is_json_fragment = bool(re.match(r"^[\s}]+$", stripped))
+            if (
+                not _TOOL_CALL_JSON_RE.match(stripped)
+                and not _ANSWER_JSON_RE.search(stripped)
+                and not is_json_fragment
             ):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""

@@ -59,6 +59,7 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
 
   // State for UI disabled + ref guard for handler (ref avoids recreating useCallback)
   const [isResponding, setIsResponding] = useState(false);
+  const [remember, setRemember] = useState(false);
   const isRespondingRef = useRef(false);
 
   // Stable ref for onRespond to avoid stale closures in timer
@@ -102,12 +103,12 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
     setIsResponding(true);
     if (timerRef.current) clearInterval(timerRef.current);
     try {
-      await onRespond(notification.id, 'allow', false);
+      await onRespond(notification.id, 'allow', remember);
     } finally {
       isRespondingRef.current = false;
       setIsResponding(false);
     }
-  }, [notification.id, onRespond]);
+  }, [notification.id, onRespond, remember]);
 
   const handleDeny = useCallback(async () => {
     if (isRespondingRef.current) return;
@@ -189,6 +190,17 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
             <span>This is a critical-tier operation</span>
           </div>
         )}
+
+        {/* Remember choice */}
+        <label className="permission-remember">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+            disabled={isResponding}
+          />
+          <span>Always allow this tool</span>
+        </label>
       </div>
 
       {/* Actions */}
