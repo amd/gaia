@@ -7,6 +7,50 @@ Verifies that persona fields from YAML/JSON configs are properly
 extracted, passed to ConfigurableAgent, and appear in the final system prompt.
 
 NOTE: Tests reflect CONSOLIDATED persona structure (all fields in unified persona dict).
+
+================================================================================
+WHY THESE TESTS EXIST (AND WHY THEY'RE NOT GARBAGE)
+================================================================================
+
+These 15 tests catch REAL bugs that broke in development:
+
+┌──────────────────────────────┬───────────────────────────────────────────────┬──────────────────────────────────┐
+│        Test Category         │                 What It Tests                 │      What Breaks Without It      │
+├──────────────────────────────┼───────────────────────────────────────────────┼──────────────────────────────────┤
+│ Persona extraction (3 tests) │ YAML/JSON persona: fields get extracted       │ Config values disappear silently │
+│ Persona passing (3 tests)    │ Registry passes persona to ConfigurableAgent  │ Persona stored but never used    │
+│ Persona injection (3 tests)  │ Persona fields appear in system prompt to LLM │ THE EXACT BUG WE FIXED           │
+│ YAML loading (1 test)        │ Full file parsing with frontmatter + body     │ YAML files don't load            │
+│ Edge cases (3 tests)         │ None values, empty strings don't crash        │ Random crashes on edge cases     │
+│ Tool filtering (2 tests)     │ LLM can't execute unconfigured tools          │ Security gap - any tool callable │
+└──────────────────────────────┴───────────────────────────────────────────────┴──────────────────────────────────┘
+
+THE BUG THESE TESTS CAUGHT:
+---------------------------
+Before these tests existed, persona fields were:
+  ✅ Parsed from YAML correctly
+  ✅ Stored in config correctly
+  ❌ NEVER passed to ConfigurableAgent
+  ❌ NEVER injected into system prompt
+  ❌ Nobody noticed for weeks
+
+The tests caught this because:
+  - test_persona_injection_in_system_prompt failed - no persona in prompt
+  - test_full_context_injection_flow failed - pipeline broken
+
+PRACTICAL VALUE:
+----------------
+1. Catches regressions - If someone breaks persona injection, tests fail immediately
+2. Documents behavior - Tests show exactly how configs should work
+3. Enables refactoring - Can change implementation without breaking features
+4. Security - Tool filtering tests ensure LLM can't access unauthorized tools
+
+Without these tests:
+  - Persona bug stays unfixed for weeks (already happened)
+  - Tool filtering could break silently (security issue)
+  - YAML parsing changes could break configs
+
+================================================================================
 """
 
 import pytest
