@@ -146,6 +146,7 @@ def create_app(db_path: str = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage startup/shutdown lifecycle for background services."""
+
         # Pre-warm LemonadeManager so the first user message skips HTTP calls.
         # Runs in a thread-pool worker to avoid blocking the event loop.
         async def _prewarm_lemonade():
@@ -154,7 +155,11 @@ def create_app(db_path: str = None) -> FastAPI:
 
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(
-                    None, lambda: LemonadeManager.ensure_ready(quiet=True)
+                    None,
+                    lambda: LemonadeManager.ensure_ready(
+                        quiet=True,
+                        min_context_size=0,  # Only check reachability — don't trigger model reloads
+                    ),
                 )
                 logger.info("LemonadeManager pre-warmed")
             except Exception as exc:  # server may not be running yet — that's fine

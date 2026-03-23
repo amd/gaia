@@ -154,7 +154,6 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     const toolSteps = displaySteps.filter((s) => s.type === 'tool');
     const errorSteps = displaySteps.filter((s) => s.type === 'error');
     const hasErrors = errorSteps.length > 0;
-    const hasToolsOrErrors = toolSteps.length > 0 || hasErrors;
 
     // Keep all tools expanded — auto-collapse is disabled for now to
     // let users observe all activity. Will add adaptive collapse later.
