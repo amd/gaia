@@ -1,3 +1,5 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
 /* ── Agent Manager ─────────────────────────────────────────────────────── */
 
 .agent-manager {
@@ -163,7 +165,13 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.agent-list::-webkit-scrollbar { width: 5px; }
+.agent-list::-webkit-scrollbar-track { background: transparent; }
+.agent-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+.agent-list::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── Empty State ──────────────────────────────────────────────────────── */
 
@@ -344,13 +352,21 @@
   transition: opacity var(--duration) var(--ease);
 }
 
-.agent-card:hover .agent-card-actions {
+.agent-card:hover .agent-card-actions,
+.agent-card:focus-within .agent-card-actions {
   opacity: 1;
 }
 
 /* Always show actions for cards with running state */
 .agent-card-running .agent-card-actions {
   opacity: 1;
+}
+
+/* Always show actions on touch-only devices (no hover capability) */
+@media (hover: none) {
+  .agent-card-actions {
+    opacity: 1;
+  }
 }
 
 .btn-card-action {

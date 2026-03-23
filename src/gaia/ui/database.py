@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
-    model TEXT NOT NULL DEFAULT 'Qwen3-Coder-30B-A3B-Instruct-GGUF',
+    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-GGUF',
     system_prompt TEXT
 );
 
@@ -102,8 +102,18 @@ class ChatDatabase:
         self._conn.executescript(SCHEMA_SQL)
         self._migrate()
 
+    def _ensure_settings_table(self):
+        """Create the settings key-value table if it doesn't exist."""
+        self._conn.execute("""CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )""")
+        self._conn.commit()
+
     def _migrate(self):
         """Apply incremental schema migrations for existing databases."""
+        # Ensure settings table exists
+        self._ensure_settings_table()
         # Add agent_steps column if it doesn't exist (added for observability persistence)
         try:
             cols = [
@@ -180,7 +190,7 @@ class ChatDatabase:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
-        model = model or "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        model = model or "Qwen3.5-35B-A3B-GGUF"
         title = title or "New Chat"
 
         with self._transaction():
@@ -674,6 +684,33 @@ class ChatDatabase:
                 (file_mtime, doc_id),
             )
             return cursor.rowcount > 0
+
+    # ── Settings ──────────────────────────────────────────────────────
+
+    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+        """Get a setting value by key."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
+            return row["value"] if row else default
+
+    def set_setting(self, key: str, value: Optional[str]) -> None:
+        """Set a setting value. Pass None to delete the key."""
+        with self._transaction():
+            if value is None:
+                self._conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+            else:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (key, value),
+                )
+
+    def get_all_settings(self) -> Dict[str, str]:
+        """Get all settings as a dict."""
+        with self._lock:
+            rows = self._conn.execute("SELECT key, value FROM settings").fetchall()
+            return {row["key"]: row["value"] for row in rows}
 
     # ── Stats ───────────────────────────────────────────────────────────
 

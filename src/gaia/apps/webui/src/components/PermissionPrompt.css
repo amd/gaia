@@ -185,6 +185,26 @@
 }
 
 
+/* ── Remember Checkbox ──────────────────────────────────────────────── */
+.permission-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary, #aaa);
+  cursor: pointer;
+  user-select: none;
+}
+.permission-remember input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-primary, #e05a2b);
+  cursor: pointer;
+}
+.permission-remember:hover span {
+  color: var(--text-primary, #fff);
+}
 
 /* ── Action Buttons ──────────────────────────────────────────────────── */
 .permission-actions {

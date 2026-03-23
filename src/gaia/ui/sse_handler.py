@@ -14,12 +14,16 @@ import queue
 import re
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
 
 logger = logging.getLogger(__name__)
+
+#: Seconds the agent thread waits for a tool-confirm response from the frontend.
+TOOL_CONFIRM_TIMEOUT_SECONDS = 60
 
 # ── Shared LLM output cleaning patterns ─────────────────────────────────
 # These regexes are the canonical definitions for filtering LLM noise.
@@ -29,7 +33,8 @@ logger = logging.getLogger(__name__)
 # Regex to detect raw tool-call JSON that LLMs sometimes emit as text content.
 # Matches patterns like: {"tool": "search_file", "tool_args": {...}}
 _TOOL_CALL_JSON_RE = re.compile(
-    r'^\s*\{["\s]*tool["\s]*:\s*"[^"]+"\s*,\s*["\s]*tool_args["\s]*:\s*\{[^}]*\}\s*\}\s*$',
+    r'^\s*\{["\s]*tool["\s]*:\s*"[^"]+"\s*,\s*["\s]*tool_args["\s]*:\s*\{.*\}\s*\}\s*$',
+    re.DOTALL,
 )
 
 # Regex for use with re.sub() to strip tool-call JSON from mixed content.
@@ -70,10 +75,11 @@ class SSEOutputHandler(OutputHandler):
         self._tool_count = 0
         self._last_tool_name: Optional[str] = None
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
-        # Tool confirmation gate: confirm_tool_execution() blocks on this
-        # event until the frontend responds via the /api/chat/confirm-tool endpoint.
-        self._confirm_event = threading.Event()
-        self._confirm_result: Optional[bool] = None
+        self._in_thinking = False  # True while inside a <think>...</think> block
+        # Tool confirmation state (blocking until frontend responds)
+        self._confirm_event: Optional[threading.Event] = None
+        self._confirm_result: bool = False
+        self._confirm_id: Optional[str] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -307,11 +313,12 @@ class SSEOutputHandler(OutputHandler):
         # these just echo the tool name which the frontend already shows.
         if message and message.lower().startswith("executing "):
             return
-        # Emit as thinking so the user can see what the agent is doing
+        # Emit as status (not thinking — thinking is reserved for LLM reasoning)
         self._emit(
             {
-                "type": "thinking",
-                "content": message or "Working",
+                "type": "status",
+                "status": "working",
+                "message": message or "Working",
             }
         )
 
@@ -384,23 +391,49 @@ class SSEOutputHandler(OutputHandler):
             # LLMs sometimes emit as text content before the tool is invoked.
             self._stream_buffer += text_chunk
 
-            # Strip any completed <think>...</think> blocks from the buffer.
-            self._stream_buffer = _THINK_TAG_SUB_RE.sub("", self._stream_buffer)
+            # ── Handle <think>...</think> blocks ──────────────────────
+            # Route thinking content to thinking events, keep remainder
+            # in buffer for normal tool-call filtering below.
+            while "<think>" in self._stream_buffer or self._in_thinking:
+                if self._in_thinking:
+                    # We're inside a thinking block — look for closing tag
+                    close_idx = self._stream_buffer.find("</think>")
+                    if close_idx >= 0:
+                        thinking_text = self._stream_buffer[:close_idx].strip()
+                        if thinking_text:
+                            self._emit({"type": "thinking", "content": thinking_text})
+                        self._stream_buffer = self._stream_buffer[
+                            close_idx + len("</think>") :
+                        ]
+                        self._in_thinking = False
+                        continue  # Check for more <think> blocks
+                    else:
+                        # Still inside thinking — emit partial and wait
+                        if self._stream_buffer.strip():
+                            self._emit(
+                                {"type": "thinking", "content": self._stream_buffer}
+                            )
+                        self._stream_buffer = ""
+                        return
+                else:
+                    # Not in thinking — look for opening tag
+                    open_idx = self._stream_buffer.find("<think>")
+                    if open_idx >= 0:
+                        # Emit any text before <think> as regular content
+                        before = self._stream_buffer[:open_idx]
+                        if before.strip():
+                            self._emit({"type": "chunk", "content": before})
+                        self._stream_buffer = self._stream_buffer[
+                            open_idx + len("<think>") :
+                        ]
+                        self._in_thinking = True
+                        continue
+                    else:
+                        break  # No more <think> tags
 
-            # If an incomplete <think> block is open (no closing tag yet),
-            # hold the buffer so we don't emit raw <think> content to the UI.
-            if (
-                "<think>" in self._stream_buffer
-                and "</think>" not in self._stream_buffer
-            ):
-                if not end_of_stream:
-                    return
-                # At end of stream, discard the unclosed think block entirely.
-                idx = self._stream_buffer.find("<think>")
-                self._stream_buffer = self._stream_buffer[:idx]
-                if not self._stream_buffer.strip():
-                    self._stream_buffer = ""
-                    return
+            # If buffer is empty after thinking extraction, nothing left to do
+            if not self._stream_buffer:
+                return
 
             stripped = self._stream_buffer.strip()
 
@@ -518,49 +551,86 @@ class SSEOutputHandler(OutputHandler):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
 
+    # === Tool Confirmation (blocking) ===
+
     def confirm_tool_execution(
-        self, tool_name: str, tool_args: Dict[str, Any], *, timeout: float = 120.0
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        timeout: float = TOOL_CONFIRM_TIMEOUT_SECONDS,
     ) -> bool:
-        """Emit a permission_request event and block until the frontend responds.
+        """Block the agent thread until the user approves or denies a tool call.
 
-        The /api/chat/confirm-tool endpoint calls ``resolve_tool_confirmation()``
-        which sets ``_confirm_result`` and signals ``_confirm_event``.
-
-        A safety-net *timeout* (default 120 s) auto-denies if the frontend never
-        responds (e.g. browser tab closed without proper disconnect).
+        Emits a ``permission_request`` SSE event so the frontend can show a modal.
+        Waits up to ``timeout`` seconds for ``resolve_tool_confirmation()``
+        to be called by the HTTP endpoint.  Returns ``True`` if the user allows,
+        ``False`` otherwise.
         """
-        self._confirm_event.clear()
-        self._confirm_result = None
+        confirm_id = str(uuid.uuid4())
+        self._confirm_event = threading.Event()
+        self._confirm_result = False
+        self._confirm_id = confirm_id
+
         self._emit(
             {
                 "type": "permission_request",
                 "tool": tool_name,
                 "args": tool_args,
+                "confirm_id": confirm_id,
+                "timeout_seconds": timeout,
             }
         )
-        # Block the agent thread until the frontend responds, the stream is
-        # cancelled, or the safety-net timeout fires.
-        deadline = time.monotonic() + timeout
-        while not self._confirm_event.is_set():
-            if self.cancelled.is_set():
-                return False
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                logger.warning(
-                    "Tool confirmation for %s timed out after %.0fs", tool_name, timeout
-                )
-                self._confirm_result = False
-                return False
-            self._confirm_event.wait(timeout=min(0.5, remaining))
-        return bool(self._confirm_result)
 
-    def resolve_tool_confirmation(self, approved: bool) -> None:
-        """Called by the /api/chat/confirm-tool endpoint to unblock the agent."""
+        # Poll in short intervals so cancellation is detected promptly.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.cancelled.is_set():
+                self._confirm_id = None
+                self._confirm_event = None
+                return False
+            if self._confirm_event.wait(timeout=0.5):
+                break
+        else:
+            # Timeout reached
+            self._emit(
+                {
+                    "type": "status",
+                    "status": "warning",
+                    "message": f"Confirmation for '{tool_name}' timed out ({TOOL_CONFIRM_TIMEOUT_SECONDS} s). Execution denied.",
+                }
+            )
+            logger.warning("Tool confirmation timed out for '%s'", tool_name)
+            self._confirm_id = None
+            self._confirm_event = None
+            return False
+
+        result = self._confirm_result
+        self._confirm_id = None
+        self._confirm_event = None
+        return result
+
+    def resolve_tool_confirmation(self, approved: bool) -> bool:
+        """Unblock the agent thread waiting in ``confirm_tool_execution()``.
+
+        Called by the ``POST /api/chat/confirm-tool`` HTTP endpoint.  Returns
+        ``False`` if there is no pending confirmation request.
+        """
+        if self._confirm_event is None:
+            # No pending confirmation — initialise state anyway so callers can
+            # inspect _confirm_result and _confirm_event after the call.
+            self._confirm_event = threading.Event()
         self._confirm_result = approved
         self._confirm_event.set()
+        return True
 
     def signal_done(self):
         """Signal that the agent has finished processing."""
+        # Flush any pending thinking content
+        if self._in_thinking and self._stream_buffer:
+            self._emit({"type": "thinking", "content": self._stream_buffer})
+            self._stream_buffer = ""
+            self._in_thinking = False
+
         # Flush any remaining stream buffer before signaling done
         if self._stream_buffer:
             stripped = self._stream_buffer.strip()

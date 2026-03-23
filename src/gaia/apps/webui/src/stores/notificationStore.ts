@@ -18,6 +18,9 @@ import { confirmTool } from '../services/api';
 /** Maximum notifications kept in the center to prevent unbounded growth. */
 const MAX_NOTIFICATIONS = 500;
 
+/** localStorage key for the "always allow" tool list. */
+export const ALWAYS_ALLOW_TOOLS_KEY = 'gaia_always_allow_tools';
+
 // ── State Interface ──────────────────────────────────────────────────────
 
 interface NotificationState {
@@ -90,6 +93,8 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
         await electronApi.notification.respondPermission(id, action, remember);
       } catch (err) {
         console.error('[notificationStore] Failed to send permission response via IPC:', err);
+        // Don't update local state — the agent didn't receive the response.
+        // The permission prompt remains actionable so the user can retry.
         return;
       }
     } else if (sessionId) {
@@ -101,7 +106,17 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
         return;
       }
     }
-    // Update local state only after backend confirms
+    // Persist "always allow" preference in localStorage
+    if (action === 'allow' && remember) {
+      if (notification?.tool) {
+        const existing: string[] = JSON.parse(localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]');
+        if (!existing.includes(notification.tool)) {
+          existing.push(notification.tool);
+          localStorage.setItem(ALWAYS_ALLOW_TOOLS_KEY, JSON.stringify(existing));
+        }
+      }
+    }
+    // Update local state after response is delivered
     set((state) => ({
       notifications: state.notifications.map((n) =>
         n.id === id
