@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { X, AlertTriangle, ExternalLink } from 'lucide-react';
+import { X, AlertTriangle, ExternalLink, Plus, Power, Trash2 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import type { SystemStatus, Settings } from '../types';
+import type { SystemStatus, Settings, MCPServerInfo, MCPCatalogEntry } from '../types';
 import './SettingsModal.css';
 
 export function SettingsModal() {
@@ -201,7 +201,7 @@ export function SettingsModal() {
                                     <StatusRow label="Device" value={status.model_device.toUpperCase()} ok={status.model_device !== 'cpu'} />
                                 )}
                                 {status.model_context_size != null && (
-                                    <StatusRow label="Context Window" value={`${(status.model_context_size / 1024).toFixed(0)}K tokens`} ok={true} />
+                                    <StatusRow label="Context Window" value={`${(status.model_context_size / 1024).toFixed(0)}K tokens`} ok={status.context_size_sufficient} />
                                 )}
                                 {status.model_labels && status.model_labels.length > 0 && (
                                     <StatusRow label="Capabilities" value={status.model_labels.join(', ')} ok={true} />

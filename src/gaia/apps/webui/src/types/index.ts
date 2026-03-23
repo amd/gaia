@@ -99,6 +99,11 @@ export interface SystemStatus {
     // Device compatibility check
     processor_name: string | null;
     device_supported: boolean;
+    // LLM configuration health
+    context_size_sufficient: boolean;
+    model_downloaded: boolean | null;
+    default_model_name: string | null;
+    lemonade_url: string | null;
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────

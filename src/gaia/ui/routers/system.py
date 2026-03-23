@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["system"])
 
+# Default model required for GAIA Chat agent
+_DEFAULT_MODEL_NAME = "Qwen3.5-35B-A3B-GGUF"
+# Minimum context window (tokens) needed for reliable agent operation.
+# Must match DEFAULT_CONTEXT_SIZE in gaia.llm.lemonade_manager.
+_MIN_CONTEXT_SIZE = 32768
+
 
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status():
@@ -37,6 +43,13 @@ async def system_status():
                 "LEMONADE_BASE_URL", "http://localhost:8000/api/v1"
             )
 
+            # Derive the Lemonade web UI URL (scheme://host:port without /api/v1)
+            try:
+                _parsed = urlparse(base_url)
+                status.lemonade_url = f"{_parsed.scheme}://{_parsed.netloc}"
+            except Exception:
+                pass  # Keep the default "http://localhost:8000"
+
             # Use /health endpoint to get the actually loaded model
             # (not /models which returns the full catalog of available models)
             health_resp = await client.get(f"{base_url}/health")
@@ -46,25 +59,81 @@ async def system_status():
                 status.model_loaded = health_data.get("model_loaded") or None
                 status.lemonade_version = health_data.get("version")
 
-                # Extract device info from loaded models
+                # Extract device info AND actual loaded context size.
+                # The context size here reflects what the server was really started
+                # with (e.g. --ctx-size 16384), which may differ from the catalog
+                # default. We use this value for the sufficiency check below.
+                # Use case-insensitive match in case Lemonade normalises the name.
+                loaded_lower = (status.model_loaded or "").lower()
                 for m in health_data.get("all_models_loaded", []):
                     if m.get("type") == "embedding":
                         status.embedding_model_loaded = True
-                    elif m.get("model_name") == status.model_loaded:
+                    elif m.get("model_name", "").lower() == loaded_lower:
                         status.model_device = m.get("device")
+                        # Actual loaded context size (preferred over catalog default).
+                        # Use `is not None` so ctx_size=0 still triggers a warning.
+                        ctx = m.get("recipe_options", {}).get("ctx_size")
+                        if ctx is not None:
+                            status.model_context_size = ctx
 
-                # Fetch model catalog for size, labels, context size
+                # Fallback: older Lemonade versions expose context_size at root level
+                if status.model_context_size is None:
+                    legacy_ctx = health_data.get("context_size")
+                    if legacy_ctx is not None:
+                        status.model_context_size = legacy_ctx
+
+                # Fetch model catalog for size, labels, and fallback context size
                 models_resp = await client.get(f"{base_url}/models")
                 if models_resp.status_code == 200:
                     for m in models_resp.json().get("data", []):
                         if m.get("id") == status.model_loaded:
                             status.model_size_gb = m.get("size")
                             status.model_labels = m.get("labels")
-                            ctx = m.get("recipe_options", {}).get("ctx_size")
-                            if ctx:
-                                status.model_context_size = ctx
+                            # Only use catalog ctx_size when health data didn't
+                            # provide it (e.g. model not yet fully loaded)
+                            if status.model_context_size is None:
+                                ctx = m.get("recipe_options", {}).get("ctx_size")
+                                if ctx is not None:
+                                    status.model_context_size = ctx
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
+
+                # When no LLM is loaded, check if the default model is downloaded.
+                # Uses show_all=true to see models that are in the catalog but not
+                # yet pulled to disk.
+                if not status.model_loaded:
+                    try:
+                        catalog_resp = await client.get(
+                            f"{base_url}/models",
+                            params={"show_all": "true"},
+                            timeout=5.0,
+                        )
+                        if catalog_resp.status_code == 200:
+                            default_lower = _DEFAULT_MODEL_NAME.lower()
+                            for m in catalog_resp.json().get("data", []):
+                                if m.get("id", "").lower() == default_lower:
+                                    status.model_downloaded = m.get(
+                                        "downloaded", False
+                                    )
+                                    break
+                            # Model not found in catalog → treat as not downloaded
+                            if status.model_downloaded is None:
+                                status.model_downloaded = False
+                    except Exception:
+                        pass  # Don't block status on catalog failure
+
+                # Validate context size sufficiency only when we have a real value.
+                # Use `is not None` so ctx_size=0 correctly triggers a warning.
+                if status.model_context_size is not None:
+                    status.context_size_sufficient = (
+                        status.model_context_size >= _MIN_CONTEXT_SIZE
+                    )
+                    logger.debug(
+                        "Context size: %d tokens (required: %d, sufficient: %s)",
+                        status.model_context_size,
+                        _MIN_CONTEXT_SIZE,
+                        status.context_size_sufficient,
+                    )
 
                 # Fetch last inference stats (short timeout — supplementary info)
                 try:

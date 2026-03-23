@@ -11,7 +11,7 @@ import hashlib
 import logging
 import os
 import tempfile
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -162,6 +162,368 @@ class TestSystemStatus:
                 resp = client.get("/api/system/status")
         data = resp.json()
         assert data["device_supported"] is False
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_llm_health_fields_have_safe_defaults(
+        self, mock_httpx_cls, client
+    ):
+        """New LLM health fields are present with safe defaults when Lemonade is down."""
+        # Simulate Lemonade being unreachable
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = Exception("Connection refused")
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        # Fields must be present
+        assert "context_size_sufficient" in data
+        assert "model_downloaded" in data
+        assert "default_model_name" in data
+        assert "lemonade_url" in data
+        # Safe defaults: don't warn when server is simply unreachable
+        assert data["context_size_sufficient"] is True  # Don't block on unknown
+        assert data["model_downloaded"] is None  # Unknown when server not running
+        assert data["default_model_name"] == "Qwen3.5-35B-A3B-GGUF"
+        assert data["lemonade_url"] == "http://localhost:8000"
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_lemonade_url_parsed_from_env(self, mock_httpx_cls, client):
+        """lemonade_url is the scheme+host origin extracted from LEMONADE_BASE_URL."""
+        # Simulate Lemonade being unreachable (focus: URL parsing only)
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = Exception("Connection refused")
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        with patch.dict(
+            os.environ,
+            {"LEMONADE_BASE_URL": "http://my-server:9000/api/v1"},
+            clear=False,
+        ):
+            resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["lemonade_url"] == "http://my-server:9000"
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_context_size_insufficient(self, mock_httpx_cls, client):
+        """context_size_sufficient is False when loaded context < 32768 tokens."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+            "version": "9.2.0",
+            "all_models_loaded": [
+                {
+                    "model_name": "Qwen3.5-35B-A3B-GGUF",
+                    "type": "llm",
+                    "device": "amd_npu",
+                    "recipe_options": {"ctx_size": 4096},  # Way too small
+                }
+            ],
+        }
+        models_data = {"data": [{"id": "Qwen3.5-35B-A3B-GGUF", "downloaded": True}]}
+        # Map URL suffix → response
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/stats" in url:
+                return make_response(404, {})
+            if "/system-info" in url:
+                return make_response(404, {})
+            return make_response(200, models_data)
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["lemonade_running"] is True
+        assert data["model_loaded"] == "Qwen3.5-35B-A3B-GGUF"
+        assert data["model_context_size"] == 4096
+        assert data["context_size_sufficient"] is False
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_context_size_sufficient(self, mock_httpx_cls, client):
+        """context_size_sufficient is True when loaded context >= 32768 tokens."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+            "version": "9.2.0",
+            "all_models_loaded": [
+                {
+                    "model_name": "Qwen3.5-35B-A3B-GGUF",
+                    "type": "llm",
+                    "device": "amd_npu",
+                    "recipe_options": {"ctx_size": 32768},
+                }
+            ],
+        }
+        models_data = {"data": [{"id": "Qwen3.5-35B-A3B-GGUF", "downloaded": True}]}
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/stats" in url:
+                return make_response(404, {})
+            if "/system-info" in url:
+                return make_response(404, {})
+            return make_response(200, models_data)
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["lemonade_running"] is True
+        assert data["model_context_size"] == 32768
+        assert data["context_size_sufficient"] is True
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_model_not_downloaded(self, mock_httpx_cls, client):
+        """model_downloaded is False when no model is loaded and default not in catalog."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": None,  # No model loaded
+            "version": "9.2.0",
+            "all_models_loaded": [],
+        }
+        # show_all=true catalog: default model present but NOT downloaded
+        catalog_data = {
+            "data": [
+                {
+                    "id": "Qwen3.5-35B-A3B-GGUF",
+                    "downloaded": False,
+                }
+            ]
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/stats" in url:
+                return make_response(404, {})
+            if "/system-info" in url:
+                return make_response(404, {})
+            # Both /models and /models?show_all=true return catalog_data
+            return make_response(200, catalog_data)
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["lemonade_running"] is True
+        assert data["model_loaded"] is None
+        assert data["model_downloaded"] is False
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_model_downloaded_but_not_loaded(self, mock_httpx_cls, client):
+        """model_downloaded is True when default model is in catalog and downloaded."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": None,  # No model currently loaded
+            "version": "9.2.0",
+            "all_models_loaded": [],
+        }
+        catalog_data = {
+            "data": [
+                {
+                    "id": "Qwen3.5-35B-A3B-GGUF",
+                    "downloaded": True,  # Model IS downloaded, just not loaded yet
+                }
+            ]
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/stats" in url:
+                return make_response(404, {})
+            if "/system-info" in url:
+                return make_response(404, {})
+            return make_response(200, catalog_data)
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["lemonade_running"] is True
+        assert data["model_loaded"] is None
+        assert data["model_downloaded"] is True
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_context_size_zero_is_insufficient(
+        self, mock_httpx_cls, client
+    ):
+        """ctx_size=0 must trigger context_size_sufficient=False (not silently pass)."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+            "version": "9.2.0",
+            "all_models_loaded": [
+                {
+                    "model_name": "Qwen3.5-35B-A3B-GGUF",
+                    "type": "llm",
+                    "device": "cpu",
+                    "recipe_options": {"ctx_size": 0},  # Explicitly zero
+                }
+            ],
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            return make_response(404, {})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["model_context_size"] == 0
+        assert data["context_size_sufficient"] is False  # 0 < 32768
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_model_downloaded_unknown_when_catalog_fails(
+        self, mock_httpx_cls, client
+    ):
+        """model_downloaded stays None when the /models?show_all call raises."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": None,
+            "version": "9.2.0",
+            "all_models_loaded": [],
+        }
+
+        call_count = {"n": 0}
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/stats" in url or "/system-info" in url:
+                return make_response(404, {})
+            # First /models call (regular catalog) succeeds with empty list;
+            # second call (?show_all=true) raises to simulate a network failure.
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return make_response(200, {"data": []})
+            raise Exception("catalog timeout")
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["lemonade_running"] is True
+        assert data["model_loaded"] is None
+        # Should stay None — don't report False when we couldn't check
+        assert data["model_downloaded"] is None
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_model_name_case_insensitive_match(
+        self, mock_httpx_cls, client
+    ):
+        """Context size is extracted even when model name casing differs."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        # health returns lowercase model name, model_loaded uses mixed case
+        health_data = {
+            "status": "ok",
+            "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+            "version": "9.2.0",
+            "all_models_loaded": [
+                {
+                    "model_name": "qwen3.5-35b-a3b-gguf",  # lowercase from server
+                    "type": "llm",
+                    "device": "amd_npu",
+                    "recipe_options": {"ctx_size": 32768},
+                }
+            ],
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            return make_response(200, {"data": []})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["model_context_size"] == 32768
+        assert data["context_size_sufficient"] is True
 
 
 class TestSessionEndpoints:
