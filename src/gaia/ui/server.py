@@ -175,16 +175,18 @@ def create_app(db_path: str = None) -> FastAPI:
                 loop = asyncio.get_event_loop()
 
                 def _do_imports():
+                    # pylint: disable=unused-import
                     import faiss  # noqa: F401
                     import sentence_transformers  # noqa: F401
-                    from gaia.agents.chat.agent import (
+
+                    from gaia.agents.chat.agent import (  # noqa: F401
                         ChatAgent,
                         ChatAgentConfig,
-                    )  # noqa: F401
-                    from gaia.rag.sdk import RAGSDK  # noqa: F401
-                    from gaia.mcp.client.mcp_client_manager import (
+                    )
+                    from gaia.mcp.client.mcp_client_manager import (  # noqa: F401
                         MCPClientManager,
-                    )  # noqa: F401
+                    )
+                    from gaia.rag.sdk import RAGSDK  # noqa: F401
 
                 await loop.run_in_executor(None, _do_imports)
                 logger.info("Heavy modules pre-loaded")
