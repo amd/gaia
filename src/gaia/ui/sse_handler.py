@@ -582,8 +582,8 @@ class SSEOutputHandler(OutputHandler):
         )
 
         # Poll in short intervals so cancellation is detected promptly.
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             if self.cancelled.is_set():
                 self._confirm_id = None
                 self._confirm_event = None
