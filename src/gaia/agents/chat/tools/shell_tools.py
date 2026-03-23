@@ -99,7 +99,6 @@ SAFE_GIT_COMMANDS = {
     "ls-tree",
     "describe",
     "rev-parse",
-    "config",
     "help",
 }
 

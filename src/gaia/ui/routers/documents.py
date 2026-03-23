@@ -56,7 +56,7 @@ def _copy_fd_to_temp(fd: int, suffix: str) -> Path:
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="gaia_upload_")
     try:
         while True:
-            block = os.read(fd, 8192)
+            block = os.read(fd, 65536)
             if not block:
                 break
             os.write(tmp_fd, block)

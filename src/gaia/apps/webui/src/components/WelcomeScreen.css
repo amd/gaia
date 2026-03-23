@@ -342,6 +342,23 @@
     line-height: 1.6;
 }
 
+/* ── First-run setup hint ─────────────────────────────────────── */
+.welcome-setup-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 20px;
+    padding: 10px 14px;
+    border: 1px solid #fed7aa;
+    border-radius: var(--radius-md);
+    background: #fffbeb;
+    color: #92400e;
+    font-size: 12px;
+    text-align: left;
+    line-height: 1.5;
+    font-family: var(--font-sans);
+}
+
 /* ── Start button: scale-in via content-revealed ──────────────── */
 .start-btn {
     margin-bottom: 36px;
