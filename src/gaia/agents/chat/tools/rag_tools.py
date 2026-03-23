@@ -1190,9 +1190,18 @@ class RAGToolsMixin:
                     self.rebuild_system_prompt()
 
                     # Return detailed stats from RAG SDK
+                    file_name = result.get("file_name", file_path)
+                    if result.get("already_indexed", False):
+                        msg = f"Document already indexed, skipping: {file_name}"
+                    elif result.get("from_cache", False):
+                        msg = f"Loaded from cache: {file_name}"
+                    elif result.get("reindexed", False):
+                        msg = f"Re-indexed (updated): {file_name}"
+                    else:
+                        msg = f"Successfully indexed: {file_name}"
                     return {
                         "status": "success",
-                        "message": f"Successfully indexed: {result.get('file_name', file_path)}",
+                        "message": msg,
                         "file_name": result.get("file_name"),
                         "file_type": result.get("file_type"),
                         "file_size_mb": result.get("file_size_mb"),

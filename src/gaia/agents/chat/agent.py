@@ -41,7 +41,7 @@ class ChatAgentConfig:
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None
-    model_id: Optional[str] = None  # None = use default Qwen3-Coder-30B
+    model_id: Optional[str] = None  # None = use default Qwen3.5-35B-A3B
 
     # Execution settings
     max_steps: int = 10
@@ -135,8 +135,8 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use Qwen3-Coder-30B by default for better JSON parsing (same as Jira agent)
-        effective_model_id = config.model_id or "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        # Use Qwen3.5-35B-A3B by default for better tool-calling
+        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-GGUF"
 
         # Debug logging for model selection
         logger.debug(
@@ -412,22 +412,37 @@ Always format your responses using Markdown for readability:
 - Keep responses well-structured and scannable
 """
 
-        # Add platform/environment context so the LLM uses correct paths
+        # Add platform/environment context so the LLM uses correct paths and commands
         home_dir = str(Path.home())
         os_name = platform.system()  # "Windows", "Linux", "Darwin"
+        os_version = platform.version()
+        machine = platform.machine()
         if os_name == "Windows":
             platform_section = f"""
-**ENVIRONMENT:**
-- Operating system: Windows
+**ENVIRONMENT:** Windows ({os_version}, {machine})
 - Home directory: {home_dir}
 - Use native Windows paths (e.g., C:\\Users\\user\\Desktop\\file.txt). NEVER use WSL/Unix-style mount paths like /mnt/c/Users/...
 - Common user folders: Desktop, Documents, Downloads (all under {home_dir})
+- Use Windows commands: `systeminfo`, `tasklist`, `ipconfig`, `driverquery`
+- For network queries: prefer `ipconfig` over PowerShell. The primary adapter has a real Default Gateway (e.g., 192.168.x.1) — ignore virtual adapters (Hyper-V, WSL, VPN tunnels) unless specifically asked.
+- For process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, @{{N='Memory(MB)';E={{[math]::Round($_.WS/1MB,1)}}}}"`. Use `tasklist /FI "IMAGENAME eq name.exe"` for specific processes. Avoid `tasklist /V` (very slow).
+- For CPU info: `powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name"`
+- For GPU info: `powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM"`
+- Prefer `Get-CimInstance` over `wmic` or `Get-WmiObject` (both deprecated on modern Windows).
+- Do NOT use Linux commands (lscpu, /proc/cpuinfo, /sys/..., uname) — they do not exist on Windows.
+"""
+        elif os_name == "Darwin":
+            platform_section = f"""
+**ENVIRONMENT:** macOS ({os_version}, {machine})
+- Home directory: {home_dir}
+- Use macOS commands: `sysctl -n machdep.cpu.brand_string` for CPU, `system_profiler SPDisplaysDataType` for GPU
+- Use `sw_vers` for macOS version, `uname -a` for kernel info
 """
         else:
             platform_section = f"""
-**ENVIRONMENT:**
-- Operating system: {os_name}
+**ENVIRONMENT:** {os_name} ({os_version}, {machine})
 - Home directory: {home_dir}
+- Use Linux commands: `lscpu` for CPU, `lspci | grep VGA` for GPU, `cat /proc/cpuinfo`, `free -h` for memory
 """
 
         # Add indexed documents section

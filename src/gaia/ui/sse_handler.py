@@ -92,6 +92,7 @@ class SSEOutputHandler(OutputHandler):
         self._tool_count = 0
         self._last_tool_name: Optional[str] = None
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
+        self._in_thinking = False  # True while inside a <think>...</think> block
         # Tool confirmation gate: confirm_tool_execution() blocks on this
         # event until the frontend responds via the /api/chat/confirm-tool endpoint.
         self._confirm_event = threading.Event()
@@ -417,23 +418,41 @@ class SSEOutputHandler(OutputHandler):
             # LLMs sometimes emit as text content before the tool is invoked.
             self._stream_buffer += text_chunk
 
-            # Strip any completed <think>...</think> blocks from the buffer.
-            self._stream_buffer = _THINK_TAG_SUB_RE.sub("", self._stream_buffer)
-
-            # If an incomplete <think> block is open (no closing tag yet),
-            # hold the buffer so we don't emit raw <think> content to the UI.
-            if (
-                "<think>" in self._stream_buffer
-                and "</think>" not in self._stream_buffer
-            ):
-                if not end_of_stream:
-                    return
-                # At end of stream, discard the unclosed think block entirely.
-                idx = self._stream_buffer.find("<think>")
-                self._stream_buffer = self._stream_buffer[:idx]
-                if not self._stream_buffer.strip():
-                    self._stream_buffer = ""
-                    return
+            # ── Handle <think>...</think> blocks ──────────────────────
+            # Route thinking content to thinking events, keep remainder
+            # in buffer for normal tool-call filtering below.
+            while "<think>" in self._stream_buffer or self._in_thinking:
+                if self._in_thinking:
+                    close_idx = self._stream_buffer.find("</think>")
+                    if close_idx >= 0:
+                        thinking_text = self._stream_buffer[:close_idx].strip()
+                        if thinking_text:
+                            self._emit({"type": "thinking", "content": thinking_text})
+                        self._stream_buffer = self._stream_buffer[
+                            close_idx + len("</think>") :
+                        ]
+                        self._in_thinking = False
+                        continue
+                    else:
+                        # Still inside thinking block — emit partial and wait
+                        if self._stream_buffer.strip():
+                            self._emit(
+                                {"type": "thinking", "content": self._stream_buffer}
+                            )
+                        self._stream_buffer = ""
+                        return
+                else:
+                    open_idx = self._stream_buffer.find("<think>")
+                    if open_idx >= 0:
+                        before = self._stream_buffer[:open_idx]
+                        if before.strip():
+                            self._emit({"type": "chunk", "content": before})
+                        self._stream_buffer = self._stream_buffer[
+                            open_idx + len("<think>") :
+                        ]
+                        self._in_thinking = True
+                        continue
+                    break  # No <think> tag found
 
             stripped = self._stream_buffer.strip()
 

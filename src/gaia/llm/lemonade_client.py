@@ -150,6 +150,12 @@ class LemonadeStatus:
 # Define available models
 MODELS = {
     # LLM Models
+    "qwen3.5-35b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="Qwen3.5-35B-A3B-GGUF",
+        display_name="Qwen3.5 35B",
+        min_ctx_size=32768,
+    ),
     "qwen3-coder-30b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="Qwen3-Coder-30B-A3B-Instruct-GGUF",
@@ -183,49 +189,49 @@ AGENT_PROFILES = {
     "chat": AgentProfile(
         name="chat",
         display_name="Chat Agent",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Interactive chat with RAG and vision support",
     ),
     "code": AgentProfile(
         name="code",
         display_name="Code Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Autonomous coding assistant",
     ),
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Voice-enabled chat",
     ),
     "rag": AgentProfile(
         name="rag",
         display_name="RAG System",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Document Q&A with retrieval and vision",
     ),
     "blender": AgentProfile(
         name="blender",
         display_name="Blender Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="3D content generation in Blender",
     ),
     "jira": AgentProfile(
         name="jira",
         display_name="Jira Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Jira issue management",
     ),
     "docker": AgentProfile(
         name="docker",
         display_name="Docker Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Docker container management",
     ),
@@ -246,7 +252,7 @@ AGENT_PROFILES = {
     "mcp": AgentProfile(
         name="mcp",
         display_name="MCP Bridge",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Model Context Protocol bridge server with vision",
     ),

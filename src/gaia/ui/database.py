@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
-    model TEXT NOT NULL DEFAULT 'Qwen3-Coder-30B-A3B-Instruct-GGUF',
+    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-GGUF',
     system_prompt TEXT
 );
 
@@ -62,6 +62,11 @@ CREATE TABLE IF NOT EXISTS messages (
     agent_steps TEXT,
     tokens_prompt INTEGER,
     tokens_completion INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 -- Indexes
@@ -180,7 +185,7 @@ class ChatDatabase:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
-        model = model or "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        model = model or "Qwen3.5-35B-A3B-GGUF"
         title = title or "New Chat"
 
         with self._transaction():
@@ -720,3 +725,30 @@ class ChatDatabase:
                 "total_chunks": total_chunks,
                 "total_size_bytes": total_size,
             }
+
+    # ── Settings ──────────────────────────────────────────────────────
+
+    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+        """Get a setting value by key."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
+            return row["value"] if row else default
+
+    def set_setting(self, key: str, value: Optional[str]) -> None:
+        """Set a setting value. Pass None to delete the key."""
+        with self._transaction():
+            if value is None:
+                self._conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+            else:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (key, value),
+                )
+
+    def get_all_settings(self) -> dict:
+        """Return all settings as a key→value dict."""
+        with self._lock:
+            rows = self._conn.execute("SELECT key, value FROM settings").fetchall()
+            return {row["key"]: row["value"] for row in rows}
