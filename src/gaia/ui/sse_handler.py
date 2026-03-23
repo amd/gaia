@@ -31,9 +31,12 @@ TOOL_CONFIRM_TIMEOUT_SECONDS = 60
 # rather than duplicating the patterns.
 
 # Regex to detect raw tool-call JSON that LLMs sometimes emit as text content.
-# Matches patterns like: {"tool": "search_file", "tool_args": {...}}
+# Matches patterns like:
+#   {"tool": "search_file", "tool_args": {...}}
+#   {"thought": "...", "goal": "...", "tool": "search_file", "tool_args": {...}}
+# The leading .* allows optional fields (thought, goal, plan) before "tool".
 _TOOL_CALL_JSON_RE = re.compile(
-    r'^\s*\{["\s]*tool["\s]*:\s*"[^"]+"\s*,\s*["\s]*tool_args["\s]*:\s*\{.*\}\s*\}\s*$',
+    r'^\s*\{.*["\s]*tool["\s]*:\s*"[^"]+"\s*,\s*["\s]*tool_args["\s]*:\s*\{.*\}\s*\}\s*$',
     re.DOTALL,
 )
 
@@ -79,6 +82,7 @@ class SSEOutputHandler(OutputHandler):
         self._last_tool_name: Optional[str] = None
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
         self._in_thinking = False  # True while inside a <think>...</think> block
+        self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
         # Tool confirmation state (blocking until frontend responds)
         self._confirm_event: Optional[threading.Event] = None
         self._confirm_result: bool = False
@@ -425,10 +429,17 @@ class SSEOutputHandler(OutputHandler):
                     # Not in thinking — look for opening tag
                     open_idx = self._stream_buffer.find("<think>")
                     if open_idx >= 0:
-                        # Emit any text before <think> as regular content
+                        # Emit any text before <think> as regular content,
+                        # stripping thought/tool-call JSON artifacts that the
+                        # model sometimes outputs before its think block.
                         before = self._stream_buffer[:open_idx]
+                        before = _THOUGHT_JSON_SUB_RE.sub("", before)
+                        before = _TOOL_CALL_JSON_SUB_RE.sub("", before)
                         if before.strip():
+                            self._json_filtered = False
                             self._emit({"type": "chunk", "content": before})
+                        else:
+                            self._json_filtered = True
                         self._stream_buffer = self._stream_buffer[
                             open_idx + len("<think>") :
                         ]
@@ -461,14 +472,17 @@ class SSEOutputHandler(OutputHandler):
                 if len(self._stream_buffer) > 2048:
                     self._emit({"type": "chunk", "content": self._stream_buffer})
                     self._stream_buffer = ""
+                    self._json_filtered = False
                     return
                 if stripped.endswith("}"):
                     if _TOOL_CALL_JSON_RE.match(stripped):
                         logger.debug("Filtered tool-call JSON: %s", stripped[:100])
                         self._stream_buffer = ""
+                        self._json_filtered = True
                         return
                     self._emit({"type": "chunk", "content": self._stream_buffer})
                     self._stream_buffer = ""
+                    self._json_filtered = False
                 # If end_of_stream, fall through to the flush block below
                 # instead of returning (otherwise the buffer is never flushed).
                 if not end_of_stream:
@@ -491,10 +505,12 @@ class SSEOutputHandler(OutputHandler):
                     else:
                         logger.debug("Filtered answer JSON: %s", stripped[:100])
                     self._stream_buffer = ""
+                    self._json_filtered = True
                     return
                 if len(self._stream_buffer) > 4096:
                     # Safety: don't buffer forever
                     self._stream_buffer = ""
+                    self._json_filtered = True
                     return
                 if not end_of_stream:
                     return
@@ -516,6 +532,7 @@ class SSEOutputHandler(OutputHandler):
                             "Filtered embedded answer JSON: %s", json_stripped[:100]
                         )
                         self._stream_buffer = ""
+                        self._json_filtered = True
                     else:
                         self._stream_buffer = json_part  # Keep buffering
                     return
@@ -529,6 +546,7 @@ class SSEOutputHandler(OutputHandler):
                     text_before = self._stream_buffer[:json_idx]
                     json_part = self._stream_buffer[json_idx:]
                     self._emit({"type": "chunk", "content": text_before})
+                    self._json_filtered = False
                     self._stream_buffer = json_part
                     # Check if the JSON part is complete
                     json_stripped = json_part.strip()
@@ -539,12 +557,22 @@ class SSEOutputHandler(OutputHandler):
                                 json_stripped[:100],
                             )
                             self._stream_buffer = ""
+                            self._json_filtered = True
                             return
                         self._emit({"type": "chunk", "content": json_part})
                         self._stream_buffer = ""
+                        self._json_filtered = False
                     return
 
-            # Not tool-call JSON — emit the buffered content
+            # Not tool-call JSON — emit the buffered content.
+            # Suppress bare closing-brace artifacts (e.g. "}" or "}}") that appear
+            # immediately after a JSON block was filtered — these are structural
+            # remnants of JSON wrappers, not real text content.
+            if self._json_filtered and re.match(r"^[\s}]+$", stripped):
+                logger.debug("Suppressed JSON artifact: %r", stripped)
+                self._stream_buffer = ""
+                return
+            self._json_filtered = False
             self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
 
