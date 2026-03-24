@@ -2,13 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { AlertTriangle, Cpu, Download, Layers, Loader2, WifiOff, X } from 'lucide-react';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useChatStore } from '../stores/chatStore';
-import * as api from '../services/api';
+import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
+import { useModelActions } from '../hooks/useModelActions';
 import './ConnectionBanner.css';
-
-/** Minimum LLM context window in tokens required for reliable agent operation. */
-const MIN_CONTEXT_SIZE = 32768;
 
 /**
  * Banner shown when the backend is unreachable, Lemonade Server is not running,
@@ -18,42 +16,9 @@ const MIN_CONTEXT_SIZE = 32768;
 export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
     const { backendConnected, systemStatus } = useChatStore();
     const [dismissed, setDismissed] = useState(false);
-    const [isLoadingModel, setIsLoadingModel] = useState(false);
-    const [isDownloadingModel, setIsDownloadingModel] = useState(false);
 
-    const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const downloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => {
-        return () => {
-            if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
-            if (downloadTimerRef.current) clearTimeout(downloadTimerRef.current);
-        };
-    }, []);
-
-    const handleLoadModel = useCallback(async (modelName: string) => {
-        setIsLoadingModel(true);
-        try {
-            await api.loadModel(modelName, MIN_CONTEXT_SIZE);
-            if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
-            loadTimerRef.current = setTimeout(() => setIsLoadingModel(false), 300_000);
-        } catch (_err) {
-            // Loading is async on backend; errors are logged server-side
-            setIsLoadingModel(false);
-        }
-    }, []);
-
-    const handleDownloadModel = useCallback(async (modelName: string) => {
-        setIsDownloadingModel(true);
-        try {
-            await api.downloadModel(modelName);
-            if (downloadTimerRef.current) clearTimeout(downloadTimerRef.current);
-            downloadTimerRef.current = setTimeout(() => setIsDownloadingModel(false), 1_800_000);
-        } catch (_err) {
-            // Download is async on backend; errors are logged server-side
-            setIsDownloadingModel(false);
-        }
-    }, []);
+    const modelName = systemStatus?.default_model_name ?? DEFAULT_MODEL_NAME;
+    const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName);
 
     // Track previous warning-worthy states so the banner reappears when
     // a new issue is detected after being dismissed.
@@ -151,7 +116,6 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         !systemStatus.model_loaded &&
         systemStatus.model_downloaded === false
     ) {
-        const modelName = systemStatus.default_model_name ?? 'Qwen3.5-35B-A3B-GGUF';
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
@@ -168,7 +132,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                 ) : (
                     <button
                         className="connection-banner__retry"
-                        onClick={() => handleDownloadModel(modelName)}
+                        onClick={() => downloadModel(false)}
                     >
                         Download
                     </button>
@@ -189,9 +153,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         );
     }
 
-    // Case 5: A model is loaded but it is not the expected one.
-    // Show a combined message when the context window is also too small, since
-    // loading the correct model will likely fix both issues at once.
+    // Case 4: A model is loaded but it is not the expected one
     if (
         systemStatus &&
         systemStatus.lemonade_running &&
@@ -199,7 +161,6 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         systemStatus.expected_model_loaded === false
     ) {
         const currentModel = systemStatus.model_loaded;
-        const expectedModel = systemStatus.default_model_name ?? 'Qwen3.5-35B-A3B-GGUF';
         const contextAlsoSmall = systemStatus.context_size_sufficient === false;
         return (
             <div className="connection-banner connection-banner--warning" role="status">
@@ -208,7 +169,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                 </div>
                 <div className="connection-banner__text">
                     Wrong model loaded: <strong>{currentModel}</strong>.{' '}
-                    GAIA Chat requires <strong>{expectedModel}</strong>.
+                    GAIA Chat requires <strong>{modelName}</strong>.
                     {contextAlsoSmall && (
                         <>{' '}Context window is also too small.</>
                     )}
@@ -221,7 +182,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                 ) : (
                     <button
                         className="connection-banner__retry"
-                        onClick={() => handleLoadModel(expectedModel)}
+                        onClick={() => loadModel()}
                     >
                         Load Now
                     </button>
@@ -242,7 +203,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         );
     }
 
-    // Case 4: Model is loaded but context window is too small
+    // Case 5: Model is loaded but context window is too small
     if (
         systemStatus &&
         systemStatus.lemonade_running &&

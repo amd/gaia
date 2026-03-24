@@ -20,7 +20,7 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -108,7 +108,8 @@ def validate_scenario(path: Path, data: dict) -> None:
             errors.append(f"{prefix}: missing 'objective'")
         # A non-None ground_truth dict OR a non-empty success_criteria string is required.
         # ground_truth: null (key present, value None) counts as absent.
-        has_gt = isinstance(turn.get("ground_truth"), dict)
+        gt = turn.get("ground_truth")
+        has_gt = isinstance(gt, dict) and bool(gt)
         has_criteria = isinstance(turn.get("success_criteria"), str) and bool(
             turn.get("success_criteria", "").strip()
         )
@@ -328,7 +329,9 @@ def recompute_turn_score(scores: dict) -> float:
         return -1.0
     if not all(isinstance(scores[k], (int, float)) for k in _SCORE_WEIGHTS):
         return -1.0
-    return sum(scores[k] * w for k, w in _SCORE_WEIGHTS.items())
+    # Clamp each dimension to [0, 10] — a hallucinating eval agent could return
+    # out-of-range values that would inflate/deflate the weighted score.
+    return sum(max(0, min(10, scores[k])) * w for k, w in _SCORE_WEIGHTS.items())
 
 
 def _validate_turn_scores(result: dict) -> list:
@@ -527,6 +530,17 @@ def run_scenario_subprocess(
                             }
                 else:
                     result = raw
+                # Guard: eval agent must return a JSON object — arrays or scalars
+                # are not processable.  Wrap them in an ERRORED result dict.
+                if not isinstance(result, dict):
+                    result = {
+                        "scenario_id": scenario_id,
+                        "status": "ERRORED",
+                        "overall_score": None,
+                        "turns": [],
+                        "error": f"Eval agent returned non-object JSON: {type(result).__name__}",
+                        "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
+                    }
                 # Guard: ensure required fields are present regardless of parse path.
                 # Always inject the runner-known scenario_id — eval agent output may omit
                 # it (partial JSON) or contain a wrong value; the runner's sid is authoritative.

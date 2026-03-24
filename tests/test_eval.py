@@ -83,6 +83,18 @@ class TestEvalCLI:
         ), f"Expected diagnostic output, got: {combined_output[:200]}"
 
 
+class TestImports:
+    """Verify critical imports are present in runner module."""
+
+    def test_timezone_imported(self):
+        """runner.py must import timezone alongside datetime (used in run_id generation)."""
+        from gaia.eval import runner
+
+        assert hasattr(
+            runner, "timezone"
+        ), "runner.py is missing 'from datetime import timezone'"
+
+
 class TestEvalCore:
     """Test core evaluation functionality"""
 
@@ -578,6 +590,32 @@ class TestScoreValidation:
         }
         assert recompute_turn_score(scores) == -1.0
 
+    def test_recompute_turn_score_clamps_out_of_range(self):
+        from gaia.eval.runner import recompute_turn_score
+
+        # Hallucinating eval agent returns out-of-range scores → clamped to [0, 10]
+        scores = {
+            "correctness": 15,  # clamped to 10
+            "tool_selection": -3,  # clamped to 0
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10,
+        }
+        result = recompute_turn_score(scores)
+        # Same as all-10 except tool_selection=0: 10*0.25 + 0*0.20 + 10*0.20 + 10*0.15 + 10*0.10 + 10*0.05 + 10*0.05 = 8.0
+        expected = (
+            10 * 0.25
+            + 0 * 0.20
+            + 10 * 0.20
+            + 10 * 0.15
+            + 10 * 0.10
+            + 10 * 0.05
+            + 10 * 0.05
+        )
+        assert result == pytest.approx(expected, abs=0.001)
+
     def test_recompute_turn_score_string_values(self):
         from gaia.eval.runner import recompute_turn_score
 
@@ -698,6 +736,18 @@ class TestValidateScenario:
             "turns": [{"turn": 1, "objective": "x", "success_criteria": "ok"}],
         }
         with pytest.raises(ValueError, match="persona must be a string"):
+            validate_scenario(tmp_path / "test.yaml", data)
+
+    def test_empty_ground_truth_raises(self, tmp_path):
+        from gaia.eval.runner import validate_scenario
+
+        data = {
+            "id": "test_scenario",
+            "category": "rag_quality",
+            "setup": {"index_documents": []},
+            "turns": [{"turn": 1, "objective": "x", "ground_truth": {}}],
+        }
+        with pytest.raises(ValueError, match="ground_truth.*success_criteria"):
             validate_scenario(tmp_path / "test.yaml", data)
 
     def test_missing_required_field_raises(self, tmp_path):
@@ -942,9 +992,7 @@ class TestManifestCrossReference:
                 str(real_world_scenarios_dir)
             ):
                 continue
-            for i, doc in enumerate(
-                data.get("setup", {}).get("index_documents", [])
-            ):
+            for i, doc in enumerate(data.get("setup", {}).get("index_documents", [])):
                 if not isinstance(doc, dict):
                     continue
                 corpus_doc = doc.get("corpus_doc")
@@ -952,9 +1000,10 @@ class TestManifestCrossReference:
                     missing.append(
                         f"{data['id']} setup.index_documents[{i}]: corpus_doc='{corpus_doc}'"
                     )
-        assert not missing, (
-            "Scenario corpus_doc references not in merged manifest:\n  "
-            + "\n  ".join(missing)
+        assert (
+            not missing
+        ), "Scenario corpus_doc references not in merged manifest:\n  " + "\n  ".join(
+            missing
         )
 
 
@@ -980,7 +1029,10 @@ class TestComputeEffectiveTimeout:
         assert result == 900
 
     def test_cap_enforced(self):
-        from gaia.eval.runner import _compute_effective_timeout, _MAX_EFFECTIVE_TIMEOUT_S
+        from gaia.eval.runner import (
+            _MAX_EFFECTIVE_TIMEOUT_S,
+            _compute_effective_timeout,
+        )
 
         # 100 docs + 100 turns → 120 + 100*90 + 100*200 = 120+9000+20000 = 29120 > cap
         data = {
@@ -991,7 +1043,7 @@ class TestComputeEffectiveTimeout:
         assert result == _MAX_EFFECTIVE_TIMEOUT_S
 
     def test_empty_scenario_uses_startup_overhead(self):
-        from gaia.eval.runner import _compute_effective_timeout, _STARTUP_OVERHEAD_S
+        from gaia.eval.runner import _STARTUP_OVERHEAD_S, _compute_effective_timeout
 
         data = {"turns": [], "setup": {"index_documents": []}}
         result = _compute_effective_timeout(0, data)
@@ -1496,6 +1548,14 @@ class TestRunScenarioSubprocess:
         # The cap at 5.99 is applied only inside scorecard.py avg_score computation, not here.
         assert isinstance(result["overall_score"], float)
 
+    def test_non_dict_json_returns_errored(self, mocker):
+        """Eval agent returning a JSON array or scalar is wrapped in an ERRORED result."""
+        # Return a JSON array (valid JSON but not a dict)
+        result = self._run(mocker, json.dumps([{"turns": []}]))
+        assert result["status"] == "ERRORED"
+        assert "non-object" in result.get("error", "")
+        assert result["scenario_id"] == "mock_scenario"
+
     def test_scenario_id_always_injected_from_runner(self, mocker):
         """Runner always overwrites scenario_id with its own sid — eval agent value is untrusted."""
         payload = {
@@ -1503,14 +1563,27 @@ class TestRunScenarioSubprocess:
                 "scenario_id": "WRONG_ID_FROM_EVAL_AGENT",
                 "status": "PASS",
                 "overall_score": 8.5,
-                "turns": [{
-                    "turn": 1, "user_message": "hi", "agent_response": "ok", "agent_tools": [],
-                    "scores": {
-                        "correctness": 8, "tool_selection": 8, "context_retention": 8,
-                        "completeness": 8, "efficiency": 8, "personality": 8, "error_recovery": 8,
-                    },
-                    "overall_score": 8.5, "pass": True, "failure_category": None, "reasoning": "ok",
-                }],
+                "turns": [
+                    {
+                        "turn": 1,
+                        "user_message": "hi",
+                        "agent_response": "ok",
+                        "agent_tools": [],
+                        "scores": {
+                            "correctness": 8,
+                            "tool_selection": 8,
+                            "context_retention": 8,
+                            "completeness": 8,
+                            "efficiency": 8,
+                            "personality": 8,
+                            "error_recovery": 8,
+                        },
+                        "overall_score": 8.5,
+                        "pass": True,
+                        "failure_category": None,
+                        "reasoning": "ok",
+                    }
+                ],
                 "cost_estimate": {"turns": 1, "estimated_usd": 0.01},
             }
         }
@@ -1778,7 +1851,13 @@ class TestScorecardByCategory:
         from gaia.eval.scorecard import build_scorecard
 
         results = [
-            {"scenario_id": "a", "status": "ERRORED", "overall_score": None, "category": "x", "cost_estimate": {"estimated_usd": 0}},
+            {
+                "scenario_id": "a",
+                "status": "ERRORED",
+                "overall_score": None,
+                "category": "x",
+                "cost_estimate": {"estimated_usd": 0},
+            },
         ]
         sc = build_scorecard("run", results, {})
         # Must be counted in errored bucket, not trigger unrecognized-status warning

@@ -439,6 +439,8 @@ async def download_model_endpoint(body: DownloadModelRequest):
     if body.force:
         payload["force"] = True
     asyncio.create_task(
-        _lemonade_post("pull", payload, timeout=7200.0, log_context=f"Download {model_name}")
+        _lemonade_post(
+            "pull", payload, timeout=7200.0, log_context=f"Download {model_name}"
+        )
     )
     return {"status": "downloading", "model": model_name}
