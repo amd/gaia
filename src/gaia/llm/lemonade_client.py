@@ -81,7 +81,10 @@ def _get_lemonade_config() -> tuple:
 # =========================================================================
 # Model Configuration Defaults
 # =========================================================================
-# Default model for text generation - lightweight CPU model for testing
+# Default model for simple `gaia llm` queries — intentionally lightweight (0.6B).
+# Agents use Qwen3.5-35B-A3B-GGUF via AGENT_PROFILES (see below), NOT this default.
+# Do NOT change this to 35B — it would break CI tests and force large downloads
+# in minimal setups. The UI default lives in ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Qwen3-0.6B-GGUF"
 # DEFAULT_MODEL_NAME = "Llama-3.2-3B-Instruct-Hybrid"
 
@@ -892,7 +895,7 @@ class LemonadeClient:
         # Check for MoE models first (e.g., "30b-a3b" = 30B total, 3B active)
         # MoE models are smaller than their total parameter count suggests
         if "a3b" in model_lower or "a2b" in model_lower:
-            return 18.0  # MoE models like Qwen3-Coder-30B-A3B are ~18GB
+            return 18.0  # MoE models like Qwen3.5-35B-A3B are ~18GB
 
         # Look for billion parameter indicators (dense models)
         if "70b" in model_lower or "72b" in model_lower:
@@ -1824,7 +1827,7 @@ class LemonadeClient:
         Get detailed information about a specific model.
 
         Args:
-            model_id: The model identifier (e.g., "Qwen3-Coder-30B-GGUF")
+            model_id: The model identifier (e.g., "Qwen3.5-35B-A3B-GGUF")
 
         Returns:
             Dict containing model metadata:
@@ -1840,7 +1843,7 @@ class LemonadeClient:
 
         Examples:
             # Get model checkpoint and recipe
-            model = client.get_model_details("Qwen3-Coder-30B-GGUF")
+            model = client.get_model_details("Qwen3.5-35B-A3B-GGUF")
             print(f"Checkpoint: {model['checkpoint']}")
             print(f"Recipe: {model['recipe']}")
 

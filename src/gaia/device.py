@@ -118,7 +118,7 @@ def check_device_supported(log=None) -> tuple[bool, str]:
     Supported configurations (Windows only — Linux/macOS support coming soon):
 
     - **AMD Ryzen AI Max** (Strix Halo) — unified HBM memory (64 GB+).
-    - **AMD Radeon discrete GPU** with >= 24 GB VRAM to fit Qwen3-Coder-30B.
+    - **AMD Radeon discrete GPU** with >= 24 GB VRAM to fit Qwen3.5-35B.
 
     When the processor name cannot be detected the function returns
     ``(True, "unknown")`` to avoid false-blocking unknown hardware.
