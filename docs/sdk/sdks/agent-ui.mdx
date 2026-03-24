@@ -20,7 +20,7 @@ from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentR
 **See also:** [User Guide](/guides/agent-ui) | [Agent SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server)
 
 <Warning>
-  **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Qwen3-Coder-30B-A3B-Instruct-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
+  **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Qwen3.5-35B-A3B-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
 </Warning>
 
 ---
@@ -80,7 +80,7 @@ from gaia.ui.database import ChatDatabase
 db = ChatDatabase()  # Uses default path ~/.gaia/chat/gaia_chat.db
 
 # Create a session
-session = db.create_session(title="My Chat", model="Qwen3-Coder-30B-A3B-Instruct-GGUF")
+session = db.create_session(title="My Chat", model="Qwen3.5-35B-A3B-GGUF")
 print(f"Session ID: {session['id']}")
 
 # Add messages
@@ -142,7 +142,7 @@ db = ChatDatabase()
 # Create session with attached documents
 session = db.create_session(
     title="Project Review",
-    model="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    model="Qwen3.5-35B-A3B-GGUF",
     system_prompt="You are a code review assistant.",
     document_ids=["doc-abc123"],
 )
@@ -401,7 +401,7 @@ class AttachDocumentRequest(BaseModel):
     ```json
     {
       "lemonade_running": true,
-      "model_loaded": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+      "model_loaded": "Qwen3.5-35B-A3B-GGUF",
       "embedding_model_loaded": false,
       "disk_space_gb": 128.5,
       "memory_available_gb": 12.3,
@@ -429,6 +429,95 @@ class AttachDocumentRequest(BaseModel):
     }
     ```
   </Accordion>
+
+  <Accordion title="POST /api/system/load-model">
+    Trigger loading a model on the Lemonade server. Returns `202` immediately; loading proceeds in the background. Poll `GET /api/system/status` to detect when loading completes.
+
+    **Request:**
+    ```json
+    {
+      "model_name": "Qwen3.5-35B-A3B-GGUF",
+      "ctx_size": 32768
+    }
+    ```
+
+    | Field | Type | Required | Description |
+    |-------|------|----------|-------------|
+    | `model_name` | string | Yes | Name of the model to load. |
+    | `ctx_size` | number | No | Context window size in tokens. Defaults to `32768`. |
+
+    **Response (202):**
+    ```json
+    {
+      "status": "loading",
+      "model": "Qwen3.5-35B-A3B-GGUF",
+      "ctx_size": 32768
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="POST /api/system/download-model">
+    Trigger downloading a model via the Lemonade server. Returns `202` immediately; the download proceeds in the background. Poll `GET /api/system/status` to detect when the model becomes available. Set `force` to `true` to re-download even if the file already exists (repairs corrupted or incomplete downloads).
+
+    **Request:**
+    ```json
+    {
+      "model_name": "Qwen3.5-35B-A3B-GGUF",
+      "force": false
+    }
+    ```
+
+    | Field | Type | Required | Description |
+    |-------|------|----------|-------------|
+    | `model_name` | string | Yes | Name of the model to download. |
+    | `force` | boolean | No | Re-download even if the model already exists. Defaults to `false`. |
+
+    **Response (202):**
+    ```json
+    {
+      "status": "downloading",
+      "model": "Qwen3.5-35B-A3B-GGUF"
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="GET /api/settings">
+    Get current user settings including the custom model override and its status on the Lemonade server.
+
+    **Response:**
+    ```json
+    {
+      "custom_model": "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated",
+      "model_status": {
+        "found": true,
+        "downloaded": true,
+        "loaded": false
+      }
+    }
+    ```
+
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `custom_model` | string or null | HuggingFace model ID overriding the default, or `null` if using the default model. |
+    | `model_status` | object or null | Status of the custom model on Lemonade. `null` when no custom model is set. Contains `found` (in catalog), `downloaded` (on disk), and `loaded` (currently active). |
+  </Accordion>
+
+  <Accordion title="PUT /api/settings">
+    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string / `null` to clear the override and revert to the default model.
+
+    **Request:**
+    ```json
+    {
+      "custom_model": "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated"
+    }
+    ```
+
+    | Field | Type | Required | Description |
+    |-------|------|----------|-------------|
+    | `custom_model` | string or null | No | HuggingFace model ID to use instead of the default. Empty string or `null` clears the override. |
+
+    **Response:** Same shape as `GET /api/settings`.
+  </Accordion>
 </AccordionGroup>
 
 ### Sessions
@@ -441,7 +530,7 @@ class AttachDocumentRequest(BaseModel):
     ```json
     {
       "title": "Code Review",
-      "model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+      "model": "Qwen3.5-35B-A3B-GGUF",
       "system_prompt": "You are a code reviewer.",
       "document_ids": ["doc-abc123"]
     }
@@ -565,7 +654,7 @@ class AttachDocumentRequest(BaseModel):
 
     **Example stream** showing a typical multi-step interaction:
     ```
-    data: {"type": "thinking", "content": "Sending to Qwen3-Coder-30B..."}
+    data: {"type": "thinking", "content": "Sending to Qwen3.5-35B..."}
     data: {"type": "step", "step": 1, "total": 10, "status": "started"}
     data: {"type": "tool_start", "tool": "query_documents", "detail": "Searching indexed documents for relevant content"}
     data: {"type": "tool_args", "tool": "query_documents", "args": {"query": "database init"}, "detail": "query: database init"}
@@ -716,7 +805,7 @@ CREATE TABLE sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT,
     updated_at TEXT,
-    model TEXT NOT NULL DEFAULT 'Qwen3-Coder-30B-A3B-Instruct-GGUF',
+    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-GGUF',
     system_prompt TEXT
 );
 
@@ -848,7 +937,7 @@ from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
 # The server creates a ChatAgent instance per request
 config = ChatAgentConfig(
-    model_id=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
+    model_id=session.get("model", "Qwen3.5-35B-A3B-GGUF"),
     system_prompt=session.get("system_prompt"),
     allowed_paths=["/path/to/files"],
 )

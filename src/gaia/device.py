@@ -14,7 +14,7 @@ import sys
 _SUPPORTED_CPU_KEYWORDS = ["RYZEN AI MAX"]
 
 # AMD Radeon discrete GPU keyword — must be paired with a >= 24 GB VRAM check.
-# 24 GB is the minimum to load Qwen3-Coder-30B-A3B-Instruct-GGUF (Q4_K_M ~17 GB).
+# 24 GB is the minimum to load Qwen3.5-35B-A3B-GGUF (Q4_K_M ~17 GB).
 _RADEON_GPU_KEYWORD = "AMD RADEON"
 _MIN_GPU_VRAM_GB = 24.0
 

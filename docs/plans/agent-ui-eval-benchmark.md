@@ -660,7 +660,7 @@ eval/
 | Dimension | Variants | Purpose |
 |-----------|----------|---------|
 | **Format** | PDF, Markdown, TXT, CSV, HTML, Python, JSON | Different RAG extraction paths |
-| **Size** | Small (<50KB), Medium (50KB-1MB), Large (1-10MB), XL (>10MB) | Indexing behavior, chunking |
+| **Size** | Small (&lt;50KB), Medium (50KB-1MB), Large (1-10MB), XL (&gt;10MB) | Indexing behavior, chunking |
 | **Domain** | Finance, HR, sales, technical, medical, general | Vocabulary diversity |
 | **Fact difficulty** | Easy (lookup), Medium (cross-reference), Hard (synthesis/negation) | Retrieval + reasoning depth |
 | **Adversarial** | Empty, unicode, very large, duplicates | Edge case resilience |
@@ -974,7 +974,7 @@ Single-scenario run: ~$0.10-0.15.
   "timestamp": "2026-03-17T10:30:00Z",
   "config": {
     "backend_url": "http://localhost:4200",
-    "local_model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    "local_model": "Qwen3.5-35B-A3B-GGUF",
     "eval_model": "claude-sonnet-4-6",
     "runner": "gaia eval agent (claude -p subprocess)",
     "system_prompt_hash": "sha256:a1b2c3...",
@@ -1431,8 +1431,8 @@ Not pre-planned. Driven by:
 | Synthetic corpus with 100+ verifiable facts | ✅ |
 | `--compare` detects regressions between runs | ✅ |
 | Pre-flight check catches infra failures before spending money | ✅ |
-| Full eval run completes in <60 min on NPU, <3 hrs on CPU | ✅ |
-| Full eval run costs <$5 in cloud LLM usage | ✅ |
+| Full eval run completes in &lt;60 min on NPU, &lt;3 hrs on CPU | ✅ |
+| Full eval run costs &lt;$5 in cloud LLM usage | ✅ |
 
 ---
 

@@ -338,7 +338,7 @@ def _estimate_step_budget(self, user_input: str, has_indexed_docs: bool) -> int:
 
 ## 5. What Won't Be Fixed by These Changes
 
-- **LLM quality floor:** The underlying Qwen3-0.6B / Qwen3-Coder-30B models have inherent limitations. Structured output and workflow enforcement raise the floor but don't eliminate all reasoning errors.
+- **LLM quality floor:** The underlying Qwen3-0.6B / Qwen3.5-35B models have inherent limitations. Structured output and workflow enforcement raise the floor but don't eliminate all reasoning errors.
 - **Fresh agent per message:** The UI server's request-per-agent design is an architectural choice driven by stateless HTTP. Full persistence across turns would require either long-running agent threads (memory/resource concern) or a robust state serialization layer. Per-turn context injection (#3.3) mitigates this without changing the server model.
 - **RAG retrieval quality:** Semantic mismatch between query and chunk is a RAG system issue (embedding model, chunking strategy), not an agentic loop issue. Addressed separately in `src/gaia/rag/sdk.py`.
 
