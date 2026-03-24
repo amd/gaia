@@ -395,7 +395,14 @@ def run_scenario_subprocess(
     # Merge real-world manifest facts if present, so the eval agent has ground
     # truth for all document types (standard + real-world) in a single context block.
     if REAL_WORLD_MANIFEST.exists():
-        rw_manifest = json.loads(REAL_WORLD_MANIFEST.read_text(encoding="utf-8"))
+        try:
+            rw_manifest = json.loads(REAL_WORLD_MANIFEST.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            print(
+                f"[WARN] Could not load real-world manifest {REAL_WORLD_MANIFEST}: {exc}",
+                file=sys.stderr,
+            )
+            rw_manifest = {}
         merged_docs = manifest_data.get("documents", []) + rw_manifest.get(
             "documents", []
         )
@@ -520,7 +527,9 @@ def run_scenario_subprocess(
                             }
                 else:
                     result = raw
-                # Guard: ensure required fields are present regardless of parse path
+                # Guard: ensure required fields are present regardless of parse path.
+                # Always inject the runner-known scenario_id — eval agent output may omit
+                # it (partial JSON) or contain a wrong value; the runner's sid is authoritative.
                 if isinstance(result, dict) and "status" not in result:
                     print(
                         f"[WARN] {scenario_id} — eval agent JSON missing 'status' field",
@@ -529,6 +538,8 @@ def run_scenario_subprocess(
                     result.setdefault("status", "ERRORED")
                     result.setdefault("overall_score", None)
                     result.setdefault("turns", [])
+                if isinstance(result, dict):
+                    result["scenario_id"] = scenario_id
                 result["elapsed_s"] = elapsed
                 score = result.get("overall_score")
                 score_str = f"{score:.1f}" if isinstance(score, (int, float)) else "n/a"
@@ -1146,7 +1157,7 @@ class AgentEvalRunner:
             sys.exit(1)
 
         # Create run dir
-        run_id = f"eval-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        run_id = f"eval-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
         run_dir = self.results_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 

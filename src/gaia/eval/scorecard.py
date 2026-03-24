@@ -108,7 +108,9 @@ def build_scorecard(run_id, results, config):
         r.get("cost_estimate", {}).get("estimated_usd", 0) for r in results
     )
 
-    # Collect any statuses not in the known set — these indicate runner bugs or new status codes
+    # Collect any statuses not in the known set — these indicate runner bugs or new status codes.
+    # ERRORED is produced by the runner when the eval agent itself fails (parse error, crash, etc.)
+    # and is correctly bucketed in the errored counter above.
     known_statuses = {
         "PASS",
         "FAIL",
@@ -118,6 +120,7 @@ def build_scorecard(run_id, results, config):
         "INFRA_ERROR",
         "SETUP_ERROR",
         "SKIPPED_NO_DOCUMENT",
+        "ERRORED",
     }
     unrecognized = sorted(
         {r.get("status") for r in results if r.get("status") not in known_statuses},

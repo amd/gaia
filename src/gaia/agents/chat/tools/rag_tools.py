@@ -598,11 +598,14 @@ class RAGToolsMixin:
                                 if hasattr(self, "rebuild_system_prompt"):
                                     self.rebuild_system_prompt()
                                 # Re-match after auto-indexing
+                                # Include resolved (absolute) path since index_document
+                                # stores the absolute path, not the relative one passed in.
                                 matching_files = [
                                     f
                                     for f in self.rag.indexed_files
                                     if norm_path in str(f)
                                     or file_path in str(f)
+                                    or str(resolved) in str(f)
                                     or Path(str(f)).name == basename
                                 ]
                                 auto_indexed = True

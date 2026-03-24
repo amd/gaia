@@ -1,9 +1,10 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { AlertTriangle, Cpu, Download, Layers, WifiOff, X } from 'lucide-react';
-import { useState, useEffect, useRef } from 'react';
+import { AlertTriangle, Cpu, Download, Layers, Loader2, WifiOff, X } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useChatStore } from '../stores/chatStore';
+import * as api from '../services/api';
 import './ConnectionBanner.css';
 
 /** Minimum LLM context window in tokens required for reliable agent operation. */
@@ -17,6 +18,42 @@ const MIN_CONTEXT_SIZE = 32768;
 export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
     const { backendConnected, systemStatus } = useChatStore();
     const [dismissed, setDismissed] = useState(false);
+    const [isLoadingModel, setIsLoadingModel] = useState(false);
+    const [isDownloadingModel, setIsDownloadingModel] = useState(false);
+
+    const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const downloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
+            if (downloadTimerRef.current) clearTimeout(downloadTimerRef.current);
+        };
+    }, []);
+
+    const handleLoadModel = useCallback(async (modelName: string) => {
+        setIsLoadingModel(true);
+        try {
+            await api.loadModel(modelName, MIN_CONTEXT_SIZE);
+            if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
+            loadTimerRef.current = setTimeout(() => setIsLoadingModel(false), 300_000);
+        } catch (_err) {
+            // Loading is async on backend; errors are logged server-side
+            setIsLoadingModel(false);
+        }
+    }, []);
+
+    const handleDownloadModel = useCallback(async (modelName: string) => {
+        setIsDownloadingModel(true);
+        try {
+            await api.downloadModel(modelName);
+            if (downloadTimerRef.current) clearTimeout(downloadTimerRef.current);
+            downloadTimerRef.current = setTimeout(() => setIsDownloadingModel(false), 1_800_000);
+        } catch (_err) {
+            // Download is async on backend; errors are logged server-side
+            setIsDownloadingModel(false);
+        }
+    }, []);
 
     // Track previous warning-worthy states so the banner reappears when
     // a new issue is detected after being dismissed.
@@ -115,31 +152,30 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         systemStatus.model_downloaded === false
     ) {
         const modelName = systemStatus.default_model_name ?? 'Qwen3.5-35B-A3B-GGUF';
-        const lemonadeUI = systemStatus.lemonade_url ?? 'http://localhost:8000';
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
                     <Download size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    Required model <strong>{modelName}</strong> is not downloaded.{' '}
-                    <span className="connection-banner__hint">
-                        Open{' '}
-                        <a
-                            className="connection-banner__link"
-                            href={lemonadeUI}
-                            target="_blank"
-                            rel="noreferrer"
-                        >
-                            Lemonade
-                        </a>{' '}
-                        to download it, or run:{' '}
-                        <code>lemonade-server pull {modelName}</code>
-                    </span>
+                    Required model <strong>{modelName}</strong> is not downloaded (~25 GB).
                 </div>
-                {onRetry && (
-                    <button className="connection-banner__retry" onClick={onRetry}>
-                        Check again
+                {isDownloadingModel ? (
+                    <span className="connection-banner__loading">
+                        <Loader2 size={13} className="connection-banner__spinner" />
+                        Downloading…
+                    </span>
+                ) : (
+                    <button
+                        className="connection-banner__retry"
+                        onClick={() => handleDownloadModel(modelName)}
+                    >
+                        Download
+                    </button>
+                )}
+                {onRetry && !isDownloadingModel && (
+                    <button className="connection-banner__retry connection-banner__retry--secondary" onClick={onRetry}>
+                        Recheck
                     </button>
                 )}
                 <button
@@ -164,7 +200,6 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
     ) {
         const currentModel = systemStatus.model_loaded;
         const expectedModel = systemStatus.default_model_name ?? 'Qwen3.5-35B-A3B-GGUF';
-        const lemonadeUI = systemStatus.lemonade_url ?? 'http://localhost:8000';
         const contextAlsoSmall = systemStatus.context_size_sufficient === false;
         return (
             <div className="connection-banner connection-banner--warning" role="status">
@@ -172,28 +207,28 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                     <Cpu size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    Unexpected model loaded: <strong>{currentModel}</strong>.{' '}
+                    Wrong model loaded: <strong>{currentModel}</strong>.{' '}
                     GAIA Chat requires <strong>{expectedModel}</strong>.
                     {contextAlsoSmall && (
-                        <>{' '}The context window is also too small.</>
-                    )}{' '}
-                    <span className="connection-banner__hint">
-                        In{' '}
-                        <a
-                            className="connection-banner__link"
-                            href={lemonadeUI}
-                            target="_blank"
-                            rel="noreferrer"
-                        >
-                            Lemonade
-                        </a>
-                        , load <strong>{expectedModel}</strong>, or run:{' '}
-                        <code>lemonade-server serve --model {expectedModel}</code>
-                    </span>
+                        <>{' '}Context window is also too small.</>
+                    )}
                 </div>
-                {onRetry && (
-                    <button className="connection-banner__retry" onClick={onRetry}>
-                        Check again
+                {isLoadingModel ? (
+                    <span className="connection-banner__loading">
+                        <Loader2 size={13} className="connection-banner__spinner" />
+                        Loading…
+                    </span>
+                ) : (
+                    <button
+                        className="connection-banner__retry"
+                        onClick={() => handleLoadModel(expectedModel)}
+                    >
+                        Load Now
+                    </button>
+                )}
+                {onRetry && !isLoadingModel && (
+                    <button className="connection-banner__retry connection-banner__retry--secondary" onClick={onRetry}>
+                        Recheck
                     </button>
                 )}
                 <button

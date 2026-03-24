@@ -83,6 +83,14 @@ export async function updateSettings(data: Partial<Settings>): Promise<Settings>
     return apiFetch<Settings>('PUT', '/settings', data);
 }
 
+export async function loadModel(modelName: string, ctxSize?: number): Promise<{ status: string; model: string; ctx_size: number }> {
+    return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize });
+}
+
+export async function downloadModel(modelName: string, force = false): Promise<{ status: string; model: string }> {
+    return apiFetch('POST', '/system/download-model', { model_name: modelName, force });
+}
+
 // -- Sessions ------------------------------------------------------------------
 
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {

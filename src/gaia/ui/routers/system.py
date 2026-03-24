@@ -3,14 +3,17 @@
 
 """System and health-check endpoints for GAIA Agent UI."""
 
+import asyncio
 import logging
 import os
 import shutil
 import sys
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
@@ -27,6 +30,38 @@ _DEFAULT_MODEL_NAME = "Qwen3.5-35B-A3B-GGUF"
 _MIN_CONTEXT_SIZE = 32768
 
 
+def _get_lemonade_base_url() -> str:
+    """Return the Lemonade Server API base URL from environment or default."""
+    return os.environ.get("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+
+
+async def _lemonade_post(
+    path: str,
+    payload: dict,
+    *,
+    timeout: float,
+    log_context: str,
+) -> None:
+    """POST to a Lemonade API endpoint, logging the result."""
+    try:
+        import httpx  # pylint: disable=import-outside-toplevel
+
+        base_url = _get_lemonade_base_url()
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(f"{base_url}/{path}", json=payload)
+            if resp.status_code == 200:
+                logger.info("%s succeeded", log_context)
+            else:
+                logger.warning(
+                    "%s returned %d: %s",
+                    log_context,
+                    resp.status_code,
+                    resp.text[:200],
+                )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("%s failed: %s", log_context, exc)
+
+
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status(db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
@@ -39,9 +74,7 @@ async def system_status(db: ChatDatabase = Depends(get_db)):
         import httpx
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            base_url = os.environ.get(
-                "LEMONADE_BASE_URL", "http://localhost:8000/api/v1"
-            )
+            base_url = _get_lemonade_base_url()
 
             # Derive the Lemonade web UI URL (scheme://host:port without /api/v1)
             try:
@@ -121,7 +154,8 @@ async def system_status(db: ChatDatabase = Depends(get_db)):
                     # frontend can name it precisely in the warning banner.
                     status.default_model_name = custom_model or _DEFAULT_MODEL_NAME
 
-                # When no LLM is loaded, check if the default model is downloaded.
+                # When no LLM is loaded, check if the expected model is downloaded.
+                # Respects custom_model override; falls back to the built-in default.
                 # Uses show_all=true to see models that are in the catalog but not
                 # yet pulled to disk.
                 if not status.model_loaded:
@@ -132,7 +166,8 @@ async def system_status(db: ChatDatabase = Depends(get_db)):
                             timeout=5.0,
                         )
                         if catalog_resp.status_code == 200:
-                            default_lower = _DEFAULT_MODEL_NAME.lower()
+                            _custom = db.get_setting("custom_model")
+                            default_lower = (_custom or _DEFAULT_MODEL_NAME).lower()
                             for m in catalog_resp.json().get("data", []):
                                 if m.get("id", "").lower() == default_lower:
                                     status.model_downloaded = m.get("downloaded", False)
@@ -266,7 +301,7 @@ async def _check_model_status(model_name: str) -> ModelStatus:
     try:
         import httpx
 
-        base_url = os.environ.get("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+        base_url = _get_lemonade_base_url()
         async with httpx.AsyncClient(timeout=5.0) as client:
             # Check catalog: is model known and downloaded?
             models_resp = await client.get(
@@ -356,3 +391,54 @@ async def health(db: ChatDatabase = Depends(get_db)):
         "service": "gaia-agent-ui",
         "stats": stats,
     }
+
+
+class LoadModelRequest(BaseModel):
+    model_name: str
+    ctx_size: Optional[int] = None
+
+
+@router.post("/api/system/load-model", status_code=202)
+async def load_model_endpoint(body: LoadModelRequest):
+    """Trigger loading a model on Lemonade server (non-blocking).
+
+    Returns 202 immediately; loading proceeds in the background.
+    Poll /api/system/status to detect when loading completes.
+    """
+    model_name = body.model_name.strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="model_name must not be empty")
+
+    ctx_size = body.ctx_size if body.ctx_size is not None else _MIN_CONTEXT_SIZE
+    payload = {"model_name": model_name, "ctx_size": ctx_size}
+    asyncio.create_task(
+        _lemonade_post("load", payload, timeout=300.0, log_context=f"Load {model_name}")
+    )
+    return {"status": "loading", "model": model_name, "ctx_size": ctx_size}
+
+
+class DownloadModelRequest(BaseModel):
+    model_name: str
+    force: bool = False
+
+
+@router.post("/api/system/download-model", status_code=202)
+async def download_model_endpoint(body: DownloadModelRequest):
+    """Trigger downloading a model via Lemonade server (non-blocking).
+
+    Returns 202 immediately; download proceeds in the background.
+    Poll /api/system/status to detect when the model becomes available.
+    Set force=True to re-download even if the file already exists (repairs
+    corrupted or incomplete downloads).
+    """
+    model_name = body.model_name.strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="model_name must not be empty")
+
+    payload: dict = {"model_name": model_name}
+    if body.force:
+        payload["force"] = True
+    asyncio.create_task(
+        _lemonade_post("pull", payload, timeout=7200.0, log_context=f"Download {model_name}")
+    )
+    return {"status": "downloading", "model": model_name}

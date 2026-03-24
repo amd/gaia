@@ -142,6 +142,32 @@
     color: #120e05;
 }
 
+.connection-banner__retry--secondary {
+    opacity: 0.7;
+    margin-left: -4px;
+}
+.connection-banner__retry--secondary:hover { opacity: 1; }
+
+.connection-banner__loading {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    opacity: 0.7;
+}
+
+.connection-banner__spinner {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
 @keyframes slideDown {
     from { opacity: 0; transform: translateY(-100%); }
     to { opacity: 1; transform: translateY(0); }

@@ -926,6 +926,77 @@ class TestManifestCrossReference:
             missing
         )
 
+    def test_scenario_corpus_docs_exist_in_manifest(self):
+        """Every corpus_doc in setup.index_documents must match a manifest document id."""
+        from gaia.eval.runner import REAL_WORLD_MANIFEST, SCENARIOS_DIR, find_scenarios
+
+        manifest = self._load_merged_manifest()
+        all_doc_ids = {doc["id"] for doc in manifest.get("documents", [])}
+        real_world_scenarios_dir = SCENARIOS_DIR / "real_world"
+        real_world_manifest_present = REAL_WORLD_MANIFEST.exists()
+
+        scenarios = find_scenarios()
+        missing = []
+        for path, data in scenarios:
+            if not real_world_manifest_present and str(path).startswith(
+                str(real_world_scenarios_dir)
+            ):
+                continue
+            for i, doc in enumerate(
+                data.get("setup", {}).get("index_documents", [])
+            ):
+                if not isinstance(doc, dict):
+                    continue
+                corpus_doc = doc.get("corpus_doc")
+                if corpus_doc and corpus_doc not in all_doc_ids:
+                    missing.append(
+                        f"{data['id']} setup.index_documents[{i}]: corpus_doc='{corpus_doc}'"
+                    )
+        assert not missing, (
+            "Scenario corpus_doc references not in merged manifest:\n  "
+            + "\n  ".join(missing)
+        )
+
+
+class TestComputeEffectiveTimeout:
+    """Tests for _compute_effective_timeout."""
+
+    def test_base_timeout_used_when_larger(self):
+        from gaia.eval.runner import _compute_effective_timeout
+
+        data = {"turns": [{}], "setup": {"index_documents": []}}
+        # base=9000 >> 120 + 0*90 + 1*200 = 320 → should return 9000 (but capped at 7200)
+        assert _compute_effective_timeout(7200, data) == 7200
+
+    def test_computed_exceeds_base(self):
+        from gaia.eval.runner import _compute_effective_timeout
+
+        # 2 docs + 3 turns → 120 + 2*90 + 3*200 = 120+180+600 = 900
+        data = {
+            "turns": [{}, {}, {}],
+            "setup": {"index_documents": [{}, {}]},
+        }
+        result = _compute_effective_timeout(100, data)
+        assert result == 900
+
+    def test_cap_enforced(self):
+        from gaia.eval.runner import _compute_effective_timeout, _MAX_EFFECTIVE_TIMEOUT_S
+
+        # 100 docs + 100 turns → 120 + 100*90 + 100*200 = 120+9000+20000 = 29120 > cap
+        data = {
+            "turns": [{}] * 100,
+            "setup": {"index_documents": [{}] * 100},
+        }
+        result = _compute_effective_timeout(100, data)
+        assert result == _MAX_EFFECTIVE_TIMEOUT_S
+
+    def test_empty_scenario_uses_startup_overhead(self):
+        from gaia.eval.runner import _compute_effective_timeout, _STARTUP_OVERHEAD_S
+
+        data = {"turns": [], "setup": {"index_documents": []}}
+        result = _compute_effective_timeout(0, data)
+        assert result == _STARTUP_OVERHEAD_S
+
 
 class TestBuildScenarioPrompt:
     """Tests for the prompt builder."""
@@ -1425,6 +1496,28 @@ class TestRunScenarioSubprocess:
         # The cap at 5.99 is applied only inside scorecard.py avg_score computation, not here.
         assert isinstance(result["overall_score"], float)
 
+    def test_scenario_id_always_injected_from_runner(self, mocker):
+        """Runner always overwrites scenario_id with its own sid — eval agent value is untrusted."""
+        payload = {
+            "structured_output": {
+                "scenario_id": "WRONG_ID_FROM_EVAL_AGENT",
+                "status": "PASS",
+                "overall_score": 8.5,
+                "turns": [{
+                    "turn": 1, "user_message": "hi", "agent_response": "ok", "agent_tools": [],
+                    "scores": {
+                        "correctness": 8, "tool_selection": 8, "context_retention": 8,
+                        "completeness": 8, "efficiency": 8, "personality": 8, "error_recovery": 8,
+                    },
+                    "overall_score": 8.5, "pass": True, "failure_category": None, "reasoning": "ok",
+                }],
+                "cost_estimate": {"turns": 1, "estimated_usd": 0.01},
+            }
+        }
+        result = self._run(mocker, json.dumps(payload))
+        # Runner's own scenario_id must win regardless of what eval agent returned
+        assert result["scenario_id"] == "mock_scenario"
+
     def test_infra_status_not_overridden(self, mocker):
         """BLOCKED_BY_ARCHITECTURE status is never overridden to FAIL."""
         payload = {
@@ -1679,6 +1772,18 @@ class TestScorecardByCategory:
         assert sc["summary"]["avg_score"] <= 7.50
         # Raw score in the result dict is preserved (not mutated)
         assert results[0]["overall_score"] == 7.5
+
+    def test_errored_status_not_flagged_as_unrecognized(self):
+        """ERRORED status is a known runner status and must not trigger the unrecognized warning."""
+        from gaia.eval.scorecard import build_scorecard
+
+        results = [
+            {"scenario_id": "a", "status": "ERRORED", "overall_score": None, "category": "x", "cost_estimate": {"estimated_usd": 0}},
+        ]
+        sc = build_scorecard("run", results, {})
+        # Must be counted in errored bucket, not trigger unrecognized-status warning
+        assert sc["summary"]["errored"] == 1
+        assert "warnings" not in sc
 
     def test_none_status_sorted_without_type_error(self):
         """A result with status=None is bucketed as errored without raising TypeError in sorted()."""
