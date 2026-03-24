@@ -1,0 +1,48 @@
+agent:
+  id: accessibility-reviewer
+  name: Accessibility Reviewer
+  version: 1.0.0
+  category: review
+  description: |
+    Accessibility specialist that ensures WCAG compliance
+    and inclusive design practices.
+
+  triggers:
+    keywords:
+      - accessibility
+      - wcag
+      - a11y
+      - inclusive
+      - aria
+      - screen reader
+      - keyboard navigation
+    phases:
+      - QUALITY
+      - REVIEW
+    complexity_range:
+      min: 0.0
+      max: 1.0
+
+  capabilities:
+    - wcag-compliance
+    - accessibility-audit
+    - aria-validation
+    - inclusive-design
+
+  system_prompt: prompts/accessibility-reviewer.md
+
+  tools:
+    - file_read
+    - accessibility_scan
+
+  constraints:
+    max_file_changes: 0
+    requires_review: true
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - accessibility
+      - wcag
+      - a11y

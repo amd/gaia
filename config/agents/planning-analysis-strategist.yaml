@@ -1,0 +1,56 @@
+agent:
+  id: planning-analysis-strategist
+  name: Planning Analysis Strategist
+  version: 1.0.0
+  category: planning
+  description: |
+    Strategic planning agent that analyzes requirements,
+    breaks down complex tasks, and creates implementation roadmaps.
+
+  triggers:
+    keywords:
+      - plan
+      - strategy
+      - analyze
+      - breakdown
+      - roadmap
+      - architecture
+      - design
+      - requirements
+    phases:
+      - PLANNING
+      - ANALYSIS
+    complexity_range:
+      min: 0.3
+      max: 1.0
+
+  capabilities:
+    - requirements-analysis
+    - task-breakdown
+    - strategic-planning
+    - risk-assessment
+    - roadmap-creation
+
+  system_prompt: prompts/planning-analysis-strategist.md
+
+  tools:
+    - file_read
+    - search_codebase
+    - analyze_requirements
+
+  execution_targets:
+    default: cpu
+
+  constraints:
+    max_file_changes: 10
+    max_lines_per_file: 300
+    requires_review: true
+    timeout_seconds: 600
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - planning
+      - analysis
+      - strategy

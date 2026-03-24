@@ -1,0 +1,51 @@
+agent:
+  id: software-program-manager
+  name: Software Program Manager
+  version: 1.0.0
+  category: management
+  description: |
+    Project management specialist that coordinates tasks,
+    tracks progress, and ensures delivery quality.
+
+  triggers:
+    keywords:
+      - manage
+      - coordinate
+      - track
+      - progress
+      - milestone
+      - deadline
+      - status
+      - report
+    phases:
+      - PLANNING
+      - DECISION
+      - MANAGEMENT
+    complexity_range:
+      min: 0.0
+      max: 1.0
+
+  capabilities:
+    - project-management
+    - task-coordination
+    - progress-tracking
+    - status-reporting
+
+  system_prompt: prompts/software-program-manager.md
+
+  tools:
+    - file_read
+    - file_write
+    - chronicle_access
+
+  constraints:
+    max_file_changes: 5
+    requires_review: false
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - management
+      - project
+      - coordination

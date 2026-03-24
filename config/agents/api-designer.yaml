@@ -1,0 +1,52 @@
+agent:
+  id: api-designer
+  name: API Designer
+  version: 1.0.0
+  category: planning
+  description: |
+    API design specialist for REST, GraphQL, and gRPC APIs.
+    Creates OpenAPI specs and API documentation.
+
+  triggers:
+    keywords:
+      - api
+      - rest
+      - graphql
+      - grpc
+      - endpoint
+      - openapi
+      - swagger
+      - graphql schema
+    phases:
+      - PLANNING
+      - DESIGN
+      - DEVELOPMENT
+    complexity_range:
+      min: 0.3
+      max: 1.0
+
+  capabilities:
+    - api-design
+    - openapi-specification
+    - graphql-schema
+    - api-documentation
+
+  system_prompt: prompts/api-designer.md
+
+  tools:
+    - file_read
+    - file_write
+    - api_validation
+
+  constraints:
+    max_file_changes: 20
+    requires_review: true
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - api
+      - design
+      - rest
+      - graphql

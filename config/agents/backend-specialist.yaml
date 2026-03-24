@@ -1,0 +1,53 @@
+agent:
+  id: backend-specialist
+  name: Backend Specialist
+  version: 1.0.0
+  category: development
+  description: |
+    Backend development specialist for APIs, services,
+    and server-side logic.
+
+  triggers:
+    keywords:
+      - backend
+      - api
+      - service
+      - server
+      - endpoint
+      - flask
+      - django
+      - fastapi
+      - express
+      - node
+    phases:
+      - DEVELOPMENT
+    complexity_range:
+      min: 0.3
+      max: 1.0
+
+  capabilities:
+    - api-development
+    - service-architecture
+    - database-integration
+    - authentication
+    - caching
+
+  system_prompt: prompts/backend-specialist.md
+
+  tools:
+    - file_read
+    - file_write
+    - bash_execute
+    - run_tests
+
+  constraints:
+    max_file_changes: 20
+    requires_review: true
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - backend
+      - api
+      - server

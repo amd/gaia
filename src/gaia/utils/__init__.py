@@ -16,6 +16,8 @@ from gaia.utils.parsing import (
     pdf_page_to_image,
     validate_required_fields,
 )
+from gaia.utils.logging import get_logger
+from gaia.utils.id_generator import generate_id, generate_pipeline_id
 
 __all__ = [
     # File watching
@@ -30,4 +32,9 @@ __all__ = [
     "pdf_page_to_image",
     "detect_field_changes",
     "validate_required_fields",
+    # Logging
+    "get_logger",
+    # ID generation
+    "generate_id",
+    "generate_pipeline_id",
 ]

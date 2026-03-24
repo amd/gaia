@@ -1,0 +1,49 @@
+agent:
+  id: quality-reviewer
+  name: Quality Reviewer
+  version: 1.0.0
+  category: review
+  description: |
+    Code quality reviewer that performs comprehensive
+    code reviews and identifies improvement areas.
+
+  triggers:
+    keywords:
+      - review
+      - quality
+      - code review
+      - audit
+      - improve
+      - refactor
+      - best practices
+    phases:
+      - QUALITY
+      - REVIEW
+    complexity_range:
+      min: 0.0
+      max: 1.0
+
+  capabilities:
+    - code-review
+    - quality-assessment
+    - best-practices-validation
+    - improvement-suggestions
+
+  system_prompt: prompts/quality-reviewer.md
+
+  tools:
+    - file_read
+    - search_codebase
+    - run_linters
+
+  constraints:
+    max_file_changes: 0
+    requires_review: false
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - quality
+      - review
+      - code-review
