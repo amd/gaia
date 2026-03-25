@@ -396,14 +396,14 @@ async def _get_chat_response(
 
     try:
         loop = asyncio.get_running_loop()
-        # Apply a 120-second timeout to prevent indefinite hangs when the
+        # Apply a 600-second timeout to prevent indefinite hangs when the
         # LLM gets stuck in a tool loop or Lemonade becomes unresponsive
         return await asyncio.wait_for(
             loop.run_in_executor(None, _do_chat),
-            timeout=120.0,
+            timeout=600.0,
         )
     except asyncio.TimeoutError:
-        logger.error("Chat response timed out after 120 seconds")
+        logger.error("Chat response timed out after 600 seconds")
         return "I took too long thinking about that one. Try breaking your question into simpler parts and I'll do my best."
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
@@ -533,6 +533,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         session_id[:8],
                         _time.monotonic() - t0,
                     )
+                    sse_handler._emit(
+                        {
+                            "type": "status",
+                            "status": "info",
+                            "message": "Sending to model...",
+                        }
+                    )
 
                 else:
                     # -- Cache miss: full construction --
@@ -612,6 +619,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         session_id[:8],
                         _time.monotonic() - t0,
                     )
+                    sse_handler._emit(
+                        {
+                            "type": "status",
+                            "status": "info",
+                            "message": "Sending to model...",
+                        }
+                    )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -675,7 +689,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         step_id = 0
         idle_cycles = 0
         _stream_start = _time.time()
-        _STREAM_TIMEOUT = 180  # 3 minutes max for entire streaming response
+        _STREAM_TIMEOUT = 600  # 10 minutes — large system prompts need time
         while True:
             # Guard: total timeout for the streaming response
             if _time.time() - _stream_start > _STREAM_TIMEOUT:

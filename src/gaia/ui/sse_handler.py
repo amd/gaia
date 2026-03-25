@@ -124,8 +124,14 @@ class SSEOutputHandler(OutputHandler):
         self._start_time = time.time()
         self._step_count = 0
         self._tool_count = 0
-        # Suppress "Sending to <model>..." — the agent always does this
-        # and it adds noise without informing the user of anything new.
+        model_label = model_id or "LLM"
+        self._emit(
+            {
+                "type": "status",
+                "status": "working",
+                "message": f"Processing with {model_label}...",
+            }
+        )
 
     def print_step_header(self, step_num: int, step_limit: int):
         self._step_count = step_num

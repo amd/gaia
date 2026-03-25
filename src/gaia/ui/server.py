@@ -377,6 +377,7 @@ def main():
         host=args.host,
         port=args.port,
         log_level=log_level,
+        access_log=args.debug,  # Only show HTTP access logs in debug mode
     )
 
 
