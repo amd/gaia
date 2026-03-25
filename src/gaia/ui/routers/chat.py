@@ -72,17 +72,22 @@ async def send_message(
     sid = request.session_id
     session_lock = session_locks.setdefault(sid, asyncio.Lock())
 
-    # Acquire session lock with timeout → 409 if the session is already busy.
-    # 30 s gives streaming responses time to fully release before the next
-    # turn arrives (important for eval runner and multi-turn tests).
+    # Acquire session lock — if a previous request is stuck (hung LLM
+    # connection, crashed stream), force-release and proceed rather than
+    # leaving the user permanently stuck with "request already in progress".
     try:
-        await asyncio.wait_for(session_lock.acquire(), timeout=30.0)
+        await asyncio.wait_for(session_lock.acquire(), timeout=5.0)
     except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=409,
-            detail="A request is already in progress for this session. "
-            "Please wait for it to complete before sending another message.",
+        logger.warning(
+            "Force-releasing stuck session lock for %s "
+            "(previous request likely hung)",
+            sid,
         )
+        try:
+            session_lock.release()
+        except RuntimeError:
+            pass  # Lock wasn't held — race condition, safe to ignore
+        await session_lock.acquire()
 
     # ── Global concurrency gate ──────────────────────────────────────
     # Queue rather than immediately reject: wait up to 60 s for a slot.
