@@ -847,12 +847,31 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             except queue.Empty:
                 if not producer.is_alive():
                     break
+                idle_cycles += 1
                 # Send a padded keepalive every ~5s (25 cycles × 0.2s).
                 # The padding flushes Chromium's receive buffer so any events
                 # already sent but not yet dispatched arrive immediately.
-                idle_cycles += 1
                 if idle_cycles % 25 == 0:
                     yield ": keepalive " + "x" * 490 + "\n\n"
+                # Every 15s (75 cycles) emit a visible status so the user knows
+                # the model is still processing (prompt prefill is silent).
+                # Use status='working' so active=true; consecutive events merge
+                # into a single updating step on the frontend.
+                if idle_cycles % 75 == 0:
+                    elapsed = int(_time.time() - _stream_start)
+                    status_evt = json.dumps(
+                        {
+                            "type": "status",
+                            "status": "working",
+                            "message": f"Model is processing... ({elapsed}s)",
+                        }
+                    )
+                    status_data = f"data: {status_evt}\n\n"
+                    if len(status_data) < 512:
+                        status_data += (
+                            ": " + "x" * (512 - len(status_data) - 4) + "\n\n"
+                        )
+                    yield status_data
                 continue
 
         # Signal cancellation (handles client disconnect) then wait for producer

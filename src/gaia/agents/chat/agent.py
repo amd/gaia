@@ -300,6 +300,19 @@ class ChatAgent(
                 f"  - Final chunks returned: {debug_info.get('final_chunks_returned', 0)}"
             )
 
+    def _get_mixin_prompts(self) -> list[str]:
+        """Only include SD prompt when SD is actually initialized (saves ~1000 tokens)."""
+        prompts = []
+        if hasattr(self, "get_sd_system_prompt") and hasattr(self, "sd_default_model"):
+            fragment = self.get_sd_system_prompt()
+            if fragment:
+                prompts.append(fragment)
+        if hasattr(self, "get_vlm_system_prompt"):
+            fragment = self.get_vlm_system_prompt()
+            if fragment:
+                prompts.append(fragment)
+        return prompts
+
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
         # Get list of indexed documents

@@ -394,7 +394,10 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 ]
             )
 
-            description = tool_info["description"].strip()
+            description = next(
+                (l.strip() for l in tool_info["description"].splitlines() if l.strip()),
+                "",
+            )
             tool_descriptions.append(f"- {name}({params_str}): {description}")
 
         return "\n".join(tool_descriptions)

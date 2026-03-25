@@ -135,7 +135,12 @@ class MCPClientManager:
         for name, client in self._clients.items():
             tools = client.list_tools()  # uses cached list — no network call
             report.append(
-                {"name": name, "connected": True, "tool_count": len(tools), "error": None}
+                {
+                    "name": name,
+                    "connected": True,
+                    "tool_count": len(tools),
+                    "error": None,
+                }
             )
         for name, error in self._failed.items():
             report.append(
