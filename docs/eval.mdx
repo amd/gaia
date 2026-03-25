@@ -193,7 +193,7 @@ The recomputation applies in three passes:
 
 2. **Scenario-level**: `overall_score` is recomputed as the arithmetic mean of recomputed per-turn scores, replacing the eval agent's scenario-level value entirely.
 
-3. **Status re-derivation**: The runner applies the rubric rules to recomputed values. An eval-agent-reported PASS can be overridden to FAIL (if any turn has `correctness < 4` or `overall_score < 6.0`), and a reported FAIL can be upgraded to PASS (if all turns satisfy both criteria). Infrastructure statuses (`BLOCKED_BY_ARCHITECTURE`, `TIMEOUT`, `BUDGET_EXCEEDED`, etc.) are never overridden. A `BLOCKED_BY_ARCHITECTURE` that passes all rubric criteria triggers a warning for human review, not an automatic upgrade.
+3. **Status re-derivation**: The runner applies the rubric rules to recomputed values. An eval-agent-reported PASS can be overridden to FAIL (if any turn has `correctness < 4` or `overall_score < 6.0`), and a reported FAIL can be upgraded to PASS (if all turns satisfy both criteria). `BLOCKED_BY_ARCHITECTURE` is never overridden — if it passes all rubric criteria, a warning is emitted for human review instead of an automatic upgrade. True infrastructure statuses (`TIMEOUT`, `BUDGET_EXCEEDED`, `INFRA_ERROR`, `SETUP_ERROR`) are also never overridden.
 
 4. **Average score integrity**: In `scorecard.json`, FAIL scenario scores are capped at 5.99 before computing `avg_score`. A scenario can score 9.8/10 on five of seven dimensions and still FAIL on hallucination — that 9.8 would inflate the benchmark's quality signal if included raw.
 
@@ -348,16 +348,19 @@ The judge evaluates each turn across 7 dimensions with fixed weights:
 
 ### Status Legend
 
-| Status | Meaning |
-|--------|---------|
-| PASS | Scenario passed all criteria |
-| FAIL | Score below threshold or critical failure |
-| BLOCKED_BY_ARCHITECTURE | Agent UI architecture prevents success (e.g., history window too small) |
-| TIMEOUT | Scenario exceeded time limit |
-| BUDGET_EXCEEDED | Claude API budget cap hit before completion |
-| INFRA_ERROR | Agent UI backend unreachable or MCP failure |
-| SETUP_ERROR | Document indexing failed (0 chunks) |
-| SKIPPED_NO_DOCUMENT | Corpus file not present on disk (e.g., real-world docs not committed) |
+Statuses are grouped by how they affect scoring. **Judged** statuses count toward `avg_score` and `judged_pass_rate`. **Infrastructure** statuses are excluded from quality metrics — they indicate environmental issues, not agent quality.
+
+| Status | Type | Meaning |
+|--------|------|---------|
+| PASS | Judged | Scenario passed all criteria |
+| FAIL | Judged | Score below threshold or critical failure |
+| BLOCKED_BY_ARCHITECTURE | Judged | Agent UI architecture prevents success (e.g., history window too small). Counts toward avg_score but status is never overridden to PASS — a warning is logged instead |
+| TIMEOUT | Infrastructure | Scenario exceeded time limit |
+| BUDGET_EXCEEDED | Infrastructure | Claude API budget cap hit before completion |
+| INFRA_ERROR | Infrastructure | Agent UI backend unreachable or MCP failure |
+| SETUP_ERROR | Infrastructure | Document indexing failed (0 chunks) |
+| SKIPPED_NO_DOCUMENT | Infrastructure | Corpus file not present on disk (e.g., real-world docs not committed) |
+| ERRORED | Infrastructure | Eval agent crashed, returned non-JSON, or encountered an unexpected error |
 
 ---
 
