@@ -56,6 +56,17 @@ _agent_cache: dict = (
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
+# Last known MCP runtime status — updated after each agent setup so
+# GET /api/mcp/status can return it without needing a running chat.
+_mcp_status_cache: list = []
+_mcp_status_lock = threading.Lock()
+
+
+def get_cached_mcp_status() -> list:
+    """Return the last known MCP server connection status from any cached agent."""
+    with _mcp_status_lock:
+        return list(_mcp_status_cache)
+
 
 def _get_cached_agent(session_id: str, model_id: str):
     """Return the cached ChatAgent for *session_id* if the model matches, else None.
@@ -626,6 +637,14 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             "message": "Sending to model...",
                         }
                     )
+
+                # -- Emit MCP runtime status (once per request, after agent setup) --
+                if hasattr(agent, "get_mcp_status_report"):
+                    mcp_report = agent.get_mcp_status_report()
+                    with _mcp_status_lock:
+                        _mcp_status_cache[:] = mcp_report
+                    if mcp_report:
+                        sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():

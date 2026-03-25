@@ -650,3 +650,129 @@ class TestMCPConfig:
         assert config.load_report["overrides"] == ["shared"]
         assert config.load_report["global"]["servers"] == ["shared"]
         assert config.load_report["local"]["servers"] == ["shared"]
+
+
+class TestMCPClientManagerStatusReport:
+    """Tests for MCPClientManager._failed tracking and get_status_report()."""
+
+    def test_get_status_report_empty_when_no_servers(self):
+        manager = MCPClientManager()
+        assert manager.get_status_report() == []
+
+    @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
+    def test_get_status_report_connected_server(self, mock_client_class):
+        mock_client = Mock()
+        mock_client.connect.return_value = True
+        mock_client.list_tools.return_value = [Mock(), Mock(), Mock()]
+        mock_client_class.from_config.return_value = mock_client
+
+        manager = MCPClientManager()
+        manager.add_server("github", {"command": "npx", "args": ["-y", "server"]})
+
+        report = manager.get_status_report()
+        assert len(report) == 1
+        assert report[0]["name"] == "github"
+        assert report[0]["connected"] is True
+        assert report[0]["tool_count"] == 3
+        assert report[0]["error"] is None
+
+    def test_failed_servers_tracked_during_load_from_config(self):
+        manager = MCPClientManager()
+
+        def _fail_connect(name, cfg, debug=False):
+            m = Mock()
+            m.connect.return_value = False
+            m.last_error = "Connection refused"
+            return m
+
+        with patch("gaia.mcp.client.mcp_client_manager.MCPClient") as mock_cls:
+            mock_cls.from_config.side_effect = _fail_connect
+            manager.config._servers = {
+                "bad_server": {"command": "npx", "args": ["-y", "server"]}
+            }
+            manager.load_from_config()
+
+        assert "bad_server" in manager._failed
+        assert manager._failed["bad_server"] == "Connection refused"
+
+    def test_get_status_report_includes_failed_servers(self):
+        manager = MCPClientManager()
+
+        def _fail_connect(name, cfg, debug=False):
+            m = Mock()
+            m.connect.return_value = False
+            m.last_error = "Timeout"
+            return m
+
+        with patch("gaia.mcp.client.mcp_client_manager.MCPClient") as mock_cls:
+            mock_cls.from_config.side_effect = _fail_connect
+            manager.config._servers = {
+                "broken": {"command": "npx", "args": ["-y", "server"]}
+            }
+            manager.load_from_config()
+
+        report = manager.get_status_report()
+        assert len(report) == 1
+        assert report[0]["name"] == "broken"
+        assert report[0]["connected"] is False
+        assert report[0]["tool_count"] == 0
+        assert report[0]["error"] == "Timeout"
+
+    @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
+    def test_get_status_report_mixed_connected_and_failed(self, mock_client_class):
+        ok_client = Mock()
+        ok_client.connect.return_value = True
+        ok_client.list_tools.return_value = [Mock()]
+
+        fail_client = Mock()
+        fail_client.connect.return_value = False
+        fail_client.last_error = "Refused"
+
+        def side_effect(name, cfg, debug=False):
+            if name == "ok":
+                return ok_client
+            return fail_client
+
+        mock_client_class.from_config.side_effect = side_effect
+
+        manager = MCPClientManager()
+        manager.config._servers = {
+            "ok": {"command": "npx", "args": ["-y", "ok"]},
+            "broken": {"command": "npx", "args": ["-y", "broken"]},
+        }
+        manager.load_from_config()
+
+        report = manager.get_status_report()
+        assert len(report) == 2
+        connected = {r["name"]: r for r in report}
+        assert connected["ok"]["connected"] is True
+        assert connected["ok"]["tool_count"] == 1
+        assert connected["broken"]["connected"] is False
+        assert connected["broken"]["error"] == "Refused"
+
+    @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
+    def test_failed_cleared_on_successful_reconnect(self, mock_client_class):
+        """A server that was previously failed should be removed from _failed on success."""
+        fail_client = Mock()
+        fail_client.connect.return_value = False
+        fail_client.last_error = "Refused"
+
+        ok_client = Mock()
+        ok_client.connect.return_value = True
+        ok_client.list_tools.return_value = []
+
+        mock_client_class.from_config.side_effect = [fail_client, ok_client]
+
+        manager = MCPClientManager()
+        manager.config._servers = {"s": {"command": "npx", "args": []}}
+        manager.load_from_config()
+        assert "s" in manager._failed
+
+        # Simulate successful reconnect via load_from_config again
+        # disconnect_all() clears _clients so load_from_config will retry
+        manager.disconnect_all()
+        manager.config._servers = {"s": {"command": "npx", "args": []}}
+        manager.load_from_config()
+
+        assert "s" not in manager._failed
+        assert "s" in manager._clients

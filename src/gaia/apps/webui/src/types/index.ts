@@ -164,6 +164,13 @@ export interface MCPCatalogEntry {
     requires_config: string[];
 }
 
+export interface MCPServerStatus {
+    name: string;
+    connected: boolean;
+    tool_count: number;
+    error: string | null;
+}
+
 // ── Mobile Access / Tunnel Types ─────────────────────────────────────────
 
 /** Status of the ngrok tunnel for mobile access. */
@@ -247,7 +254,8 @@ export type StreamEventType =
     | 'tool_confirm' // Tool requires user confirmation (blocking)
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
-    | 'permission_request'; // Tool confirmation request
+    | 'permission_request' // Tool confirmation request
+    | 'mcp_status';  // MCP server connection status update
 
 export interface StreamEvent {
     type: StreamEventType;
@@ -271,6 +279,8 @@ export interface StreamEvent {
     tools_used?: number;
     /** Inference stats from the LLM backend (attached to done events). */
     stats?: InferenceStats;
+    /** MCP server statuses (for mcp_status events). */
+    servers?: MCPServerStatus[];
     /** Structured command output (for tool_result of run_shell_command). */
     command_output?: {
         command: string;

@@ -28,6 +28,7 @@ class MCPClientManager:
         self.config = config or MCPConfig()
         self.debug = debug
         self._clients: Dict[str, MCPClient] = {}
+        self._failed: Dict[str, str] = {}  # name -> last connection error
 
     def add_server(self, name: str, config: Dict) -> MCPClient:
         """Add and connect to an MCP server.
@@ -99,6 +100,7 @@ class MCPClientManager:
         client = self._clients[name]
         client.disconnect()
         del self._clients[name]
+        self._failed.pop(name, None)
 
         self.config.remove_server(name)
 
@@ -122,6 +124,24 @@ class MCPClientManager:
             list[str]: Server names
         """
         return list(self._clients.keys())
+
+    def get_status_report(self) -> List[Dict]:
+        """Return runtime connection status for all known servers.
+
+        Returns:
+            List of dicts with keys: name, connected, tool_count, error
+        """
+        report = []
+        for name, client in self._clients.items():
+            tools = client.list_tools()  # uses cached list — no network call
+            report.append(
+                {"name": name, "connected": True, "tool_count": len(tools), "error": None}
+            )
+        for name, error in self._failed.items():
+            report.append(
+                {"name": name, "connected": False, "tool_count": 0, "error": error}
+            )
+        return report
 
     def disconnect_all(self) -> None:
         """Disconnect from all MCP servers."""
@@ -193,6 +213,8 @@ class MCPClientManager:
                 name, client, error = future.result()
                 if client is not None:
                     self._clients[name] = client
+                    self._failed.pop(name, None)
                     logger.debug(f"Loaded MCP server: {name}")
                 else:
+                    self._failed[name] = error or "Unknown error"
                     logger.debug(f"Failed to connect to server '{name}': {error}")

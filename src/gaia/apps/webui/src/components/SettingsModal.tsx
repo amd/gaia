@@ -2,19 +2,20 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { X, Loader2 } from 'lucide-react';
+import { X, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
-import type { SystemStatus } from '../types';
+import type { SystemStatus, MCPServerStatus } from '../types';
 import './SettingsModal.css';
 
 export function SettingsModal() {
     const { setShowSettings, sessions, removeSession } = useChatStore();
     const [status, setStatus] = useState<SystemStatus | null>(null);
     const [loading, setLoading] = useState(true);
+    const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
 
     useEffect(() => {
         log.system.info('Checking system status...');
@@ -38,6 +39,10 @@ export function SettingsModal() {
                 setStatus(null);
             })
             .finally(() => setLoading(false));
+
+        api.getMCPRuntimeStatus()
+            .then((r) => setMcpServers(r.servers))
+            .catch(() => { /* MCP status is non-critical */ });
     }, []);
 
     const modelName = status?.default_model_name ?? DEFAULT_MODEL_NAME;
@@ -228,6 +233,33 @@ export function SettingsModal() {
                             </div>
                         )}
                     </section>
+
+                    {/* MCP Servers */}
+                    {mcpServers.length > 0 && (
+                        <section className="settings-section">
+                            <h4>MCP Servers</h4>
+                            <div className="status-grid">
+                                {mcpServers.map((s) => (
+                                    <div key={s.name} className="status-row">
+                                        <span className="status-label">{s.name}</span>
+                                        <div className="status-value-wrap">
+                                            {s.connected ? (
+                                                <span className="status-value ok mcp-status-connected">
+                                                    <CheckCircle2 size={12} />
+                                                    {s.tool_count} tool{s.tool_count !== 1 ? 's' : ''}
+                                                </span>
+                                            ) : (
+                                                <span className="status-value warn mcp-status-failed" title={s.error ?? undefined}>
+                                                    <AlertCircle size={12} />
+                                                    Failed
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </section>
+                    )}
 
                     {/* About */}
                     <section className="settings-section">

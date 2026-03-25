@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -454,4 +454,8 @@ export async function disableMCPServer(name: string): Promise<{ status: string; 
 
 export async function getMCPCatalog(): Promise<{ catalog: MCPCatalogEntry[] }> {
     return apiFetch('GET', '/mcp/catalog');
+}
+
+export async function getMCPRuntimeStatus(): Promise<{ servers: MCPServerStatus[] }> {
+    return apiFetch('GET', '/mcp/status');
 }
