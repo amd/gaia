@@ -311,6 +311,72 @@ class TestChatAgent:
             if test_dir.exists() and not any(test_dir.iterdir()):
                 test_dir.rmdir()
 
+    def test_tier2_rag_rules_absent_without_indexed_docs(self, agent):
+        """Tier 2 query rules must NOT appear when no documents are indexed.
+
+        RAG tools are always registered, so Tier 1 discovery rules are always
+        present. Tier 2 rules (FACTUAL ACCURACY, POST-INDEX QUERY, etc.) should
+        only appear once documents are actually indexed.
+        """
+        # No documents indexed — has_indexed is False
+        assert not agent.rag.indexed_files
+
+        prompt = agent.system_prompt
+
+        # Tier 1 (always present — LLM needs these for registered RAG tools)
+        assert "SMART DISCOVERY WORKFLOW" in prompt
+        assert "FILE SEARCH AND AUTO-INDEX" in prompt
+
+        # Tier 2 (absent until docs are indexed)
+        assert "FACTUAL ACCURACY RULE" not in prompt
+        assert "DOCUMENT SILENCE RULE" not in prompt
+        assert "POST-INDEX QUERY RULE" not in prompt
+
+    def test_tier2_rag_rules_present_after_indexing(self, agent):
+        """Tier 2 query rules appear in prompt once a document is indexed."""
+        test_dir = Path(__file__).parent / "test_data"
+        test_dir.mkdir(exist_ok=True)
+        test_file = test_dir / "test_tier2_gating.txt"
+
+        try:
+            test_file.write_text("Content for tier-2 gating test.")
+
+            mock_lemonade = Mock()
+            mock_lemonade.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+
+            def mock_load_embedder():
+                agent.rag.llm_client = mock_lemonade
+                agent.rag.embedder = mock_lemonade
+                agent.rag.use_lemonade_embeddings = True
+
+            with (
+                patch("gaia.rag.sdk.faiss") as mock_faiss,
+                patch.object(agent.rag, "_load_embedder", mock_load_embedder),
+            ):
+                mock_index = Mock()
+                mock_index.ntotal = 1
+                mock_faiss.IndexFlatL2.return_value = mock_index
+                result = agent.rag.index_document(str(test_file))
+                assert result.get("success"), f"Indexing failed: {result.get('error')}"
+
+            agent.rebuild_system_prompt()
+
+            prompt = agent.system_prompt
+
+            # Tier 1 still present
+            assert "SMART DISCOVERY WORKFLOW" in prompt
+
+            # Tier 2 now injected because has_indexed=True
+            assert "FACTUAL ACCURACY RULE" in prompt
+            assert "POST-INDEX QUERY RULE" in prompt
+        finally:
+            if test_file.exists():
+                test_file.unlink()
+            if test_dir.exists() and not any(test_dir.iterdir()):
+                test_dir.rmdir()
+
 
 class TestChatAgentEval:
     """Evaluation tests for Chat Agent quality metrics."""
