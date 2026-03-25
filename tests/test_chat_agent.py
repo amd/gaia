@@ -315,8 +315,12 @@ class TestChatAgent:
         """Tier 2 query rules must NOT appear when no documents are indexed.
 
         RAG tools are always registered, so Tier 1 discovery rules are always
-        present. Tier 2 rules (FACTUAL ACCURACY, POST-INDEX QUERY, etc.) should
+        present. Tier 2 rules (FACTUAL ACCURACY, DOCUMENT SILENCE, etc.) should
         only appear once documents are actually indexed.
+
+        NOTE: POST-INDEX QUERY RULE is intentionally always present (in tool_rules)
+        because Smart Discovery can trigger indexing mid-conversation even when no
+        docs are initially indexed — the model needs this rule from the start.
         """
         # No documents indexed — has_indexed is False
         assert not agent.rag.indexed_files
@@ -326,11 +330,12 @@ class TestChatAgent:
         # Tier 1 (always present — LLM needs these for registered RAG tools)
         assert "SMART DISCOVERY WORKFLOW" in prompt
         assert "FILE SEARCH AND AUTO-INDEX" in prompt
+        # POST-INDEX QUERY RULE is always present (moved to tool_rules for Smart Discovery)
+        assert "POST-INDEX QUERY RULE" in prompt
 
         # Tier 2 (absent until docs are indexed)
         assert "FACTUAL ACCURACY RULE" not in prompt
         assert "DOCUMENT SILENCE RULE" not in prompt
-        assert "POST-INDEX QUERY RULE" not in prompt
 
     def test_tier2_rag_rules_present_after_indexing(self, agent):
         """Tier 2 query rules appear in prompt once a document is indexed."""
