@@ -39,12 +39,12 @@ def session_id(client):
     return resp.json()["id"]
 
 
-class TestSessionLock409:
-    """Tests for per-session lock returning 409 Conflict."""
+class TestSessionLockForceRelease:
+    """Tests for per-session lock force-release on stuck requests."""
 
-    def test_concurrent_request_to_same_session_returns_409(self, app, session_id):
-        """When a session lock is already held, a second request gets 409."""
-        # Pre-acquire the session lock to simulate a request in progress
+    def test_concurrent_request_force_releases_stuck_lock(self, app, session_id):
+        """When a session lock is stuck, a second request force-releases it and proceeds."""
+        # Pre-acquire the session lock to simulate a stuck request
         lock = asyncio.Lock()
 
         async def _hold_lock():
@@ -57,19 +57,20 @@ class TestSessionLock409:
         app.state.session_locks[session_id] = lock
 
         client = TestClient(app)
-        resp = client.post(
-            "/api/chat/send",
-            json={
-                "session_id": session_id,
-                "message": "blocked",
-                "stream": False,
-            },
-        )
-        assert resp.status_code == 409
-        assert "already in progress" in resp.json()["detail"]
+        with patch("gaia.ui.server._get_chat_response") as mock:
+            mock.return_value = "force-released response"
+            resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": session_id,
+                    "message": "should succeed after force-release",
+                    "stream": False,
+                },
+            )
+        # Should succeed (200) instead of deadlocking with 409
+        assert resp.status_code == 200
 
         # Cleanup
-        lock.release()
         loop.close()
 
     def test_different_sessions_not_blocked(self, client, db):
