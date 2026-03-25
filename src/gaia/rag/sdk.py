@@ -45,7 +45,7 @@ from gaia.security import PathValidator
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+    model: str = "Qwen3.5-35B-A3B-GGUF"
     max_tokens: int = 1024
     chunk_size: int = 500
     chunk_overlap: int = 100  # Increased to 20% overlap for better context preservation
@@ -940,6 +940,66 @@ These positions indicate where to split the text."""
             self.log.error(f"Error reading JSON {json_path}: {e}")
             raise
 
+    def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
+        """Extract text from Excel (.xlsx / .xls) files using openpyxl."""
+        try:
+            import openpyxl
+
+            wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+            parts = []
+
+            for sheet in wb.worksheets:
+                parts.append(f"Sheet: {sheet.title}")
+
+                # Collect rows, skipping entirely blank rows
+                rows = []
+                for row in sheet.iter_rows(values_only=True):
+                    cells = [str(c) if c is not None else "" for c in row]
+                    if any(c.strip() for c in cells):
+                        rows.append(cells)
+
+                if not rows:
+                    continue
+
+                # Use first non-empty row as header if it looks like one
+                # (contains at least one non-numeric string cell)
+                header = rows[0]
+                has_header = any(
+                    c.strip()
+                    and not c.strip().replace(".", "").replace("-", "").isdigit()
+                    for c in header
+                )
+
+                if has_header and len(rows) > 1:
+                    parts.append(
+                        f"Columns: {', '.join(c for c in header if c.strip())}"
+                    )
+                    for row in rows[1:]:
+                        row_parts = []
+                        for i, cell in enumerate(row):
+                            col_name = header[i] if i < len(header) else f"Col{i+1}"
+                            if cell.strip():
+                                row_parts.append(f"{col_name}: {cell}")
+                        if row_parts:
+                            parts.append(" | ".join(row_parts))
+                else:
+                    for row in rows:
+                        parts.append(" | ".join(c for c in row if c.strip()))
+
+            text = "\n".join(parts)
+
+            if self.config.show_stats:
+                print(
+                    f"  ✅ Loaded Excel file ({len(wb.worksheets)} sheet(s), {len(text):,} chars)"
+                )
+            self.log.info(
+                f"📊 Extracted {len(text):,} characters from Excel file ({len(wb.worksheets)} sheets)"
+            )
+            return text
+        except Exception as e:
+            self.log.error(f"Error reading Excel file {xlsx_path}: {e}")
+            raise
+
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
         Extract text from file based on type.
@@ -972,6 +1032,10 @@ These positions indicate where to split the text."""
         # JSON files
         elif file_type == ".json":
             return self._extract_text_from_json(file_path), metadata
+
+        # Excel files
+        elif file_type in [".xlsx", ".xls"]:
+            return self._extract_text_from_xlsx(file_path), metadata
 
         # Code files (treat as text for Q&A purposes)
         elif file_type in [

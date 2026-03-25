@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Manager for multiple MCP client connections."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
 from gaia.logger import get_logger
@@ -148,33 +149,50 @@ class MCPClientManager:
 
         logger.debug(f"Loading {len(servers)} MCP servers from configuration")
 
+        # Filter to servers that are eligible to connect
+        to_connect = {}
         for name, server_config in servers.items():
             if name in self._clients:
                 logger.debug(f"Skipping already-connected server: {name}")
                 continue
+            if server_config.get("disabled", False):
+                logger.debug(f"Skipping disabled server: {name}")
+                continue
+            transport_type = server_config.get("type", "stdio")
+            if transport_type != "stdio":
+                logger.warning(
+                    f"Skipping server '{name}': GAIA MCP client only supports stdio "
+                    f"transport at this time (found '{transport_type}')"
+                )
+                continue
+            if "command" not in server_config:
+                logger.warning(f"No command specified for server: {name}")
+                continue
+            to_connect[name] = server_config
 
+        if not to_connect:
+            return
+
+        # Connect to all servers in parallel so slow/failing servers don't
+        # block each other (each connection can take 1-3s on failure).
+        def _connect_one(name, server_config):
             try:
-                # Check transport type - only stdio is supported
-                transport_type = server_config.get("type", "stdio")
-                if transport_type != "stdio":
-                    logger.warning(
-                        f"Skipping server '{name}': GAIA MCP client only supports stdio "
-                        f"transport at this time (found '{transport_type}')"
-                    )
-                    continue
-
-                if "command" not in server_config:
-                    logger.warning(f"No command specified for server: {name}")
-                    continue
-
                 client = MCPClient.from_config(name, server_config, debug=self.debug)
                 if client.connect():
+                    return name, client, None
+                return name, None, client.last_error
+            except Exception as e:
+                return name, None, str(e)
+
+        with ThreadPoolExecutor(max_workers=len(to_connect)) as pool:
+            futures = {
+                pool.submit(_connect_one, name, cfg): name
+                for name, cfg in to_connect.items()
+            }
+            for future in as_completed(futures):
+                name, client, error = future.result()
+                if client is not None:
                     self._clients[name] = client
                     logger.debug(f"Loaded MCP server: {name}")
                 else:
-                    logger.debug(
-                        f"Failed to connect to server '{name}': {client.last_error}"
-                    )
-
-            except Exception as e:
-                logger.debug(f"Error loading server '{name}': {e}")
+                    logger.debug(f"Failed to connect to server '{name}': {error}")

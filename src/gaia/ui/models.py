@@ -39,6 +39,12 @@ class SystemStatus(BaseModel):
     # Device compatibility check
     processor_name: Optional[str] = None
     device_supported: bool = True
+    # LLM configuration health
+    context_size_sufficient: bool = True  # False if loaded ctx < required minimum
+    model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
+    default_model_name: str = "Qwen3.5-35B-A3B-GGUF"  # Required model for GAIA Chat
+    lemonade_url: str = "http://localhost:8000"  # Lemonade web UI base URL
+    expected_model_loaded: bool = True  # False if a different model is loaded
 
 
 # ── Settings ────────────────────────────────────────────────────────────────
@@ -89,6 +95,7 @@ class UpdateSessionRequest(BaseModel):
 
     title: Optional[str] = None
     system_prompt: Optional[str] = None
+    document_ids: Optional[List[str]] = None
 
 
 class SessionResponse(BaseModel):
@@ -178,6 +185,15 @@ class AgentStepResponse(BaseModel):
     fileList: Optional[FileListResponse] = None
 
 
+class InferenceStatsResponse(BaseModel):
+    """LLM inference performance metrics for a message."""
+
+    tokens_per_second: float = 0
+    time_to_first_token: float = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
 class MessageResponse(BaseModel):
     """A single message."""
 
@@ -188,6 +204,7 @@ class MessageResponse(BaseModel):
     created_at: str
     rag_sources: Optional[List[SourceInfo]] = None
     agent_steps: Optional[List[AgentStepResponse]] = None
+    stats: Optional[InferenceStatsResponse] = None
 
 
 class MessageListResponse(BaseModel):

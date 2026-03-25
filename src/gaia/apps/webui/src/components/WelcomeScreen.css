@@ -356,6 +356,7 @@
     font-size: 12px;
     text-align: left;
     line-height: 1.5;
+    font-family: var(--font-sans);
 }
 
 .welcome-setup-hint svg {
@@ -447,6 +448,16 @@
     color: var(--amd-red);
     background: var(--amd-red-dim2);
     transform: translateY(-1px);
+}
+
+/* ── Copyright notice ────────────────────────────────────────── */
+.welcome-copyright {
+    margin-top: 32px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    opacity: 0.35;
+    letter-spacing: 0.3px;
 }
 
 /* ── Responsive ───────────────────────────────────────────────── */

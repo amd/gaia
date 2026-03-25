@@ -3,14 +3,17 @@
 
 """System and health-check endpoints for GAIA Agent UI."""
 
+import asyncio
 import logging
 import os
 import shutil
 import sys
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
@@ -20,20 +23,65 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["system"])
 
+# Default model required for GAIA Chat agent
+_DEFAULT_MODEL_NAME = "Qwen3.5-35B-A3B-GGUF"
+# Minimum context window (tokens) needed for reliable agent operation.
+# Must match DEFAULT_CONTEXT_SIZE in gaia.llm.lemonade_manager.
+_MIN_CONTEXT_SIZE = 32768
+
+
+def _get_lemonade_base_url() -> str:
+    """Return the Lemonade Server API base URL from environment or default."""
+    return os.environ.get("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+
+
+async def _lemonade_post(
+    path: str,
+    payload: dict,
+    *,
+    timeout: float,
+    log_context: str,
+) -> None:
+    """POST to a Lemonade API endpoint, logging the result."""
+    try:
+        import httpx  # pylint: disable=import-outside-toplevel
+
+        base_url = _get_lemonade_base_url()
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(f"{base_url}/{path}", json=payload)
+            if resp.status_code == 200:
+                logger.info("%s succeeded", log_context)
+            else:
+                logger.warning(
+                    "%s returned %d: %s",
+                    log_context,
+                    resp.status_code,
+                    resp.text[:200],
+                )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("%s failed: %s", log_context, exc)
+
 
 @router.get("/api/system/status", response_model=SystemStatus)
-async def system_status():
+async def system_status(db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
     status = SystemStatus()
 
     # Check Lemonade Server
+    # Use a generous timeout (10s) because when the LLM is handling many
+    # parallel requests it may take a while to respond to the health check.
     try:
         import httpx
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            base_url = os.environ.get(
-                "LEMONADE_BASE_URL", "http://localhost:8000/api/v1"
-            )
+            base_url = _get_lemonade_base_url()
+
+            # Derive the Lemonade web UI URL (scheme://host:port without /api/v1)
+            try:
+                _parsed = urlparse(base_url)
+                status.lemonade_url = f"{_parsed.scheme}://{_parsed.netloc}"
+            except Exception:
+                pass  # Keep the default "http://localhost:8000"
 
             # Use /health endpoint to get the actually loaded model
             # (not /models which returns the full catalog of available models)
@@ -44,25 +92,104 @@ async def system_status():
                 status.model_loaded = health_data.get("model_loaded") or None
                 status.lemonade_version = health_data.get("version")
 
-                # Extract device info from loaded models
+                # Extract device info AND actual loaded context size from
+                # all_models_loaded. Some Lemonade versions omit the root-level
+                # model_loaded field and only expose the list, so when the root
+                # field is absent we fall back to the first non-embedding entry.
+                # Use case-insensitive match in case Lemonade normalises the name.
+                loaded_lower = (status.model_loaded or "").lower()
+                _llm_found = False
                 for m in health_data.get("all_models_loaded", []):
                     if m.get("type") == "embedding":
                         status.embedding_model_loaded = True
-                    elif m.get("model_name") == status.model_loaded:
-                        status.model_device = m.get("device")
+                    else:
+                        m_name = m.get("model_name", "")
+                        # Match by name when root field was present; otherwise
+                        # take the first LLM entry as the fallback.
+                        is_match = bool(loaded_lower) and m_name.lower() == loaded_lower
+                        is_fallback = not loaded_lower
+                        if (is_match or is_fallback) and not _llm_found:
+                            if not status.model_loaded:
+                                status.model_loaded = m_name
+                            status.model_device = m.get("device")
+                            # Actual loaded context size (preferred over catalog
+                            # default). Use `is not None` so ctx_size=0 triggers
+                            # a warning.
+                            ctx = m.get("recipe_options", {}).get("ctx_size")
+                            if ctx is not None:
+                                status.model_context_size = ctx
+                            _llm_found = True  # take only the first matching LLM
 
-                # Fetch model catalog for size, labels, context size
+                # Fallback: older Lemonade versions expose context_size at root level
+                if status.model_context_size is None:
+                    legacy_ctx = health_data.get("context_size")
+                    if legacy_ctx is not None:
+                        status.model_context_size = legacy_ctx
+
+                # Fetch model catalog for size, labels, and fallback context size
                 models_resp = await client.get(f"{base_url}/models")
                 if models_resp.status_code == 200:
                     for m in models_resp.json().get("data", []):
                         if m.get("id") == status.model_loaded:
                             status.model_size_gb = m.get("size")
                             status.model_labels = m.get("labels")
-                            ctx = m.get("recipe_options", {}).get("ctx_size")
-                            if ctx:
-                                status.model_context_size = ctx
+                            # Only use catalog ctx_size when health data didn't
+                            # provide it (e.g. model not yet fully loaded)
+                            if status.model_context_size is None:
+                                ctx = m.get("recipe_options", {}).get("ctx_size")
+                                if ctx is not None:
+                                    status.model_context_size = ctx
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
+
+                # Validate that the loaded model matches what GAIA Chat expects.
+                # Respects custom_model override if the user has configured one.
+                if status.model_loaded:
+                    custom_model = db.get_setting("custom_model")
+                    expected = (custom_model or _DEFAULT_MODEL_NAME).lower()
+                    status.expected_model_loaded = (
+                        status.model_loaded.lower() == expected
+                    )
+                    # Surface the actual expected name in the response so the
+                    # frontend can name it precisely in the warning banner.
+                    status.default_model_name = custom_model or _DEFAULT_MODEL_NAME
+
+                # When no LLM is loaded, check if the expected model is downloaded.
+                # Respects custom_model override; falls back to the built-in default.
+                # Uses show_all=true to see models that are in the catalog but not
+                # yet pulled to disk.
+                if not status.model_loaded:
+                    try:
+                        catalog_resp = await client.get(
+                            f"{base_url}/models",
+                            params={"show_all": "true"},
+                            timeout=5.0,
+                        )
+                        if catalog_resp.status_code == 200:
+                            _custom = db.get_setting("custom_model")
+                            default_lower = (_custom or _DEFAULT_MODEL_NAME).lower()
+                            for m in catalog_resp.json().get("data", []):
+                                if m.get("id", "").lower() == default_lower:
+                                    status.model_downloaded = m.get("downloaded", False)
+                                    break
+                            # Model not found in catalog → treat as not downloaded
+                            if status.model_downloaded is None:
+                                status.model_downloaded = False
+                    except Exception:
+                        pass  # Don't block status on catalog failure
+
+                # Validate context size sufficiency only when we have a real value.
+                # Use `is not None` so ctx_size=0 correctly triggers a warning.
+                if status.model_context_size is not None:
+                    status.context_size_sufficient = (
+                        status.model_context_size >= _MIN_CONTEXT_SIZE
+                    )
+                    logger.debug(
+                        "Context size: %d tokens (required: %d, sufficient: %s)",
+                        status.model_context_size,
+                        _MIN_CONTEXT_SIZE,
+                        status.context_size_sufficient,
+                    )
 
                 # Fetch last inference stats (short timeout — supplementary info)
                 try:
@@ -174,7 +301,7 @@ async def _check_model_status(model_name: str) -> ModelStatus:
     try:
         import httpx
 
-        base_url = os.environ.get("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+        base_url = _get_lemonade_base_url()
         async with httpx.AsyncClient(timeout=5.0) as client:
             # Check catalog: is model known and downloaded?
             models_resp = await client.get(
@@ -264,3 +391,56 @@ async def health(db: ChatDatabase = Depends(get_db)):
         "service": "gaia-agent-ui",
         "stats": stats,
     }
+
+
+class LoadModelRequest(BaseModel):
+    model_name: str
+    ctx_size: Optional[int] = None
+
+
+@router.post("/api/system/load-model", status_code=202)
+async def load_model_endpoint(body: LoadModelRequest):
+    """Trigger loading a model on Lemonade server (non-blocking).
+
+    Returns 202 immediately; loading proceeds in the background.
+    Poll /api/system/status to detect when loading completes.
+    """
+    model_name = body.model_name.strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="model_name must not be empty")
+
+    ctx_size = body.ctx_size if body.ctx_size is not None else _MIN_CONTEXT_SIZE
+    payload = {"model_name": model_name, "ctx_size": ctx_size}
+    asyncio.create_task(
+        _lemonade_post("load", payload, timeout=300.0, log_context=f"Load {model_name}")
+    )
+    return {"status": "loading", "model": model_name, "ctx_size": ctx_size}
+
+
+class DownloadModelRequest(BaseModel):
+    model_name: str
+    force: bool = False
+
+
+@router.post("/api/system/download-model", status_code=202)
+async def download_model_endpoint(body: DownloadModelRequest):
+    """Trigger downloading a model via Lemonade server (non-blocking).
+
+    Returns 202 immediately; download proceeds in the background.
+    Poll /api/system/status to detect when the model becomes available.
+    Set force=True to re-download even if the file already exists (repairs
+    corrupted or incomplete downloads).
+    """
+    model_name = body.model_name.strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="model_name must not be empty")
+
+    payload: dict = {"model_name": model_name}
+    if body.force:
+        payload["force"] = True
+    asyncio.create_task(
+        _lemonade_post(
+            "pull", payload, timeout=7200.0, log_context=f"Download {model_name}"
+        )
+    )
+    return {"status": "downloading", "model": model_name}

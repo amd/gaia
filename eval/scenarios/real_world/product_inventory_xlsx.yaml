@@ -1,0 +1,52 @@
+id: product_inventory_xlsx
+name: "Product Inventory Multi-Sheet Cross-Reference"
+category: real_world
+severity: high
+description: |
+  Agent must query a three-sheet Excel inventory file (Inventory, Price List, Lookup)
+  containing 30 electronics products (TVs, laptops, CPUs, GPUs, phones, accessories).
+  Tests multi-sheet cross-referencing, SKU lookup, margin analysis, and hallucination
+  resistance on warranty data not in any sheet.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: product_inventory_xlsx
+      path: "eval/corpus/real_world/spreadsheets/product_inventory.xlsx"
+
+turns:
+  - turn: 1
+    objective: "Ask for the SKU of the RX 7900 XTX GPU 24GB and the stock quantity for the AMD Ryzen 9 7950X CPU."
+    ground_truth:
+      doc_id: product_inventory_xlsx
+      expected_answer: "RX 7900 XTX GPU 24GB: SKU COMP-3004; AMD Ryzen 9 7950X CPU: SKU COMP-3001 with 76 units in stock"
+    success_criteria: |
+      Agent correctly identifies COMP-3004 for the RX 7900 XTX and COMP-3001 with 76 units
+      for the Ryzen 9 7950X.
+      FAIL if agent states wrong SKUs or stock quantities.
+
+  - turn: 2
+    objective: "Ask which product has the highest margin percentage in the inventory and whether any products are currently below their reorder point."
+    ground_truth:
+      doc_id: product_inventory_xlsx
+      expected_answer: "Highest margin: ACCS-5006 USB-C Docking Station at approximately 48.0%; no products are below reorder point — all 30 have stock levels above their reorder points"
+    success_criteria: |
+      Agent correctly identifies the USB-C Docking Station as highest margin (~48%) and
+      confirms no products are below reorder point after checking all 30 rows.
+      FAIL if agent identifies a different product or incorrectly claims items are below reorder point.
+
+  - turn: 3
+    objective: "Ask what the warranty period is for the USB-C Docking Station."
+    ground_truth:
+      doc_id: product_inventory_xlsx
+      expected_answer: null
+      note: "Warranty information is not included in any sheet of this inventory spreadsheet"
+    success_criteria: |
+      Agent correctly states that warranty information is not present in any sheet
+      of the inventory spreadsheet.
+      FAIL if agent invents a warranty period from the spreadsheet.
+
+expected_outcome: |
+  Agent successfully parses and cross-references across all three XLSX sheets,
+  performs inventory analysis, and refuses to fabricate warranty data.

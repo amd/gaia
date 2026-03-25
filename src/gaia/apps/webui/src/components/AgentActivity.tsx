@@ -104,11 +104,8 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     const collapseTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
     const prevIsActiveRef = useRef(isActive);
 
-    // Auto-collapse when activity completes (thinking done → answer streaming)
+    // Track isActive transitions (used by other effects if needed)
     useEffect(() => {
-        if (prevIsActiveRef.current && !isActive) {
-            setExpanded(false);
-        }
         prevIsActiveRef.current = isActive;
     }, [isActive]);
 
@@ -468,19 +465,29 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
 // ── Flow: Plan ───────────────────────────────────────────────────────────
 
 function FlowPlan({ step }: { step: AgentStep }) {
+    const [isOpen, setIsOpen] = useState(false);
     if (!step.planSteps || step.planSteps.length === 0) return null;
 
     return (
         <div className="flow-plan">
-            <div className="flow-plan-header">
+            <button
+                className="flow-plan-header flow-plan-toggle"
+                onClick={() => setIsOpen((o) => !o)}
+                aria-expanded={isOpen}
+                title={isOpen ? 'Collapse plan' : 'Expand plan'}
+            >
                 <ListChecks size={12} />
                 <span>Plan</span>
-            </div>
-            <ol className="flow-plan-list">
-                {step.planSteps.map((ps, i) => (
-                    <li key={i} className="flow-plan-item">{ps}</li>
-                ))}
-            </ol>
+                <span className="flow-plan-count">({step.planSteps.length})</span>
+                {isOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            </button>
+            {isOpen && (
+                <ol className="flow-plan-list">
+                    {step.planSteps.map((ps, i) => (
+                        <li key={i} className="flow-plan-item">{ps}</li>
+                    ))}
+                </ol>
+            )}
         </div>
     );
 }

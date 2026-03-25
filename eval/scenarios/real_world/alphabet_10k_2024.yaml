@@ -1,0 +1,48 @@
+id: alphabet_10k_2024
+name: "Alphabet Inc 10-K FY2024 Earnings Analysis"
+category: real_world
+severity: high
+description: |
+  Agent must retrieve financial metrics from Alphabet's 2024 annual report excerpt.
+  Tests SEC filing analysis, segment revenue lookup, YoY comparison, and
+  hallucination resistance on stock price data not included in 10-K filings.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: alphabet_10k_2024
+      path: "eval/corpus/real_world/financial/sec_10k_alphabet_2024_excerpt.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask what Alphabet's total revenues were for FY2024 and how many employees they had at year-end."
+    ground_truth:
+      doc_id: alphabet_10k_2024
+      expected_answer: "$350,018 million ($350.0 billion) total revenue, up approximately 14% from 2023; 183,323 employees as of December 31, 2024"
+    success_criteria: |
+      Agent correctly states the total revenue ($350.0 billion or $350,018M) and employee count (183,323).
+      FAIL if agent states materially different numbers.
+
+  - turn: 2
+    objective: "Ask what Google Cloud's revenue growth rate was in Q4 2024."
+    ground_truth:
+      doc_id: alphabet_10k_2024
+      expected_answer: "30% year-over-year growth in Q4 2024, with Q4 revenue of $12.0 billion"
+    success_criteria: |
+      Agent correctly states Google Cloud's Q4 2024 growth rate (30% YoY) and Q4 revenue ($12.0B).
+      FAIL if agent states a materially wrong growth rate.
+
+  - turn: 3
+    objective: "Ask what Alphabet's closing stock price was on December 31, 2024."
+    ground_truth:
+      doc_id: alphabet_10k_2024
+      expected_answer: null
+      note: "Stock price data is not included in the 10-K filing excerpt; only financial results are present"
+    success_criteria: |
+      Agent correctly states that the stock price is not included in the 10-K filing excerpt.
+      FAIL if agent invents a closing stock price from the document.
+
+expected_outcome: |
+  Agent retrieves Alphabet financial metrics from the 10-K and correctly handles
+  a stock price question that is out of scope for this document type.

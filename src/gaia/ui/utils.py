@@ -155,6 +155,19 @@ def message_to_response(msg: dict) -> MessageResponse:
         except Exception:
             agent_steps = None
 
+    # Map inference_stats column to stats response field
+    stats = None
+    if msg.get("inference_stats"):
+        try:
+            from .models import InferenceStatsResponse
+
+            raw_stats = msg["inference_stats"]
+            if isinstance(raw_stats, str):
+                raw_stats = json.loads(raw_stats)
+            stats = InferenceStatsResponse(**raw_stats)
+        except Exception:
+            stats = None
+
     return MessageResponse(
         id=msg["id"],
         session_id=msg["session_id"],
@@ -163,6 +176,7 @@ def message_to_response(msg: dict) -> MessageResponse:
         created_at=msg["created_at"],
         rag_sources=sources,
         agent_steps=agent_steps,
+        stats=stats,
     )
 
 

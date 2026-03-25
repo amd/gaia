@@ -262,6 +262,15 @@ export function DocumentLibrary() {
         }
     }, [documents, setDocuments]);
 
+    const handleOpenFolder = useCallback(async (filepath: string, filename: string) => {
+        log.doc.info(`Opening folder for: ${filepath}`);
+        try {
+            await api.openFileOrFolder(filepath, true);
+        } catch (err) {
+            log.doc.error(`Failed to open folder for: ${filename}`, err);
+        }
+    }, []);
+
     const handleCancelIndexing = useCallback(async (id: string) => {
         const doc = documents.find((d) => d.id === id);
         log.doc.info(`Cancelling indexing for: ${doc?.filename || id}`);
@@ -441,16 +450,28 @@ export function DocumentLibrary() {
                                     <span className="doc-name">{doc.filename}</span>
                                     {renderDocStatus(doc)}
                                 </div>
-                                {doc.indexing_status !== 'indexing' && doc.indexing_status !== 'pending' && (
-                                    <button
-                                        className="btn-icon-sm doc-delete"
-                                        onClick={() => handleDeleteDoc(doc.id)}
-                                        title="Remove"
-                                        aria-label={`Remove ${doc.filename}`}
-                                    >
-                                        <Trash2 size={14} />
-                                    </button>
-                                )}
+                                <div className="doc-row-actions">
+                                    {doc.filepath && (
+                                        <button
+                                            className="btn-icon-sm doc-open-folder"
+                                            onClick={() => handleOpenFolder(doc.filepath, doc.filename)}
+                                            title={`Open folder: ${doc.filepath}`}
+                                            aria-label={`Open containing folder for ${doc.filename}`}
+                                        >
+                                            <FolderOpen size={14} />
+                                        </button>
+                                    )}
+                                    {doc.indexing_status !== 'indexing' && doc.indexing_status !== 'pending' && (
+                                        <button
+                                            className="btn-icon-sm doc-delete"
+                                            onClick={() => handleDeleteDoc(doc.id)}
+                                            title="Remove"
+                                            aria-label={`Remove ${doc.filename}`}
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
+                                    )}
+                                </div>
                             </div>
                         ))}
                     </div>

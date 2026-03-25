@@ -6,61 +6,116 @@ icon: "desktop"
 
 GAIA Agent UI is a desktop interface for running AI agents **100% locally** on your AMD hardware. Use agents to analyze documents, generate code, answer questions, and accomplish tasks on your PC — all without sending data to the cloud.
 
-<Info>
-  **Ready to install?** See the [Quickstart](/quickstart#agent-ui-fastest) for installation instructions.
-</Info>
-
 <Warning>
-  **Requirements:** The Agent UI is currently supported on **Windows only** (Linux/macOS coming soon) and requires one of the following to run large language models locally:
+  **Tested Configuration:** The Agent UI has been tested exclusively on **AMD Ryzen AI MAX+ 395** processors running the **Qwen3.5-35B-A3B-GGUF** model via Lemonade Server. Other hardware or model combinations may work but are not officially verified.
 
-  - **AMD Ryzen AI Max (Strix Halo)** — unified HBM memory (e.g. Ryzen AI MAX+ 395)
-  - **AMD Radeon discrete GPU** with **≥ 24 GB VRAM** (e.g. RX 7900 XTX, Radeon Pro W7900)
-
-  If your device is not supported, a banner will appear in the UI. You can dismiss it and continue, connect to a remote Lemonade server (`gaia --ui --base-url <url>`), or [request support on GitHub](https://github.com/amd/gaia/issues/new?template=feature_request.md&title=[Feature]%20Support%20Agent%20UI%20on%20additional%20devices&labels=enhancement,agent-ui). See the Troubleshooting section below for details.
+  If you encounter issues on a different configuration, please [open a GitHub issue](https://github.com/amd/gaia/issues/new) and include:
+  - Your processor model (e.g., Ryzen AI 9 HX 370, Ryzen AI MAX+ 395)
+  - RAM and available memory
+  - The LLM model you are using
+  - Operating system and version
+  - Steps to reproduce the issue
 </Warning>
 
 ---
 
-## Before You Start
+## Getting Started
 
-The Agent UI requires three things to be in place before you can chat. Run these steps once in order:
+### Prerequisites
 
-<Steps>
-  <Step title="Install dependencies">
-    Install GAIA with Agent UI support:
+The Agent UI requires two backend services:
+
+1. **Lemonade Server** — serves the LLM locally (port 8000)
+2. **A downloaded model** — the LLM the agent uses to reason
+
+<Note>
+  **Using the npm install?** `gaia-ui` handles prerequisite #1 and #2 automatically on first run (installs Lemonade Server and downloads a minimal model). You can skip to [Install and Launch](#install-and-launch).
+</Note>
+
+If you're using the Python CLI path, or want the full-size model, run:
+
+```bash
+gaia init --profile chat
+```
+
+This downloads Lemonade Server and the recommended model (~25 GB). Use `--profile minimal` for a smaller download (~400 MB).
+
+Then start the server:
+
+```bash
+lemonade-server serve
+```
+
+### Install and Launch
+
+Choose one of the two install paths:
+
+<Tabs>
+  <Tab title="npm (Recommended)">
+    The npm package bundles everything — on first run it auto-installs the Python backend (uv, Python 3.12, amd-gaia), Lemonade Server, and a minimal model.
+
+    **Requires:** [Node.js 18+](https://nodejs.org) (`winget install OpenJS.NodeJS.LTS` on Windows, `brew install node@20` on macOS)
+
     ```bash
-    pip install amd-gaia[ui,rag]
+    npm install -g @amd-gaia/agent-ui
     ```
-    Or if developing locally:
+
+    Then launch:
+
     ```bash
-    uv pip install -e ".[ui,rag]"
+    gaia-ui
     ```
-  </Step>
-  <Step title="Download models (first time only, ~25 GB)">
-    This downloads Lemonade Server and the AI models needed for the Agent UI. Only required once:
+
+    The Agent UI opens automatically in your browser at [http://localhost:4200](http://localhost:4200).
+
+    **Options:**
+
+    | Flag | Description |
+    |------|-------------|
+    | `gaia-ui --port 8080` | Custom port |
+    | `gaia-ui --no-open` | Don't auto-open the browser |
+    | `gaia-ui --serve` | Serve frontend only (Node.js static server) |
+    | `gaia-ui --version` | Show version |
+
+    **Update:**
+
     ```bash
-    gaia init --profile chat
+    npm install -g @amd-gaia/agent-ui@latest
     ```
-    The `chat` profile downloads a large language model, an embedding model for document Q&A, and a vision model for PDF image extraction — everything the Agent UI needs.
-    <Note>
-      Model downloads are large (~25 GB). Ensure you have at least **30 GB of free disk space** before running this command. Download time varies by internet speed (typically 15–60 minutes).
-    </Note>
-  </Step>
-  <Step title="Start the LLM server">
-    In a separate terminal, start Lemonade Server (must remain running while using the UI):
-    ```bash
-    lemonade-server serve
-    ```
-  </Step>
-  <Step title="Launch the Agent UI">
+  </Tab>
+
+  <Tab title="Python CLI">
+    If you already have GAIA installed via pip/uv, launch the Agent UI directly:
+
     ```bash
     gaia chat --ui
     ```
-    Then open [http://localhost:4200](http://localhost:4200) in your browser.
-  </Step>
-</Steps>
 
-If any of these steps are incomplete, the Agent UI will display a banner explaining what needs to be fixed.
+    Or equivalently:
+
+    ```bash
+    gaia --ui
+    ```
+
+    The Agent UI starts on [http://localhost:4200](http://localhost:4200). Open this URL in your browser.
+
+    **Options:**
+
+    | Flag | Description |
+    |------|-------------|
+    | `gaia chat --ui --ui-port 8080` | Custom port |
+    | `gaia --ui --ui-port 8080` | Custom port (top-level alias) |
+    | `gaia --ui --base-url http://192.168.1.100:8000/api/v1` | Connect to Lemonade on another machine (e.g., GPU workstation) |
+
+    <Note>
+      If you see a missing dependencies error, install the UI extras:
+
+      ```bash
+      uv pip install "amd-gaia[ui]"
+      ```
+    </Note>
+  </Tab>
+</Tabs>
 
 ---
 
@@ -119,11 +174,6 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
   </Accordion>
 
   <Accordion title="No model loaded">
-    Run `gaia init --profile chat` to download models and configure Lemonade Server in one step (~25 GB, required once):
-    ```bash
-    gaia init --profile chat
-    ```
-    If you've already run `gaia init` but need to re-download a specific agent's models:
     ```bash
     gaia download --agent chat
     ```
@@ -131,26 +181,12 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
 
   <Accordion title="Port 4200 already in use">
     ```bash
-    gaia --ui --ui-port 8080
+    # npm CLI
+    gaia-ui --port 8080
+
+    # Python CLI
+    gaia --ui-port 8080
     ```
-  </Accordion>
-
-  <Accordion title="Unsupported device warning banner">
-    The Agent UI is currently supported on **Windows only** (Linux/macOS coming soon) and requires an AMD Ryzen AI Max (Strix Halo) or an AMD Radeon GPU with ≥ 24 GB VRAM to run large language models locally.
-
-    If your device does not meet these requirements, a warning banner appears at the top of the UI. You can **dismiss it and continue** (the UI is fully functional — you may just hit memory limits depending on the model), or use one of these options:
-
-    **Connect to a remote Lemonade server** — inference runs there; no local hardware requirements:
-    ```bash
-    gaia --ui --base-url https://your-server:8000/api/v1
-    ```
-
-    **Suppress the banner entirely** (environment variable):
-    ```bash
-    set GAIA_SKIP_DEVICE_CHECK=1 && gaia --ui
-    ```
-
-    To request support for your device, [open a GitHub issue](https://github.com/amd/gaia/issues/new?template=feature_request.md&title=[Feature]%20Support%20Agent%20UI%20on%20additional%20devices&labels=enhancement,agent-ui).
   </Accordion>
 
   <Accordion title="Database locked error">

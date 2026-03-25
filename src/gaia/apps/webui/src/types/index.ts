@@ -99,6 +99,12 @@ export interface SystemStatus {
     // Device compatibility check
     processor_name: string | null;
     device_supported: boolean;
+    // LLM configuration health
+    context_size_sufficient: boolean;
+    model_downloaded: boolean | null;
+    default_model_name: string | null;
+    lemonade_url: string | null;
+    expected_model_loaded: boolean;
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────
@@ -134,6 +140,28 @@ export interface IndexFolderResponse {
     failed: number;
     documents: Document[];
     errors: string[];
+}
+
+// ── MCP Server Types ──────────────────────────────────────────────────────
+
+export interface MCPServerInfo {
+    name: string;
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+    enabled: boolean;
+}
+
+export interface MCPCatalogEntry {
+    name: string;
+    display_name: string;
+    description: string;
+    category: string;
+    tier: number;
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+    requires_config: string[];
 }
 
 // ── Mobile Access / Tunnel Types ─────────────────────────────────────────

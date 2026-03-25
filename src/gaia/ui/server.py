@@ -50,6 +50,7 @@ from .document_monitor import DocumentMonitor
 from .routers import chat as chat_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
+from .routers import mcp as mcp_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
@@ -145,6 +146,48 @@ def create_app(db_path: str = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage startup/shutdown lifecycle for background services."""
+
+        # Pre-warm LemonadeManager so the first user message skips HTTP calls.
+        # Runs in a thread-pool worker to avoid blocking the event loop.
+        async def _prewarm_lemonade():
+            try:
+                from gaia.llm.lemonade_manager import LemonadeManager
+
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: LemonadeManager.ensure_ready(
+                        quiet=True,
+                        min_context_size=0,  # Only check reachability — don't trigger model reloads
+                    ),
+                )
+                logger.info("LemonadeManager pre-warmed")
+            except Exception as exc:  # server may not be running yet — that's fine
+                logger.debug("LemonadeManager pre-warm skipped: %s", exc)
+
+        asyncio.create_task(_prewarm_lemonade())
+
+        # Pre-import heavy pure-library modules so first-message imports are cached.
+        # Only import libraries with no Lemonade/LLM side-effects at module level.
+        # ChatAgent/RAGSDK/MCPClientManager are intentionally excluded: their import
+        # trees pull in gaia.apps.* modules that instantiate AgentSDK at module level,
+        # which calls LemonadeManager.ensure_ready() and can trigger a model switch.
+        async def _preload_modules():
+            try:
+                loop = asyncio.get_event_loop()
+
+                def _do_imports():
+                    # pylint: disable=unused-import
+                    import faiss  # noqa: F401
+                    import sentence_transformers  # noqa: F401
+
+                await loop.run_in_executor(None, _do_imports)
+                logger.info("Heavy modules pre-loaded")
+            except Exception as exc:
+                logger.debug("Module pre-load skipped: %s", exc)
+
+        asyncio.create_task(_preload_modules())
+
         # Start document file monitor for auto re-indexing
         monitor = DocumentMonitor(
             db=db,
@@ -238,6 +281,7 @@ def create_app(db_path: str = None) -> FastAPI:
     app.include_router(documents_router_mod.router)
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)
+    app.include_router(mcp_router_mod.router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.

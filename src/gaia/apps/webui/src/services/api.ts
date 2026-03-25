@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -81,6 +81,14 @@ export async function getSettings(): Promise<Settings> {
 
 export async function updateSettings(data: Partial<Settings>): Promise<Settings> {
     return apiFetch<Settings>('PUT', '/settings', data);
+}
+
+export async function loadModel(modelName: string, ctxSize?: number): Promise<{ status: string; model: string; ctx_size: number }> {
+    return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize });
+}
+
+export async function downloadModel(modelName: string, force = false): Promise<{ status: string; model: string }> {
+    return apiFetch('POST', '/system/download-model', { model_name: modelName, force });
 }
 
 // -- Sessions ------------------------------------------------------------------
@@ -420,4 +428,30 @@ export async function stopTunnel(): Promise<{ active: boolean }> {
 
 export async function getTunnelStatus(): Promise<TunnelStatus> {
     return apiFetch('GET', '/tunnel/status');
+}
+
+// -- MCP Server Management -------------------------------------------------------
+
+export async function listMCPServers(): Promise<{ servers: MCPServerInfo[] }> {
+    return apiFetch('GET', '/mcp/servers');
+}
+
+export async function addMCPServer(data: { name: string; command: string; args?: string[]; env?: Record<string, string> }): Promise<{ status: string; name: string }> {
+    return apiFetch('POST', '/mcp/servers', data);
+}
+
+export async function removeMCPServer(name: string): Promise<{ status: string; name: string }> {
+    return apiFetch('DELETE', `/mcp/servers/${name}`);
+}
+
+export async function enableMCPServer(name: string): Promise<{ status: string; name: string }> {
+    return apiFetch('POST', `/mcp/servers/${name}/enable`);
+}
+
+export async function disableMCPServer(name: string): Promise<{ status: string; name: string }> {
+    return apiFetch('POST', `/mcp/servers/${name}/disable`);
+}
+
+export async function getMCPCatalog(): Promise<{ catalog: MCPCatalogEntry[] }> {
+    return apiFetch('GET', '/mcp/catalog');
 }

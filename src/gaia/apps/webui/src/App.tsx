@@ -56,6 +56,8 @@ function App() {
         setSessions,
         setCurrentSession,
         addSession,
+        removeSession,
+        updateSessionInList,
         setMessages,
         showDocLibrary,
         showFileBrowser,
@@ -203,7 +205,7 @@ function App() {
         return () => {
             if (sessionPollRef.current) clearInterval(sessionPollRef.current);
         };
-    }, [setSessions, setBackendConnected]);
+    }, [setSessions, addSession, removeSession, updateSessionInList, setBackendConnected]);
 
     // Support URL-based session navigation (?session=<id> or #<hash>)
     useEffect(() => {
@@ -382,7 +384,7 @@ function App() {
                         setIsViewTransitioning(false);
                     });
                 });
-            }, 250); // matches CSS transition duration
+            }, 220); // matches CSS transition duration
             return () => clearTimeout(timer);
         }
     }, [currentSessionId, displayedSessionId]);

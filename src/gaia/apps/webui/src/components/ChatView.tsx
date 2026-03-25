@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
@@ -206,14 +206,18 @@ export function ChatView({ sessionId }: ChatViewProps) {
         log.chat.info(`ChatView mounted for session=${sessionId}, loading messages...`);
         const t = log.chat.time();
         setLoadingMessages(true);
+        let cancelled = false;
 
         const loadMessages = (isInitial = false) => {
             api.getMessages(sessionId)
                 .then((data) => {
+                    if (cancelled) return;
                     const msgs = (data.messages || []).map((m: any) => ({
                         ...m,
                         // Map snake_case agent_steps from API to camelCase agentSteps
                         agentSteps: m.agentSteps || m.agent_steps || undefined,
+                        // Map inference_stats from API to stats field
+                        stats: m.stats || m.inference_stats || undefined,
                     }));
                     if (isInitial) {
                         setMessages(msgs);
@@ -227,12 +231,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     }
                 })
                 .catch((err) => {
+                    if (cancelled) return;
                     if (isInitial) {
                         log.chat.error(`Failed to load messages for session=${sessionId}`, err);
                         setMessages([]);
                     }
                 })
-                .finally(() => { if (isInitial) setLoadingMessages(false); });
+                .finally(() => { if (!cancelled && isInitial) setLoadingMessages(false); });
         };
 
         loadMessages(true);
@@ -240,6 +245,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // Poll every 3s for messages added by external tools (MCP API, etc.)
         msgPollRef.current = setInterval(() => loadMessages(false), 3_000);
         return () => {
+            cancelled = true;
             if (msgPollRef.current) clearInterval(msgPollRef.current);
         };
     }, [sessionId, setMessages, setLoadingMessages]);
@@ -850,9 +856,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 setTimeout(() => {
                     api.getMessages(sessionId)
                         .then((data) => {
+                            if (useChatStore.getState().currentSessionId !== sessionId) return;
                             const msgs = (data.messages || []).map((m: any) => ({
                                 ...m,
                                 agentSteps: m.agentSteps || m.agent_steps || undefined,
+                                stats: m.stats || m.inference_stats || undefined,
                             }));
                             setMessages(msgs);
                             lastMsgCountRef.current = msgs.length;
@@ -949,7 +957,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 log.chat.error(`Failed to delete message ${messageId}`, err);
                 // Reload messages on error to restore accurate state
                 api.getMessages(sessionId)
-                    .then((data) => setMessages(data.messages || []))
+                    .then((data) => {
+                        if (useChatStore.getState().currentSessionId !== sessionId) return;
+                        setMessages(data.messages || []);
+                    })
                     .catch(() => {});
             }
         }, 250);
@@ -970,7 +981,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
             log.chat.error(`Failed to delete messages from ${message.id}`, err);
             // Reload messages on error
             api.getMessages(sessionId)
-                .then((data) => setMessages(data.messages || []))
+                .then((data) => {
+                    if (useChatStore.getState().currentSessionId !== sessionId) return;
+                    setMessages(data.messages || []);
+                })
                 .catch(() => {});
             return;
         }
@@ -1077,6 +1091,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
     };
 
     const showEmptyState = !isLoadingMessages && messages.length === 0 && !isStreaming;
+
+    // Pre-compute per-message latency: time from preceding user message to each
+    // assistant message. O(N) single pass, avoids repeated backward scans in render.
+    const latencyByMsgId = useMemo(() => {
+        const map = new Map<number, number>();
+        let lastUserTime: number | undefined;
+        for (const msg of messages) {
+            if (msg.role === 'user' && msg.created_at) {
+                lastUserTime = new Date(msg.created_at).getTime();
+            } else if (msg.role === 'assistant' && msg.created_at && lastUserTime !== undefined) {
+                const assistTime = new Date(msg.created_at).getTime();
+                if (assistTime > lastUserTime) map.set(msg.id, assistTime - lastUserTime);
+                lastUserTime = undefined;
+            }
+        }
+        return map;
+    }, [messages]);
 
     return (
         <main
@@ -1252,6 +1283,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         && msg.role === 'assistant'
                         && idx === messages.length - 1;
                     if (isStreamEndingMsg) return null;
+
+                    const latencyMs = latencyByMsgId.get(msg.id);
+
                     return (
                         <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
                             <MessageBubble
@@ -1260,6 +1294,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
                                 onDelete={!isStreaming ? handleDeleteMessage : undefined}
                                 onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
+                                latencyMs={latencyMs}
                             />
                         </div>
                     );

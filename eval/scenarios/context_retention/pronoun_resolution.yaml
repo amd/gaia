@@ -1,0 +1,43 @@
+id: pronoun_resolution
+name: "Pronoun Resolution"
+category: context_retention
+severity: critical
+description: |
+  User asks follow-up questions using pronouns ("it", "that policy").
+  Agent must retain context and resolve references without re-querying.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+
+turns:
+  - turn: 1
+    objective: "Ask about PTO policy for new employees"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: pto_days
+      expected_answer: "15 days"
+    success_criteria: "Agent states first-year employees get 15 PTO days"
+
+  - turn: 2
+    objective: "Ask follow-up using pronoun: 'what about remote work - does it have a policy too?'"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: remote_work
+      expected_answer: "Up to 3 days/week with manager approval. Fully remote requires VP approval."
+    success_criteria: "Agent understands 'it' refers to the handbook and answers remote work policy"
+
+  - turn: 3
+    objective: "Ask 'are contractors eligible for those benefits?' using pronoun to refer to employee benefits"
+    user_message: "Are contractors eligible for those benefits?"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: contractor_benefits
+      expected_answer: "No — benefits are for full-time employees only"
+    success_criteria: "Agent correctly states contractors are NOT eligible for benefits. FAIL if agent says contractors are eligible."
+
+expected_outcome: |
+  Agent maintains context across turns and resolves pronouns correctly.

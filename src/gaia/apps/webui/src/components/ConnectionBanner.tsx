@@ -1,50 +1,62 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { AlertTriangle, WifiOff, X, MonitorX, Download } from 'lucide-react';
+import { AlertTriangle, Cpu, Download, Layers, Loader2, WifiOff, X } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useChatStore } from '../stores/chatStore';
+import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
+import { useModelActions } from '../hooks/useModelActions';
 import './ConnectionBanner.css';
 
-const GITHUB_DEVICE_SUPPORT_URL =
-    'https://github.com/amd/gaia/issues/new?' +
-    'template=feature_request.md&' +
-    'title=[Feature]%20Support%20Agent%20UI%20on%20additional%20devices&' +
-    'labels=enhancement,agent-ui';
-
 /**
- * Banner shown at the top of the app for four conditions (in priority order):
- *   1. Backend API unreachable     — suggests `gaia chat --ui`
- *   2. Device not supported        — shows processor name, links to GitHub feature request
- *   3. Lemonade Server not running — suggests `gaia init` (first time) or `lemonade-server serve` (already set up)
- *   4. Lemonade running, no model  — suggests `gaia init` (covers model download + Lemonade start)
- *      (also warns if disk space < 30 GB)
- * Each banner is independently dismissible. Dismissed banners reappear if the
- * underlying condition changes again (e.g. Lemonade stops after being dismissed).
+ * Banner shown when the backend is unreachable, Lemonade Server is not running,
+ * the required model is not downloaded, the wrong model is loaded, or the
+ * context window is too small. Provides clear messaging and actionable hints.
  */
 export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
     const { backendConnected, systemStatus } = useChatStore();
     const [dismissed, setDismissed] = useState(false);
-    const [deviceDismissed, setDeviceDismissed] = useState(false);
-    const [modelDismissed, setModelDismissed] = useState(false);
 
-    // Reset dismissed state when the underlying status changes so the
-    // banner reappears if Lemonade stops again after being dismissed.
+    const modelName = systemStatus?.default_model_name ?? DEFAULT_MODEL_NAME;
+    const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName);
+
+    // Track previous warning-worthy states so the banner reappears when
+    // a new issue is detected after being dismissed.
     const prevLemonadeRef = useRef(systemStatus?.lemonade_running);
-    const prevModelRef = useRef(systemStatus?.model_loaded);
+    const prevModelDownloadedRef = useRef(systemStatus?.model_downloaded);
+    const prevContextSufficientRef = useRef(systemStatus?.context_size_sufficient);
+    const prevExpectedModelRef = useRef(systemStatus?.expected_model_loaded);
+
     useEffect(() => {
-        const currentLemonade = systemStatus?.lemonade_running;
-        const currentModel = systemStatus?.model_loaded;
-        if (prevLemonadeRef.current !== currentLemonade) {
-            prevLemonadeRef.current = currentLemonade;
-            if (currentLemonade === false) setDismissed(false);
+        const lemonade = systemStatus?.lemonade_running;
+        const modelDownloaded = systemStatus?.model_downloaded;
+        const contextSufficient = systemStatus?.context_size_sufficient;
+        const expectedModel = systemStatus?.expected_model_loaded;
+
+        let shouldReset = false;
+
+        if (prevLemonadeRef.current !== lemonade) {
+            prevLemonadeRef.current = lemonade;
+            if (lemonade === false) shouldReset = true;
         }
-        if (prevModelRef.current !== currentModel) {
-            prevModelRef.current = currentModel;
-            // Re-show model banner if model was unloaded
-            if (!currentModel) setModelDismissed(false);
+        if (prevModelDownloadedRef.current !== modelDownloaded) {
+            prevModelDownloadedRef.current = modelDownloaded;
+            if (modelDownloaded === false) shouldReset = true;
         }
+        if (prevContextSufficientRef.current !== contextSufficient) {
+            prevContextSufficientRef.current = contextSufficient;
+            if (contextSufficient === false) shouldReset = true;
+        }
+        if (prevExpectedModelRef.current !== expectedModel) {
+            prevExpectedModelRef.current = expectedModel;
+            if (expectedModel === false) shouldReset = true;
+        }
+
+        if (shouldReset) setDismissed(false);
     }, [systemStatus]);
+
+    // Nothing to show
+    if (dismissed) return null;
 
     // Case 1: Backend API is unreachable
     if (!backendConnected) {
@@ -68,61 +80,18 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         );
     }
 
-    // Case 2: Device is not a supported Strix Halo machine
-    if (!deviceDismissed && systemStatus && systemStatus.device_supported === false) {
-        const processorName = systemStatus.processor_name || 'Unknown processor';
-        return (
-            <div className="connection-banner connection-banner--device" role="alert">
-                <div className="connection-banner__icon">
-                    <MonitorX size={16} />
-                </div>
-                <div className="connection-banner__text">
-                    Unsupported device: <strong>{processorName}</strong>.{' '}
-                    <span className="connection-banner__hint">
-                        GAIA Agent UI requires an AMD Ryzen AI Max (Strix Halo) or an AMD Radeon GPU with &ge;&nbsp;24&nbsp;GB VRAM.{' '}
-                        <a
-                            href={GITHUB_DEVICE_SUPPORT_URL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="connection-banner__link"
-                        >
-                            Request support for your device &rarr;
-                        </a>
-                    </span>
-                </div>
-                <button
-                    className="connection-banner__dismiss"
-                    onClick={() => setDeviceDismissed(true)}
-                    aria-label="Dismiss"
-                >
-                    <X size={14} />
-                </button>
-            </div>
-        );
-    }
-
-    // Case 3: Backend is up but Lemonade Server is not running.
-    // If the system hasn't been initialized yet, `gaia init` is the single command
-    // that installs Lemonade and downloads models. Once initialized, the user only
-    // needs to start the already-installed server.
-    if (!dismissed && systemStatus && !systemStatus.lemonade_running) {
-        const notInitialized = !systemStatus.initialized;
+    // Case 2: Backend is up but Lemonade Server is not running
+    if (systemStatus && !systemStatus.lemonade_running) {
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    LLM server is not running &mdash; chat will not work.{' '}
-                    {notInitialized ? (
-                        <span className="connection-banner__hint">
-                            First time? Run: <code>gaia init --profile chat</code>
-                        </span>
-                    ) : (
-                        <span className="connection-banner__hint">
-                            Start it with: <code>lemonade-server serve</code>
-                        </span>
-                    )}
+                    LLM server is not responding &mdash; it may be busy or not running.{' '}
+                    <span className="connection-banner__hint">
+                        If not started, run: <code>lemonade-server serve</code>
+                    </span>
                 </div>
                 {onRetry && (
                     <button className="connection-banner__retry" onClick={onRetry}>
@@ -140,27 +109,142 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         );
     }
 
-    // Case 4: Lemonade is running but no model is loaded.
-    // `gaia init` is preferred over `gaia download` — it handles model download,
-    // Lemonade server configuration, and marks the system as initialized.
-    if (!modelDismissed && systemStatus && systemStatus.lemonade_running && !systemStatus.model_loaded) {
+    // Case 3: Lemonade is running but the required default model is not downloaded
+    if (
+        systemStatus &&
+        systemStatus.lemonade_running &&
+        !systemStatus.model_loaded &&
+        systemStatus.model_downloaded === false
+    ) {
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
                     <Download size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    No model loaded &mdash; chat will not work until a model is downloaded.{' '}
-                    <span className="connection-banner__hint">
-                        Run: <code>gaia init --profile chat</code> to download models (~25&nbsp;GB)
-                        {systemStatus.disk_space_gb != null && systemStatus.disk_space_gb < 30 && (
-                            <> &nbsp;&bull;&nbsp; <strong>Warning:</strong> only {systemStatus.disk_space_gb}&nbsp;GB free</>
-                        )}
-                    </span>
+                    Required model <strong>{modelName}</strong> is not downloaded (~25 GB).
                 </div>
+                {isDownloadingModel ? (
+                    <span className="connection-banner__loading">
+                        <Loader2 size={13} className="connection-banner__spinner" />
+                        Downloading…
+                    </span>
+                ) : (
+                    <button
+                        className="connection-banner__retry"
+                        onClick={() => downloadModel(false)}
+                    >
+                        Download
+                    </button>
+                )}
+                {onRetry && !isDownloadingModel && (
+                    <button className="connection-banner__retry connection-banner__retry--secondary" onClick={onRetry}>
+                        Recheck
+                    </button>
+                )}
                 <button
                     className="connection-banner__dismiss"
-                    onClick={() => setModelDismissed(true)}
+                    onClick={() => setDismissed(true)}
+                    aria-label="Dismiss"
+                >
+                    <X size={14} />
+                </button>
+            </div>
+        );
+    }
+
+    // Case 4: A model is loaded but it is not the expected one
+    if (
+        systemStatus &&
+        systemStatus.lemonade_running &&
+        systemStatus.model_loaded &&
+        systemStatus.expected_model_loaded === false
+    ) {
+        const currentModel = systemStatus.model_loaded;
+        const contextAlsoSmall = systemStatus.context_size_sufficient === false;
+        return (
+            <div className="connection-banner connection-banner--warning" role="status">
+                <div className="connection-banner__icon">
+                    <Cpu size={16} />
+                </div>
+                <div className="connection-banner__text">
+                    Wrong model loaded: <strong>{currentModel}</strong>.{' '}
+                    GAIA Chat requires <strong>{modelName}</strong>.
+                    {contextAlsoSmall && (
+                        <>{' '}Context window is also too small.</>
+                    )}
+                </div>
+                {isLoadingModel ? (
+                    <span className="connection-banner__loading">
+                        <Loader2 size={13} className="connection-banner__spinner" />
+                        Loading…
+                    </span>
+                ) : (
+                    <button
+                        className="connection-banner__retry"
+                        onClick={() => loadModel()}
+                    >
+                        Load Now
+                    </button>
+                )}
+                {onRetry && !isLoadingModel && (
+                    <button className="connection-banner__retry connection-banner__retry--secondary" onClick={onRetry}>
+                        Recheck
+                    </button>
+                )}
+                <button
+                    className="connection-banner__dismiss"
+                    onClick={() => setDismissed(true)}
+                    aria-label="Dismiss"
+                >
+                    <X size={14} />
+                </button>
+            </div>
+        );
+    }
+
+    // Case 5: Model is loaded but context window is too small
+    if (
+        systemStatus &&
+        systemStatus.lemonade_running &&
+        systemStatus.model_loaded &&
+        systemStatus.context_size_sufficient === false
+    ) {
+        const current = systemStatus.model_context_size ?? 0;
+        const lemonadeUI = systemStatus.lemonade_url ?? 'http://localhost:8000';
+        return (
+            <div className="connection-banner connection-banner--warning" role="status">
+                <div className="connection-banner__icon">
+                    <Layers size={16} />
+                </div>
+                <div className="connection-banner__text">
+                    LLM context window is too small ({current.toLocaleString()} tokens;{' '}
+                    {MIN_CONTEXT_SIZE.toLocaleString()} required).{' '}
+                    <span className="connection-banner__hint">
+                        In{' '}
+                        <a
+                            className="connection-banner__link"
+                            href={lemonadeUI}
+                            target="_blank"
+                            rel="noreferrer"
+                        >
+                            Lemonade
+                        </a>
+                        , set ctx&#8209;size to {MIN_CONTEXT_SIZE.toLocaleString()}, or
+                        restart with:{' '}
+                        <code>
+                            lemonade-server serve --ctx-size {MIN_CONTEXT_SIZE}
+                        </code>
+                    </span>
+                </div>
+                {onRetry && (
+                    <button className="connection-banner__retry" onClick={onRetry}>
+                        Check again
+                    </button>
+                )}
+                <button
+                    className="connection-banner__dismiss"
+                    onClick={() => setDismissed(true)}
                     aria-label="Dismiss"
                 >
                     <X size={14} />

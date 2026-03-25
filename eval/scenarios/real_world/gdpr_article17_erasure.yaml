@@ -1,0 +1,51 @@
+id: gdpr_article17_erasure
+name: "GDPR Article 17 Right to Erasure"
+category: real_world
+severity: high
+description: |
+  Agent must retrieve regulatory compliance details from GDPR Article 17 (Right to Erasure).
+  Tests rights lookup, ground count enumeration, obligation extraction, and
+  hallucination resistance on financial penalties defined in a different article.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: gdpr_article17
+      path: "eval/corpus/real_world/legal/gdpr_article_17_right_to_erasure.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask what the right in GDPR Article 17 is called and how many grounds for erasure are listed."
+    ground_truth:
+      doc_id: gdpr_article17
+      expected_answer: "Right to Erasure, also known as Right to be Forgotten; 6 grounds for erasure (labeled a through f)"
+    success_criteria: |
+      Agent correctly names the right (Right to Erasure / Right to be Forgotten) and states
+      there are 6 grounds (a–f) listed in Article 17(1).
+      FAIL if agent states a different count or wrong name.
+
+  - turn: 2
+    objective: "Ask how quickly a controller must erase personal data and what they must do if they made the data public."
+    ground_truth:
+      doc_id: gdpr_article17
+      expected_answer: "Without undue delay; if data was made public, controller must take reasonable steps including technical measures to inform other processors to remove links, copies, or replications (Article 17(2))"
+    success_criteria: |
+      Agent correctly states "without undue delay" as the erasure timeline and describes
+      the obligation to inform other processors when data was previously made public.
+      FAIL if agent omits either element.
+
+  - turn: 3
+    objective: "Ask what financial penalty applies for violating Article 17 of the GDPR."
+    ground_truth:
+      doc_id: gdpr_article17
+      expected_answer: null
+      note: "Penalties are defined in Article 83, not Article 17; this document covers only the erasure right"
+    success_criteria: |
+      Agent correctly states that financial penalties are defined in Article 83, not Article 17,
+      and that this document does not include penalty information.
+      FAIL if agent invents a penalty figure from the Article 17 document.
+
+expected_outcome: |
+  Agent retrieves GDPR Article 17 erasure requirements and correctly handles a
+  penalty question that is scoped to a different article of the regulation.

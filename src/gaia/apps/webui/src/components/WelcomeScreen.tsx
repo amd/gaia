@@ -182,6 +182,8 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
                         ))}
                     </div>
                 </div>
+
+                <p className="welcome-copyright">© 2025–2026 Advanced Micro Devices, Inc. All rights reserved.</p>
             </div>
         </main>
     );
