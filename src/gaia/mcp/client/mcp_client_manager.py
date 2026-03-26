@@ -2,7 +2,13 @@
 # SPDX-License-Identifier: MIT
 """Manager for multiple MCP client connections."""
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    ThreadPoolExecutor,
+)
+from concurrent.futures import TimeoutError as _FutureTimeoutError
+from concurrent.futures import (
+    as_completed,
+)
 from typing import Dict, List, Optional
 
 from gaia.logger import get_logger
@@ -201,6 +207,11 @@ class MCPClientManager:
 
         # Connect to all servers in parallel so slow/failing servers don't
         # block each other (each connection can take 1-3s on failure).
+        # A hard timeout prevents a hanging stdio server from blocking agent
+        # construction indefinitely — the underlying readline() has no OS-level
+        # timeout, so we impose one here at the futures layer.
+        _CONNECT_TIMEOUT = 10.0  # seconds; generous for legitimate servers
+
         def _connect_one(name, server_config):
             try:
                 client = MCPClient.from_config(name, server_config, debug=self.debug)
@@ -210,12 +221,13 @@ class MCPClientManager:
             except Exception as e:
                 return name, None, str(e)
 
-        with ThreadPoolExecutor(max_workers=len(to_connect)) as pool:
-            futures = {
-                pool.submit(_connect_one, name, cfg): name
-                for name, cfg in to_connect.items()
-            }
-            for future in as_completed(futures):
+        pool = ThreadPoolExecutor(max_workers=len(to_connect))
+        futures = {
+            pool.submit(_connect_one, name, cfg): name
+            for name, cfg in to_connect.items()
+        }
+        try:
+            for future in as_completed(futures, timeout=_CONNECT_TIMEOUT):
                 name, client, error = future.result()
                 if client is not None:
                     self._clients[name] = client
@@ -224,3 +236,16 @@ class MCPClientManager:
                 else:
                     self._failed[name] = error or "Unknown error"
                     logger.debug(f"Failed to connect to server '{name}': {error}")
+        except _FutureTimeoutError:
+            for future, server_name in futures.items():
+                if not future.done():
+                    self._failed[server_name] = (
+                        f"Connection timed out after {_CONNECT_TIMEOUT:.0f}s"
+                    )
+                    logger.warning(
+                        "MCP server '%s' did not respond within %.0fs; skipping",
+                        server_name,
+                        _CONNECT_TIMEOUT,
+                    )
+        finally:
+            pool.shutdown(wait=False)
