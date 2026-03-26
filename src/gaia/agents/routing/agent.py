@@ -14,6 +14,7 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 class RoutingAgent:
     """
     Routes user requests to appropriate agents using AgentRegistry.
@@ -34,9 +35,12 @@ class RoutingAgent:
         # Look for agents in default paths
         base_dir = Path(__file__).parent.parent.parent.parent.parent
         agents_dir = base_dir / "config" / "agents"
-        
-        self.registry = AgentRegistry(agents_dir=str(agents_dir) if agents_dir.exists() else None)
+
+        self.registry = AgentRegistry(
+            agents_dir=str(agents_dir) if agents_dir.exists() else None
+        )
         import asyncio
+
         # We need to ensure the registry is initialized. Since __init__ is sync,
         # we can't easily await initialize() here unless we use a loop
         try:
@@ -48,7 +52,7 @@ class RoutingAgent:
                 loop.run_until_complete(self.registry.initialize())
         except RuntimeError:
             asyncio.run(self.registry.initialize())
-            
+
         self.orchestrator = AgentOrchestrator(self.registry)
 
     def process_query(
@@ -75,7 +79,7 @@ class RoutingAgent:
 
         context = {
             "parameters": context_params,
-            "phase": kwargs.get("phase", "UNKNOWN")
+            "phase": kwargs.get("phase", "UNKNOWN"),
         }
 
         # Route to the best agent
@@ -90,7 +94,12 @@ class RoutingAgent:
             # Check if it has an async execute method (new BaseAgent pipeline interface)
             elif hasattr(agent, "execute"):
                 import asyncio
-                exec_context = {"goal": query, "phase": context["phase"], "parameters": context_params}
+
+                exec_context = {
+                    "goal": query,
+                    "phase": context["phase"],
+                    "parameters": context_params,
+                }
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
@@ -100,7 +109,9 @@ class RoutingAgent:
                 except RuntimeError:
                     return asyncio.run(agent.execute(exec_context))
             else:
-                raise AttributeError(f"Agent {agent.__class__.__name__} does not support execution.")
-        
+                raise AttributeError(
+                    f"Agent {agent.__class__.__name__} does not support execution."
+                )
+
         # Return agent instance
         return agent
