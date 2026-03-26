@@ -13,7 +13,7 @@ audit trail of all state changes.
 
 from enum import Enum, auto
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Set
 import threading
 
@@ -82,7 +82,7 @@ class PipelineContext:
 
     pipeline_id: str
     user_goal: str
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
     template: str = "STANDARD"
     quality_threshold: float = 0.90
@@ -219,7 +219,7 @@ class PipelineSnapshot:
         if not self.started_at:
             return None
 
-        end_time = self.completed_at or datetime.utcnow()
+        end_time = self.completed_at or datetime.now(timezone.utc)
         return (end_time - self.started_at).total_seconds()
 
 
@@ -402,7 +402,7 @@ class PipelineStateMachine:
             self._snapshot.state = new_state
 
             # Update timestamps based on state
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             self._update_timestamps(new_state, old_state, now)
 
             # Create transition record
@@ -416,13 +416,15 @@ class PipelineStateMachine:
             self._transition_log.append(transition)
 
             # Add to chronicle
-            self._snapshot.chronicle.append({
-                "event": "STATE_TRANSITION",
-                "timestamp": now.isoformat(),
-                "from_state": old_state.name,
-                "to_state": new_state.name,
-                "reason": reason,
-            })
+            self._snapshot.chronicle.append(
+                {
+                    "event": "STATE_TRANSITION",
+                    "timestamp": now.isoformat(),
+                    "from_state": old_state.name,
+                    "to_state": new_state.name,
+                    "reason": reason,
+                }
+            )
 
             return True
 
@@ -547,13 +549,15 @@ class PipelineStateMachine:
             data: Event data
         """
         with self._lock:
-            self._snapshot.chronicle.append({
-                "event": event,
-                "timestamp": datetime.utcnow().isoformat(),
-                "pipeline_id": self._context.pipeline_id,
-                "phase": self._snapshot.current_phase,
-                "data": data or {},
-            })
+            self._snapshot.chronicle.append(
+                {
+                    "event": event,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "pipeline_id": self._context.pipeline_id,
+                    "phase": self._snapshot.current_phase,
+                    "data": data or {},
+                }
+            )
 
     def get_state_info(self) -> Dict[str, Any]:
         """
@@ -570,14 +574,10 @@ class PipelineStateMachine:
                 "iteration": self._snapshot.iteration_count,
                 "quality_score": self._snapshot.quality_score,
                 "started_at": (
-                    self._snapshot.started_at.isoformat()
-                    if self._snapshot.started_at
-                    else None
+                    self._snapshot.started_at.isoformat() if self._snapshot.started_at else None
                 ),
                 "completed_at": (
-                    self._snapshot.completed_at.isoformat()
-                    if self._snapshot.completed_at
-                    else None
+                    self._snapshot.completed_at.isoformat() if self._snapshot.completed_at else None
                 ),
                 "artifacts_count": len(self._snapshot.artifacts),
                 "defects_count": len(self._snapshot.defects),
@@ -595,7 +595,7 @@ class PipelineStateMachine:
             self._transition_log.clear()
             self._transition_log.append(
                 StateTransition(
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     from_state=PipelineState.INITIALIZING,
                     to_state=PipelineState.READY,
                     reason="Reset to ready",

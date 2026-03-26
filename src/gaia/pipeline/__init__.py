@@ -30,6 +30,34 @@ from gaia.pipeline.defect_router import (
     RoutingRule,
     create_defect,
 )
+from gaia.pipeline.defect_remediation_tracker import (
+    DefectRemediationTracker,
+    DefectStatusChange,
+    DefectStatusTransition,
+    InvalidStatusTransitionError,
+)
+from gaia.pipeline.phase_contract import (
+    PhaseContract,
+    PhaseContractRegistry,
+    ContractTerm,
+    ContractViolationSeverity,
+    InputType,
+    ValidationResult,
+    ContractViolationError,
+    PhaseExecutionError,
+    create_default_phase_contracts,
+    create_planning_contract,
+    create_development_contract,
+    create_quality_contract,
+    create_decision_contract,
+    validate_defect_routing,
+)
+from gaia.pipeline.audit_logger import (
+    AuditLogger,
+    AuditEvent,
+    AuditEventType,
+    IntegrityVerificationError,
+)
 
 __all__ = [
     # Engine
@@ -55,4 +83,31 @@ __all__ = [
     "DefectStatus",
     "RoutingRule",
     "create_defect",
+    # Defect remediation
+    "DefectRemediationTracker",
+    "DefectStatusChange",
+    "DefectStatusTransition",
+    "InvalidStatusTransitionError",
+    # Phase Contract
+    "PhaseContract",
+    "PhaseContractRegistry",
+    "ContractTerm",
+    "ContractViolationSeverity",
+    "InputType",
+    "ValidationResult",
+    "ContractViolationError",
+    "PhaseExecutionError",
+    # Contract factories
+    "create_default_phase_contracts",
+    "create_planning_contract",
+    "create_development_contract",
+    "create_quality_contract",
+    "create_decision_contract",
+    # Validation
+    "validate_defect_routing",
+    # Audit Logger
+    "AuditLogger",
+    "AuditEvent",
+    "AuditEventType",
+    "IntegrityVerificationError",
 ]

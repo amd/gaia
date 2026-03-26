@@ -113,10 +113,12 @@ class TestPipelineSnapshot:
 
     def test_elapsed_time(self):
         """Test elapsed time calculation."""
+        from datetime import timezone
+
         snapshot = PipelineSnapshot(state=PipelineState.INITIALIZING)
         assert snapshot.elapsed_time() is None  # Not started
 
-        snapshot.started_at = datetime.utcnow()
+        snapshot.started_at = datetime.now(timezone.utc)
         # Small delay to ensure time difference
         import time
         time.sleep(0.01)
