@@ -1,31 +1,23 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""RoutingAgent - Intelligently routes requests and disambiguates parameters."""
+"""RoutingAgent - Intelligently routes requests using AgentOrchestrator."""
 
 import json
 import os
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 from gaia.agents.base.agent import Agent
-from gaia.llm import create_client
+from gaia.agents.registry import AgentRegistry
+from gaia.agents.base.orchestrator import AgentOrchestrator
 from gaia.logger import get_logger
-
-from .system_prompt import ROUTING_ANALYSIS_PROMPT
 
 logger = get_logger(__name__)
 
-
 class RoutingAgent:
     """
-    Routes user requests to appropriate agents with intelligent disambiguation.
-
-    Currently handles Code agent routing. Future: Jira, Docker, etc.
-
-    Flow:
-    1. Analyze query with LLM to detect agent and parameters
-    2. If parameters unknown, ask user for clarification
-    3. Recursively re-analyze with user's response as added context
-    4. Once resolved, return configured agent ready to execute
+    Routes user requests to appropriate agents using AgentRegistry.
+    Replaces old LLM-based hardcoded CodeAgent routing.
     """
 
     def __init__(
@@ -34,40 +26,30 @@ class RoutingAgent:
         output_handler=None,
         **agent_kwargs,
     ):
-        """Initialize routing agent with LLM client.
-
-        Args:
-            api_mode: If True, skip interactive questions and use defaults/best-guess.
-                     If False (default), ask clarification questions via input().
-            output_handler: Optional OutputHandler for streaming events (passed to created agents).
-                           If None (default), agents create their own AgentConsole.
-            **agent_kwargs: Additional kwargs to pass to created agents
-        """
-        # API mode settings
         self.api_mode = api_mode
         self.output_handler = output_handler
+        self.agent_kwargs = agent_kwargs
 
-        # Initialize LLM client for language detection
-        # Extract LLM-specific params from agent_kwargs
-        use_claude = agent_kwargs.get("use_claude", False)
-        use_chatgpt = agent_kwargs.get("use_chatgpt", False)
-
-        # Determine base_url: CLI arg > Environment > LLMClient default
-        base_url = agent_kwargs.get("base_url")
-        if base_url is None:
-            # Read from environment if not provided
-            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
-
-        # Initialize LLM client - factory auto-detects provider from flags
-        self.llm_client = create_client(
-            use_claude=use_claude, use_openai=use_chatgpt, base_url=base_url
-        )
-        self.agent_kwargs = agent_kwargs  # Store for passing to created agents
-
-        # Model to use for routing analysis (configurable via env var)
-        self.routing_model = os.getenv(
-            "AGENT_ROUTING_MODEL", "Qwen3-Coder-30B-A3B-Instruct-GGUF"
-        )
+        # Initialize AgentRegistry and Orchestrator
+        # Look for agents in default paths
+        base_dir = Path(__file__).parent.parent.parent.parent.parent
+        agents_dir = base_dir / "config" / "agents"
+        
+        self.registry = AgentRegistry(agents_dir=str(agents_dir) if agents_dir.exists() else None)
+        import asyncio
+        # We need to ensure the registry is initialized. Since __init__ is sync,
+        # we can't easily await initialize() here unless we use a loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We can't run_until_complete if loop is running.
+                loop.create_task(self.registry.initialize())
+            else:
+                loop.run_until_complete(self.registry.initialize())
+        except RuntimeError:
+            asyncio.run(self.registry.initialize())
+            
+        self.orchestrator = AgentOrchestrator(self.registry)
 
     def process_query(
         self,
@@ -76,492 +58,49 @@ class RoutingAgent:
         execute: bool = None,
         workspace_root: Optional[str] = None,
         **kwargs,
-    ):
+    ) -> Any:
         """
-        Process query with optional conversation history from disambiguation rounds.
-
-        Args:
-            query: Original user query
-            conversation_history: List of conversation turns [{"role": "user", "content": "..."}]
-            execute: If True, execute the routed agent and return result.
-                    If False, return the agent instance (CLI behavior).
-                    If None (default), uses api_mode (True for API, False for CLI).
-            workspace_root: Optional workspace directory for agent execution (API mode).
-            **kwargs: Additional kwargs passed to agent.process_query() when execute=True.
-
-        Returns:
-            If execute=False: Configured agent instance ready to execute
-            If execute=True: Execution result from agent.process_query()
-
-        Example (CLI mode - default):
-            router = RoutingAgent()
-            agent = router.process_query("Create Express API")
-            result = agent.process_query("Create Express API")
-
-        Example (API mode with execute):
-            router = RoutingAgent(api_mode=True, output_handler=sse_handler)
-            result = router.process_query("Create Express API")  # auto-executes
+        Process query by routing to the most appropriate agent via Orchestrator.
         """
-        # Default execute based on api_mode: API mode auto-executes, CLI returns agent
         if execute is None:
             execute = self.api_mode
 
-        if conversation_history is None:
-            conversation_history = []
+        # Combine kwargs with our agent_kwargs
+        context_params = dict(self.agent_kwargs)
+        if self.output_handler:
+            context_params["output_handler"] = self.output_handler
+        if workspace_root:
+            context_params["workspace_root"] = workspace_root
+        context_params.update(kwargs)
 
-        # Add current query to conversation history if not already there
-        if not conversation_history or conversation_history[-1].get("content") != query:
-            conversation_history.append({"role": "user", "content": query})
-
-        logger.debug(
-            f"Routing analysis for: '{query}' (conversation turns: {len(conversation_history)})"
-        )
-
-        # Analyze with LLM using conversation history
-        analysis = self._analyze_with_llm(conversation_history)
-
-        logger.debug(f"Analysis result: {analysis}")
-
-        # If language could not be determined, default to TypeScript/Next.js
-        analysis = self._default_unknown_language_to_typescript(analysis)
-
-        # Check if we have all required parameters
-        if self._has_unknowns(analysis):
-            if self.api_mode:
-                # API mode: skip interactive questions, use defaults
-                logger.info("API mode: using defaults for unknown parameters")
-                agent = self._create_agent_with_defaults(analysis)
-            else:
-                # Interactive mode: ask user for clarification
-                question = self._generate_clarification_question(analysis)
-                print(f"\n{question}")
-                user_response = input("> ").strip()
-
-                if not user_response:
-                    logger.warning("Empty user response, using defaults")
-                    # Use defaults if user just hits enter
-                    agent = self._create_agent_with_defaults(analysis)
-                else:
-                    # Add assistant question and user response to conversation history
-                    conversation_history.append(
-                        {"role": "assistant", "content": question}
-                    )
-                    conversation_history.append(
-                        {"role": "user", "content": user_response}
-                    )
-
-                    # Recursive call with enriched conversation history
-                    return self.process_query(
-                        query,
-                        conversation_history,
-                        execute=execute,
-                        workspace_root=workspace_root,
-                        **kwargs,
-                    )
-        else:
-            # All parameters resolved, create agent
-            agent = self._create_agent(analysis)
-
-        # Execute if requested (API mode), otherwise return agent (CLI mode)
-        if execute:
-            return agent.process_query(query, workspace_root=workspace_root, **kwargs)
-        return agent
-
-    def _analyze_with_llm(
-        self, conversation_history: List[Dict[str, str]]
-    ) -> Dict[str, Any]:
-        """
-        Analyze query with LLM to determine agent and parameters.
-
-        Args:
-            conversation_history: Full conversation including clarifications
-
-        Returns:
-            Analysis dict with agent, parameters, confidence, reasoning
-        """
-        # Build context from conversation history
-        context_parts = []
-        for turn in conversation_history:
-            role = turn["role"]
-            content = turn["content"]
-            if role == "user":
-                context_parts.append(f"User: {content}")
-            elif role == "assistant":
-                context_parts.append(f"Assistant: {content}")
-
-        full_context = "\n".join(context_parts)
-
-        # Format prompt with full conversation context
-        analysis_prompt = f"""Analyze this conversation and determine the configuration parameters.
-
-Conversation:
-{full_context}
-
-{ROUTING_ANALYSIS_PROMPT.split('User Request: "{query}"')[1]}"""
-
-        # Wrap in Qwen chat format
-        prompt = (
-            f"<|im_start|>user\n{analysis_prompt}<|im_end|>\n<|im_start|>assistant\n"
-        )
-
-        try:
-            response = self.llm_client.generate(
-                prompt=prompt,
-                model=self.routing_model,
-                max_tokens=500,
-                stop=["<|im_end|>", "<|im_start|>"],
-                stream=False,
-            )
-
-            # Extract JSON from response
-            response_text = response.strip()
-
-            # Handle potential markdown code blocks
-            if "```json" in response_text:
-                response_text = (
-                    response_text.split("```json")[1].split("```")[0].strip()
-                )
-            elif "```" in response_text:
-                response_text = response_text.split("```")[1].split("```")[0].strip()
-
-            # Remove any leading/trailing whitespace and parse
-            result = json.loads(response_text)
-            return result
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse LLM response as JSON: {e}")
-            logger.error(f"Response was: {response_text}")
-            # Fallback to defaults
-            return {
-                "agent": "code",
-                "parameters": {"language": "unknown", "project_type": "unknown"},
-                "confidence": 0.0,
-                "reasoning": "JSON parse error, using defaults",
-            }
-        except Exception as e:
-            logger.error(f"Error analyzing query: {e}")
-            raise RuntimeError(f"Failed to analyze query with Lemonade: {e}") from e
-
-    def _fallback_keyword_detection(self, query: str) -> Dict[str, Any]:
-        """
-        Fallback keyword-based detection when LLM fails.
-
-        Args:
-            query: User query
-
-        Returns:
-            Analysis dict with detected language and project type
-        """
-        query_lower = query.lower()
-
-        # TypeScript/Node.js indicators
-        ts_keywords = [
-            "nextjs",
-            "next.js",
-            "express",
-            "nestjs",
-            "koa",
-            "fastify",
-            "mongodb",
-            "mongoose",
-            "node.js",
-            "nodejs",
-            "react",
-            "vue",
-            "angular",
-            "svelte",
-            "vite",
-            "typescript",
-        ]
-
-        # Python indicators
-        py_keywords = ["django", "flask", "fastapi", "pandas", "numpy", "python"]
-
-        # Detect language
-        has_ts = any(kw in query_lower for kw in ts_keywords)
-        has_py = any(kw in query_lower for kw in py_keywords)
-
-        if has_ts:
-            language = "typescript"
-            reasoning = f"Detected TypeScript keywords: {[kw for kw in ts_keywords if kw in query_lower]}"
-        elif has_py:
-            language = "python"
-            reasoning = f"Detected Python keywords: {[kw for kw in py_keywords if kw in query_lower]}"
-        else:
-            language = "unknown"
-            reasoning = "No framework keywords detected"
-
-        # Detect project type based on language
-        if language == "typescript":
-            # All TypeScript web apps use Next.js fullstack approach
-            if any(kw in query_lower for kw in ["cli", "tool", "script", "utility"]):
-                project_type = "script"
-            else:
-                # Default to fullstack for any web-related TypeScript project
-                project_type = "fullstack"
-        elif language == "python":
-            # Python project types
-            if any(
-                kw in query_lower
-                for kw in [
-                    "api",
-                    "rest",
-                    "backend",
-                    "server",
-                    "fastapi",
-                    "flask",
-                    "django",
-                ]
-            ):
-                project_type = "api"
-            elif any(kw in query_lower for kw in ["web", "website", "dashboard"]):
-                project_type = "web"
-            elif any(
-                kw in query_lower
-                for kw in ["cli", "tool", "script", "utility", "calculator"]
-            ):
-                project_type = "script"
-            else:
-                project_type = "unknown"
-        else:
-            # Unknown language - try to detect project type from keywords
-            if any(
-                kw in query_lower
-                for kw in [
-                    "api",
-                    "rest",
-                    "backend",
-                    "web",
-                    "app",
-                    "dashboard",
-                    "frontend",
-                ]
-            ):
-                project_type = "fullstack"  # Assume web app
-            elif any(kw in query_lower for kw in ["cli", "tool", "script", "utility"]):
-                project_type = "script"
-            else:
-                project_type = "unknown"
-
-        return {
-            "agent": "code",
-            "parameters": {"language": language, "project_type": project_type},
-            "confidence": 0.8 if language != "unknown" else 0.3,
-            "reasoning": f"Keyword detection: {reasoning}",
+        context = {
+            "parameters": context_params,
+            "phase": kwargs.get("phase", "UNKNOWN")
         }
 
-    def _has_unknowns(self, analysis: Dict[str, Any]) -> bool:
-        """
-        Check if analysis has unknown parameters that need disambiguation.
+        # Route to the best agent
+        agent = self.orchestrator.route(query, context=context)
 
-        Args:
-            analysis: Analysis result from LLM
+        logger.info(f"Routed query '{query}' to {agent.__class__.__name__}")
 
-        Returns:
-            True if any required parameter is unknown or confidence is low
-        """
-        params = analysis.get("parameters", {})
-        confidence = analysis.get("confidence", 0.0)
-
-        # Check for explicit unknowns
-        has_unknown_params = (
-            params.get("language") == "unknown"
-            or params.get("project_type") == "unknown"
-        )
-
-        # Check for low confidence (< 0.9 means LLM is guessing)
-        low_confidence = confidence < 0.9
-
-        return has_unknown_params or low_confidence
-
-    def _generate_clarification_question(self, analysis: Dict[str, Any]) -> str:
-        """
-        Generate natural language clarification question based on unknowns.
-
-        Args:
-            analysis: Analysis result with unknowns
-
-        Returns:
-            Question string to ask user
-        """
-        params = analysis.get("parameters", {})
-        language = params.get("language")
-        project_type = params.get("project_type")
-
-        if language == "unknown" and project_type == "unknown":
-            return (
-                "What kind of application would you like to build?\n"
-                "(e.g., 'Next.js blog', 'Python CLI tool', 'Django API', 'React dashboard')"
-            )
-        elif language == "unknown":
-            if project_type == "fullstack":
-                return (
-                    "What language/framework would you like to use for your web application?\n"
-                    "(e.g., 'Next.js/TypeScript' for web apps, 'Django/Python' for APIs)"
-                )
-            elif project_type == "script":
-                return (
-                    "What language would you like to use for your script?\n"
-                    "(e.g., 'Python', 'TypeScript/Node.js')"
-                )
+        if execute:
+            # Check if the agent has a process_query method (legacy interface)
+            if hasattr(agent, "process_query"):
+                return agent.process_query(query, conversation_history, **kwargs)
+            # Check if it has an async execute method (new BaseAgent pipeline interface)
+            elif hasattr(agent, "execute"):
+                import asyncio
+                exec_context = {"goal": query, "phase": context["phase"], "parameters": context_params}
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Return coroutine if loop is running
+                        return agent.execute(exec_context)
+                    return loop.run_until_complete(agent.execute(exec_context))
+                except RuntimeError:
+                    return asyncio.run(agent.execute(exec_context))
             else:
-                return (
-                    "What language/framework would you like to use?\n"
-                    "(e.g., 'Next.js', 'Django', 'Python', 'TypeScript')"
-                )
-        elif project_type == "unknown":
-            if language == "typescript":
-                return (
-                    "What type of TypeScript project would you like to create?\n"
-                    "(e.g., 'web app' for Next.js full-stack, 'CLI tool' for Node.js script)"
-                )
-            else:  # python
-                return (
-                    "What type of Python project would you like to create?\n"
-                    "(e.g., 'REST API', 'web app', 'CLI tool', 'data analysis script')"
-                )
-
-        return "Please provide more details about your project."
-
-    def _get_console(self):
-        """Return the configured output handler or a default console."""
-        if self.output_handler:
-            return self.output_handler
-
-        from gaia.agents.base.console import AgentConsole
-
-        return AgentConsole()
-
-    def _enforce_typescript_only(
-        self, language: str, project_type: str, console
-    ) -> tuple[str, str]:
-        """Warn and normalize when routing to unsupported languages."""
-        is_nextjs = language == "typescript" and project_type == "fullstack"
-
-        if not is_nextjs:
-            console.print_error(
-                "Only TypeScript (Next.js) is currently supported. "
-                "Please try a Next.js/TypeScript request."
-            )
-            raise SystemExit(1)
-
-        return language, project_type
-
-    def _default_unknown_language_to_typescript(
-        self, analysis: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Default unknown language/project type to TypeScript/Next.js."""
-        params = analysis.get("parameters", {})
-        language = params.get("language")
-
-        if language != "unknown":
-            return analysis
-
-        console = self._get_console()
-        console.print_info(
-            "Defaulting to TypeScript (Next.js) because the language could not be determined."
-        )
-
-        params["language"] = "typescript"
-        if params.get("project_type") == "unknown":
-            params["project_type"] = "fullstack"
-
-        analysis["parameters"] = params
-        analysis["confidence"] = 1.0
-        analysis["reasoning"] = (
-            analysis.get("reasoning", "")
-            + " Defaulted to TypeScript/Next.js due to unknown language."
-        ).strip()
-
-        return analysis
-
-    def _create_agent(self, analysis: Dict[str, Any]) -> Agent:
-        """
-        Create configured agent based on analysis.
-
-        Args:
-            analysis: Resolved analysis with all parameters
-
-        Returns:
-            Configured agent instance
-        """
-        agent_type = analysis.get("agent", "code")
-        params = analysis.get("parameters", {})
-
-        if agent_type == "code":
-            from gaia.agents.code.agent import CodeAgent
-
-            language = params.get("language", "python")
-            project_type = params.get("project_type", "script")
-
-            logger.debug(
-                f"Creating CodeAgent with language={language}, project_type={project_type}"
-            )
-
-            # Use passed output_handler or create AgentConsole (CLI default)
-            console = self._get_console()
-            language, project_type = self._enforce_typescript_only(
-                language, project_type, console
-            )
-
-            # Print agent selected message
-            console.print_agent_selected("CodeAgent", language, project_type)
-
-            # Build agent kwargs, including output_handler if provided
-            agent_init_kwargs = dict(self.agent_kwargs)
-            if self.output_handler:
-                agent_init_kwargs["output_handler"] = self.output_handler
-
-            # Merge routing params with any additional kwargs
-            return CodeAgent(
-                language=language, project_type=project_type, **agent_init_kwargs
-            )
-        else:
-            raise ValueError(f"Unknown agent type: {agent_type}")
-
-    def _create_agent_with_defaults(self, analysis: Dict[str, Any]) -> Agent:
-        """
-        Create agent with default values for unknown parameters.
-
-        Args:
-            analysis: Analysis that may have unknowns
-
-        Returns:
-            Configured agent with defaults
-        """
-        params = analysis.get("parameters", {})
-
-        # Determine language with defaults
-        language = params.get("language")
-        if language == "unknown":
-            # Default to Python as the safest option
-            language = "python"
-            logger.info("Defaulting to Python for unknown language")
-
-        # Determine project type with smart defaults based on language
-        project_type = params.get("project_type")
-        if project_type == "unknown":
-            if language == "typescript":
-                # TypeScript defaults to fullstack (Next.js)
-                project_type = "fullstack"
-                logger.info("Defaulting to fullstack (Next.js) for TypeScript")
-            else:
-                # Python defaults to script
-                project_type = "script"
-                logger.info("Defaulting to script for Python")
-
-        from gaia.agents.code.agent import CodeAgent
-
-        console = self._get_console()
-        language, project_type = self._enforce_typescript_only(
-            language, project_type, console
-        )
-
-        # Build agent kwargs, including output_handler if provided
-        agent_init_kwargs = dict(self.agent_kwargs)
-        if self.output_handler:
-            agent_init_kwargs["output_handler"] = self.output_handler
-
-        return CodeAgent(
-            language=language, project_type=project_type, **agent_init_kwargs
-        )
+                raise AttributeError(f"Agent {agent.__class__.__name__} does not support execution.")
+        
+        # Return agent instance
+        return agent

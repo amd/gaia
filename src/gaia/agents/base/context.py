@@ -63,16 +63,16 @@ class AgentConstraints:
     Agent execution constraints.
 
     Attributes:
-        timeout: Maximum execution time in seconds
-        max_steps: Maximum number of execution steps
-        required_resources: Required resources/permissions
-        parallel_ok: Whether agent can run in parallel
+        timeout_seconds: Maximum execution time in seconds
+        max_file_changes: Maximum number of files to change
+        max_lines_per_file: Maximum lines to change per file
+        requires_review: Whether the agent requires review
     """
 
-    timeout: Optional[int] = None
-    max_steps: int = 100
-    required_resources: List[str] = field(default_factory=list)
-    parallel_ok: bool = False
+    timeout_seconds: Optional[int] = None
+    max_file_changes: int = 10
+    max_lines_per_file: int = 100
+    requires_review: bool = False
 
 
 @dataclass
@@ -88,11 +88,23 @@ class AgentDefinition:
         triggers: Activation triggers
         constraints: Execution constraints
         metadata: Additional metadata
+        version: Agent version
+        category: Agent category
+        enabled: Whether agent is enabled
+        system_prompt: Default system prompt
+        tools: List of tool names
+        execution_targets: Target execution environments
     """
 
     id: str
     name: str
     description: str
+    version: str = "1.0.0"
+    category: str = ""
+    enabled: bool = True
+    system_prompt: str = ""
+    tools: List[str] = field(default_factory=list)
+    execution_targets: Dict[str, str] = field(default_factory=dict)
     capabilities: AgentCapabilities = field(default_factory=AgentCapabilities)
     triggers: AgentTriggers = field(default_factory=AgentTriggers)
     constraints: AgentConstraints = field(default_factory=AgentConstraints)
