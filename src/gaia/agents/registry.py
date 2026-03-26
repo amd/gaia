@@ -217,6 +217,7 @@ class AgentRegistry:
                     max_lines_per_file=constraints_data.get("max_lines_per_file", 500),
                     requires_review=constraints_data.get("requires_review", True),
                     timeout_seconds=constraints_data.get("timeout_seconds", 300),
+                    max_steps=constraints_data.get("max_steps", 100),
                 ),
                 metadata=agent_data.get("metadata", {}),
                 enabled=agent_data.get("enabled", True),

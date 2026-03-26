@@ -14,6 +14,7 @@ from gaia.agents.base.context import (  # noqa: F401
     AgentCapabilities,
     AgentTriggers,
     AgentConstraints,
+    AgentResult,
     AgentDefinition,
     BaseAgent,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "AgentCapabilities",
     "AgentTriggers",
     "AgentConstraints",
+    "AgentResult",
     "AgentDefinition",
     "BaseAgent",
 ]
