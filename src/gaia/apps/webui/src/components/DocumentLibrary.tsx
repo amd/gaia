@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock } from 'lucide-react';
+import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -68,7 +68,9 @@ function formatFullTimestamp(isoString: string): string {
 }
 
 export function DocumentLibrary() {
-    const { documents, setDocuments, setShowDocLibrary, setShowFileBrowser } = useChatStore();
+    const { documents, setDocuments, setShowDocLibrary, setShowFileBrowser,
+            currentSessionId, sessions, updateSessionInList } = useChatStore();
+    const currentSession = sessions.find(s => s.id === currentSessionId) ?? null;
     const [isDragOver, setIsDragOver] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
@@ -223,6 +225,22 @@ export function DocumentLibrary() {
         try {
             const doc = await api.uploadDocumentByPath(filepath);
             log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, t);
+            // Auto-attach to the active session so the agent can immediately use it
+            if (currentSessionId && doc?.id) {
+                try {
+                    await api.attachDocument(currentSessionId, doc.id);
+                    const freshSession = useChatStore.getState().sessions.find(s => s.id === currentSessionId);
+                    const existing = freshSession?.document_ids ?? [];
+                    if (!existing.includes(doc.id)) {
+                        updateSessionInList(currentSessionId, {
+                            document_ids: [...existing, doc.id],
+                        });
+                    }
+                    log.doc.info(`Auto-attached "${filename}" to session ${currentSessionId}`);
+                } catch (attachErr) {
+                    log.doc.warn(`Could not attach document to session: ${attachErr}`);
+                }
+            }
             // Refresh document list
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
@@ -236,7 +254,7 @@ export function DocumentLibrary() {
         } finally {
             setIsUploading(false);
         }
-    }, [setDocuments]);
+    }, [currentSessionId, updateSessionInList, setDocuments]);
 
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
@@ -285,6 +303,25 @@ export function DocumentLibrary() {
             log.doc.error(`Failed to cancel indexing: ${doc?.filename || id}`, err);
         }
     }, [documents, setDocuments]);
+
+    const handleAttachDoc = useCallback(async (docId: string) => {
+        if (!currentSessionId) return;
+        const doc = documents.find((d) => d.id === docId);
+        log.doc.info(`Attaching document to session: ${doc?.filename || docId}`);
+        try {
+            await api.attachDocument(currentSessionId, docId);
+            const freshSession = useChatStore.getState().sessions.find(s => s.id === currentSessionId);
+            const existing = freshSession?.document_ids ?? [];
+            if (!existing.includes(docId)) {
+                updateSessionInList(currentSessionId, {
+                    document_ids: [...existing, docId],
+                });
+            }
+            log.doc.info(`Attached "${doc?.filename || docId}" to session ${currentSessionId}`);
+        } catch (err) {
+            log.doc.error(`Failed to attach document to session: ${doc?.filename || docId}`, err);
+        }
+    }, [currentSessionId, documents, updateSessionInList]);
 
     const handleFolderSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
@@ -459,6 +496,18 @@ export function DocumentLibrary() {
                                             aria-label={`Open containing folder for ${doc.filename}`}
                                         >
                                             <FolderOpen size={14} />
+                                        </button>
+                                    )}
+                                    {currentSessionId &&
+                                     doc.indexing_status === 'complete' &&
+                                     !currentSession?.document_ids?.includes(doc.id) && (
+                                        <button
+                                            className="btn-icon-sm doc-attach"
+                                            onClick={() => handleAttachDoc(doc.id)}
+                                            title="Use in current session"
+                                            aria-label={`Attach ${doc.filename} to current session`}
+                                        >
+                                            <Link2 size={14} />
                                         </button>
                                     )}
                                     {doc.indexing_status !== 'indexing' && doc.indexing_status !== 'pending' && (
