@@ -159,6 +159,7 @@ class MCPClientManager:
                 logger.error(f"Error disconnecting from '{name}': {e}")
 
         self._clients.clear()
+        self._failed.clear()
 
     def load_from_config(self) -> None:
         """Load and connect to all servers from configuration.

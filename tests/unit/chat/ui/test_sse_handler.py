@@ -140,22 +140,22 @@ class TestPrintProcessingStart:
         handler.print_processing_start("hello", 10)
         assert handler._tool_count == 0
 
-    def test_suppresses_thinking_event(self, handler):
-        """print_processing_start no longer emits a thinking event.
-
-        The "Sending to <model>..." message was suppressed because the
-        streaming chat flow in _chat_helpers already emits its own
-        "Connecting to ..." thinking event, so the duplicate added noise.
-        """
+    def test_emits_processing_status_event(self, handler):
+        """print_processing_start emits a 'working' status event naming the model."""
         handler.print_processing_start("hello", 10, model_id="qwen")
         events = _drain(handler)
-        assert len(events) == 0
+        assert len(events) == 1
+        assert events[0]["type"] == "status"
+        assert events[0]["status"] == "working"
+        assert "qwen" in events[0]["message"]
 
-    def test_suppresses_thinking_event_no_model(self, handler):
-        """Same suppression applies when no model_id is provided."""
+    def test_emits_processing_status_event_no_model(self, handler):
+        """When no model_id is provided the label falls back to 'LLM'."""
         handler.print_processing_start("hello", 10)
         events = _drain(handler)
-        assert len(events) == 0
+        assert len(events) == 1
+        assert events[0]["type"] == "status"
+        assert "LLM" in events[0]["message"]
 
 
 # ===========================================================================
@@ -1547,10 +1547,9 @@ class TestEventSequences:
         events = _drain(handler)
 
         # Verify event types in order
-        # Note: print_processing_start no longer emits a thinking event
-        # (it was suppressed to reduce noise since _chat_helpers emits its own)
         event_types = [e["type"] if e is not None else None for e in events]
         assert event_types == [
+            "status",  # print_processing_start — "Processing with..."
             "step",  # step_header
             "thinking",  # thought
             "tool_start",  # tool_usage

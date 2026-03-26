@@ -141,6 +141,14 @@ class TestMCPClientManager:
         mock_client2.disconnect.assert_called_once()
         assert len(manager.list_servers()) == 0
 
+    def test_disconnect_all_clears_failed_dict(self):
+        """disconnect_all must clear _failed so stale errors don't persist."""
+        manager = MCPClientManager()
+        # Seed _failed directly to simulate a previous failed connection
+        manager._failed["removed_server"] = "connection refused"
+        manager.disconnect_all()
+        assert len(manager._failed) == 0
+
     @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
     def test_add_server_requires_config_dict(self, mock_client_class):
         """Test that add_server requires a config dict, not a command string."""

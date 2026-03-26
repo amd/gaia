@@ -1291,6 +1291,21 @@ class TestSessionDocumentEndpoints:
         assert resp.status_code == 200
         assert resp.json()["detached"] is True
 
+    def test_detach_document_evicts_agent_cache(self, client, db):
+        """detach_document must evict the cached ChatAgent so the next turn
+        rebuilds without the removed document (regression guard)."""
+        create_resp = client.post("/api/sessions", json={})
+        session_id = create_resp.json()["id"]
+
+        doc = db.add_document("evict.pdf", "/evict.pdf", "evict_hash")
+        db.attach_document(session_id, doc["id"])
+
+        with patch("gaia.ui.routers.sessions.evict_session_agent") as mock_evict:
+            resp = client.delete(f"/api/sessions/{session_id}/documents/{doc['id']}")
+
+        assert resp.status_code == 200
+        mock_evict.assert_called_once_with(session_id)
+
 
 class TestCORSConfiguration:
     """Tests for CORS middleware configuration."""
