@@ -777,7 +777,7 @@ def _ensure_webui_built(log=None):
         print("Warning: npm not found. Skipping frontend rebuild.")
 
 
-def _launch_agent_ui(port=4200, base_url=None, log=None):
+def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False):
     """Launch the Agent UI server (FastAPI + uvicorn).
 
     Reused by top-level --ui, gaia chat --ui, and the interactive menu.
@@ -812,7 +812,13 @@ def _launch_agent_ui(port=4200, base_url=None, log=None):
         import uvicorn
 
         app = create_app()
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+        uvicorn.run(
+            app,
+            host="127.0.0.1",
+            port=port,
+            log_level="debug" if debug else "info",
+            access_log=debug,
+        )
     except ImportError as e:
         print(f"\nMissing dependencies for Agent UI: {e}")
         print("\n   The Agent UI requires extra dependencies that are not installed.")
@@ -2703,6 +2709,7 @@ Examples:
                 port=getattr(args, "ui_port", 4200),
                 base_url=getattr(args, "base_url", None),
                 log=log,
+                debug=getattr(args, "debug", False),
             )
             return
 
@@ -2716,6 +2723,7 @@ Examples:
             port=getattr(args, "ui_port", 4200),
             base_url=getattr(args, "base_url", None),
             log=log,
+            debug=getattr(args, "debug", False),
         )
         return
 
@@ -2734,6 +2742,7 @@ Examples:
             port=getattr(args, "ui_port", 4200),
             base_url=getattr(args, "base_url", None),
             log=log,
+            debug=getattr(args, "debug", False),
         )
         return
 

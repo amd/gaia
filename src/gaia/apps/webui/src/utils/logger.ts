@@ -32,6 +32,18 @@ const ICONS: Record<string, string> = {
 
 type Category = keyof typeof COLORS;
 
+/** Verbose logging off by default. Enable via ?debug URL param or localStorage. */
+const _verbose = (() => {
+    try {
+        if (localStorage.getItem('gaia-debug') === 'true') return true;
+        if (typeof location !== 'undefined') {
+            const p = new URLSearchParams(location.search);
+            if (p.has('debug') || p.has('verbose')) return true;
+        }
+    } catch { /* SSR / restricted storage */ }
+    return false;
+})();
+
 function formatTimestamp(): string {
     const now = new Date();
     return now.toLocaleTimeString('en-US', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
@@ -46,6 +58,7 @@ function createLog(category: Category) {
 
     return {
         info: (message: string, ...data: any[]) => {
+            if (!_verbose) return;
             const ts = formatTimestamp();
             if (data.length > 0) {
                 console.log(`${badge} %c${ts} %c${message}`, badgeStyle, timeStyle, 'color: inherit;', ...data);
@@ -62,11 +75,13 @@ function createLog(category: Category) {
             console.error(`${badge} %c${ts} %c${message}`, badgeStyle, timeStyle, 'color: inherit;', ...data);
         },
         debug: (message: string, ...data: any[]) => {
+            if (!_verbose) return;
             const ts = formatTimestamp();
             console.debug(`${badge} %c${ts} %c${message}`, badgeStyle, timeStyle, 'color: #999;', ...data);
         },
         /** Log with a timing duration in ms */
         timed: (message: string, startMs: number, ...data: any[]) => {
+            if (!_verbose) return;
             const duration = Math.round(performance.now() - startMs);
             const ts = formatTimestamp();
             const durColor = duration > 2000 ? 'color: #e57373;' : duration > 500 ? 'color: #ffb74d;' : 'color: #81c784;';
@@ -107,8 +122,15 @@ export function logBanner(version: string) {
         'background: #333; color: #fff; padding: 4px 8px;',
         'background: #1a1a1a; color: #888; padding: 4px 8px; border-radius: 0 4px 4px 0;',
     );
-    console.log(
-        '%cDebug logging enabled. Categories: [fetch] [state] [chat] [stream] [ui] [docs] [sys] [nav]',
-        'color: #666; font-style: italic;',
-    );
+    if (_verbose) {
+        console.log(
+            '%cVerbose logging enabled. Categories: [fetch] [state] [chat] [stream] [ui] [docs] [sys] [nav]',
+            'color: #666; font-style: italic;',
+        );
+    } else {
+        console.log(
+            '%cVerbose logging: add ?debug to URL or run localStorage.setItem("gaia-debug","true")',
+            'color: #666; font-style: italic;',
+        );
+    }
 }
