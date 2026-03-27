@@ -1,27 +1,24 @@
 ---
 title: "v0.17.0"
-description: "GAIA Agent UI — private local alternative to ChatGPT with document Q&A on AMD hardware"
+description: "GAIA Agent UI — a privacy-first desktop app for running AI agents locally on AMD hardware"
 ---
 
 # GAIA v0.17.0 Release Notes
 
-Your documents contain answers — now you can ask questions and get cited responses without anything leaving your machine. GAIA v0.17.0 introduces the **Agent UI**, a desktop chat interface that turns your AMD PC into a private, local alternative to ChatGPT with full document Q&A.
+Run AI agents locally on your PC — analyze documents, execute tools, and accomplish tasks without sending data to the cloud. GAIA v0.17.0 introduces the **Agent UI**, a privacy-first desktop application that puts a local AI agent on your AMD hardware.
 
 ```bash
-pip install --upgrade "amd-gaia[ui,rag]"
-gaia chat --ui
+npm install -g @amd-gaia/agent-ui
+gaia-ui
 ```
 
 **Why upgrade:**
-- **Keep sensitive documents private** — Ask questions about medical records, contracts, financial data, or any of 53+ file types and get answers with page citations. Nothing is uploaded to the cloud — everything runs locally on your AMD hardware
-- **Use AI agents you can trust** — Tool guardrails require your approval before the agent executes commands or writes files, so you stay in control of what happens on your machine
+- **Keep sensitive documents on your machine** — Ask questions about medical records, contracts, financial data, or any of 53+ file types and get answers with page citations. Nothing leaves your PC — the agent runs 100% locally on your AMD hardware
+- **An AI agent you can trust** — Tool guardrails require your approval before the agent executes commands or writes files, so you stay in control of what happens on your machine
 - **Works on modest hardware** — A 78% smaller system prompt means GAIA now runs reliably on smaller models like Qwen3.5 without timeouts, so you don't need top-tier hardware to get started
-- **Access from anywhere** — Built-in ngrok tunnel lets you chat with your local GAIA instance from your phone or tablet while your data stays on your PC
+- **Access from anywhere** — Built-in ngrok tunnel lets you use your local GAIA instance from your phone or tablet while your data stays on your PC
 
-**Try it in 60 seconds:**
-1. `pip install --upgrade "amd-gaia[ui,rag]"`
-2. `gaia chat --ui` — opens the Agent UI in your browser
-3. Drop a PDF into the chat and ask: "Summarize this document"
+Get started with the [Agent UI guide](/guides/agent-ui) — install, launch, and run your first task in under 60 seconds.
 
 ---
 
@@ -29,14 +26,15 @@ gaia chat --ui
 
 ### GAIA Agent UI
 
-A private, local ChatGPT-like experience that runs entirely on your AMD hardware (PR #428). Upload documents, ask questions, and get cited answers — without sending anything to the cloud.
+A privacy-first desktop application for running AI agents locally on your AMD hardware (PR #428). Analyze documents, generate code, search files, execute tools, and accomplish tasks — without sending anything to the cloud.
 
 **What you can do:**
-- **Ask questions about your documents** — Drag-and-drop PDFs, Word docs, or any of 53+ file formats and get answers with page-level citations, powered by local RAG
-- **Access from your phone** — Built-in ngrok tunnel lets you chat with your local GAIA instance from any device
+- **Analyze your documents** — Drag-and-drop PDFs, Word docs, or any of 53+ file formats and get answers with page-level citations, powered by local RAG
+- **Execute tools safely** — The agent can run shell commands, write files, and use MCP tools — but only after you approve each action
+- **Search and browse files** — The agent can find files, explore directories, and locate content across your projects
+- **Access from your phone** — Built-in ngrok tunnel lets you use your local GAIA instance from any device
 - **Watch the agent think** — Real-time streaming with `<think>` block rendering shows the agent's reasoning process inline
-- **Pick up where you left off** — Create, switch, and persist chat sessions with full conversation history
-- **Stay in control** — Tool execution guardrails ask before running commands; device detection warns about unsupported hardware
+- **Pick up where you left off** — Create, switch, and persist sessions with full history
 - **Monitor performance** — Hover tooltips show token counts, latency, and throughput metrics per response
 
 **Under the hood:**
@@ -48,14 +46,11 @@ A private, local ChatGPT-like experience that runs entirely on your AMD hardware
 - 13+ bug fixes across backend, frontend, and integration layers
 
 ```bash
-# Launch the Agent UI
-gaia chat --ui
-
-# Custom port
-gaia chat --ui --ui-port 8080
+npm install -g @amd-gaia/agent-ui
+gaia-ui
 ```
 
-See the [Agent UI documentation](/guides/agent-ui) for setup and usage.
+See the [Agent UI guide](/guides/agent-ui) for full setup, prerequisites, and onboarding.
 
 ---
 
@@ -65,7 +60,6 @@ AI agents are powerful but can be unpredictable. This release adds a safety laye
 
 - **Confirmation popup** — **Allow**, **Deny**, or **Always Allow** before `run_shell_command` and other write/execute tools
 - **60-second timeout** — Auto-denies if you don't respond within a minute
-- **CLI path unaffected** — Terminal-based usage auto-approves to preserve existing workflow
 - **Expanded coverage** — Extended to cover all write/execute tools, not just shell commands (PR #604)
 
 ---
@@ -87,7 +81,7 @@ If you previously experienced timeouts or slow first responses on smaller models
 
 - **17,600 → 3,853 tokens (78% reduction)** — Two-tier RAG gating only injects document context when relevant, meaning 4–5× faster prompt processing
 - **Qwen3.5 timeouts eliminated** — Smaller prompt fits within context window of constrained models
-- **Chat timeout increased to 600s** — Prevents premature timeouts on complex queries
+- **Timeout increased to 600s** — Prevents premature timeouts on complex queries
 
 ---
 
@@ -103,7 +97,7 @@ If you previously experienced timeouts or slow first responses on smaller models
 - **Lemonade v10 device keys** — Updated device key references: `npu` → `amd_npu`, `gpu` → `amd_igpu`/`amd_dgpu`. Fixed NPU detection in Hardware Advisor (PR #548)
 - **Agent UI rendering** — Fixed post-tool thinking visibility, FileListView layout, and text spacing (PR #566)
 - **Agent UI guardrails & Windows paths** — Tightened JSON safety regex, added platform context to system prompt for native Windows paths, cleared messages before session switch (PR #604)
-- **RAG indexing guards** — `gaia init` now installs RAG dependencies for chat/rag/all profiles. Added None guards to 8 RAG tools preventing crashes when dependencies aren't installed (PR #605)
+- **RAG indexing guards** — `gaia init` now installs RAG dependencies for all profiles. Added None guards to 8 RAG tools preventing crashes when dependencies aren't installed (PR #605)
 - **Reverted accidental changes** — Restored per-file upload locking, tool confirmation flow, CSS design system, and formatting utilities accidentally reverted during a stale merge (PR #608)
 - **v0.16.1 release notes** — Added missing PRs to previous release notes (PR #589)
 
@@ -112,19 +106,7 @@ If you previously experienced timeouts or slow first responses on smaller models
 ## Upgrade
 
 ```bash
-# Install/upgrade GAIA
-pip install --upgrade amd-gaia
-
-# Include RAG support for document Q&A
-pip install --upgrade "amd-gaia[rag]"
-
-# Include UI support for Agent UI
-pip install --upgrade "amd-gaia[ui]"
-
-# Build C++ framework
-cd cpp
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
+npm install -g @amd-gaia/agent-ui@latest
 ```
 
 ---
@@ -144,7 +126,7 @@ cmake --build build --config Release
 - `8c2d24a` - security: fix TOCTOU race condition in document upload endpoint (#448) (#564)
 - `bae3a62` - docs(releases): add missing PRs to v0.16.1 release notes (#589)
 - `25c6d25` - Agent UI: terminal animations, pixelated cursor, and docs fixes (#568)
-- `b2ace80` - Add GAIA Agent UI: privacy-first desktop chat with document Q&A (#428)
+- `b2ace80` - Add GAIA Agent UI: privacy-first desktop agent with document Q&A (#428)
 - `4015bb2` - Fix Lemonade v10 system-info device key compatibility (#548)
 
 Full Changelog: [v0.16.1...v0.17.0](https://github.com/amd/gaia/compare/v0.16.1...v0.17.0)
