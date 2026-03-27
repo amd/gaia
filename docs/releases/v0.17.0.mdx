@@ -1,11 +1,11 @@
 ---
 title: "v0.17.0"
-description: "GAIA Agent UI — a privacy-first desktop app for running AI agents locally on AMD hardware"
+description: "GAIA Agent UI — a privacy-first web app for running AI agents locally on AMD hardware"
 ---
 
 # GAIA v0.17.0 Release Notes
 
-Run AI agents locally on your PC — analyze documents, execute tools, and accomplish tasks without sending data to the cloud. GAIA v0.17.0 introduces the **Agent UI**, a privacy-first desktop application that puts a local AI agent on your AMD hardware.
+Run AI agents locally on your PC — analyze documents, execute tools, and accomplish tasks without sending data to the cloud. GAIA v0.17.0 introduces the **Agent UI**, a privacy-first web application that puts a local AI agent on your AMD hardware.
 
 ```bash
 npm install -g @amd-gaia/agent-ui
@@ -26,7 +26,7 @@ Get started with the [Agent UI guide](/guides/agent-ui) — install, launch, and
 
 ### GAIA Agent UI
 
-A privacy-first desktop application for running AI agents locally on your AMD hardware (PR #428). Analyze documents, generate code, search files, execute tools, and accomplish tasks — without sending anything to the cloud.
+A privacy-first web application for running AI agents locally on your AMD hardware (PR #428). Analyze documents, generate code, search files, execute tools, and accomplish tasks — without sending anything to the cloud.
 
 **What you can do:**
 - **Analyze your documents** — Drag-and-drop PDFs, Word docs, or any of 53+ file formats and get answers with page-level citations, powered by local RAG
@@ -97,7 +97,7 @@ If you previously experienced timeouts or slow first responses on smaller models
 - **Lemonade v10 device keys** — Updated device key references: `npu` → `amd_npu`, `gpu` → `amd_igpu`/`amd_dgpu`. Fixed NPU detection in Hardware Advisor (PR #548)
 - **Agent UI rendering** — Fixed post-tool thinking visibility, FileListView layout, and text spacing (PR #566)
 - **Agent UI guardrails & Windows paths** — Tightened JSON safety regex, added platform context to system prompt for native Windows paths, cleared messages before session switch (PR #604)
-- **RAG indexing guards** — `gaia init` now installs RAG dependencies for all profiles. Added None guards to 8 RAG tools preventing crashes when dependencies aren't installed (PR #605)
+- **RAG indexing guards** — `gaia init` now installs RAG dependencies for all profiles. Fixed crashes that occurred when optional dependencies weren't installed (PR #605)
 - **Reverted accidental changes** — Restored per-file upload locking, tool confirmation flow, CSS design system, and formatting utilities accidentally reverted during a stale merge (PR #608)
 - **v0.16.1 release notes** — Added missing PRs to previous release notes (PR #589)
 
@@ -126,7 +126,7 @@ npm install -g @amd-gaia/agent-ui@latest
 - `8c2d24a` - security: fix TOCTOU race condition in document upload endpoint (#448) (#564)
 - `bae3a62` - docs(releases): add missing PRs to v0.16.1 release notes (#589)
 - `25c6d25` - Agent UI: terminal animations, pixelated cursor, and docs fixes (#568)
-- `b2ace80` - Add GAIA Agent UI: privacy-first desktop agent with document Q&A (#428)
+- `b2ace80` - Add GAIA Agent UI: privacy-first local agent with document Q&A (#428)
 - `4015bb2` - Fix Lemonade v10 system-info device key compatibility (#548)
 
 Full Changelog: [v0.16.1...v0.17.0](https://github.com/amd/gaia/compare/v0.16.1...v0.17.0)
