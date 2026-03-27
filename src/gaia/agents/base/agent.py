@@ -85,6 +85,7 @@ class Agent(abc.ABC):
         base_url: Optional[str] = None,
         model_id: str = None,
         max_steps: int = 20,
+        max_files_shown: int = 0,
         debug_prompts: bool = False,
         show_prompts: bool = False,
         output_dir: str = None,
@@ -129,6 +130,7 @@ class Agent(abc.ABC):
             []
         )  # Store conversation history for session persistence
         self.max_steps = max_steps
+        self.max_files_shown = max_files_shown
         self.debug_prompts = debug_prompts
         self.show_prompts = show_prompts  # Separate flag for displaying prompts
         self.output_dir = output_dir if output_dir else os.getcwd()
