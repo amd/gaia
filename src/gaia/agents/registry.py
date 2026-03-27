@@ -5,10 +5,24 @@ Dynamic agent registry with hot-reload support and capability-based routing.
 """
 
 import asyncio
+import concurrent.futures
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Callable
 import threading
+
+
+def _run_async(coro):
+    """Run an async coroutine from sync context, safe when a loop is already running."""
+    try:
+        asyncio.get_running_loop()
+        # Already inside an async context — delegate to a new thread to avoid deadlock
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, coro)
+            return future.result()
+    except RuntimeError:
+        return asyncio.run(coro)
 
 try:
     import yaml
@@ -19,6 +33,7 @@ from gaia.agents.base import AgentDefinition, AgentTriggers, AgentCapabilities, 
 from gaia.exceptions import AgentNotFoundError, AgentLoadError, AgentSelectionError
 from gaia.utils.logging import get_logger
 from gaia.utils.id_generator import generate_id
+from gaia.pipeline.defect_types import DEFECT_SPECIALISTS, DefectType
 
 
 logger = get_logger(__name__)
@@ -100,6 +115,11 @@ class AgentRegistry:
         self._capability_index: Dict[str, List[str]] = {}  # capability -> agent IDs
         self._trigger_index: Dict[str, List[str]] = {}  # keyword -> agent IDs
         self._category_index: Dict[str, List[str]] = {}  # category -> agent IDs
+
+        # LRU cache for capability lookups (QW-002)
+        self._get_agents_by_capability_cached = self._lru_cache_wrapper(
+            self._get_agents_by_capability_impl
+        )
 
         # Thread safety
         self._lock = asyncio.Lock()
@@ -217,7 +237,6 @@ class AgentRegistry:
                     max_lines_per_file=constraints_data.get("max_lines_per_file", 500),
                     requires_review=constraints_data.get("requires_review", True),
                     timeout_seconds=constraints_data.get("timeout_seconds", 300),
-                    max_steps=constraints_data.get("max_steps", 100),
                 ),
                 metadata=agent_data.get("metadata", {}),
                 enabled=agent_data.get("enabled", True),
@@ -257,6 +276,8 @@ class AgentRegistry:
                     if kw_lower not in self._trigger_index:
                         self._trigger_index[kw_lower] = []
                     self._trigger_index[kw_lower].append(agent_id)
+
+        self.invalidate_capability_cache()
 
     async def _setup_hot_reload(self) -> None:
         """Set up file watcher for hot-reload."""
@@ -438,13 +459,7 @@ class AgentRegistry:
                 scored_candidates.sort(key=lambda x: (-x[1], x[0]))
                 return scored_candidates[0][0]
 
-        # Run async function in current event loop
-        try:
-            loop = asyncio.get_event_loop()
-            return loop.run_until_complete(_select())
-        except RuntimeError:
-            # No event loop - create one
-            return asyncio.run(_select())
+        return _run_async(_select())
 
     def get_agent(self, agent_id: str) -> Optional[AgentDefinition]:
         """
@@ -479,13 +494,15 @@ class AgentRegistry:
         """
         Get all agents with a capability.
 
+        Uses LRU-cached capability index lookup (QW-002).
+
         Args:
             capability: Capability name
 
         Returns:
             List of AgentDefinition instances
         """
-        agent_ids = self._capability_index.get(capability, [])
+        agent_ids = self._get_agents_by_capability_cached(capability)
         return [
             self._agents[aid]
             for aid in agent_ids
@@ -517,11 +534,7 @@ class AgentRegistry:
                 self._build_indexes()
             logger.info(f"Registered agent: {definition.id}")
 
-        try:
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(_register())
-        except RuntimeError:
-            asyncio.run(_register())
+        _run_async(_register())
 
     def unregister_agent(self, agent_id: str) -> bool:
         """
@@ -542,11 +555,7 @@ class AgentRegistry:
                     return True
                 return False
 
-        try:
-            loop = asyncio.get_event_loop()
-            return loop.run_until_complete(_unregister())
-        except RuntimeError:
-            return asyncio.run(_unregister())
+        return _run_async(_unregister())
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get registry statistics."""
@@ -560,6 +569,90 @@ class AgentRegistry:
             "capabilities": len(self._capability_index),
             "trigger_keywords": len(self._trigger_index),
         }
+
+    def _get_agents_by_capability_impl(self, capability: str) -> List[str]:
+        """Internal capability lookup for LRU caching (QW-002)."""
+        return self._capability_index.get(capability, [])
+
+    def _lru_cache_wrapper(self, func):
+        """
+        Create an LRU-cached version of a method.
+
+        Args:
+            func: Function to wrap
+
+        Returns:
+            LRU-cached function
+        """
+        return lru_cache(maxsize=128)(func)
+
+    def invalidate_capability_cache(self) -> None:
+        """
+        Invalidate the LRU cache for capability lookups.
+
+        Should be called when agents are added or removed.
+        """
+        if hasattr(self, '_get_agents_by_capability_cached') and hasattr(
+            self._get_agents_by_capability_cached, 'cache_clear'
+        ):
+            self._get_agents_by_capability_cached.cache_clear()
+
+    def get_specialist_agent(
+        self,
+        defect_type: str,
+        fallback: str = "senior-developer",
+    ) -> Optional[str]:
+        """
+        Get specialist agent for a defect type.
+
+        Uses the centralized DEFECT_SPECIALISTS mapping from defect_types module
+        for consistent specialist routing across the GAIA pipeline.
+
+        Args:
+            defect_type: Defect type name (e.g., "SECURITY", "PERFORMANCE")
+            fallback: Fallback agent ID if no specialist found
+
+        Returns:
+            Agent ID of specialist, or fallback if not found
+        """
+        defect_type_upper = defect_type.upper() if isinstance(defect_type, str) else ""
+        try:
+            defect_enum = DefectType[defect_type_upper]
+        except KeyError:
+            defect_enum = DefectType.UNKNOWN
+
+        candidates = DEFECT_SPECIALISTS.get(defect_enum, [])
+
+        for candidate_id in candidates:
+            agent = self.get_agent(candidate_id)
+            if agent and agent.enabled:
+                return candidate_id
+
+        if fallback and fallback not in candidates:
+            agent = self.get_agent(fallback)
+            if agent and agent.enabled:
+                return fallback
+
+        enabled_agents = self.get_enabled_agents()
+        if enabled_agents:
+            return next(iter(enabled_agents.keys()))
+
+        return None
+
+    def get_specialist_agents(
+        self,
+        defect_types: List[str],
+    ) -> Dict[str, Optional[str]]:
+        """
+        Get specialist agents for multiple defect types.
+
+        Args:
+            defect_types: List of defect type names
+
+        Returns:
+            Dictionary mapping defect types to agent IDs
+        """
+        return {dt: self.get_specialist_agent(dt) for dt in defect_types}
 
     def shutdown(self) -> None:
         """Shutdown registry and stop file watcher."""

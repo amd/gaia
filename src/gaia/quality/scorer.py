@@ -5,7 +5,8 @@ Evaluates artifacts across 27 validation categories organized into 6 dimensions.
 """
 
 import asyncio
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass
 
@@ -14,8 +15,10 @@ from gaia.quality.models import (
     DimensionScore,
     QualityReport,
     CertificationStatus,
+    QualityWeightConfig,
 )
 from gaia.quality.templates import QualityTemplate, get_template
+from gaia.quality.weight_config import QualityWeightConfigManager, get_profile as get_weight_profile
 from gaia.exceptions import (
     QualityScoringError,
     InvalidQualityThresholdError,
@@ -108,7 +111,7 @@ class BaseValidator:
             "severity": severity,
             "location": location,
             "suggestion": suggestion,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
 
@@ -292,17 +295,20 @@ class QualityScorer:
         "additional": "Additional Categories",
     }
 
-    def __init__(self, validators: Optional[Dict[str, BaseValidator]] = None):
+    def __init__(self, validators: Optional[Dict[str, BaseValidator]] = None, max_workers: int = 4):
         """
         Initialize the quality scorer.
 
         Args:
             validators: Optional dict mapping category IDs to validators.
                        If not provided, default validators are used.
+            max_workers: Maximum number of parallel workers for validation (QW-004).
         """
         self._validators: Dict[str, BaseValidator] = validators or {}
+        self._max_workers = max_workers
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._register_default_validators()
-        logger.info(f"QualityScorer initialized with {len(self._validators)} validators")
+        logger.info(f"QualityScorer initialized with {len(self._validators)} validators and {max_workers} workers")
 
     def _register_default_validators(self) -> None:
         """
@@ -361,12 +367,14 @@ class QualityScorer:
         self,
         artifact: Any,
         context: Dict[str, Any],
+        weight_config: Optional[QualityWeightConfig] = None,
     ) -> QualityReport:
         """
         Evaluate an artifact across all 27 categories.
 
         This is the main evaluation method. It runs all validators
-        concurrently and aggregates results into a QualityReport.
+        concurrently via ThreadPoolExecutor and aggregates results
+        into a QualityReport.
 
         Args:
             artifact: The artifact to evaluate (code, docs, etc.)
@@ -375,6 +383,10 @@ class QualityScorer:
                 - language: Programming language
                 - template: Quality template name
                 - user_story: User story being addressed
+                - weight_profile: Optional named weight profile to load
+            weight_config: Optional QualityWeightConfig specifying dimension and
+                category weight overrides. When None, hardcoded CATEGORIES weights
+                are used. Supplied profiles are recorded in report.metadata["weight_profile"].
 
         Returns:
             QualityReport with comprehensive evaluation results
@@ -392,6 +404,14 @@ class QualityScorer:
             extra={"artifact_type": type(artifact).__name__},
         )
 
+        # Apply weight profile from context if provided (QW-weight-profile)
+        if weight_config is None and "weight_profile" in context:
+            try:
+                weight_config = get_weight_profile(context["weight_profile"])
+                logger.info(f"Using weight profile: {context['weight_profile']}")
+            except KeyError:
+                logger.warning(f"Unknown weight profile: {context['weight_profile']}, using defaults")
+
         category_scores: List[CategoryScore] = []
         dimension_data: Dict[str, Dict[str, Any]] = {}
         total_defects = 0
@@ -399,30 +419,48 @@ class QualityScorer:
         tests_run = 0
         tests_passed = 0
 
-        # Evaluate each category concurrently
-        tasks = []
+        # Evaluate each category concurrently via ThreadPoolExecutor (QW-004)
+        loop = asyncio.get_running_loop()
+        futures = []
+        ordered_category_ids = []
         for category_id, category_def in self.CATEGORIES.items():
             validator = self._validators.get(category_id)
             if not validator:
                 logger.warning(f"No validator for category {category_id}")
                 continue
 
-            task = self._evaluate_category(
+            future = loop.run_in_executor(
+                self._executor,
+                self._evaluate_category_sync,
                 category_id,
                 category_def,
                 validator,
                 artifact,
                 context,
             )
-            tasks.append(task)
+            futures.append(future)
+            ordered_category_ids.append(category_id)
 
-        # Gather results
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Gather results from executor futures
+        results = await asyncio.gather(*futures, return_exceptions=True)
 
         # Process results
         for i, result in enumerate(results):
-            category_id = list(self.CATEGORIES.keys())[i]
+            category_id = ordered_category_ids[i]
             category_def = self.CATEGORIES[category_id]
+
+            # Compute effective weight, applying profile overrides if provided
+            base_weight = category_def["weight"]
+            if weight_config is not None:
+                dimension = category_def["dimension"]
+                dim_weight = weight_config.get_weight(dimension)
+                if dim_weight > 0:
+                    dim_categories = [
+                        cid for cid, cdef in self.CATEGORIES.items()
+                        if cdef["dimension"] == dimension
+                    ]
+                    base_weight = dim_weight / len(dim_categories)
+                base_weight = weight_config.get_category_weight(dimension, category_id, base_weight)
 
             if isinstance(result, Exception):
                 logger.error(
@@ -433,7 +471,7 @@ class QualityScorer:
                 category_score = CategoryScore(
                     category_id=category_id,
                     category_name=category_def["name"],
-                    weight=category_def["weight"],
+                    weight=base_weight,
                     raw_score=0.0,
                     weighted_score=0.0,
                     defects=[
@@ -445,7 +483,19 @@ class QualityScorer:
                     ],
                 )
             else:
-                category_score = result
+                # Rebuild CategoryScore with effective weight when override is active
+                if weight_config is not None:
+                    category_score = CategoryScore(
+                        category_id=result.category_id,
+                        category_name=result.category_name,
+                        weight=base_weight,
+                        raw_score=result.raw_score,
+                        weighted_score=result.raw_score * base_weight,
+                        validation_details=result.validation_details,
+                        defects=result.defects,
+                    )
+                else:
+                    category_score = result
 
             category_scores.append(category_score)
 
@@ -459,7 +509,7 @@ class QualityScorer:
                     "categories": [],
                 }
 
-            dimension_data[dimension]["total_weight"] += category_def["weight"]
+            dimension_data[dimension]["total_weight"] += base_weight
             dimension_data[dimension]["earned_score"] += category_score.weighted_score
             dimension_data[dimension]["categories"].append(category_score)
 
@@ -508,6 +558,7 @@ class QualityScorer:
             metadata={
                 "categories_evaluated": len(category_scores),
                 "dimensions_evaluated": len(dimension_scores),
+                "weight_profile": weight_config.name if weight_config else "default",
             },
         )
 
@@ -545,6 +596,55 @@ class QualityScorer:
         """
         try:
             result = await validator.validate(artifact, context)
+
+            return CategoryScore(
+                category_id=category_id,
+                category_name=category_def["name"],
+                weight=category_def["weight"],
+                raw_score=result.score,
+                weighted_score=result.score * category_def["weight"],
+                validation_details={
+                    **result.details,
+                    "tests_run": result.tests_run,
+                    "tests_passed": result.tests_passed,
+                },
+                defects=result.defects,
+            )
+        except Exception as e:
+            logger.exception(f"Validator {category_id} error: {e}")
+            raise
+
+    def _evaluate_category_sync(
+        self,
+        category_id: str,
+        category_def: Dict[str, Any],
+        validator: BaseValidator,
+        artifact: Any,
+        context: Dict[str, Any],
+    ) -> CategoryScore:
+        """
+        Synchronous wrapper for _evaluate_category (for ThreadPoolExecutor execution, QW-004).
+
+        Wraps the async _evaluate_category to allow parallel execution
+        using ThreadPoolExecutor.
+
+        Args:
+            category_id: Category ID
+            category_def: Category definition
+            validator: Validator to use
+            artifact: Artifact to evaluate
+            context: Evaluation context
+
+        Returns:
+            CategoryScore for this category
+        """
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(validator.validate(artifact, context))
+            finally:
+                loop.close()
 
             return CategoryScore(
                 category_id=category_id,
@@ -654,3 +754,14 @@ class QualityScorer:
             Validator or None if not found
         """
         return self._validators.get(category_id)
+
+    def shutdown(self, wait: bool = True) -> None:
+        """
+        Shutdown the QualityScorer and release resources (QW-004).
+
+        Args:
+            wait: Whether to wait for pending tasks to complete
+        """
+        if hasattr(self, '_executor') and self._executor:
+            self._executor.shutdown(wait=wait)
+            logger.info("QualityScorer executor shutdown complete")

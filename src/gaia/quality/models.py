@@ -6,8 +6,30 @@ Data models for quality scoring results.
 
 from enum import Enum
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
+
+# Import DefectType for defect categorization support
+try:
+    from gaia.pipeline.defect_types import DefectType
+except ImportError:
+    # DefectType not available - define fallback enum
+    from enum import auto
+
+    class DefectType(Enum):
+        """Fallback DefectType enum when pipeline module not available."""
+
+        SECURITY = auto()
+        PERFORMANCE = auto()
+        TESTING = auto()
+        DOCUMENTATION = auto()
+        CODE_QUALITY = auto()
+        REQUIREMENTS = auto()
+        ARCHITECTURE = auto()
+        ACCESSIBILITY = auto()
+        COMPATIBILITY = auto()
+        DATA_INTEGRITY = auto()
+        UNKNOWN = auto()
 
 
 class CertificationStatus(Enum):
@@ -173,7 +195,7 @@ class QualityReport:
     tests_run: int = 0
     tests_passed: int = 0
     metadata: Dict[str, Any] = field(default_factory=dict)
-    evaluated_at: datetime = field(default_factory=datetime.utcnow)
+    evaluated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -250,6 +272,48 @@ class QualityReport:
                     defects.append(defect)
         return defects
 
+    def get_defects_by_type(self, defect_type: str) -> List[Dict[str, Any]]:
+        """
+        Get all defects of a specific type.
+
+        Args:
+            defect_type: Defect type name (e.g., "SECURITY", "PERFORMANCE")
+                or DefectType enum value
+
+        Returns:
+            List of defects with matching type
+        """
+        defects = []
+        target_type = defect_type.upper() if isinstance(defect_type, str) else defect_type.name
+
+        for cs in self.category_scores:
+            for defect in cs.defects:
+                defect_type_value = defect.get("defect_type", "")
+                if isinstance(defect_type_value, str):
+                    if defect_type_value.upper() == target_type:
+                        defects.append(defect)
+                elif hasattr(defect_type_value, "name"):
+                    if defect_type_value.name == target_type:
+                        defects.append(defect)
+        return defects
+
+    def get_routing_decisions(self) -> List[Dict[str, Any]]:
+        """
+        Get defects with routing information.
+
+        Returns list of defects that have routing decision metadata,
+        including target_agent, target_phase, and loop_back flag.
+
+        Returns:
+            List of defects with routing decisions
+        """
+        defects = []
+        for cs in self.category_scores:
+            for defect in cs.defects:
+                if "routing" in defect or "target_phase" in defect:
+                    defects.append(defect)
+        return defects
+
     def summary(self) -> str:
         """
         Generate a human-readable summary.
@@ -258,9 +322,118 @@ class QualityReport:
             Summary string
         """
         status = self.certification_status.value
+        pass_pct = (
+            f"({self.tests_passed/self.tests_run*100:.1f}%)"
+            if self.tests_run > 0
+            else "(N/A)"
+        )
         return (
             f"Quality Report: {self.overall_score:.1f}% ({status})\n"
             f"  Defects: {self.total_defects} total, {self.critical_defects} critical\n"
-            f"  Tests: {self.tests_passed}/{self.tests_run} passed "
-            f"({self.tests_passed/self.tests_run*100:.1f}%)"
+            f"  Tests: {self.tests_passed}/{self.tests_run} passed {pass_pct}"
+        )
+
+
+@dataclass
+class QualityWeightConfig:
+    """
+    Configuration for quality dimension weights.
+
+    QualityWeightConfig defines how much each quality dimension
+    contributes to the overall score. Weights must sum to 1.0.
+
+    Attributes:
+        name: Configuration profile name
+        weights: Dictionary mapping dimension names to weights (must sum to 1.0)
+        category_overrides: Optional per-category weight overrides
+        description: Human-readable description
+    """
+
+    name: str
+    weights: Dict[str, float]
+    category_overrides: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    description: str = ""
+
+    def validate(self, tolerance: float = 0.01) -> bool:
+        """
+        Validate that weights sum to 1.0 within tolerance.
+
+        Args:
+            tolerance: Acceptable deviation from 1.0 (default: +/-0.01)
+
+        Returns:
+            True if weights are valid
+
+        Raises:
+            ValueError: If weights don't sum to 1.0 within tolerance
+        """
+        total = sum(self.weights.values())
+        if abs(total - 1.0) > tolerance:
+            raise ValueError(
+                f"Weights for profile '{self.name}' sum to {total}, "
+                f"not 1.0 (tolerance: {tolerance})"
+            )
+        return True
+
+    def get_weight(self, dimension: str) -> float:
+        """
+        Get weight for a specific dimension.
+
+        Args:
+            dimension: Dimension name
+
+        Returns:
+            Weight value (0-1) or 0.0 if dimension not found
+        """
+        return self.weights.get(dimension, 0.0)
+
+    def get_category_weight(
+        self,
+        dimension: str,
+        category_id: str,
+        default_weight: float
+    ) -> float:
+        """
+        Get weight for a specific category with override support.
+
+        Args:
+            dimension: Dimension name
+            category_id: Category ID (e.g., "CQ-01")
+            default_weight: Default weight for this category
+
+        Returns:
+            Overridden weight if category override exists, otherwise default_weight
+        """
+        if dimension in self.category_overrides:
+            overrides = self.category_overrides[dimension]
+            if category_id in overrides:
+                return overrides[category_id]
+        return default_weight
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "name": self.name,
+            "weights": self.weights,
+            "category_overrides": self.category_overrides,
+            "description": self.description,
+            "total_weight": sum(self.weights.values()),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "QualityWeightConfig":
+        """
+        Create QualityWeightConfig from dictionary.
+
+        Args:
+            data: Dictionary with config data
+
+        Returns:
+            QualityWeightConfig instance
+        """
+        return cls(
+            name=data.get("name", "custom"),
+            weights=data.get("weights", {}),
+            category_overrides=data.get("category_overrides", {}),
+            description=data.get("description", ""),
         )

@@ -10,12 +10,14 @@ from gaia.quality.models import (
     DimensionScore,
     QualityReport,
     CertificationStatus,
+    QualityWeightConfig,
 )
 from gaia.quality.templates import (
     QualityTemplate,
     QUALITY_TEMPLATES,
     get_template,
 )
+from gaia.quality.weight_config import QualityWeightConfigManager
 
 __all__ = [
     "QualityScorer",
@@ -26,4 +28,7 @@ __all__ = [
     "QualityTemplate",
     "QUALITY_TEMPLATES",
     "get_template",
+    # P4 additions - weight configuration
+    "QualityWeightConfig",
+    "QualityWeightConfigManager",
 ]

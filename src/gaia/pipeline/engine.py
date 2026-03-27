@@ -6,8 +6,10 @@ Main pipeline orchestrator that coordinates all components.
 
 import asyncio
 from dataclasses import dataclass
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Callable
 
+from gaia.pipeline.recursive_template import get_recursive_template
+from gaia.pipeline.routing_engine import RoutingEngine
 from gaia.pipeline.state import (
     PipelineState,
     PipelineContext,
@@ -15,7 +17,7 @@ from gaia.pipeline.state import (
     PipelineStateMachine,
 )
 from gaia.pipeline.loop_manager import LoopManager, LoopConfig
-from gaia.pipeline.decision_engine import DecisionEngine, DecisionType
+from gaia.pipeline.decision_engine import DecisionEngine, Decision, DecisionType
 from gaia.quality.scorer import QualityScorer
 from gaia.agents.registry import AgentRegistry
 from gaia.hooks.base import HookContext
@@ -49,7 +51,6 @@ logger = get_logger(__name__)
 # Pipeline phases
 class PipelinePhase:
     """Pipeline phase constants."""
-
     PLANNING = "PLANNING"
     DEVELOPMENT = "DEVELOPMENT"
     QUALITY = "QUALITY"
@@ -72,8 +73,7 @@ class PipelineConfig:
         enable_hooks: Whether to enable hooks
         hooks: List of hooks to register
     """
-
-    template: str = "STANDARD"
+    template: str = "generic"
     quality_threshold: float = 0.90
     max_iterations: int = 10
     concurrent_loops: int = 5
@@ -118,6 +118,8 @@ class PipelineEngine:
         agents_dir: Optional[str] = None,
         enable_logging: bool = True,
         log_level: int = 20,  # INFO
+        max_concurrent_loops: int = 100,
+        worker_pool_size: int = 4,
     ):
         """
         Initialize pipeline engine.
@@ -126,6 +128,8 @@ class PipelineEngine:
             agents_dir: Directory for agent definitions
             enable_logging: Whether to setup logging
             log_level: Logging level
+            max_concurrent_loops: Maximum number of concurrent pipeline loops (default: 100)
+            worker_pool_size: Worker pool semaphore size for bounded execution (default: 4)
         """
         if enable_logging:
             setup_logging(level=log_level)
@@ -133,6 +137,11 @@ class PipelineEngine:
         self._agents_dir = agents_dir
         self._initialized = False
         self._running = False
+
+        # Bounded concurrency configuration
+        self.max_concurrent_loops = max_concurrent_loops
+        self._semaphore = asyncio.Semaphore(max_concurrent_loops)
+        self._worker_semaphore = asyncio.Semaphore(worker_pool_size)
 
         # Components (initialized in initialize())
         self._state_machine: Optional[PipelineStateMachine] = None
@@ -142,11 +151,15 @@ class PipelineEngine:
         self._agent_registry: Optional[AgentRegistry] = None
         self._hook_registry: Optional[HookRegistry] = None
         self._hook_executor: Optional[HookExecutor] = None
+        self._routing_engine: Optional[RoutingEngine] = None
 
         # State
         self._context: Optional[PipelineContext] = None
         self._config: Optional[Dict[str, Any]] = None
         self._completion_event: Optional[asyncio.Event] = None
+
+        # Template-driven phase configuration (not yet wired — see _get_phase_config)
+        self._current_template = None
 
         logger.info("PipelineEngine created")
 
@@ -181,10 +194,7 @@ class PipelineEngine:
 
         # Initialize loop manager
         concurrent_loops = self._config.get("concurrent_loops", context.concurrent_loops)
-        self._loop_manager = LoopManager(
-            max_concurrent=concurrent_loops,
-            agent_registry=self._agent_registry,
-        )
+        self._loop_manager = LoopManager(max_concurrent=concurrent_loops)
 
         # Initialize decision engine
         self._decision_engine = DecisionEngine(self._config)
@@ -196,6 +206,24 @@ class PipelineEngine:
         agents_dir = self._config.get("agents_dir", self._agents_dir)
         self._agent_registry = AgentRegistry(agents_dir=agents_dir)
         await self._agent_registry.initialize()
+
+        # Initialize routing engine
+        self._routing_engine = RoutingEngine(agent_registry=self._agent_registry)
+
+        # Wire template-driven phase configuration (P6)
+        template_name = (self._config.get("template") or "generic").lower()
+        try:
+            self._current_template = get_recursive_template(template_name)
+            logger.info(
+                f"Loaded pipeline template: {template_name}",
+                extra={"template": template_name},
+            )
+        except KeyError:
+            logger.warning(
+                f"Template '{template_name}' not found in registry, using 'generic' fallback",
+                extra={"template": template_name},
+            )
+            self._current_template = get_recursive_template("generic")
 
         # Initialize hook system
         if self._config.get("enable_hooks", True):
@@ -362,31 +390,40 @@ class PipelineEngine:
         """Execute planning phase."""
         logger.info("Executing PLANNING phase")
 
-        # Select planning agent
-        agent_id = self._agent_registry.select_agent(
-            task_description=self._context.user_goal,
-            current_phase=PipelinePhase.PLANNING,
-            state=self._get_state_dict(),
-        )
-
-        if agent_id:
-            logger.info(f"Selected planning agent: {agent_id}")
-            self._state_machine.add_artifact("planning_agent", agent_id)
+        # Use template-driven agent sequence when available; fall back to registry
+        template_agents = self._get_agents_for_phase(PipelinePhase.PLANNING)
+        if template_agents:
+            agent_sequence = template_agents
+        else:
+            agent_id = self._agent_registry.select_agent(
+                task_description=self._context.user_goal,
+                current_phase=PipelinePhase.PLANNING,
+                state=self._get_state_dict(),
+            )
+            if agent_id:
+                logger.info(f"Selected planning agent: {agent_id}")
+                self._state_machine.add_artifact("planning_agent", agent_id)
+            agent_sequence = [agent_id] if agent_id else []
 
         # Create planning loop
         loop_config = LoopConfig(
             loop_id=generate_loop_id(self._context.pipeline_id),
             phase_name=PipelinePhase.PLANNING,
-            agent_sequence=[agent_id] if agent_id else [],
+            agent_sequence=agent_sequence,
             exit_criteria={"quality_threshold": self._context.quality_threshold},
             quality_threshold=self._context.quality_threshold,
             max_iterations=self._context.max_iterations,
         )
         await self._loop_manager.create_loop(loop_config)
-        await self._loop_manager.start_loop(loop_config.loop_id)
+        future = await self._loop_manager.start_loop(loop_config.loop_id)
 
         # Wait for loop completion
-        await asyncio.sleep(0.1)  # In production, would wait properly
+        if future is not None:
+            loop_state = await asyncio.wrap_future(future)
+            logger.info(
+                f"Planning loop completed: status={loop_state.status.name}",
+                extra={"loop_id": loop_config.loop_id, "status": loop_state.status.name},
+            )
 
         self._state_machine.increment_iteration()
         return True
@@ -395,30 +432,40 @@ class PipelineEngine:
         """Execute development phase."""
         logger.info("Executing DEVELOPMENT phase")
 
-        # Select development agent
-        agent_id = self._agent_registry.select_agent(
-            task_description=self._context.user_goal,
-            current_phase=PipelinePhase.DEVELOPMENT,
-            state=self._get_state_dict(),
-            required_capabilities=["full-stack-development"],
-        )
-
-        if agent_id:
-            logger.info(f"Selected development agent: {agent_id}")
+        # Use template-driven agent sequence when available; fall back to registry
+        template_agents = self._get_agents_for_phase(PipelinePhase.DEVELOPMENT)
+        if template_agents:
+            agent_sequence = template_agents
+        else:
+            agent_id = self._agent_registry.select_agent(
+                task_description=self._context.user_goal,
+                current_phase=PipelinePhase.DEVELOPMENT,
+                state=self._get_state_dict(),
+                required_capabilities=["full-stack-development"],
+            )
+            if agent_id:
+                logger.info(f"Selected development agent: {agent_id}")
+            agent_sequence = [agent_id] if agent_id else []
 
         # Create development loop
         loop_config = LoopConfig(
             loop_id=generate_loop_id(self._context.pipeline_id),
             phase_name=PipelinePhase.DEVELOPMENT,
-            agent_sequence=[agent_id] if agent_id else [],
+            agent_sequence=agent_sequence,
             exit_criteria={"quality_threshold": self._context.quality_threshold},
             quality_threshold=self._context.quality_threshold,
             max_iterations=self._context.max_iterations,
         )
         await self._loop_manager.create_loop(loop_config)
-        await self._loop_manager.start_loop(loop_config.loop_id)
+        future = await self._loop_manager.start_loop(loop_config.loop_id)
 
-        await asyncio.sleep(0.1)
+        # Wait for loop completion
+        if future is not None:
+            loop_state = await asyncio.wrap_future(future)
+            logger.info(
+                f"Development loop completed: status={loop_state.status.name}",
+                extra={"loop_id": loop_config.loop_id, "status": loop_state.status.name},
+            )
 
         self._state_machine.increment_iteration()
         return True
@@ -435,7 +482,7 @@ class PipelineEngine:
             artifact=artifacts,
             context={
                 "requirements": [self._context.user_goal],
-                "template": self._config.get("template", "STANDARD"),
+                "template": self._config.get("template", "generic"),
             },
         )
 
@@ -457,6 +504,22 @@ class PipelineEngine:
 
         quality_score = self._state_machine.snapshot.quality_score or 0.0
         iteration = self._state_machine.snapshot.iteration_count
+
+        # Route defects through RoutingEngine if available
+        if self._routing_engine:
+            defects = self._state_machine.snapshot.defects or []
+            if defects:
+                routing_decisions = []
+                for defect in defects:
+                    # Normalize defect to dict if needed
+                    defect_dict = defect if isinstance(defect, dict) else {"description": str(defect)}
+                    routing_decision = self._routing_engine.route_defect(defect_dict)
+                    routing_decisions.append(routing_decision.to_dict())
+                self._state_machine.add_artifact("routing_decisions", routing_decisions)
+                logger.info(
+                    f"Routed {len(routing_decisions)} defects via RoutingEngine",
+                    extra={"defect_count": len(routing_decisions)},
+                )
 
         # Make decision
         decision = self._decision_engine.evaluate(
@@ -482,6 +545,59 @@ class PipelineEngine:
             return False
 
         return True
+
+    async def execute(self, workload: Any) -> Any:
+        """
+        Execute a single workload through the pipeline.
+
+        This is the single-workload execution primitive used by
+        execute_with_backpressure(). Callers may pass any workload
+        representation; the default implementation delegates to start()
+        if the engine is already initialized, or returns the workload
+        unchanged when used in test/mock contexts.
+
+        Args:
+            workload: The workload to execute (pipeline context, dict, or any object)
+
+        Returns:
+            Pipeline snapshot or workload result
+        """
+        if self._initialized and self._state_machine:
+            return await self.start()
+        return workload
+
+    async def execute_with_backpressure(
+        self,
+        workloads: list,
+        progress_callback: Optional[Callable] = None,
+    ) -> list:
+        """
+        Execute multiple workloads with bounded concurrency.
+
+        Uses dual semaphores to control concurrency: the outer semaphore
+        limits total concurrent loops to max_concurrent_loops, and the
+        inner worker semaphore limits parallel worker execution to
+        worker_pool_size.
+
+        Args:
+            workloads: List of workload items to execute
+            progress_callback: Optional callback invoked after each completed
+                execution. Receives the result as its argument.
+
+        Returns:
+            List of results in the same order as workloads. Exceptions are
+            returned as exception objects (not raised) due to return_exceptions=True.
+        """
+        async def bounded_execute(workload):
+            async with self._semaphore:
+                async with self._worker_semaphore:
+                    result = await self.execute(workload)
+                    if progress_callback:
+                        progress_callback(result)
+                    return result
+
+        tasks = [bounded_execute(w) for w in workloads]
+        return await asyncio.gather(*tasks, return_exceptions=True)
 
     def _get_state_dict(self) -> Dict[str, Any]:
         """Get current state as dictionary."""
@@ -575,6 +691,63 @@ class PipelineEngine:
             raise PipelineNotInitializedError()
         return self._loop_manager
 
+    def _get_phase_config(self, phase_name: str) -> Optional[Any]:
+        """
+        Get phase configuration from template.
+
+        Args:
+            phase_name: Name of phase to get config for
+
+        Returns:
+            PhaseConfig if template has this phase, None otherwise
+        """
+        if not self._current_template:
+            return None
+        return self._current_template.get_phase(phase_name)
+
+    def _get_agents_for_phase(self, phase_name: str) -> List[str]:
+        """
+        Get list of agent IDs for a phase from template.
+
+        Args:
+            phase_name: Name of phase
+
+        Returns:
+            List of agent IDs configured for this phase
+        """
+        phase_config = self._get_phase_config(phase_name)
+        if phase_config and phase_config.agents:
+            return list(phase_config.agents)
+
+        if self._current_template:
+            for category, agents in self._current_template.agent_categories.items():
+                if category.lower() == phase_name.lower():
+                    return list(agents)
+
+        return []
+
+    def _get_output_artifact_name(self, phase_name: str) -> str:
+        """
+        Get output artifact name for a phase from template.
+
+        Args:
+            phase_name: Name of phase
+
+        Returns:
+            Artifact name for phase output
+        """
+        phase_config = self._get_phase_config(phase_name)
+        if phase_config and phase_config.exit_criteria.get("artifact"):
+            return phase_config.exit_criteria["artifact"]
+
+        default_artifacts = {
+            "planning": "technical_plan",
+            "development": "implementation",
+            "quality": "quality_report",
+            "decision": "decision",
+        }
+        return default_artifacts.get(phase_name.lower(), f"{phase_name.lower()}_output")
+
     def shutdown(self) -> None:
         """Shutdown pipeline and cleanup resources."""
         logger.info("Shutting down PipelineEngine")
@@ -585,5 +758,10 @@ class PipelineEngine:
         if self._agent_registry:
             self._agent_registry.shutdown()
 
+        if self._quality_scorer:
+            self._quality_scorer.shutdown()
+
         self._initialized = False
         self._running = False
+
+
