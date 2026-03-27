@@ -285,3 +285,60 @@ def test_concurrent_second_thread_skips_load():
 
         # load_model must NOT be called because re-check found an LLM
         mock_cls.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 12. Re-check inside lock returns non-200 → load_model still called
+# ---------------------------------------------------------------------------
+
+
+def test_recheck_non200_proceeds_to_load():
+    """If the re-check inside the lock returns non-200, load_model is still called
+    (we cannot confirm another thread loaded the model, so we proceed)."""
+    empty_health = _health_ok([])
+    bad = MagicMock(spec=httpx.Response)
+    bad.status_code = 503
+
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, side_effect=[empty_health, bad]),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        mock_instance = MagicMock()
+        mock_cls.return_value = mock_instance
+
+        _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")
+
+        mock_instance.load_model.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 13. Re-check inside lock raises exception → outer handler catches, no crash
+# ---------------------------------------------------------------------------
+
+
+def test_recheck_exception_caught_by_outer_handler():
+    """If the re-check inside the lock raises (e.g. ConnectError), the outer
+    except block catches it — no crash, warning SSE emitted."""
+    empty_health = _health_ok([])
+    sse = MagicMock()
+
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(
+            _HTTPX_GET,
+            side_effect=[empty_health, httpx.ConnectError("refused")],
+        ),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+
+        _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF", sse_handler=sse)  # must not raise
+
+        mock_cls.assert_not_called()
+
+    warning_calls = [
+        c for c in sse._emit.call_args_list if c.args[0].get("status") == "warning"
+    ]
+    assert warning_calls, "Expected a warning SSE after exception in re-check"
