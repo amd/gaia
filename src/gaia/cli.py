@@ -4893,8 +4893,6 @@ Let me know your answer!
 
         # Handle model cache clearing
         if args.models:
-            import shutil
-
             try:
                 # Find HuggingFace cache directory
                 hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
