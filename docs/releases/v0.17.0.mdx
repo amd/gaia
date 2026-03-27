@@ -5,16 +5,18 @@ description: "GAIA Agent UI with document Q&A, tool execution guardrails, system
 
 # GAIA v0.17.0 Release Notes
 
-**Minor release** introducing the GAIA Agent UI — a full-stack privacy-first desktop chat interface with document Q&A — along with tool execution guardrails, an optimized system prompt for small models, and several security and reliability fixes.
+Introducing the GAIA Agent UI — a full-stack privacy-first desktop agent interface with document Q&A — along with tool execution guardrails, an optimized system prompt for small models, and several security and reliability fixes.
+
+```bash
+pip install --upgrade amd-gaia
+gaia chat --ui
+```
 
 **TL;DR:**
-- **New: GAIA Agent UI** — Full-stack desktop chat with streaming responses, 53+ format document Q&A, ngrok tunnel for mobile, page-level citations
-- **New: Tool Execution Guardrails** — Confirmation popup with Allow/Deny/Always Allow before executing write or shell tools
-- **New: Device Support Detection** — Clear messaging on unsupported hardware with `--base-url` remote bypass
-- **Security: TOCTOU Fix** — Atomic `O_NOFOLLOW` + `fstat` race condition fix in document upload
-- **Performance: 78% System Prompt Reduction** — 17,600 → 3,853 tokens via two-tier RAG gating
-- **Fix: LRU Eviction** — Silent failure allowing unbounded memory growth, plus new CLI flags
-- **Fix: Lemonade v10 Compatibility** — Device key renames (`npu` → `amd_npu`, `gpu` → `amd_igpu`/`amd_dgpu`)
+- **GAIA Agent UI** — Full-stack desktop agent UI with streaming responses, 53+ format document Q&A, ngrok tunnel for mobile, page-level citations and more
+- **Safer tool execution** — Confirmation guardrails and security hardening protect against unintended actions and upload vulnerabilities
+- **Better small-model performance** — 78% smaller system prompt eliminates Qwen3.5 timeouts and speeds up first-token latency
+- **Lemonade v10 + reliability fixes** — Device key compatibility, LRU eviction, RAG indexing guards, and Windows path handling
 
 ---
 
@@ -22,7 +24,7 @@ description: "GAIA Agent UI with document Q&A, tool execution guardrails, system
 
 ### GAIA Agent UI
 
-Full-stack privacy-first desktop chat application with document Q&A support (PR #428):
+Full-stack privacy-first desktop agent interface with document Q&A support (PR #428):
 
 - **FastAPI backend + React/TypeScript frontend + Electron shell** — Complete desktop app architecture with SSE streaming
 - **Document Q&A** — Drag-and-drop document upload supporting 53+ file formats with local RAG-powered Q&A
