@@ -14,6 +14,7 @@ patches take effect.
 """
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -50,7 +51,7 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 # requests, and the per-session session_lock prevents concurrent turns within
 # the same session.  Together they guarantee the cache dict and each agent are
 # accessed by at most one thread at a time — no per-entry locking needed.
-_agent_cache: dict = (
+_agent_cache: dict[str, dict] = (
     {}
 )  # session_id -> {"agent": ChatAgent, "model_id": str, "document_ids": list}
 _agent_cache_lock = threading.Lock()
@@ -58,7 +59,7 @@ _MAX_CACHED_AGENTS = 10
 
 # Last known MCP runtime status — updated after each agent setup so
 # GET /api/mcp/status can return it without needing a running chat.
-_mcp_status_cache: list = []
+_mcp_status_cache: list[dict] = []
 _mcp_status_lock = threading.Lock()
 
 # Lock preventing concurrent sessions from issuing simultaneous load_model()
@@ -66,10 +67,10 @@ _mcp_status_lock = threading.Lock()
 _model_load_lock = threading.Lock()
 
 
-def get_cached_mcp_status() -> list:
+def get_cached_mcp_status() -> list[dict]:
     """Return the last known MCP server connection status from any cached agent."""
     with _mcp_status_lock:
-        return list(_mcp_status_cache)
+        return copy.deepcopy(_mcp_status_cache)
 
 
 def _get_cached_agent(session_id: str, model_id: str):
