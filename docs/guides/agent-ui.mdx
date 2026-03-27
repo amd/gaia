@@ -6,16 +6,20 @@ icon: "desktop"
 
 GAIA Agent UI is a desktop interface for running AI agents **100% locally** on your AMD hardware. Use agents to analyze documents, generate code, answer questions, and accomplish tasks on your PC — all without sending data to the cloud.
 
-<Warning>
-  **Tested Configuration:** The Agent UI has been tested exclusively on **AMD Ryzen AI MAX+ 395** processors running the **Qwen3.5-35B-A3B-GGUF** model via Lemonade Server. Other hardware or model combinations may work but are not officially verified.
+{/* TODO: Replace with actual demo video once recorded */}
+<video
+  controls
+  autoPlay
+  loop
+  muted
+  playsInline
+  className="w-full rounded-lg"
+  src="https://assets.amd-gaia.ai/videos/gaia-agent-ui-demo.webm"
+/>
 
-  If you encounter issues on a different configuration, please [open a GitHub issue](https://github.com/amd/gaia/issues/new) and include:
-  - Your processor model (e.g., Ryzen AI 9 HX 370, Ryzen AI MAX+ 395)
-  - RAM and available memory
-  - The LLM model you are using
-  - Operating system and version
-  - Steps to reproduce the issue
-</Warning>
+<Note>
+  **Tested on AMD Ryzen AI MAX+ 395** with the **Qwen3.5-35B-A3B-GGUF** model via Lemonade Server. Other hardware or model combinations may work but are not officially verified. If you encounter issues, please [open a GitHub issue](https://github.com/amd/gaia/issues/new) with your processor model, RAM, LLM model, and OS.
+</Note>
 
 ---
 
@@ -117,6 +121,42 @@ Choose one of the two install paths:
   </Tab>
 </Tabs>
 
+### Uninstall
+
+<Tabs>
+  <Tab title="npm">
+    ```bash
+    npm uninstall -g @amd-gaia/agent-ui
+    ```
+
+    To also remove all GAIA data (sessions, config, downloaded models):
+
+    ```bash
+    # macOS / Linux
+    rm -rf ~/.gaia
+
+    # Windows (PowerShell)
+    Remove-Item -Recurse -Force "$env:USERPROFILE\.gaia"
+    ```
+  </Tab>
+
+  <Tab title="Python CLI">
+    ```bash
+    uv pip uninstall amd-gaia
+    ```
+
+    To also remove all GAIA data:
+
+    ```bash
+    # macOS / Linux
+    rm -rf ~/.gaia
+
+    # Windows (PowerShell)
+    Remove-Item -Recurse -Force "$env:USERPROFILE\.gaia"
+    ```
+  </Tab>
+</Tabs>
+
 ---
 
 ## What You Can Do
@@ -125,17 +165,35 @@ Choose one of the two install paths:
 
 The agent has access to your local file system. Ask it to find files, explore directories, or locate specific content across your projects — no manual browsing required.
 
+**Example prompts:**
+- *"Find all Python files in my Downloads folder"*
+- *"Show me the largest files on my Desktop"*
+- *"Search my project for files that import pandas"*
+
 ### Analyze Documents
 
-Once the agent finds files — or you drag them into a session — it can index and analyze their content. Ask it to summarize, compare, extract data, or answer questions about any supported format:
+Drag files into a session or ask the agent to find them — it can index and analyze their content. Ask it to summarize, compare, extract data, or answer questions about any supported format:
 
 - **Documents:** PDF, Word, PowerPoint, Excel, TXT, Markdown, CSV, JSON, HTML, XML, YAML
 - **Code:** Python, JavaScript, TypeScript, Java, C/C++, Go, Rust, Ruby, Shell
 - **Config:** INI, CFG, TOML, YAML, JSON, XML
 
+**Example prompts:**
+- *"Summarize this PDF in 3 bullet points"*
+- *"Compare these two contracts and list the differences"*
+- *"What are the key findings in this spreadsheet?"*
+
 ### Session Management
 
-Create, rename, search, export (Markdown/JSON), and delete sessions. Sessions persist across the CLI (`gaia chat`) and the Agent UI.
+Sessions let you organize separate conversations by topic. You can:
+
+- **Create** a new session from the sidebar
+- **Rename** a session by clicking its title
+- **Search** across sessions with `Ctrl+K`
+- **Export** a session as Markdown or JSON from the session menu
+- **Delete** a session by clicking the trash icon (confirms before deleting)
+
+Sessions persist across the CLI (`gaia chat`) and the Agent UI — start a conversation in one, continue in the other.
 
 ---
 
@@ -150,7 +208,9 @@ Create, rename, search, export (Markdown/JSON), and delete sessions. Sessions pe
 
 ---
 
-## MCP Server
+## MCP Integration
+
+### MCP Server (Expose Agent UI to External Tools)
 
 The Agent UI includes a built-in **MCP (Model Context Protocol) server** that exposes the full Agent UI as a set of tools. This lets external AI assistants — like **Claude Code**, **Cursor**, or any MCP-compatible client — interact with GAIA agents through the same backend that powers the web UI.
 
@@ -159,6 +219,24 @@ Conversations initiated via MCP appear in the browser UI in real time, so you ca
 The MCP server provides 15 tools for managing sessions, sending messages, indexing documents, browsing files, and more.
 
 See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions and usage examples.
+
+### MCP Client (Add External Tools to the Agent)
+
+The agent can also connect to external MCP servers, giving it access to tools like GitHub, Slack, databases, and more. Configure servers in `~/.gaia/mcp_servers.json` or through the Agent UI settings panel.
+
+```bash
+# Add a server via CLI
+gaia mcp add time "uvx mcp-server-time"
+
+# Check configured servers
+gaia mcp status
+```
+
+See the [MCP Client guide](/guides/mcp/client) for setup instructions and available servers.
+
+<Warning>
+  Misconfigured MCP servers (e.g., servers that don't exist or aren't running) can cause agent response timeouts. If you experience slow responses, check `~/.gaia/mcp_servers.json` and remove any servers you don't need.
+</Warning>
 
 ---
 
@@ -197,6 +275,32 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
     - Ensure the file is a supported format and not password-protected
     - Keep file size under 100MB
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
+  </Accordion>
+
+  <Accordion title="LLM response times out or fails">
+    If you see "I wasn't able to generate a response" errors, check your MCP server configuration. Misconfigured or unreachable MCP servers cause the agent to wait up to 10 seconds per server before responding.
+
+    Check your config:
+
+    ```bash
+    # macOS / Linux
+    cat ~/.gaia/mcp_servers.json
+
+    # Windows (PowerShell)
+    Get-Content "$env:USERPROFILE\.gaia\mcp_servers.json"
+    ```
+
+    If it contains servers you don't recognize or aren't running, either remove them or reset the file:
+
+    ```json
+    { "mcpServers": {} }
+    ```
+
+    You can also manage MCP servers through the Agent UI settings panel or with the CLI:
+
+    ```bash
+    gaia mcp status
+    ```
   </Accordion>
 </AccordionGroup>
 
