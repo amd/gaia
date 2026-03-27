@@ -1,11 +1,11 @@
 ---
 title: "v0.17.0"
-description: "GAIA Agent UI with document Q&A, tool execution guardrails, system prompt optimization, security hardening"
+description: "GAIA Agent UI with private document Q&A, tool execution guardrails, faster small-model performance, security hardening"
 ---
 
 # GAIA v0.17.0 Release Notes
 
-Introducing the GAIA Agent UI — a full-stack privacy-first desktop agent interface with document Q&A — along with tool execution guardrails, an optimized system prompt for small models, and several security and reliability fixes.
+Chat with your documents privately, run AI agents safely, and get faster responses — all locally on your AMD hardware. This release introduces the GAIA Agent UI, a desktop interface for private document Q&A, along with tool execution guardrails, a 78% smaller system prompt, and security hardening.
 
 ```bash
 pip install --upgrade amd-gaia
@@ -13,10 +13,15 @@ gaia chat --ui
 ```
 
 **TL;DR:**
-- **GAIA Agent UI** — Full-stack desktop agent UI with streaming responses, 53+ format document Q&A, ngrok tunnel for mobile, page-level citations and more
-- **Safer tool execution** — Confirmation guardrails and security hardening protect against unintended actions and upload vulnerabilities
-- **Better small-model performance** — 78% smaller system prompt eliminates Qwen3.5 timeouts and speeds up first-token latency
+- **Chat with your documents privately** — Drop PDFs, Word docs, or any of 53+ file types into the Agent UI and get answers with page citations — all running locally on your AMD hardware
+- **No more accidental commands** — Tool guardrails ask before executing shell commands or writing files, so nothing runs without your approval
+- **Faster responses on small models** — 78% smaller system prompt eliminates Qwen3.5 timeouts and speeds up first-token latency
 - **Lemonade v10 + reliability fixes** — Device key compatibility, LRU eviction, RAG indexing guards, and Windows path handling
+
+**Try it in 60 seconds:**
+1. `pip install --upgrade "amd-gaia[ui,rag]"`
+2. `gaia chat --ui` — opens the Agent UI in your browser
+3. Drop a PDF into the chat and ask: "Summarize this document"
 
 ---
 
@@ -24,22 +29,26 @@ gaia chat --ui
 
 ### GAIA Agent UI
 
-Full-stack privacy-first desktop agent interface with document Q&A support (PR #428):
+A privacy-first desktop interface for local AI conversations and document Q&A (PR #428).
 
-- **FastAPI backend + React/TypeScript frontend + Electron shell** — Complete desktop app architecture with SSE streaming
-- **Document Q&A** — Drag-and-drop document upload supporting 53+ file formats with local RAG-powered Q&A
-- **Page-level citations** — Responses include specific page references back to source documents
-- **Streaming agent responses** — Real-time token streaming with agent activity visualization
-- **Session management** — Create, switch, and persist chat sessions with full conversation history
-- **ngrok tunnel** — Built-in tunnel support for accessing your local GAIA instance from mobile devices
-- **Security hardening** — Path traversal prevention, SQL parameterization, and input validation throughout
-- **Redesigned Settings modal** — System dashboard showing device info, model load/download actions, and connection status
-- **Thinking display** — `<think>` block rendering shows the agent's reasoning process inline
-- **Performance stats** — Hover tooltips showing token counts, latency, and throughput metrics
-- **13+ bug fixes** — Across backend, frontend, and integration layers
+**What you can do:**
+- **Ask questions about your documents** — Drag-and-drop PDFs, Word docs, or any of 53+ file formats and get answers with page-level citations, powered by local RAG
+- **Access from your phone** — Built-in ngrok tunnel lets you chat with your local GAIA instance from any device
+- **Watch the agent think** — Real-time streaming with `<think>` block rendering shows the agent's reasoning process inline
+- **Pick up where you left off** — Create, switch, and persist chat sessions with full conversation history
+- **Stay in control** — Tool execution guardrails ask before running commands; device detection warns about unsupported hardware
+- **Monitor performance** — Hover tooltips show token counts, latency, and throughput metrics per response
+
+**Under the hood:**
+- FastAPI backend + React/TypeScript frontend + Electron shell with SSE streaming
+- Redesigned Settings modal with system dashboard, model load/download actions, and live MCP server connection status with tool counts
+- Terminal-inspired design: typewriter welcome animation, pixelated AMD cursor with red glow, glassmorphism, smooth crossfade transitions (PR #568)
+- `prefers-reduced-motion` support — all animations respect OS accessibility settings
+- Path traversal prevention, SQL parameterization, and input validation throughout
+- 13+ bug fixes across backend, frontend, and integration layers
 
 ```bash
-# Launch the Chat UI
+# Launch the Agent UI
 gaia chat --ui
 
 # Custom port
@@ -52,66 +61,50 @@ See the [Agent UI documentation](/guides/agent-ui) for setup and usage.
 
 ### Tool Execution Guardrails
 
-New safety layer requiring user confirmation before executing write or shell tools (PR #565):
+A safety layer that asks before executing sensitive tools — so you don't accidentally run destructive commands (PR #565):
 
-- **Confirmation popup** — Blocking modal with **Allow**, **Deny**, and **Always Allow** options before `run_shell_command` and other write/execute tools run
-- **60-second timeout** — Auto-denies if the user doesn't respond within a minute
+- **Confirmation popup** — **Allow**, **Deny**, or **Always Allow** before `run_shell_command` and other write/execute tools
+- **60-second timeout** — Auto-denies if you don't respond within a minute
 - **CLI path unaffected** — Terminal-based usage auto-approves to preserve existing workflow
-- **Expanded in PR #604** — Later extended to cover all write/execute tools, not just shell commands
+- **Expanded coverage** — Extended to cover all write/execute tools, not just shell commands (PR #604)
 
 ---
 
 ### Device Support Detection
 
-Agent UI now detects hardware compatibility and provides clear guidance on unsupported devices (PR #593):
+Clear guidance when your hardware isn't yet supported, with easy workarounds (PR #593):
 
 - **Supported devices** — AMD Ryzen AI Max processors and AMD Radeon GPUs with ≥24 GB VRAM
-- **Clear banner messaging** — Shows processor name and links to a GitHub feature-request on unsupported hardware
-- **`--base-url` flag** — Bypass local device checks by pointing to a remote Lemonade Server instance
+- **Clear banner messaging** — Shows your processor name and links to a GitHub feature-request
+- **`--base-url` flag** — Point to a remote Lemonade Server to use GAIA on any machine
 - **`GAIA_SKIP_DEVICE_CHECK=1`** — Environment variable override for advanced users
-- **Setup prerequisites checklist** — Comprehensive UX guidance displayed at CLI startup
-
----
-
-### Terminal-Inspired UI Design
-
-New visual design system for the Agent UI (PR #568):
-
-- **Typewriter welcome page** — Hacker-style randomized typing animation on first load
-- **Feature cards** — Interactive cards with erasing cursor interaction effects
-- **Pixelated AMD cursor** — Custom cursor with red glow, matching AMD brand
-- **Smooth crossfade transitions** — Between welcome screen and chat interface
-- **Elegant agent activity animations** — Slide-in/out with staggered delays for tool execution status
-- **`prefers-reduced-motion` support** — Global animation infrastructure respects OS accessibility settings
 
 ---
 
 ### System Prompt Optimization
 
-Reduced system prompt size by 78%, fixing timeouts on smaller models (PR #617):
+Faster responses and broader model compatibility (PR #617):
 
-- **17,600 → 3,853 tokens** — Dramatic reduction via two-tier RAG gating that only injects document context when relevant
-- **MCP runtime status** — Agent UI Settings modal now shows live MCP server connection status with tool counts
+- **17,600 → 3,853 tokens (78% reduction)** — Two-tier RAG gating only injects document context when relevant, meaning 4–5× faster prompt processing and no more timeouts on constrained models like Qwen3.5
 - **Chat timeout increased to 600s** — Prevents premature timeouts on complex queries
 - **Fixed stale log messages** — Eliminated misleading log output during prompt construction
-- **Fixed `MCPTool.get()` AttributeError** — Resolved crash when MCP tools lacked expected attributes
 
 ---
 
 ## Security
 
-- **TOCTOU race condition** — Replaced path-based validation with atomic `O_NOFOLLOW` + `fstat` to prevent symlink attacks in document upload. Copies files to process-controlled temp location before indexing. Serializes concurrent uploads via per-file `asyncio.Lock` (PR #564)
+- **Document upload vulnerability fixed** — Closed a TOCTOU race condition that could allow file substitution during upload. Now uses atomic `O_NOFOLLOW` + `fstat` validation and serializes concurrent uploads via per-file `asyncio.Lock` (PR #564)
 
 ---
 
 ## Bug Fixes
 
-- **LRU eviction silent failure** — Fixed unbounded memory growth: added pre-flight rejection at capacity, logging on all failure paths, `_check_memory_limits()` returning bool for post-index violation detection, and fixed cache-load bug where cached files weren't added to LRU tracking. New CLI flags: `--max-indexed-files` and `--max-total-chunks` (PR #567)
-- **Lemonade v10 device keys** — Updated device key references from v9 to v10 API: `npu` → `amd_npu`, `gpu` → `amd_igpu`/`amd_dgpu`. Fixed NPU detection in Hardware Advisor and related code (PR #548)
-- **Agent UI rendering** — Fixed post-tool thinking visibility, FileListView layout, and text spacing issues (PR #566)
-- **Agent UI guardrails & Windows paths** — Tightened JSON safety regex to prevent garbled `]]]]]` output, added platform context to system prompt so LLM uses native Windows paths instead of `/mnt/c/...`, cleared messages before session switch to prevent flash (PR #604)
-- **RAG indexing guards** — `gaia init` now installs RAG dependencies for chat/rag/all profiles. Added None guards to 8 RAG tools preventing crashes when dependencies aren't installed. Updated Agent UI install docs to include `[rag]` extras (PR #605)
-- **Reverted accidental changes** — Restored per-file upload locking, tool confirmation flow, CSS design system (glassmorphism, animations), AnimatedPresence transitions, custom model override UI, and formatting utilities accidentally reverted during a stale merge (PR #608)
+- **LRU eviction silent failure** — Fixed unbounded memory growth: added pre-flight rejection at capacity, logging on all failure paths, and fixed cache-load bug where cached files weren't tracked. New CLI flags: `--max-indexed-files` and `--max-total-chunks` (PR #567)
+- **Lemonade v10 device keys** — Updated device key references: `npu` → `amd_npu`, `gpu` → `amd_igpu`/`amd_dgpu`. Fixed NPU detection in Hardware Advisor (PR #548)
+- **Agent UI rendering** — Fixed post-tool thinking visibility, FileListView layout, and text spacing (PR #566)
+- **Agent UI guardrails & Windows paths** — Tightened JSON safety regex, added platform context to system prompt for native Windows paths, cleared messages before session switch (PR #604)
+- **RAG indexing guards** — `gaia init` now installs RAG dependencies for chat/rag/all profiles. Added None guards to 8 RAG tools preventing crashes when dependencies aren't installed (PR #605)
+- **Reverted accidental changes** — Restored per-file upload locking, tool confirmation flow, CSS design system, and formatting utilities accidentally reverted during a stale merge (PR #608)
 - **v0.16.1 release notes** — Added missing PRs to previous release notes (PR #589)
 
 ---
@@ -119,7 +112,7 @@ Reduced system prompt size by 78%, fixing timeouts on smaller models (PR #617):
 ## Upgrade
 
 ```bash
-# Install/upgrade GAIA (Python)
+# Install/upgrade GAIA
 pip install --upgrade amd-gaia
 
 # Include RAG support for document Q&A
