@@ -225,7 +225,7 @@ def create_app(db_path: str = None) -> FastAPI:
             "http://localhost:5173",
             "http://127.0.0.1:5173",
         ],
-        allow_origin_regex=r"https://[a-zA-Z0-9-]+\.ngrok-free\.app",  # Allow ngrok tunnel origins
+        allow_origin_regex=r"https://[a-zA-Z0-9-]+\.(ngrok-free\.app|use\.devtunnels\.ms)",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -311,6 +311,14 @@ def create_app(db_path: str = None) -> FastAPI:
         # Serve index.html for all non-API routes (SPA fallback)
         _resolved_dist = _webui_dist.resolve()
         _index_html = str(_resolved_dist / "index.html")
+        # Prevent browsers and tunnel proxies from caching index.html so
+        # that rebuilt assets (with new content hashes) are always picked up.
+        # Hashed files under /assets/ are cached normally by StaticFiles.
+        _NO_CACHE = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
 
         @app.get("/{full_path:path}")
         async def serve_spa(full_path: str):
@@ -319,7 +327,7 @@ def create_app(db_path: str = None) -> FastAPI:
             # Checks are explicit so static analysis (CodeQL) can verify
             # the user-controlled ``full_path`` is properly constrained.
             if not full_path or "\x00" in full_path or ".." in full_path:
-                return FileResponse(_index_html)
+                return FileResponse(_index_html, headers=_NO_CACHE)
 
             candidate = (_resolved_dist / full_path).resolve()
 
@@ -327,13 +335,13 @@ def create_app(db_path: str = None) -> FastAPI:
             try:
                 candidate.relative_to(_resolved_dist)
             except ValueError:
-                return FileResponse(_index_html)
+                return FileResponse(_index_html, headers=_NO_CACHE)
 
             if candidate.is_file():
                 return FileResponse(str(candidate))
 
             # Default to index.html for SPA routing
-            return FileResponse(_index_html)
+            return FileResponse(_index_html, headers=_NO_CACHE)
 
     else:
         logger.info(
@@ -377,6 +385,7 @@ def main():
         host=args.host,
         port=args.port,
         log_level=log_level,
+        access_log=args.debug,  # Only show HTTP access logs in debug mode
     )
 
 

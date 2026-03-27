@@ -577,6 +577,36 @@ class FileSearchToolsMixin:
                         ),
                     }
 
+                # Document formats must be indexed via index_document, not read directly.
+                # The tool docstring explicitly scopes read_file to text files (Python,
+                # Markdown, etc.); binary document types are not supported.  Returning
+                # a clear error here stops the LLM from spinning on a useless
+                # "[Binary file, X bytes]" success response.
+                doc_ext = os.path.splitext(file_path)[1].lower()
+                if doc_ext in {
+                    ".pdf",
+                    ".docx",
+                    ".doc",
+                    ".pptx",
+                    ".ppt",
+                    ".xlsx",
+                    ".xls",
+                    ".odt",
+                    ".ods",
+                    ".odp",
+                    ".epub",
+                }:
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"Cannot read {doc_ext} files directly — they are binary document formats. "
+                            f"Call index_document('{file_path}') to index it, "
+                            "then use query_specific_file or query_documents to retrieve content. "
+                            "If index_document returns 'Access denied', ask the user to index the "
+                            "file via the Document Library (attachment icon in the UI)."
+                        ),
+                    }
+
                 # Guard against reading very large files into memory
                 file_size = os.path.getsize(file_path)
                 if file_size > 10_000_000:  # 10 MB

@@ -14,8 +14,13 @@ import './ConnectionBanner.css';
  * context window is too small. Provides clear messaging and actionable hints.
  */
 export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
-    const { backendConnected, systemStatus } = useChatStore();
+    const { backendConnected, systemStatus, currentSessionId, messages } = useChatStore();
     const [dismissed, setDismissed] = useState(false);
+
+    // Suppress the banner entirely while a conversation is in progress.
+    // The banner will not show, will not update its internal state, and will
+    // resume normal behaviour only when there is no active conversation.
+    const hasActiveConversation = !!currentSessionId && messages.length > 0;
 
     const modelName = systemStatus?.default_model_name ?? DEFAULT_MODEL_NAME;
     const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName);
@@ -28,6 +33,9 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
     const prevExpectedModelRef = useRef(systemStatus?.expected_model_loaded);
 
     useEffect(() => {
+        // Freeze all state tracking while a conversation is active.
+        if (hasActiveConversation) return;
+
         const lemonade = systemStatus?.lemonade_running;
         const modelDownloaded = systemStatus?.model_downloaded;
         const contextSufficient = systemStatus?.context_size_sufficient;
@@ -53,10 +61,13 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         }
 
         if (shouldReset) setDismissed(false);
-    }, [systemStatus]);
+    }, [systemStatus, hasActiveConversation]);
 
     // Nothing to show
     if (dismissed) return null;
+
+    // Hidden while a conversation is active (user is in a chat with messages).
+    if (hasActiveConversation) return null;
 
     // Case 1: Backend API is unreachable
     if (!backendConnected) {
@@ -153,12 +164,16 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         );
     }
 
-    // Case 4: A model is loaded but it is not the expected one
+    // Case 4: A model is loaded but it is not the expected one.
+    // Suppressed when the embedding model is the currently active model — that
+    // is a normal transient state after indexing. The backend pre-flight check
+    // in _chat_helpers.py loads the correct LLM before the first query executes.
     if (
         systemStatus &&
         systemStatus.lemonade_running &&
         systemStatus.model_loaded &&
-        systemStatus.expected_model_loaded === false
+        systemStatus.expected_model_loaded === false &&
+        !systemStatus.embedding_model_loaded
     ) {
         const currentModel = systemStatus.model_loaded;
         const contextAlsoSmall = systemStatus.context_size_sufficient === false;

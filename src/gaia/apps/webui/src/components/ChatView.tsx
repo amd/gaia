@@ -134,6 +134,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const { addNotification } = useNotificationStore();
 
     const session = sessions.find((s) => s.id === sessionId);
+    const sessionDocIds = new Set(session?.document_ids ?? []);
+    const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useState('');
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
@@ -1047,22 +1049,25 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     };
 
-    /** Remove a document from the index directly from the context bar. */
+    /** Detach a document from this session via the context bar (does not delete from library). */
     const handleRemoveDocument = useCallback(async (e: React.MouseEvent, docId: string) => {
         e.stopPropagation(); // Don't trigger the context bar click
         const doc = documents.find((d) => d.id === docId);
-        log.doc.info(`Removing document from context bar: ${doc?.filename || docId}`);
+        log.doc.info(`Detaching document from session: ${doc?.filename || docId}`);
         try {
-            await api.deleteDocument(docId);
-            const remaining = documents.filter((d) => d.id !== docId);
-            setDocuments(remaining);
-            // Auto-collapse when 3 or fewer docs remain
+            await api.detachDocument(sessionId, docId);
+            // Read fresh state after await to avoid stale-closure bugs when
+            // the user removes multiple documents in quick succession.
+            const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
+            const remaining = (freshSession?.document_ids ?? []).filter(id => id !== docId);
+            updateSessionInList(sessionId, { document_ids: remaining });
+            // Auto-collapse when 3 or fewer session docs remain after removal
             if (remaining.length <= 3) setDocsExpanded(false);
-            log.doc.info(`Removed document: ${doc?.filename || docId}`);
+            log.doc.info(`Detached document from session: ${doc?.filename || docId}`);
         } catch (err) {
-            log.doc.error(`Failed to remove document: ${doc?.filename || docId}`, err);
+            log.doc.error(`Failed to detach document: ${doc?.filename || docId}`, err);
         }
-    }, [documents, setDocuments]);
+    }, [documents, sessionId, updateSessionInList]);
 
     // Drag & drop
     const handleDrop = useCallback(async (e: React.DragEvent) => {
@@ -1074,13 +1079,25 @@ export function ChatView({ sessionId }: ChatViewProps) {
             for (const file of Array.from(e.dataTransfer.files)) {
                 const filepath = (file as any).path || file.name;
                 try {
-                    await api.uploadDocumentByPath(filepath);
+                    const doc = await api.uploadDocumentByPath(filepath);
+                    if (sessionId && doc?.id) {
+                        try {
+                            await api.attachDocument(sessionId, doc.id);
+                            const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
+                            const existing = freshSession?.document_ids ?? [];
+                            if (!existing.includes(doc.id)) {
+                                updateSessionInList(sessionId, { document_ids: [...existing, doc.id] });
+                            }
+                        } catch (attachErr) {
+                            log.doc.warn(`Could not attach dropped document to session: ${attachErr}`);
+                        }
+                    }
                 } catch (err) {
                     log.doc.error(`Upload failed: ${filepath}`, err);
                 }
             }
         }
-    }, [setShowDocLibrary]);
+    }, [sessionId, updateSessionInList, setShowDocLibrary]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -1162,10 +1179,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 </div>
             </header>
 
-            {/* Indexed documents context bar */}
-            {documents.length > 0 && (() => {
+            {/* Indexed documents context bar — shows only docs attached to this session */}
+            {sessionDocs.length > 0 && (() => {
                 // Sort by most recently accessed (last_accessed_at), falling back to indexed_at
-                const sorted = [...documents].sort((a, b) => {
+                const sorted = [...sessionDocs].sort((a, b) => {
                     const aTime = a.last_accessed_at || a.indexed_at || '';
                     const bTime = b.last_accessed_at || b.indexed_at || '';
                     return bTime.localeCompare(aTime);
@@ -1175,7 +1192,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 return (
                     <div
                         className={`doc-context-bar${docsExpanded ? ' doc-context-expanded' : ''}`}
-                        aria-label={`${documents.length} indexed document${documents.length !== 1 ? 's' : ''}`}
+                        aria-label={`${sessionDocs.length} indexed document${sessionDocs.length !== 1 ? 's' : ''}`}
                     >
                         <CheckCircle2 size={12} className="doc-context-icon" />
                         <span
@@ -1185,7 +1202,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             role="button"
                             tabIndex={0}
                         >
-                            {documents.length} indexed
+                            {sessionDocs.length} indexed
                         </span>
                         <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
                             {visibleDocs.map((d) => (
@@ -1195,8 +1212,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     <button
                                         className="doc-pill-remove"
                                         onClick={(e) => handleRemoveDocument(e, d.id)}
-                                        title={`Remove ${d.filename} from index`}
-                                        aria-label={`Remove ${d.filename}`}
+                                        title={`Remove ${d.filename} from this session`}
+                                        aria-label={`Remove ${d.filename} from this session`}
                                     >
                                         <X size={10} />
                                     </button>
