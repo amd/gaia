@@ -74,6 +74,7 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     agent_steps = []
     event_log = []
     current_tool = None
+    inference_stats = None
 
     for line in r.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
@@ -143,6 +144,21 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
         elif etype == "agent_error":
             event_log.append(f"[error] {event.get('content', '')}")
 
+        elif etype == "done":
+            stats = event.get("stats")
+            if stats:
+                inference_stats = stats
+                event_log.append(
+                    f"[perf] {stats.get('tokens_per_second', 0)} tok/s | "
+                    f"{stats.get('time_to_first_token', 0)*1000:.0f}ms TTFT | "
+                    f"{stats.get('input_tokens', 0)} → "
+                    f"{stats.get('output_tokens', 0)} tokens"
+                )
+            # done content takes final priority over answer/chunk accumulation
+            done_content = event.get("content", "")
+            if done_content:
+                full_content = done_content
+
         elif etype == "status":
             msg = event.get("message", "")
             if msg:
@@ -161,11 +177,14 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     full_content = _re.sub(r"^[}\s`]+", "", full_content)
     full_content = full_content.strip()
 
-    return {
+    result = {
         "content": full_content,
         "agent_steps": agent_steps,
         "event_log": event_log,
     }
+    if inference_stats:
+        result["stats"] = inference_stats
+    return result
 
 
 def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
@@ -234,6 +253,9 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
                     }
                     for s in steps
                 ]
+            stats = m.get("stats")
+            if stats:
+                msg["stats"] = stats
             messages.append(msg)
         return {"messages": messages, "total": data.get("total", len(messages))}
 

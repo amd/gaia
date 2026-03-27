@@ -108,6 +108,29 @@ overall = correctness*0.25 + tool_selection*0.20 + context_retention*0.20
 
 Note: a turn where the agent gave no response at all (completeness=0) will also have correctness=0, so rule 1 covers it. There is no separate rule for completeness alone.
 
+## PERFORMANCE DATA COLLECTION (mandatory)
+
+Every `send_message()` call returns a `stats` object with LLM inference metrics.
+Every assistant message from `get_messages()` includes a `stats` field.
+You MUST record these for every turn.
+
+**Fields to capture per turn:**
+- `tokens_per_second` (float): LLM decode throughput
+- `time_to_first_token` (float, seconds): Latency before first token
+- `input_tokens` (int): Prompt token count
+- `output_tokens` (int): Completion token count
+
+**How to capture:**
+1. After each `send_message()`, check the response for a `stats` key and record the values
+2. In Phase 3 (`get_messages`), cross-reference persisted stats with what you recorded live
+3. If `stats` is missing or all zeros, record `null` — do NOT invent numbers
+
+**Performance flags (informational — do NOT affect pass/fail):**
+- `no_stats`: stats missing or all zeros (Lemonade may be offline or using a non-Lemonade provider)
+- `low_throughput`: tokens_per_second < 5.0 (severely degraded inference)
+- `high_latency`: time_to_first_token > 5.0 seconds
+- `token_explosion`: input_tokens > 4000 (bloated context — possible prompt or history issue)
+
 ## FAILURE CATEGORIES
 
 - wrong_answer: Factually incorrect (number, name, or claim contradicts ground_truth)
