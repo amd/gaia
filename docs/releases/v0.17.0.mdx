@@ -1,14 +1,14 @@
 ---
 title: "v0.17.0"
-description: "GAIA Chat UI with document Q&A, Agent UI eval benchmark, tool execution guardrails, system prompt optimization, security hardening"
+description: "GAIA Agent UI with document Q&A, Agent UI eval benchmark, tool execution guardrails, system prompt optimization, security hardening"
 ---
 
 # GAIA v0.17.0 Release Notes
 
-**Minor release** introducing the GAIA Chat UI — a full-stack privacy-first desktop chat interface with document Q&A — along with an Agent UI evaluation framework, tool execution guardrails, an optimized system prompt for small models, and several security and reliability fixes.
+**Minor release** introducing the GAIA Agent UI — a full-stack privacy-first desktop chat interface with document Q&A — along with an Agent UI evaluation framework, tool execution guardrails, an optimized system prompt for small models, and several security and reliability fixes.
 
 **TL;DR:**
-- **New: GAIA Chat UI** — Full-stack desktop chat with streaming responses, 53+ format document Q&A, ngrok tunnel for mobile, page-level citations
+- **New: GAIA Agent UI** — Full-stack desktop chat with streaming responses, 53+ format document Q&A, ngrok tunnel for mobile, page-level citations
 - **New: Agent UI Eval Framework** — `gaia eval agent` command with 7-dimension scoring across 34 scenarios
 - **New: Settings Modal Redesign** — System dashboard, model load/download actions, thinking display, performance stats
 - **New: Tool Execution Guardrails** — Confirmation popup with Allow/Deny/Always Allow before executing write or shell tools
@@ -22,7 +22,7 @@ description: "GAIA Chat UI with document Q&A, Agent UI eval benchmark, tool exec
 
 ## What's New
 
-### GAIA Chat UI
+### GAIA Agent UI
 
 Full-stack privacy-first desktop chat application with document Q&A support (PR #428):
 
@@ -163,7 +163,7 @@ cmake --build build --config Release
 - `8c2d24a` - security: fix TOCTOU race condition in document upload endpoint (#448) (#564)
 - `bae3a62` - docs(releases): add missing PRs to v0.16.1 release notes (#589)
 - `25c6d25` - Agent UI: terminal animations, pixelated cursor, and docs fixes (#568)
-- `b2ace80` - Add GAIA Chat UI: privacy-first desktop chat with document Q&A (#428)
+- `b2ace80` - Add GAIA Agent UI: privacy-first desktop chat with document Q&A (#428)
 - `4015bb2` - Fix Lemonade v10 system-info device key compatibility (#548)
 
 Full Changelog: [v0.16.1...v0.17.0](https://github.com/amd/gaia/compare/v0.16.1...v0.17.0)
