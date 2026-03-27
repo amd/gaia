@@ -236,4 +236,5 @@ async def detach_document(
 ):
     """Detach a document from a session."""
     db.detach_document(session_id, doc_id)
+    evict_session_agent(session_id)
     return {"detached": True}

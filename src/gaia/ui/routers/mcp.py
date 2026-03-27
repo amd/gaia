@@ -251,6 +251,13 @@ class MCPServerInfo(BaseModel):
     enabled: bool
 
 
+class MCPServerStatus(BaseModel):
+    name: str
+    connected: bool
+    tool_count: int
+    error: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -384,8 +391,8 @@ async def list_mcp_server_tools(name: str):
             "name": name,
             "tools": [
                 {
-                    "name": t.get("name", ""),
-                    "description": t.get("description", ""),
+                    "name": t.name,
+                    "description": t.description,
                 }
                 for t in tools
             ],
@@ -403,3 +410,16 @@ async def list_mcp_server_tools(name: str):
 async def get_mcp_catalog():
     """Return the curated list of popular MCP servers."""
     return {"catalog": _CATALOG}
+
+
+@router.get("/api/mcp/status")
+async def get_mcp_runtime_status():
+    """Return runtime MCP server connection status from the most recent chat session.
+
+    Only populated after the first chat message is sent.  Returns an empty list
+    before any chat has started.
+    """
+    from gaia.ui._chat_helpers import get_cached_mcp_status
+
+    servers = get_cached_mcp_status()
+    return {"servers": [MCPServerStatus(**s).model_dump() for s in servers]}

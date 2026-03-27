@@ -175,7 +175,10 @@ class TestSystemStatus:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_httpx_cls.return_value = mock_client
 
-        resp = client.get("/api/system/status")
+        # Ensure default localhost URL is used regardless of env
+        env_override = {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"}
+        with patch.dict(os.environ, env_override, clear=False):
+            resp = client.get("/api/system/status")
         data = resp.json()
         # Fields must be present
         assert "context_size_sufficient" in data
@@ -1290,6 +1293,21 @@ class TestSessionDocumentEndpoints:
         resp = client.delete(f"/api/sessions/{session_id}/documents/nonexistent-doc")
         assert resp.status_code == 200
         assert resp.json()["detached"] is True
+
+    def test_detach_document_evicts_agent_cache(self, client, db):
+        """detach_document must evict the cached ChatAgent so the next turn
+        rebuilds without the removed document (regression guard)."""
+        create_resp = client.post("/api/sessions", json={})
+        session_id = create_resp.json()["id"]
+
+        doc = db.add_document("evict.pdf", "/evict.pdf", "evict_hash")
+        db.attach_document(session_id, doc["id"])
+
+        with patch("gaia.ui.routers.sessions.evict_session_agent") as mock_evict:
+            resp = client.delete(f"/api/sessions/{session_id}/documents/{doc['id']}")
+
+        assert resp.status_code == 200
+        mock_evict.assert_called_once_with(session_id)
 
 
 class TestCORSConfiguration:

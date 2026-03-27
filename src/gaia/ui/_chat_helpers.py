@@ -14,6 +14,7 @@ patches take effect.
 """
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -50,11 +51,26 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 # requests, and the per-session session_lock prevents concurrent turns within
 # the same session.  Together they guarantee the cache dict and each agent are
 # accessed by at most one thread at a time — no per-entry locking needed.
-_agent_cache: dict = (
+_agent_cache: dict[str, dict] = (
     {}
 )  # session_id -> {"agent": ChatAgent, "model_id": str, "document_ids": list}
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
+
+# Last known MCP runtime status — updated after each agent setup so
+# GET /api/mcp/status can return it without needing a running chat.
+_mcp_status_cache: list[dict] = []
+_mcp_status_lock = threading.Lock()
+
+# Lock preventing concurrent sessions from issuing simultaneous load_model()
+# calls when both arrive with Lemonade in a no-model or embedding-only state.
+_model_load_lock = threading.Lock()
+
+
+def get_cached_mcp_status() -> list[dict]:
+    """Return the last known MCP server connection status from any cached agent."""
+    with _mcp_status_lock:
+        return copy.deepcopy(_mcp_status_cache)
 
 
 def _get_cached_agent(session_id: str, model_id: str):
@@ -276,6 +292,79 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
+    """Ensure a text-generation LLM is active before issuing a chat completion.
+
+    Handles two cases that cause a silent 100-900 second hang:
+    - No model loaded (fresh Lemonade start): Lemonade keeps the HTTP connection
+      open producing zero tokens. No exception is raised so _execute_with_auto_download
+      never fires.
+    - Embedding model active (after document indexing): same silent hang.
+
+    In both cases Lemonade returns no error — it just hangs. This pre-flight
+    check detects the problem and does a blocking model swap before process_query
+    is called. VLMs (type='vlm') are treated as valid chat models.
+
+    Note: There is a small TOCTOU window between this check and the actual
+    chat request. A model eviction between the two is unlikely but possible;
+    _execute_with_auto_download handles that residual case.
+    """
+    if not model_id:
+        return
+    try:
+        import httpx
+
+        from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+
+        base_url = LemonadeManager.get_base_url() or "http://localhost:8000/api/v1"
+        resp = httpx.get(f"{base_url}/health", timeout=5.0)
+        if resp.status_code != 200:
+            return
+        data = resp.json()
+        all_models = data.get("all_models_loaded", [])
+
+        # Fast path: any LLM or VLM is already active — nothing to do.
+        # Embedding-only or empty list means we must load the expected model.
+        has_chat_model = any(m.get("type") in ("llm", "vlm") for m in all_models)
+        if has_chat_model:
+            return
+
+        logger.info(
+            "No chat-capable model active (loaded=%s); loading: %s",
+            [m.get("type") for m in all_models] or "<none>",
+            model_id,
+        )
+        if sse_handler is not None:
+            sse_handler._emit(
+                {"type": "status", "status": "info", "message": "Loading LLM model..."}
+            )
+
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        with _model_load_lock:
+            # Re-check after acquiring the lock: another thread may have
+            # already loaded the model while we were waiting.
+            resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
+            if resp2.status_code == 200:
+                all_models2 = resp2.json().get("all_models_loaded", [])
+                if any(m.get("type") in ("llm", "vlm") for m in all_models2):
+                    logger.debug("Model loaded by concurrent thread; skipping load")
+                    return
+            LemonadeClient(verbose=False).load_model(
+                model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False
+            )
+    except Exception as exc:
+        logger.warning("Pre-flight model check failed: %s", exc)
+        if sse_handler is not None:
+            sse_handler._emit(
+                {
+                    "type": "status",
+                    "status": "warning",
+                    "message": "Could not auto-load LLM. Check that Lemonade is running.",
+                }
+            )
+
+
 # ── Non-streaming Chat ───────────────────────────────────────────────────────
 
 
@@ -385,6 +474,9 @@ async def _get_chat_response(
             agent.conversation_history.append({"role": "user", "content": u})
             agent.conversation_history.append({"role": "assistant", "content": a})
 
+        # Pre-flight: same fix as the streaming path — see _maybe_load_expected_model.
+        _maybe_load_expected_model(model_id)
+
         result = agent.process_query(request.message)
         if isinstance(result, dict):
             # process_query returns {"result": "...", "status": "...", ...}
@@ -396,14 +488,14 @@ async def _get_chat_response(
 
     try:
         loop = asyncio.get_running_loop()
-        # Apply a 120-second timeout to prevent indefinite hangs when the
+        # Apply a 600-second timeout to prevent indefinite hangs when the
         # LLM gets stuck in a tool loop or Lemonade becomes unresponsive
         return await asyncio.wait_for(
             loop.run_in_executor(None, _do_chat),
-            timeout=120.0,
+            timeout=600.0,
         )
     except asyncio.TimeoutError:
-        logger.error("Chat response timed out after 120 seconds")
+        logger.error("Chat response timed out after 600 seconds")
         return "I took too long thinking about that one. Try breaking your question into simpler parts and I'll do my best."
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
@@ -533,6 +625,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         session_id[:8],
                         _time.monotonic() - t0,
                     )
+                    sse_handler._emit(
+                        {
+                            "type": "status",
+                            "status": "info",
+                            "message": "Sending to model...",
+                        }
+                    )
 
                 else:
                     # -- Cache miss: full construction --
@@ -612,6 +711,21 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         session_id[:8],
                         _time.monotonic() - t0,
                     )
+                    sse_handler._emit(
+                        {
+                            "type": "status",
+                            "status": "info",
+                            "message": "Sending to model...",
+                        }
+                    )
+
+                # -- Emit MCP runtime status (once per request, after agent setup) --
+                if hasattr(agent, "get_mcp_status_report"):
+                    mcp_report = agent.get_mcp_status_report()
+                    with _mcp_status_lock:
+                        _mcp_status_cache[:] = mcp_report
+                    if mcp_report:
+                        sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -644,6 +758,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 if sse_handler.cancelled.is_set():
                     return
 
+                # Pre-flight: ensure a chat-capable LLM is active before sending the query.
+                # Lemonade silently hangs when no model is loaded or the embedding model is
+                # active — no error is returned, so _execute_with_auto_download never fires.
+                _maybe_load_expected_model(model_id, sse_handler)
+
                 # -- Phase 5: Query processing --
                 t_query = _time.monotonic()
                 result = agent.process_query(request.message)
@@ -675,7 +794,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         step_id = 0
         idle_cycles = 0
         _stream_start = _time.time()
-        _STREAM_TIMEOUT = 180  # 3 minutes max for entire streaming response
+        _STREAM_TIMEOUT = 600  # 10 minutes — large system prompts need time
         while True:
             # Guard: total timeout for the streaming response
             if _time.time() - _stream_start > _STREAM_TIMEOUT:
@@ -814,12 +933,31 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             except queue.Empty:
                 if not producer.is_alive():
                     break
+                idle_cycles += 1
                 # Send a padded keepalive every ~5s (25 cycles × 0.2s).
                 # The padding flushes Chromium's receive buffer so any events
                 # already sent but not yet dispatched arrive immediately.
-                idle_cycles += 1
                 if idle_cycles % 25 == 0:
                     yield ": keepalive " + "x" * 490 + "\n\n"
+                # Every 15s (75 cycles) emit a visible status so the user knows
+                # the model is still processing (prompt prefill is silent).
+                # Use status='working' so active=true; consecutive events merge
+                # into a single updating step on the frontend.
+                if idle_cycles % 75 == 0:
+                    elapsed = int(_time.time() - _stream_start)
+                    status_evt = json.dumps(
+                        {
+                            "type": "status",
+                            "status": "working",
+                            "message": f"Model is processing... ({elapsed}s)",
+                        }
+                    )
+                    status_data = f"data: {status_evt}\n\n"
+                    if len(status_data) < 512:
+                        status_data += (
+                            ": " + "x" * (512 - len(status_data) - 4) + "\n\n"
+                        )
+                    yield status_data
                 continue
 
         # Signal cancellation (handles client disconnect) then wait for producer
