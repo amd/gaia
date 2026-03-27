@@ -334,7 +334,9 @@ def test_recheck_exception_caught_by_outer_handler():
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
 
-        _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF", sse_handler=sse)  # must not raise
+        _maybe_load_expected_model(
+            "Qwen3.5-35B-A3B-GGUF", sse_handler=sse
+        )  # must not raise
 
         mock_cls.assert_not_called()
 
