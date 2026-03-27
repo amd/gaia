@@ -2,13 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Manager for multiple MCP client connections."""
 
-from concurrent.futures import (
-    ThreadPoolExecutor,
-)
+from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FutureTimeoutError
-from concurrent.futures import (
-    as_completed,
-)
+from concurrent.futures import as_completed
 from typing import Dict, List, Optional
 
 from gaia.logger import get_logger
@@ -248,4 +244,7 @@ class MCPClientManager:
                         _CONNECT_TIMEOUT,
                     )
         finally:
-            pool.shutdown(wait=False)
+            # wait=False: don't block on threads that are stuck in readline().
+            # cancel_futures=True: stop any pending (not-yet-started) futures.
+            # Already-running threads become daemon threads and exit with the process.
+            pool.shutdown(wait=False, cancel_futures=True)

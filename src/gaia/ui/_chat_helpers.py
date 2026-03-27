@@ -61,6 +61,10 @@ _MAX_CACHED_AGENTS = 10
 _mcp_status_cache: list = []
 _mcp_status_lock = threading.Lock()
 
+# Lock preventing concurrent sessions from issuing simultaneous load_model()
+# calls when both arrive with Lemonade in a no-model or embedding-only state.
+_model_load_lock = threading.Lock()
+
 
 def get_cached_mcp_status() -> list:
     """Return the last known MCP server connection status from any cached agent."""
@@ -287,6 +291,79 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
+    """Ensure a text-generation LLM is active before issuing a chat completion.
+
+    Handles two cases that cause a silent 100-900 second hang:
+    - No model loaded (fresh Lemonade start): Lemonade keeps the HTTP connection
+      open producing zero tokens. No exception is raised so _execute_with_auto_download
+      never fires.
+    - Embedding model active (after document indexing): same silent hang.
+
+    In both cases Lemonade returns no error — it just hangs. This pre-flight
+    check detects the problem and does a blocking model swap before process_query
+    is called. VLMs (type='vlm') are treated as valid chat models.
+
+    Note: There is a small TOCTOU window between this check and the actual
+    chat request. A model eviction between the two is unlikely but possible;
+    _execute_with_auto_download handles that residual case.
+    """
+    if not model_id:
+        return
+    try:
+        import httpx
+
+        from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+
+        base_url = LemonadeManager.get_base_url() or "http://localhost:8000/api/v1"
+        resp = httpx.get(f"{base_url}/health", timeout=5.0)
+        if resp.status_code != 200:
+            return
+        data = resp.json()
+        all_models = data.get("all_models_loaded", [])
+
+        # Fast path: any LLM or VLM is already active — nothing to do.
+        # Embedding-only or empty list means we must load the expected model.
+        has_chat_model = any(m.get("type") in ("llm", "vlm") for m in all_models)
+        if has_chat_model:
+            return
+
+        logger.info(
+            "No chat-capable model active (loaded=%s); loading: %s",
+            [m.get("type") for m in all_models] or "<none>",
+            model_id,
+        )
+        if sse_handler is not None:
+            sse_handler._emit(
+                {"type": "status", "status": "info", "message": "Loading LLM model..."}
+            )
+
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        with _model_load_lock:
+            # Re-check after acquiring the lock: another thread may have
+            # already loaded the model while we were waiting.
+            resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
+            if resp2.status_code == 200:
+                all_models2 = resp2.json().get("all_models_loaded", [])
+                if any(m.get("type") in ("llm", "vlm") for m in all_models2):
+                    logger.debug("Model loaded by concurrent thread; skipping load")
+                    return
+            LemonadeClient(verbose=False).load_model(
+                model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False
+            )
+    except Exception as exc:
+        logger.warning("Pre-flight model check failed: %s", exc)
+        if sse_handler is not None:
+            sse_handler._emit(
+                {
+                    "type": "status",
+                    "status": "warning",
+                    "message": "Could not auto-load LLM. Check that Lemonade is running.",
+                }
+            )
+
+
 # ── Non-streaming Chat ───────────────────────────────────────────────────────
 
 
@@ -395,6 +472,9 @@ async def _get_chat_response(
                 a += "... (truncated)"
             agent.conversation_history.append({"role": "user", "content": u})
             agent.conversation_history.append({"role": "assistant", "content": a})
+
+        # Pre-flight: same fix as the streaming path — see _maybe_load_expected_model.
+        _maybe_load_expected_model(model_id)
 
         result = agent.process_query(request.message)
         if isinstance(result, dict):
@@ -676,6 +756,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
                     return
+
+                # Pre-flight: ensure a chat-capable LLM is active before sending the query.
+                # Lemonade silently hangs when no model is loaded or the embedding model is
+                # active — no error is returned, so _execute_with_auto_download never fires.
+                _maybe_load_expected_model(model_id, sse_handler)
 
                 # -- Phase 5: Query processing --
                 t_query = _time.monotonic()
