@@ -1,16 +1,14 @@
 ---
 title: "v0.17.0"
-description: "GAIA Agent UI with document Q&A, Agent UI eval benchmark, tool execution guardrails, system prompt optimization, security hardening"
+description: "GAIA Agent UI with document Q&A, tool execution guardrails, system prompt optimization, security hardening"
 ---
 
 # GAIA v0.17.0 Release Notes
 
-**Minor release** introducing the GAIA Agent UI — a full-stack privacy-first desktop chat interface with document Q&A — along with an Agent UI evaluation framework, tool execution guardrails, an optimized system prompt for small models, and several security and reliability fixes.
+**Minor release** introducing the GAIA Agent UI — a full-stack privacy-first desktop chat interface with document Q&A — along with tool execution guardrails, an optimized system prompt for small models, and several security and reliability fixes.
 
 **TL;DR:**
 - **New: GAIA Agent UI** — Full-stack desktop chat with streaming responses, 53+ format document Q&A, ngrok tunnel for mobile, page-level citations
-- **New: Agent UI Eval Framework** — `gaia eval agent` command with 7-dimension scoring across 34 scenarios
-- **New: Settings Modal Redesign** — System dashboard, model load/download actions, thinking display, performance stats
 - **New: Tool Execution Guardrails** — Confirmation popup with Allow/Deny/Always Allow before executing write or shell tools
 - **New: Device Support Detection** — Clear messaging on unsupported hardware with `--base-url` remote bypass
 - **Security: TOCTOU Fix** — Atomic `O_NOFOLLOW` + `fstat` race condition fix in document upload
@@ -33,6 +31,9 @@ Full-stack privacy-first desktop chat application with document Q&A support (PR 
 - **Session management** — Create, switch, and persist chat sessions with full conversation history
 - **ngrok tunnel** — Built-in tunnel support for accessing your local GAIA instance from mobile devices
 - **Security hardening** — Path traversal prevention, SQL parameterization, and input validation throughout
+- **Redesigned Settings modal** — System dashboard showing device info, model load/download actions, and connection status
+- **Thinking display** — `<think>` block rendering shows the agent's reasoning process inline
+- **Performance stats** — Hover tooltips showing token counts, latency, and throughput metrics
 - **13+ bug fixes** — Across backend, frontend, and integration layers
 
 ```bash
@@ -44,20 +45,6 @@ gaia chat --ui --ui-port 8080
 ```
 
 See the [Agent UI documentation](/guides/agent-ui) for setup and usage.
-
----
-
-### Agent UI Eval Benchmark Framework
-
-New evaluation framework for benchmarking Agent UI quality and performance (PR #607):
-
-- **`gaia eval agent` CLI command** — Runs multi-turn Agent UI benchmarks via Claude subprocess with MCP tools
-- **7-dimension weighted scoring** — Correctness, tool selection, context retention, completeness, efficiency, personality, and error recovery
-- **34 eval scenarios** — Comprehensive scenario corpus covering chat, RAG, tool use, and edge cases
-- **Score clamping and hardened runner** — Prevents score inflation and handles subprocess failures gracefully
-- **Redesigned Settings modal** — System dashboard showing device info, model load/download actions, and connection status
-- **Thinking display** — `<think>` block rendering shows the agent's reasoning process inline
-- **Performance stats** — Hover tooltips showing token counts, latency, and throughput metrics
 
 ---
 
@@ -149,10 +136,9 @@ cmake --build build --config Release
 
 ## Full Changelog
 
-**14 commits** since v0.16.1:
+**13 commits** since v0.16.1:
 
 - `2d08088` - fix: reduce system prompt 78% to fix Qwen3.5 timeouts + MCP runtime status (#609) (#617)
-- `c72e6d9` - feat: Agent UI eval benchmark framework with gaia eval agent command (#607)
 - `b7a97e6` - Restore changes reverted by accidental PR #566 merge (#564, #565, #568) (#608)
 - `af652d9` - fix: RAG indexing guards, gaia init pip extras, and docs update (#605)
 - `95b304f` - Fix Agent UI guardrails, rendering, LRU eviction, and Windows paths (#604)
