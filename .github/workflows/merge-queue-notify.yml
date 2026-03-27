@@ -1,19 +1,27 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# Notifies PR authors when their PR fails in the merge queue
-# Watches for workflow completions triggered by merge_group events
+# Notifies PR authors when their PR fails in the merge queue.
+#
+# Two triggers:
+# 1. workflow_run: Fires when watched workflows complete — posts a comment if
+#    the triggering run was a merge_group event that failed.
+# 2. merge_group: Pass-through so the merge queue sees a "success" status
+#    instead of a phantom "failure" (GitHub creates run records for every
+#    workflow file on push/merge_group; files without a matching trigger
+#    get 0 jobs → conclusion "failure").
 
 name: Merge Queue Failure Notification
 
 on:
   workflow_run:
     workflows:
-      - "GAIA CLI Tests (All Platforms)"
       - "Code Quality (Lint)"
       - "Unit Tests"
     types:
       - completed
+  # Explicit merge_group trigger prevents phantom failure runs in the merge queue
+  merge_group:
 
 permissions:
   contents: read
@@ -21,11 +29,20 @@ permissions:
   actions: read
 
 jobs:
+  # Fast pass-through so the merge queue sees a green check for this workflow
+  merge-queue-pass:
+    name: Merge Queue Pass-Through
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Pass-through — notification runs via workflow_run trigger"
+
   notify-on-failure:
     name: Notify on Merge Queue Failure
     runs-on: ubuntu-latest
-    # Only run if the triggering workflow was from a merge_group and failed
+    # Only run when a watched workflow completed AND it was from a merge_group AND it failed
     if: >
+      github.event_name == 'workflow_run' &&
       github.event.workflow_run.event == 'merge_group' &&
       github.event.workflow_run.conclusion == 'failure'
     steps:
