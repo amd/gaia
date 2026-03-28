@@ -95,6 +95,7 @@ setup(
         "requests",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
+        "pyyaml>=6.0",
     ],
     extras_require={
         "image": [
