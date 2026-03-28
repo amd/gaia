@@ -1,0 +1,9 @@
+# Don't upload these to Railway
+node_modules/
+.astro/
+dist/
+.git/
+*.log
+.env.local
+.vscode/
+.idea/
