@@ -20,10 +20,6 @@ gaia-ui
 
 Everything installs automatically — Python, the AI model, the backend. No accounts, no API keys, no cloud. Just your machine.
 
-<Note>
-  **Tested on AMD Ryzen AI MAX+ 395** with the **Qwen3.5-35B-A3B-GGUF** model via Lemonade Server. Other hardware or model combinations may work but are not officially verified. If you encounter issues, please [open a GitHub issue](https://github.com/amd/gaia/issues/new) with your processor model, RAM, LLM model, and OS.
-</Note>
-
 ---
 
 ## What You Can Do
@@ -56,38 +52,6 @@ Drag files into the chat — or just ask the agent to find them. It indexes the 
 > *"Compare these two contracts and list the differences"*
 >
 > *"What's the total spend in this expense report?"*
-
-### Keep Conversations Organized
-
-Sessions let you separate work by topic — one for your tax documents, another for a code review, a third for research. You can:
-
-- **Create** a new session from the sidebar
-- **Rename** sessions by clicking the title
-- **Search** across all sessions with `Ctrl+K`
-- **Export** as Markdown or JSON
-- **Delete** with confirmation
-
-Sessions sync between the CLI (`gaia chat`) and the Agent UI — start in one, pick up in the other.
-
-### Extend with External Tools (MCP)
-
-Connect external MCP servers to give the agent access to GitHub, Slack, databases, and more:
-
-```bash
-gaia mcp add time "uvx mcp-server-time"
-```
-
-Or expose the Agent UI itself as an MCP server — letting Claude Code, Cursor, or any MCP client drive GAIA agents programmatically. Conversations appear in the UI in real time.
-
-<CardGroup cols={2}>
-  <Card title="Use as MCP Server" icon="server" href="/guides/mcp/agent-ui">
-    Let external AI tools control GAIA agents through 15 built-in tools
-  </Card>
-
-  <Card title="Add MCP Clients" icon="plug" href="/guides/mcp/client">
-    Connect external services to extend the agent's capabilities
-  </Card>
-</CardGroup>
 
 ---
 
@@ -195,14 +159,36 @@ Or expose the Agent UI itself as an MCP server — letting Claude Code, Cursor, 
 
 ---
 
-## Keyboard Shortcuts
+## Sessions and Shortcuts
+
+Sessions let you organize conversations by topic. They sync between the CLI (`gaia chat`) and the Agent UI — start in one, pick up in the other. Export any session as Markdown or JSON from the session menu.
 
 | Shortcut | Action |
 |----------|--------|
 | `Enter` | Send message |
 | `Shift+Enter` | New line |
 | `Escape` | Stop agent response |
-| `Ctrl+K` | Focus sidebar search |
+| `Ctrl+K` | Search across sessions |
+
+---
+
+## Extend with MCP
+
+The agent supports the **Model Context Protocol** in both directions — connect external tools to expand what the agent can do, or expose the Agent UI itself so other AI tools can drive it.
+
+<CardGroup cols={2}>
+  <Card title="Add Tools to the Agent" icon="plug" href="/guides/mcp/client">
+    Connect GitHub, Slack, databases, and more via MCP servers
+  </Card>
+
+  <Card title="Expose Agent UI to Other Tools" icon="server" href="/guides/mcp/agent-ui">
+    Let Claude Code, Cursor, or any MCP client control GAIA agents
+  </Card>
+</CardGroup>
+
+<Warning>
+  Misconfigured MCP servers can cause slow responses. If you experience timeouts, check `~/.gaia/mcp_servers.json` and remove any servers you don't need. See [Troubleshooting](#llm-response-times-out-or-fails) for details.
+</Warning>
 
 ---
 
@@ -324,6 +310,10 @@ For the REST API reference and backend classes, see the [Agent UI SDK Reference]
 </CardGroup>
 
 ---
+
+<Note>
+  **Hardware:** Tested on AMD Ryzen AI MAX+ 395 with Qwen3.5-35B-A3B-GGUF via Lemonade Server. Other configurations may work — [report issues here](https://github.com/amd/gaia/issues/new).
+</Note>
 
 <small style="color: #666;">
 
