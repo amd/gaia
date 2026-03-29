@@ -1,74 +1,74 @@
 ---
 title: "Agent UI"
-description: "Run AI agents locally on your PC through a desktop interface"
+description: "Your personal AI that lives on your PC — private, fast, and entirely yours"
 icon: "desktop"
 ---
 
-GAIA Agent UI is a desktop interface for running AI agents **100% locally** on your AMD hardware. Use agents to analyze documents, generate code, answer questions, and accomplish tasks on your PC — all without sending data to the cloud.
+Ask your PC to find that contract you downloaded last month. Drop in a spreadsheet and get an instant analysis. Search across thousands of files in seconds. GAIA Agent UI puts a local AI agent in your browser — one that sees your files, understands your documents, and never sends a byte to the cloud.
 
-<Warning>
-  **Tested Configuration:** The Agent UI has been tested exclusively on **AMD Ryzen AI MAX+ 395** processors running the **Qwen3.5-35B-A3B-GGUF** model via Lemonade Server. Other hardware or model combinations may work but are not officially verified.
+{/* TODO: Add demo video — upload to assets.amd-gaia.ai then uncomment:
+<video controls autoPlay loop muted playsInline className="w-full rounded-lg"
+  src="https://assets.amd-gaia.ai/videos/gaia-agent-ui-demo.webm" />
+*/}
 
-  If you encounter issues on a different configuration, please [open a GitHub issue](https://github.com/amd/gaia/issues/new) and include:
-  - Your processor model (e.g., Ryzen AI 9 HX 370, Ryzen AI MAX+ 395)
-  - RAM and available memory
-  - The LLM model you are using
-  - Operating system and version
-  - Steps to reproduce the issue
-</Warning>
+**Two commands to get started:**
+
+```bash
+npm install -g @amd-gaia/agent-ui
+gaia-ui
+```
+
+Everything installs automatically — Python, the AI model, the backend. No accounts, no API keys, no cloud. Just your machine.
 
 ---
 
-## Getting Started
+## What You Can Do
 
-### Prerequisites
+### Find Anything on Your PC
 
-The Agent UI requires two backend services:
+Ask the agent to locate files across your drives — by name, type, content, or recency. No more digging through folder trees.
 
-1. **Lemonade Server** — serves the LLM locally (port 8000)
-2. **A downloaded model** — the LLM the agent uses to reason
+> *"Find all Python files in my Downloads folder"*
+>
+> *"Show me the largest files on my Desktop"*
+>
+> *"Search my project for files that import pandas"*
 
-<Note>
-  **Using the npm install?** `gaia-ui` handles prerequisite #1 and #2 automatically on first run (installs Lemonade Server and downloads a minimal model). You can skip to [Install and Launch](#install-and-launch).
-</Note>
+The agent searches your common folders first, then offers a deep search across all drives if nothing turns up.
 
-If you're using the Python CLI path, or want the full-size model, run:
+### Analyze Any Document
 
-```bash
-gaia init --profile chat
-```
+Drag files into the chat — or just ask the agent to find them. It indexes the content and lets you ask questions, extract data, compare sections, or get summaries. Works with:
 
-This downloads Lemonade Server and the recommended model (~25 GB). Use `--profile minimal` for a smaller download (~400 MB).
+| Category | Formats |
+|----------|---------|
+| **Documents** | PDF, Word, PowerPoint, Excel, TXT, Markdown |
+| **Data** | CSV, JSON, XML, YAML, HTML |
+| **Code** | Python, JavaScript, TypeScript, Java, C/C++, Go, Rust, Ruby, Shell |
+| **Config** | INI, CFG, TOML |
 
-Then start the server:
+> *"Summarize this PDF in 3 bullet points"*
+>
+> *"Compare these two contracts and list the differences"*
+>
+> *"What's the total spend in this expense report?"*
 
-```bash
-lemonade-server serve
-```
+---
 
-### Install and Launch
-
-Choose one of the two install paths:
+## Install
 
 <Tabs>
   <Tab title="npm (Recommended)">
-    The npm package bundles everything — on first run it auto-installs the Python backend (uv, Python 3.12, amd-gaia), Lemonade Server, and a minimal model.
+    The npm package handles everything — on first run it auto-installs Python, the GAIA backend, Lemonade Server, and a minimal model.
 
     **Requires:** [Node.js 18+](https://nodejs.org) (`winget install OpenJS.NodeJS.LTS` on Windows, `brew install node@20` on macOS)
 
     ```bash
     npm install -g @amd-gaia/agent-ui
-    ```
-
-    Then launch:
-
-    ```bash
     gaia-ui
     ```
 
-    The Agent UI opens automatically in your browser at [http://localhost:4200](http://localhost:4200).
-
-    **Options:**
+    The Agent UI opens automatically at [http://localhost:4200](http://localhost:4200).
 
     | Flag | Description |
     |------|-------------|
@@ -85,27 +85,20 @@ Choose one of the two install paths:
   </Tab>
 
   <Tab title="Python CLI">
-    If you already have GAIA installed via pip/uv, launch the Agent UI directly:
-
-    ```bash
-    gaia chat --ui
-    ```
-
-    Or equivalently:
+    If you already have GAIA installed via pip/uv:
 
     ```bash
     gaia --ui
     ```
 
-    The Agent UI starts on [http://localhost:4200](http://localhost:4200). Open this URL in your browser.
+    Or equivalently: `gaia chat --ui`
 
-    **Options:**
+    The Agent UI starts on [http://localhost:4200](http://localhost:4200).
 
     | Flag | Description |
     |------|-------------|
-    | `gaia chat --ui --ui-port 8080` | Custom port |
-    | `gaia --ui --ui-port 8080` | Custom port (top-level alias) |
-    | `gaia --ui --base-url http://192.168.1.100:8000/api/v1` | Connect to Lemonade on another machine (e.g., GPU workstation) |
+    | `gaia --ui --ui-port 8080` | Custom port |
+    | `gaia --ui --base-url http://192.168.1.100:8000/api/v1` | Connect to Lemonade on another machine |
 
     <Note>
       If you see a missing dependencies error, install the UI extras:
@@ -114,51 +107,88 @@ Choose one of the two install paths:
       uv pip install "amd-gaia[ui]"
       ```
     </Note>
+
+    **Prerequisites (Python path only):**
+
+    The Python CLI path requires you to set up the backend manually:
+
+    ```bash
+    gaia init --profile chat    # Downloads Lemonade Server + model (~25 GB)
+    lemonade-server serve       # Start the LLM server
+    ```
+
+    Use `--profile minimal` for a smaller download (~400 MB).
+  </Tab>
+</Tabs>
+
+### Uninstall
+
+<Tabs>
+  <Tab title="npm">
+    ```bash
+    npm uninstall -g @amd-gaia/agent-ui
+    ```
+
+    To also remove all GAIA data (sessions, config, downloaded models):
+
+    ```bash
+    # macOS / Linux
+    rm -rf ~/.gaia
+
+    # Windows (PowerShell)
+    Remove-Item -Recurse -Force "$env:USERPROFILE\.gaia"
+    ```
+  </Tab>
+
+  <Tab title="Python CLI">
+    ```bash
+    uv pip uninstall amd-gaia
+    ```
+
+    To also remove all GAIA data:
+
+    ```bash
+    # macOS / Linux
+    rm -rf ~/.gaia
+
+    # Windows (PowerShell)
+    Remove-Item -Recurse -Force "$env:USERPROFILE\.gaia"
+    ```
   </Tab>
 </Tabs>
 
 ---
 
-## What You Can Do
+## Sessions and Shortcuts
 
-### Search and Browse Files
-
-The agent has access to your local file system. Ask it to find files, explore directories, or locate specific content across your projects — no manual browsing required.
-
-### Analyze Documents
-
-Once the agent finds files — or you drag them into a session — it can index and analyze their content. Ask it to summarize, compare, extract data, or answer questions about any supported format:
-
-- **Documents:** PDF, Word, PowerPoint, Excel, TXT, Markdown, CSV, JSON, HTML, XML, YAML
-- **Code:** Python, JavaScript, TypeScript, Java, C/C++, Go, Rust, Ruby, Shell
-- **Config:** INI, CFG, TOML, YAML, JSON, XML
-
-### Session Management
-
-Create, rename, search, export (Markdown/JSON), and delete sessions. Sessions persist across the CLI (`gaia chat`) and the Agent UI.
-
----
-
-## Keyboard Shortcuts
+Sessions let you organize conversations by topic. They sync between the CLI (`gaia chat`) and the Agent UI — start in one, pick up in the other. Export any session as Markdown or JSON from the session menu.
 
 | Shortcut | Action |
 |----------|--------|
-| `Enter` | Send task / message |
+| `Enter` | Send message |
 | `Shift+Enter` | New line |
 | `Escape` | Stop agent response |
-| `Ctrl+K` | Focus sidebar search |
+| `Ctrl+K` | Search across sessions |
 
 ---
 
-## MCP Server
+## Extend with MCP
 
-The Agent UI includes a built-in **MCP (Model Context Protocol) server** that exposes the full Agent UI as a set of tools. This lets external AI assistants — like **Claude Code**, **Cursor**, or any MCP-compatible client — interact with GAIA agents through the same backend that powers the web UI.
+The agent supports the **Model Context Protocol** in both directions — connect external tools to expand what the agent can do, or expose the Agent UI itself so other AI tools can drive it.
 
-Conversations initiated via MCP appear in the browser UI in real time, so you can watch tool execution and agent activity as it happens.
+<CardGroup cols={2}>
+  <Card title="Add Tools to the Agent" icon="plug" href="/guides/mcp/client">
+    Connect GitHub, Slack, databases, and more via MCP servers
+  </Card>
 
-The MCP server provides 15 tools for managing sessions, sending messages, indexing documents, browsing files, and more.
+  <Card title="Expose Agent UI to Other Tools" icon="server" href="/guides/mcp/agent-ui">
+    Let Claude Code, Cursor, or any MCP client control GAIA agents
+  </Card>
+</CardGroup>
 
-See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions and usage examples.
+<Warning>
+  Misconfigured MCP servers can cause slow responses. If you experience timeouts, check `~/.gaia/mcp_servers.json` and remove any servers you don't need. See [Troubleshooting](#llm-response-times-out-or-fails) for details.
+</Warning>
 
 ---
 
@@ -185,7 +215,7 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
     gaia-ui --port 8080
 
     # Python CLI
-    gaia --ui-port 8080
+    gaia --ui --ui-port 8080
     ```
   </Accordion>
 
@@ -197,6 +227,32 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
     - Ensure the file is a supported format and not password-protected
     - Keep file size under 100MB
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
+  </Accordion>
+
+  <Accordion title="LLM response times out or fails">
+    If you see "I wasn't able to generate a response" errors, check your MCP server configuration. Misconfigured or unreachable MCP servers cause the agent to wait up to 10 seconds per server before responding.
+
+    Check your config:
+
+    ```bash
+    # macOS / Linux
+    cat ~/.gaia/mcp_servers.json
+
+    # Windows (PowerShell)
+    Get-Content "$env:USERPROFILE\.gaia\mcp_servers.json"
+    ```
+
+    If it contains servers you don't recognize or aren't running, either remove them or reset the file:
+
+    ```json
+    { "mcpServers": {} }
+    ```
+
+    You can also manage MCP servers through the Agent UI settings panel or with the CLI:
+
+    ```bash
+    gaia mcp status
+    ```
   </Accordion>
 </AccordionGroup>
 
@@ -254,6 +310,10 @@ For the REST API reference and backend classes, see the [Agent UI SDK Reference]
 </CardGroup>
 
 ---
+
+<Note>
+  **Hardware:** Tested on AMD Ryzen AI MAX+ 395 with Qwen3.5-35B-A3B-GGUF via Lemonade Server. Other configurations may work — [report issues here](https://github.com/amd/gaia/issues/new).
+</Note>
 
 <small style="color: #666;">
 
