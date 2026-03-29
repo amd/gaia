@@ -39,21 +39,14 @@ class RoutingAgent:
         self.registry = AgentRegistry(
             agents_dir=str(agents_dir) if agents_dir.exists() else None
         )
-        import asyncio
-
-        # We need to ensure the registry is initialized. Since __init__ is sync,
-        # we can't easily await initialize() here unless we use a loop
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We can't run_until_complete if loop is running.
-                loop.create_task(self.registry.initialize())
-            else:
-                loop.run_until_complete(self.registry.initialize())
-        except RuntimeError:
-            asyncio.run(self.registry.initialize())
-
+        self._initialized = False
         self.orchestrator = AgentOrchestrator(self.registry)
+
+    async def initialize(self):
+        """Async initialization for the registry."""
+        if not self._initialized:
+            await self.registry.initialize()
+            self._initialized = True
 
     def process_query(
         self,
@@ -66,6 +59,17 @@ class RoutingAgent:
         """
         Process query by routing to the most appropriate agent via Orchestrator.
         """
+        if not self._initialized:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                # If we're already in a running loop, we can't block synchronously.
+                # In a well-behaved async system, the caller should have awaited initialize().
+                # For safety, we warn, though it might fail if registry is empty.
+                logger.warning("RoutingAgent.process_query called synchronously in an async loop without prior initialization. Registry might be empty.")
+            except RuntimeError:
+                # No running loop, we can safely run it
+                asyncio.run(self.initialize())
         if execute is None:
             execute = self.api_mode
 

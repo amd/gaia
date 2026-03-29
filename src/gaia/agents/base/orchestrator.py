@@ -37,63 +37,47 @@ class AgentOrchestrator:
         return self._instantiate_agent(agent_id, context)
 
     def _instantiate_agent(self, agent_id: str, context: Dict[str, Any]) -> Agent:
-        """Map agent_id to concrete Agent classes."""
-        # Get definition from registry to pass to ConfigurableAgent if needed
+        """Map agent_id to concrete Agent classes with error handling."""
         definition = self.registry.get_agent(agent_id)
-
-        # Build kwargs from context
         kwargs = context.get("parameters", {})
 
-        # Mapping to concrete classes
-        # The 10 agent types typically available in GAIA
-        if agent_id in (
-            "code",
-            "senior-developer",
-            "frontend-specialist",
-            "backend-specialist",
-        ):
-            from gaia.agents.code.agent import CodeAgent
-
-            return CodeAgent(**kwargs)
-        elif agent_id == "chat":
+        def _fallback():
             from gaia.agents.chat.agent import ChatAgent
-
             return ChatAgent(**kwargs)
-        elif agent_id == "docker":
-            from gaia.agents.docker.agent import DockerAgent
 
-            return DockerAgent(**kwargs)
-        elif agent_id == "emr":
-            from gaia.agents.emr.agent import MedicalIntakeAgent
-
-            return MedicalIntakeAgent(**kwargs)
-        elif agent_id == "jira":
-            from gaia.agents.jira.agent import JiraAgent
-
-            return JiraAgent(**kwargs)
-        elif agent_id == "sd":
-            from gaia.agents.sd.agent import SDAgent
-
-            return SDAgent(**kwargs)
-        elif agent_id == "blender":
-            from gaia.agents.blender.agent import BlenderAgent
-
-            return BlenderAgent(**kwargs)
-        elif agent_id == "summarize":
-            from gaia.agents.summarize.agent import SummarizerAgent
-
-            return SummarizerAgent(**kwargs)
-        else:
-            # Fallback to configurable agent if definition exists
-            if definition:
-                from gaia.agents.configurable import ConfigurableAgent
-
-                return ConfigurableAgent(definition=definition, **kwargs)
-            else:
-                # Ultimate fallback
+        try:
+            if agent_id in ("code", "senior-developer", "frontend-specialist", "backend-specialist"):
+                from gaia.agents.code.agent import CodeAgent
+                return CodeAgent(**kwargs)
+            elif agent_id == "chat":
                 from gaia.agents.chat.agent import ChatAgent
-
                 return ChatAgent(**kwargs)
+            elif agent_id == "docker":
+                from gaia.agents.docker.agent import DockerAgent
+                return DockerAgent(**kwargs)
+            elif agent_id == "emr":
+                from gaia.agents.emr.agent import MedicalIntakeAgent
+                return MedicalIntakeAgent(**kwargs)
+            elif agent_id == "jira":
+                from gaia.agents.jira.agent import JiraAgent
+                return JiraAgent(**kwargs)
+            elif agent_id == "sd":
+                from gaia.agents.sd.agent import SDAgent
+                return SDAgent(**kwargs)
+            elif agent_id == "blender":
+                from gaia.agents.blender.agent import BlenderAgent
+                return BlenderAgent(**kwargs)
+            elif agent_id == "summarize":
+                from gaia.agents.summarize.agent import SummarizerAgent
+                return SummarizerAgent(**kwargs)
+            else:
+                if definition:
+                    from gaia.agents.configurable import ConfigurableAgent
+                    return ConfigurableAgent(definition=definition, **kwargs)
+                return _fallback()
+        except ImportError as e:
+            logger.error(f"Failed to import agent {agent_id}: {e}. Falling back to ChatAgent.")
+            return _fallback()
 
     def delegate(self, from_agent: Agent, task: str, **kwargs) -> Any:
         """Agent A delegates a subtask to the best agent for that task."""

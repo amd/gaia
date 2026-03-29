@@ -109,6 +109,13 @@ jobs:
           echo ""
           pytest tests/integration/test_database_agent.py -v --tb=short
 
+      - name: Run pipeline tests
+        run: |
+          echo "=== Running Pipeline Tests ==="
+          echo "Testing orchestrator pipeline components"
+          echo ""
+          pytest tests/pipeline/ -v --tb=short
+
       - name: Unit test summary
         if: always()
         run: |

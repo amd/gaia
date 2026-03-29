@@ -67,12 +67,14 @@ class AgentConstraints:
         max_file_changes: Maximum number of files to change
         max_lines_per_file: Maximum lines to change per file
         requires_review: Whether the agent requires review
+        max_steps: Maximum execution steps
     """
 
     timeout_seconds: Optional[int] = None
     max_file_changes: int = 10
     max_lines_per_file: int = 100
     requires_review: bool = False
+    max_steps: int = 100
 
 
 @dataclass
