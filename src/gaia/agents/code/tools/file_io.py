@@ -95,23 +95,42 @@ class FileIOToolsMixin:
 
                     result["file_type"] = "python"
 
-                    # Validate syntax using mixin method
-                    validation = self._validate_python_syntax(content)
-                    result["is_valid"] = validation["is_valid"]
-                    result["errors"] = validation.get("errors", [])
+                    # Validate syntax — use mixin method if available (CodeAgent),
+                    # otherwise fall back to stdlib ast (graceful degradation for ChatAgent)
+                    if hasattr(self, "_validate_python_syntax"):
+                        validation = self._validate_python_syntax(content)
+                        result["is_valid"] = validation["is_valid"]
+                        result["errors"] = validation.get("errors", [])
+                        is_valid = validation["is_valid"]
+                    else:
+                        try:
+                            ast.parse(content)
+                            result["is_valid"] = True
+                            result["errors"] = []
+                            is_valid = True
+                        except SyntaxError as e:
+                            result["is_valid"] = False
+                            result["errors"] = [str(e)]
+                            is_valid = False
 
-                    # Extract symbols using mixin method
-                    if validation["is_valid"]:
-                        parsed = self._parse_python_code(content)
-                        # Handle both ParsedCode object and dict (for backward compat)
-                        if hasattr(parsed, "symbols"):
-                            result["symbols"] = [
-                                {"name": s.name, "type": s.type, "line": s.line}
-                                for s in parsed.symbols
-                            ]
-                        elif hasattr(parsed, "ast_tree"):
-                            # ParsedCode object
-                            tree = parsed.ast_tree
+                    # Extract symbols
+                    if is_valid:
+                        if hasattr(self, "_parse_python_code"):
+                            parsed = self._parse_python_code(content)
+                            # Handle both ParsedCode object and dict (for backward compat)
+                            if hasattr(parsed, "symbols"):
+                                result["symbols"] = [
+                                    {"name": s.name, "type": s.type, "line": s.line}
+                                    for s in parsed.symbols
+                                ]
+                            elif hasattr(parsed, "ast_tree"):
+                                tree = parsed.ast_tree
+                            else:
+                                tree = None
+                        else:
+                            tree = ast.parse(content)
+
+                        if "symbols" not in result:
                             symbols = []
                             for node in ast.walk(tree):
                                 if isinstance(
@@ -184,9 +203,16 @@ class FileIOToolsMixin:
                 Dictionary with write operation results
             """
             try:
-                # Validate syntax if requested (using mixin method)
+                # Validate syntax if requested (graceful degradation: stdlib ast if no mixin)
                 if validate:
-                    validation = self._validate_python_syntax(content)
+                    if hasattr(self, "_validate_python_syntax"):
+                        validation = self._validate_python_syntax(content)
+                    else:
+                        try:
+                            ast.parse(content)
+                            validation = {"is_valid": True, "errors": []}
+                        except SyntaxError as e:
+                            validation = {"is_valid": False, "errors": [str(e)]}
                     if not validation["is_valid"]:
                         return {
                             "status": "error",
@@ -263,8 +289,15 @@ class FileIOToolsMixin:
                 # Create new content
                 modified_content = current_content.replace(old_content, new_content, 1)
 
-                # Validate new content (using mixin method)
-                validation = self._validate_python_syntax(modified_content)
+                # Validate new content (graceful degradation: stdlib ast if no mixin)
+                if hasattr(self, "_validate_python_syntax"):
+                    validation = self._validate_python_syntax(modified_content)
+                else:
+                    try:
+                        ast.parse(modified_content)
+                        validation = {"is_valid": True, "errors": []}
+                    except SyntaxError as e:
+                        validation = {"is_valid": False, "errors": [str(e)]}
                 if not validation["is_valid"]:
                     return {
                         "status": "error",
@@ -885,8 +918,15 @@ class FileIOToolsMixin:
                 )
                 modified_content = "".join(new_lines)
 
-                # Validate new content (using mixin method)
-                validation = self._validate_python_syntax(modified_content)
+                # Validate new content (graceful degradation: stdlib ast if no mixin)
+                if hasattr(self, "_validate_python_syntax"):
+                    validation = self._validate_python_syntax(modified_content)
+                else:
+                    try:
+                        ast.parse(modified_content)
+                        validation = {"is_valid": True, "errors": []}
+                    except SyntaxError as e:
+                        validation = {"is_valid": False, "errors": [str(e)]}
                 if not validation["is_valid"]:
                     return {
                         "status": "error",

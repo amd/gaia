@@ -228,3 +228,6 @@ docs/playbooks/sd-agent/index-backup.mdx
 
 # Custom util scripts
 util/custom/*
+
+# Real-world eval corpus documents (sourced from public web, not committed)
+eval/corpus/real_world/

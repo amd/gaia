@@ -5,440 +5,400 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Rate limiting for API endpoints using express-rate-limit
 const apiLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minute
-    max: 100, // limit each IP to 100 requests per windowMs
+    windowMs: 60 * 1000,
+    max: 100,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests. Please try again later.' }
 });
 
 app.use('/api/', apiLimiter);
-
-// Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
-
-// Parse JSON bodies
 app.use(express.json());
 
-// Base paths for data files - use environment variables or defaults
-const EXPERIMENTS_PATH = process.env.EXPERIMENTS_PATH || path.join(__dirname, '../../../..', 'experiments');
-const EVALUATIONS_PATH = process.env.EVALUATIONS_PATH || path.join(__dirname, '../../../..', 'evaluation');
-const TEST_DATA_PATH = process.env.TEST_DATA_PATH || path.join(__dirname, '../../../..', 'test_data');
-const GROUNDTRUTH_PATH = process.env.GROUNDTRUTH_PATH || path.join(__dirname, '../../../..', 'groundtruth');
-const AGENT_OUTPUTS_PATH = process.env.AGENT_OUTPUTS_PATH || path.join(__dirname, '../../../..');
-const SINGLE_AGENT_FILE = process.env.SINGLE_AGENT_FILE;
+// Paths
+const RESULTS_DIR = process.env.RESULTS_DIR || path.join(__dirname, '../../../../eval/results');
+const REPO_ROOT = path.join(__dirname, '../../../..');
 
-// API endpoint to list available files
-app.get('/api/files', (req, res) => {
+// Eval subprocess tracking
+let evalProcess = null;
+let evalStatus = { running: false, current_scenario: null, progress: { done: 0, total: 0 } };
+
+// Path traversal protection: validate runId
+function isValidRunId(runId) {
+    return /^[a-zA-Z0-9_-]+$/.test(runId);
+}
+
+// Safely load JSON from a file path
+function loadJson(filePath) {
+    if (!fs.existsSync(filePath)) {
+        return null;
+    }
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+// ---- API Endpoints ----
+
+// List all eval runs (newest first)
+app.get('/api/agent-eval/runs', (req, res) => {
     try {
-        const experiments = fs.existsSync(EXPERIMENTS_PATH)
-            ? fs.readdirSync(EXPERIMENTS_PATH).filter(file => file.endsWith('.experiment.json'))
-            : [];
+        if (!fs.existsSync(RESULTS_DIR)) {
+            return res.json([]);
+        }
 
-        let evaluations = [];
-        if (fs.existsSync(EVALUATIONS_PATH)) {
-            // Get files from root
-            const rootFiles = fs.readdirSync(EVALUATIONS_PATH).filter(file =>
-                file.endsWith('.experiment.eval.json') ||
-                file === 'consolidated_evaluations_report.json' ||
-                file.endsWith('_evaluations_report.json'));
-            evaluations.push(...rootFiles.map(file => ({
-                name: file,
-                path: path.join(EVALUATIONS_PATH, file),
-                type: 'evaluation',
-                directory: 'root'
-            })));
+        const entries = fs.readdirSync(RESULTS_DIR, { withFileTypes: true });
+        const runs = [];
 
-            // Check for subdirectories
-            const items = fs.readdirSync(EVALUATIONS_PATH, { withFileTypes: true });
-            for (const item of items) {
-                if (item.isDirectory()) {
-                    const subDirPath = path.join(EVALUATIONS_PATH, item.name);
-                    const subDirFiles = fs.readdirSync(subDirPath).filter(file =>
-                        file.endsWith('.experiment.eval.json') ||
-                        file === 'consolidated_evaluations_report.json' ||
-                        file.endsWith('_evaluations_report.json'));
-                    evaluations.push(...subDirFiles.map(file => ({
-                        name: `${item.name}/${file}`,
-                        path: path.join(subDirPath, file),
-                        type: 'evaluation',
-                        directory: item.name
-                    })));
-                }
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            if (!entry.name.match(/^eval-/) && entry.name !== 'rerun') continue;
+
+            const scorecardPath = path.join(RESULTS_DIR, entry.name, 'scorecard.json');
+            if (!fs.existsSync(scorecardPath)) continue;
+
+            try {
+                const scorecard = JSON.parse(fs.readFileSync(scorecardPath, 'utf8'));
+                runs.push({
+                    run_id: scorecard.run_id || entry.name,
+                    timestamp: scorecard.timestamp || null,
+                    config: scorecard.config || {},
+                    summary: scorecard.summary || {},
+                    cost: scorecard.cost || null,
+                    dir_name: entry.name
+                });
+            } catch (parseErr) {
+                // Skip runs with invalid scorecard
             }
         }
 
-        // Collect agent outputs
-        let agentOutputs = [];
-        if (SINGLE_AGENT_FILE && fs.existsSync(SINGLE_AGENT_FILE)) {
-            // Single file mode
-            agentOutputs.push({
-                name: path.basename(SINGLE_AGENT_FILE),
-                path: SINGLE_AGENT_FILE,
-                type: 'agent_output',
-                directory: 'single'
-            });
-        } else if (fs.existsSync(AGENT_OUTPUTS_PATH)) {
-            // Directory mode - look for agent_output_*.json files
-            const agentFiles = fs.readdirSync(AGENT_OUTPUTS_PATH).filter(file =>
-                file.startsWith('agent_output_') && file.endsWith('.json'));
-            agentOutputs = agentFiles.map(file => ({
-                name: file,
-                path: path.join(AGENT_OUTPUTS_PATH, file),
-                type: 'agent_output',
-                directory: 'root'
-            }));
-        }
-
-        res.json({
-            experiments: experiments.map(file => ({
-                name: file,
-                path: path.join(EXPERIMENTS_PATH, file),
-                type: 'experiment'
-            })),
-            evaluations: evaluations,
-            agentOutputs: agentOutputs,
-            paths: {
-                experiments: EXPERIMENTS_PATH,
-                evaluations: EVALUATIONS_PATH,
-                testData: TEST_DATA_PATH,
-                groundtruth: GROUNDTRUTH_PATH
+        // Sort newest first by timestamp, then by run_id
+        runs.sort((a, b) => {
+            if (a.timestamp && b.timestamp) {
+                return b.timestamp.localeCompare(a.timestamp);
             }
+            return b.run_id.localeCompare(a.run_id);
         });
+
+        res.json(runs);
     } catch (error) {
-        res.status(500).json({ error: 'Failed to list files', details: error.message });
+        res.status(500).json({ error: 'Failed to list runs', details: error.message });
     }
 });
 
-// API endpoint to load experiment data
-app.get('/api/experiment/:filename', (req, res) => {
+// Load full scorecard for a run
+app.get('/api/agent-eval/runs/:runId', (req, res) => {
     try {
-        // Use path.basename() to strip directory components (prevents path traversal)
-        const safeFilename = path.basename(req.params.filename);
-        const filePath = path.join(EXPERIMENTS_PATH, safeFilename);
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ error: 'File not found' });
+        const runId = req.params.runId;
+        if (!isValidRunId(runId)) {
+            return res.status(400).json({ error: 'Invalid run ID' });
         }
-        const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-        res.json(data);
+
+        const scorecardPath = path.join(RESULTS_DIR, runId, 'scorecard.json');
+        const scorecard = loadJson(scorecardPath);
+
+        if (!scorecard) {
+            return res.status(404).json({ error: 'Scorecard not found' });
+        }
+
+        res.json(scorecard);
     } catch (error) {
-        res.status(500).json({ error: 'Failed to load experiment', details: error.message });
+        res.status(500).json({ error: 'Failed to load scorecard', details: error.message });
     }
 });
 
-// API endpoint to load evaluation data (supports subdirectories)
-app.get('/api/evaluation/*', (req, res) => {
+// Load single scenario trace
+app.get('/api/agent-eval/runs/:runId/scenario/:id', (req, res) => {
     try {
-        const userPath = req.params[0];
-        // Reject paths with directory traversal
-        if (userPath.includes('..')) {
-            return res.status(400).json({ error: 'Invalid file path' });
+        const runId = req.params.runId;
+        const scenarioId = req.params.id;
+
+        if (!isValidRunId(runId)) {
+            return res.status(400).json({ error: 'Invalid run ID' });
         }
-        const filePath = path.join(EVALUATIONS_PATH, userPath);
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ error: 'File not found' });
+        if (!isValidRunId(scenarioId)) {
+            return res.status(400).json({ error: 'Invalid scenario ID' });
         }
-        const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-        res.json(data);
+
+        const tracePath = path.join(RESULTS_DIR, runId, 'traces', scenarioId + '.json');
+        const trace = loadJson(tracePath);
+
+        if (!trace) {
+            return res.status(404).json({ error: 'Scenario trace not found' });
+        }
+
+        res.json(trace);
     } catch (error) {
-        res.status(500).json({ error: 'Failed to load evaluation', details: error.message });
+        res.status(500).json({ error: 'Failed to load scenario trace', details: error.message });
     }
 });
 
-// API endpoint to load agent output data
-app.get('/api/agent-output/:filename(*)', (req, res) => {
+// Compare two scorecards
+app.get('/api/agent-eval/compare', (req, res) => {
     try {
-        const userFilename = req.params.filename;
-        // Reject paths with directory traversal
-        if (userFilename.includes('..')) {
-            return res.status(400).json({ error: 'Invalid file path' });
-        }
-        let filePath;
+        const baselineId = req.query.baseline;
+        const currentId = req.query.current;
 
-        // Check if it's a single file mode or directory mode
-        if (SINGLE_AGENT_FILE && fs.existsSync(SINGLE_AGENT_FILE) &&
-            path.basename(SINGLE_AGENT_FILE) === userFilename) {
-            filePath = SINGLE_AGENT_FILE;
+        if (!baselineId || !currentId) {
+            return res.status(400).json({ error: 'Both baseline and current query params required' });
+        }
+
+        // Allow "baseline" as a special ID for baseline.json
+        let baselineData;
+        if (baselineId === 'baseline') {
+            const baselinePath = path.join(RESULTS_DIR, 'baseline.json');
+            baselineData = loadJson(baselinePath);
+            if (!baselineData) {
+                return res.status(404).json({ error: 'baseline.json not found' });
+            }
         } else {
-            // Use basename to prevent path traversal for simple filenames
-            const safeFilename = path.basename(userFilename);
-            filePath = path.join(AGENT_OUTPUTS_PATH, safeFilename);
-        }
-
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ error: 'Agent output file not found' });
-        }
-
-        const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-
-        // Process the agent output data to extract useful information
-        const processedData = {
-            ...data,
-            metadata: {
-                filename: userFilename,
-                filepath: filePath,
-                fileSize: fs.statSync(filePath).size,
-                lastModified: fs.statSync(filePath).mtime,
-                conversationLength: data.conversation ? data.conversation.length : 0,
-                hasPerformanceStats: data.conversation ?
-                    data.conversation.some(msg => msg.role === 'system' && msg.content?.type === 'stats') : false
+            if (!isValidRunId(baselineId)) {
+                return res.status(400).json({ error: 'Invalid baseline run ID' });
             }
-        };
-
-        res.json(processedData);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to load agent output', details: error.message });
-    }
-});
-
-// API endpoint to get combined report (experiment + evaluation)
-app.get('/api/report/:experimentFile/:evaluationFile?', (req, res) => {
-    try {
-        // Load experiment data - use basename to prevent path traversal
-        const safeExpFile = path.basename(req.params.experimentFile);
-        const expFilePath = path.join(EXPERIMENTS_PATH, safeExpFile);
-        if (!fs.existsSync(expFilePath)) {
-            return res.status(404).json({ error: 'Experiment file not found' });
-        }
-        const experimentData = JSON.parse(fs.readFileSync(expFilePath, 'utf8'));
-
-        let evaluationData = null;
-        if (req.params.evaluationFile) {
-            const safeEvalFile = path.basename(req.params.evaluationFile);
-            const evalFilePath = path.join(EVALUATIONS_PATH, safeEvalFile);
-            if (fs.existsSync(evalFilePath)) {
-                evaluationData = JSON.parse(fs.readFileSync(evalFilePath, 'utf8'));
+            baselineData = loadJson(path.join(RESULTS_DIR, baselineId, 'scorecard.json'));
+            if (!baselineData) {
+                return res.status(404).json({ error: 'Baseline scorecard not found' });
             }
         }
 
-        res.json({
-            experiment: experimentData,
-            evaluation: evaluationData,
-            combined: true
-        });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to load report', details: error.message });
-    }
-});
-
-// API endpoint to list test data directories and files
-app.get('/api/test-data', (req, res) => {
-    try {
-        const testData = { directories: [], files: [] };
-
-        if (!fs.existsSync(TEST_DATA_PATH)) {
-            return res.json(testData);
+        if (!isValidRunId(currentId)) {
+            return res.status(400).json({ error: 'Invalid current run ID' });
+        }
+        const currentData = loadJson(path.join(RESULTS_DIR, currentId, 'scorecard.json'));
+        if (!currentData) {
+            return res.status(404).json({ error: 'Current scorecard not found' });
         }
 
-        const entries = fs.readdirSync(TEST_DATA_PATH, { withFileTypes: true });
+        // Build scenario maps
+        function scenarioMap(sc) {
+            var map = {};
+            var scenarios = sc.scenarios || [];
+            for (var i = 0; i < scenarios.length; i++) {
+                map[scenarios[i].scenario_id] = scenarios[i];
+            }
+            return map;
+        }
 
-        // Check if TEST_DATA_PATH itself contains data files (user pointed to specific subdirectory)
-        const rootDataFiles = entries
-            .filter(entry => entry.isFile() && (entry.name.endsWith('.txt') || entry.name.endsWith('.pdf')))
-            .map(entry => entry.name);
+        var baseMap = scenarioMap(baselineData);
+        var currMap = scenarioMap(currentData);
 
-        if (rootDataFiles.length > 0) {
-            // User pointed directly at a data directory (e.g., test_data/meetings)
-            const hasMetadata = entries.some(entry =>
-                entry.isFile() && entry.name.endsWith('_metadata.json')
-            );
-
-            // Use the directory name from the path
-            const dirName = path.basename(TEST_DATA_PATH);
-
-            testData.directories.push({
-                name: dirName,
-                path: TEST_DATA_PATH,
-                files: rootDataFiles,
-                hasMetadata: hasMetadata
-            });
-        } else {
-            // User pointed at parent directory - scan for subdirectories
-            for (const entry of entries) {
-                if (entry.isDirectory()) {
-                    const dirPath = path.join(TEST_DATA_PATH, entry.name);
-                    const dirFiles = fs.readdirSync(dirPath, { withFileTypes: true });
-
-                    const dataFiles = dirFiles
-                        .filter(file => file.isFile() && (file.name.endsWith('.txt') || file.name.endsWith('.pdf')))
-                        .map(file => file.name);
-
-                    const hasMetadata = dirFiles.some(file =>
-                        file.isFile() && file.name.endsWith('_metadata.json')
-                    );
-
-                    testData.directories.push({
-                        name: entry.name,
-                        path: dirPath,
-                        files: dataFiles,
-                        hasMetadata: hasMetadata
-                    });
-                }
+        // Collect all scenario IDs
+        var allIds = Object.keys(baseMap).concat(Object.keys(currMap));
+        var uniqueIds = [];
+        var seen = {};
+        for (var i = 0; i < allIds.length; i++) {
+            if (!seen[allIds[i]]) {
+                seen[allIds[i]] = true;
+                uniqueIds.push(allIds[i]);
             }
         }
+        uniqueIds.sort();
 
-        res.json(testData);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to list test data', details: error.message });
-    }
-});
+        var improved = [];
+        var regressed = [];
+        var unchanged = [];
+        var only_in_baseline = [];
+        var only_in_current = [];
 
-// API endpoint to load test data file content
-app.get('/api/test-data/:type/:filename', (req, res) => {
-    try {
-        const type = req.params.type;
-        const filename = req.params.filename;
+        for (var j = 0; j < uniqueIds.length; j++) {
+            var sid = uniqueIds[j];
+            if (baseMap[sid] && !currMap[sid]) {
+                only_in_baseline.push(sid);
+                continue;
+            }
+            if (!baseMap[sid] && currMap[sid]) {
+                only_in_current.push(sid);
+                continue;
+            }
 
-        // Validate type doesn't contain path traversal
-        const resolvedTypeDir = path.resolve(TEST_DATA_PATH, type);
-        if (!resolvedTypeDir.startsWith(path.resolve(TEST_DATA_PATH) + path.sep)) {
-            return res.status(400).json({ error: 'Invalid type parameter' });
-        }
+            var b = baseMap[sid];
+            var c = currMap[sid];
+            var bPass = b.status === 'PASS';
+            var cPass = c.status === 'PASS';
+            var bScore = b.overall_score || 0;
+            var cScore = c.overall_score || 0;
+            var delta = cScore - bScore;
 
-        // Try subdirectory first, then root level
-        let filePath = path.resolve(resolvedTypeDir, filename);
-        if (!filePath.startsWith(resolvedTypeDir + path.sep) && filePath !== resolvedTypeDir) {
-            return res.status(400).json({ error: 'Invalid file path' });
-        }
+            var entry = {
+                scenario_id: sid,
+                baseline_status: b.status,
+                current_status: c.status,
+                baseline_score: bScore,
+                current_score: cScore,
+                delta: Math.round(delta * 100) / 100
+            };
 
-        // If not found in subdirectory, try root level
-        if (!fs.existsSync(filePath)) {
-            const rootPath = path.resolve(TEST_DATA_PATH, filename);
-            if (rootPath.startsWith(path.resolve(TEST_DATA_PATH) + path.sep) && fs.existsSync(rootPath)) {
-                filePath = rootPath;
+            if (!bPass && cPass) {
+                improved.push(entry);
+            } else if (bPass && !cPass) {
+                regressed.push(entry);
             } else {
-                return res.status(404).json({ error: 'Test data file not found' });
+                unchanged.push(entry);
             }
         }
 
-        // Final validation: ensure the resolved filePath is within TEST_DATA_PATH
-        const resolvedBase = path.resolve(TEST_DATA_PATH);
-        const resolvedFilePath = path.resolve(filePath);
-        if (!resolvedFilePath.startsWith(resolvedBase + path.sep) && resolvedFilePath !== resolvedBase) {
-            return res.status(400).json({ error: 'Invalid file path' });
-        }
-
-        // Check if file is PDF
-        if (filename.endsWith('.pdf')) {
-            // For PDFs, send file info and indicate it's a binary file
-            const stats = fs.statSync(filePath);
-            res.json({
-                filename: filename,
-                type: type,
-                isPdf: true,
-                size: stats.size,
-                message: 'PDF file - preview not available. Please open the file directly to view contents.'
-            });
-        } else {
-            // For text files, send the content
-            const content = fs.readFileSync(filePath, 'utf8');
-            res.json({
-                filename: filename,
-                type: type,
-                content: content
-            });
-        }
+        res.json({
+            baseline: {
+                run_id: baselineData.run_id || baselineId,
+                summary: baselineData.summary
+            },
+            current: {
+                run_id: currentData.run_id || currentId,
+                summary: currentData.summary
+            },
+            improved: improved,
+            regressed: regressed,
+            unchanged: unchanged,
+            only_in_baseline: only_in_baseline,
+            only_in_current: only_in_current
+        });
     } catch (error) {
-        res.status(500).json({ error: 'Failed to load test data file', details: error.message });
+        res.status(500).json({ error: 'Failed to compare scorecards', details: error.message });
     }
 });
 
-// API endpoint to load test data metadata
-app.get('/api/test-data/:type/metadata', (req, res) => {
+// Get eval status
+app.get('/api/agent-eval/status', (req, res) => {
+    res.json(evalStatus);
+});
+
+// Load baseline.json
+app.get('/api/agent-eval/baseline', (req, res) => {
     try {
-        const type = req.params.type;
+        const baselinePath = path.join(RESULTS_DIR, 'baseline.json');
+        const baseline = loadJson(baselinePath);
 
-        // Validate type directory
-        const resolvedTypeDir = path.resolve(TEST_DATA_PATH, type);
-        if (!resolvedTypeDir.startsWith(path.resolve(TEST_DATA_PATH) + path.sep)) {
-            return res.status(400).json({ error: 'Invalid type parameter' });
+        if (!baseline) {
+            return res.status(404).json({ error: 'No baseline.json found' });
         }
 
-        const metadataFiles = [
-            `${type}_metadata.json`,
-            'metadata.json'
-        ];
-
-        let metadataPath = null;
-        for (const filename of metadataFiles) {
-            const potentialPath = path.resolve(resolvedTypeDir, filename);
-            if (potentialPath.startsWith(resolvedTypeDir + path.sep) && fs.existsSync(potentialPath)) {
-                metadataPath = potentialPath;
-                break;
-            }
-        }
-
-        if (!metadataPath) {
-            return res.status(404).json({ error: 'Metadata file not found' });
-        }
-
-        const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-        res.json(metadata);
+        res.json(baseline);
     } catch (error) {
-        res.status(500).json({ error: 'Failed to load metadata', details: error.message });
+        res.status(500).json({ error: 'Failed to load baseline', details: error.message });
     }
 });
 
-// API endpoint to list groundtruth files
-app.get('/api/groundtruth', (req, res) => {
+// Save a run as baseline
+app.post('/api/agent-eval/baseline', (req, res) => {
     try {
-        const groundtruthData = { directories: [], files: [] };
-
-        if (!fs.existsSync(GROUNDTRUTH_PATH)) {
-            return res.json(groundtruthData);
+        var runId = req.body.runId;
+        if (!runId || !isValidRunId(runId)) {
+            return res.status(400).json({ error: 'Invalid or missing runId' });
         }
 
-        // Function to recursively find groundtruth files
-        function findGroundtruthFiles(dir, relativePath = '') {
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
+        var scorecardPath = path.join(RESULTS_DIR, runId, 'scorecard.json');
+        if (!fs.existsSync(scorecardPath)) {
+            return res.status(404).json({ error: 'Scorecard not found for run: ' + runId });
+        }
 
-            for (const entry of entries) {
-                const fullPath = path.join(dir, entry.name);
-                const relativeFilePath = relativePath ? path.join(relativePath, entry.name) : entry.name;
+        var baselinePath = path.join(RESULTS_DIR, 'baseline.json');
+        fs.copyFileSync(scorecardPath, baselinePath);
 
-                if (entry.isDirectory()) {
-                    findGroundtruthFiles(fullPath, relativeFilePath);
-                } else if (entry.isFile() && entry.name.endsWith('.groundtruth.json')) {
-                    groundtruthData.files.push({
-                        name: entry.name,
-                        path: relativeFilePath,
-                        directory: relativePath || 'root',
-                        type: entry.name.includes('consolidated') ? 'consolidated' : 'individual'
-                    });
+        res.json({ success: true, message: 'Baseline saved from run ' + runId });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to save baseline', details: error.message });
+    }
+});
+
+// Start an eval run
+app.post('/api/agent-eval/start', (req, res) => {
+    try {
+        if (evalProcess) {
+            return res.status(409).json({ error: 'An eval is already running' });
+        }
+
+        var args = ['run', 'python', '-m', 'gaia.cli', 'eval', 'agent'];
+
+        if (req.body.scenario) {
+            args.push('--scenario', req.body.scenario);
+        }
+        if (req.body.category) {
+            args.push('--category', req.body.category);
+        }
+        if (req.body.fix) {
+            args.push('--fix');
+        }
+
+        evalStatus = { running: true, current_scenario: 'starting...', progress: { done: 0, total: 0 } };
+
+        evalProcess = spawn('uv', args, {
+            cwd: REPO_ROOT,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            shell: true
+        });
+
+        var outputLines = [];
+
+        evalProcess.stdout.on('data', function(data) {
+            var lines = data.toString().split('\n');
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i].trim();
+                if (!line) continue;
+                outputLines.push(line);
+                if (outputLines.length > 50) outputLines.shift();
+
+                // Parse progress from output
+                var progressMatch = line.match(/\[(\d+)\/(\d+)\]/);
+                if (progressMatch) {
+                    evalStatus.progress.done = parseInt(progressMatch[1], 10);
+                    evalStatus.progress.total = parseInt(progressMatch[2], 10);
+                }
+
+                // Parse scenario name
+                var scenarioMatch = line.match(/scenario[:\s]+(\S+)/i);
+                if (scenarioMatch) {
+                    evalStatus.current_scenario = scenarioMatch[1];
                 }
             }
-        }
+        });
 
-        findGroundtruthFiles(GROUNDTRUTH_PATH);
+        evalProcess.stderr.on('data', function(data) {
+            var lines = data.toString().split('\n');
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i].trim();
+                if (line) {
+                    outputLines.push('[stderr] ' + line);
+                    if (outputLines.length > 50) outputLines.shift();
+                }
+            }
+        });
 
-        res.json(groundtruthData);
+        evalProcess.on('close', function(code) {
+            evalStatus = { running: false, current_scenario: null, progress: evalStatus.progress, exit_code: code };
+            evalProcess = null;
+        });
+
+        evalProcess.on('error', function(err) {
+            evalStatus = { running: false, current_scenario: null, progress: { done: 0, total: 0 }, error: err.message };
+            evalProcess = null;
+        });
+
+        res.json({ success: true, message: 'Eval started' });
     } catch (error) {
-        res.status(500).json({ error: 'Failed to list groundtruth files', details: error.message });
+        res.status(500).json({ error: 'Failed to start eval', details: error.message });
     }
 });
 
-// API endpoint to load groundtruth file content
-app.get('/api/groundtruth/:filename(*)', (req, res) => {
+// Stop a running eval
+app.post('/api/agent-eval/stop', (req, res) => {
     try {
-        const userPath = req.params.filename;
-        // Reject paths with directory traversal
-        if (userPath.includes('..')) {
-            return res.status(400).json({ error: 'Invalid file path' });
+        if (!evalProcess) {
+            return res.status(404).json({ error: 'No eval is currently running' });
         }
-        const filePath = path.join(GROUNDTRUTH_PATH, userPath);
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ error: 'File not found' });
-        }
-        const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-        res.json(data);
+
+        evalProcess.kill('SIGTERM');
+        evalProcess = null;
+        evalStatus = { running: false, current_scenario: null, progress: evalStatus.progress };
+
+        res.json({ success: true, message: 'Eval stopped' });
     } catch (error) {
-        res.status(500).json({ error: 'Failed to load groundtruth file', details: error.message });
+        res.status(500).json({ error: 'Failed to stop eval', details: error.message });
     }
 });
 
@@ -447,14 +407,8 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-    console.log(`Gaia Evaluation Visualizer running on http://localhost:${PORT}`);
-    console.log(`Experiments path: ${EXPERIMENTS_PATH}`);
-    console.log(`Evaluations path: ${EVALUATIONS_PATH}`);
-    console.log(`Test data path: ${TEST_DATA_PATH}`);
-    console.log(`Groundtruth path: ${GROUNDTRUTH_PATH}`);
-    console.log(`Agent outputs path: ${AGENT_OUTPUTS_PATH}`);
-    if (SINGLE_AGENT_FILE) {
-        console.log(`Single agent file: ${SINGLE_AGENT_FILE}`);
-    }
+app.listen(PORT, function() {
+    console.log('GAIA Agent Eval webapp running on http://localhost:' + PORT);
+    console.log('Results directory: ' + RESULTS_DIR);
+    console.log('Repo root: ' + REPO_ROOT);
 });

@@ -10,10 +10,12 @@ from .browser_tools import BrowserToolsMixin
 from .file_tools import FileSearchToolsMixin
 from .filesystem_tools import FileSystemToolsMixin
 from .scratchpad_tools import ScratchpadToolsMixin
+from .screenshot_tools import ScreenshotToolsMixin
 
 __all__ = [
     "BrowserToolsMixin",
     "FileSearchToolsMixin",
     "FileSystemToolsMixin",
     "ScratchpadToolsMixin",
+    "ScreenshotToolsMixin",
 ]

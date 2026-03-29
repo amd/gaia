@@ -140,22 +140,22 @@ class TestPrintProcessingStart:
         handler.print_processing_start("hello", 10)
         assert handler._tool_count == 0
 
-    def test_suppresses_thinking_event(self, handler):
-        """print_processing_start no longer emits a thinking event.
-
-        The "Sending to <model>..." message was suppressed because the
-        streaming chat flow in _chat_helpers already emits its own
-        "Connecting to ..." thinking event, so the duplicate added noise.
-        """
+    def test_emits_processing_status_event(self, handler):
+        """print_processing_start emits a 'working' status event naming the model."""
         handler.print_processing_start("hello", 10, model_id="qwen")
         events = _drain(handler)
-        assert len(events) == 0
+        assert len(events) == 1
+        assert events[0]["type"] == "status"
+        assert events[0]["status"] == "working"
+        assert "qwen" in events[0]["message"]
 
-    def test_suppresses_thinking_event_no_model(self, handler):
-        """Same suppression applies when no model_id is provided."""
+    def test_emits_processing_status_event_no_model(self, handler):
+        """When no model_id is provided the label falls back to 'LLM'."""
         handler.print_processing_start("hello", 10)
         events = _drain(handler)
-        assert len(events) == 0
+        assert len(events) == 1
+        assert events[0]["type"] == "status"
+        assert "LLM" in events[0]["message"]
 
 
 # ===========================================================================
@@ -630,11 +630,15 @@ class TestPrintInfo:
 class TestStartProgress:
     """Tests for SSEOutputHandler.start_progress."""
 
-    def test_emits_thinking_for_normal_message(self, handler):
+    def test_emits_status_for_normal_message(self, handler):
         handler.start_progress("Analyzing code...")
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0] == {"type": "thinking", "content": "Analyzing code..."}
+        assert events[0] == {
+            "type": "status",
+            "status": "working",
+            "message": "Analyzing code...",
+        }
 
     def test_filters_executing_prefix(self, handler):
         handler.start_progress("Executing search_file")
@@ -651,14 +655,14 @@ class TestStartProgress:
         handler.start_progress(None)
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0]["content"] == "Working"
+        assert events[0]["message"] == "Working"
 
     def test_empty_string_emits_working_fallback(self, handler):
         # "" is falsy, so startswith check skipped; "message or 'Working'" applies
         handler.start_progress("")
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0]["content"] == "Working"
+        assert events[0]["message"] == "Working"
 
 
 # ===========================================================================
@@ -863,13 +867,17 @@ class TestPrintStreamingText:
         assert handler._stream_buffer == ""
 
     def test_embedded_text_then_tool_json_split(self, handler):
-        """Text followed by tool JSON should emit text and filter JSON."""
+        """Pre-tool planning text and tool JSON are both suppressed.
+
+        When the buffer contains text followed by tool-call JSON, Case 3 of
+        print_streaming_text discards the pre-tool planning text (per system
+        prompt rules: "NEVER output planning text before a tool call") and
+        then filters the tool-call JSON itself.  No chunk event is emitted.
+        """
         mixed = 'I will search now.\n{"tool": "search_file", "tool_args": {"query": "test"}}'
         handler.print_streaming_text(mixed)
         events = _drain(handler)
-        assert len(events) == 1
-        assert events[0]["type"] == "chunk"
-        assert "I will search now." in events[0]["content"]
+        assert len(events) == 0
         assert handler._stream_buffer == ""
 
     def test_buffer_overflow_emits_content(self, handler):
@@ -1539,10 +1547,9 @@ class TestEventSequences:
         events = _drain(handler)
 
         # Verify event types in order
-        # Note: print_processing_start no longer emits a thinking event
-        # (it was suppressed to reduce noise since _chat_helpers emits its own)
         event_types = [e["type"] if e is not None else None for e in events]
         assert event_types == [
+            "status",  # print_processing_start — "Processing with..."
             "step",  # step_header
             "thinking",  # thought
             "tool_start",  # tool_usage

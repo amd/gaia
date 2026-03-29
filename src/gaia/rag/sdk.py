@@ -45,7 +45,7 @@ from gaia.security import PathValidator
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+    model: str = "Qwen3.5-35B-A3B-GGUF"
     max_tokens: int = 1024
     chunk_size: int = 500
     chunk_overlap: int = 100  # Increased to 20% overlap for better context preservation
@@ -142,8 +142,11 @@ class RAGSDK:
         )  # {file_path: {'full_text': str, 'num_pages': int, 'vlm_pages': int, ...}}
 
         # LRU tracking for memory management
-        self.file_access_times = {}  # {file_path: last_access_time}
-        self.file_index_times = {}  # {file_path: index_time}
+        # Uses a monotonic counter (not time.time()) to guarantee strict ordering
+        # even on platforms with coarse clock resolution (e.g. ~15ms on Windows).
+        self._access_counter = 0
+        self.file_access_times = {}  # {file_path: monotonic access counter}
+        self.file_index_times = {}  # {file_path: index_time (wall clock for display)}
 
         # Create cache directory
         os.makedirs(self.config.cache_dir, exist_ok=True)
@@ -218,6 +221,8 @@ class RAGSDK:
         # This prevents TOCTOU attacks where symlinks are swapped
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY  # Ensure binary mode on Windows
 
         try:
             # Open file descriptor with O_NOFOLLOW
@@ -935,6 +940,66 @@ These positions indicate where to split the text."""
             self.log.error(f"Error reading JSON {json_path}: {e}")
             raise
 
+    def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
+        """Extract text from Excel (.xlsx / .xls) files using openpyxl."""
+        try:
+            import openpyxl
+
+            wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+            parts = []
+
+            for sheet in wb.worksheets:
+                parts.append(f"Sheet: {sheet.title}")
+
+                # Collect rows, skipping entirely blank rows
+                rows = []
+                for row in sheet.iter_rows(values_only=True):
+                    cells = [str(c) if c is not None else "" for c in row]
+                    if any(c.strip() for c in cells):
+                        rows.append(cells)
+
+                if not rows:
+                    continue
+
+                # Use first non-empty row as header if it looks like one
+                # (contains at least one non-numeric string cell)
+                header = rows[0]
+                has_header = any(
+                    c.strip()
+                    and not c.strip().replace(".", "").replace("-", "").isdigit()
+                    for c in header
+                )
+
+                if has_header and len(rows) > 1:
+                    parts.append(
+                        f"Columns: {', '.join(c for c in header if c.strip())}"
+                    )
+                    for row in rows[1:]:
+                        row_parts = []
+                        for i, cell in enumerate(row):
+                            col_name = header[i] if i < len(header) else f"Col{i+1}"
+                            if cell.strip():
+                                row_parts.append(f"{col_name}: {cell}")
+                        if row_parts:
+                            parts.append(" | ".join(row_parts))
+                else:
+                    for row in rows:
+                        parts.append(" | ".join(c for c in row if c.strip()))
+
+            text = "\n".join(parts)
+
+            if self.config.show_stats:
+                print(
+                    f"  ✅ Loaded Excel file ({len(wb.worksheets)} sheet(s), {len(text):,} chars)"
+                )
+            self.log.info(
+                f"📊 Extracted {len(text):,} characters from Excel file ({len(wb.worksheets)} sheets)"
+            )
+            return text
+        except Exception as e:
+            self.log.error(f"Error reading Excel file {xlsx_path}: {e}")
+            raise
+
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
         Extract text from file based on type.
@@ -967,6 +1032,10 @@ These positions indicate where to split the text."""
         # JSON files
         elif file_type == ".json":
             return self._extract_text_from_json(file_path), metadata
+
+        # Excel files
+        elif file_type in [".xlsx", ".xls"]:
+            return self._extract_text_from_xlsx(file_path), metadata
 
         # Code files (treat as text for Q&A purposes)
         elif file_type in [
@@ -1502,11 +1571,18 @@ These positions indicate where to split the text."""
         Returns:
             True if a document was evicted, False otherwise
         """
-        if not self.config.enable_lru_eviction or not self.file_access_times:
+        if not self.config.enable_lru_eviction:
+            self.log.warning("LRU eviction disabled, cannot free memory")
+            return False
+
+        if not self.file_access_times:
+            self.log.warning("No tracked files available for LRU eviction")
             return False
 
         # Find LRU file (oldest access time)
         lru_file = min(self.file_access_times, key=self.file_access_times.get)
+
+        self.log.info(f"Evicting LRU document to free memory: {Path(lru_file).name}")
 
         if self.config.show_stats:
             print(
@@ -1514,11 +1590,17 @@ These positions indicate where to split the text."""
             )
 
         # Remove the LRU document
-        return self.remove_document(lru_file)
+        result = self.remove_document(lru_file)
+        if not result:
+            self.log.error(f"Failed to evict LRU document: {Path(lru_file).name}")
+        return result
 
-    def _check_memory_limits(self) -> None:
+    def _check_memory_limits(self) -> bool:
         """
         Check memory limits and evict documents if necessary.
+
+        Returns:
+            True if limits are satisfied, False if still exceeded
         """
         # Check total chunks limit
         while (
@@ -1527,15 +1609,61 @@ These positions indicate where to split the text."""
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
             if not self._evict_lru_document():
+                self.log.warning(
+                    f"Cannot meet chunk limit: {len(self.chunks)} chunks "
+                    f"exceeds max {self.config.max_total_chunks}, eviction failed"
+                )
                 break
 
         # Check indexed files limit
         while (
             self.config.max_indexed_files > 0
             and len(self.indexed_files) > self.config.max_indexed_files
-        ):
+            and len(self.indexed_files) > 1
+        ):  # Keep at least one file
             if not self._evict_lru_document():
+                self.log.warning(
+                    f"Cannot meet file limit: {len(self.indexed_files)} files "
+                    f"exceeds max {self.config.max_indexed_files}, eviction failed"
+                )
                 break
+
+        chunks_ok = (
+            self.config.max_total_chunks <= 0
+            or len(self.chunks) <= self.config.max_total_chunks
+        )
+        files_ok = (
+            self.config.max_indexed_files <= 0
+            or len(self.indexed_files) <= self.config.max_indexed_files
+        )
+        return chunks_ok and files_ok
+
+    def _has_indexing_capacity(self) -> bool:
+        """Check if there is capacity to index another document.
+
+        This is a read-only check — it does not evict. When eviction is
+        enabled, capacity is available if there is at least one document
+        that could be evicted. When disabled, capacity requires being
+        under the limits.
+        """
+        files_at_limit = (
+            self.config.max_indexed_files > 0
+            and len(self.indexed_files) >= self.config.max_indexed_files
+        )
+        chunks_at_limit = (
+            self.config.max_total_chunks > 0
+            and len(self.chunks) >= self.config.max_total_chunks
+        )
+
+        if not files_at_limit and not chunks_at_limit:
+            return True  # Under both limits
+
+        # At limit — can we evict to make room?
+        if self.config.enable_lru_eviction and len(self.indexed_files) > 0:
+            return True  # Eviction can free space (post-index)
+
+        # At limit with no eviction possible
+        return False
 
     def index_document(self, file_path: str) -> Dict[str, Any]:
         """
@@ -1585,6 +1713,8 @@ These positions indicate where to split the text."""
             "num_chunks": 0,
             "total_indexed_files": len(self.indexed_files),
             "total_chunks": len(self.chunks),
+            "max_indexed_files": self.config.max_indexed_files,
+            "max_total_chunks": self.config.max_total_chunks,
         }
 
         # Check if file exists before processing
@@ -1651,6 +1781,22 @@ These positions indicate where to split the text."""
             stats["already_indexed"] = True
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)
+            return stats
+
+        # Pre-flight: check capacity before investing in indexing
+        if not self._has_indexing_capacity():
+            msg = (
+                f"Memory limit reached: {len(self.indexed_files)} files "
+                f"(max: {self.config.max_indexed_files}), "
+                f"{len(self.chunks)} chunks "
+                f"(max: {self.config.max_total_chunks}). "
+                "Enable LRU eviction or remove documents manually."
+            )
+            self.log.warning(f"Cannot index {file_path}: {msg}")
+            if self.config.show_stats:
+                print(f"❌ {msg}")
+            stats["error"] = msg
+            stats["memory_limit_reached"] = True
             return stats
 
         # Check cache - the cache key is based on file content hash
@@ -1741,8 +1887,18 @@ These positions indicate where to split the text."""
                         }
 
                     self.indexed_files.add(file_path)
+
+                    # Track access time for LRU (was missing — pre-existing bug)
+                    current_time = time.time()
+                    self.file_index_times[file_path] = current_time
+                    self._access_counter += 1
+                    self.file_access_times[file_path] = self._access_counter
+
                     if self.config.show_stats:
                         print("  ✅ Successfully loaded from cache")
+
+                    # Check memory limits after cache load
+                    limits_ok = self._check_memory_limits()
 
                     # Update stats for cache load
                     stats["success"] = True
@@ -1753,6 +1909,8 @@ These positions indicate where to split the text."""
                     stats["total_indexed_files"] = len(self.indexed_files)
                     stats["total_chunks"] = len(self.chunks)
                     stats["from_cache"] = True
+                    if not limits_ok:
+                        stats["memory_limit_warning"] = True
                     return stats
             except Exception as e:
                 self.log.warning(f"Cache load failed: {e}, reindexing")
@@ -1870,10 +2028,17 @@ These positions indicate where to split the text."""
             # Track index time for LRU
             current_time = time.time()
             self.file_index_times[file_path] = current_time
-            self.file_access_times[file_path] = current_time
+            self._access_counter += 1
+            self.file_access_times[file_path] = self._access_counter
 
             # Check memory limits and evict if necessary
-            self._check_memory_limits()
+            limits_ok = self._check_memory_limits()
+            if not limits_ok:
+                self.log.warning(
+                    f"Memory limits exceeded after indexing {file_path}. "
+                    "Consider increasing limits or removing documents."
+                )
+                stats["memory_limit_warning"] = True
 
             if self.config.show_stats:
                 print(f"✅ Successfully indexed {Path(file_path).name}")
@@ -1921,7 +2086,8 @@ These positions indicate where to split the text."""
             raise ValueError(f"File not indexed: {file_path}")
 
         # Update access time for LRU tracking
-        self.file_access_times[file_path] = time.time()
+        self._access_counter += 1
+        self.file_access_times[file_path] = self._access_counter
 
         # Get chunk indices for this file
         file_chunk_indices = self.file_to_chunk_indices[file_path]

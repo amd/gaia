@@ -1,0 +1,71 @@
+{
+  "scenario_id": "cross_section_rag",
+  "run": "fix_phase",
+  "original_score": 6.67,
+  "status": "PASS",
+  "overall_score": 9.27,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "Give me a complete picture of Acme's Q3 performance — revenue, growth, and CEO outlook all in one answer",
+      "agent_response_summary": "Revenue $14.2M, 23% YoY growth, CEO projects 15-18% Q4 growth. All three ground truth figures correct. No hallucination. Used query_documents + query_specific_file with bare filename. 2 tool calls.",
+      "agent_tools": ["query_documents", "query_specific_file"],
+      "tool_steps": 3,
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 9,
+        "personality": 9,
+        "error_recovery": 10
+      },
+      "overall_score": 9.7,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "CRITICAL IMPROVEMENT over original Turn 1 (CRITICAL_FAIL score 2.5). Agent correctly queried acme_q3_report.md (not employee_handbook.md) because the document was properly linked to the session via document_ids. No hallucinated financial figures. All required values present: $14.2M, 23% YoY, 15-18% Q4 guidance."
+    },
+    {
+      "turn": 2,
+      "user_message": "What does that mean for their Q4 projected revenue in dollars?",
+      "agent_response_summary": "Correctly calculated: $16.3M (15% growth) to $16.8M (18% growth) on $14.2M base. Ground truth: $16.3M-$16.7M range. Agent's $16.8M slightly high for 18% end but within acceptable margin. 3 tool calls.",
+      "agent_tools": ["list_indexed_documents", "query_specific_file", "query_specific_file"],
+      "tool_steps": 4,
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 8,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 8,
+        "personality": 9,
+        "error_recovery": 10
+      },
+      "overall_score": 9.1,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Correct calculation with 15-18% growth applied to $14.2M base. Minor: $16.8M for 18% (technically $16.756M rounds to $16.8M — acceptable). Good context retention from Turn 1. Clean bare filename usage."
+    },
+    {
+      "turn": 3,
+      "user_message": "Quote me exactly what the CEO said about the outlook",
+      "agent_response_summary": "Provided exact CEO quote: 'For Q4, we project 15-18% growth driven by enterprise segment expansion and three new product launches planned for November.' Both required phrases present. 4 tool calls.",
+      "agent_tools": ["query_documents", "query_specific_file", "query_specific_file", "query_specific_file"],
+      "tool_steps": 5,
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 7,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 7,
+        "personality": 8,
+        "error_recovery": 10
+      },
+      "overall_score": 9.0,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Exact CEO quote retrieved and cited verbatim. Both '15-18%' and 'enterprise segment' present. 4 tool calls somewhat redundant but result is correct. Agent used full path on some queries but all succeeded."
+    }
+  ],
+  "improvement": "improved",
+  "notes": "Massive improvement: 6.67 → 9.27. Root cause of original failure was the document NOT being linked to the session via document_ids — agent received ALL library documents including employee_handbook.md as library_documents, and queried the wrong file in Turn 1. Fix: properly passing session_id in index_document call ensures document_ids is set, so _resolve_rag_paths returns only session-specific docs. Agent then correctly sees only acme_q3_report.md in its context. Fix 3 code change (_chat_helpers.py) also prevents the empty-document_ids contamination path, though it wasn't the trigger in this run."
+}

@@ -1,0 +1,29 @@
+id: concise_response
+name: "Concise Response -- Short Greeting"
+category: personality
+severity: medium
+description: |
+  User sends a short greeting. Agent should respond concisely (1-2 sentences)
+  rather than producing a verbose paragraph. Tests response length calibration.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Say 'Hi!'"
+    ground_truth:
+      expected_behavior: "Agent responds with a brief greeting of 1-2 sentences"
+    success_criteria: "Agent replies with 1-2 sentences maximum. FAIL if agent responds with more than 3 sentences."
+
+  - turn: 2
+    objective: "Ask 'What can you help me with?'"
+    ground_truth:
+      expected_behavior: "Agent gives a 2-3 sentence summary of its capabilities"
+    success_criteria: "Agent provides a concise capabilities summary in 2-3 sentences. FAIL if response exceeds 5 sentences."
+
+expected_outcome: |
+  Agent calibrates response length to the input. Short greetings get short
+  replies. Capability questions get concise summaries, not walls of text.

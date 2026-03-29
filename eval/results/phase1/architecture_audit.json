@@ -1,0 +1,10 @@
+{
+  "architecture_audit": {
+    "history_pairs": 5,
+    "max_msg_chars": 2000,
+    "tool_results_in_history": true,
+    "agent_persistence": "unknown",
+    "blocked_scenarios": [],
+    "recommendations": []
+  }
+}

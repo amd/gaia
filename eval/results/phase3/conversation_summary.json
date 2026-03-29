@@ -1,0 +1,148 @@
+{
+  "scenario_id": "conversation_summary",
+  "status": "PASS",
+  "overall_score": 9.55,
+  "history_pairs_tested": 5,
+  "facts_recalled_in_turn6": [
+    "$14.2 million Q3 revenue",
+    "23% year-over-year growth",
+    "15-18% Q4 growth outlook",
+    "Widget Pro X $8.1M (57% of total revenue)",
+    "North America $8.5M (60% of total revenue)"
+  ],
+  "history_restoration_observed": {
+    "turn2": "Restoring 1 previous message(s)",
+    "turn3": "Restoring 2 previous message(s)",
+    "turn4": "Restoring 3 previous message(s)",
+    "turn5": "Restoring 4 previous message(s)",
+    "turn6": "Restoring 5 previous message(s)"
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "What was Acme's Q3 revenue?",
+      "agent_response": "According to acme_q3_report.md:\n\nAcme Corp's Q3 2025 revenue was $14.2 million, representing a 23% increase from Q3 2024's $11.5 million.",
+      "agent_tools": ["query_documents", "query_specific_file"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 9,
+        "context_retention": 10,
+        "completeness": 9,
+        "efficiency": 8,
+        "personality": 8,
+        "error_recovery": 10
+      },
+      "overall_score": 9.35,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Correctly identified $14.2M revenue. Used 2 tools (query_documents + query_specific_file) which is slightly redundant for a simple fact lookup but not unreasonable. Also volunteered YoY growth unprompted."
+    },
+    {
+      "turn": 2,
+      "user_message": "And the year-over-year growth?",
+      "agent_response": "According to acme_q3_report.md, page null:\n\nAcme Corp's Q3 2025 revenue was **$14.2 million**, showing a **23% year-over-year growth** compared to Q3 2024's $11.5 million.",
+      "agent_tools": ["query_specific_file"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 10,
+        "personality": 8,
+        "error_recovery": 10
+      },
+      "overall_score": 9.9,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Correctly answered 23% YoY growth. Understood the implicit context ('And the...' referring to the same Q3 report). Used 1 targeted tool. History restoration confirmed (1 prior message pair)."
+    },
+    {
+      "turn": 3,
+      "user_message": "What's the Q4 outlook?",
+      "agent_response": "According to acme_q3_report.md:\n\nAcme Corp reported Q3 2025 revenue of $14.2 million, representing a 23% increase from Q3 2024's $11.5 million.\n\nFor Q4 outlook, the company projects 15-18% growth driven by enterprise segment expansion and three new product launches planned for November.",
+      "agent_tools": ["query_documents", "query_specific_file", "query_specific_file"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 8,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 7,
+        "personality": 8,
+        "error_recovery": 10
+      },
+      "overall_score": 9.2,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Correctly identified 15-18% Q4 growth outlook. Used 3 tools (slightly redundant with 2 query_specific_file calls), lowering efficiency. Context maintained from 2 prior pairs."
+    },
+    {
+      "turn": 4,
+      "user_message": "Which product performed best?",
+      "agent_response": "Based on the quarterly report:\n\n**Q3 Revenue:** $14.2 million (up 23% from Q3 2024)\n\n**Best Performing Product:** Widget Pro X generated $8.1 million (57% of total revenue)\n\n**Q4 Outlook:** Projected 15-18% growth driven by enterprise segment expansion and three new product launches planned for November.",
+      "agent_tools": ["query_documents"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 9,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 10,
+        "personality": 9,
+        "error_recovery": 10
+      },
+      "overall_score": 9.75,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Correctly identified Widget Pro X at $8.1M (57%). Single tool call. Well-formatted response with full context recap. History restoration confirmed (3 prior pairs)."
+    },
+    {
+      "turn": 5,
+      "user_message": "Which region led sales?",
+      "agent_response": "According to acme_q3_report.md:\n\n**Q3 Revenue:** $14.2 million (up 23% year-over-year from $11.5 million)\n\n**Q4 Outlook:** Projected 15-18% growth driven by enterprise segment expansion and three new product launches planned for November.\n\n**Best Performing Product:** Widget Pro X was top performer with $8.1 million in revenue (57% of total).\n\n**Leading Region:** North America led sales with $8.5 million (60% of total).",
+      "agent_tools": ["query_specific_file"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 10,
+        "personality": 9,
+        "error_recovery": 10
+      },
+      "overall_score": 9.95,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Correctly identified North America at $8.5M (60%). Single tool call. Comprehensive response recapping all prior facts. History restoration confirmed (4 prior pairs)."
+    },
+    {
+      "turn": 6,
+      "user_message": "Summarize everything we've discussed in this conversation.",
+      "agent_response": "According to acme_q3_report.md, Acme Corp reported strong financial performance in Q3 2025:\n\n**Revenue & Growth:**\n- Q3 2025 revenue reached $14.2 million\n- This represents a 23% increase from Q3 2024's $11.5 million\n\n**Q4 Outlook:**\n- Management projects 15-18% growth for Q4 driven by enterprise segment expansion\n- Three new product launches are planned for November\n\n**Product Performance:**\n- Widget Pro X was the top performer with $8.1 million in revenue (57% of total)\n- Widget Lite contributed $4.2 million (30% of total)\n- Accessories and services: $1.9 million (13% of total)\n\n**Regional Sales Leadership:**\n- North America led sales with $8.5 million (60% of total)\n- Europe followed with $3.9 million (27% of total)\n- Asia Pacific generated $1.8 million (13% of total)",
+      "agent_tools": ["list_indexed_documents", "query_specific_file", "query_specific_file", "query_specific_file", "query_specific_file", "query_specific_file"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 8,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 6,
+        "personality": 9,
+        "error_recovery": 10
+      },
+      "overall_score": 9.15,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "All 5 ground truth facts present in response. History correctly restored (5 prior pairs = architectural limit). Agent re-queried document comprehensively (6 tool calls) rather than relying solely on conversation memory — this is valid RAG behavior that produced a correct and comprehensive result, but reduces efficiency score. Formatting is excellent with bold headers. CRITICAL PASS: all 5 facts recalled at the history_pairs=5 boundary."
+    }
+  ],
+  "root_cause": null,
+  "recommended_fix": null,
+  "architecture_notes": {
+    "history_pairs_limit": 5,
+    "history_restoration_verified": true,
+    "boundary_behavior": "At Turn 6 the system correctly restored all 5 prior conversation pairs (confirmed by 'Restoring 5 previous message(s)' in event log), demonstrating the history_pairs=5 limit is working as designed.",
+    "rag_behavior_at_summary": "Agent chose to re-query the RAG index at Turn 6 rather than synthesizing from conversation history alone. This produced a correct and comprehensive result with additional detail beyond the 5 asked facts."
+  },
+  "cost_estimate": {
+    "turns": 6,
+    "estimated_usd": 0.07
+  }
+}

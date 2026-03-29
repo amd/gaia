@@ -119,7 +119,7 @@ def __init__(
         use_chatgpt: Use ChatGPT/OpenAI API instead of local LLM
         claude_model: Model to use when use_claude=True
         base_url: Local LLM server URL (default: from LEMONADE_BASE_URL or http://localhost:8000/api/v1)
-        model_id: Model ID for local LLM (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)
+        model_id: Model ID for local LLM (default: Qwen3.5-35B-A3B-GGUF)
         max_steps: Maximum reasoning iterations (default: 20)
         debug_prompts: Include prompts in conversation history (default: False)
         show_prompts: Display prompts sent to LLM (default: False)
@@ -659,7 +659,7 @@ dependencies = [
 - Tool descriptions consume ~100-500 tokens
 - Monitor token usage with `show_stats=True`
 - Use smaller models for simple tasks (Qwen3-0.6B)
-- Use larger models for complex reasoning (Qwen3-Coder-30B)
+- Use larger models for complex reasoning (Qwen3.5-35B)
 
 ### Latency
 

@@ -11,6 +11,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from .._chat_helpers import evict_session_agent
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import (
@@ -82,9 +83,12 @@ async def update_session(
     request: UpdateSessionRequest,
     db: ChatDatabase = Depends(get_db),
 ):
-    """Update session title or system prompt."""
+    """Update session title, system prompt, or linked documents."""
     session = db.update_session(
-        session_id, title=request.title, system_prompt=request.system_prompt
+        session_id,
+        title=request.title,
+        system_prompt=request.system_prompt,
+        document_ids=request.document_ids,
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -102,6 +106,9 @@ async def delete_session(
         raise HTTPException(status_code=404, detail="Session not found")
     # Remove the per-session lock to prevent memory leaks
     http_request.app.state.session_locks.pop(session_id, None)
+    # Evict the cached ChatAgent for this session so a fresh one is created
+    # if the session is ever recreated with the same ID.
+    evict_session_agent(session_id)
     return {"deleted": True}
 
 
@@ -229,4 +236,5 @@ async def detach_document(
 ):
     """Detach a document from a session."""
     db.detach_document(session_id, doc_id)
+    evict_session_agent(session_id)
     return {"detached": True}

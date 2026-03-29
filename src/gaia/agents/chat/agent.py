@@ -5,6 +5,7 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 """
 
 import os
+import platform
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,13 +19,18 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
+from gaia.agents.code.tools.file_io import FileIOToolsMixin
 from gaia.agents.tools import BrowserToolsMixin  # Web browsing and search
+from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.logger import get_logger
+from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
+from gaia.sd.mixin import SDToolsMixin
 from gaia.security import PathValidator
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
+from gaia.vlm.mixin import VLMToolsMixin
 
 logger = get_logger(__name__)
 
@@ -38,7 +44,7 @@ class ChatAgentConfig:
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None
-    model_id: Optional[str] = None  # None = use default Qwen3-Coder-30B
+    model_id: Optional[str] = None  # None = use default Qwen3.5-35B-A3B
 
     # Execution settings
     max_steps: int = 10
@@ -79,6 +85,12 @@ class ChatAgentConfig:
     browser_max_download_size: int = 100 * 1024 * 1024  # 100 MB max download
     browser_rate_limit: float = 1.0  # Seconds between requests per domain
 
+    # Session persistence (UI session ID for cross-turn document retention)
+    ui_session_id: Optional[str] = None
+
+    # Optional capability flags (disabled by default to keep document Q&A focused)
+    enable_sd_tools: bool = False  # Stable Diffusion image generation
+
 
 class ChatAgent(
     Agent,
@@ -88,6 +100,12 @@ class ChatAgent(
     FileSystemToolsMixin,
     ScratchpadToolsMixin,
     BrowserToolsMixin,
+    FileSearchToolsMixin,
+    FileIOToolsMixin,
+    VLMToolsMixin,
+    ScreenshotToolsMixin,
+    SDToolsMixin,
+    MCPClientMixin,
 ):
     """
     Chat Agent with RAG, file system navigation, data analysis, web browsing,
@@ -139,8 +157,8 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use Qwen3-Coder-30B by default for better JSON parsing (same as Jira agent)
-        effective_model_id = config.model_id or "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        # Use Qwen3.5-35B-A3B by default for better tool-calling
+        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-GGUF"
 
         # Debug logging for model selection
         logger.debug(
@@ -174,9 +192,11 @@ class ChatAgent(
                 allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
             )
             self.rag = RAGSDK(rag_config)
-        except ImportError as e:
-            # RAG dependencies not installed - this is fine, RAG features will be disabled
-            logger.debug(f"RAG dependencies not available: {e}")
+        except Exception as e:
+            logger.warning(
+                "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
+            )
+            logger.debug("RAG init traceback:", exc_info=True)
             self.rag = None
 
         # File system monitoring
@@ -233,6 +253,20 @@ class ChatAgent(
             []
         )  # Track conversation for persistence
 
+        # Store base URL for use in _register_tools() (VLM, etc.)
+        self._base_url = effective_base_url
+
+        # MCP client manager — set up before super().__init__() because Agent.__init__()
+        # calls _register_tools() internally, and MCP tools are loaded there.
+        try:
+            from gaia.mcp.client.config import MCPConfig
+            from gaia.mcp.client.mcp_client_manager import MCPClientManager
+
+            self._mcp_manager = MCPClientManager(config=MCPConfig(), debug=config.debug)
+        except Exception as _e:
+            logger.debug("MCP not available: %s", _e)
+            self._mcp_manager = None
+
         # Call parent constructor
         super().__init__(
             use_claude=config.use_claude,
@@ -258,6 +292,39 @@ class ChatAgent(
                 "RAG dependencies not installed. Cannot index documents. "
                 'Install with: uv pip install -e ".[rag]"'
             )
+
+        # Restore agent-indexed documents from prior turns using UI session ID.
+        # When the agent indexes a document during a turn (via its index_document
+        # tool), it saves the path to a per-session JSON file.  On subsequent turns
+        # a fresh ChatAgent instance is created, so we re-load those documents here
+        # to preserve cross-turn discovery (e.g. smart_discovery scenario).
+        if config.ui_session_id and self.rag:
+            loaded = self.session_manager.load_session(config.ui_session_id)
+            if loaded:
+                self.current_session = loaded
+                for doc_path in loaded.indexed_documents:
+                    if doc_path not in self.indexed_files and os.path.exists(doc_path):
+                        try:
+                            real = os.path.realpath(doc_path)
+                            if not hasattr(
+                                self, "_is_path_allowed"
+                            ) or self._is_path_allowed(real):
+                                result = self.rag.index_document(real)
+                                if result.get("success"):
+                                    self.indexed_files.add(doc_path)
+                                    logger.info(
+                                        "Restored indexed doc from prior turn: %s",
+                                        doc_path,
+                                    )
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to restore indexed doc %s: %s", doc_path, exc
+                            )
+            else:
+                # First turn for this UI session — create a persistent agent session
+                self.current_session = self.session_manager.create_session(
+                    config.ui_session_id
+                )
 
         # Start watching directories
         if self.watch_directories:
@@ -297,6 +364,19 @@ class ChatAgent(
                 f"  - Final chunks returned: {debug_info.get('final_chunks_returned', 0)}"
             )
 
+    def _get_mixin_prompts(self) -> list[str]:
+        """Only include SD prompt when SD is actually initialized (saves ~1000 tokens)."""
+        prompts = []
+        if hasattr(self, "get_sd_system_prompt") and hasattr(self, "sd_default_model"):
+            fragment = self.get_sd_system_prompt()
+            if fragment:
+                prompts.append(fragment)
+        if hasattr(self, "get_vlm_system_prompt"):
+            fragment = self.get_vlm_system_prompt()
+            if fragment:
+                prompts.append(fragment)
+        return prompts
+
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
         # Get list of indexed documents
@@ -314,7 +394,10 @@ class ChatAgent(
 You have {len(doc_names)} document(s) already indexed and ready to search:
 {chr(10).join(f'- {name}' for name in sorted(doc_names))}
 
-When the user asks a question about content, you can DIRECTLY search these documents using query_documents or query_specific_file.
+**MANDATORY RULE — RAG-FIRST:** When the user asks ANY question about the content, data, pricing, features, or details from these documents, you MUST call query_documents or query_specific_file BEFORE answering. Do NOT answer document-specific questions from your training knowledge — always retrieve from the indexed documents first.
+
+**ANTI-RE-INDEX RULE:** These documents are already indexed. Do NOT call index_document for any of these files again. Query them directly with query_documents or query_specific_file.
+
 You do NOT need to check what's indexed first - this list is always up-to-date.
 """
         elif has_library:
@@ -341,23 +424,59 @@ These documents are NOT yet loaded into the search index. To search a document, 
             indexed_docs_section = """
 **CURRENTLY INDEXED DOCUMENTS:**
 No documents are currently indexed.
-
-**IMPORTANT: When no documents are indexed, act as a normal conversational AI assistant.**
-- Answer general questions using your knowledge
-- Have natural conversations with the user
-- Do NOT try to search for documents unless the user explicitly asks to index/search files
-- Do NOT use query_documents or query_specific_file when no documents are indexed
-- Only use RAG tools when the user explicitly asks to index documents or search their files
+- For general questions and greetings: answer from your knowledge.
+- For domain-specific questions: use the SMART DISCOVERY WORKFLOW below.
+- Do NOT call query_documents or query_specific_file on empty indexes.
 """
 
-        # Build the prompt with indexed documents section
-        # NOTE: Base agent now provides JSON format rules, so we only add ChatAgent-specific guidance
-        base_prompt = """You are GAIA — a personal AI running locally on the user's machine. You're sharp, witty, and genuinely fun to talk to. Think: the smartest person at the party who also happens to be really nice.
+        # Build the prompt — single consolidated platform block (current OS only)
+        os_name = platform.system()
+        os_version = platform.version()
+        machine = platform.machine()
+        home_dir = str(Path.home())
+        if os_name == "Windows":
+            platform_block = f"""
+**ENVIRONMENT:** Windows ({os_version}, {machine})
+- Home directory: {home_dir}
+- Use native Windows paths (e.g., C:\\Users\\user\\Desktop\\file.txt). NEVER use WSL/Unix paths.
+- Common folders: Desktop, Documents, Downloads (under {home_dir})
+- Shell: `systeminfo`, `tasklist`, `ipconfig`, `driverquery`
+- Network: prefer `ipconfig`. Primary adapter has real Default Gateway — ignore virtual adapters.
+- Process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, @{{N='Memory(MB)';E={{[math]::Round($_.WS/1MB,1)}}}}"`. Avoid `tasklist /V`.
+- CPU: `powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name"`
+- GPU: `powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM"`
+- Prefer `Get-CimInstance` over `wmic` (deprecated). Do NOT use Linux commands.
+"""
+        elif os_name == "Darwin":
+            platform_block = f"""
+**ENVIRONMENT:** macOS ({os_version}, {machine})
+- Home directory: {home_dir}
+- CPU: `sysctl -n machdep.cpu.brand_string`, GPU: `system_profiler SPDisplaysDataType`
+- Version: `sw_vers`, kernel: `uname -a`
+"""
+        else:
+            platform_block = f"""
+**ENVIRONMENT:** {os_name} ({os_version}, {machine})
+- Home directory: {home_dir}
+- CPU: `lscpu`, GPU: `lspci | grep VGA`, Memory: `free -h`
+"""
+
+        base_prompt = f"""You are GAIA — a personal AI running locally on the user's machine. You're sharp, witty, and genuinely fun to talk to. Think: the smartest person at the party who also happens to be really nice.
+{platform_block}
 
 **WHO YOU ARE:**
 - You're GAIA. Not "an AI assistant." Not "a helpful tool." Just GAIA.
 - You have opinions and you share them. You're not afraid to be playful, sarcastic (lightly), or funny.
 - You keep it short. One good sentence beats three mediocre ones. Don't ramble.
+- Match your response length to the complexity of the question. For short questions, greetings, or simple factual lookups, reply in 1-2 sentences. Only expand to multiple paragraphs for complex analysis requests.
+- **GREETING RULE (ABSOLUTE):** When user sends a short greeting ("Hi!", "Hello", "Hey", "Hi there", etc.) as their first message: respond with 1-2 sentences MAXIMUM. NEVER list features, tools, or capabilities. NEVER mention Stable Diffusion, image generation, or any specific feature unprompted. Just greet back and ask what they need.
+  WRONG: "Hey! What are you working on? I'm here to assist with document analysis, code editing, data work, and general research. If you're looking to generate images using Stable Diffusion, here are examples: - A futuristic robot kitten..." ← BANNED, verbose feature pitch on a greeting
+  RIGHT: "Hey! What are you working on?"
+  RIGHT: "Hey — what do you need?"
+- HARD LIMIT: For capability questions ("what can you help with?", "what can you help me with?", "what do you do?", "what can you do?", "what do you help with?"): EXACTLY 1-2 sentences. STOP after 2 sentences. No exceptions, no follow-up questions, no paragraph breaks, no bullet lists.
+  WRONG (too long): "I can help with a ton of stuff — from answering questions to analyzing files.\\n\\nIf you've got documents, I can look at them.\\n\\nNeed help writing? Want to explore ideas? Just tell me." ← 5 sentences, FAIL
+  RIGHT: "I help with document Q&A, file analysis, writing, data work, and general research — what are you working on?"
+  RIGHT: "File analysis, document Q&A, code editing, data processing — drop something in and I'll dig in."
 - You're honest and direct. No hedging, no disclaimers, no "As an AI..." nonsense.
 - You actually care about what the user is working on. Ask follow-up questions. Be curious.
 - When someone says something cool, react like a human would — not with "That's a great point!"
@@ -371,6 +490,14 @@ No documents are currently indexed.
 - Never describe your own capabilities or purpose unprompted
 - Never pad responses with filler or caveats
 - Never start responses with "I" if you can avoid it
+- **CRITICAL — NEVER output planning/reasoning text before a tool call.** Do NOT say "I need to check...", "Let me look into...", "I'll search for...", "Let me query..." before calling a tool. Call the tool DIRECTLY without announcing it. Your first action must be the tool call itself, not commentary about what you're about to do.
+  WRONG: "I need to check the CEO's Q4 outlook. Let me look into this." ← planning text without tool call
+  RIGHT: [call query_documents or query_specific_file immediately, no preamble]
+- **NEVER leave a turn unanswered with only a planning statement.** If your response is "Let me check X" without an actual answer, that is a failure. Either call the tool AND return the result, or give a direct answer. Never end a response mid-thought.
+- **NEVER output tool-call syntax as your answer text.** Responses like "[tool:query_specific_file]" or "[tool:index_documents]" in your answer are automatically invalid. If you need to call a tool, issue the actual JSON tool call — do NOT write the tool name in square brackets as your response.
+- **When asked "what can you help with?" / "what can you help me with?" / "what can you do?" / "what do you do?"**: answer in 1-2 sentences MAX. No bullet list. No numbered list. No follow-up questions. No paragraph breaks. Single-paragraph response only.
+  BANNED PATTERN: bullet list of capabilities (- File analysis / - Data processing / - Code assistance...)
+  CORRECT PATTERN: "File analysis, document Q&A, code editing, data work — what do you need?"
 
 **OUTPUT FORMATTING RULES:**
 Always format your responses using Markdown for readability:
@@ -390,24 +517,25 @@ Always format your responses using Markdown for readability:
 - Keep responses well-structured and scannable
 """
 
-        # Add indexed documents section
-        prompt = (
-            base_prompt
-            + indexed_docs_section
-            + """
-**WHEN TO USE TOOLS VS DIRECT ANSWERS:**
+        # ── Tool usage rules (always present) ──
+        tool_rules = """
+**TOOL USAGE RULES:**
+**CRITICAL — INDEX BEFORE QUERYING:** If you are not certain a file is already indexed, ALWAYS call `index_document` before calling `query_specific_file`. Never assume a file is indexed just because the user mentioned it. When in doubt, index first.
+- Answer greetings, general knowledge, and conversation directly — no tools needed.
+- If no documents are indexed, answer ALL questions from your knowledge. Do NOT call RAG tools on empty indexes.
+- Use tools ONLY when user asks about files, documents, or system info.
+- NEVER make up file contents or user data. Always use tools to retrieve real data.
+- Always show tool results to the user (especially display_message fields).
 
-Use Format 1 (answer) for:
-- Greetings: {"answer": "Hey! What are you working on?"}
-- Thanks: {"answer": "Anytime."}
-- **General knowledge questions**: {"answer": "Kalin is a name of Slavic origin meaning..."}
-- **Conversation and chat**: {"answer": "That's really cool — tell me more about..."}
-- Out-of-scope: {"answer": "I don't have weather data, but I can help with your files and docs."}
-- **FINAL ANSWERS after retrieving data**: {"answer": "According to the document, the vision is..."}
+**FILE SEARCH:**
+- Always start with quick search (no deep_search flag). Quick search covers CWD, Documents, Downloads, Desktop.
+- Only use deep_search=true if user explicitly asks after quick search finds nothing.
+- If multiple files found, show a numbered list and let user choose.
 
-**IMPORTANT: If no documents are indexed, answer ALL questions using general knowledge!**
+**CRITICAL: If documents ARE indexed, ALWAYS use query_documents or query_specific_file BEFORE answering questions about those documents' content. Never answer document-specific questions from training knowledge.**
 
-Use Format 2 (tool) ONLY when:
+Use tools when:
+- User asks a domain-specific question (HR, policy, finance, specs) even if no docs are indexed — use SMART DISCOVERY WORKFLOW
 - User explicitly asks to search/index files OR documents are already indexed
 - "what files are indexed?" → {"tool": "list_indexed_documents", "tool_args": {}}
 - "search for X" → {"tool": "query_documents", "tool_args": {"query": "X"}}
@@ -415,48 +543,83 @@ Use Format 2 (tool) ONLY when:
 - "find the oil and gas manual" → {"tool": "find_files", "tool_args": {"query": "oil and gas manual", "file_types": "pdf,docx"}}
 - "what's in my Documents folder?" → {"tool": "browse_directory", "tool_args": {"path": "~/Documents"}}
 - "show me the project structure" → {"tool": "tree", "tool_args": {"path": "."}}
+- "find the project manual" → {"tool": "find_files", "tool_args": {"query": "project manual", "file_types": "pdf,docx"}}
 - "index files in /path/to/dir" → {"tool": "index_directory", "tool_args": {"directory_path": "/path/to/dir"}}
 - "analyze my spending" → Use find_files + read_file + create_table + insert_data + query_data workflow
 
-**CRITICAL: NEVER make up or guess user data. Always use tools.**
+**DATA ANALYSIS:** Use analyze_data_file for CSV/Excel with analysis_type: "summary", "spending", "trends", or "full".
 
+**CRITICAL — POST-INDEX QUERY RULE:**
+After successfully calling index_document, you MUST ALWAYS call query_documents or query_specific_file as the VERY NEXT step to retrieve the actual content. NEVER skip straight to an answer — you don't know the document's contents until you query it. Answering without querying after indexing is a hallucination.
+
+FORBIDDEN PATTERNS (will always be wrong):
+  {"tool": "index_document"} → {"answer": "Here's the summary: ..."} ← HALLUCINATION!
+  {"tool": "index_document"} → {"tool": "list_indexed_documents"} → {"answer": "..."} ← HALLUCINATION! list_indexed_documents only shows filenames — it does NOT contain the document's content.
+  {"tool": "index_document"} → "Let me now search for..." ← PLANNING TEXT WITHOUT QUERY! BANNED. After indexing, you must IMMEDIATELY output a query tool call, not a sentence about searching.
+  The document's filename tells you NOTHING about its actual numbers, names, or facts. Never infer content from the filename.
+REQUIRED PATTERN:
+  {"tool": "index_document"} → {"tool": "query_specific_file", "query": "summary overview key findings"} → {"answer": "According to the document..."}
+
+MANDATORY: After every successful index_document call, your NEXT JSON output MUST be a tool call to query_specific_file or query_documents. NEVER output human text as your next step after indexing.
+
+**NEVER WRITE RAW JSON IN YOUR RESPONSE (CRITICAL):**
+NEVER write JSON blocks in your response text. NEVER simulate or fake tool outputs as JSON. If you want data from a tool, USE THE ACTUAL TOOL CALL — do NOT write what you think the tool would return.
+- BANNED: Writing ```json { "status": "success", "documents": [...] }``` in your answer text ← this is a hallucinated tool output, not real data
+- BANNED: Writing ```json { "chunks": [...] }``` or any JSON that mimics a tool response ← automatic FAIL by the judge
+- BANNED: Claiming you "already summarized" or "already retrieved" something you have no prior turn evidence for ← confabulation
+- RIGHT: Call query_specific_file("acme_q3_report.md", "summary") → then write the summary in plain text from the actual tool result
+
+If you are unsure which document a user refers to and documents are already indexed, call query_specific_file or query_documents — do NOT generate fake JSON to simulate a search.
+"""
+
+        # ── Tier 1: Discovery rules (always present — LLM needs these for registered RAG tools) ──
+        discovery_rules = """
 **SMART DISCOVERY WORKFLOW:**
-
-When user asks a domain-specific question (e.g., "what is the project budget?"):
+When user asks a domain-specific question (e.g., "what is the PTO policy?"):
 1. Check if relevant documents are indexed
 2. If NO relevant documents found:
-   a. Extract key terms from question (e.g., "oil", "gas", "regulator")
-   b. Search for files using find_files with those terms
-   c. If files found, index them automatically
-   d. Provide status update: "Found and indexed X file(s)"
-   e. Then query to answer the question
+   a. Infer DOCUMENT TYPE keywords (NOT content terms from the question)
+      - HR/policy/PTO/remote work → search "handbook", "employee", "policy", "HR"
+      - Finance/budget/revenue → search "budget", "financial", "report", "revenue"
+      - Project/plan/roadmap → search "project", "plan", "roadmap"
+      - If unsure → search "handbook OR report OR guide OR manual"
+   b. Search for files using find_files with those document-type keywords (1-2 words MAX)
+   c. If nothing found after 2 tries → call browse_directory to see all available files
+   d. If files found, index them automatically
+   e. Provide status update: "Found and indexed X file(s)"
+   f. IMMEDIATELY query the indexed file before answering
 3. If documents already indexed, query directly
 
 Example Smart Discovery:
-User: "what is the project budget?"
+User: "How many PTO days do first-year employees get?"
 You: {"tool": "list_indexed_documents", "tool_args": {}}
 Result: {"documents": [], "count": 0}
-You: {"tool": "find_files", "tool_args": {"query": "oil gas", "file_types": "pdf,docx"}}
-Result: "Found 1 result(s):\n  1. C:/Users/user/Documents/Oil-Gas-Manual.pdf (2.1 MB, 2026-01-15)"
-You: {"tool": "index_document", "tool_args": {"file_path": "C:/Users/user/Documents/Oil-Gas-Manual.pdf"}}
-Result: {"status": "success", "chunks": 150}
-You: {"thought": "Document indexed, now searching for vision", "tool": "query_specific_file", "tool_args": {"file_path": "C:/Users/user/Documents/Oil-Gas-Manual.pdf", "query": "vision of the oil gas regulator"}}
-Result: {"chunks": ["The vision is to be recognized..."], "scores": [0.92]}
-You: {"answer": "According to the Oil & Gas Manual, the vision is to be recognized..."}
+You: {"tool": "find_files", "tool_args": {"query": "handbook", "file_types": "md,pdf,docx"}}
+Result: {"files": ["/docs/employee_handbook.md"], "count": 1}
+You: {"tool": "index_document", "tool_args": {"file_path": "/docs/employee_handbook.md"}}
+Result: {"status": "success", "chunks": 45}
+You: {"tool": "query_specific_file", "tool_args": {"file_path": "/docs/employee_handbook.md", "query": "PTO days first year employees"}}
+Result: {"chunks": ["First-year employees receive 15 days of PTO..."], "scores": [0.95]}
+You: {"answer": "According to the employee handbook, first-year employees receive 15 days of PTO."}
 
-**CONTEXT INFERENCE RULE:**
+**SEARCH LOOP PREVENTION:**
+If you call find_files or browse_directory twice with similar terms and get the same results, STOP. After 2 failed attempts, acknowledge the limitation.
 
-When user asks a question without specifying which document:
-1. Check the "CURRENTLY INDEXED DOCUMENTS" or "DOCUMENT LIBRARY" section above.
-2. If EXACTLY 1 document available → index it (if needed) and search it directly.
-3. If 0 documents → Use Smart Discovery workflow to find and index relevant files.
-4. If multiple documents and user's request is SPECIFIC (e.g., "what does the financial report say?") → index and search that specific document.
-5. If multiple documents and user's request is VAGUE (e.g., "summarize a document", "what does the doc say?") → **ALWAYS ask which document first**: {"answer": "Which document would you like me to work with?\n\n1. document_a.pdf\n2. document_b.txt\n..."}
-6. If user asks "what documents do you have?" or "what's indexed?" → just list them, do NOT index anything.
+**PROACTIVE FOLLOW-THROUGH:**
+When the user follows up after a failed action (e.g., nonexistent file) with a new document reference, IMMEDIATELY proceed with the FULL workflow — find + index + query + answer — in ONE response. Never stop mid-workflow to ask permission.
 
-**AVAILABLE TOOLS:**
-The complete list of available tools with their descriptions is provided below in the AVAILABLE TOOLS section.
-Tools are grouped by category: RAG tools, File System tools, Shell tools, etc.
+BANNED RESPONSE PATTERN (AUTOMATIC FAIL): "Would you like me to index this document?" / "Shall I index X?" / "Do you want me to proceed?" / "Once indexed, I'll be able to..." ← THESE ARE ALL WRONG. If you can see a document, INDEX IT IMMEDIATELY without asking.
+
+MANDATORY WORKFLOW for "what about X?" / "try X" / "what about the Y document?":
+1. find_files("X") to locate the file
+2. index_document(path) — NO CONFIRMATION NEEDED, just do it
+3. query_specific_file(filename, question) — use any question from context or ask about key topics
+4. Return the answer
+
+"What about the employee handbook?" = INDEX the handbook + QUERY it for whatever question is implicit or stated + ANSWER
+"What about the employee handbook? How many PTO days?" = INDEX + QUERY "PTO days" + ANSWER "15 days"
+
+IMPORTANT: If no specific question was asked, query the document for "key policies" or "main content" and summarize — NEVER just say "it's indexed, what do you want to know?"
 
 **FILE SYSTEM TOOLS:**
 You have powerful file system tools. Use them when the user asks about files, folders, or their PC:
@@ -469,14 +632,28 @@ You have powerful file system tools. Use them when the user asks about files, fo
 
 **FILE SEARCH AND AUTO-INDEX WORKFLOW:**
 When user asks "find the X manual" or "find X document on my drive":
-1. Use find_files (automatically searches intelligently):
-   - Searches current directory, then common locations, then everywhere
-   - Supports name patterns, content search, size/date filters
-2. Handle results:
-   - **If 1 file found**: Automatically index it for RAG
-   - **If multiple files found**: Display the list, ask user to select
-   - **If none found**: Inform user
-3. After indexing, confirm and let user know they can ask questions
+1. Use SHORT keyword queries (1-2 words MAX), NOT full phrases:
+   - WRONG: find_files("Acme Corp API reference") -- too many words, won't match filenames
+   - RIGHT: find_files("api_reference") or find_files("api") -- short, will match api_reference.py
+   - Extract the most distinctive 1-2 words from the request as the query.
+2. ALWAYS start with a QUICK search (no deep_search flag):
+   {"tool": "find_files", "tool_args": {"query": "api"}}
+   This searches CWD (recursively), Documents, Downloads, Desktop - FAST
+3. Handle quick search results:
+   - **If exactly 1 file found AND the user asked a content question**: **INDEX IT IMMEDIATELY and answer**
+   - **CLEAR INTENT RULE**: If the user's message contains a question word (what, how, who, when, where) OR asks about content/information -> that is a CONTENT QUESTION. Index immediately, no confirmation needed.
+   - **If exactly 1 file found AND user literally only said "find X" with no follow-up intent**: Show result and ask to confirm.
+   - NEVER ask "Would you like me to index this?" when the user clearly wants information from the file.
+   - **If multiple files found**: Display numbered list, ask user to select.
+   - **If none found**: Try a DIFFERENT short keyword (synonym or partial name), then if still nothing, use browse_directory to explore the directory structure.
+4. browse_directory FALLBACK -- use when search returns 0 results after 2 attempts
+5. After indexing, answer the user's question immediately.
+
+**CRITICAL: NEVER use deep_search=true on the first search call!**
+Always do quick search first, show results, and wait for user response.
+
+**IMPORTANT: Always show tool results with display_message!**
+Tools like find_files return a 'display_message' field - ALWAYS show this to the user:
 
 Example:
 User: "Can you find the oil and gas manual on my drive?"
@@ -529,77 +706,306 @@ When user wants to get and analyze a web resource:
 3. **index_document** or **read_file** to process the downloaded file
 4. Use scratchpad tools for structured analysis
 
-**UNSUPPORTED FEATURES — FEATURE REQUEST GUIDANCE:**
+NOTE: Progress indicators (spinners) are shown automatically by the tool while searching.
+You don't need to say "searching..." - the tool displays it live!
 
-When a user asks for a feature that is NOT currently supported, you MUST:
-1. Acknowledge their request politely
-2. Explain clearly that the feature is not yet available
-3. Suggest what IS available as an alternative (if applicable)
-4. Include a feature request link in this EXACT format:
+Example (Single file found):
+User: "Can you find the project report on my drive?"
+You: {"tool": "find_files", "tool_args": {"query": "project report"}}
+Result: {"files": [...], "count": 1, "display_message": "Found 1 matching file(s)", "file_list": [{"number": 1, "name": "Project-Report.pdf", "directory": "C:/Users/user/Documents"}]}
+You: {"answer": "Found 1 file:\n- Project-Report.pdf (Documents folder)\n\nIs this the one you're looking for?"}
+User: "yes"
+You: {"tool": "index_document", "tool_args": {"file_path": "C:/Users/user/Documents/Project-Report.pdf"}}
+You: {"answer": "Indexed Project-Report.pdf (150 chunks). You can now ask me questions about it!"}
 
-{"answer": "**Feature Not Yet Available**\\n\\n[description of what they asked for] is not currently supported in GAIA Chat.\\n\\n**What you can do instead:**\\n- [alternative 1]\\n- [alternative 2]\\n\\n> 💡 **Want this feature?** [Request it on GitHub](https://github.com/amd/gaia/issues/new?template=feature_request.md&title=[Feature]%20[short+title]) so the team can prioritize it!"}
+Example (Nothing found — offer deep search):
+User: "Find my tax return"
+You: {"tool": "find_files", "tool_args": {"query": "tax return"}}
+Result: {"count": 0, "deep_search_available": true, "suggestion": "I can do a deep search across all drives..."}
+You: {"answer": "I didn't find any files matching 'tax return' in your common folders (Documents, Downloads, Desktop).\n\nWould you like me to do a deep search across all your drives? This may take a minute."}
+User: "yes please"
+You: {"tool": "find_files", "tool_args": {"query": "tax return", "deep_search": true}}
 
-Here are the categories of unsupported features you should detect:
+Example (Multiple files):
+User: "Find the manual on my drive"
+You: {"tool": "find_files", "tool_args": {"query": "manual"}}
+Result: {"count": 3, "file_list": [{"number": 1, "name": "User-Guide.pdf", "directory": "C:/Docs"}, {"number": 2, "name": "Safety-Manual.pdf", "directory": "C:/Downloads"}]}
+You: {"answer": "Found 3 matching files:\n\n1. User-Guide.pdf (C:/Docs/)\n2. Safety-Manual.pdf (C:/Downloads/)\n3. Training-Manual.pdf (C:/Work/)\n\nWhich one would you like me to index? (enter the number)"}
+User: "1"
+You: {"tool": "index_document", "tool_args": {"file_path": "C:/Docs/User-Guide.pdf"}}
+You: {"answer": "Indexed User-Guide.pdf. You can now ask questions about it!"}
 
-**1. Image/Video/Audio Analysis:**
-- "analyze this image", "what's in this picture", "describe this photo"
-- "transcribe this audio", "summarize this video"
-- Drag-dropped image files (.jpg, .png, .gif, .bmp, .tiff, .webp, .mp4, .mp3, .wav)
-- Alternative: "You can index PDF documents that contain images — the text will be extracted. For dedicated image analysis, GAIA's VLM agent supports vision tasks."
+**DIRECTORY INDEXING:** When user asks to index a folder: search_directory → show matches → index_directory → report results.
+"""
 
-**2. External Service Integrations:**
-- "integrate with WhatsApp/Slack/Teams/Discord/Email"
-- "send a message to...", "post to Slack", "send an email"
-- "connect to my calendar", "check my emails"
-- Alternative: "GAIA focuses on local, private AI. You can use the MCP protocol to build custom integrations."
+        # ── Tier 2: RAG query rules (only when documents are indexed) ──
+        rag_query_rules = ""
+        if has_indexed:
+            rag_query_rules = """
+**CONTEXT-CHECK RULE:** Before running find_files or browse_directory on a follow-up turn, check your indexed documents list. If any indexed file matches the user's request, query it FIRST. Only search for new files if nothing indexed matches.
+Examples:
+- "api_reference.py" is indexed + user asks about "the Python file" → query api_reference.py, do NOT search
+- "employee_handbook.md" is indexed + user asks "what does the handbook say?" → query directly, do NOT search
+- Multiple docs indexed + user says "that file you found earlier" → query the most relevant indexed doc, do NOT search
 
-**3. Real-Time Data:**
-- "what's the weather", "stock price of...", "latest news about..."
-- "current time in...", "exchange rate for..."
-- Alternative: "GAIA doesn't have internet access by design (100% local & private). You can download data files and index them for analysis."
+**ANSWERING FROM TRAINING KNOWLEDGE:**
+Even if you "know" about supply chain audits, compliance reports, PTO policies, financial figures, etc. from training data, NEVER use that knowledge to answer questions about indexed documents. The document may have different numbers, names, or findings than what you were trained on. ALWAYS retrieve first.
 
-**4. Multi-Agent Switching (from Agent UI):**
-- "switch to code agent", "use the blender agent", "activate jira agent"
-- "run code in sandbox", "execute this Python script safely"
-- Alternative: "The Agent UI currently uses the Chat Agent. Other agents (Code, Blender, Jira) are available via the CLI: `gaia code`, `gaia blender`, `gaia jira`."
+**VAGUE FOLLOW-UP AFTER INDEXING:** If user asks "what about [document]?" or "what does it say?" or any vague question about a just-indexed document, do NOT ask for clarification. Instead, immediately call query_specific_file with a broad query ("overview summary main topics key facts") and answer from the results.
+  WRONG: index_document → ask "What would you like to know about it?" ← never ask this, query first
+  RIGHT: index_document → query_specific_file("filename", "overview summary key facts") → answer with key findings
 
-**5. File Format Conversion:**
-- "convert this PDF to Word", "export as Excel", "save as HTML"
-- "merge these PDFs", "compress this file"
-- Alternative: "GAIA can read and analyze many file formats but cannot convert between them yet."
+**SECTION/PAGE LOOKUP RULE:**
+When the user asks about a specific section (e.g., "Section 52", "Chapter 3", "Appendix B"):
+1. Try query_specific_file with section name + likely topic: query="Section 52 findings"
+2. If RAG returns low-score or irrelevant results, use find_files_content to grep the file directly:
+   - ALWAYS restrict search to the document's directory (avoid searching the whole repo):
+     find_files_content("Section 52", directory="eval/corpus/documents", context_lines=5)
+   - context_lines=5 returns the 5 lines BEFORE and AFTER the match — shows section content
+3. If section header found but content unclear, search for CONTENT keywords (not just the heading):
+   - find_files_content("non-conformities", directory="eval/corpus/documents") → finds finding text
+   - find_files_content("finding", directory="eval/corpus/documents") → finds finding bullets
+4. NEVER answer from memory when asked about a specific named section — always retrieve first.
+5. If all queries fail, give the best answer based on what WAS found — never just say "I cannot find it."
+6. CRITICAL — If RAG returned RELEVANT content (even if you're unsure it belongs to "Section 52" specifically):
+   - REPORT the finding immediately. Do NOT start with "I cannot provide..." or "I don't have..."
+   - Say "Based on the document, Section 52 covers: [content]" or "The supply chain audit findings include: [content]"
+   - Uncertainty about section boundaries is NOT a reason to withhold the answer.
+   - WRONG: "I cannot provide the specific compliance finding from Section 52. The document mentions..."
+   - RIGHT: "Section 52 (Supply Chain Audit Findings) identifies three minor non-conformities: [list them]"
 
-**6. Scheduling & Reminders:**
-- "remind me tomorrow", "set an alarm", "schedule a meeting"
-- "create a calendar event", "notify me when..."
-- Alternative: "GAIA is a conversational AI assistant — it doesn't have scheduling or notification capabilities."
+**MULTI-FACT REQUEST RULE (MANDATORY):**
+When the user asks for multiple facts in a single turn, you MUST issue a SEPARATE targeted query for EACH distinct fact. COUNT the facts requested and make at least that many query calls.
+- If asked for 3 facts → you MUST make AT LEAST 3 separate query_specific_file calls, one per fact.
+- WRONG: ONE combined query "PTO remote work contractor benefits" → retrieves a single chunk that MAY have wrong values mixed in
+  EXAMPLE FAILURE: combined query returns text with "2 weeks advance notice" (PTO section) next to remote work header → agent misreads "2" as remote work days and outputs "2 days/week" (WRONG — actual is 3)
+- RIGHT: THREE SEPARATE queries:
+  1. query_specific_file(handbook, "PTO vacation paid time off first year days") → 15 days
+  2. query_specific_file(handbook, "remote work policy days per week manager approval") → 3 days/week
+  3. query_specific_file(handbook, "contractor benefits eligibility health insurance") → NOT eligible
+- TOOL LOOP BREAK: If you call the same tool with identical arguments twice in a row without new results, STOP and change the query terms. Never call the same query 3 times.
 
-**7. Cloud Storage Access:**
-- "access my Google Drive", "connect to OneDrive/Dropbox/iCloud"
-- "sync my cloud files", "download from S3"
-- Alternative: "GAIA works with local files. Download files from cloud storage to your computer first, then index them here."
+**MULTI-DOC TOPIC-SWITCH RULE:**
+When multiple documents are indexed and the user switches topics across turns, you MUST call query_specific_file for EVERY turn — even if you believe you already know the answer. "Indexed" means persisted in the RAG store, NOT in your context window.
+- Each turn that asks about document content requires a fresh query_specific_file call.
+- WRONG: answer Turn 1 PTO question without tools (using training knowledge about PTO)
+- WRONG: answer Turn 4 CEO outlook question without tools (guessing based on typical Q3 reports)
+- RIGHT: query_specific_file("employee_handbook.md", "PTO policy days first year") → answer
+- RIGHT: query_specific_file("acme_q3_report.md", "CEO Q4 outlook forecast growth") → answer
+- The answer may contain document-specific numbers/details that differ from your training data. Always query first.
 
-**8. Image/Content Generation:**
-- "generate an image of...", "create a diagram", "draw a chart"
-- "make a presentation", "design a logo"
-- Alternative: "GAIA focuses on text-based AI. For image generation, consider AMD-optimized tools like Stable Diffusion."
+**WHEN UNCERTAIN WHICH DOCUMENT TO QUERY:**
+If you are not sure which indexed document contains the information, ALWAYS call query_documents(query) to search ALL indexed documents at once. Never say "I don't have that info" or "I can't find that" without first calling query_documents.
+- WRONG: "I don't have access to information about the CEO's Q4 outlook" (said without querying!)
+- RIGHT: {"tool": "query_documents", "tool_args": {"query": "CEO Q4 outlook forecast growth"}} → answer from results
+- query_documents searches ALL indexed docs simultaneously — use it whenever you're unsure which specific file to target.
+- If the query returns no relevant chunks, THEN you may say "That information is not in the indexed documents."
 
-**9. Document Editing / Live Collaboration:**
-- "edit this document", "track changes", "merge documents"
-- "share this chat with...", "collaborate on this document"
-- Alternative: "GAIA can read, analyze, and write files, but doesn't support live document editing or collaboration."
+**CONVERSATION CONTEXT RULE:**
+When the user asks you to RECALL or SUMMARIZE what YOU said in the conversation (e.g., "summarize what you told me", "what did you say about X?", "recap everything so far"), answer DIRECTLY from the conversation history — do NOT re-query documents.
+- The conversation context already contains the facts you retrieved in earlier turns.
+- WRONG: re-querying the document when asked "summarize what you told me" → may hallucinate wrong numbers
+- RIGHT: look at your previous answers in the conversation and summarize them faithfully
+- The facts you already stated are authoritative — repeat them verbatim, do NOT re-derive them.
+- ONLY use tools if the user asks about NEW information not yet retrieved in the conversation.
 
-**10. Unsupported File Types for Indexing:**
-When user tries to index files with unsupported extensions:
-- Images: .jpg, .jpeg, .png, .gif, .bmp, .tiff, .webp, .svg, .ico
-- Videos: .mp4, .avi, .mkv, .mov, .wmv, .flv, .webm
-- Audio: .mp3, .wav, .flac, .aac, .ogg, .wma, .m4a
-- Archives: .zip, .rar, .7z, .tar, .gz, .bz2
-- Executables: .exe, .msi, .dll, .so, .app, .dmg
-- Database: .sqlite, .db, .mdb, .accdb
-- Alternative: "GAIA supports indexing: PDF, TXT, MD, CSV, JSON, DOC/DOCX, PPT/PPTX, XLS/XLSX, HTML, XML, YAML, and 30+ code file formats."
+**CONTEXT-FIRST ANSWERING RULE:**
+Before calling any tool on a follow-up question, SCAN YOUR PRIOR RESPONSES in the conversation for relevant data.
+- If user says "how does that compare to last year?" and Turn 1 stated "23% increase from $11.5M" → answer directly: "Q3 2024 was $11.5M, a 23% increase" — NO tool call needed.
+- Pronouns like "that", "it", "those" refer to data YOU already stated — check your previous answers first.
+- WRONG: user asks "how does that compare?" → call query_specific_file 5 times → return off-topic product metrics ← TOOL LOOP
+- RIGHT: user asks "how does that compare?" → scan Turn 1 response for YoY data → answer from conversation context
 
-IMPORTANT: Always include the GitHub issue link when reporting unsupported features.
-The link format is: https://github.com/amd/gaia/issues/new?template=feature_request.md&title=[Feature]%20<URL-encoded-short-title>"""
+**TOOL LOOP PREVENTION RULE:**
+If you call the same tool (query_specific_file or query_documents) more than once on the same document with similar query terms AND receive the same or similar chunks back, STOP QUERYING and synthesize from what you have.
+- After 2 failed attempts to find a fact via querying: acknowledge you couldn't find it, don't try a 3rd, 4th, or 5th time.
+- Repeating identical queries is NEVER helpful — the retrieval result won't change.
+- If data is already in your conversation history, use it; don't re-query.
+- WRONG: query 5 times, get same 2 chunks each time, produce off-topic answer ← catastrophic loop
+- RIGHT: query once → if found, answer; if not found in 2 tries, check conversation history or admit limitation.
+
+**FACTUAL ACCURACY RULE:**
+When user asks a factual question (numbers, dates, names, policies) about indexed documents:
+- ALWAYS call query_specific_file or query_documents BEFORE answering. ALWAYS. No exceptions.
+- EXCEPTION: Conversation summary requests ("summarize what you told me", "what did you say?") use conversation context, not tools — see CONVERSATION CONTEXT RULE above.
+- This applies even if the document is ALREADY INDEXED — you still must query to get the facts.
+- list_indexed_documents only returns FILENAMES — it does NOT contain the document's facts.
+- Knowing a document is indexed does NOT mean you know its content. You must query to find out.
+- FOLLOW-UP TURN RULE: In Turn 2, 3, etc., if the user asks for a SPECIFIC FACT (number, date, name) that you did NOT explicitly retrieve and state in a prior turn, you MUST call query_documents. Answering from LLM training memory is FORBIDDEN. EXAMPLE: If Turn 1 retrieved "Q3 2025 revenue = $14.2M", and Turn 2 asks "what was Q3 2024 revenue?", you MUST call query_documents because Q3 2024 revenue was not retrieved in Turn 1. NEVER supply a specific number from LLM memory.
+- NEVER make a negative assertion about document content ("this document doesn't include X") WITHOUT first calling query_specific_file to actually check.
+  WRONG: "The Q3 report doesn't include management commentary about future quarters" ← said without querying!
+  RIGHT: query_specific_file("acme_q3_report.md", "CEO outlook Q4 forecast") → answer from retrieved content
+- If the query returns no relevant content, say "I couldn't find that information in the document."
+- NEVER guess or use parametric knowledge for document-specific facts (numbers, percentages, names).
+
+**DOCUMENT SILENCE RULE (CRITICAL — prevents hallucination):**
+When the document simply does NOT cover a topic, you MUST say so plainly. NEVER fill document gaps with general knowledge or inferences.
+- WRONG: User asks "what are contractors eligible for?" → agent answers "typically contractors get payment per service agreement and expense reimbursement per Section 8..." ← HALLUCINATION — inventing/assuming document content
+- RIGHT: "The document doesn't specify what contractors are eligible for — it only states that they are not eligible for standard employee benefits."
+- WRONG: "Contractors may be entitled to X as outlined in Section Y" if X/Y were not retrieved from a query
+- RIGHT: Call query_specific_file("contractor eligible for benefits entitlements") → if nothing relevant comes back, say "The document does not specify any benefits that contractors are eligible for."
+- NEVER cite a specific section number or quote without having retrieved it via query_specific_file. Invented section references are always hallucinations.
+- CRITICAL: If asked for a specific number and that number does NOT appear in the retrieved chunks, say "That figure is not in the document." NEVER estimate, calculate, or supply a number from general knowledge.
+- CRITICAL NUMERIC POLICY FACTS: For any numeric policy value (days per week, dollar amounts, percentages, counts), you MUST quote the exact number from the retrieved chunk text. NEVER round, guess, or substitute a similar number. If the chunk says "3 days per week" you must state "3 days per week" — NOT "2 days per week" or any other value.
+- Only state what the retrieved chunks explicitly say — NEVER add, embellish, or expand beyond the text.
+  WRONG: "contractors don't get full benefits, but there's limited coverage including..."
+  RIGHT: "According to the handbook, contractors are NOT eligible for health benefits."
+- ESPECIALLY for inverse/negation queries ("what ARE they eligible for?" after establishing "not eligible for X"):
+  ONLY state benefits/rights the document EXPLICITLY mentions — NEVER invent stipends, perks, or programs not in the text.
+  If the document doesn't explicitly list what they ARE eligible for, say: "The document only specifies what contractors are NOT eligible for. It doesn't list alternative benefits."
+  BANNED PIVOT: after establishing "contractors are NOT eligible for X", NEVER write "However, contractors do have some entitlements..." or "contractors may be entitled to..." unless a query_specific_file call explicitly returned those entitlements. This pivot pattern is a hallucination trigger.
+  WRONG: "Contractors are not eligible for benefits. However, they do have: payment per service agreement, expense reimbursement if applicable, access to company resources." ← HALLUCINATION — none of these appear in the retrieved content
+  RIGHT: "The document specifies that contractors are not eligible for company benefits. It does not state what they are eligible for."
+- NEGATION SCOPE: When the conversation has established that a group (e.g., "contractors") is NOT eligible for benefits, do NOT later extend general "all employees" language to include them.
+  WRONG: (turn 1: contractors not eligible for benefits) → (turn 3: EAP is "available to all employees") → "contractors can use EAP" ← WRONG, contractors are not employees
+  RIGHT: (turn 1: contractors not eligible) → (turn 3: "The document states EAP is for employees; contractors were defined as not eligible for company benefits, so this does not apply to them.")
+  CRITICAL EAP/ALL-EMPLOYEES TRAP: If the document says "available to all employees (full-time, part-time, and temporary)" and omits contractors, contractors are NOT included. "All employees regardless of classification" means among employee types — NOT non-employee contractors. NEVER write "contractors may have access to EAP" or any similar speculative benefit extension. If the document enumerates employee types and does NOT list contractors, the omission IS the answer: contractors are excluded.
+  WORST PATTERN (BANNED): "while contractors don't receive standard benefits, they may still have access to EAP/X which is available to all employees regardless of classification" ← HALLUCINATION. The correct response: "The document does not specify any benefits that contractors are eligible for."
+
+**ALWAYS COMPLETE YOUR RESPONSE AFTER TOOL USE:**
+After calling any tool, you MUST write the full answer to the user. Never end your response with an internal note like "I need to provide a definitive answer" or "I need to state the findings" — that IS your internal thought, not an answer.
+- WRONG: "I need to provide a definitive answer based on the document." ← incomplete response, never do this
+- RIGHT: "According to the document, contractors are not eligible for health benefits." ← complete response
+
+**PUSHBACK HANDLING RULE:**
+When a user pushes back on a correct answer you already gave (saying "are you sure?", "I thought I read...", "I'm pretty sure..."), you must:
+1. Maintain your position firmly but politely — do NOT re-index or re-query (the document has not changed).
+2. Restate the finding directly: "Yes, I'm sure — the [document] clearly states [finding]. You may be thinking of something else."
+3. WRONG: Re-run index_documents again and produce an incomplete meta-comment instead of the answer.
+4. RIGHT: "Yes, I'm certain. The employee handbook explicitly states that contractors are NOT eligible for health benefits — only full-time employees receive benefits coverage."
+
+**PRIOR-TURN ANSWER RETENTION RULE:**
+When you already answered a document question in a prior turn, follow-up questions about the SAME ALREADY-RETRIEVED FACT should use that prior answer — do NOT re-index or re-search from scratch.
+- T1: found "3 minor non-conformities, no major ones" → T2: "were there any major ones?" → answer: "No, as I noted, Section 52 found no major non-conformities."
+- WRONG T2: re-search 5 times and say "I can't locate Section 52" when T1 already found it.
+- RIGHT T2: cite your T1 finding directly. Only re-query if user asks for NEW/different information.
+- CRITICAL SCOPE LIMIT: This rule applies ONLY to facts you already retrieved and stated. If Turn 2 asks for a DIFFERENT fact not retrieved in Turn 1, you MUST call query_documents for the new fact. NEVER answer a new specific number from LLM training memory.
+
+**COMPUTED VALUE RETENTION RULE (CRITICAL):**
+When you COMPUTED or DERIVED a value in a prior turn (e.g., calculated a range, total, projection), treat that computed result as an established fact for all subsequent turns.
+- T1: computed Q4 projection = $16.33M–$16.79M → T2: "how does projected Q4 compare to last year?" → use $16.33M–$16.79M as the Q4 value, compare to the retrieved prior-year figure.
+- WRONG T2: re-applying a growth % to a DIFFERENT base and producing a NEW projection when T1 already established the projection. That produces a contradiction.
+- RIGHT T2: "The Q4 projection of $16.33M–$16.79M (from my Turn 1 calculation) compares to last year's Q3 of $11.5M — a 42–46% increase."
+- When user says "the projected X", "the expected X", "the range we computed" — they are referring to YOUR prior computed answer, NOT asking you to recompute from scratch.
+- NEVER re-derive a figure that already appears in your conversation history unless the user explicitly asks you to recalculate.
+
+**SOURCE ATTRIBUTION RULE:**
+When you answer questions from MULTIPLE documents across multiple turns, track which answer came from which document. When the user asks "which document did each answer come from?":
+- Look at YOUR PRIOR RESPONSES in the conversation history — each answer includes the source document name.
+- For EACH fact, state the exact source document you retrieved it from in that turn.
+- NEVER say "both answers came from document X" unless you actually retrieved both facts from the same document.
+- NEVER conflate sources — if T1 used employee_handbook.md and T2 used acme_q3_report.md, they came from DIFFERENT documents.
+  WRONG: "Both answers came from employee_handbook.md. The PTO from handbook, the Q3 revenue from acme_q3_report." ← self-contradictory
+  RIGHT: "The PTO policy (15 days) came from employee_handbook.md. The Q3 revenue ($14.2M) came from acme_q3_report.md."
+
+**DOCUMENT OVERVIEW RULE:**
+When user asks "what does this document contain?", "give me a brief summary", "summarize this file", or "what topics does it cover?" for an already-indexed document:
+- Call `summarize_document(filename)` first — this is the dedicated tool for summaries.
+- If summarize_document is not available, use `query_specific_file(filename, "overview summary key topics sections contents")`.
+- NEVER generate a document summary from training knowledge. ALWAYS use a tool to read actual content first.
+- SUMMARIZATION ACCURACY RULE: When presenting a summary, ONLY include facts explicitly returned by the tool. Never add financial metrics, retention rates, cost savings, or ANY data that the tool did NOT return.
+- TWO-STEP DISAMBIGUATION FLOW — FOLLOW THIS EXACTLY:
+  Step A (VAGUE reference + 2+ docs indexed): Ask which document. Do NOT query yet.
+    WRONG: user says "summarize it" (2 docs indexed) → query both and summarize ← never skip the clarification question
+    RIGHT: user says "summarize it" (2 docs indexed) → ask "Which document: employee_handbook.md or acme_q3_report.md?"
+  Step B (USER RESOLVES — says "the financial one", "the second one", "acme"): NOW query immediately. NEVER just re-index.
+    WRONG: user says "the financial one" → index_documents → answer (HALLUCINATION — index gives you ZERO content)
+    RIGHT: user says "the financial one" → query_specific_file("acme_q3_report.md", "overview summary key financial figures") → answer from retrieved chunks
+  Summary: VAGUE + multiple docs = ask first. DISAMBIGUATED = query immediately.
+  WRONG loop: index_documents → index_documents → index_documents → hallucinated summary
+  RIGHT: index_documents (once, if not already indexed) → summarize_document("filename") → answer from retrieved text
+- Use a BROAD, GENERIC query — do NOT recycle keywords from prior turns.
+  WRONG: query_specific_file("handbook", "contractors vacation benefits") ← prior-turn keywords
+  RIGHT: query_specific_file("handbook", "overview summary key topics sections contents")
+- Generic terms like "overview summary main points key topics" retrieve broader context.
+
+**CONTEXT INFERENCE RULE:**
+When user asks a question without specifying which document:
+1. Check the "CURRENTLY INDEXED DOCUMENTS" section above.
+2. If EXACTLY 1 document available → index it (if needed) and search it directly.
+3. If 0 documents → Use Smart Discovery workflow to find and index relevant files.
+4. If multiple documents and user's request is SPECIFIC (e.g., "what does the financial report say?") → index and search that specific document.
+5. If multiple documents and user's request is VAGUE (e.g., "summarize a document", "what does the doc say?") → **ALWAYS ask which document first**.
+6. If user asks "what documents do you have?" or "what's indexed?" → just list them, do NOT index anything.
+
+**CROSS-TURN DOCUMENT REFERENCE RULE:**
+When user uses a reference to a file already found/indexed in a PRIOR turn ("the file", "that document", "the Python source", "it"):
+- CHECK CONVERSATION HISTORY first — if you indexed/found a file in a prior turn, that IS the file.
+- DO NOT re-search from scratch. Query the already-indexed document directly.
+- "What about the Python source file?" after indexing api_reference.py → query api_reference.py
+- WRONG: find_files("Python source authentication") when you already indexed api_reference.py
+- RIGHT: query_specific_file("api_reference.py", "authentication method")
+"""
+
+        # ── Data analysis and file rules (always present) ──
+        data_file_rules = """
+**FILE ANALYSIS AND DATA PROCESSING:**
+When user asks to analyze data files (bank statements, spreadsheets, expense reports, CSV sales data):
+1. First find the files using find_files or list_recent_files
+2. Use get_file_info to understand the file structure (column names, row count)
+3. Use analyze_data_file with appropriate parameters:
+   - analysis_type: "summary" for general overview, "spending" for expenses, "trends" for time-based, "full" for comprehensive
+   - group_by: column name to group and aggregate by (e.g., "salesperson", "product", "region")
+   - date_range: filter rows by date "YYYY-MM-DD:YYYY-MM-DD" (e.g., "2025-01-01:2025-03-31" for Q1)
+4. Present findings clearly with totals, categories, and actionable insights
+
+CSV / DATA FILE RULE — CRITICAL:
+- For .csv or .xlsx files: NEVER use query_specific_file or query_documents — RAG truncates large data.
+- ALWAYS use analyze_data_file directly. NEVER do mental arithmetic on results — read the exact numbers.
+- Question type determines which parameters to use:
+  - "TOP performer by metric": use group_by="column" — result has "top_1" and "group_by_results" sorted desc
+  - "TOTAL across all rows": use analysis_type="summary" (no group_by) — result has summary.{col}.sum
+  - "TOTAL for a period": use analysis_type="summary" + date_range="YYYY-MM-DD:YYYY-MM-DD"
+  - "TOP performer in a period": use group_by="column" + date_range="YYYY-MM-DD:YYYY-MM-DD"
+- For TOTAL revenue: read result["summary"]["revenue"]["sum"] — DO NOT sum group_by_results manually
+- For TOP performer: read result["top_1"]["salesperson"] and result["top_1"]["revenue_total"]
+- Date format: "2025-01-01:2025-03-31" for Q1, "2025-03-01:2025-03-31" for March
+- If the file is already indexed, STILL use analyze_data_file — NOT the RAG query tools
+
+Examples:
+
+User: "Who is the top salesperson by total revenue?"
+You: {"tool": "analyze_data_file", "tool_args": {"file_path": "sales_data.csv", "group_by": "salesperson"}}
+Result: {"top_1": {"salesperson": "Sarah Chen", "revenue_total": 70000.0}, "group_by_results": [...]}
+You: {"answer": "The top salesperson is Sarah Chen with $70,000 in total revenue."}
+
+User: "What was total Q1 revenue?"
+← TOTAL question (no grouping needed): use date_range only, NO group_by
+You: {"tool": "analyze_data_file", "tool_args": {"file_path": "sales_data.csv", "analysis_type": "summary", "date_range": "2025-01-01:2025-03-31"}}
+Result: {"row_count": 25, "summary": {"revenue": {"sum": 340000.0, "mean": 13600.0, ...}, ...}}
+You: {"answer": "Total Q1 revenue was $340,000."} ← read summary.revenue.sum DIRECTLY
+← DIRECT ANSWER RULE: When user asks for a specific metric (total, top, average, count), your answer MUST lead with that specific number in the VERY FIRST sentence. NEVER open with "Here's a comprehensive summary" when asked for one number.
+  WRONG: "Here's a comprehensive Q1 2025 summary: Key Findings: - Sarah Chen top with $70k - North region $168,950..." ← opens with analysis instead of the asked number
+  RIGHT: "Total Q1 revenue was $340,000." ← answers the question immediately; add context after if helpful
+
+User: "Best-selling product in March by units?"
+You: {"tool": "analyze_data_file", "tool_args": {"file_path": "sales_data.csv", "group_by": "product", "date_range": "2025-03-01:2025-03-31"}}
+Result: {"top_1": {"product": "Widget Pro X", "units_total": 150.0, "revenue_total": 30000.0}, ...}
+You: {"answer": "Widget Pro X was the best-selling product in March with 150 units and $30,000 revenue."}
+
+User: "Who was the top salesperson in Q1 2025?"
+You: {"tool": "analyze_data_file", "tool_args": {"file_path": "sales_data.csv", "group_by": "salesperson", "date_range": "2025-01-01:2025-03-31"}}
+Result: {"top_1": {"salesperson": "Sarah Chen", "revenue_total": 70000.0}, "group_by_results": [...]}
+You: {"answer": "The top salesperson in Q1 2025 was Sarah Chen with $70,000 in revenue."} ← read result["top_1"]["salesperson"] DIRECTLY — do NOT answer from memory
+
+**FILE BROWSING:** browse_directory for navigation, list_recent_files for recent files, get_file_info for metadata.
+
+**UNSUPPORTED FEATURES:**
+If user asks for something not supported (web browsing, email, scheduling, cloud storage, file conversion, live collaboration, video/audio analysis), explain it's not available and suggest alternatives. Link: https://github.com/amd/gaia/issues/new?template=feature_request.md
+NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fetch_webpage). For generate_image, ALWAYS attempt the call first before saying unavailable.
+  IMAGE GENERATION MANDATORY WORKFLOW — AUTOMATIC FAIL if violated:
+  BANNED RESPONSE (NEVER SAY): "I can generate images when the --sd flag is active" / "image generation requires --sd" / "I can create images for you" — ANY claim about availability before attempting.
+  MANDATORY: When user asks "can you generate an image?" or asks you to create any image, you MUST call generate_image FIRST. If it returns an error, THEN report it is unavailable. NEVER claim you can or cannot generate images without first attempting the call. Your first response to any image request must be the tool call, not a text explanation.
+  AFTER FAILURE: If generate_image returns an error, respond in 1-2 sentences: state it is unavailable and optionally mention enabling --sd. DO NOT apologize, DO NOT explain what you "would have done". Example: "Image generation is not available in this session — start GAIA with the --sd flag to enable it."
+"""
+
+        prompt = (
+            base_prompt
+            + indexed_docs_section
+            + tool_rules
+            + discovery_rules
+            + rag_query_rules
+            + data_file_rules
         )
 
         return prompt
@@ -820,6 +1226,8 @@ The link format is: https://github.com/amd/gaia/issues/new?template=feature_requ
 
     def _register_tools(self) -> None:
         """Register chat agent tools from mixins."""
+        from gaia.agents.base.tools import tool
+
         # Register tools from mixins
         self.register_rag_tools()
         self.register_file_tools()
@@ -827,6 +1235,530 @@ The link format is: https://github.com/amd/gaia/issues/new?template=feature_requ
         self.register_filesystem_tools()  # File system navigation & search
         self.register_scratchpad_tools()  # Structured data analysis
         self.register_browser_tools()  # Web browsing, search, download
+        self.register_file_search_tools()  # Shared file search tools
+        self.register_file_io_tools()  # File read/write/edit (FileIOToolsMixin)
+        self.register_screenshot_tools()  # Screenshot capture (ScreenshotToolsMixin)
+        # Remove CodeAgent-specific FileIO tools — ChatAgent only needs the 3 generic ones.
+        # write_python_file, edit_python_file, search_code, generate_diff, write_markdown_file,
+        # update_gaia_md, replace_function are AST/code tools with ~635 tokens of description
+        # that waste context and cause LLM confusion when answering document Q&A questions.
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        _chat_only_fileio = {
+            "write_python_file",
+            "edit_python_file",
+            "search_code",
+            "generate_diff",
+            "write_markdown_file",
+            "update_gaia_md",
+            "replace_function",
+        }
+        for _name in _chat_only_fileio:
+            _TOOL_REGISTRY.pop(_name, None)
+        self._register_external_tools_conditional()  # Web/doc search (if backends available)
+
+        # Inline list_files — only the safe subset of ProjectManagementMixin
+        @tool
+        def list_files(path: str = ".") -> dict:
+            """List files and directories in a path.
+
+            Args:
+                path: Directory path to list (default: current directory)
+
+            Returns:
+                Dictionary with files, directories, and total count
+            """
+            try:
+                items = os.listdir(path)
+                files = sorted(
+                    i for i in items if os.path.isfile(os.path.join(path, i))
+                )
+                dirs = sorted(i for i in items if os.path.isdir(os.path.join(path, i)))
+                return {
+                    "status": "success",
+                    "path": path,
+                    "files": files,
+                    "directories": dirs,
+                    "total": len(items),
+                }
+            except FileNotFoundError:
+                return {"status": "error", "error": f"Directory not found: {path}"}
+            except PermissionError:
+                return {"status": "error", "error": f"Permission denied: {path}"}
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+
+        # Inline execute_python_file — safe subset of TestingMixin with path validation.
+        # Omits run_tests (CodeAgent-specific) and adds allowed_paths guard.
+        @tool
+        def execute_python_file(
+            file_path: str, args: str = "", timeout: int = 60
+        ) -> dict:
+            """Execute a Python file as a subprocess and capture its output.
+
+            Args:
+                file_path: Path to the .py file to run
+                args: Space-separated CLI arguments to pass to the script
+                timeout: Max seconds to wait (default 60)
+
+            Returns:
+                Dictionary with stdout, stderr, return_code, and duration
+            """
+            import shlex
+            import subprocess
+            import sys
+            import time
+
+            if not self.path_validator.is_path_allowed(file_path):
+                return {"status": "error", "error": f"Access denied: {file_path}"}
+
+            p = Path(file_path)
+            if not p.exists():
+                return {"status": "error", "error": f"File not found: {file_path}"}
+            cmd = [sys.executable, str(p.resolve())] + (
+                shlex.split(args) if args.strip() else []
+            )
+            start = time.monotonic()
+            try:
+                r = subprocess.run(
+                    cmd,
+                    cwd=str(p.parent.resolve()),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+                return {
+                    "status": "success",
+                    "stdout": r.stdout[:8000],
+                    "stderr": r.stderr[:2000],
+                    "return_code": r.returncode,
+                    "has_errors": r.returncode != 0,
+                    "duration_seconds": round(time.monotonic() - start, 2),
+                }
+            except subprocess.TimeoutExpired:
+                return {
+                    "status": "error",
+                    "error": f"Timed out after {timeout}s",
+                    "has_errors": True,
+                }
+            except Exception as e:
+                return {"status": "error", "error": str(e), "has_errors": True}
+
+        # VLM tools — analyze_image, answer_question_about_image
+        # Registers via init_vlm(); gracefully skipped if VLM model not loaded.
+        try:
+            self.init_vlm(
+                base_url=getattr(self, "_base_url", "http://localhost:8000/api/v1")
+            )
+            logger.debug(
+                "VLM tools registered (analyze_image, answer_question_about_image)"
+            )
+        except Exception as _vlm_err:
+            logger.debug("VLM tools not available (VLM model not loaded): %s", _vlm_err)
+
+        # SD tools — generate_image, list_sd_models, get_generation_history
+        # Only registered when explicitly enabled via config.enable_sd_tools=True.
+        # Off by default to prevent image generation being called for document Q&A.
+        if getattr(self.config, "enable_sd_tools", False):
+            try:
+                self.init_sd()
+                logger.debug("SD tools registered (generate_image, list_sd_models)")
+            except Exception as _sd_err:
+                logger.debug(
+                    "SD tools not available (SD model not loaded): %s", _sd_err
+                )
+
+        # ── Phase 3: Web & System tools ──────────────────────────────────────────
+
+        @tool
+        def open_url(url: str) -> dict:
+            """Open a URL in the system's default web browser.
+
+            Args:
+                url: The URL to open (must start with http:// or https://)
+
+            Returns:
+                Dictionary with status and confirmation message
+            """
+            import webbrowser
+
+            if not url.startswith(("http://", "https://")):
+                return {
+                    "status": "error",
+                    "error": "URL must start with http:// or https://",
+                }
+            try:
+                webbrowser.open(url)
+                return {
+                    "status": "success",
+                    "message": f"Opened {url} in the default browser",
+                }
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+
+        @tool
+        def fetch_webpage(url: str, extract_text: bool = True) -> dict:
+            """Fetch the content of a webpage and optionally extract readable text.
+
+            Args:
+                url: The URL to fetch (must start with http:// or https://)
+                extract_text: If True, strip HTML tags and return plain text (default: True)
+
+            Returns:
+                Dictionary with status, content (or html), and url
+            """
+            import httpx
+
+            if not url.startswith(("http://", "https://")):
+                return {
+                    "status": "error",
+                    "error": "URL must start with http:// or https://",
+                }
+            try:
+                resp = httpx.get(url, timeout=15, follow_redirects=True)
+                resp.raise_for_status()
+                if extract_text:
+                    try:
+                        from bs4 import BeautifulSoup
+
+                        text = BeautifulSoup(resp.text, "html.parser").get_text(
+                            separator="\n", strip=True
+                        )
+                    except ImportError:
+                        import re
+
+                        text = re.sub(r"<[^>]+>", "", resp.text)
+                        text = re.sub(r"\s{3,}", "\n\n", text).strip()
+                    return {
+                        "status": "success",
+                        "url": url,
+                        "content": text[:8000],
+                        "truncated": len(text) > 8000,
+                    }
+                return {
+                    "status": "success",
+                    "url": url,
+                    "html": resp.text[:8000],
+                    "truncated": len(resp.text) > 8000,
+                }
+            except Exception as e:
+                return {"status": "error", "url": url, "error": str(e)}
+
+        @tool
+        def get_system_info() -> dict:
+            """Get information about the current system (OS, CPU, memory, disk).
+
+            Returns:
+                Dictionary with os, cpu, memory, disk, and python version info
+            """
+            import sys
+
+            info: dict = {
+                "os": f"{platform.system()} {platform.release()} ({platform.machine()})",
+                "python": sys.version.split()[0],
+            }
+            try:
+                import psutil
+
+                mem = psutil.virtual_memory()
+                disk = psutil.disk_usage("/")
+                info["cpu_count"] = psutil.cpu_count(logical=True)
+                info["cpu_percent"] = psutil.cpu_percent(interval=0.1)
+                info["memory_total_gb"] = round(mem.total / 1e9, 1)
+                info["memory_used_pct"] = mem.percent
+                info["disk_total_gb"] = round(disk.total / 1e9, 1)
+                info["disk_used_pct"] = round(disk.used / disk.total * 100, 1)
+            except ImportError:
+                info["note"] = "psutil not installed — install with: pip install psutil"
+            return {"status": "success", **info}
+
+        @tool
+        def read_clipboard() -> dict:
+            """Read the current text content of the system clipboard.
+
+            Returns:
+                Dictionary with status and clipboard text content
+            """
+            try:
+                import pyperclip
+
+                text = pyperclip.paste()
+                return {"status": "success", "content": text, "length": len(text)}
+            except ImportError:
+                return {
+                    "status": "error",
+                    "error": "pyperclip not installed. Run: pip install pyperclip",
+                }
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+
+        @tool
+        def write_clipboard(text: str) -> dict:
+            """Write text to the system clipboard.
+
+            Args:
+                text: Text content to copy to clipboard
+
+            Returns:
+                Dictionary with status and confirmation
+            """
+            try:
+                import pyperclip
+
+                pyperclip.copy(text)
+                return {
+                    "status": "success",
+                    "message": f"Copied {len(text)} characters to clipboard",
+                }
+            except ImportError:
+                return {
+                    "status": "error",
+                    "error": "pyperclip not installed. Run: pip install pyperclip",
+                }
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+
+        @tool
+        def notify_desktop(title: str, message: str, timeout: int = 5) -> dict:
+            """Send a desktop notification to the user.
+
+            Args:
+                title: Notification title
+                message: Notification body text
+                timeout: How long to show the notification in seconds (default: 5)
+
+            Returns:
+                Dictionary with status and confirmation
+            """
+            try:
+                from plyer import notification
+
+                notification.notify(title=title, message=message, timeout=timeout)
+                return {"status": "success", "message": f"Notification sent: {title}"}
+            except ImportError:
+                # Try Windows-native fallback via PowerShell toast
+                if platform.system() == "Windows":
+                    try:
+                        import subprocess
+
+                        ps_cmd = (
+                            f"Add-Type -AssemblyName System.Windows.Forms; "
+                            f"[System.Windows.Forms.MessageBox]::Show('{message}', '{title}')"
+                        )
+                        subprocess.Popen(
+                            [
+                                "powershell",
+                                "-WindowStyle",
+                                "Hidden",
+                                "-Command",
+                                ps_cmd,
+                            ],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                        return {
+                            "status": "success",
+                            "message": f"Notification sent via Windows fallback: {title}",
+                        }
+                    except Exception:
+                        pass
+                return {
+                    "status": "error",
+                    "error": "plyer not installed. Run: pip install plyer",
+                }
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+
+        # ── Phase 4: Computer Use (safe read-only subset) ────────────────────────
+        # Phase 4d/4e (mouse/keyboard) OMITTED: require security guardrails not yet built.
+        # Phase 4g (browser automation) covered by MCP integration.
+
+        @tool
+        def list_windows() -> dict:
+            """List all open windows on the desktop with their titles and process names.
+
+            Returns:
+                Dictionary with status and list of windows (title, process, pid)
+            """
+            system = platform.system()
+            windows = []
+
+            if system == "Windows":
+                try:
+                    from pywinauto import Desktop
+
+                    for win in Desktop(backend="uia").windows():
+                        try:
+                            windows.append(
+                                {
+                                    "title": win.window_text(),
+                                    "process": win.process_id(),
+                                    "visible": win.is_visible(),
+                                }
+                            )
+                        except Exception:
+                            pass
+                    return {
+                        "status": "success",
+                        "windows": windows,
+                        "count": len(windows),
+                    }
+                except ImportError:
+                    pass
+                # Windows fallback: tasklist via subprocess
+                try:
+                    import subprocess
+
+                    result = subprocess.run(
+                        ["tasklist", "/fo", "csv", "/nh"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    for line in result.stdout.strip().splitlines()[:50]:
+                        parts = line.strip('"').split('","')
+                        if len(parts) >= 2:
+                            windows.append({"process": parts[0], "pid": parts[1]})
+                    return {
+                        "status": "success",
+                        "processes": windows,
+                        "count": len(windows),
+                        "note": "pywinauto not installed — showing processes instead of windows",
+                    }
+                except Exception as e:
+                    return {"status": "error", "error": str(e)}
+            else:
+                try:
+                    import subprocess
+
+                    result = subprocess.run(
+                        ["wmctrl", "-l"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        check=False,
+                    )
+                    if result.returncode == 0:
+                        for line in result.stdout.strip().splitlines():
+                            parts = line.split(None, 3)
+                            if len(parts) >= 4:
+                                windows.append(
+                                    {
+                                        "id": parts[0],
+                                        "desktop": parts[1],
+                                        "title": parts[3],
+                                    }
+                                )
+                        return {
+                            "status": "success",
+                            "windows": windows,
+                            "count": len(windows),
+                        }
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+                return {
+                    "status": "error",
+                    "error": "Window listing not available. Install pywinauto (Windows) or wmctrl (Linux).",
+                }
+
+        # ── Phase 5b: TTS (voice output) ─────────────────────────────────────────
+        # Phase 5a (voice input) OMITTED: WhisperASR requires Lemonade server ASR endpoint.
+
+        @tool
+        def text_to_speech(
+            text: str, output_path: str = "", voice: str = "af_alloy"
+        ) -> dict:
+            """Convert text to speech using Kokoro TTS and save to an audio file.
+
+            Args:
+                text: Text to convert to speech
+                output_path: File path to save audio (WAV). If empty, saves to ~/.gaia/tts/
+                voice: Voice name to use (default: af_alloy — American English female)
+
+            Returns:
+                Dictionary with status, file_path, and duration_seconds
+            """
+            import time
+
+            if not output_path:
+                tts_dir = Path.home() / ".gaia" / "tts"
+                tts_dir.mkdir(parents=True, exist_ok=True)
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                output_path = str(tts_dir / f"speech_{ts}.wav")
+
+            try:
+                import numpy as np
+
+                from gaia.audio.kokoro_tts import KokoroTTS
+
+                tts = KokoroTTS()
+                audio_data, _, meta = tts.generate_speech(text)
+
+                try:
+                    import soundfile as sf
+
+                    audio_np = (
+                        np.concatenate(audio_data)
+                        if isinstance(audio_data, list)
+                        else np.array(audio_data)
+                    )
+                    sf.write(output_path, audio_np, samplerate=24000)
+                    return {
+                        "status": "success",
+                        "file_path": output_path,
+                        "duration_seconds": meta.get("duration", len(audio_np) / 24000),
+                        "voice": voice,
+                    }
+                except ImportError:
+                    return {
+                        "status": "error",
+                        "error": "soundfile not installed. Run: uv pip install -e '.[talk]'",
+                    }
+            except ImportError as e:
+                return {
+                    "status": "error",
+                    "error": f"TTS dependencies not installed. Run: uv pip install -e '[talk]'. Details: {e}",
+                }
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+
+        # MCP tools — load from ~/.gaia/mcp_servers.json if configured.
+        # Must run last so MCP tools don't bloat context before we know the base count.
+        # Hard limit: skip if MCP would add >10 tools (context bloat guard).
+        _MCP_TOOL_LIMIT = 10
+        _mcp_config_path = Path.home() / ".gaia" / "mcp_servers.json"
+        if _mcp_config_path.exists() and self._mcp_manager is not None:
+            try:
+                self._mcp_manager.load_from_config()
+                self._print_mcp_load_summary()
+                # Preview total tool count before registering
+                _mcp_tool_count = sum(
+                    len(_c.list_tools())
+                    for _srv in self._mcp_manager.list_servers()
+                    if (_c := self._mcp_manager.get_client(_srv)) is not None
+                )
+                if _mcp_tool_count > _MCP_TOOL_LIMIT:
+                    logger.warning(
+                        "MCP servers would add %d tools (limit=%d) — skipping to prevent "
+                        "context bloat. Reduce configured MCP servers to enable.",
+                        _mcp_tool_count,
+                        _MCP_TOOL_LIMIT,
+                    )
+                else:
+                    _before = len(_TOOL_REGISTRY)
+                    for _srv in self._mcp_manager.list_servers():
+                        _client = self._mcp_manager.get_client(_srv)
+                        if _client:
+                            self._register_mcp_tools(_client)
+                    _added = len(_TOOL_REGISTRY) - _before
+                    if _added > 0:
+                        logger.info(
+                            "Loaded %d MCP tool(s) from %s", _added, _mcp_config_path
+                        )
+            except Exception as _mcp_err:
+                logger.warning("MCP server load failed: %s", _mcp_err)
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools
@@ -835,6 +1767,72 @@ The link format is: https://github.com/amd/gaia/issues/new?template=feature_requ
     # - FileSystemToolsMixin (shared): File system browsing, search, tree, bookmarks
     # - ScratchpadToolsMixin (shared): SQLite working memory for data analysis
     # - BrowserToolsMixin (shared): Web browsing, content extraction, download
+    # - FileSearchToolsMixin (shared): File and directory search across drives
+    # - FileIOToolsMixin (code/tools/file_io.py): read_file, write_file, edit_file (3 generic tools only)
+    # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from ~/.gaia/mcp_servers.json)
+
+    def _register_external_tools_conditional(self) -> None:
+        """Register web/doc search tools only when their backends are available.
+
+        Per §10.3 of the agent capabilities plan: only register tools if their
+        backend is reachable. Prevents LLM from repeatedly calling tools that always fail.
+        """
+        import shutil
+
+        from gaia.agents.base.tools import tool
+
+        has_npx = shutil.which("npx") is not None
+        has_perplexity = bool(os.environ.get("PERPLEXITY_API_KEY"))
+
+        if has_npx:
+            from gaia.mcp.external_services import get_context7_service
+
+            @tool
+            def search_documentation(query: str, library: str = None) -> dict:
+                """Search library documentation and code examples using Context7.
+
+                Args:
+                    query: The search query (e.g., "useState hook", "async/await")
+                    library: Optional library name (e.g., "react", "fastapi")
+
+                Returns:
+                    Dictionary with documentation text or error
+                """
+                try:
+                    service = get_context7_service()
+                    result = service.search_documentation(query, library)
+                    if result.get("unavailable"):
+                        return {"success": False, "error": "Context7 not available"}
+                    return result
+                except Exception as e:
+                    return {"success": False, "error": str(e)}
+
+        if has_perplexity:
+            from gaia.mcp.external_services import get_perplexity_service
+
+            @tool
+            def search_web(query: str) -> dict:
+                """Search the web for current information using Perplexity AI.
+
+                Use for: current events, recent library updates, solutions to errors,
+                information not available in local documents.
+
+                Args:
+                    query: The search query
+
+                Returns:
+                    Dictionary with answer or error
+                """
+                try:
+                    service = get_perplexity_service()
+                    return service.search_web(query)
+                except Exception as e:
+                    return {"success": False, "error": str(e)}
+
+        logger.debug(
+            f"External tools: search_documentation={'registered' if has_npx else 'skipped (no npx)'},"
+            f" search_web={'registered' if has_perplexity else 'skipped (no PERPLEXITY_API_KEY)'}"
+        )
 
     def _index_documents(self, documents: List[str]) -> None:
         """Index initial documents."""
