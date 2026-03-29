@@ -27,13 +27,15 @@ def test_configurable_agent_init():
 
 def test_configurable_agent_format_tools():
     """Test that ConfigurableAgent only includes requested tools."""
-    # Mock _TOOL_REGISTRY
+    # Mock _TOOL_REGISTRY at the source and import locations
     mock_tools = {
         "tool1": {"description": "desc1", "parameters": {}},
         "tool2": {"description": "desc2", "parameters": {}},
     }
 
-    with patch("gaia.agents.base.configurable._TOOL_REGISTRY", mock_tools):
+    with patch("gaia.agents.base.tools._TOOL_REGISTRY", mock_tools), \
+         patch("gaia.agents.base.agent._TOOL_REGISTRY", mock_tools), \
+         patch("gaia.agents.base.configurable._TOOL_REGISTRY", mock_tools):
         agent = ConfigurableAgent(
             name="Test",
             description="Test",

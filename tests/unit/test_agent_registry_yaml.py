@@ -135,7 +135,7 @@ system_prompt: Test
         """Test that YAML and JSON produce equivalent agent configs."""
         yaml_content = """
 name: EquivalentAgent
-description: Same config in YAML
+description: Same config in both formats
 tools:
   - tool1
   - tool2
@@ -146,7 +146,7 @@ init_params:
 """
         json_content = """{
   "name": "EquivalentAgent",
-  "description": "Same config in JSON",
+  "description": "Same config in both formats",
   "tools": ["tool1", "tool2"],
   "system_prompt": "You are an agent.",
   "init_params": {"max_steps": 25}
