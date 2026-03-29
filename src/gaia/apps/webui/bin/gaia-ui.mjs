@@ -207,7 +207,7 @@ function installBackend() {
   // Step 3: Install pinned amd-gaia[ui] into the venv
   console.log(`Installing ${pipPackage}...`);
 
-  const pipArgs = ["pip", "install", pipPackage, "--python", join(GAIA_VENV, IS_WINDOWS ? "Scripts/python.exe" : "bin/python")];
+  const pipArgs = ["pip", "install", pipPackage, "--refresh", "--python", join(GAIA_VENV, IS_WINDOWS ? "Scripts/python.exe" : "bin/python")];
 
   // Linux: use CPU-only PyTorch to avoid large CUDA packages
   if (!IS_WINDOWS) {
