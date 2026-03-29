@@ -69,6 +69,7 @@
                   "guides/jira",
                   "guides/docker",
                   "guides/routing",
+                  "guides/configurable-agents",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
                 ]
@@ -150,7 +151,8 @@
                     "pages": [
                       "sdk/agents/routing",
                       "sdk/agents/specialized",
-                      "sdk/agents/talk"
+                      "sdk/agents/talk",
+                      "sdk/agents/configurable-agent"
                     ]
                   },
                   {

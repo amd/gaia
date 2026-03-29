@@ -1,0 +1,232 @@
+# Configurable Agents
+
+Configurable agents allow you to create custom AI agents without writing Python code. Define your agent's personality, tools, and behavior using YAML, JSON, or Markdown configuration files.
+
+## What Are Configurable Agents?
+
+Configurable agents are defined entirely through configuration files. This means you can:
+
+- **Create new agent personalities** without writing Python classes
+- **Customize behavior** through persona fields (style, focus, background, expertise)
+- **Select specific tools** each agent has access to
+- **Iterate quickly** on agent design without recompiling code
+
+This is ideal for creating specialized agents for different tasks while maintaining a consistent underlying implementation.
+
+## Configuration Formats
+
+Configurable agents support three configuration formats:
+
+### YAML Format (Recommended)
+
+YAML provides the most readable and structured format for agent definitions:
+
+```yaml
+---
+name: Researcher
+description: An agent specialized in researching topics and summarizing findings.
+id: gaia-researcher
+tools:
+  - list_dir
+  - view_file
+  - search_web
+init_params:
+  max_steps: 50
+  silent_mode: false
+---
+
+You are a Research Agent specialized in finding and synthesizing information.
+
+When researching:
+1. Break down the user's request into specific search queries
+2. Use available tools to find relevant information from web and files
+3. Evaluate source credibility and relevance
+4. Synthesize findings into clear, well-organized reports
+5. Always cite your sources with links or file paths
+
+Guidelines:
+- Be thorough but concise
+- Prioritize recent and authoritative sources
+- Clearly distinguish between facts and interpretations
+- If information is conflicting, present multiple perspectives
+
+## Persona
+
+**Style:** Analytical and methodical
+**Focus:** Information gathering, verification, and synthesis
+**Background:**
+You have a PhD in Information Science with 15 years of research experience.
+You've worked as a senior researchers at academic institutions and think tanks.
+**Expertise:**
+  - Academic research methodologies
+  - Source credibility assessment
+  - Data synthesis and analysis
+  - Technical writing
+**Voice:**
+You speak in precise, measured language. You qualify statements appropriately
+and always distinguish between facts, inferences, and speculation.
+**Communication:** Professional, thorough, citation-focused
+```
+
+### JSON Format
+
+JSON is useful for programmatic agent generation:
+
+```json
+{
+  "name": "Code Reviewer",
+  "description": "An agent that reviews code for bugs and best practices",
+  "id": "code-reviewer",
+  "tools": ["list_dir", "view_file", "write_file"],
+  "system_prompt": "You are a code review expert...",
+  "persona": {
+    "style": "Detail-oriented and constructive",
+    "focus": "Code quality and security",
+    "expertise": ["Python", "TypeScript", "Security auditing"]
+  }
+}
+```
+
+### Markdown Format
+
+Markdown format uses frontmatter for configuration:
+
+```markdown
+---
+name: Writer
+description: Creative writing assistant
+tools:
+  - write_file
+  - search_web
+---
+
+You are a creative writing assistant...
+
+## Persona
+
+**Style:** Imaginative and expressive
+**Focus:** Narrative development and prose quality
+```
+
+## Configuration Fields
+
+### Required Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Human-readable name for your agent |
+| `description` | string | Brief description of agent capabilities |
+| `tools` | array | List of tool names the agent can use |
+
+### Optional Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique identifier (defaults to lowercase name) |
+| `init_params` | object | Agent initialization parameters (max_steps, silent_mode, etc.) |
+| `persona` | object | Nested persona configuration |
+
+### Persona Fields
+
+The persona section defines how your agent behaves and communicates:
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `style` | Communication style | "Analytical and methodical" |
+| `focus` | Primary area of focus | "Information gathering and synthesis" |
+| `background` | Agent's background story | "PhD in Information Science..." |
+| `expertise` | List of expertise areas | ["research", "analysis"] |
+| `voice` | Voice characteristics | "Precise, measured language" |
+| `communication` | Communication approach | "Professional, thorough" |
+
+## Available Tools
+
+The following tools are available for agents:
+
+| Tool | Description |
+|------|-------------|
+| `list_dir` | List contents of a directory |
+| `view_file` | View contents of a file |
+| `write_file` | Write content to a file |
+| `edit_file` | Edit an existing file |
+| `search_web` | Search the web for information |
+| `run_command` | Execute shell commands |
+| `search_code` | Search code files |
+| `read_many_files` | Read multiple files at once |
+
+Use `*` to give an agent access to all available tools:
+
+```yaml
+tools:
+  - "*"
+```
+
+## Running Custom Agents
+
+Once you've created your agent configuration file, run it using:
+
+```bash
+gaia agent run path/to/your-agent.yml
+```
+
+For example, to run the researcher agent:
+
+```bash
+gaia agent run src/gaia/agents/custom/researcher.yml
+```
+
+## Example: Creating a Customer Support Agent
+
+Here's a complete example of a customer support agent:
+
+```yaml
+---
+name: SupportAgent
+description: Handles customer support inquiries
+id: support-agent
+tools:
+  - view_file
+  - write_file
+  - search_web
+init_params:
+  max_steps: 30
+  silent_mode: false
+---
+
+You are a Customer Support Agent dedicated to helping users resolve their issues.
+
+## Guidelines
+- Always be polite and professional
+- Acknowledge the user's frustration
+- Provide step-by-step solutions
+- Escalate complex issues appropriately
+
+## Persona
+
+**Style:** Empathetic and solution-oriented
+**Focus:** Customer satisfaction and issue resolution
+**Background:**
+You have 10 years of customer support experience in the technology sector.
+You're trained in conflict resolution and technical troubleshooting.
+**Expertise:**
+  - Technical troubleshooting
+  - Customer communication
+  - Product documentation
+**Voice:**
+Warm, patient, and encouraging. You make customers feel heard and valued.
+**Communication:** Clear, jargon-free explanations with empathy.
+```
+
+## Best Practices
+
+1. **Be specific with tools**: Only include tools the agent actually needs
+2. **Define clear personas**: Detailed personas lead to more consistent behavior
+3. **Set appropriate limits**: Use `max_steps` to prevent runaway agents
+4. **Test iteratively**: Start with a basic config and refine based on results
+5. **Document your agents**: Keep notes on what each agent is optimized for
+
+## Next Steps
+
+- See [SDK Reference: ConfigurableAgent](/sdk/agents/configurable-agent) for API details
+- Check out the [Researcher example](https://github.com/amd/gaia/tree/main/src/gaia/agents/custom/researcher.yml)
+- Learn about [available tools](/sdk/core/tools)

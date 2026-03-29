@@ -1,0 +1,413 @@
+# ConfigurableAgent
+
+The `ConfigurableAgent` class allows you to create agents defined entirely through configuration rather than Python code. This enables rapid prototyping and deployment of specialized agents without writing new classes.
+
+## Overview
+
+```python
+from gaia.agents.base.configurable import ConfigurableAgent
+
+agent = ConfigurableAgent(
+    name="Researcher",
+    description="Research specialist",
+    system_prompt="You are a research expert...",
+    tools=["list_dir", "view_file", "search_web"],
+    persona={
+        "style": "Analytical and methodical",
+        "focus": "Information gathering and synthesis",
+    }
+)
+```
+
+## Configuration Formats
+
+The `ConfigurableAgent` supports loading configurations from multiple formats:
+
+### YAML Configuration
+
+```yaml
+---
+name: Researcher
+description: Research specialist
+tools:
+  - list_dir
+  - search_web
+persona:
+  style: Analytical
+  focus: Information gathering
+---
+
+Base system prompt content...
+```
+
+### JSON Configuration
+
+```json
+{
+  "name": "Researcher",
+  "description": "Research specialist",
+  "tools": ["list_dir", "search_web"],
+  "persona": {
+    "style": "Analytical",
+    "focus": "Information gathering"
+  },
+  "system_prompt": "Base system prompt content..."
+}
+```
+
+### Markdown Configuration
+
+```markdown
+---
+name: Researcher
+description: Research specialist
+tools:
+  - list_dir
+  - search_web
+---
+
+Base system prompt content...
+
+## Persona
+
+**Style:** Analytical
+**Focus:** Information gathering
+```
+
+## Class Reference
+
+### Constructor
+
+```python
+def __init__(
+    self,
+    name: str,
+    description: str,
+    system_prompt: str,
+    tools: List[str] = None,
+    persona: Optional[Dict[str, Any]] = None,
+    **kwargs,
+)
+```
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | `str` | Yes | Human-readable name of the agent |
+| `description` | `str` | Yes | Brief description of agent capabilities |
+| `system_prompt` | `str` | Yes | Base instructions for the LLM |
+| `tools` | `List[str]` | No | List of tool names to register (must match `@tool` registered functions) |
+| `persona` | `Dict[str, Any]` | No | Unified dictionary with persona fields |
+| `**kwargs` | `Any` | No | Standard `Agent` initialization parameters |
+
+### Persona Fields
+
+The `persona` dictionary accepts the following fields:
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `style` | `str` | Communication style | `"Analytical and methodical"` |
+| `focus` | `str` | Primary focus area | `"Information gathering and synthesis"` |
+| `background` | `str` | Agent's background | `"PhD in Information Science..."` |
+| `expertise` | `Union[str, List[str]]` | Areas of expertise | `["research", "analysis"]` |
+| `voice` | `str` | Voice characteristics | `"Precise, measured language"` |
+| `communication` | `str` | Communication approach | `"Professional, thorough"` |
+
+### Methods
+
+#### `_get_system_prompt() -> str`
+
+Returns the complete system prompt with all persona sections injected.
+
+```python
+prompt = agent._get_system_prompt()
+# Returns: "<base_prompt>\n\n## AGENT PERSONA\n**Style:** ...\n**Focus:** ..."
+```
+
+**Output Format:**
+```
+<base_system_prompt>
+
+## AGENT PERSONA
+**Style:** <style_value>
+**Focus:** <focus_value>
+**Background:** <background_value>
+**Expertise:** <expertise_value>
+**Voice:** <voice_value>
+**Communication:** <communication_value>
+```
+
+#### `_format_tools_for_prompt() -> str`
+
+Returns formatted tool descriptions for only the requested tools.
+
+```python
+tools_prompt = agent._format_tools_for_prompt()
+# Returns: "- tool_name(args): description\n- tool_name2(args): description"
+```
+
+**Tool Filtering:**
+- If `tools=["*"]`, all available tools are included
+- If `tools=["tool1", "tool2"]`, only specified tools are included
+- Unknown tools are logged as warnings but don't cause errors
+
+#### `_execute_tool(tool_name: str, tool_args: Dict) -> Any`
+
+Executes a tool by name with enforcement of tool filtering.
+
+```python
+result = agent._execute_tool("list_dir", {"path": "/home/user"})
+```
+
+**Security:** Tools not in the configured list will return an error:
+```python
+{
+    "status": "error",
+    "error": "Tool 'tool_name' is not available. Available tools: [...]"
+}
+```
+
+#### `get_model_info() -> Dict[str, Any]`
+
+Returns model metadata for API registry integration.
+
+```python
+info = agent.get_model_info()
+# Returns: {
+#     "id": "researcher",
+#     "description": "Research specialist",
+#     "max_input_tokens": 8192,
+#     "max_output_tokens": 4096
+# }
+```
+
+## Tool Filtering and Security
+
+The `ConfigurableAgent` implements tool filtering at two levels:
+
+### 1. Prompt Filtering
+
+Only configured tools are shown in the system prompt:
+
+```python
+agent = ConfigurableAgent(
+    name="Limited Agent",
+    system_prompt="You help users.",
+    tools=["list_dir"],  # Only this tool shown in prompt
+)
+```
+
+### 2. Execution Filtering
+
+Tool execution is also restricted at runtime:
+
+```python
+# This will fail even if the LLM tries to call it
+result = agent._execute_tool("unauthorized_tool", {})
+# Returns: {"status": "error", "error": "Tool 'unauthorized_tool' is not available..."}
+```
+
+### Wildcard Access
+
+Use `"*"` to give full tool access:
+
+```yaml
+tools:
+  - "*"
+```
+
+## Integration with AgentRegistry
+
+The `AgentRegistry` automatically loads and manages configurable agents:
+
+```python
+from gaia.api.agent_registry import AgentRegistry
+
+registry = AgentRegistry()
+
+# Get a configurable agent by ID
+agent = registry.get_agent("researcher")
+# Returns: ConfigurableAgent instance
+```
+
+**Registry Loading:**
+1. Scans `src/gaia/agents/custom/` for `.yml`, `.yaml`, `.json`, `.md` files
+2. Parses configuration based on file format
+3. Instantiates `ConfigurableAgent` with parsed config
+4. Registers under the agent's `id` field
+
+## Examples
+
+### Basic YAML Agent
+
+```yaml
+---
+name: Summarizer
+description: Summarizes documents
+id: summarizer
+tools:
+  - view_file
+  - write_file
+---
+
+You are a document summarization expert. Create concise, accurate summaries.
+
+## Persona
+
+**Style:** Concise and clear
+**Focus:** Extracting key information
+**Expertise:** Technical writing, summarization
+```
+
+### Advanced JSON Agent
+
+```json
+{
+  "name": "Data Analyst",
+  "description": "Analyzes data and generates insights",
+  "id": "data-analyst",
+  "tools": ["view_file", "write_file", "run_command"],
+  "init_params": {
+    "max_steps": 100,
+    "silent_mode": true
+  },
+  "persona": {
+    "style": "Methodical and data-driven",
+    "focus": "Statistical analysis and insight generation",
+    "background": "Masters in Statistics with 10 years industry experience",
+    "expertise": ["Python", "Pandas", "Statistical modeling", "Data visualization"],
+    "voice": "Objective and precise",
+    "communication": "Clear explanations of complex patterns"
+  }
+}
+```
+
+### Markdown Agent with Frontmatter
+
+```markdown
+---
+name: Creative Writer
+description: Helps with creative writing projects
+id: creative-writer
+tools:
+  - write_file
+  - search_web
+---
+
+You are a creative writing assistant specializing in fiction and poetry.
+
+## Guidelines
+- Encourage creative expression
+- Provide constructive feedback
+- Help overcome writer's block
+
+## Persona
+
+**Style:** Imaginative and supportive
+**Focus:** Narrative development and prose quality
+**Background:** Published author with MFA in Creative Writing
+**Expertise:** Fiction, poetry, character development
+**Voice:** Warm and encouraging
+**Communication:** Constructive feedback with positive reinforcement
+```
+
+## Best Practices
+
+### 1. Define Clear Personas
+
+Detailed personas lead to more consistent agent behavior:
+
+```yaml
+# Good - specific and detailed
+persona:
+  style: "Methodical, security-focused analysis"
+  focus: "Identifying vulnerabilities and best practices"
+  background: "15 years in cybersecurity, CISSP certified"
+  expertise: ["Penetration testing", "Code review", "Threat modeling"]
+
+# Avoid - too generic
+persona:
+  style: "Helpful"
+  focus: "Security"
+```
+
+### 2. Minimize Tool Access
+
+Only include tools the agent actually needs:
+
+```yaml
+# Good - minimal required tools
+tools:
+  - view_file
+  - search_web
+
+# Avoid - unnecessary access
+tools:
+  - "*"
+```
+
+### 3. Use init_params Appropriately
+
+```yaml
+# For research tasks that may take time
+init_params:
+  max_steps: 100
+
+# For quick lookups
+init_params:
+  max_steps: 20
+  silent_mode: false
+```
+
+### 4. Separate Base Prompt from Persona
+
+Keep your base system prompt focused on task instructions:
+
+```yaml
+# The content before ## Persona section
+---
+# Frontmatter config
+---
+
+Task-specific instructions here...
+
+## Persona
+
+# Persona fields here (injected automatically)
+```
+
+## Error Handling
+
+### Unknown Tools
+
+```yaml
+tools:
+  - view_file
+  - unknown_tool  # This doesn't exist
+```
+
+**Result:** Agent loads with warning logged:
+```
+WARNING: Agent requested unknown tools: {'unknown_tool'}. Available: [...]
+```
+
+### Missing Required Fields
+
+```yaml
+# Missing 'description' field
+---
+name: My Agent
+tools:
+  - view_file
+---
+```
+
+**Result:** Raises `ValueError` during configuration parsing.
+
+## See Also
+
+- [Agent System Overview](/sdk/core/agent-system)
+- [Tool Decorator](/sdk/core/tools)
+- [Agent Registry](/sdk/infrastructure/api-server)
+- [User Guide: Configurable Agents](/guides/configurable-agents)

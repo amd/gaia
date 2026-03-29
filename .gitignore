@@ -8,6 +8,9 @@
 *.bak
 **/__pycache__/
 
+# Chroma database
+chroma_data/
+
 # Python distribution / packaging
 .Python
 env/
@@ -228,3 +231,6 @@ docs/playbooks/sd-agent/index-backup.mdx
 
 # Custom util scripts
 util/custom/*
+
+# Test output files
+test_output.txt
