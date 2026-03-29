@@ -8,7 +8,7 @@ icon: "terminal"
 </Info>
 
 <Note>
-**Import:** `from gaia.agents.base.console import AgentConsole, SilentConsole`
+**Import:** `from gaia.agents.base.console import MinimalConsole, AgentConsole, SilentConsole`
 </Note>
 ---
 
@@ -20,22 +20,53 @@ icon: "terminal"
 
 ---
 
-## AgentConsole (Rich CLI Output)
+## MinimalConsole (Default)
+
+```python
+from gaia.agents.base.console import MinimalConsole
+
+class MyAgent(Agent):
+    def _create_console(self):
+        # Clean, minimal output (default behavior)
+        return MinimalConsole()
+
+# Shows:
+# - LLM answers (streamed as markdown)
+# - Tool calls (one-line with spinner)
+# - Brief tool output (key results, not raw JSON)
+# - Errors and warnings (inline)
+#
+# Suppresses:
+# - Agent internals (thoughts, goals, plans, step numbers)
+# - Full JSON dumps of tool arguments/results
+# - Decorative panels and separators
+```
+
+`MinimalConsole` is the **default** output handler for all agents. It provides a clean, fast user experience by showing only what matters: answers, brief tool status, and errors.
+
+Use `--verbose` on the CLI (or `verbose=True` in code) to switch to `AgentConsole`.
+
+---
+
+## AgentConsole (Verbose CLI Output)
 
 ```python
 from gaia.agents.base.console import AgentConsole
 
 class MyAgent(Agent):
     def _create_console(self):
-        # Rich console with syntax highlighting
+        # Rich console with full step-by-step output
         return AgentConsole()
 
 # Displays:
 # - Colored step headers
-# - Syntax-highlighted tool calls
+# - Thoughts, goals, and plans
+# - Syntax-highlighted tool calls with full JSON
 # - Progress indicators
-# - Formatted results
+# - Formatted results with panels
 ```
+
+`AgentConsole` is used when `--verbose` is passed on the CLI or `verbose=True` in the agent constructor. It provides maximum visibility into the agent's reasoning process, useful for development and debugging.
 
 ---
 
@@ -77,7 +108,8 @@ agent = MyAgent(output_handler=handler)
 
 | Handler | Use Case | Output | Best For |
 |---------|----------|--------|----------|
-| `AgentConsole` | Interactive CLI | Rich, colored text | Development, debugging |
+| `MinimalConsole` | Interactive CLI (default) | Clean, minimal text | End users, production |
+| `AgentConsole` | Verbose CLI (`--verbose`) | Rich, colored text | Development, debugging |
 | `SilentConsole` | Headless operation | None | APIs, tests, background |
 | `SSEOutputHandler` | Streaming API | Server-Sent Events | Web applications |
 
