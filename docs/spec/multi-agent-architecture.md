@@ -265,7 +265,17 @@ send_to_agent(target_agent, message, context={})
 request_and_wait(target_agent, request, timeout_seconds=60)
     # Synchronous request — blocks until response or timeout
     # For quick queries where full task creation is overkill
+
+use_agent_as_tool(target_agent, query, expected_schema={})
+    # "Agents-as-tools" pattern (OpenAI Agents SDK inspired)
+    # GaiaAgent retains narrative control. Calls specialist for a bounded answer.
+    # Unlike create_task (full delegation), this is a single-turn tool call.
+    # Example: GaiaAgent asks FinanceAgent "What's the current cash balance?"
+    # FinanceAgent returns a structured answer. GaiaAgent weaves it into conversation.
+    # expected_schema enforces typed response (Pydantic model), not free text.
 ```
+
+**Why both patterns?** `create_task` is full delegation — the specialist owns the task end-to-end. `use_agent_as_tool` is a quick query — GaiaAgent keeps narrative control and just needs a fact. Using full task delegation for "What's the cash balance?" is overkill; using agent-as-tool for "File the LLC" is insufficient.
 
 #### Agent Discovery
 ```python
@@ -368,6 +378,40 @@ user_profile (key, value, source_agent, confidence, updated_at)
 agent_directory (agent_id, display_name, capabilities, model, status, last_active_at)
 ```
 
+### Event-Based Memory Notifications
+
+**Why:** Polling for memory updates wastes tokens and introduces latency. When FormationAgent writes an EIN, ComplianceAgent and FinanceAgent shouldn't discover it on their next scheduled run — they should be notified immediately.
+
+When an agent writes to its memory namespace, the system emits an SSE event:
+```
+agent_insight: {agent_id: "formation", category: "fact", content: "EIN: 12-3456789"}
+```
+
+Other agents can subscribe to specific categories or agents. GaiaAgent subscribes to all, so it can narrate updates. ComplianceAgent subscribes to "formation" insights, so it knows when the EIN arrives.
+
+This replaces polling with push notifications — faster, cheaper, and no wasted context.
+
+### Typed Schemas for Inter-Agent Data
+
+**Why:** Free-text passing between agents is brittle. If FormationAgent sends "EIN: 12-3456789" as a string, ComplianceAgent must parse it. If the format varies ("EIN 12-3456789", "Employer ID: 123456789"), parsing breaks.
+
+Critical data exchanged between agents uses typed Pydantic models:
+```python
+class EINResult(BaseModel):
+    ein: str                    # "12-3456789"
+    entity_name: str            # "Austin Bites LLC"
+    entity_type: str            # "llc"
+    issued_date: str            # ISO date
+
+class TaskResult(BaseModel):
+    status: str                 # "completed", "failed"
+    summary: str                # Human-readable summary
+    data: dict                  # Structured result data
+    artifacts: list[str]        # File paths produced
+```
+
+Agents pass structured objects via MCP. The schema is validated at the boundary — malformed data is rejected immediately, not silently misinterpreted downstream.
+
 ### Collective Intelligence in Practice
 
 **Why this is the killer feature for local AI:** Cloud agents can't share behavioral data without transmitting it to third-party servers. GAIA's memory is entirely local — agents build a deeply personalized, private understanding of the user that improves with every interaction.
@@ -462,6 +506,8 @@ Without this, the multi-agent system is a black box. Users won't trust agents th
 - **User feedback improves agents.** When the user corrects an agent, the correction is stored in memory. The agent learns and doesn't repeat the mistake.
 - **Approval gates are conversational.** Instead of a modal popup, the agent asks naturally in the task thread: "Ready to file the LLC with Texas SOS for $300. Should I proceed?" The user responds in the conversation.
 - **GaiaAgent mediates when needed.** If the user provides conflicting instructions to two agents, GaiaAgent resolves the conflict and communicates the decision.
+- **Confidence-based autonomy.** Not every action is binary approve/reject. Agents report confidence scores. High confidence (>0.9) = autonomous. Medium (0.5-0.9) = GaiaAgent decides. Low (<0.5) = user decides. This reduces approval fatigue while maintaining safety.
+- **Preference learning.** When the user modifies an agent's proposal, the delta is captured in memory. Over time, agents learn the user's preferences and adjust their proposals accordingly — reducing the need for corrections.
 
 ### SSE Events
 
@@ -516,6 +562,30 @@ When a specialist agent fails or times out:
 - `request_and_wait`: 60s default, configurable per call
 - `create_task`: no timeout (async), but GaiaAgent can poll and report "still working on it..."
 - Individual tool calls within specialists: inherit agent-level timeout (default 30s)
+
+### Kill Criteria and Iteration Limits
+
+**Why:** Unbounded agent loops are the #1 production failure mode in multi-agent systems. Anthropic's own systems spawned 50 subagents for simple queries before adding hard caps. (Source: Anthropic engineering blog, GitHub multi-agent reliability research)
+
+- **Max iterations per task:** 8 (default). Agent forced to reflect and either complete or escalate after 8 tool-call loops.
+- **Stuck detection:** If an agent retries the same tool call 3 times with the same arguments, mark task as `stuck` and notify GaiaAgent.
+- **Per-agent context budget:** Each agent has a token budget per task (default: 4K for 0.6B GaiaAgent, 8K for 1.7B specialists, 16K for 4B CodeAgent). Exceeding budget triggers forced summarization of context.
+- **Deadlock detection:** Before executing `depends_on`, check for circular dependencies in the task graph. Reject cycles at creation time.
+
+### Semantic Checkpointing
+
+**Why:** Specialists that run on schedules (weekly ComplianceAgent, daily FinanceAgent) lose their working context between runs. Without checkpoints, they must reconstruct understanding from scratch every time — wasting tokens and missing continuity.
+
+At key milestones during task execution, agents persist a **context summary** to their memory namespace:
+```python
+checkpoint(task_id, summary="Filed LLC with TX SOS. Awaiting confirmation. EIN application next.",
+           state={"filed": True, "confirmation_pending": True, "ein_applied": False})
+```
+
+On next scheduled run, the agent loads its last checkpoint instead of replaying the full conversation. This enables:
+- Resumption after crashes or restarts
+- Continuity across scheduled runs (weekly ComplianceAgent picks up where it left off)
+- Efficient context usage (checkpoint summary vs full conversation replay)
 
 ---
 
@@ -650,7 +720,32 @@ spawn_agent(
 )
 ```
 
-The specialist agent's `__init__` method uses this context to construct its system prompt dynamically — not from a template file, but through the agent's own reasoning about what's relevant for this specific business.
+The specialist agent's `__init__` method uses this context to construct its system prompt dynamically — not from a template file, but through the agent's own reasoning about what's relevant for this specific situation.
+
+### Memory Slicing on Spawn
+
+**Why:** Dumping the full interview transcript and all context to every spawned agent wastes context window tokens (especially critical for 1.7B specialists with 8K context). Research shows relevance-filtered context reduces memory overhead by 42% while maintaining task accuracy. (Source: AgentSpawn, arxiv 2602.07072)
+
+When GaiaAgent spawns a specialist, it creates a **focused context slice** — only the information relevant to that agent's task:
+
+```python
+spawn_agent(
+    agent_type="compliance_expert",
+    task="Track tax obligations",
+    context={
+        # Only compliance-relevant fields from the interview:
+        "business_name": "Austin Bites LLC",
+        "entity_type": "llc",
+        "state": "TX",
+        "industry": "food_service",
+        "has_employees": False,
+        # NOT included: monthly_budget, tech_comfort, existing_tools
+        # (irrelevant to compliance work)
+    }
+)
+```
+
+GaiaAgent reasons about what each specialist needs and excludes irrelevant context. This keeps specialist context windows lean and focused.
 
 ### Shared Workspace
 
