@@ -1,0 +1,27 @@
+id: clipboard_tools
+name: "Clipboard Tools -- Graceful Degradation"
+category: web_system
+severity: low
+description: |
+  Tests clipboard read/write tools. These gracefully degrade if pyperclip is not installed.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask agent to read clipboard"
+    user_message: "Can you read what's currently in my clipboard?"
+    ground_truth:
+      expected_behavior: "Agent calls read_clipboard and returns content or graceful error"
+    success_criteria: |
+      Agent calls read_clipboard tool. If pyperclip is installed, returns clipboard content.
+      If not installed, returns error about missing pyperclip dependency.
+      PASS if agent attempts read_clipboard and provides any result (content or graceful error).
+      FAIL if agent claims it has no clipboard tool at all.
+
+expected_outcome: |
+  Agent calls read_clipboard and either returns clipboard content or a graceful
+  "pyperclip not installed" error message.

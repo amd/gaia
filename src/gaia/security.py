@@ -129,8 +129,18 @@ class PathValidator:
                     allowed_path_str = str(res_allowed)
                     norm_allowed_path = normalize_macos(allowed_path_str)
 
-                    # Robust check using string prefix on normalized paths
-                    if norm_real_path.startswith(norm_allowed_path):
+                    # Robust check using string prefix on normalized paths.
+                    # Append os.sep to prevent prefix attacks where
+                    # /home/user/project matches /home/user/project-secrets
+                    norm_allowed_with_sep = (
+                        norm_allowed_path
+                        if norm_allowed_path.endswith(os.sep)
+                        else norm_allowed_path + os.sep
+                    )
+                    if (
+                        norm_real_path == norm_allowed_path
+                        or norm_real_path.startswith(norm_allowed_with_sep)
+                    ):
                         return True
 
                     # Fallback to relative_to for safety

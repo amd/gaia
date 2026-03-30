@@ -1,0 +1,310 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* ── Permission Prompt Overlay ────────────────────────────────────────── */
+.permission-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-modal-overlay, rgba(0, 0, 0, 0.5));
+  animation: permFadeIn 150ms var(--ease);
+}
+
+@keyframes permFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ── Prompt Card ─────────────────────────────────────────────────────── */
+.permission-prompt {
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: permSlideUp 200ms var(--ease);
+}
+
+@keyframes permSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ── Header ──────────────────────────────────────────────────────────── */
+.permission-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  background: rgba(226, 60, 64, 0.06);
+  border-bottom: 1px solid var(--border-light);
+}
+
+[data-theme="dark"] .permission-header {
+  background: rgba(226, 60, 64, 0.08);
+}
+
+.permission-header-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: var(--amd-red);
+  color: white;
+  flex-shrink: 0;
+}
+
+.permission-header-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.permission-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.permission-agent {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.permission-countdown {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: var(--accent-danger-dim);
+  color: var(--accent-danger);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  animation: permCountdownPulse 1s infinite;
+}
+
+@keyframes permCountdownPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* ── Body ────────────────────────────────────────────────────────────── */
+.permission-body {
+  padding: 16px 20px;
+}
+
+.permission-message {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  margin: 0 0 12px;
+}
+
+/* ── Tool Info ────────────────────────────────────────────────────────── */
+.permission-tool-info {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.permission-tool-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-light);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+.permission-tool-header svg {
+  color: var(--accent-yellow);
+}
+
+.permission-tool-name {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-light);
+}
+.permission-tool-name code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--amd-red);
+}
+
+.permission-tool-args {
+  padding: 0;
+  max-height: 160px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.permission-tool-args::-webkit-scrollbar { width: 5px; }
+.permission-tool-args::-webkit-scrollbar-track { background: transparent; }
+.permission-tool-args::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+.permission-tool-args::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+.permission-tool-args pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── Critical Banner ─────────────────────────────────────────────────── */
+.permission-critical-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin-top: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-danger-dim);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: var(--accent-danger);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ── Remember Checkbox ───────────────────────────────────────────────── */
+.permission-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-top: 1px solid var(--border-light);
+  transition: background 150ms var(--ease);
+}
+.permission-remember:hover {
+  background: var(--bg-hover);
+}
+.permission-remember input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--amd-red);
+  cursor: pointer;
+}
+.permission-remember code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 1px 4px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* ── Action Buttons ──────────────────────────────────────────────────── */
+.permission-actions {
+  display: flex;
+  gap: 10px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-light);
+}
+
+.permission-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 150ms var(--ease);
+}
+.permission-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.permission-btn-allow {
+  background: var(--accent-green);
+  color: white;
+  border: 1px solid var(--accent-green);
+}
+.permission-btn-allow:hover:not(:disabled) {
+  filter: brightness(1.1);
+  box-shadow: 0 2px 8px rgba(34, 197, 94, 0.3);
+}
+
+.permission-btn-deny {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+.permission-btn-deny:hover:not(:disabled) {
+  color: var(--accent-danger);
+  border-color: var(--accent-danger);
+  background: rgba(239, 68, 68, 0.06);
+}
+
+/* ── Keyboard Hints ──────────────────────────────────────────────────── */
+.permission-hints {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding: 8px 20px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.permission-hints kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-right: 4px;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .permission-prompt {
+    width: 100%;
+    max-width: 100%;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+  }
+  .permission-overlay {
+    align-items: flex-end;
+  }
+}

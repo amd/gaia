@@ -1,0 +1,47 @@
+id: multi_doc_context
+name: "Multi-Document Context"
+category: context_retention
+severity: high
+description: |
+  Two documents are indexed simultaneously. Agent must answer questions from each
+  document correctly and not confuse facts between them. Turn 3 asks agent to
+  confirm which document each prior answer came from.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask about PTO policy for new employees"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: pto_days
+      expected_answer: "15 days"
+    success_criteria: "Agent states first-year employees get 15 PTO days from the employee handbook"
+
+  - turn: 2
+    objective: "Ask about Q3 revenue"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million"
+    success_criteria: "Agent states Q3 revenue was $14.2 million from the Q3 report"
+
+  - turn: 3
+    objective: "Ask 'which document did each of those answers come from?'"
+    ground_truth:
+      # Note: intentionally no doc_id — this is a synthesis turn referencing both
+      # employee_handbook and acme_q3_report simultaneously. The expected_answer
+      # covers document attribution metadata, not a single manifest fact.
+      expected_answer: "PTO policy from employee_handbook.md, Q3 revenue from acme_q3_report.md"
+    success_criteria: "Agent correctly attributes PTO to employee handbook and revenue to Q3 report. FAIL if agent confuses which fact came from which document."
+
+expected_outcome: |
+  Agent correctly retrieves facts from two separate documents and does not
+  cross-contaminate information between them.

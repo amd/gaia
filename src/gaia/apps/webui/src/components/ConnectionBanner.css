@@ -1,0 +1,182 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* Connection status banner -- refined alert style */
+
+.connection-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 24px;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    flex-shrink: 0;
+    animation: slideDown 200ms var(--ease);
+    z-index: 40;
+}
+
+.connection-banner--error {
+    background: #fef2f2;
+    color: #991b1b;
+    border-bottom: 1px solid #fecaca;
+}
+
+.connection-banner--warning {
+    background: #fffbeb;
+    color: #92400e;
+    border-bottom: 1px solid #fed7aa;
+}
+
+.connection-banner--device {
+    background: #f0f9ff;
+    color: #075985;
+    border-bottom: 1px solid #bae6fd;
+}
+
+[data-theme="dark"] .connection-banner--error {
+    background: rgba(237, 28, 36, 0.06);
+    color: #fca5a5;
+    border-bottom: 1px solid rgba(237, 28, 36, 0.15);
+}
+
+[data-theme="dark"] .connection-banner--warning {
+    background: rgba(232, 168, 48, 0.06);
+    color: #fcd34d;
+    border-bottom: 1px solid rgba(232, 168, 48, 0.15);
+}
+
+[data-theme="dark"] .connection-banner--device {
+    background: #031624;
+    color: #7dd3fc;
+    border-bottom: 1px solid #0c2d42;
+}
+
+.connection-banner__icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+}
+
+.connection-banner__text {
+    flex: 1;
+    min-width: 0;
+}
+
+.connection-banner__hint {
+    font-weight: 400;
+    opacity: 0.8;
+    font-size: 11px;
+}
+
+.connection-banner__hint code {
+    font-family: var(--font-mono);
+    padding: 2px 7px;
+    border-radius: var(--radius-sm);
+    background: rgba(0, 0, 0, 0.06);
+    font-size: 11px;
+}
+
+[data-theme="dark"] .connection-banner__hint code {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.connection-banner__link {
+    color: inherit;
+    text-decoration: underline;
+    opacity: 0.85;
+}
+.connection-banner__link:hover {
+    opacity: 1;
+}
+
+.connection-banner__dismiss {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    opacity: 0.5;
+    transition: opacity var(--duration-fast) var(--ease);
+}
+.connection-banner__dismiss:hover {
+    opacity: 1;
+}
+
+.connection-banner__retry {
+    flex-shrink: 0;
+    padding: 5px 14px;
+    border-radius: var(--radius-md);
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all var(--duration) var(--ease);
+}
+
+.connection-banner--error .connection-banner__retry {
+    background: #991b1b;
+    color: #fff;
+}
+.connection-banner--error .connection-banner__retry:hover {
+    background: #7f1d1d;
+}
+
+.connection-banner--warning .connection-banner__retry {
+    background: #92400e;
+    color: #fff;
+}
+.connection-banner--warning .connection-banner__retry:hover {
+    background: #78350f;
+}
+
+[data-theme="dark"] .connection-banner--error .connection-banner__retry {
+    background: #fca5a5;
+    color: #120808;
+}
+[data-theme="dark"] .connection-banner--warning .connection-banner__retry {
+    background: #fcd34d;
+    color: #120e05;
+}
+
+.connection-banner__retry--secondary {
+    opacity: 0.7;
+    margin-left: -4px;
+}
+.connection-banner__retry--secondary:hover { opacity: 1; }
+
+.connection-banner__loading {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    opacity: 0.7;
+}
+
+.connection-banner__spinner {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-100%); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 768px) {
+    .connection-banner {
+        padding: 8px 16px;
+        padding-left: 52px;
+        font-size: 11px;
+    }
+}

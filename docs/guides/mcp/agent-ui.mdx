@@ -1,0 +1,199 @@
+---
+title: "Agent UI MCP Server"
+description: "Connect Claude Code, Cursor, or any MCP client to the GAIA Agent UI for AI-powered conversations and document Q&A"
+icon: "plug"
+---
+
+<Info>
+  **Prerequisites:** Complete the [Setup](/setup) guide and have the [Agent UI](/guides/agent-ui) backend running.
+</Info>
+
+## Overview
+
+The GAIA Agent UI includes a built-in **MCP (Model Context Protocol) server** that exposes the full Agent UI as a set of tools. This lets external AI assistants — like **Claude Code**, **Cursor**, or any MCP-compatible client — interact with GAIA agents, manage chat sessions, index documents, and browse files, all through the same backend that powers the web UI.
+
+Conversations initiated via MCP appear in the browser UI in real time, so you can watch tool execution and agent activity as it happens.
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `system_status` | Check GAIA system status (LLM server, model, memory) |
+| `list_sessions` | List all chat sessions with titles and message counts |
+| `create_session` | Create a new chat session |
+| `get_session` | Get details of a specific session |
+| `delete_session` | Delete a session and all its messages |
+| `get_messages` | Get all messages in a session (with agent steps) |
+| `send_message` | Send a message to the GAIA agent (streams to the web UI) |
+| `list_documents` | List all indexed documents |
+| `index_document` | Index a file for RAG (PDF, TXT, CSV, XLSX, etc.) |
+| `index_folder` | Index all documents in a folder |
+| `browse_files` | Browse files and folders on the filesystem |
+| `search_files` | Search for files by name pattern and type |
+| `preview_file` | Preview file contents or metadata |
+| `take_screenshot` | Capture the Agent UI browser window (Windows) |
+| `open_session_in_browser` | Open a session in the default browser |
+
+---
+
+## Setup with Claude Code
+
+<Steps>
+  <Step title="Start the Agent UI backend">
+    ```bash
+    # Option 1: Using the startup script (recommended)
+    # Linux/macOS
+    ./scripts/start-agent-ui.sh
+
+    # Windows PowerShell
+    .\scripts\start-agent-ui.ps1
+    ```
+
+    ```bash
+    # Option 2: Manual
+    uv run python -m gaia.ui.server --debug
+    ```
+
+    Verify the backend is running:
+    ```bash
+    curl http://localhost:4200/api/health
+    ```
+  </Step>
+
+  <Step title="Add the MCP server to Claude Code">
+    ```bash
+    # Project-scoped (recommended — only available in this project)
+    claude mcp add gaia-agent-ui -s project -- uv run python -m gaia.mcp.servers.agent_ui_mcp --stdio
+
+    # Or user-scoped (available in all projects)
+    claude mcp add gaia-agent-ui -s user -- uv run python -m gaia.mcp.servers.agent_ui_mcp --stdio
+    ```
+
+    The `--stdio` flag tells the MCP server to use stdio transport, which is what Claude Code expects.
+  </Step>
+
+  <Step title="Start a new Claude Code conversation">
+    After adding the MCP server, start a new conversation (or restart Claude Code) so it picks up the new tools. You should see `gaia-agent-ui` tools available.
+  </Step>
+</Steps>
+
+<Note>
+  The MCP server connects to the Agent UI backend at `http://localhost:4200` by default. If your backend runs on a different port, pass `--backend http://localhost:YOUR_PORT` after `--stdio`.
+</Note>
+
+---
+
+## Setup with Other MCP Clients
+
+The MCP server also supports **Streamable HTTP** transport for clients that connect over HTTP instead of stdio:
+
+```bash
+# Start as an HTTP MCP server (default port 8765)
+uv run python -m gaia.mcp.servers.agent_ui_mcp
+
+# Custom port
+uv run python -m gaia.mcp.servers.agent_ui_mcp --port 9000
+```
+
+Connect your MCP client to `http://localhost:8765/mcp`.
+
+---
+
+## Usage Examples
+
+Once connected, you can ask Claude Code (or any MCP client) to interact with GAIA:
+
+### Chat with the Agent
+
+```
+"Create a new session called 'Project Analysis' and ask the agent
+to search for Python files in my project"
+```
+
+Claude Code will call `create_session`, then `send_message`, and the conversation will appear in the Agent UI browser window in real time.
+
+### Index and Query Documents
+
+```
+"Index all PDFs in my Documents folder and then ask the agent
+what the quarterly revenue was"
+```
+
+This calls `index_folder` to index the documents, then `send_message` to query them using RAG.
+
+### Browse and Search Files
+
+```
+"Search my computer for any Excel spreadsheets related to budgets"
+```
+
+The agent uses `search_files` to find matching files across the filesystem.
+
+### Visual Feedback
+
+```
+"Take a screenshot of the Agent UI so I can see what it looks like"
+```
+
+Captures the browser window and returns the image path for review.
+
+---
+
+## Architecture
+
+```
+┌─────────────────┐     stdio/HTTP      ┌──────────────────┐
+│  Claude Code /   │ ◄────────────────► │  GAIA Agent UI   │
+│  MCP Client      │      MCP tools      │  MCP Server      │
+└─────────────────┘                     └────────┬─────────┘
+                                                 │ REST API
+                                                 ▼
+                                        ┌──────────────────┐
+                                        │  Agent UI Backend │
+                                        │  (FastAPI :4200)  │
+                                        └────────┬─────────┘
+                                                 │
+                                    ┌────────────┼────────────┐
+                                    ▼            ▼            ▼
+                              ┌──────────┐ ┌──────────┐ ┌──────────┐
+                              │ Chat     │ │ RAG      │ │ Lemonade │
+                              │ Agent    │ │ Engine   │ │ LLM      │
+                              └──────────┘ └──────────┘ └──────────┘
+```
+
+The MCP server is a thin wrapper around the Agent UI REST API. When you call `send_message`, it streams the response via SSE (Server-Sent Events) from the backend, collects tool outputs and agent steps, and returns the complete result. The web UI receives the same SSE events simultaneously, so you see real-time activity in the browser.
+
+---
+
+## Configuration
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--stdio` | off | Use stdio transport (for Claude Code) |
+| `--port` | `8765` | HTTP MCP server port |
+| `--host` | `localhost` | HTTP MCP server host |
+| `--backend` | `http://localhost:4200` | Agent UI backend URL |
+
+---
+
+## Removing the MCP Server
+
+```bash
+claude mcp remove gaia-agent-ui
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="MCP tools not appearing in Claude Code">
+    Make sure you started a **new conversation** after adding the MCP server. Claude Code only loads MCP tools at conversation start. Also verify the backend is running with `curl http://localhost:4200/api/health`.
+  </Accordion>
+
+  <Accordion title="'Cannot connect to GAIA backend' errors">
+    The Agent UI backend must be running before the MCP server can work. Start it with `uv run python -m gaia.ui.server` or use the startup scripts in `scripts/`.
+  </Accordion>
+
+  <Accordion title="send_message times out">
+    Large documents or complex queries can take time. The default timeout is 180 seconds. If the Lemonade LLM server is slow to respond, check its status with `system_status`.
+  </Accordion>
+</AccordionGroup>

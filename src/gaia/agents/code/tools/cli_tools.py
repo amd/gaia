@@ -515,10 +515,10 @@ class CLIToolsMixin:
             # Check if console is available for preview
             console = getattr(self, "console", None)
 
-            if console:
+            if console and hasattr(console, "start_file_preview"):
                 console.start_file_preview(command, max_lines=15, title_prefix="💻")
-            elif getattr(self, "console", None):
-                self.console.print_command_executing(command)
+            elif console and hasattr(console, "print_command_executing"):
+                console.print_command_executing(command)
             else:
                 print(f"\nExecuting Command: {command}")
 

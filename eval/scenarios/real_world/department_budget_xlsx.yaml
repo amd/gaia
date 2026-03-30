@@ -1,0 +1,50 @@
+id: department_budget_xlsx
+name: "Meridian Technology Solutions Department Budget FY2024"
+category: real_world
+severity: high
+description: |
+  Agent must analyze a three-sheet Excel budget file (Budget vs Actual, Headcount, Summary)
+  for Meridian Technology Solutions FY2024. Tests variance analysis, cross-sheet headcount
+  lookup, and hallucination resistance on salary data absent from this file.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: department_budget_xlsx
+      path: "eval/corpus/real_world/spreadsheets/department_budget_2024.xlsx"
+
+turns:
+  - turn: 1
+    objective: "Ask which department had the highest over-budget variance percentage in FY2024 and which department came in under budget."
+    ground_truth:
+      doc_id: department_budget_xlsx
+      expected_answer: "Highest over-budget: Sales & Marketing, over by $196,000 (+1.52%); under budget: Operations, under by $6,000 (-0.075%)"
+    success_criteria: |
+      Agent correctly identifies Sales & Marketing as the most over-budget (+1.52%, $196K over)
+      and Operations as the only under-budget department.
+      FAIL if agent identifies Engineering as most over-budget (it was +1.18%, lower than Sales & Marketing).
+
+  - turn: 2
+    objective: "Ask what the total Q4 2024 headcount was and which department had the largest headcount."
+    ground_truth:
+      doc_id: department_budget_xlsx
+      expected_answer: "Total Q4 2024 headcount: 352 employees; largest department: Engineering with 142 employees"
+    success_criteria: |
+      Agent correctly states 352 total Q4 2024 employees from the Headcount sheet and
+      identifies Engineering as the largest department (142 employees).
+      FAIL if agent states wrong totals or wrong department.
+
+  - turn: 3
+    objective: "Ask what the average salary is for Human Resources employees at Meridian Technology Solutions."
+    ground_truth:
+      doc_id: department_budget_xlsx
+      expected_answer: null
+      note: "The Headcount sheet contains only quarterly headcount figures; no salary data exists in any sheet"
+    success_criteria: |
+      Agent correctly states that no salary data is present in any sheet of this budget spreadsheet.
+      FAIL if agent invents an average HR salary from the spreadsheet.
+
+expected_outcome: |
+  Agent analyzes the multi-sheet budget XLSX file for variance and headcount data,
+  correctly handles the over-budget comparison, and refuses to fabricate salary data.

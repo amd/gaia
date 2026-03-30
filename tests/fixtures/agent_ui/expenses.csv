@@ -1,0 +1,90 @@
+date,description,merchant,category,amount
+2026-01-02,Weekly grocery run,Whole Foods Market,groceries,127.43
+2026-01-03,Coffee and pastry,Starbucks,dining,8.75
+2026-01-04,Uber ride to airport,Uber,transportation,34.50
+2026-01-05,Electric bill January,Pacific Gas & Electric,utilities,142.87
+2026-01-06,Movie tickets x2,AMC Theatres,entertainment,28.00
+2026-01-07,Gas station fill-up,Shell,transportation,52.18
+2026-01-08,Sushi dinner,Nobu Restaurant,dining,86.42
+2026-01-09,Produce and dairy,Trader Joes,groceries,63.21
+2026-01-10,Concert tickets,Ticketmaster,entertainment,125.00
+2026-01-11,Internet bill,Comcast Xfinity,utilities,79.99
+2026-01-12,Lunch with client,Panera Bread,dining,24.67
+2026-01-13,Monthly bus pass,Metro Transit,transportation,95.00
+2026-01-14,Household supplies,Costco,groceries,215.83
+2026-01-15,Pizza delivery,Dominos,dining,32.49
+2026-01-16,Water bill,City Water Dept,utilities,45.30
+2026-01-17,Streaming subscription,Netflix,entertainment,15.99
+2026-01-18,Toll road charges,EZ Pass,transportation,12.50
+2026-01-19,Bakery items,Whole Foods Market,groceries,28.76
+2026-01-20,Thai takeout,Pad Thai Express,dining,41.20
+2026-01-21,Phone bill,T-Mobile,utilities,85.00
+2026-01-22,Museum admission,MoMA,entertainment,25.00
+2026-01-23,Train ticket roundtrip,Amtrak,transportation,67.00
+2026-01-24,Meat and seafood,Safeway,groceries,94.52
+2026-01-25,Brunch,The Breakfast Club,dining,55.80
+2026-01-26,Gaming subscription,Xbox Game Pass,entertainment,14.99
+2026-01-27,Parking garage,ParkWhiz,transportation,22.00
+2026-01-28,Snacks and beverages,7-Eleven,groceries,18.43
+2026-01-29,Italian dinner,Olive Garden,dining,73.15
+2026-01-30,Gas bill January,National Grid,utilities,108.45
+2026-01-31,Board game purchase,Barnes & Noble,entertainment,39.99
+2026-02-01,Weekly groceries,Kroger,groceries,142.67
+2026-02-02,Coffee run,Dunkin Donuts,dining,6.45
+2026-02-03,Lyft to downtown,Lyft,transportation,18.73
+2026-02-04,Electric bill February,Pacific Gas & Electric,utilities,131.22
+2026-02-05,Comedy show tickets,Laugh Factory,entertainment,45.00
+2026-02-06,Vegetable box delivery,Imperfect Foods,groceries,35.99
+2026-02-07,Valentines dinner,The Capital Grille,dining,187.50
+2026-02-08,Car maintenance oil change,Jiffy Lube,transportation,49.99
+2026-02-09,Organic groceries,Sprouts Farmers Market,groceries,78.34
+2026-02-10,Music subscription,Spotify Premium,entertainment,10.99
+2026-02-11,Breakfast burrito,Chipotle,dining,12.85
+2026-02-12,Internet bill,Comcast Xfinity,utilities,79.99
+2026-02-13,Bus fare daily,Metro Transit,transportation,5.50
+2026-02-14,Chocolates gift box,Godiva,groceries,42.00
+2026-02-15,Wine bar evening,Vino Veritas,dining,68.30
+2026-02-16,Escape room outing,Escape the Room,entertainment,35.00
+2026-02-17,Airport parking,LAX Parking,transportation,78.00
+2026-02-18,Bulk items,Costco,groceries,198.45
+2026-02-19,Ramen lunch,Ichiran Ramen,dining,19.50
+2026-02-20,Water bill February,City Water Dept,utilities,43.18
+2026-02-21,Book purchase,Amazon Books,entertainment,16.99
+2026-02-22,Toll charges weekly,EZ Pass,transportation,8.75
+2026-02-23,Deli and cheese,Whole Foods Market,groceries,54.87
+2026-02-24,Seafood dinner,Red Lobster,dining,92.45
+2026-02-25,Phone bill,T-Mobile,utilities,85.00
+2026-02-26,Art gallery admission,LACMA,entertainment,20.00
+2026-02-27,Uber pool rides,Uber,transportation,14.20
+2026-02-28,Pantry restock,Target,groceries,67.93
+2026-03-01,Smoothie bowl,Jamba Juice,dining,11.49
+2026-03-02,Gas station fill-up,Chevron,transportation,48.72
+2026-03-03,Electric bill March,Pacific Gas & Electric,utilities,118.90
+2026-03-04,Theater tickets,Broadway Direct,entertainment,175.00
+2026-03-05,Fresh fish market,Pike Place Fish,groceries,46.80
+2026-03-06,Dim sum brunch,Dragon Palace,dining,58.25
+2026-03-07,Monthly metro pass,Metro Transit,transportation,95.00
+2026-03-08,Cleaning supplies,Walmart,groceries,31.44
+2026-03-09,Bowling night,Lucky Strike,entertainment,42.00
+2026-03-10,Trash collection,Waste Management,utilities,35.00
+2026-03-11,Taco Tuesday,Taco Bell,dining,15.87
+2026-03-12,Rideshare to meeting,Lyft,transportation,22.35
+2026-03-13,Organic produce,Trader Joes,groceries,71.28
+2026-03-14,Birthday dinner out,Ruth Chris Steakhouse,dining,245.80
+2026-03-15,Streaming bundle,Disney Plus Bundle,entertainment,13.99
+2026-03-16,Internet bill March,Comcast Xfinity,utilities,79.99
+2026-03-17,Parking meter downtown,ParkMobile,transportation,6.00
+2026-03-18,Bakery and bread,La Boulangerie,groceries,22.15
+2026-03-19,Korean BBQ dinner,Kang Ho Dong,dining,76.90
+2026-03-20,Mini golf outing,Topgolf,entertainment,55.00
+2026-03-21,Gas bill March,National Grid,utilities,92.30
+2026-03-22,Uber to airport,Uber,transportation,41.60
+2026-03-23,Beverage restock,Costco,groceries,89.76
+2026-03-24,Fast food lunch,Five Guys,dining,17.23
+2026-03-25,Phone bill,T-Mobile,utilities,85.00
+2026-03-26,Zoo admission family,San Diego Zoo,entertainment,68.00
+2026-03-27,Highway tolls,EZ Pass,transportation,15.25
+2026-03-28,Weekly essentials,Kroger,groceries,103.52
+2026-03-29,Pho dinner,Pho 79,dining,29.40
+2026-03-30,Karaoke night,Sing Sing,entertainment,30.00
+2026-03-31,Car wash and detail,Sparkle Auto Wash,transportation,35.00

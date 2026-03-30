@@ -1,5 +1,5 @@
 {
-  "name": "@gaia/electron",
+  "name": "@amd-gaia/electron",
   "version": "1.0.0",
   "description": "Shared Electron framework for GAIA WebUI applications",
   "main": "src/main.js",

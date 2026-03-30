@@ -20,7 +20,9 @@ try:
     from gaia.talk.sdk import TalkConfig, TalkSDK
 
     HAS_AUDIO_DEPS = True
-except ImportError:
+except (ImportError, OSError):
+    # OSError can occur on Windows when Application Control policies block
+    # native DLLs (e.g. torch_global_deps.dll) from loading.
     HAS_AUDIO_DEPS = False
 
 from gaia.logger import get_logger
@@ -30,6 +32,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@unittest.skipIf(not HAS_AUDIO_DEPS, "Audio dependencies (whisper/torch) not available")
 class TestWhisperAsr(unittest.TestCase):
     def setUp(self):
         self.log = get_logger(__name__)
@@ -94,6 +97,7 @@ class TestWhisperAsr(unittest.TestCase):
         super().tearDown()
 
 
+@unittest.skipIf(not HAS_AUDIO_DEPS, "Audio dependencies (whisper/torch) not available")
 class TestProcessAudioWrapper(unittest.TestCase):
     """Integration tests for the process_audio_wrapper method in TalkSDK's AudioClient."""
 

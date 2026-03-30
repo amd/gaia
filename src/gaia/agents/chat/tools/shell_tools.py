@@ -8,15 +8,170 @@ Provides shell command execution capabilities for file operations and system que
 
 import logging
 import os
+import re
 import shlex
 import subprocess
 import time
 from collections import deque
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# Security: WHITELIST approach - only allow explicitly safe commands
+# This is much safer than a blacklist which always misses dangerous commands
+ALLOWED_COMMANDS = {
+    # File listing and navigation (READ-ONLY)
+    "ls",
+    "dir",
+    "pwd",
+    "cd",
+    # File content viewing (READ-ONLY)
+    "cat",
+    "head",
+    "tail",
+    "more",
+    "less",
+    # Text processing (READ-ONLY)
+    "grep",
+    "find",
+    "wc",
+    "sort",
+    "uniq",
+    "diff",
+    "findstr",  # Windows grep equivalent
+    # File information (READ-ONLY)
+    "file",
+    "stat",
+    "du",
+    "df",
+    # System information (READ-ONLY) - cross-platform
+    "whoami",
+    "hostname",
+    "uname",
+    "date",
+    "uptime",
+    # Linux/macOS system information (READ-ONLY)
+    "lscpu",  # CPU information
+    "lspci",  # PCI devices (GPU, etc.)
+    "lsblk",  # Block devices
+    "lsusb",  # USB devices
+    "free",  # Memory usage
+    "nproc",  # Number of processors
+    "arch",  # Architecture
+    "sysctl",  # macOS system info
+    "sw_vers",  # macOS version
+    "system_profiler",  # macOS hardware info
+    # Windows system information (READ-ONLY)
+    "systeminfo",  # Comprehensive system/hardware info
+    "wmic",  # WMI queries (subcommands checked separately)
+    "powershell",  # PowerShell (cmdlets checked separately)
+    "powershell.exe",  # PowerShell alias
+    "tasklist",  # Process list (Windows equivalent of ps)
+    "ipconfig",  # Network configuration
+    "driverquery",  # Installed driver information
+    "ver",  # Windows version
+    # Path utilities
+    "which",
+    "whereis",
+    "basename",
+    "dirname",
+    # Safe output
+    "echo",
+    "printf",
+    # Process information (READ-ONLY)
+    "ps",
+    "top",
+    "jobs",
+    # Git commands (mostly safe, read-only operations)
+    "git",  # Individual git subcommands checked separately
+}
+
+# Safe read-only git subcommands
+SAFE_GIT_COMMANDS = {
+    "status",
+    "log",
+    "show",
+    "diff",
+    "branch",
+    "remote",
+    "ls-files",
+    "ls-tree",
+    "describe",
+    "rev-parse",
+    "help",
+}
+
+# Safe PowerShell cmdlet prefixes (read-only operations)
+SAFE_PS_CMDLET_PREFIXES = (
+    "get-",
+    "select-object",
+    "format-list",
+    "format-table",
+    "format-wide",
+    "where-object",
+    "sort-object",
+    "measure-object",
+    "group-object",
+    "convertto-",
+    "convertfrom-",
+    "out-string",
+    "out-null",
+    "write-output",
+    "test-path",
+    "join-path",
+    "split-path",
+    "resolve-path",
+)
+
+# Dangerous PowerShell patterns to block
+DANGEROUS_PS_PATTERNS = (
+    "set-",
+    "remove-",
+    "new-",
+    "stop-",
+    "start-",
+    "restart-",
+    "invoke-",
+    "clear-",
+    "disable-",
+    "enable-",
+    "uninstall-",
+    "install-",
+    "register-",
+    "unregister-",
+    "add-",
+    "move-",
+    "copy-",
+    "rename-",
+    "update-",
+    "send-",
+    "import-",
+    "export-",
+    "iex",
+    "invoke-expression",
+    "invoke-command",
+    "invoke-webrequest",
+    "start-process",
+    "net ",  # net user, net stop, etc.
+    "cmd ",
+    "& {",
+    "& '",
+    '& "',
+)
+
+# Shell operators that could be used for command chaining or redirection
+# Pipe (|) is allowed but validated separately
+# SECURITY: Block command chaining and redirection operators.
+# - && and & are command separators (Windows cmd.exe / bash)
+# - > >> are output redirection, < is input redirection
+# - || is OR chaining, ; is command separator
+# - ` and $() are command substitution
+# Note: bare & is matched as word-boundary to avoid false positives
+# inside quoted PowerShell strings (e.g. @{N='...'}).
+DANGEROUS_SHELL_OPERATORS = re.compile(
+    r"(?:&&|&(?=\s|$)|>>|>(?:[^&>]|$)|<(?:[^<]|$)|\|\||;|`|\$\()"
+)
 
 
 class ShellToolsMixin:
@@ -97,6 +252,110 @@ class ShellToolsMixin:
         """Record command execution timestamp for rate limiting."""
         self.shell_command_times.append(time.time())
 
+    @staticmethod
+    def _validate_command(
+        cmd_base: str, cmd_parts: list, command: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate a command against the whitelist and subcommand rules.
+
+        Returns None if the command is allowed, or an error dict if blocked.
+        """
+        # Special handling for git - only allow read-only operations
+        if cmd_base == "git":
+            if len(cmd_parts) > 1:
+                git_subcmd = cmd_parts[1].lower()
+                if git_subcmd not in SAFE_GIT_COMMANDS:
+                    return {
+                        "status": "error",
+                        "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
+                        "has_errors": True,
+                        "allowed_git_commands": list(SAFE_GIT_COMMANDS),
+                    }
+        # Special handling for wmic - only allow read-only queries
+        elif cmd_base == "wmic":
+            cmd_lower = command.lower()
+            dangerous_wmic_ops = {"call", "create", "delete", "set"}
+            cmd_words = set(cmd_lower.split())
+            if cmd_words & dangerous_wmic_ops:
+                return {
+                    "status": "error",
+                    "error": "Only read-only wmic queries are allowed (get, list). Modifying operations (call, create, delete, set) are blocked.",
+                    "has_errors": True,
+                    "hint": "Use 'wmic <alias> get <properties>' for safe queries",
+                    "examples": "wmic cpu get name, wmic os get caption, wmic path win32_videocontroller get name",
+                }
+        # Special handling for powershell - only allow read-only cmdlets
+        elif cmd_base in ("powershell", "powershell.exe"):
+            # Block dangerous execution flags that can bypass cmdlet filtering
+            _BLOCKED_PS_FLAGS = {
+                "-encodedcommand",
+                "-enc",
+                "-file",
+                "-f",
+                "-executionpolicy",
+                "-ex",
+                "-ep",
+                "-noprofile",
+                "-nop",
+                "-windowstyle",
+                "-w",
+                "-noninteractive",
+                "-noni",
+            }
+            if any(part.lower() in _BLOCKED_PS_FLAGS for part in cmd_parts[1:]):
+                return {
+                    "status": "error",
+                    "error": "PowerShell execution flags like -EncodedCommand, -File, and -ExecutionPolicy are not allowed.",
+                    "has_errors": True,
+                    "hint": "Use -Command to pass a readable cmdlet string",
+                    "examples": 'powershell -Command "Get-WmiObject Win32_Processor | Select-Object Name"',
+                }
+            # Extract the PowerShell command text
+            ps_cmd = ""
+            for i, part in enumerate(cmd_parts):
+                if part.lower() in ("-command", "-c"):
+                    ps_cmd = " ".join(cmd_parts[i + 1 :]).lower()
+                    break
+            if not ps_cmd:
+                # Inline: powershell "Get-Process"
+                ps_cmd = " ".join(cmd_parts[1:]).lower()
+
+            if any(pat in ps_cmd for pat in DANGEROUS_PS_PATTERNS):
+                return {
+                    "status": "error",
+                    "error": "Only read-only PowerShell cmdlets are allowed (Get-*, Select-Object, Format-*, Where-Object, etc.).",
+                    "has_errors": True,
+                    "hint": "Use Get-* cmdlets for safe queries",
+                    "examples": (
+                        'powershell -Command "Get-WmiObject Win32_Processor | Select-Object Name", '
+                        'powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion"'
+                    ),
+                }
+
+            # Verify each cmdlet is safe
+            cmdlets = re.findall(r"[a-z]+-[a-z]+", ps_cmd)
+            for cmdlet in cmdlets:
+                if not any(
+                    cmdlet.startswith(prefix) for prefix in SAFE_PS_CMDLET_PREFIXES
+                ):
+                    return {
+                        "status": "error",
+                        "error": f"PowerShell cmdlet '{cmdlet}' is not allowed. Only read-only cmdlets are permitted.",
+                        "has_errors": True,
+                        "hint": "Allowed: Get-*, Select-Object, Format-List, Format-Table, Where-Object, Sort-Object",
+                    }
+        elif cmd_base not in ALLOWED_COMMANDS:
+            return {
+                "status": "error",
+                "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
+                "has_errors": True,
+                "hint": "Only read-only, informational commands are allowed",
+                "examples": "ls, cat, grep, find, git status, systeminfo, powershell -Command 'Get-WmiObject ...'",
+            }
+
+        return None  # Command is allowed
+
     def register_shell_tools(self) -> None:
         """Register shell command execution tools."""
         from gaia.agents.base.tools import tool
@@ -104,7 +363,14 @@ class ShellToolsMixin:
         @tool(
             atomic=True,
             name="run_shell_command",
-            description="Execute a shell/terminal command. Useful for listing directories (ls/dir), checking files (cat, stat), finding files (find), text processing (grep, head, tail), and navigation (pwd).",
+            description=(
+                "Execute a shell/terminal command. Useful for listing directories (ls/dir), "
+                "checking files (cat, stat), finding files (find), text processing (grep, head, tail), "
+                "navigation (pwd), and system information. "
+                'On Windows use: systeminfo, powershell -Command "Get-WmiObject Win32_Processor", '
+                'powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM". '
+                "On Linux use: lscpu, lspci, free -h. Pipes (|) are supported."
+            ),
             parameters={
                 "command": {
                     "type": "str",
@@ -167,7 +433,6 @@ class ShellToolsMixin:
                         }
 
                     # Validate path is allowed
-                    # Use PathValidator if available (ChatAgent), otherwise fallback or skip
                     if hasattr(self, "path_validator"):
                         if not self.path_validator.is_path_allowed(working_directory):
                             return {
@@ -176,7 +441,6 @@ class ShellToolsMixin:
                                 "has_errors": True,
                             }
                     elif hasattr(self, "_is_path_allowed"):
-                        # Backward compatibility
                         if not self._is_path_allowed(working_directory):
                             return {
                                 "status": "error",
@@ -187,6 +451,41 @@ class ShellToolsMixin:
                     cwd = str(Path(working_directory).resolve())
                 else:
                     cwd = str(Path.cwd())
+
+                # Block dangerous shell operators (redirects, chaining)
+                # Pipes (|) are allowed but each command is validated
+                # For PowerShell commands, only check operators in the outer
+                # shell portion — the PS script body is validated separately
+                # by _validate_command (DANGEROUS_PS_PATTERNS + cmdlet
+                # prefix checks).
+                shell_text_to_check = command
+                cmd_lower_stripped = command.strip().lower()
+                if cmd_lower_stripped.startswith(("powershell ", "powershell.exe ")):
+                    # Strip out the -Command argument content so we only
+                    # check the outer shell for dangerous operators.
+                    try:
+                        _ps_parts = shlex.split(command)
+                    except ValueError:
+                        _ps_parts = command.split()
+                    _ps_outer = []
+                    _skip_next = False
+                    for _p in _ps_parts:
+                        if _skip_next:
+                            _skip_next = False
+                            continue
+                        if _p.lower() in ("-command", "-c"):
+                            _skip_next = True
+                            continue
+                        _ps_outer.append(_p)
+                    shell_text_to_check = " ".join(_ps_outer)
+
+                if DANGEROUS_SHELL_OPERATORS.search(shell_text_to_check):
+                    return {
+                        "status": "error",
+                        "error": "Shell operators (&, >, >>, <, &&, ||, ;, `, $()) are not allowed for security reasons.",
+                        "has_errors": True,
+                        "hint": "Pipe (|) is allowed. Use individual commands for other operations.",
+                    }
 
                 # Parse command safely
                 try:
@@ -209,23 +508,25 @@ class ShellToolsMixin:
                 # This prevents "cat ../secret.txt" even if "cat" is allowed
                 if hasattr(self, "path_validator"):
                     for arg in cmd_parts[1:]:
-                        # Skip flags that don't look like paths (simple heuristics)
-                        # We check for path separators or ".."
-                        # We also handle --flag=/path/to/file
+                        # Skip shell pipe operator
+                        if arg == "|":
+                            continue
 
                         candidate_path = arg
                         if arg.startswith("-"):
                             if "=" in arg:
                                 _, candidate_path = arg.split("=", 1)
                             else:
-                                # Skip flags without value (e.g. -l, --verbose)
-                                # But what about -f/path? Hard to parse without knowing the tool.
-                                # We'll assume if it has a path separator, it might be a path attached to a flag
                                 if os.sep not in arg and "/" not in arg:
                                     continue
-                                # If it has separators, treat the whole thing or part of it as path?
-                                # Treating "-f/tmp" as a path "/tmp" is hard.
-                                # Let's be conservative: if it contains separators, check it.
+
+                        # On Windows, skip flags starting with / (e.g., /i, /n, /c:)
+                        # These are Windows command switches, not Unix paths
+                        if os.name == "nt" and candidate_path.startswith("/"):
+                            # Only treat as a real path if it has multiple segments
+                            # (e.g., /proc/cpuinfo) not single flags (/i, /format:list)
+                            if "/" not in candidate_path[1:]:
+                                continue
 
                         # Check if it looks like a path
                         if (
@@ -241,11 +542,7 @@ class ShellToolsMixin:
 
                             # Resolve path relative to CWD
                             try:
-                                # Handle potential flag prefix if we didn't split it cleanly
-                                # This is best-effort.
                                 clean_path = candidate_path
-
-                                # Resolve
                                 resolved_path = str(
                                     Path(cwd).joinpath(clean_path).resolve()
                                 )
@@ -259,116 +556,102 @@ class ShellToolsMixin:
                                         "has_errors": True,
                                     }
                             except Exception:
-                                # If we can't resolve it (e.g. invalid chars), we might warn or ignore.
-                                # For security, maybe ignore if it's not a valid path anyway?
                                 pass
-
-                # Security: WHITELIST approach - only allow explicitly safe commands
-                # This is much safer than a blacklist which always misses dangerous commands
-                ALLOWED_COMMANDS = {
-                    # File listing and navigation (READ-ONLY)
-                    "ls",
-                    "dir",
-                    "pwd",
-                    "cd",
-                    # File content viewing (READ-ONLY)
-                    "cat",
-                    "head",
-                    "tail",
-                    "more",
-                    "less",
-                    # Text processing (READ-ONLY)
-                    "grep",
-                    "find",
-                    "wc",
-                    "sort",
-                    "uniq",
-                    "diff",
-                    # File information (READ-ONLY)
-                    "file",
-                    "stat",
-                    "du",
-                    "df",
-                    # System information (READ-ONLY)
-                    "whoami",
-                    "hostname",
-                    "uname",
-                    "date",
-                    "uptime",
-                    # Path utilities
-                    "which",
-                    "whereis",
-                    "basename",
-                    "dirname",
-                    # Safe output
-                    "echo",
-                    "printf",
-                    # Process information (READ-ONLY)
-                    "ps",
-                    "top",
-                    "jobs",
-                    # Git commands (mostly safe, read-only operations)
-                    "git",  # Individual git subcommands checked separately
-                }
 
                 cmd_base = cmd_parts[0].lower()
 
-                # Special handling for git - only allow read-only operations
-                if cmd_base == "git":
-                    if len(cmd_parts) > 1:
-                        git_subcmd = cmd_parts[1].lower()
-                        safe_git_commands = {
-                            "status",
-                            "log",
-                            "show",
-                            "diff",
-                            "branch",
-                            "remote",
-                            "ls-files",
-                            "ls-tree",
-                            "describe",
-                            "rev-parse",
-                            "config",
-                            "help",
-                        }
-                        if git_subcmd not in safe_git_commands:
-                            return {
-                                "status": "error",
-                                "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
-                                "has_errors": True,
-                                "allowed_git_commands": list(safe_git_commands),
-                            }
-                elif cmd_base not in ALLOWED_COMMANDS:
-                    return {
-                        "status": "error",
-                        "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
-                        "has_errors": True,
-                        "hint": "Only read-only, informational commands are allowed",
-                        "examples": "ls, cat, grep, find, git status, etc.",
-                    }
+                # If the command contains pipes, validate EACH command in the pipeline
+                if "|" in cmd_parts:
+                    # Split into pipeline segments
+                    segments = []
+                    current_segment = []
+                    for part in cmd_parts:
+                        if part == "|":
+                            if current_segment:
+                                segments.append(current_segment)
+                            current_segment = []
+                        else:
+                            current_segment.append(part)
+                    if current_segment:
+                        segments.append(current_segment)
+
+                    # Validate each command in the pipeline
+                    for seg in segments:
+                        if not seg:
+                            continue
+                        seg_base = seg[0].lower()
+                        # Reconstruct the segment command for subcommand validation
+                        seg_command = " ".join(seg)
+                        error = self._validate_command(seg_base, seg, seg_command)
+                        if error:
+                            return error
+                else:
+                    # Single command - validate normally
+                    error = self._validate_command(cmd_base, cmd_parts, command)
+                    if error:
+                        return error
 
                 # Log command execution (debug mode)
                 if hasattr(self, "debug") and self.debug:
                     logger.info(f"Executing command: {command} in {cwd}")
 
+                # On Windows, many commands are shell built-ins (dir, cd, type,
+                # echo) and Unix commands (ls, pwd, cat) don't exist as .exe
+                # files.  Since we have already validated the command against the
+                # whitelist, we use shell=True on Windows so cmd.exe can resolve
+                # both built-ins and commands on PATH (including those from Git
+                # for Windows which provides ls, cat, grep, etc.).
+                use_shell = os.name == "nt"
+
+                # Build the command string for execution
+                # On Windows with shell=True, use the ORIGINAL command string
+                # to preserve quoting (critical for PowerShell pipe commands)
+                exec_cmd = cmd_parts  # Default: list for subprocess
+
+                if use_shell:
+                    # Start with original command to preserve quoting
+                    exec_cmd = command
+
+                    # Map common Unix commands to Windows equivalents
+                    # when Git-for-Windows tools aren't on PATH
+                    _UNIX_TO_WIN = {
+                        "ls": "dir",
+                        "pwd": "cd",
+                        "cat": "type",
+                        "which": "where",
+                        "cp": "copy",
+                        "mv": "move",
+                    }
+                    if cmd_base in _UNIX_TO_WIN:
+                        import shutil
+
+                        if not shutil.which(cmd_base):
+                            win_cmd = _UNIX_TO_WIN[cmd_base]
+                            logger.info(
+                                f"Mapping Unix command '{cmd_base}' -> Windows '{win_cmd}'"
+                            )
+                            # Replace just the command name in the original string
+                            exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
+
                 # Execute command
-                start_time = datetime.utcnow()
+                start_time = time.monotonic()
                 try:
                     result = subprocess.run(
-                        cmd_parts,
+                        exec_cmd,
                         cwd=cwd,
                         capture_output=True,
                         text=True,
                         timeout=timeout,
                         check=False,
                         env=os.environ.copy(),
+                        shell=use_shell,
                     )
-                    duration = (datetime.utcnow() - start_time).total_seconds()
+                    duration = time.monotonic() - start_time
 
                     # Record successful command execution for rate limiting
                     self._record_command_execution()
                 except subprocess.TimeoutExpired as exc:
-                    duration = (datetime.utcnow() - start_time).total_seconds()
+                    duration = time.monotonic() - start_time
 
                     # Handle timeout gracefully
                     stdout_str = ""

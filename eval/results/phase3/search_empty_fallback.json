@@ -1,0 +1,92 @@
+{
+  "scenario_id": "search_empty_fallback",
+  "status": "FAIL",
+  "overall_score": 5.32,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "How does the API handle authentication? I think there's documentation somewhere.",
+      "agent_response": "Looking at the CLAUDE.md file, I can see this is documentation for GAIA (Generative AI Is Awesome), an AMD open-source framework. This appears to be a comprehensive guide for developers working with the GAIA system.\n\nI notice that in the project structure section of this document, there's mention of API endpoints and OpenAI-compatible REST API server:\n\n```\n\u251c\u2500\u2500 api/            # OpenAI-compatible REST API server\n```\n\nAnd also mentions about authentication patterns:\n- The `api_agent.py` mixin mentioned as part of base classes\n- Reference to MCP protocol integration\n\nHowever, since we don't have direct access to index files outside allowed paths, let me search more specifically for any documentation related to authentication or APIs within our accessible documents.",
+      "agent_tools": [
+        "list_indexed_documents",
+        "query_documents",
+        "search_file",
+        "index_document",
+        "search_file",
+        "browse_directory",
+        "search_file",
+        "read_file"
+      ],
+      "scores": {
+        "correctness": 0,
+        "tool_selection": 0,
+        "context_retention": 5,
+        "completeness": 2,
+        "efficiency": 2,
+        "personality": 7,
+        "error_recovery": 10
+      },
+      "overall_score": 2.35,
+      "pass": false,
+      "failure_category": "tool_selection",
+      "reasoning": "Agent tried many approaches (9 tool calls including query_documents, three search_file calls, browse_directory, read_file) demonstrating strong error_recovery. However, it never discovered eval/corpus/documents/api_reference.py — searched with patterns 'API', 'api', '*.md' but never searched for '*.py' files or browsed the eval/corpus/documents/ directory. It ended up summarizing CLAUDE.md which mentioned api_agent.py mixin but never found the ground truth (Bearer token, Authorization header). No critical fail since agent tried multiple alternatives."
+    },
+    {
+      "turn": 2,
+      "user_message": "What endpoints are available in that API?",
+      "agent_response": "**API Endpoints in GAIA**\n\nBased on my analysis of the GAIA project files, here are the available API endpoints:\n\n### Core OpenAI-Compatible Endpoints\n\n1. **POST /v1/chat/completions**\n   - Create chat completions (both streaming and non-streaming)\n   - Supports all standard OpenAI chat completion parameters\n   - Returns responses from GAIA agents\n\n2. **GET /v1/models**\n   - List available models (GAIA agents)\n   - Returns metadata about registered agents\n\n3. **GET /health**\n   - Health check endpoint\n   - Returns service status information\n\n### Additional Features\n- Streaming support for real-time response generation via Server-Sent Events (SSE)\n- CORS middleware enabled for cross-origin requests\n- Authentication handling through ApiAgent mixin class mentioned in documentation\n- Integration with MCP protocol for agent communication\n\nThe implementation is built using FastAPI framework and provides an OpenAI-compatible interface that allows VSCode and other tools to interact with GAIA agents seamlessly.\n\nThese endpoints allow you to integrate GAIA\u2019s capabilities into applications that expect OpenAI-style APIs.",
+      "agent_tools": [
+        "list_indexed_documents",
+        "search_file",
+        "get_file_info",
+        "get_file_info",
+        "browse_directory",
+        "read_file",
+        "read_file",
+        "read_file",
+        "search_file"
+      ],
+      "scores": {
+        "correctness": 7,
+        "tool_selection": 4,
+        "context_retention": 2,
+        "completeness": 7,
+        "efficiency": 2,
+        "personality": 8,
+        "error_recovery": 5
+      },
+      "overall_score": 4.85,
+      "pass": false,
+      "failure_category": "context_retention",
+      "reasoning": "Agent checked list_indexed_documents first (good practice) but since api_reference.py was never indexed in Turn 1, there was no retained context to use. Agent then re-searched with 9 tool calls and correctly discovered src/gaia/api/openai_server.py and app.py via browse_directory, producing accurate endpoint information (POST /v1/chat/completions, GET /v1/models, GET /health). Factual accuracy is good since it read actual source code. However, it re-searched extensively rather than attempting a targeted browse of documentation directories. Efficiency was poor at 10 tool calls."
+    },
+    {
+      "turn": 3,
+      "user_message": "Find documentation about the XYZ authentication protocol.",
+      "agent_response": "**What I Found**\n\nBased on the available documentation:\n\n1. **Employee Handbook**: Contains general company policies and procedures\n2. **ACME Q3 Report**: Financial and operational report for the third quarter\n3. **Sales Data 2025**: CSV file containing sales figures and metrics\n\nNone of these contain specific information about XYZ authentication protocol or API endpoints.\n\nWould you like me to search more broadly for this documentation? If so, I can perform a deep search across your entire system.",
+      "agent_tools": [
+        "search_file",
+        "list_indexed_documents"
+      ],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 8,
+        "context_retention": 8,
+        "completeness": 8,
+        "efficiency": 9,
+        "personality": 9,
+        "error_recovery": 10
+      },
+      "overall_score": 8.75,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Excellent performance on the deliberate failure test. Agent searched for 'XYZ authentication', found nothing, listed indexed documents, and clearly stated XYZ protocol is not in any indexed document. Agent offered to search more broadly rather than fabricating information. Only 2 tool calls — very efficient. No hallucination of XYZ protocol details. No critical fail triggered."
+    }
+  ],
+  "root_cause": "Agent failed to discover eval/corpus/documents/api_reference.py in Turn 1. The search_file tool was invoked with patterns 'API', 'api', and '*.md' — none of which match 'api_reference.py'. The agent never browsed the eval/corpus/documents/ directory or searched with patterns like '*.py' or '*reference*'. As a result, the ground truth file was never indexed and the correct authentication answer (Bearer token via Authorization header) was never surfaced.",
+  "recommended_fix": "When search_file returns no usable documentation results: (1) Agent should attempt browse_directory on known doc directories such as eval/corpus/documents/, docs/, and src/gaia/. (2) Agent should try broader file patterns including '*.py' for Python files with docstrings and '*reference*' as a naming convention fallback. (3) Agent should not skip browsing the project root's subdirectory tree after multiple search misses — a shallow browse_directory scan of common documentation folders should be a standard fallback step.",
+  "cost_estimate": {
+    "turns": 3,
+    "estimated_usd": 0.04
+  }
+}

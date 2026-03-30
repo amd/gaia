@@ -1,0 +1,44 @@
+id: table_extraction
+name: "HTML Table Extraction"
+category: rag_quality
+severity: high
+description: |
+  Agent must correctly parse and extract structured data from an HTML comparison
+  table. Tests the ability to read table cells, compare product attributes, and
+  answer fact-based questions about structured data in a web document.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: product_comparison
+      path: "eval/corpus/documents/product_comparison.html"
+
+turns:
+  - turn: 1
+    objective: "Ask 'How many integrations does each product support?'"
+    ground_truth:
+      doc_id: product_comparison
+      fact_ids: [integrations_a, integrations_b]
+      expected_answer: "StreamLine supports 10 integrations, ProFlow supports 25 integrations"
+    success_criteria: "Agent states StreamLine has 10 integrations and ProFlow has 25 integrations"
+
+  - turn: 2
+    objective: "Ask 'Which product has the better star rating and by how much?'"
+    ground_truth:
+      doc_id: product_comparison
+      fact_ids: [rating_a, rating_b]
+      expected_answer: "ProFlow with 4.7 vs StreamLine's 4.2 (0.5 star difference)"
+    success_criteria: "Agent identifies ProFlow as higher rated (4.7 vs 4.2)"
+
+  - turn: 3
+    objective: "Ask 'What is the price difference between the two products?'"
+    ground_truth:
+      doc_id: product_comparison
+      fact_id: price_diff
+      expected_answer: "$30/month (ProFlow costs more at $79 vs StreamLine's $49)"
+    success_criteria: "Agent states the price difference is $30/month with ProFlow being more expensive"
+
+expected_outcome: |
+  Agent correctly reads structured HTML table data to answer questions about
+  product attributes, ratings, and pricing comparisons.

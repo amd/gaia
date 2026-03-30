@@ -26,6 +26,13 @@ try:
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+    rprint = print
+    Panel = None
+    Console = None
+    Live = None
+    Spinner = None
+    Syntax = None
+    Table = None
     print(
         "Rich library not found. Install with 'uv pip install rich' for syntax highlighting."
     )
@@ -197,6 +204,14 @@ class OutputHandler(ABC):
     def print_header(self, text: str):  # pylint: disable=unused-argument
         """Print header. Optional - default no-op."""
         ...
+
+    def confirm_tool_execution(
+        self,
+        tool_name: str,  # pylint: disable=unused-argument
+        tool_args: Dict[str, Any],  # pylint: disable=unused-argument
+    ) -> bool:
+        """Request user confirmation before executing a tool. Returns True to proceed."""
+        return True
 
     def print_separator(self, length: int = 50):  # pylint: disable=unused-argument
         """Print separator. Optional - default no-op."""
@@ -2032,6 +2047,13 @@ class SilentConsole(OutputHandler):
             return
 
         # Use Rich table format (same as AgentConsole)
+        if not RICH_AVAILABLE:
+            # Fallback: print plain text stats
+            for key, value in stats.items():
+                if value is not None:
+                    print(f"  {key}: {value}")
+            return
+
         from rich.console import Console
         from rich.panel import Panel
         from rich.table import Table

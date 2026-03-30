@@ -74,6 +74,28 @@ class LemonadeProvider(LLMClient):
         # Default to low temperature for deterministic responses (matches old LLMClient behavior)
         kwargs.setdefault("temperature", 0.1)
 
+        # Repetition prevention: penalise recently-generated tokens so the
+        # model doesn't get stuck in a loop repeating tables, paragraphs, etc.
+        #
+        # We use TWO layers of protection:
+        #   1. OpenAI-standard params (frequency_penalty, presence_penalty) –
+        #      work in both streaming (OpenAI client) and non-streaming paths.
+        #   2. llama.cpp-native params (repeat_penalty, repeat_last_n) –
+        #      passed via extra_body for the streaming OpenAI client path,
+        #      and directly in kwargs for the non-streaming requests.post path.
+        #
+        # frequency_penalty: additive penalty proportional to token frequency
+        #                    in generated text so far (0.0 = off, 0.0–2.0 range)
+        # presence_penalty:  flat penalty if token appeared at all in output
+        #                    (0.0 = off, 0.0–2.0 range)
+        # repeat_penalty:    llama.cpp multiplicative penalty on tokens in the
+        #                    last repeat_last_n window (1.0 = off, 1.1–1.3 typical)
+        # repeat_last_n:     how far back to look (default 64; 256 covers tables)
+        kwargs.setdefault("frequency_penalty", 0.3)
+        kwargs.setdefault("presence_penalty", 0.1)
+        kwargs.setdefault("repeat_penalty", 1.1)
+        kwargs.setdefault("repeat_last_n", 256)
+
         response = self._backend.chat_completions(
             model=effective_model, messages=messages, stream=stream, **kwargs
         )
@@ -88,7 +110,10 @@ class LemonadeProvider(LLMClient):
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")
 
-        return response["choices"][0]["message"]["content"]
+        content = response["choices"][0]["message"]["content"]
+        if not content:
+            content = response["choices"][0]["message"].get("reasoning_content", "")
+        return content
 
     def embed(self, texts: list[str], **kwargs) -> list[list[float]]:
         response = self._backend.embeddings(texts, **kwargs)
@@ -115,13 +140,34 @@ class LemonadeProvider(LLMClient):
         return response["choices"][0]["text"]
 
     def _handle_stream(self, response) -> Iterator[str]:
+        in_thinking = False
         for chunk in response:
             if "choices" in chunk and chunk["choices"]:
                 delta = chunk["choices"][0].get("delta", {})
                 content = delta.get("content")
                 if content:
+                    # Close thinking block before yielding actual content
+                    if in_thinking:
+                        yield "</think>"
+                        in_thinking = False
                     yield content
-                elif "text" in chunk["choices"][0]:
-                    text = chunk["choices"][0]["text"]
-                    if text:
-                        yield text
+                else:
+                    # Thinking models (e.g. Qwen3.5) stream reasoning in a
+                    # separate field. Wrap in <think> tags so the UI can
+                    # display it in a collapsible section.
+                    reasoning = delta.get("reasoning_content")
+                    if reasoning:
+                        if not in_thinking:
+                            yield "<think>"
+                            in_thinking = True
+                        yield reasoning
+                    elif "text" in chunk["choices"][0]:
+                        text = chunk["choices"][0]["text"]
+                        if text:
+                            if in_thinking:
+                                yield "</think>"
+                                in_thinking = False
+                            yield text
+        # Close any unclosed thinking block at end of stream
+        if in_thinking:
+            yield "</think>"

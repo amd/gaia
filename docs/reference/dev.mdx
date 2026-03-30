@@ -175,6 +175,33 @@ GAIA includes Electron-based GUI applications. To run the JAX (Jira Agent Experi
 ./src/gaia/apps/jira/webui/run.sh
 ```
 
+### Agent UI Development
+
+Start the Agent UI (backend + frontend) with the convenience scripts:
+
+**Linux / macOS:**
+```bash
+./scripts/start-agent-ui.sh                # Start both backend + frontend
+./scripts/start-agent-ui.sh --backend-only # Backend only (port 4200)
+./scripts/start-agent-ui.sh --frontend-only # Frontend dev server only (port 5174)
+```
+
+**Windows PowerShell:**
+```powershell
+.\scripts\start-agent-ui.ps1               # Start both backend + frontend
+.\scripts\start-agent-ui.ps1 -BackendOnly  # Backend only (port 4200)
+.\scripts\start-agent-ui.ps1 -FrontendOnly # Frontend dev server only (port 5174)
+```
+
+Or start manually:
+```bash
+# Terminal 1: Backend
+uv run python -m gaia.ui.server --debug
+
+# Terminal 2: Frontend (Vite dev server with hot reload)
+cd src/gaia/apps/webui && npm run dev
+```
+
 ---
 
 ## Troubleshooting

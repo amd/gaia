@@ -1,14 +1,16 @@
 ---
 title: "v0.16.1"
-description: "C++ tool security, gaia init reliability, CI improvements"
+description: "Process Analyst Agent, C++ tool security, MCP config stacking, gaia init reliability, CI improvements"
 ---
 
 # GAIA v0.16.1 Release Notes
 
-**Patch release** with C++ tool security hardening, `gaia init` reliability fixes, Lemonade Server v10.0.0 update, and CI/CD improvements including a new doc link checker and scoped workflow triggers.
+**Patch release** with the Process Analyst Agent for C++, C++ tool security hardening, MCP config stacking, `gaia init` reliability fixes, Lemonade Server v10.0.0 update, and CI/CD improvements including a new doc link checker and scoped workflow triggers.
 
 **TL;DR:**
+- **New: Process Analyst Agent** — C++ agent for Windows process/service diagnostics with background monitoring and LemonadeClient
 - **New: C++ Tool Security** — Policy-based tool execution with confirmation prompts, allowlisting, and argument validation
+- **New: MCP Config Stacking** — Two-level config loading with improved tool display names
 - **Fix: `gaia init` reliability** — Improved version checks and MSI installer reliability
 - **Update: Lemonade Server v10.0.0** — Updated to latest Lemonade Server release
 - **CI: Doc link checker** — Automated broken link detection across documentation
@@ -18,6 +20,39 @@ description: "C++ tool security, gaia init reliability, CI improvements"
 ---
 
 ## What's New
+
+### Process Analyst Agent
+
+New C++ agent for Windows process and service diagnostics under `cpp/examples/process_agent.cpp` (PR #426):
+
+- **LemonadeClient C++ class** — Mirrors the Python `LemonadeClient`, handling HTTP communication with Lemonade Server from C++
+- **7 diagnostic tools** — `system_snapshot`, `list_processes`, `explain_item`, `kill_process`, `restart_process`, `restart_service`, and `quarantine_item`
+- **Background monitoring** — Continuous process monitoring with diff-based alerting that only reports changes, plus Windows balloon notifications for critical events
+- **Conversational diagnostics** — Ask natural-language questions about running processes and Windows services
+
+```cpp
+// Interactive agent — auto-analysis runs on startup, then action menu appears
+ProcessAgent agent("Qwen3-4B-Instruct-GGUF");
+agent.chat("What processes are consuming the most CPU?");
+
+// Background monitoring — scans every 5 minutes, alerts on changes
+SystemMonitor monitor("Qwen3-4B-Instruct-GGUF", std::chrono::seconds(300));
+monitor.start();
+```
+
+See the [Process Analyst documentation](/cpp/process-agent) for setup and usage.
+
+---
+
+### MCP Config Stacking & Tool Display Naming
+
+Improved MCP server configuration loading and tool naming (PR #477):
+
+- **Two-level config stacking** — Global config at `~/.gaia/mcp_servers.json` is merged with local `./mcp_servers.json`, allowing per-project overrides without duplicating shared server definitions
+- **Tool display names** — Tools now display as `tool_name (server)` instead of the opaque `mcp_server_tool` format, making it easier to identify which server provides each tool
+- **Connection summary panel** — Startup output now shows a compact summary of connected MCP servers and their available tools
+
+---
 
 ### C++ Tool Security Framework
 
@@ -81,7 +116,7 @@ cmake --build build --config Release
 
 ## Full Changelog
 
-**6 commits** since v0.16.0:
+**8 commits** since v0.16.0:
 
 - `e11e4a0` - Fix gaia init version checks and MSI reliability (#478)
 - `6693a0a` - ci: add doc link checker, scope workflow triggers, fix broken links (#499)
@@ -89,5 +124,7 @@ cmake --build build --config Release
 - `24c9e69` - Fix GAIA CLI Linux test hanging in merge queue (#445)
 - `aeaa8c5` - Update Lemonade Server to v10.0.0 (#498)
 - `e42a560` - Fixed broken links to amd-gaia.ai in README.md (#497)
+- `3b6518f` - feat(cpp): Process Analyst Agent with LemonadeClient and background monitoring (#426)
+- `f8fbec5` - Fix MCP config stacking and tool display naming (#477)
 
 Full Changelog: [v0.16.0...v0.16.1](https://github.com/amd/gaia/compare/v0.16.0...HEAD)

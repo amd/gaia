@@ -55,7 +55,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system pytest pytest-cov
+          uv pip install --system pytest pytest-cov pytest-asyncio
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity

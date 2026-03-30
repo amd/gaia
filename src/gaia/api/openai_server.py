@@ -195,13 +195,14 @@ async def create_chat_completion(request: ChatCompletionRequest):
         for i, msg in enumerate(request.messages):
             logger.debug(f"Message {i}:")
             logger.debug(f"  Role: {msg.role}")
-            # Preview content (truncate if too long)
+            # Preview content (truncate if too long); guard against None content
+            content_text = msg.content or ""
             content_preview = (
-                msg.content[:500] if len(msg.content) > 500 else msg.content
+                content_text[:500] if len(content_text) > 500 else content_text
             )
-            if len(msg.content) > 500:
+            if len(content_text) > 500:
                 content_preview += (
-                    f"\n  ... (truncated, total length: {len(msg.content)} chars)"
+                    f"\n  ... (truncated, total length: {len(content_text)} chars)"
                 )
             logger.debug(f"  Content:\n{content_preview}")
             logger.debug("-" * 40)

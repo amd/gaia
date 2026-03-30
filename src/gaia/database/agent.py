@@ -163,6 +163,16 @@ class DatabaseAgent(Agent, DatabaseMixin):
             Returns:
                 Dictionary with 'columns' (list of column info dicts)
             """
+            # Validate table name to prevent SQL injection
+            # (PRAGMA doesn't support parameterized queries)
+            import re
+
+            if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", table):
+                return {
+                    "error": f"Invalid table name: {table}",
+                    "table": table,
+                    "columns": [],
+                }
             rows = agent.query(f"PRAGMA table_info({table})")
             columns = [
                 {

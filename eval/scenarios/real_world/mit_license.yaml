@@ -1,0 +1,40 @@
+id: mit_license
+name: "MIT License Short-Form Legal Parsing"
+category: real_world
+severity: medium
+description: |
+  Agent must parse the MIT License text and answer compliance questions.
+  Tests short-form legal document comprehension, permission lookup, and
+  hallucination resistance on patent grant differences not stated in MIT text itself.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: mit_license
+      path: "eval/corpus/real_world/legal/mit_license.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask what the single condition required by the MIT License is and whether commercial use is allowed."
+    ground_truth:
+      doc_id: mit_license
+      expected_answer: "The copyright notice and permission notice must be included in all copies or substantial portions; commercial use is allowed"
+    success_criteria: |
+      Agent correctly states the single condition (copyright/permission notice in copies)
+      and confirms commercial use is permitted.
+      FAIL if agent invents additional conditions or denies commercial use.
+
+  - turn: 2
+    objective: "Ask whether the MIT License includes an explicit patent grant."
+    ground_truth:
+      doc_id: mit_license
+      expected_answer: "No — unlike Apache 2.0, MIT does not include an explicit patent grant"
+    success_criteria: |
+      Agent correctly states that MIT does not include an explicit patent grant,
+      optionally noting the contrast with Apache 2.0.
+      FAIL if agent claims MIT includes a patent grant.
+
+expected_outcome: |
+  Agent correctly parses MIT License terms, identifies the single condition,
+  and accurately reports the absence of an explicit patent grant.
