@@ -5,6 +5,7 @@
 #include <gaia/types.h>
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 
 using namespace gaia;
@@ -170,8 +171,7 @@ TEST(TypesTest, AgentConfigFromJsonFileNotFound) {
 
 TEST(TypesTest, AgentConfigFromJsonFileMalformed) {
     // Write a temp file with invalid JSON
-    const char* tmpDir = std::getenv("TMPDIR");
-    std::string tmpPath = std::string(tmpDir ? tmpDir : "/tmp") + "/gaia_test_malformed.json";
+    std::string tmpPath = (std::filesystem::temp_directory_path() / "gaia_test_malformed.json").string();
     {
         std::ofstream f(tmpPath);
         f << "{ invalid json }";
@@ -181,8 +181,7 @@ TEST(TypesTest, AgentConfigFromJsonFileMalformed) {
 }
 
 TEST(TypesTest, AgentConfigFromJsonFileValid) {
-    const char* tmpDir = std::getenv("TMPDIR");
-    std::string tmpPath = std::string(tmpDir ? tmpDir : "/tmp") + "/gaia_test_valid.json";
+    std::string tmpPath = (std::filesystem::temp_directory_path() / "gaia_test_valid.json").string();
     {
         std::ofstream f(tmpPath);
         f << R"({"maxSteps": 5, "maxTokens": 1024, "temperature": 0.3})";
