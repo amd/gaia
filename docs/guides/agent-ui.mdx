@@ -6,6 +6,10 @@ icon: "desktop"
 
 GAIA Agent UI is a desktop interface for running AI agents **100% locally** on your AMD hardware. Use agents to analyze documents, generate code, answer questions, and accomplish tasks on your PC — all without sending data to the cloud.
 
+<Info>
+  This guide assumes you have completed the [Quickstart](/quickstart) and have GAIA installed.
+</Info>
+
 <Warning>
   **Tested Configuration:** The Agent UI has been tested exclusively on **AMD Ryzen AI MAX+ 395** processors running the **Qwen3.5-35B-A3B-GGUF** model via Lemonade Server. Other hardware or model combinations may work but are not officially verified.
 
@@ -99,6 +103,10 @@ Choose one of the two install paths:
 
     The Agent UI starts on [http://localhost:4200](http://localhost:4200). Open this URL in your browser.
 
+    <Note>
+      **Source/dev installs:** The frontend is built during `gaia init`. If you see a JSON response instead of the UI, run `gaia init` or manually build with `cd src/gaia/apps/webui && npm install && npm run build`.
+    </Note>
+
     **Options:**
 
     | Flag | Description |
@@ -166,17 +174,11 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
 
 <AccordionGroup>
   <Accordion title="Lemonade Server not running">
-    ```bash
-    lemonade-server serve
-    ```
-
-    If not installed, run `gaia init --profile minimal` or follow the [Setup Guide](/setup).
+    Start Lemonade with `lemonade-server serve`. If Lemonade is not installed, follow the initialization steps in the [Quickstart](/quickstart#cli-install).
   </Accordion>
 
   <Accordion title="No model loaded">
-    ```bash
-    gaia download --agent chat
-    ```
+    Download models with `gaia init --profile chat`. See the [Quickstart](/quickstart#cli-install) for details.
   </Accordion>
 
   <Accordion title="Port 4200 already in use">
@@ -197,6 +199,20 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
     - Ensure the file is a supported format and not password-protected
     - Keep file size under 100MB
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
+  </Accordion>
+
+  <Accordion title="Frontend shows JSON instead of the UI">
+    The Agent UI frontend has not been built.
+
+    **Source/dev installs (git clone):** Run `gaia init` to build it automatically, or manually:
+
+    ```bash
+    cd src/gaia/apps/webui && npm install && npm run build
+    ```
+
+    Then restart `gaia chat --ui`.
+
+    **pip/PyPI installs:** Use the [npm install path](#install-and-launch) instead — the pip package does not include frontend source files.
   </Accordion>
 </AccordionGroup>
 
