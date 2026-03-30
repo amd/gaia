@@ -205,6 +205,14 @@ class OutputHandler(ABC):
         """Print header. Optional - default no-op."""
         ...
 
+    def confirm_tool_execution(
+        self,
+        tool_name: str,  # pylint: disable=unused-argument
+        tool_args: Dict[str, Any],  # pylint: disable=unused-argument
+    ) -> bool:
+        """Request user confirmation before executing a tool. Returns True to proceed."""
+        return True
+
     def print_separator(self, length: int = 50):  # pylint: disable=unused-argument
         """Print separator. Optional - default no-op."""
         ...

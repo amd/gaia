@@ -140,8 +140,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: '22'
 
       - name: Install dependencies
         working-directory: src/gaia/apps/webui
@@ -153,9 +152,7 @@ jobs:
 
       - name: Publish @amd-gaia/agent-ui
         working-directory: src/gaia/apps/webui
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
 
       - name: Published successfully
         run: |

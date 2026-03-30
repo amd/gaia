@@ -81,7 +81,7 @@ interface FilePreview {
 }
 
 export function FileBrowser() {
-    const { setShowFileBrowser } = useChatStore();
+    const { setShowFileBrowser, currentSessionId, updateSessionInList } = useChatStore();
 
     // Browse state
     const [currentPath, setCurrentPath] = useState<string>('');
@@ -236,19 +236,39 @@ export function FileBrowser() {
         let success = 0;
         let failed = 0;
         let lastError = '';
+        const newDocIds: string[] = [];
         const folderPaths = new Set(entries.filter(e => e.type === 'folder').map(e => e.path));
         for (const filepath of supportedFiles) {
             try {
                 if (folderPaths.has(filepath)) {
-                    await api.indexFolder(filepath);
+                    const result = await api.indexFolder(filepath);
+                    result.documents.forEach(d => { if (d.id) newDocIds.push(d.id); });
                 } else {
-                    await api.uploadDocumentByPath(filepath);
+                    const doc = await api.uploadDocumentByPath(filepath);
+                    if (doc?.id) newDocIds.push(doc.id);
                 }
                 success++;
                 setIndexStatus(`Indexed ${success}/${supportedFiles.length}...`);
             } catch (err) {
                 failed++;
                 lastError = err instanceof Error ? err.message : 'Unknown error';
+            }
+        }
+
+        // Auto-attach successfully indexed documents to the active session
+        if (currentSessionId && newDocIds.length > 0) {
+            for (const docId of newDocIds) {
+                try {
+                    await api.attachDocument(currentSessionId, docId);
+                } catch (attachErr) {
+                    log.doc.warn(`Could not attach document to session: ${attachErr}`);
+                }
+            }
+            const freshSession = useChatStore.getState().sessions.find(s => s.id === currentSessionId);
+            const existing = freshSession?.document_ids ?? [];
+            const toAdd = newDocIds.filter(id => !existing.includes(id));
+            if (toAdd.length > 0) {
+                updateSessionInList(currentSessionId, { document_ids: [...existing, ...toAdd] });
             }
         }
 
@@ -268,7 +288,7 @@ export function FileBrowser() {
         if (indexStatusTimerRef.current) clearTimeout(indexStatusTimerRef.current);
         indexStatusTimerRef.current = setTimeout(() => setIndexStatus(null), 5000);
         setSelectedFiles(new Set());
-    }, [selectedFiles]);
+    }, [selectedFiles, currentSessionId, updateSessionInList]);
 
     const handleAskAgent = useCallback(() => {
         if (selectedFiles.size === 0) return;

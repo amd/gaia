@@ -69,6 +69,7 @@ gaia --cli      # Launch interactive CLI chat instead
 | `--ui` | Launch the Agent UI (browser-based chat interface) — this is the default |
 | `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
 | `--cli` | Launch interactive CLI chat |
+| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:8000/api/v1`). |
 
 **Examples:**
 
@@ -84,10 +85,14 @@ gaia --ui-port 8080
 ```bash Launch CLI Chat
 gaia --cli
 ```
+
+```bash Remote Lemonade Server
+gaia --ui --base-url https://your-server:8000/api/v1
+```
 </CodeGroup>
 
 <Note>
-  `gaia chat --ui` continues to work as an alias.
+  `gaia chat --ui` continues to work as an alias. The Agent UI requires an AMD Ryzen AI Max (Strix Halo) or an AMD Radeon GPU with ≥ 24 GB VRAM. If your device is not supported, a dismissible warning banner will appear in the UI.
 </Note>
 
 ---
@@ -136,11 +141,15 @@ gaia init [OPTIONS]
 |---------|--------|-------------|-------------|
 | `minimal` | Qwen3-0.6B | Fast setup with lightweight model | ~400 MB |
 | `sd` | SD-Turbo | Image generation with Stable Diffusion | ~8 GB |
-| `chat` | Qwen3-Coder-30B, nomic-embed, Qwen3-VL-4B | Interactive chat with RAG and vision | ~25 GB |
-| `code` | Qwen3-Coder-30B | Autonomous coding assistant | ~18 GB |
-| `rag` | Qwen3-Coder-30B, nomic-embed, Qwen3-VL-4B | Document Q&A with retrieval and vision | ~25 GB |
-| `mcp` | Qwen3-Coder-30B | MCP bridge server for external integrations | ~18 GB |
-| `vlm` | Qwen3-VL-4B | Vision pipeline for document and image extraction | ~3 GB |
+| `chat` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Interactive chat with RAG and vision | ~25 GB |
+| `code` | Qwen3.5-35B | Autonomous coding assistant | ~18 GB |
+| `talk` | Qwen3.5-35B | Voice-enabled chat | ~18 GB |
+| `rag` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Document Q&A with retrieval and vision | ~25 GB |
+| `blender` | Qwen3.5-35B | 3D content generation in Blender | ~18 GB |
+| `jira` | Qwen3.5-35B | Jira issue management | ~18 GB |
+| `docker` | Qwen3.5-35B | Docker container management | ~18 GB |
+| `mcp` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Model Context Protocol bridge server with vision | ~25 GB |
+| `vlm` | Qwen3-VL-4B | Image understanding and analysis | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
@@ -395,11 +404,13 @@ gaia chat [MESSAGE] [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
-| `--model` | string | Qwen3-Coder-30B-A3B-Instruct-GGUF | Model name to use |
+| `--model` | string | Qwen3.5-35B-A3B-GGUF | Model name to use |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
 | `--chunk-size` | integer | 500 | Document chunk size for RAG |
 | `--max-chunks` | integer | 3 | Maximum chunks to retrieve for RAG |
+| `--max-indexed-files` | integer | 100 | Maximum number of files to keep indexed. Evicts least-recently-accessed files when LRU eviction is enabled; rejects new files when disabled. |
+| `--max-total-chunks` | integer | 10000 | Maximum total chunks across all indexed files. Same eviction behavior as `--max-indexed-files`. |
 | `--stats` | flag | false | Show performance statistics |
 | `--streaming` | flag | false | Enable streaming responses |
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
@@ -433,7 +444,7 @@ gaia chat --index report.pdf --query "Summarize the report"
 
 ```bash Custom Settings
 gaia chat \
-  --model Qwen3-Coder-30B-A3B-Instruct-GGUF \
+  --model Qwen3.5-35B-A3B-GGUF \
   --streaming \
   --show-stats
 ```
@@ -999,8 +1010,8 @@ gaia download --agent code
 ```
 📥 Downloading 3 model(s) for 'chat'...
 
-📥 Qwen3-Coder-30B-A3B-Instruct-GGUF
-   ⏳ [1/31] Qwen3-Coder-30B-A3B-Q4_K_M.gguf: 3.5 GB/17.7 GB (20%)
+📥 Qwen3.5-35B-A3B-GGUF
+   ⏳ [1/31] Qwen3.5-35B-A3B-Q4_K_M.gguf: 3.5 GB/17.7 GB (20%)
    ...
    ✅ Download complete
 

@@ -51,7 +51,6 @@ interface PromptInnerProps {
 }
 
 function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
-  const [remember, setRemember] = useState(false);
   const hasTimeout = notification.timeoutSeconds != null && notification.timeoutSeconds > 0;
   const [countdown, setCountdown] = useState<number | null>(
     hasTimeout ? notification.timeoutSeconds! : null
@@ -60,6 +59,7 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
 
   // State for UI disabled + ref guard for handler (ref avoids recreating useCallback)
   const [isResponding, setIsResponding] = useState(false);
+  const [remember, setRemember] = useState(false);
   const isRespondingRef = useRef(false);
 
   // Stable ref for onRespond to avoid stale closures in timer
@@ -108,7 +108,7 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
       isRespondingRef.current = false;
       setIsResponding(false);
     }
-  }, [notification.id, remember, onRespond]);
+  }, [notification.id, onRespond, remember]);
 
   const handleDeny = useCallback(async () => {
     if (isRespondingRef.current) return;
@@ -116,12 +116,12 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
     setIsResponding(true);
     if (timerRef.current) clearInterval(timerRef.current);
     try {
-      await onRespond(notification.id, 'deny', remember);
+      await onRespond(notification.id, 'deny', false);
     } finally {
       isRespondingRef.current = false;
       setIsResponding(false);
     }
-  }, [notification.id, remember, onRespond]);
+  }, [notification.id, onRespond]);
 
   // Handle keyboard shortcuts — preventDefault stops lower-priority Escape handlers
   useEffect(() => {
@@ -190,19 +190,18 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
             <span>This is a critical-tier operation</span>
           </div>
         )}
-      </div>
 
-      {/* Remember checkbox — only shown when a specific tool is identified */}
-      {notification.tool && (
+        {/* Remember choice */}
         <label className="permission-remember">
           <input
             type="checkbox"
             checked={remember}
             onChange={(e) => setRemember(e.target.checked)}
+            disabled={isResponding}
           />
-          <span>Remember this choice for <code>{notification.tool}</code></span>
+          <span>Always allow this tool</span>
         </label>
-      )}
+      </div>
 
       {/* Actions */}
       <div className="permission-actions">

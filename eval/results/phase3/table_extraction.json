@@ -1,0 +1,80 @@
+{
+  "scenario_id": "table_extraction",
+  "status": "FAIL",
+  "overall_score": 5.17,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "What was the best-selling product in March 2025 by revenue?",
+      "agent_response": "Looking at the CSV data I've extracted from sales_data_2025.csv (which contains only January and February 2025 records), I can see that there are no March 2025 entries in this dataset. The file appears to contain sales data for early 2025 but is missing all March records.\n\nBased on the available data:\n- All dates in the file are either from January or February 2025\n- There's only one product listed: Widget Pro X\n- No revenue figures exist for March 2025\n\nSince there are no actual March 2025 sales records in the indexed document files provided by the user, I cannot determine which product was best-selling by revenue during that month.",
+      "agent_tools": ["list_indexed_documents", "get_file_info", "query_specific_file", "query_specific_file", "analyze_data_file", "query_documents", "read_file"],
+      "scores": {
+        "correctness": 5,
+        "tool_selection": 8,
+        "context_retention": 7,
+        "completeness": 4,
+        "efficiency": 4,
+        "personality": 8,
+        "error_recovery": 8
+      },
+      "overall_score": 6.05,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent correctly named Widget Pro X (the right product) but concluded March 2025 data does not exist in the index rather than identifying it as the best-seller. With only 2 RAG chunks indexed, the March rows were not visible. The agent did not refuse — it used 7 tools including read_file, honestly acknowledged the data limitation, and avoided hallucinating a revenue figure. correctness=5 (right product named, wrong framing, no revenue); error_recovery=8 (transparent about what data was missing)."
+    },
+    {
+      "turn": 2,
+      "user_message": "What was the total Q1 2025 revenue across all products?",
+      "agent_response": "Based on my analysis of the available documents, I can provide the Q1 2025 revenue breakdown as follows:\n\nQ1 2025 Revenue Summary:\n- January 2025: $36,800 (from sales_data_2025.csv)\n- February 2025: $37,600 (from sales_data_2025.csv)\n- March 2025: No data available in indexed files\n\nTotal Q1 2025 Revenue: Approximately $74,400 across January and February only.\n\nThe March 2025 records are missing from the indexed CSV file. For complete Q1 figures including March, you would need to add the March data or access a full year's worth of sales records.",
+      "agent_tools": ["query_documents", "query_documents", "query_specific_file", "query_specific_file", "query_specific_file"],
+      "scores": {
+        "correctness": 0,
+        "tool_selection": 8,
+        "context_retention": 8,
+        "completeness": 5,
+        "efficiency": 7,
+        "personality": 7,
+        "error_recovery": 8
+      },
+      "overall_score": 5.40,
+      "pass": false,
+      "failure_category": "WRONG_AGGREGATE",
+      "reasoning": "Ground truth is $342,150; agent returned $74,400 (Jan+Feb sample only). The RAG index holds only 2 chunks representing a small fraction of the 500-row CSV, so the agent's partial total is based on an unrepresentative sample. However, it correctly acknowledged March data was missing and did not fabricate a full-year figure. correctness=0 (total is wrong by ~78%); error_recovery=8 (honest about March gap); context_retention=8 (maintained continuity with Turn 1 conclusion)."
+    },
+    {
+      "turn": 3,
+      "user_message": "Who was the top salesperson by total revenue in Q1?",
+      "agent_response": "Based on my analysis of the Q1 2025 sales data in sales_data_2025.csv:\n\nTop Salesperson by Revenue:\n- Maria Garcia: $7,800 (16 deals)\n- John Smith: $7,800 (16 deals)\n- David Kim: $7,800 (16 deals)\n- Emily Brown: $7,800 (16 deals)\n- Sarah Chen: $3,600 (4 deals)\n\nAll top performers tied with exactly $7,800 in revenue during Q1 2025.",
+      "agent_tools": ["query_documents", "query_documents", "query_specific_file", "query_specific_file"],
+      "scores": {
+        "correctness": 0,
+        "tool_selection": 7,
+        "context_retention": 4,
+        "completeness": 4,
+        "efficiency": 8,
+        "personality": 6,
+        "error_recovery": 3
+      },
+      "overall_score": 4.05,
+      "pass": false,
+      "failure_category": "WRONG_RANKING_AND_AMOUNTS",
+      "reasoning": "Ground truth is Sarah Chen at $70,000; agent ranked her last at $3,600 and gave the top spot to four other salespeople each at $7,800. The agent presented fabricated-from-sample numbers as definitive rather than acknowledging the data was partial — a regression from the honesty shown in Turns 1–2. Also inconsistent with Turn 2 (total changed from $74,400 to $48,600 unexplained). error_recovery=3 because the agent stopped caveating its limitations and instead presented a confident but wrong leaderboard."
+    }
+  ],
+  "root_cause": "CSV file (26 KB, ~500 rows) was chunked into only 2 RAG chunks, giving the agent visibility into fewer than ~50 rows. The sample contained disproportionately Jan/Feb rows and under-represented March and the full salesperson distribution. Aggregation tasks (SUM, RANK) are inherently unreliable over RAG chunks because vector similarity retrieval cannot guarantee that all relevant rows are returned.",
+  "recommended_fix": "1. Increase chunk granularity for CSV files (e.g., one chunk per N rows instead of splitting on token count). 2. Add a dedicated 'analyze_data_file' tool that reads the full CSV and executes pandas-style aggregations rather than relying on RAG retrieval. 3. Detect CSV/tabular files at index time and warn the user that full-dataset aggregation may require direct file access. 4. In Turn 3 the agent lost its self-awareness of data gaps — consider a post-tool consistency check that re-applies the March-missing caveat to aggregation answers.",
+  "cost_estimate": {
+    "turns": 3,
+    "estimated_usd": 0.04
+  },
+  "metadata": {
+    "session_id": "d2704493-6f18-402c-bc31-05f78746dea1",
+    "chunk_count": 2,
+    "model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    "embedding_model_loaded": true,
+    "run_timestamp": "2026-03-20T03:46:07Z",
+    "infra_status": "OK",
+    "critical_failure": false,
+    "notes": "Only 2 RAG chunks indexed from a ~500-row CSV. Agent correctly avoided a CRITICAL FAIL by attempting all queries. Partial credit applied per scenario rules for honest acknowledgment of data limitations in Turns 1–2. Turn 3 regressed by presenting fabricated-from-sample data without caveats."
+  }
+}

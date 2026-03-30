@@ -293,7 +293,7 @@ class TestStdioTransport:
         assert stderr == ""
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="Signal names not available on Windows"
+        sys.platform == "win32", reason="Unix signals not available on Windows"
     )
     def test_format_exit_code_with_signal(self):
         """Test that _format_exit_code translates signal numbers to names."""
@@ -303,7 +303,7 @@ class TestStdioTransport:
         assert "SIGSEGV" in result
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="Signal names not available on Windows"
+        sys.platform == "win32", reason="SIGKILL not available on Windows"
     )
     def test_format_exit_code_with_sigkill(self):
         """Test _format_exit_code for SIGKILL (-9)."""

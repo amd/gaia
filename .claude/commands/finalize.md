@@ -1,123 +1,143 @@
-Get the current feature branch ready for PR merge. Follow these phases exactly.
+---
+description: Finalizes implementation by rebasing onto main, running the GAIA claude.yml code review (Opus), fixing issues, linting, and looping until tests pass.
+---
 
-## Phase 1: Merge Latest Main
+You are finalizing the current branch's implementation. Work through the following steps in order. Be thorough and methodical — fix every issue you find before moving on.
 
-1. Capture current branch: `git branch --show-current`
-2. Check for dirty working tree: `git status --porcelain`
-   - If dirty: `git stash`
-3. `git checkout main && git pull origin main`
-4. `git checkout <branch> && git merge main`
-5. If merge conflicts exist (git status shows conflict markers):
-   - Report the conflicting files
-   - **STOP** — do not proceed. The user must resolve conflicts manually.
-6. If stashed: `git stash pop`
+---
 
-## Phase 2: Local PR Review (Replicating claude.yml)
+## Step 1: Rebase onto Latest Main
 
-### Generate diff artifacts
-```bash
+1. Record the current branch: `git rev-parse --abbrev-ref HEAD`
+2. Verify the working tree is clean: `git status --porcelain`
+   - If dirty: stop and tell the user to commit or stash their changes first.
+3. Fetch latest: `git fetch origin main`
+4. Rebase onto main: `git rebase origin/main`
+   - If conflicts arise, resolve them per-commit. Prefer the feature branch intent unless main has clearly superseded it. After resolving each conflict: `git add <files>` then `git rebase --continue`.
+   - If the rebase becomes intractable, run `git rebase --abort` and fall back to `git merge origin/main` with a warning to the user.
+5. Push the rebased branch:
+   - If no remote tracking branch exists yet: `git push -u origin <branch>`
+   - If remote branch exists: `git push --force-with-lease`
+6. Confirm success: `git log --oneline origin/main..HEAD` should show only feature commits, no merge commits.
+
+---
+
+## Step 2: Code Review (claude.yml Equivalent — Use Opus Agent)
+
+This step replicates what the project's `.github/workflows/claude.yml` GitHub Action does when a PR is opened.
+
+### 2a. Generate the diff
+
+Run these commands to produce the review inputs:
+```
 git diff origin/main...HEAD > pr-diff.txt
 git diff --name-status origin/main...HEAD > pr-files.txt
 ```
 
-### Self-review using the claude.yml checklist
+### 2b. Check for an existing PR and its review comments
 
-Read `.github/workflows/claude.yml` lines 78–246 for the full review criteria. Apply that same checklist to the current branch changes.
-
-**File reading strategy:**
-- Read `pr-diff.txt` first — it shows ALL changes
-- Read `pr-files.txt` to see which files changed
-- For large files (>1000 lines), use Grep with context or Read with offset/limit — do NOT read the entire file
-- Focus on reviewing CHANGED code, not entire files
-
-**Apply all 7 review sections:**
-
-1. **Code Quality & Patterns** — architecture consistency, pattern reuse, error handling, code style, CLAUDE.md compliance
-2. **Security** — SQL injection, command injection, XSS, secrets exposure, path traversal, unsafe deserialization, resource cleanup
-3. **Testing** — tests exist for new functionality, edge cases covered, test quality
-4. **Documentation** — docs updated for new features/CLI commands/SDK changes
-5. **Breaking Changes & Compatibility** — public API changes, backward compatibility
-6. **Performance & Architecture** — N+1 queries, inefficient algorithms, unnecessary dependencies
-7. **Commit Quality** — commit messages are clear and logical
-
-**Classify all findings:**
-- 🔴 **Critical** — Security issues, breaking changes, data loss risks
-- 🟡 **Important** — Bugs, architectural concerns, missing tests
-- 🟢 **Minor** — Style issues, optimizations, suggestions
-
-**DO NOT review or flag:**
-- Copyright headers (presence, absence, or year inconsistencies)
-- SPDX license identifiers
-- License-related boilerplate
-
-### Fix findings
-- Fix all 🔴 Critical and 🟡 Important issues immediately using Edit/Write tools
-- Skip 🟢 Minor issues unless the fix is trivial (one-liner)
-- For security issues: fix them directly
-
-### Clean up diff artifacts
-```bash
-rm -f pr-diff.txt pr-files.txt
+Check if there is an open pull request for this branch:
+```
+gh pr list --head <branch> --json number,title,url
 ```
 
-## Phase 3: Ralph Wiggum Loop
+If a PR exists:
+- Fetch existing Claude bot review comments: `gh pr view <number> --comments`
+- Note any 🔴 Critical or 🟡 Important issues already flagged by the claude.yml action
 
-Loop until everything is green, **maximum 5 iterations**.
+### 2c. Launch the code-reviewer Opus agent
 
-On each iteration:
+Use the **code-reviewer** sub-agent (which uses Claude Opus) to perform a full code review of `pr-diff.txt` and `pr-files.txt`. Instruct it to follow the same checklist as the `claude.yml` review:
 
-### Step 1: Re-run local PR review
-Repeat Phase 2 (generate diffs, review, fix, clean up). If no new 🔴/🟡 issues, proceed to Step 2.
+**Review checklist (from claude.yml):**
+- Code Quality & Patterns: architecture consistency, error handling, code style
+- Security: SQL injection, command injection, XSS, secrets exposure, path traversal, unsafe deserialization, resource cleanup
+- Testing: tests exist for new functionality, edge cases covered
+- Documentation: docs/ updated for new features, CLI reference updated if needed
+- Breaking Changes: public API compatibility
+- Performance: N+1 queries, inefficient algorithms, unnecessary dependencies
 
-### Step 2: Lint
-```bash
+**Severity classification:**
+- 🔴 Critical — security issues, breaking changes, data loss risks
+- 🟡 Important — bugs, architectural concerns, missing tests
+- 🟢 Minor — style, optimizations (fix these too if easy)
+
+**Do NOT flag:** Copyright headers, SPDX license identifiers.
+
+### 2d. Fix all Critical and Important issues
+
+Address every 🔴 Critical and 🟡 Important item found by the code-reviewer agent. Also fix 🟢 Minor issues when straightforward. After fixing, do a quick re-read of changed files to verify correctness.
+
+---
+
+## Step 3: The Ralph Wiggum Loop
+
+Repeat this loop until **all three conditions pass**:
+- ✅ Lint passes with no errors
+- ✅ Code review finds no Critical or Important issues
+- ✅ Unit tests pass
+
+### 3a. Lint
+
+Run the linter with auto-fix:
+```
 python util/lint.py --all --fix
 ```
-Check exit code. If lint still reports failures after `--fix`:
-- Read the lint output carefully
-- Manually fix remaining issues using Edit (common: import ordering, line length, f-string issues black can't auto-fix)
-- Re-run `python util/lint.py --all` to verify clean
 
-### Step 3: Run tests
-```bash
+Check the output. If the linter reports issues it could not auto-fix, fix them manually. Common issues:
+- Import ordering (isort violations) — reorder imports
+- Formatting (black violations) — reformat the affected code
+- Trailing whitespace, missing newlines at EOF
+
+Re-run lint to confirm it passes cleanly before continuing.
+
+### 3b. Re-run Code Review (Opus agent)
+
+Launch the **code-reviewer** agent again on the current diff (`git diff origin/main...HEAD`) to check if your fixes introduced any new issues or if any Critical/Important items remain unresolved.
+
+Fix any newly found Critical or Important issues.
+
+### 3c. Run Unit Tests
+
+```
+python -m pytest tests/unit/ -x --tb=short
+```
+
+The `-x` flag stops at the first failure. Analyze failures:
+- Read the full traceback
+- Identify the root cause (changed interface, broken import, logic error, etc.)
+- Fix the underlying issue — do NOT skip or mock away real failures
+- Re-run tests to confirm the fix
+
+If all unit tests pass, optionally run the full test suite:
+```
 python -m pytest tests/ -x --tb=short
 ```
-- `-x` stops on first failure — analyze and fix before continuing
-- Tests requiring external services (Lemonade server) skip automatically via pytest markers
-- If tests fail: read the traceback, identify root cause, fix with Edit, then re-run
+(Skip integration tests that require external services like Lemonade if they are not running)
 
-### Step 4: Evaluate
-- If lint is clean AND tests pass AND no 🔴/🟡 issues in review → **exit loop, report success**
-- If max iterations (5) reached → report remaining issues and stop
+### 3d. Loop Control
 
-## Exit Report
+After completing 3a–3c:
+- If **any step failed**, return to 3a and repeat
+- If **all steps passed**, exit the loop
 
-Always end with:
+---
+
+## Completion
+
+When the loop exits with everything passing, report:
 
 ```
-## Finalize Implementation Report
+✅ FINALIZE COMPLETE
 
-**Branch:** <branch-name>
-**Iterations:** <n>/5
+Branch: <branch-name>
+Rebased onto: main
 
-### Lint
-✅ Clean / ❌ <remaining issues>
+Code Review: No Critical or Important issues remaining
+Lint: Passing
+Tests: All unit tests passing
 
-### Tests
-✅ All passed (<N> tests) / ❌ <failure summary>
-
-### PR Review Verdict
-✅ Approve / ✅ Approve with suggestions (minor only) / ❌ Request changes — <summary>
-
-### Ready for PR
-✅ Yes — branch is ready to open/update PR
-❌ No — <list remaining blocking issues for user to resolve>
+Ready for PR review / merge.
 ```
 
-## Key Behaviors
-
-- **Never commit** — only fix files; the user decides when to commit
-- **Never skip the lint step** — lint failures will be caught by CI
-- **Prefer Edit over Write** — surgical fixes only
-- **Preserve existing tests** — if your fixes break tests, undo and rethink
-- **If uncertain about a fix** — describe the issue and ask rather than guessing
+If a PR already exists, note its URL so the user can submit it for final merge.

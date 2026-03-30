@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
-    model TEXT NOT NULL DEFAULT 'Qwen3-Coder-30B-A3B-Instruct-GGUF',
+    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-GGUF',
     system_prompt TEXT
 );
 
@@ -62,6 +62,11 @@ CREATE TABLE IF NOT EXISTS messages (
     agent_steps TEXT,
     tokens_prompt INTEGER,
     tokens_completion INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 -- Indexes
@@ -102,8 +107,18 @@ class ChatDatabase:
         self._conn.executescript(SCHEMA_SQL)
         self._migrate()
 
+    def _ensure_settings_table(self):
+        """Create the settings key-value table if it doesn't exist."""
+        self._conn.execute("""CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )""")
+        self._conn.commit()
+
     def _migrate(self):
         """Apply incremental schema migrations for existing databases."""
+        # Ensure settings table exists
+        self._ensure_settings_table()
         # Add agent_steps column if it doesn't exist (added for observability persistence)
         try:
             cols = [
@@ -116,6 +131,21 @@ class ChatDatabase:
                 logger.info("Migrated messages table: added agent_steps column")
         except Exception as e:
             logger.debug("Migration check for agent_steps: %s", e)
+
+        # Add inference_stats column for persisting LLM performance metrics
+        try:
+            cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
+            ]
+            if "inference_stats" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE messages ADD COLUMN inference_stats TEXT"
+                )
+                self._conn.commit()
+                logger.info("Migrated messages table: added inference_stats column")
+        except Exception as e:
+            logger.debug("Migration check for inference_stats: %s", e)
 
         # Add indexing_status column for background indexing progress
         try:
@@ -180,7 +210,7 @@ class ChatDatabase:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
-        model = model or "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        model = model or "Qwen3.5-35B-A3B-GGUF"
         title = title or "New Chat"
 
         with self._transaction():
@@ -257,9 +287,13 @@ class ChatDatabase:
             return row["cnt"]
 
     def update_session(
-        self, session_id: str, title: str = None, system_prompt: str = None
+        self,
+        session_id: str,
+        title: str = None,
+        system_prompt: str = None,
+        document_ids: list = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title and/or system prompt."""
+        """Update session title, system prompt, and/or document_ids."""
         updates = []
         params = []
 
@@ -270,9 +304,6 @@ class ChatDatabase:
             updates.append("system_prompt = ?")
             params.append(system_prompt)
 
-        if not updates:
-            return self.get_session(session_id)
-
         updates.append("updated_at = ?")
         params.append(self._now())
         params.append(session_id)
@@ -282,6 +313,22 @@ class ChatDatabase:
                 f"UPDATE sessions SET {', '.join(updates)} WHERE id = ?",
                 params,
             )
+            # Update session-document attachments via the join table.
+            # Replace the full set: delete all existing links then re-insert
+            # so the final state exactly matches the supplied list.
+            if document_ids is not None:
+                self._conn.execute(
+                    "DELETE FROM session_documents WHERE session_id = ?",
+                    (session_id,),
+                )
+                now = self._now()
+                for doc_id in document_ids:
+                    self._conn.execute(
+                        """INSERT OR IGNORE INTO session_documents
+                           (session_id, document_id, attached_at)
+                           VALUES (?, ?, ?)""",
+                        (session_id, doc_id, now),
+                    )
 
         return self.get_session(session_id)
 
@@ -313,17 +360,19 @@ class ChatDatabase:
         agent_steps: List[Dict] = None,
         tokens_prompt: int = None,
         tokens_completion: int = None,
+        inference_stats: Dict = None,
     ) -> int:
         """Add a message to a session. Returns message ID."""
         sources_json = json.dumps(rag_sources) if rag_sources else None
         steps_json = json.dumps(agent_steps) if agent_steps else None
+        stats_json = json.dumps(inference_stats) if inference_stats else None
 
         with self._transaction():
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
-                    agent_steps, tokens_prompt, tokens_completion)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -333,6 +382,7 @@ class ChatDatabase:
                     steps_json,
                     tokens_prompt,
                     tokens_completion,
+                    stats_json,
                 ),
             )
 
@@ -371,6 +421,11 @@ class ChatDatabase:
                     msg["agent_steps"] = json.loads(msg["agent_steps"])
                 except (json.JSONDecodeError, TypeError):
                     msg["agent_steps"] = None
+            if msg.get("inference_stats"):
+                try:
+                    msg["inference_stats"] = json.loads(msg["inference_stats"])
+                except (json.JSONDecodeError, TypeError):
+                    msg["inference_stats"] = None
             messages.append(msg)
 
         return messages
@@ -674,6 +729,33 @@ class ChatDatabase:
                 (file_mtime, doc_id),
             )
             return cursor.rowcount > 0
+
+    # ── Settings ──────────────────────────────────────────────────────
+
+    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+        """Get a setting value by key."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
+            return row["value"] if row else default
+
+    def set_setting(self, key: str, value: Optional[str]) -> None:
+        """Set a setting value. Pass None to delete the key."""
+        with self._transaction():
+            if value is None:
+                self._conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+            else:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (key, value),
+                )
+
+    def get_all_settings(self) -> Dict[str, str]:
+        """Get all settings as a dict."""
+        with self._lock:
+            rows = self._conn.execute("SELECT key, value FROM settings").fetchall()
+            return {row["key"]: row["value"] for row in rows}
 
     # ── Stats ───────────────────────────────────────────────────────────
 

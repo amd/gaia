@@ -184,53 +184,53 @@ class AgentSDK:
         try:
             messages = self._prepare_messages_for_llm(messages)
 
-            # Convert messages to chat history format
-            chat_history = []
-
-            for msg in messages:
-                role = msg.get("role", "")
-                content = self._normalize_message_content(msg.get("content", ""))
-
-                if role == "user":
-                    chat_history.append(f"user: {content}")
-                elif role == "assistant":
-                    chat_history.append(f"assistant: {content}")
-                elif role == "tool":
-                    tool_name = msg.get("name", "tool")
-                    chat_history.append(f"assistant: [tool:{tool_name}] {content}")
-                # Skip system messages since they're passed separately
-
-            # Use provided system prompt or fall back to config default
+            # Build structured messages for the LLM (no manual ChatML formatting —
+            # the provider/server applies the chat template exactly once).
             effective_system_prompt = system_prompt or self.config.system_prompt
-
-            # Format according to model type
-            formatted_prompt = Prompts.format_chat_history(
-                model=self.config.model,
-                chat_history=chat_history,
-                assistant_name="assistant",
-                system_prompt=effective_system_prompt,
-            )
+            structured = []
+            if effective_system_prompt:
+                structured.append(
+                    {"role": "system", "content": effective_system_prompt}
+                )
+            for msg in messages:
+                role = msg.get("role", "user")
+                if role == "system":
+                    self.log.warning(
+                        "Dropping system-role message from conversation history; "
+                        "system prompt already prepended."
+                    )
+                    continue
+                content = self._normalize_message_content(msg.get("content", ""))
+                if role == "tool":
+                    tool_name = msg.get("name", "tool")
+                    structured.append(
+                        {
+                            "role": "assistant",
+                            "content": f"[Tool result: {tool_name}] {content}",
+                        }
+                    )
+                else:
+                    structured.append({"role": role, "content": content})
 
             # Debug logging
-            self.log.debug(f"Formatted prompt length: {len(formatted_prompt)} chars")
+            self.log.debug(f"Structured messages: {len(structured)} entries")
             self.log.debug(
                 f"System prompt used: {effective_system_prompt[:100] if effective_system_prompt else 'None'}..."
             )
 
-            # Set appropriate stop tokens based on model
+            # Set appropriate stop tokens based on model (safety net)
             model_lower = self.config.model.lower() if self.config.model else ""
             if "qwen" in model_lower:
                 kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
             elif "llama" in model_lower:
                 kwargs.setdefault("stop", ["<|eot_id|>", "<|start_header_id|>"])
 
-            # Use generate with formatted prompt
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
-            response = self.llm_client.generate(
-                prompt=formatted_prompt,
+            response = self.llm_client.chat(
+                messages=structured,
                 model=self.config.model,
                 stream=False,
                 **kwargs,
@@ -271,54 +271,54 @@ class AgentSDK:
         try:
             messages = self._prepare_messages_for_llm(messages)
 
-            # Convert messages to chat history format
-            chat_history = []
-
-            for msg in messages:
-                role = msg.get("role", "")
-                content = self._normalize_message_content(msg.get("content", ""))
-
-                if role == "user":
-                    chat_history.append(f"user: {content}")
-                elif role == "assistant":
-                    chat_history.append(f"assistant: {content}")
-                elif role == "tool":
-                    tool_name = msg.get("name", "tool")
-                    chat_history.append(f"assistant: [tool:{tool_name}] {content}")
-                # Skip system messages since they're passed separately
-
-            # Use provided system prompt or fall back to config default
+            # Build structured messages for the LLM (no manual ChatML formatting —
+            # the provider/server applies the chat template exactly once).
             effective_system_prompt = system_prompt or self.config.system_prompt
-
-            # Format according to model type
-            formatted_prompt = Prompts.format_chat_history(
-                model=self.config.model,
-                chat_history=chat_history,
-                assistant_name="assistant",
-                system_prompt=effective_system_prompt,
-            )
+            structured = []
+            if effective_system_prompt:
+                structured.append(
+                    {"role": "system", "content": effective_system_prompt}
+                )
+            for msg in messages:
+                role = msg.get("role", "user")
+                if role == "system":
+                    self.log.warning(
+                        "Dropping system-role message from conversation history; "
+                        "system prompt already prepended."
+                    )
+                    continue
+                content = self._normalize_message_content(msg.get("content", ""))
+                if role == "tool":
+                    tool_name = msg.get("name", "tool")
+                    structured.append(
+                        {
+                            "role": "assistant",
+                            "content": f"[Tool result: {tool_name}] {content}",
+                        }
+                    )
+                else:
+                    structured.append({"role": role, "content": content})
 
             # Debug logging
-            self.log.debug(f"Formatted prompt length: {len(formatted_prompt)} chars")
+            self.log.debug(f"Structured messages: {len(structured)} entries")
             self.log.debug(
                 f"System prompt used: {effective_system_prompt[:100] if effective_system_prompt else 'None'}..."
             )
 
-            # Set appropriate stop tokens based on model
+            # Set appropriate stop tokens based on model (safety net)
             model_lower = self.config.model.lower() if self.config.model else ""
             if "qwen" in model_lower:
                 kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
             elif "llama" in model_lower:
                 kwargs.setdefault("stop", ["<|eot_id|>", "<|start_header_id|>"])
 
-            # Use generate with formatted prompt for streaming
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
             full_response = ""
-            for chunk in self.llm_client.generate(
-                prompt=formatted_prompt, model=self.config.model, stream=True, **kwargs
+            for chunk in self.llm_client.chat(
+                messages=structured, model=self.config.model, stream=True, **kwargs
             ):
                 full_response += chunk
                 yield AgentResponse(text=chunk, is_complete=False)

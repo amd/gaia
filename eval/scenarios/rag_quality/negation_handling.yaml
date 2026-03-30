@@ -1,0 +1,45 @@
+id: negation_handling
+name: "Negation Handling"
+category: rag_quality
+severity: high
+description: |
+  Tests whether the agent correctly interprets negation in source documents.
+  The employee handbook explicitly states contractors are NOT eligible for benefits.
+  Agent must not merely find the benefits section and assume eligibility --
+  it must parse the negation correctly.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+
+turns:
+  - turn: 1
+    objective: "Ask 'Are contractors eligible for health benefits?'"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: contractor_benefits
+      expected_answer: "No — benefits are for full-time employees only"
+    success_criteria: "Agent clearly states NO, contractors are not eligible. FAIL if agent says yes or hedges without a clear negative."
+
+  - turn: 2
+    objective: "Ask 'What about dental and vision benefits for contractors?'"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: contractor_benefits
+      expected_answer: "No — benefits are for full-time employees only"
+    success_criteria: "Agent maintains that contractors are not eligible for company benefits. FAIL if agent claims dental/vision are available to contractors separately from health benefits."
+
+  - turn: 3
+    objective: "Ask 'What ARE contractors eligible for?'"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: contractor_entitlements
+      expected_answer: null
+    success_criteria: "Agent either states what contractors are eligible for (if in document) or honestly says the document does not specify contractor entitlements. FAIL if agent invents benefits."
+
+expected_outcome: |
+  Agent correctly handles negation: contractors are NOT eligible for benefits.
+  Agent does not hallucinate contractor entitlements that are not in the document.

@@ -3,86 +3,96 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gaia Evaluator</title>
+    <title>GAIA Agent Eval</title>
     <link rel="stylesheet" href="styles.css">
-    <!-- Libraries for export functionality -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <div class="header-content">
-                <h1>Gaia Evaluator</h1>
-                <p class="subtitle">Advanced AI Model Quality Analysis & Comparison</p>
-                <div class="features">
-                    <span class="feature" data-tooltip="Generate synthetic test data, meeting transcripts, emails, and groundtruth summaries using Claude AI">🔬 Data Generation</span>
-                    <span class="feature" data-tooltip="Monitor API costs and token usage across all evaluations with detailed breakdowns per model and experiment">💰 Cost Tracking</span>
-                    <span class="feature" data-tooltip="Get percentage-based quality scores with color-coded ratings (Excellent, Good, Fair, Poor) for easy assessment">📊 Quality Scoring</span>
-                    <span class="feature" data-tooltip="Double-click any file in the interface to instantly load evaluation reports without manual selection">⚡ One-Click Loading</span>
-                    <span class="feature" data-tooltip="Explore comprehensive analysis with quality explanations, strengths, weaknesses, and actionable recommendations">🔍 Detailed Analysis</span>
-                    <span class="feature" data-tooltip="Compare multiple AI models side-by-side with performance rankings and detailed metric comparisons">📈 Model Comparison</span>
-                </div>
-            </div>
-        </header>
+    <header>
+        <div class="header-left">
+            <h1>GAIA Agent Eval</h1>
+        </div>
+        <div class="header-right">
+            <span id="statusBadge" class="status-badge idle">IDLE</span>
+        </div>
+    </header>
 
-        <div class="controls">
-            <div class="file-selector">
-                <h3>Available Reports</h3>
-                <div class="file-lists">
-                    <div class="test-data-list">
-                        <h4>Test Data</h4>
-                        <small class="path-display" id="testDataPath"></small>
-                        <select id="testDataSelect" multiple size="6">
-                            <option disabled>Loading test data...</option>
-                        </select>
+    <nav>
+        <button class="nav-btn active" data-view="runs">Runs</button>
+        <button class="nav-btn" data-view="compare">Compare</button>
+        <button class="nav-btn" data-view="control">Control</button>
+    </nav>
+
+    <main>
+        <!-- Runs View -->
+        <div id="view-runs" class="view active">
+            <div class="split-panel">
+                <div class="left-panel">
+                    <div class="panel-header">
+                        <h2>Eval Runs</h2>
+                        <button id="refreshRunsBtn" class="btn-small" title="Refresh">Refresh</button>
                     </div>
-                    <div class="groundtruth-list">
-                        <h4>Groundtruth</h4>
-                        <small class="path-display" id="groundtruthPath"></small>
-                        <select id="groundtruthSelect" multiple size="6">
-                            <option disabled>Loading groundtruth...</option>
-                        </select>
-                    </div>
-                    <div class="experiments-list">
-                        <h4>Experiments</h4>
-                        <small class="path-display" id="experimentsPath"></small>
-                        <select id="experimentSelect" multiple size="6">
-                            <option disabled>Loading experiments...</option>
-                        </select>
-                    </div>
-                    <div class="evaluations-list">
-                        <h4>Evaluations</h4>
-                        <small class="path-display" id="evaluationsPath"></small>
-                        <select id="evaluationSelect" multiple size="6">
-                            <option disabled>Loading evaluations...</option>
-                        </select>
-                    </div>
-                    <div class="agent-outputs-list">
-                        <h4>Agent Outputs</h4>
-                        <select id="agentOutputSelect" multiple size="6">
-                            <option disabled>Loading agent outputs...</option>
-                        </select>
+                    <div id="runsList" class="runs-list">
+                        <div class="empty-state">Loading runs...</div>
                     </div>
                 </div>
-                <div class="action-buttons">
-                    <button id="addReportBtn" class="btn-primary">Add Report</button>
-                    <button id="compareBtn" class="btn-secondary">Compare Selected</button>
-                    <button id="clearBtn" class="btn-secondary">Clear All</button>
+                <div class="right-panel">
+                    <div id="runDetail" class="run-detail">
+                        <div class="empty-state">Select a run to view details</div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="reports-container">
-            <div id="reportsGrid" class="reports-grid">
-                <div class="empty-state">
-                    <h3>No reports loaded</h3>
-                    <p>Select experiment and/or evaluation files to visualize results</p>
+        <!-- Compare View -->
+        <div id="view-compare" class="view">
+            <div class="compare-controls">
+                <div class="compare-selector">
+                    <label for="compareA">Run A (baseline)</label>
+                    <select id="compareA"><option value="">Select run...</option></select>
+                </div>
+                <div class="compare-selector">
+                    <label for="compareB">Run B (current)</label>
+                    <select id="compareB"><option value="">Select run...</option></select>
+                </div>
+                <button id="compareBtn" class="btn-primary">Compare</button>
+            </div>
+            <div id="compareResults" class="compare-results">
+                <div class="empty-state">Select two runs and click Compare</div>
+            </div>
+        </div>
+
+        <!-- Control View -->
+        <div id="view-control" class="view">
+            <div class="control-panel">
+                <h2>Eval Control</h2>
+                <div class="control-actions">
+                    <button id="runAllBtn" class="btn-primary">Run All Scenarios</button>
+                    <button id="runFixBtn" class="btn-secondary">Run --fix Mode</button>
+                    <button id="stopBtn" class="btn-danger" disabled>Stop</button>
+                </div>
+                <div class="control-status">
+                    <h3>Status</h3>
+                    <div class="progress-container">
+                        <div id="progressBar" class="progress-bar">
+                            <div id="progressFill" class="progress-fill" style="width: 0%"></div>
+                        </div>
+                        <span id="progressText" class="progress-text">Idle</span>
+                    </div>
+                    <div id="currentScenario" class="current-scenario"></div>
+                </div>
+                <div class="baseline-section">
+                    <h3>Baseline</h3>
+                    <p id="baselineInfo" class="baseline-info">No baseline loaded</p>
+                    <div class="baseline-actions">
+                        <label for="baselineSelect">Save run as baseline:</label>
+                        <select id="baselineSelect"><option value="">Select run...</option></select>
+                        <button id="saveBaselineBtn" class="btn-secondary">Save as Baseline</button>
+                    </div>
                 </div>
             </div>
         </div>
-    </div>
+    </main>
 
     <script src="app.js"></script>
 </body>
-</html> 
+</html>

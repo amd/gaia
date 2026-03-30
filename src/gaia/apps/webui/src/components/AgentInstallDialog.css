@@ -58,8 +58,8 @@
 }
 
 .install-step.failed .install-step-dot {
-    border-color: #ef4444;
-    background: #ef4444;
+    border-color: var(--accent-danger);
+    background: var(--accent-danger);
     color: white;
 }
 
@@ -131,7 +131,7 @@
 }
 
 .install-progress-fill.failed {
-    background: #ef4444;
+    background: var(--accent-danger);
 }
 
 .install-progress-fill.failed::after {
@@ -195,7 +195,7 @@
 }
 
 .install-step-icon.failed {
-    color: #ef4444;
+    color: var(--accent-danger);
 }
 
 .install-step-icon.preparing {
@@ -259,7 +259,7 @@
     background: rgba(239, 68, 68, 0.05);
     border: 1px solid rgba(239, 68, 68, 0.2);
     border-radius: var(--radius-sm);
-    color: #ef4444;
+    color: var(--accent-danger);
 }
 
 [data-theme="dark"] .install-error {

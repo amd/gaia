@@ -11,11 +11,15 @@
 
 import { create } from 'zustand';
 import type { GaiaNotification, NotificationType } from '../types/agent';
+import { confirmTool } from '../services/api';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
 /** Maximum notifications kept in the center to prevent unbounded growth. */
 const MAX_NOTIFICATIONS = 500;
+
+/** localStorage key for the "always allow" tool list. */
+export const ALWAYS_ALLOW_TOOLS_KEY = 'gaia_always_allow_tools';
 
 // ── State Interface ──────────────────────────────────────────────────────
 
@@ -78,18 +82,41 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   setTypeFilter: (type) => set({ typeFilter: type }),
 
   respondToPermission: async (id, action, remember) => {
-    const api = window.gaiaAPI;
-    if (api) {
+    // Find the notification to get the session ID for the REST call
+    const notification = get().notifications.find((n) => n.id === id);
+    const sessionId = notification?.agentId;
+
+    // Try Electron IPC first, then fall back to REST API
+    const electronApi = window.gaiaAPI;
+    if (electronApi?.notification?.respondPermission) {
       try {
-        await api.notification.respondPermission(id, action, remember);
+        await electronApi.notification.respondPermission(id, action, remember);
       } catch (err) {
         console.error('[notificationStore] Failed to send permission response via IPC:', err);
         // Don't update local state — the agent didn't receive the response.
         // The permission prompt remains actionable so the user can retry.
         return;
       }
+    } else if (sessionId) {
+      // Web browser mode — call the REST endpoint
+      try {
+        await confirmTool(sessionId, action === 'allow');
+      } catch (err) {
+        console.error('[notificationStore] Failed to send permission response via REST:', err);
+        return;
+      }
     }
-    // Update local state only after IPC succeeds (or if no IPC is available)
+    // Persist "always allow" preference in localStorage
+    if (action === 'allow' && remember) {
+      if (notification?.tool) {
+        const existing: string[] = JSON.parse(localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]');
+        if (!existing.includes(notification.tool)) {
+          existing.push(notification.tool);
+          localStorage.setItem(ALWAYS_ALLOW_TOOLS_KEY, JSON.stringify(existing));
+        }
+      }
+    }
+    // Update local state after response is delivered
     set((state) => ({
       notifications: state.notifications.map((n) =>
         n.id === id

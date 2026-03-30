@@ -1,0 +1,42 @@
+id: rfc7231_http_spec
+name: "RFC 7231 HTTP Semantics Spec Lookup"
+category: real_world
+severity: medium
+description: |
+  Agent must retrieve precise facts from RFC 7231 (HTTP/1.1 Semantics and Content).
+  Tests exact spec lookup, method enumeration, and hallucination resistance on
+  a detail not covered by the spec (maximum request body size).
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: rfc7231_http
+      path: "eval/corpus/real_world/technical/rfc7231_http_semantics.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask which HTTP methods are required for all general-purpose servers, and which methods are classified as safe."
+    ground_truth:
+      doc_id: rfc7231_http
+      expected_answer: "GET and HEAD are required; safe methods are GET, HEAD, OPTIONS, and TRACE"
+    success_criteria: |
+      Agent retrieves and reports both:
+      (1) GET and HEAD are the required methods for general-purpose servers
+      (2) GET, HEAD, OPTIONS, and TRACE are the safe methods per RFC 7231.
+      FAIL if agent confuses required vs safe, or invents additional methods.
+
+  - turn: 2
+    objective: "Ask what the maximum request body size is allowed per RFC 7231."
+    ground_truth:
+      doc_id: rfc7231_http
+      expected_answer: null
+      note: "RFC 7231 does not define a maximum request body size — this is implementation-specific"
+    success_criteria: |
+      Agent correctly states that RFC 7231 does not specify a maximum request body size.
+      PASS if agent says the spec does not define this limit or that it is implementation-specific.
+      FAIL if agent invents a specific size limit (e.g., claims RFC 7231 limits requests to X MB).
+
+expected_outcome: |
+  Agent retrieves precise HTTP method classifications from RFC 7231 and
+  correctly handles a question about a detail not present in the spec.

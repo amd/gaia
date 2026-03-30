@@ -35,7 +35,7 @@ class TestRAGConfig:
 
         config = RAGConfig()
 
-        assert config.model == "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        assert config.model == "Qwen3.5-35B-A3B-GGUF"
         assert config.max_tokens == 1024
         assert config.chunk_size == 500
         assert config.chunk_overlap == 100
@@ -575,6 +575,322 @@ class TestErrorHandling:
                 chat.send("")
 
             assert "Message cannot be empty" in str(exc_info.value)
+
+
+class TestMemoryLimits:
+    """Test memory limit enforcement and LRU eviction."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Mock external dependencies."""
+        with (
+            patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
+            patch("gaia.rag.sdk.PdfReader") as mock_pdf,
+            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
+            patch("gaia.rag.sdk.faiss") as mock_faiss,
+            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
+        ):
+            mock_vlm_instance = Mock()
+            mock_vlm_instance.check_availability.return_value = False
+            mock_vlm_class.return_value = mock_vlm_instance
+
+            mock_lemonade_instance = Mock()
+            mock_lemonade_instance.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+            mock_lemonade.return_value = mock_lemonade_instance
+
+            mock_pdf_instance = Mock()
+            mock_pdf_instance.pages = [Mock()]
+            mock_pdf_instance.pages[0].extract_text.return_value = (
+                "Sample PDF content for testing."
+            )
+            mock_pdf.return_value = mock_pdf_instance
+
+            mock_embedder = Mock()
+            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
+            mock_st.return_value = mock_embedder
+
+            mock_index = Mock()
+            mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
+            mock_faiss.IndexFlatL2.return_value = mock_index
+
+            mock_chat_response = Mock()
+            mock_chat_response.text = "Mocked LLM response"
+            mock_chat_response.stats = {"tokens": 50}
+            mock_chat_instance = Mock()
+            mock_chat_instance.send.return_value = mock_chat_response
+            mock_chat.return_value = mock_chat_instance
+
+            yield {
+                "pdf": mock_pdf,
+                "embedder": mock_embedder,
+                "index": mock_index,
+                "chat": mock_chat_instance,
+                "vlm": mock_vlm_instance,
+                "lemonade": mock_lemonade_instance,
+            }
+
+    def test_index_rejected_at_file_limit_eviction_disabled(self, mock_dependencies):
+        """Test that indexing is rejected when file limit reached and eviction disabled."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(
+                cache_dir=temp_dir,
+                max_indexed_files=1,
+                enable_lru_eviction=False,
+                show_stats=False,
+            )
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create two temp PDF files
+                pdf1 = Path(temp_dir) / "doc1.pdf"
+                pdf1.write_text("dummy content 1")
+                pdf2 = Path(temp_dir) / "doc2.pdf"
+                pdf2.write_text("dummy content 2")
+
+                # First doc should succeed
+                result1 = rag.index_document(str(pdf1))
+                assert result1["success"] is True
+
+                # Second doc should be rejected
+                result2 = rag.index_document(str(pdf2))
+                assert result2["success"] is False
+                assert result2.get("memory_limit_reached") is True
+                assert "Memory limit" in result2.get("error", "")
+
+    def test_index_rejected_at_chunk_limit_eviction_disabled(self, mock_dependencies):
+        """Test that indexing is rejected when chunk limit reached and eviction disabled."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(
+                cache_dir=temp_dir,
+                max_total_chunks=2,
+                enable_lru_eviction=False,
+                show_stats=False,
+            )
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create first PDF
+                pdf1 = Path(temp_dir) / "doc1.pdf"
+                pdf1.write_text("dummy content 1")
+
+                # Index first doc
+                result1 = rag.index_document(str(pdf1))
+                assert result1["success"] is True
+
+                # If already at or over chunk limit, second doc should be rejected
+                if len(rag.chunks) >= config.max_total_chunks:
+                    pdf2 = Path(temp_dir) / "doc2.pdf"
+                    pdf2.write_text("dummy content 2")
+
+                    result2 = rag.index_document(str(pdf2))
+                    assert result2["success"] is False
+                    assert result2.get("memory_limit_reached") is True
+
+    def test_lru_eviction_makes_room_for_new_doc(self, mock_dependencies):
+        """Test that LRU eviction allows new doc when at file limit."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(
+                cache_dir=temp_dir,
+                max_indexed_files=1,
+                enable_lru_eviction=True,
+                show_stats=False,
+            )
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create two temp PDF files with different names
+                pdf_a = Path(temp_dir) / "doc_a.pdf"
+                pdf_a.write_text("content for doc A")
+                pdf_b = Path(temp_dir) / "doc_b.pdf"
+                pdf_b.write_text("content for doc B")
+
+                # Index file A - should succeed
+                result_a = rag.index_document(str(pdf_a))
+                assert result_a["success"] is True
+
+                # Index file B - should succeed (A gets evicted by _check_memory_limits)
+                result_b = rag.index_document(str(pdf_b))
+                assert result_b["success"] is True
+
+                # File A should have been evicted, file B should remain
+                abs_a = str(pdf_a.absolute())
+                abs_b = str(pdf_b.absolute())
+                assert abs_a not in rag.indexed_files
+                assert abs_b in rag.indexed_files
+
+    def test_stats_include_memory_limit_fields(self, mock_dependencies):
+        """Test that stats dict includes memory limit information."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create and index a PDF
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                result = rag.index_document(str(fake_pdf))
+
+                assert result["success"] is True
+                assert "max_indexed_files" in result
+                assert "max_total_chunks" in result
+                assert result["max_indexed_files"] == 100
+                assert result["max_total_chunks"] == 10000
+
+    def test_preflight_rejection_logged(self, mock_dependencies, caplog):
+        """Test that pre-flight capacity rejection is logged when eviction is disabled.
+
+        When enable_lru_eviction=False and the file limit is reached,
+        _has_indexing_capacity returns False BEFORE _check_memory_limits
+        is called, so the rejection happens at the pre-flight check.
+        """
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        import logging
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(
+                cache_dir=temp_dir,
+                max_indexed_files=1,
+                enable_lru_eviction=False,
+                show_stats=False,
+            )
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create two temp PDF files
+                pdf1 = Path(temp_dir) / "doc1.pdf"
+                pdf1.write_text("dummy content 1")
+                pdf2 = Path(temp_dir) / "doc2.pdf"
+                pdf2.write_text("dummy content 2")
+
+                # Index first doc
+                rag.index_document(str(pdf1))
+
+                # Index second doc with log capture
+                with caplog.at_level(logging.WARNING):
+                    rag.index_document(str(pdf2))
+
+                # Check that a relevant warning was logged
+                log_messages = " ".join(r.message for r in caplog.records)
+                assert any(
+                    keyword in log_messages
+                    for keyword in ["Memory limit", "cannot", "eviction"]
+                ), f"Expected memory limit warning in logs, got: {log_messages}"
+
+    def test_eviction_failure_logged(self, mock_dependencies, caplog):
+        """Test that a warning is logged when LRU eviction fails to free memory.
+
+        With enable_lru_eviction=True, _has_indexing_capacity passes
+        the pre-flight check (eviction could theoretically free space).
+        After indexing, _check_memory_limits calls _evict_lru_document,
+        which calls remove_document. If remove_document returns False,
+        eviction fails and a warning about exceeding the file limit is logged.
+        """
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        import logging
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(
+                cache_dir=temp_dir,
+                max_indexed_files=1,
+                enable_lru_eviction=True,
+                show_stats=False,
+            )
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create two temp PDF files
+                pdf1 = Path(temp_dir) / "doc1.pdf"
+                pdf1.write_text("dummy content 1")
+                pdf2 = Path(temp_dir) / "doc2.pdf"
+                pdf2.write_text("dummy content 2")
+
+                # Index first doc - succeeds normally
+                result1 = rag.index_document(str(pdf1))
+                assert result1["success"] is True
+
+                # Mock remove_document to return False so eviction fails
+                with (
+                    patch.object(rag, "remove_document", return_value=False),
+                    caplog.at_level(logging.WARNING),
+                ):
+                    result2 = rag.index_document(str(pdf2))
+
+                # The document still gets indexed (success=True) but
+                # _check_memory_limits logs a warning about eviction failure
+                assert result2["success"] is True
+
+                # Verify warning about eviction failure was logged
+                log_messages = " ".join(r.message for r in caplog.records)
+                assert any(
+                    keyword in log_messages
+                    for keyword in [
+                        "eviction failed",
+                        "Failed to evict",
+                        "Cannot meet file limit",
+                    ]
+                ), f"Expected eviction failure warning in logs, got: {log_messages}"
+
+    def test_cache_load_tracks_access_times(self, mock_dependencies):
+        """Test that loading from cache sets file_access_times and file_index_times."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                # First pass: index document to create cache
+                rag1 = RAGSDK(config)
+
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                result1 = rag1.index_document(str(fake_pdf))
+                assert result1["success"] is True
+
+                file_path = str(fake_pdf.absolute())
+
+                # Second pass: new RAGSDK instance loads from cache
+                rag2 = RAGSDK(config)
+
+                # Clear any state to ensure cache path is exercised
+                rag2.indexed_files.clear()
+                rag2.chunks.clear()
+                rag2.file_access_times.clear()
+                rag2.file_index_times.clear()
+
+                result2 = rag2.index_document(str(fake_pdf))
+                assert result2["success"] is True
+
+                # Verify that access/index times were set during cache load
+                assert file_path in rag2.file_access_times
+                assert file_path in rag2.file_index_times
 
 
 if __name__ == "__main__":

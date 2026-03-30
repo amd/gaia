@@ -14,6 +14,13 @@ export interface Session {
     document_ids: string[];
 }
 
+export interface InferenceStats {
+    tokens_per_second: number;
+    time_to_first_token: number;
+    input_tokens: number;
+    output_tokens: number;
+}
+
 export interface Message {
     id: number;
     session_id: string;
@@ -23,6 +30,8 @@ export interface Message {
     rag_sources: SourceInfo[] | null;
     /** Agent activity that occurred while generating this message. */
     agentSteps?: AgentStep[];
+    /** Inference performance stats from the LLM backend. */
+    stats?: InferenceStats;
 }
 
 export interface SourceInfo {
@@ -58,6 +67,17 @@ export interface Attachment {
     error?: string;
 }
 
+export interface ModelStatus {
+    found: boolean;
+    downloaded: boolean;
+    loaded: boolean;
+}
+
+export interface Settings {
+    custom_model: string | null;
+    model_status: ModelStatus | null;
+}
+
 export interface SystemStatus {
     lemonade_running: boolean;
     model_loaded: string | null;
@@ -66,6 +86,25 @@ export interface SystemStatus {
     memory_available_gb: number;
     initialized: boolean;
     version: string;
+    // Extended Lemonade info
+    lemonade_version: string | null;
+    model_size_gb: number | null;
+    model_device: string | null;
+    model_context_size: number | null;
+    model_labels: string[] | null;
+    gpu_name: string | null;
+    gpu_vram_gb: number | null;
+    tokens_per_second: number | null;
+    time_to_first_token: number | null;
+    // Device compatibility check
+    processor_name: string | null;
+    device_supported: boolean;
+    // LLM configuration health
+    context_size_sufficient: boolean;
+    model_downloaded: boolean | null;
+    default_model_name: string | null;
+    lemonade_url: string | null;
+    expected_model_loaded: boolean;
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────
@@ -101,6 +140,35 @@ export interface IndexFolderResponse {
     failed: number;
     documents: Document[];
     errors: string[];
+}
+
+// ── MCP Server Types ──────────────────────────────────────────────────────
+
+export interface MCPServerInfo {
+    name: string;
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+    enabled: boolean;
+}
+
+export interface MCPCatalogEntry {
+    name: string;
+    display_name: string;
+    description: string;
+    category: string;
+    tier: number;
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+    requires_config: string[];
+}
+
+export interface MCPServerStatus {
+    name: string;
+    connected: boolean;
+    tool_count: number;
+    error: string | null;
 }
 
 // ── Mobile Access / Tunnel Types ─────────────────────────────────────────
@@ -163,23 +231,31 @@ export interface AgentStep {
     commandOutput?: CommandOutput;
     /** Retrieved document chunks (for RAG query tools). */
     retrievalChunks?: RetrievalChunk[];
+    /** File list from file search tools. */
+    fileList?: {
+        files: Array<Record<string, unknown>>;
+        total: number;
+    };
 }
 
 /** Extended SSE event types for agent communication. */
 export type StreamEventType =
-    | 'chunk'       // Text content chunk
-    | 'done'        // Stream complete
-    | 'error'       // Error
-    | 'status'      // Agent state change
-    | 'step'        // Step progress
-    | 'thinking'    // Agent reasoning
-    | 'plan'        // Agent plan
-    | 'tool_start'  // Tool execution started
-    | 'tool_end'    // Tool execution completed
-    | 'tool_result' // Tool result summary
-    | 'tool_args'   // Tool arguments detail
-    | 'answer'      // Final answer from agent
-    | 'agent_error';// Agent-level error (non-fatal)
+    | 'chunk'        // Text content chunk
+    | 'done'         // Stream complete
+    | 'error'        // Error
+    | 'status'       // Agent state change
+    | 'step'         // Step progress
+    | 'thinking'     // Agent reasoning
+    | 'plan'         // Agent plan
+    | 'tool_start'   // Tool execution started
+    | 'tool_end'     // Tool execution completed
+    | 'tool_result'  // Tool result summary
+    | 'tool_args'    // Tool arguments detail
+    | 'tool_confirm' // Tool requires user confirmation (blocking)
+    | 'answer'       // Final answer from agent
+    | 'agent_error'  // Agent-level error (non-fatal)
+    | 'permission_request' // Tool confirmation request
+    | 'mcp_status';  // MCP server connection status update
 
 export interface StreamEvent {
     type: StreamEventType;
@@ -201,6 +277,10 @@ export interface StreamEvent {
     model?: string;
     elapsed?: number;
     tools_used?: number;
+    /** Inference stats from the LLM backend (attached to done events). */
+    stats?: InferenceStats;
+    /** MCP server statuses (for mcp_status events). */
+    servers?: MCPServerStatus[];
     /** Structured command output (for tool_result of run_shell_command). */
     command_output?: {
         command: string;
@@ -211,6 +291,10 @@ export interface StreamEvent {
         duration_seconds?: number;
         truncated?: boolean;
     };
+    /** Confirmation ID (for tool_confirm events). */
+    confirm_id?: string;
+    /** Timeout in seconds (for tool_confirm events). */
+    timeout_seconds?: number;
     /** Structured result data (for tool_result with search results, file lists, etc.). */
     result_data?: {
         type: string;

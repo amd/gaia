@@ -1,0 +1,54 @@
+id: topic_switch
+name: "Rapid Topic Switch"
+category: adversarial
+severity: medium
+description: |
+  User rapidly switches topics between two different documents across four turns.
+  Agent must track which document each question refers to and not confuse facts
+  from the employee handbook with the financial report or vice versa.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask 'What is the PTO policy?'"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: pto_days
+      expected_answer: "15 days"
+    success_criteria: "Agent states first-year employees get 15 PTO days"
+
+  - turn: 2
+    objective: "Ask 'Completely different topic -- what was Acme's Q3 revenue?'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million"
+    success_criteria: "Agent switches to the Q3 report and states $14.2 million"
+
+  - turn: 3
+    objective: "Ask 'Going back to HR -- are contractors eligible for benefits?'"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: contractor_benefits
+      expected_answer: "No — benefits are for full-time employees only"
+    success_criteria: "Agent switches back to the handbook and states contractors are NOT eligible"
+
+  - turn: 4
+    objective: "Ask 'And the CEO's Q4 outlook?'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: ceo_outlook
+      expected_answer: "Projected 15-18% growth"
+    success_criteria: "Agent switches back to the Q3 report and states 15-18% projected growth"
+
+expected_outcome: |
+  Agent handles rapid topic switches between two documents without cross-contaminating
+  facts. Each answer comes from the correct source document.

@@ -95,7 +95,7 @@ class TestSessionToResponse:
             "title": "Test Chat",
             "created_at": "2025-01-01T00:00:00",
             "updated_at": "2025-01-01T00:00:01",
-            "model": "Qwen3-Coder-30B",
+            "model": "Qwen3.5-35B",
             "system_prompt": "You are helpful.",
             "message_count": 5,
             "document_ids": ["doc1", "doc2"],
@@ -105,7 +105,7 @@ class TestSessionToResponse:
         resp = session_to_response(full_session)
         assert resp.id == "sess-123"
         assert resp.title == "Test Chat"
-        assert resp.model == "Qwen3-Coder-30B"
+        assert resp.model == "Qwen3.5-35B"
         assert resp.system_prompt == "You are helpful."
         assert resp.message_count == 5
         assert resp.document_ids == ["doc1", "doc2"]

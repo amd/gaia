@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
 
 # ---------------------------------------------------------------------------
@@ -743,3 +744,57 @@ class TestFormatFileListIntegration:
         assert len(result) == 10
         assert result[0]["number"] == 1
         assert result[9]["number"] == 10
+
+
+# ===========================================================================
+# 9. read_file: binary document guard
+# ===========================================================================
+
+
+@pytest.fixture(scope="module")
+def read_file_fn():
+    """Return the read_file tool function registered by FileSearchToolsMixin."""
+    _StubMixin().register_file_search_tools()
+    return _TOOL_REGISTRY["read_file"]["function"]
+
+
+class TestReadFileBinaryGuard:
+    """Tests for the binary document early-exit guard in read_file."""
+
+    @pytest.mark.parametrize(
+        "extension",
+        [
+            ".pdf",
+            ".docx",
+            ".doc",
+            ".pptx",
+            ".ppt",
+            ".xlsx",
+            ".xls",
+            ".odt",
+            ".ods",
+            ".odp",
+            ".epub",
+        ],
+    )
+    def test_binary_extension_returns_error(self, read_file_fn, extension, tmp_path):
+        """read_file must return an error dict for binary document formats."""
+        fake_doc = tmp_path / f"document{extension}"
+        fake_doc.write_bytes(b"%PDF-1.4 fake content")
+
+        result = read_file_fn(str(fake_doc))
+
+        assert result["status"] == "error"
+        assert "index_document" in result["error"]
+        assert extension in result["error"]
+
+    def test_text_file_not_blocked(self, read_file_fn, tmp_path):
+        """Plain .txt files must pass through the binary guard."""
+        txt_file = tmp_path / "notes.txt"
+        txt_file.write_text("hello world")
+
+        result = read_file_fn(str(txt_file))
+
+        assert result.get("status") != "error" or "index_document" not in result.get(
+            "error", ""
+        )

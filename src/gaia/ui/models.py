@@ -3,7 +3,7 @@
 
 """Pydantic models for GAIA Agent UI API."""
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +25,57 @@ class SystemStatus(BaseModel):
     memory_available_gb: float = 0.0
     initialized: bool = False
     version: str = _gaia_version
+    # Extended Lemonade info (settings modal)
+    lemonade_version: Optional[str] = None
+    model_size_gb: Optional[float] = None
+    model_device: Optional[str] = None
+    model_context_size: Optional[int] = None
+    model_labels: Optional[List[str]] = None
+    gpu_name: Optional[str] = None
+    gpu_vram_gb: Optional[float] = None
+    # Last inference stats
+    tokens_per_second: Optional[float] = None
+    time_to_first_token: Optional[float] = None
+    # Device compatibility check
+    processor_name: Optional[str] = None
+    device_supported: bool = True
+    # LLM configuration health
+    context_size_sufficient: bool = True  # False if loaded ctx < required minimum
+    model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
+    default_model_name: str = "Qwen3.5-35B-A3B-GGUF"  # Required model for GAIA Chat
+    lemonade_url: str = "http://localhost:8000"  # Lemonade web UI base URL
+    expected_model_loaded: bool = True  # False if a different model is loaded
+
+
+# ── Settings ────────────────────────────────────────────────────────────────
+
+
+class ModelStatus(BaseModel):
+    """Status of a custom model on the Lemonade server."""
+
+    found: bool = False
+    downloaded: bool = False
+    loaded: bool = False
+
+
+class SettingsResponse(BaseModel):
+    """Current user settings."""
+
+    custom_model: Optional[str] = None
+    model_status: Optional[ModelStatus] = None
+
+
+class SettingsUpdateRequest(BaseModel):
+    """Request to update user settings."""
+
+    custom_model: Optional[str] = Field(
+        None,
+        description=(
+            "HuggingFace model ID to use instead of the default model. "
+            "Example: huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated. "
+            "Set to empty string or null to clear the override."
+        ),
+    )
 
 
 # ── Sessions ────────────────────────────────────────────────────────────────
@@ -44,6 +95,7 @@ class UpdateSessionRequest(BaseModel):
 
     title: Optional[str] = None
     system_prompt: Optional[str] = None
+    document_ids: Optional[List[str]] = None
 
 
 class SessionResponse(BaseModel):
@@ -109,6 +161,13 @@ class CommandOutputResponse(BaseModel):
     truncated: bool = False
 
 
+class FileListResponse(BaseModel):
+    """Structured file list from file search tool results."""
+
+    files: List[Dict[str, Any]] = []
+    total: int = 0
+
+
 class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
@@ -123,6 +182,16 @@ class AgentStepResponse(BaseModel):
     planSteps: Optional[List[str]] = None
     timestamp: int = 0
     commandOutput: Optional[CommandOutputResponse] = None
+    fileList: Optional[FileListResponse] = None
+
+
+class InferenceStatsResponse(BaseModel):
+    """LLM inference performance metrics for a message."""
+
+    tokens_per_second: float = 0
+    time_to_first_token: float = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class MessageResponse(BaseModel):
@@ -135,6 +204,7 @@ class MessageResponse(BaseModel):
     created_at: str
     rag_sources: Optional[List[SourceInfo]] = None
     agent_steps: Optional[List[AgentStepResponse]] = None
+    stats: Optional[InferenceStatsResponse] = None
 
 
 class MessageListResponse(BaseModel):

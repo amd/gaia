@@ -69,6 +69,7 @@ SKIP_PATTERNS = [
     r"^url$",  # Placeholder "url" in markdown syntax examples
     r"github\.com/amd/gaia/compare/",  # Release compare URLs (tags may not exist yet)
     r"github\.com/amd/gaia/(blob|tree)/main/",  # Same-repo links (may 404 during PRs before merge)
+    r"https?://(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)",  # RFC1918 private IPs (example URLs in docs)
 ]
 
 
