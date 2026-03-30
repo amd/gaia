@@ -19,6 +19,14 @@
 
 // Platform-specific memory headers
 #if defined(_WIN32)
+// WIN32_LEAN_AND_MEAN prevents <windows.h> from pulling in <winsock.h>,
+// avoiding redefinition conflicts when <httplib.h> later includes <winsock2.h>.
+#    ifndef WIN32_LEAN_AND_MEAN
+#        define WIN32_LEAN_AND_MEAN
+#    endif
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
 #    include <windows.h>
 #    include <psapi.h>
 #elif defined(__APPLE__)
