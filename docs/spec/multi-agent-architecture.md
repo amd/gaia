@@ -213,77 +213,70 @@ Lemonade Server
 
 ---
 
-## 4. Agent MCP Server — The Communication Bus
+## 4. Agent Communication — Shared State, Not Protocols
 
-**File:** `src/gaia/mcp/servers/agent_ui_mcp.py` (extend existing)
 **GitHub Issue:** #675
 
-### Why MCP as the Communication Layer?
+### Why Not MCP for Agent-to-Agent?
 
-**Observability.** If agents communicated via direct Python function calls, their interactions would be invisible. By routing everything through MCP:
-- Every message, task, and delegation is a structured MCP operation
-- The Agent UI receives SSE events for every operation in real time
-- Users see exactly what agents are doing — building trust
-- The same protocol works for both local agents and future remote/cloud agents
+MCP is designed for agent-to-tool communication, not agent-to-agent. Google's A2A protocol exists for cross-vendor agent interop, but it's designed for agents across organizational boundaries with OAuth and discovery — massive overkill for agents in the same process.
 
-**Interoperability.** MCP is the emerging standard for agent communication (Agentic AI Foundation, 10,000+ deployed servers). Building on MCP means GAIA agents can communicate with any MCP-compatible system — not just each other.
+**What we actually need is simpler:** agents share state through a common database and the system emits events for the UI. No protocol overhead. No serialization. Just shared SQLite tables + SSE for observability.
 
-All inter-agent communication flows through the Agent MCP Server. Every operation is visible in the Agent UI.
+**MCP stays for external communication** — connecting GAIA to third-party tools (Playwright, Home Assistant), exposing GAIA to external clients (Claude Code, IDE extensions, webapp embeds). But agents talking to each other inside GAIA? Shared state is simpler, faster, and works naturally with small models.
 
-### MCP Tools
+### Agent Tools (Python functions, not MCP)
 
-#### Task Management
+Agents get two tools for working with other agents. These are regular Python `@tool` functions that read/write the shared task table — no protocol overhead:
+
 ```python
-create_task(title, assigned_agent, depends_on=[], context={})
-    # Any agent can create tasks for any agent
-    # depends_on: list of task_ids — task blocks until all dependencies complete
+@tool
+def create_task(title, assigned_agent, depends_on=[], context={})
+    # Writes a row to the tasks table. Any agent can assign work to any agent.
+    # depends_on: list of task_ids — task stays blocked until all complete.
+    # Returns task_id. Assigned agent picks it up on next run or is woken immediately.
 
-get_task_status(task_id)
-    # Check: blocked → pending → in_progress → completed → failed
-
-complete_task(task_id, result, artifacts=[])
-    # Called by assigned agent when done
-
-list_tasks(status=None, assigned_agent=None, parent_task_id=None)
-    # Query tasks with filters
+@tool
+def ask_agent(target_agent, question, timeout_seconds=60)
+    # Quick synchronous question. Wakes the target agent, waits for answer.
+    # "What's the cash balance?" "Is the EIN ready?"
+    # For fast answers where full task creation is overkill.
 ```
 
-#### Agent Spawning
-```python
-spawn_agent(agent_type, task, context={}, parent_task_id=None)
-    # Spawn a new agent instance to handle a task
-    # Returns task_id immediately. Agent runs asynchronously.
+**Two tools. Small models can easily distinguish "big job" from "quick question."** No `send_to_agent`, no `request_and_wait`, no `use_agent_as_tool` — those are the same concept with different names. Simplify.
+
+### How It Works Under the Hood
+
+```
+Shared SQLite (tasks table):
+  Agent A calls create_task(assigned=Agent B) → row inserted
+  Agent B checks for pending tasks → picks it up → status = in_progress
+  Agent B completes → status = completed, result filled
+  Agent A reads result (or GaiaAgent narrates it to user)
+
+  Dependencies:
+  Task C depends_on [Task A, Task B] → stays blocked
+  Task A completes → system checks → Task B still pending → Task C stays blocked
+  Task B completes → system checks → all deps met → Task C → pending
+
+  SSE events emitted on every state change → Agent UI updates in real time
 ```
 
-**Why spawning matters:** Complex workflows need multiple agents working in parallel. GaiaAgent can spawn 3 specialists simultaneously, each working on a different aspect of the user's request. Without spawning, everything is sequential — 3x slower.
+No MCP serialization. No protocol negotiation. Just database writes and reads. Fast, debuggable, works with any model size.
 
-#### Inter-Agent Communication
+### Agent Discovery
+
+Agents register in the Agent Registry (#612) on startup. GaiaAgent queries the registry to know what's available:
+
 ```python
-send_to_agent(target_agent, message, context={})
-    # Fire-and-forget message to another agent
+@tool
+def list_agents()
+    # Returns all registered agents with capabilities and status
 
-request_and_wait(target_agent, request, timeout_seconds=60)
-    # Synchronous request — blocks until response or timeout
-    # For quick queries where full task creation is overkill
-
-use_agent_as_tool(target_agent, query, expected_schema={})
-    # "Agents-as-tools" pattern (OpenAI Agents SDK inspired)
-    # GaiaAgent retains narrative control. Calls specialist for a bounded answer.
-    # Unlike create_task (full delegation), this is a single-turn tool call.
-    # Example: GaiaAgent asks FinanceAgent "What's the current cash balance?"
-    # FinanceAgent returns a structured answer. GaiaAgent weaves it into conversation.
-    # expected_schema enforces typed response (Pydantic model), not free text.
-```
-
-**Why both patterns?** `create_task` is full delegation — the specialist owns the task end-to-end. `use_agent_as_tool` is a quick query — GaiaAgent keeps narrative control and just needs a fact. Using full task delegation for "What's the cash balance?" is overkill; using agent-as-tool for "File the LLC" is insufficient.
-
-#### Agent Discovery
-```python
-list_available_agents()
-    # All registered agents with capabilities and status
-
-get_agent_capabilities(agent_id)
-    # Detailed info: tools, model, memory stats
+@tool
+def spawn_agent(agent_type, task, context={})
+    # Start a new agent instance. Creates a task and wakes the agent.
+    # Returns task_id. Agent runs asynchronously.
 ```
 
 ### Task Lifecycle
@@ -378,39 +371,17 @@ user_profile (key, value, source_agent, confidence, updated_at)
 agent_directory (agent_id, display_name, capabilities, model, status, last_active_at)
 ```
 
-### Event-Based Memory Notifications
+### Memory Updates
 
-**Why:** Polling for memory updates wastes tokens and introduces latency. When FormationAgent writes an EIN, ComplianceAgent and FinanceAgent shouldn't discover it on their next scheduled run — they should be notified immediately.
+When an agent writes an important fact (EIN obtained, deadline discovered, task completed), GaiaAgent sees it on the next interaction and can narrate it to the user. Agents read relevant memories at the start of each task — no complex subscription system needed.
 
-When an agent writes to its memory namespace, the system emits an SSE event:
+Critical facts are stored as simple key-value pairs in the agent's memory namespace:
 ```
-agent_insight: {agent_id: "formation", category: "fact", content: "EIN: 12-3456789"}
-```
-
-Other agents can subscribe to specific categories or agents. GaiaAgent subscribes to all, so it can narrate updates. ComplianceAgent subscribes to "formation" insights, so it knows when the EIN arrives.
-
-This replaces polling with push notifications — faster, cheaper, and no wasted context.
-
-### Typed Schemas for Inter-Agent Data
-
-**Why:** Free-text passing between agents is brittle. If FormationAgent sends "EIN: 12-3456789" as a string, ComplianceAgent must parse it. If the format varies ("EIN 12-3456789", "Employer ID: 123456789"), parsing breaks.
-
-Critical data exchanged between agents uses typed Pydantic models:
-```python
-class EINResult(BaseModel):
-    ein: str                    # "12-3456789"
-    entity_name: str            # "Austin Bites LLC"
-    entity_type: str            # "llc"
-    issued_date: str            # ISO date
-
-class TaskResult(BaseModel):
-    status: str                 # "completed", "failed"
-    summary: str                # Human-readable summary
-    data: dict                  # Structured result data
-    artifacts: list[str]        # File paths produced
+FormationAgent stores: {category: "fact", key: "ein", value: "12-3456789"}
+ComplianceAgent reads it on next run: recall(agent_id="formation", category="fact")
 ```
 
-Agents pass structured objects via MCP. The schema is validated at the boundary — malformed data is rejected immediately, not silently misinterpreted downstream.
+Simple, queryable, no parsing required.
 
 ### Collective Intelligence in Practice
 
@@ -506,8 +477,7 @@ Without this, the multi-agent system is a black box. Users won't trust agents th
 - **User feedback improves agents.** When the user corrects an agent, the correction is stored in memory. The agent learns and doesn't repeat the mistake.
 - **Approval gates are conversational.** Instead of a modal popup, the agent asks naturally in the task thread: "Ready to file the LLC with Texas SOS for $300. Should I proceed?" The user responds in the conversation.
 - **GaiaAgent mediates when needed.** If the user provides conflicting instructions to two agents, GaiaAgent resolves the conflict and communicates the decision.
-- **Confidence-based autonomy.** Not every action is binary approve/reject. Agents report confidence scores. High confidence (>0.9) = autonomous. Medium (0.5-0.9) = GaiaAgent decides. Low (<0.5) = user decides. This reduces approval fatigue while maintaining safety.
-- **Preference learning.** When the user modifies an agent's proposal, the delta is captured in memory. Over time, agents learn the user's preferences and adjust their proposals accordingly — reducing the need for corrections.
+- **Preference learning.** When the user corrects an agent ("No, the deadline is April 15, not March 15"), the correction is stored in that agent's memory. The agent reads its past corrections at the start of each task and doesn't repeat mistakes.
 
 ### SSE Events
 
@@ -778,21 +748,13 @@ Schedules are defined at spawn time and registered with the scheduler (v0.23.0).
 
 ### Domain-Specific Guardrails
 
-Beyond the general security model (Section 10), domain teams can define additional guardrails:
+Domain guardrails are system prompt instructions, not code abstractions. CodeAgent bakes them into each agent's prompt when building it:
 
-```python
-@dataclass
-class DomainGuardrails:
-    requires_disclaimer: bool = False       # "Not legal/financial advice"
-    disclaimer_text: str = ""
-    human_approval_actions: List[str] = []  # ["file_government", "spend_money", "send_external"]
-    quality_checks: List[str] = []          # ["verify_state_code", "validate_ein_format"]
-```
+- Business agents: "Always include a disclaimer that you're not a lawyer or CPA"
+- Financial agents: "Never execute a transaction without user confirmation"
+- Home automation agents: "Never unlock doors or disable alarms without explicit user approval"
 
-For the small business team:
-- All legal/tax advice includes mandatory disclaimer
-- Government filings, spending, and external communications require user approval
-- State codes and EIN formats are validated before use
+Simple, readable, no framework overhead. The guardrails are in the prompt where the model can follow them.
 
 ---
 
