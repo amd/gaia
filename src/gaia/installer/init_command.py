@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 # Rich imports for better CLI formatting
@@ -441,8 +442,13 @@ class InitCommand:
         profile_config = INIT_PROFILES[self.profile]
         has_pip_extras = bool(profile_config.get("pip_extras"))
 
+        _webui_src = Path(__file__).resolve().parent.parent / "apps" / "webui" / "src"
+        _is_dev_install = _webui_src.is_dir()
+
         total_steps = 4 if not self.skip_models else 3
         if has_pip_extras:
+            total_steps += 1
+        if _is_dev_install:
             total_steps += 1
 
         try:
@@ -501,6 +507,22 @@ class InitCommand:
                     step_num, total_steps, "Installing Python dependencies..."
                 )
                 self._install_pip_extras()
+
+            # Build Agent UI frontend (dev/source installs only)
+            if _is_dev_install:
+                step_num += 1
+                self._print("")
+                self._print_step(step_num, total_steps, "Building Agent UI frontend...")
+                try:
+                    from gaia.ui.build import ensure_webui_built
+
+                    built = ensure_webui_built(
+                        log_fn=self._print, warn_fn=self._print_warning
+                    )
+                    if built:
+                        self._print_success("Agent UI frontend ready")
+                except Exception as e:
+                    self._print_warning(f"Frontend build skipped: {e}")
 
             # Final step: Verify setup
             step_num += 1
@@ -1516,8 +1538,6 @@ class InitCommand:
 
                 # Show path for each failed model
                 hf_cache = os.path.expanduser("~/.cache/huggingface/hub")
-                from pathlib import Path
-
                 for model_id, error in models_failed:
                     # Find actual model directory (may have org prefix like ggml-org/model-name)
                     # Search for directories containing the model name
