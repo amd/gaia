@@ -528,7 +528,129 @@ Even though GAIA runs locally, agents have real power: shell commands, file writ
 
 ---
 
-## 11. Scaling: Adding New Use Cases
+## 11. Dynamic Team Assembly
+
+### Why Not Templates?
+
+Templates are brittle. They require maintenance for every new scenario, break on edge cases, and don't scale to use cases the designer didn't anticipate. A Jinja2 template for "small business in Texas" doesn't help when a user says "I'm starting a nonprofit music school in Berlin."
+
+**The intelligence should be in the agents, not in static templates.**
+
+### How Teams Are Built: GaiaAgent + CodeAgent
+
+1. **GaiaAgent interviews the user** — understands the need through natural conversation
+2. **GaiaAgent reasons about what specialists are needed** — based on conversation context, not a template lookup
+3. **GaiaAgent checks the Agent Registry** — are the needed specialists already available?
+4. **For existing specialists:** GaiaAgent spawns them with context from the interview
+5. **For new specialists:** GaiaAgent asks CodeAgent to build them — CodeAgent has the full GAIA codebase and docs as context, knows the agent patterns, and creates purpose-built specialists
+6. **Specialists register themselves** in the Agent Registry and start working
+7. **GaiaAgent narrates progress** to the user
+
+```
+User: "I want to start a food truck in Austin"
+
+GaiaAgent (reasoning):
+  - This needs entity formation help → FormationAgent (exists in registry)
+  - This needs tax/compliance help → ComplianceAgent (exists)
+  - This needs financial help → FinanceAgent (exists)
+  - Food truck in Texas → needs health permit specialist → doesn't exist
+  → Ask CodeAgent to build a PermitAgent for Texas food service
+
+GaiaAgent → CodeAgent: "Build a specialist agent for food service
+  permits in Texas. It needs tools for web search and document
+  generation. Use the GAIA agent base class pattern."
+
+CodeAgent:
+  - Reads src/gaia/agents/base/agent.py (understands the pattern)
+  - Reads existing specialists as examples
+  - Creates src/gaia/agents/permits/agent.py with focused prompt + tools
+  - Registers in Agent Registry
+  - Reports back to GaiaAgent
+
+GaiaAgent: "I've assembled your team: FormationAgent for LLC filing,
+  ComplianceAgent for tax deadlines, FinanceAgent for bookkeeping,
+  and a new PermitAgent specifically for Texas food service permits."
+```
+
+### Why This Scales
+
+| Template Approach | Dynamic Assembly |
+|-------------------|-----------------|
+| Need a template for every industry × state × entity type | GaiaAgent reasons about what's needed from conversation context |
+| New use case = someone writes a new template | New use case = CodeAgent builds the right agents on the fly |
+| Edge cases break templates (nonprofit in Berlin?) | GaiaAgent + CodeAgent handle anything through reasoning |
+| Scaling linearly with templates maintained | Scaling with the capability of the models |
+
+### Domain Context Injection
+
+Instead of Jinja2 templates, each specialist receives context through its **spawn configuration** — a structured object passed at creation time:
+
+```python
+spawn_agent(
+    agent_type="compliance_expert",
+    task="Track tax obligations and compliance deadlines",
+    context={
+        "business_name": "Austin Bites LLC",
+        "industry": "food_service",
+        "entity_type": "llc",
+        "state": "TX",
+        "city": "Austin",
+    }
+)
+```
+
+The specialist agent's `__init__` method uses this context to construct its system prompt dynamically — not from a template file, but through the agent's own reasoning about what's relevant for this specific business.
+
+### Shared Workspace
+
+Teams share a working directory (`~/.gaia/teams/<team_name>/`) with per-agent owned files:
+
+```
+~/.gaia/teams/austin_bites/
+├── README.md              # Team overview (owned by GaiaAgent)
+├── formation.md           # Entity & Legal (owned by FormationAgent)
+├── compliance.md          # Tax & Compliance (owned by ComplianceAgent)
+├── finance.md             # Finances (owned by FinanceAgent)
+└── profile.json           # Domain context (read-only, set during interview)
+```
+
+Each agent writes only its own file. All agents can read all files via RAG. GaiaAgent maintains the README as the team status dashboard.
+
+### Scheduled Recurring Execution
+
+Some specialists need to run on a schedule, not just on-demand:
+- ComplianceAgent: "Every Monday, check for upcoming tax deadlines"
+- FinanceAgent: "Daily, reconcile transactions"
+- InfraAgent: "Every 5 minutes, run health checks"
+
+Schedules are defined in the blueprint and registered with the scheduler (v0.23.0). Each scheduled run:
+1. Agent loads its memory context
+2. Checks for pending tasks
+3. Executes highest-priority task
+4. Updates its workspace file
+5. Notifies GaiaAgent of progress
+
+### Domain-Specific Guardrails
+
+Beyond the general security model (Section 10), domain teams can define additional guardrails:
+
+```python
+@dataclass
+class DomainGuardrails:
+    requires_disclaimer: bool = False       # "Not legal/financial advice"
+    disclaimer_text: str = ""
+    human_approval_actions: List[str] = []  # ["file_government", "spend_money", "send_external"]
+    quality_checks: List[str] = []          # ["verify_state_code", "validate_ein_format"]
+```
+
+For the small business team:
+- All legal/tax advice includes mandatory disclaimer
+- Government filings, spending, and external communications require user approval
+- State codes and EIN formats are validated before use
+
+---
+
+## 12. Scaling: Adding New Use Cases
 
 ### Why This Architecture Scales
 
