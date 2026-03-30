@@ -52,3 +52,16 @@ Set these two fields at the top level of the result object returned in Phase 6:
   ```
 
 Do **not** add a `scenario_complete` field — it is not part of the result schema.
+
+## Performance summary
+
+After evaluating all turns, aggregate the per-turn performance data into a scenario-level
+`performance_summary` field in the final result:
+
+- **avg_tokens_per_second**: Mean of non-null tokens_per_second across turns
+- **avg_time_to_first_token**: Mean of non-null time_to_first_token across turns
+- **total_input_tokens**: Sum of input_tokens across all turns
+- **total_output_tokens**: Sum of output_tokens across all turns
+- **flags**: Union of all per-turn performance flags (deduplicated)
+
+If no turns have performance data, set `performance_summary` to `null`.

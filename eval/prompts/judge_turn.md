@@ -43,6 +43,22 @@ Pass/fail decision (apply in order):
 3. FAIL if overall_score < 6.0
 4. PASS otherwise
 
+## STEP 5 — RECORD PERFORMANCE DATA
+
+After scoring, capture inference performance stats from the `send_message()` response.
+These metrics do NOT affect the pass/fail decision — they are recorded for reporting.
+
+Check the `send_message()` return value for a `stats` key containing:
+- `tokens_per_second`, `time_to_first_token`, `input_tokens`, `output_tokens`
+
+If stats are present, include them in the output. If missing, set `performance` to `null`.
+
+Flag any anomalies (informational only):
+- `no_stats`: stats missing or all zeros
+- `low_throughput`: tokens_per_second < 5.0
+- `high_latency`: time_to_first_token > 5.0s
+- `token_explosion`: input_tokens > 4000
+
 ## OUTPUT FORMAT
 
 ```json
@@ -59,6 +75,13 @@ Pass/fail decision (apply in order):
   "overall_score": N.N,
   "pass": true/false,
   "failure_category": null or "category_name",
-  "reasoning": "1-2 sentence explanation"
+  "reasoning": "1-2 sentence explanation",
+  "performance": {
+    "tokens_per_second": N.N or null,
+    "time_to_first_token": N.NNN or null,
+    "input_tokens": N or null,
+    "output_tokens": N or null,
+    "flags": [] or ["no_stats", "low_throughput", "high_latency", "token_explosion"]
+  }
 }
 ```
