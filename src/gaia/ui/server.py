@@ -295,7 +295,8 @@ def create_app(db_path: str = None) -> FastAPI:
 
     # ── Serve Frontend Static Files ──────────────────────────────────────
     # Look for built frontend assets in the webui dist directory
-    _webui_dist = Path(__file__).resolve().parent.parent / "apps" / "webui" / "dist"
+    _default_dist = Path(__file__).resolve().parent.parent / "apps" / "webui" / "dist"
+    _webui_dist = Path(os.environ.get("GAIA_WEBUI_DIST", str(_default_dist)))
     if _webui_dist.is_dir():
         logger.info("Serving frontend from %s", _webui_dist)
 

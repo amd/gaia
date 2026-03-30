@@ -371,7 +371,7 @@ function startBackend(gaiaBin, port) {
 
   const child = spawn(gaiaBin, ["chat", "--ui", "--ui-port", String(port)], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
+    env: { ...process.env, GAIA_WEBUI_DIST: join(ROOT_DIR, "dist") },
     detached: false,
   });
 
