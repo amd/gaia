@@ -232,6 +232,8 @@ class MCPClientMixin:
         Returns:
             List of dicts with keys: name, connected, tool_count, error
         """
+        if self._mcp_manager is None:
+            return []
         return self._mcp_manager.get_status_report()
 
     def disconnect_mcp_server(self, name: str) -> None:

@@ -149,10 +149,10 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
             if stats:
                 inference_stats = stats
                 event_log.append(
-                    f"[perf] {stats.get('tokens_per_second', 0)} tok/s | "
-                    f"{stats.get('time_to_first_token', 0)*1000:.0f}ms TTFT | "
-                    f"{stats.get('input_tokens', 0)} → "
-                    f"{stats.get('output_tokens', 0)} tokens"
+                    f"[perf] {stats.get('tokens_per_second') or 0} tok/s | "
+                    f"{(stats.get('time_to_first_token') or 0)*1000:.0f}ms TTFT | "
+                    f"{stats.get('input_tokens') or 0} → "
+                    f"{stats.get('output_tokens') or 0} tokens"
                 )
             # done content takes final priority over answer/chunk accumulation
             done_content = event.get("content", "")
