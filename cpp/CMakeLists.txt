@@ -34,6 +34,9 @@ endif()
 option(GAIA_BUILD_INTEGRATION_TESTS
     "Build LLM integration tests (requires lemonade-server with Qwen3-4B-GGUF loaded)" OFF)
 
+# Performance benchmarks -- always OFF by default.
+option(GAIA_BUILD_BENCHMARKS "Build performance benchmarks" OFF)
+
 # ---------------------------------------------------------------------------
 # Dependencies -- prefer system packages, fall back to FetchContent
 # ---------------------------------------------------------------------------
@@ -89,6 +92,7 @@ endif()
 # Library
 # ---------------------------------------------------------------------------
 add_library(gaia_core
+    src/types.cpp
     src/tool_registry.cpp
     src/console.cpp
     src/clean_console.cpp
@@ -243,6 +247,37 @@ if(GAIA_BUILD_INTEGRATION_TESTS)
     gtest_discover_tests(tests_integration
         PROPERTIES TIMEOUT 300
     )
+endif()
+
+# ---------------------------------------------------------------------------
+# Benchmarks
+# ---------------------------------------------------------------------------
+if(GAIA_BUILD_BENCHMARKS)
+    add_executable(gaia_benchmarks benchmarks/bench_main.cpp)
+    target_link_libraries(gaia_benchmarks PRIVATE gaia::gaia_core)
+
+    target_include_directories(gaia_benchmarks PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks
+    )
+
+    # httplib is PRIVATE to gaia_core; benchmarks need it for the mock server
+    if(httplib_FOUND)
+        target_link_libraries(gaia_benchmarks PRIVATE httplib::httplib)
+    else()
+        target_include_directories(gaia_benchmarks SYSTEM PRIVATE
+            $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+
+    # OpenSSL defines must match gaia_core for httplib header consistency
+    if(OpenSSL_FOUND)
+        target_compile_definitions(gaia_benchmarks PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(gaia_benchmarks PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+
+    # Windows: psapi for GetProcessMemoryInfo
+    if(WIN32)
+        target_link_libraries(gaia_benchmarks PRIVATE psapi)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

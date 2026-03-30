@@ -37,22 +37,69 @@ Agent::Agent(const AgentConfig& config)
     : config_(config),
       lemonade_(LemonadeClientConfig{config.baseUrl, config.modelId, config.contextSize, config.debug}) {
 
-    // Override baseUrl from GAIA_CPP_BASE_URL environment variable if set.
-    // This mirrors how the Python Lemonade client respects its env var.
-    std::string envUrl = getEnvVar("GAIA_CPP_BASE_URL");
+    // GAIA_BASE_URL / GAIA_CPP_BASE_URL (deprecated fallback)
+    std::string envUrl = getEnvVar("GAIA_BASE_URL");
+    if (envUrl.empty()) {
+        envUrl = getEnvVar("GAIA_CPP_BASE_URL");
+        if (!envUrl.empty()) {
+            std::cerr << "[GAIA] GAIA_CPP_BASE_URL is deprecated; use GAIA_BASE_URL instead\n";
+        }
+    }
     if (!envUrl.empty()) {
         config_.baseUrl = envUrl;
         lemonade_.setBaseUrl(config_.baseUrl);
     }
 
-    // Override context size from GAIA_CPP_CTX_SIZE environment variable if set.
-    std::string envCtx = getEnvVar("GAIA_CPP_CTX_SIZE");
+    // GAIA_MODEL_ID
+    std::string envModel = getEnvVar("GAIA_MODEL_ID");
+    if (!envModel.empty()) {
+        config_.modelId = envModel;
+        lemonade_.setModel(config_.modelId);
+    }
+
+    // GAIA_MAX_STEPS
+    std::string envMaxSteps = getEnvVar("GAIA_MAX_STEPS");
+    if (!envMaxSteps.empty()) {
+        try {
+            int val = std::stoi(envMaxSteps);
+            if (val > 0) { config_.maxSteps = val; }
+            else { std::cerr << "[GAIA] GAIA_MAX_STEPS must be > 0; ignoring value " << val << "\n"; }
+        } catch (const std::exception&) {
+            std::cerr << "[GAIA] GAIA_MAX_STEPS='" << envMaxSteps << "' is not a valid integer; ignoring\n";
+        }
+    }
+
+    // GAIA_CONTEXT_SIZE / GAIA_CPP_CTX_SIZE (deprecated fallback)
+    std::string envCtx = getEnvVar("GAIA_CONTEXT_SIZE");
+    if (envCtx.empty()) {
+        envCtx = getEnvVar("GAIA_CPP_CTX_SIZE");
+        if (!envCtx.empty()) {
+            std::cerr << "[GAIA] GAIA_CPP_CTX_SIZE is deprecated; use GAIA_CONTEXT_SIZE instead\n";
+        }
+    }
     if (!envCtx.empty()) {
         try {
-            config_.contextSize = std::stoi(envCtx);
-            lemonade_.setContextSize(config_.contextSize); // propagate to client
+            int val = std::stoi(envCtx);
+            if (val > 0) {
+                config_.contextSize = val;
+                lemonade_.setContextSize(config_.contextSize);
+            } else {
+                std::cerr << "[GAIA] GAIA_CONTEXT_SIZE must be > 0; ignoring value " << val << "\n";
+            }
         } catch (const std::exception&) {
-            // Ignore malformed value, keep default
+            std::cerr << "[GAIA] GAIA_CONTEXT_SIZE='" << envCtx << "' is not a valid integer; ignoring\n";
+        }
+    }
+
+    // GAIA_MAX_TOKENS
+    std::string envMaxTokens = getEnvVar("GAIA_MAX_TOKENS");
+    if (!envMaxTokens.empty()) {
+        try {
+            int val = std::stoi(envMaxTokens);
+            if (val > 0) { config_.maxTokens = val; }
+            else { std::cerr << "[GAIA] GAIA_MAX_TOKENS must be > 0; ignoring value " << val << "\n"; }
+        } catch (const std::exception&) {
+            std::cerr << "[GAIA] GAIA_MAX_TOKENS='" << envMaxTokens << "' is not a valid integer; ignoring\n";
         }
     }
 
@@ -81,6 +128,65 @@ Agent::Agent(const AgentConfig& config)
     systemPromptDirty_ = true;
 }
 
+AgentConfig Agent::config() const {
+    std::lock_guard<std::mutex> lock(configMutex_);
+    return config_;
+}
+
+void Agent::setConfig(const AgentConfig& newConfig) {
+    newConfig.validate();
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        config_ = newConfig;
+        modelEnsured_ = false;
+        systemPromptDirty_ = true;
+    }
+    // Update LemonadeClient outside configMutex_ to avoid holding the lock
+    // across external calls (guards against future LemonadeClient → Agent callbacks).
+    lemonade_.setBaseUrl(newConfig.baseUrl);
+    lemonade_.setModel(newConfig.modelId);
+    lemonade_.setContextSize(newConfig.contextSize);
+    lemonade_.setDebug(newConfig.debug);
+}
+
+void Agent::setModel(const std::string& modelId) {
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        config_.modelId = modelId;
+        modelEnsured_ = false;
+    }
+    lemonade_.setModel(modelId);
+}
+
+void Agent::setMaxSteps(int maxSteps) {
+    if (maxSteps <= 0)
+        throw std::invalid_argument("maxSteps must be > 0");
+    std::lock_guard<std::mutex> lock(configMutex_);
+    config_.maxSteps = maxSteps;
+}
+
+void Agent::setMaxTokens(int maxTokens) {
+    if (maxTokens <= 0)
+        throw std::invalid_argument("maxTokens must be > 0");
+    std::lock_guard<std::mutex> lock(configMutex_);
+    config_.maxTokens = maxTokens;
+}
+
+void Agent::setTemperature(double temperature) {
+    if (temperature < 0.0 || temperature > 2.0)
+        throw std::invalid_argument("temperature must be in [0.0, 2.0]");
+    std::lock_guard<std::mutex> lock(configMutex_);
+    config_.temperature = temperature;
+}
+
+void Agent::setDebug(bool debug) {
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        config_.debug = debug;
+    }
+    lemonade_.setDebug(debug);
+}
+
 void Agent::setToolConfirmCallback(ToolConfirmCallback cb) {
     tools_.setConfirmCallback(std::move(cb));
 }
@@ -98,14 +204,30 @@ void Agent::setOutputHandler(std::unique_ptr<OutputHandler> handler) {
 }
 
 std::string Agent::systemPrompt() const {
+    // Check under lock; return cached if still fresh.
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        if (!systemPromptDirty_) {
+            return cachedSystemPrompt_;
+        }
+    }
+    // Recompute WITHOUT holding configMutex_ — composeSystemPrompt() calls the
+    // virtual getSystemPrompt(), and a subclass override may legally call back
+    // into Agent methods (e.g. config()) that also acquire configMutex_.
+    // Holding the lock here would cause a deadlock in that case.
+    std::string newPrompt = composeSystemPrompt();
+    // Re-acquire lock and re-check: a concurrent thread may have already
+    // recomputed and stored a fresh prompt since we released the lock above.
+    std::lock_guard<std::mutex> lock(configMutex_);
     if (systemPromptDirty_) {
-        cachedSystemPrompt_ = composeSystemPrompt();
+        cachedSystemPrompt_ = std::move(newPrompt);
         systemPromptDirty_ = false;
     }
     return cachedSystemPrompt_;
 }
 
 void Agent::rebuildSystemPrompt() {
+    std::lock_guard<std::mutex> lock(configMutex_);
     systemPromptDirty_ = true;
 }
 
@@ -132,14 +254,15 @@ std::string Agent::composeSystemPrompt() const {
 
 // ---- LLM Communication ----
 
-std::string Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt) {
+std::string Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt,
+                           const AgentConfig& cfg) {
     // Build OpenAI-compatible request.
     // NOTE: n_ctx is intentionally omitted — context size is set at model load
     // time via LemonadeClient::loadModel() / ensureModelLoaded(), not per-request.
     json requestBody;
-    requestBody["model"] = config_.modelId;
-    requestBody["max_tokens"] = 4096;
-    requestBody["temperature"] = config_.temperature;
+    requestBody["model"] = cfg.modelId;
+    requestBody["max_tokens"] = cfg.maxTokens;
+    requestBody["temperature"] = cfg.temperature;
 
     json msgArray = json::array();
 
@@ -155,7 +278,7 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
 
     requestBody["messages"] = msgArray;
 
-    if (config_.debug) {
+    if (cfg.debug) {
         std::cerr << "[LLM] POST /chat/completions, messages=" << msgArray.size() << std::endl;
     }
 
@@ -270,8 +393,13 @@ json Agent::resolvePlanParameters(const json& toolArgs, const std::vector<json>&
 // ---- MCP Integration ----
 
 bool Agent::connectMcpServer(const std::string& name, const json& config) {
+    bool debugMode;
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        debugMode = config_.debug;
+    }
     try {
-        auto client = std::make_unique<MCPClient>(MCPClient::fromConfig(name, config, 30, config_.debug));
+        auto client = std::make_unique<MCPClient>(MCPClient::fromConfig(name, config, 30, debugMode));
         if (!client->connect()) {
             console_->printError("Failed to connect to MCP server '" + name + "': " + client->lastError());
             return false;
@@ -353,12 +481,18 @@ bool Agent::reconnectMcpServer(const std::string& name) {
     auto cfgIt = mcpServerConfigs_.find(name);
     if (cfgIt == mcpServerConfigs_.end()) return false;
 
+    bool debugMode;
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        debugMode = config_.debug;
+    }
+
     // Drop the old (dead) client
     mcpClients_.erase(name);
 
     try {
         auto client = std::make_unique<MCPClient>(
-            MCPClient::fromConfig(name, cfgIt->second, 30, config_.debug));
+            MCPClient::fromConfig(name, cfgIt->second, 30, debugMode));
         if (!client->connect()) {
             console_->printError("MCP reconnect failed for '" + name + "': " + client->lastError());
             return false;
@@ -390,11 +524,18 @@ void Agent::disconnectAllMcp() {
 // ---- Main Execution Loop ----
 
 json Agent::processQuery(const std::string& userInput, int maxSteps) {
-    int stepsLimit = (maxSteps > 0) ? maxSteps : config_.maxSteps;
+    // Snapshot config at start of query for thread-safe consistency throughout.
+    AgentConfig cfg;
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        cfg = config_;
+    }
+
+    int stepsLimit = (maxSteps > 0) ? maxSteps : cfg.maxSteps;
 
     // Ensure the model is loaded with the requested context size (once per agent lifetime).
     // Context size is a server-side setting applied at load time, not per-request.
-    if (!modelEnsured_ && !config_.modelId.empty()) {
+    if (!modelEnsured_ && !cfg.modelId.empty()) {
         try {
             lemonade_.ensureModelLoaded(); // uses stored model_ and contextSize_
             modelEnsured_ = true;
@@ -424,7 +565,7 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
     userMsg.content = userInput;
     messages.push_back(userMsg);
 
-    console_->printProcessingStart(userInput, stepsLimit, config_.modelId);
+    console_->printProcessingStart(userInput, stepsLimit, cfg.modelId);
 
     int stepsTaken = 0;
     std::string finalAnswer;
@@ -460,7 +601,7 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
         if (!config_.streaming) console_->startProgress("Thinking");
         std::string response;
         try {
-            response = callLlm(messages, systemPrompt());
+            response = callLlm(messages, systemPrompt(), cfg);
         } catch (const std::exception& e) {
             if (!config_.streaming) console_->stopProgress();
             console_->printWarning(std::string("LLM call failed, retrying: ") + e.what());
@@ -468,7 +609,7 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
             // Retry once
             if (!config_.streaming) console_->startProgress("Retrying");
             try {
-                response = callLlm(messages, systemPrompt());
+                response = callLlm(messages, systemPrompt(), cfg);
             } catch (const std::exception& e2) {
                 if (!config_.streaming) console_->stopProgress();
                 console_->printError(std::string("LLM error: ") + e2.what());
@@ -479,7 +620,7 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
         if (!config_.streaming) console_->stopProgress();
 
         // Debug: show response
-        if (config_.showPrompts) {
+        if (cfg.showPrompts) {
             console_->printResponse(response, "LLM Response");
         }
 
@@ -508,7 +649,16 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
 
         // ---- Display plan if provided (advisory only — not auto-executed) ----
         if (parsed.plan.has_value() && parsed.plan.value().is_array()) {
+            ++planIterations_;
             console_->printPlan(parsed.plan.value(), -1);
+            if (planIterations_ > cfg.maxPlanIterations) {
+                Message forceMsg;
+                forceMsg.role = MessageRole::USER;
+                forceMsg.content =
+                    "You have been planning too long without completing the task. "
+                    "Please provide a final answer now based on the information you have gathered.";
+                messages.push_back(forceMsg);
+            }
         }
 
         // ---- Handle tool call ----
@@ -517,20 +667,24 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
             json toolArgs = parsed.toolArgs.value_or(json::object());
             if (toolArgs.is_null()) toolArgs = json::object();
 
-            // Loop detection — same tool name AND same args repeated 4+ times
-            if (toolCallHistory.size() >= 3) {
-                bool allSame = true;
-                for (size_t i = toolCallHistory.size() - 3; i < toolCallHistory.size(); ++i) {
-                    if (toolCallHistory[i].first != toolName ||
-                        toolCallHistory[i].second != toolArgs) {
-                        allSame = false;
+            // Loop detection — same tool+args repeated maxConsecutiveRepeats times
+            {
+                int repeatThreshold = cfg.maxConsecutiveRepeats - 1;
+                if (static_cast<int>(toolCallHistory.size()) >= repeatThreshold) {
+                    bool allSame = true;
+                    for (size_t i = toolCallHistory.size() - static_cast<size_t>(repeatThreshold);
+                         i < toolCallHistory.size(); ++i) {
+                        if (toolCallHistory[i].first != toolName ||
+                            toolCallHistory[i].second != toolArgs) {
+                            allSame = false;
+                            break;
+                        }
+                    }
+                    if (allSame) {
+                        console_->printWarning("Detected repeated tool call loop. Breaking out.");
+                        finalAnswer = "Task stopped due to repeated tool call loop.";
                         break;
                     }
-                }
-                if (allSame) {
-                    console_->printWarning("Detected repeated tool call loop. Breaking out.");
-                    finalAnswer = "Task stopped due to repeated tool call loop.";
-                    break;
                 }
             }
 
@@ -601,10 +755,10 @@ json Agent::processQuery(const std::string& userInput, int maxSteps) {
     }
 
     // Prune to maxHistoryMessages
-    if (config_.maxHistoryMessages > 0 &&
-        static_cast<int>(messages.size()) > config_.maxHistoryMessages) {
+    if (cfg.maxHistoryMessages > 0 &&
+        static_cast<int>(messages.size()) > cfg.maxHistoryMessages) {
         messages.erase(messages.begin(),
-                       messages.begin() + (static_cast<int>(messages.size()) - config_.maxHistoryMessages));
+                       messages.begin() + (static_cast<int>(messages.size()) - cfg.maxHistoryMessages));
     }
     conversationHistory_ = messages;
 
