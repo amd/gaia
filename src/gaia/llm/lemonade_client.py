@@ -3172,7 +3172,7 @@ class LemonadeClient:
                         f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version: "
                         f"v{actual_version} (expected v{expected_version})"
                     )
-                    print("   Consider updating: " "https://lemonade-server.ai")
+                    print("   Consider updating: https://lemonade-server.ai")
 
             return True
 
