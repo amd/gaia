@@ -516,8 +516,11 @@ class InitCommand:
                 try:
                     from gaia.ui.build import ensure_webui_built
 
-                    ensure_webui_built(log_fn=self._print)
-                    self._print_success("Agent UI frontend ready")
+                    built = ensure_webui_built(
+                        log_fn=self._print, warn_fn=self._print_warning
+                    )
+                    if built:
+                        self._print_success("Agent UI frontend ready")
                 except Exception as e:
                     self._print_warning(f"Frontend build skipped: {e}")
 

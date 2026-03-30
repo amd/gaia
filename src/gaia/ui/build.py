@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 
-def ensure_webui_built(log_fn=print, _webui_dir=None):
+def ensure_webui_built(log_fn=print, warn_fn=None, _webui_dir=None):
     """Rebuild the Agent UI frontend if source files are newer than dist.
 
     Only runs in dev mode (editable install) where the webui src/ directory
@@ -22,11 +22,22 @@ def ensure_webui_built(log_fn=print, _webui_dir=None):
     not available.
 
     Args:
-        log_fn: Callable used for user-visible output.  Defaults to ``print``.
+        log_fn: Callable used for informational output.  Defaults to ``print``.
                 Pass ``logger.info`` or ``self._print`` to integrate with your
                 own output mechanism.
+        warn_fn: Callable used for warning/error output.  Defaults to
+                 ``log_fn`` when not provided.  Pass ``logger.warning`` or
+                 ``self._print_warning`` to route warnings separately from
+                 informational messages.
         _webui_dir: Override the webui directory path (used in tests only).
+
+    Returns:
+        True  — build succeeded, or dist is already up-to-date.
+        False — build was skipped or failed (warn_fn already reported why).
     """
+    if warn_fn is None:
+        warn_fn = log_fn
+
     webui_dir = (
         _webui_dir
         if _webui_dir is not None
@@ -37,7 +48,7 @@ def ensure_webui_built(log_fn=print, _webui_dir=None):
 
     # Gate 1 — dev mode only (src/ absent in pip-installed package)
     if not src_dir.is_dir():
-        return
+        return False
 
     # Gate 2 — staleness check
     newest_src = 0.0
@@ -52,7 +63,7 @@ def ensure_webui_built(log_fn=print, _webui_dir=None):
             newest_src = max(newest_src, p.stat().st_mtime)
 
     if dist_index.exists() and newest_src <= dist_index.stat().st_mtime:
-        return
+        return True
 
     if dist_index.exists():
         log_fn("Agent UI frontend source is newer than built output")
@@ -61,12 +72,12 @@ def ensure_webui_built(log_fn=print, _webui_dir=None):
 
     # Gate 3 — node/npm availability
     if not shutil.which("node"):
-        log_fn("Warning: Node.js not found. Cannot auto-rebuild Agent UI frontend.")
-        log_fn("  The UI may be stale. Install Node.js from https://nodejs.org/")
-        return
+        warn_fn("Warning: Node.js not found. Cannot auto-rebuild Agent UI frontend.")
+        warn_fn("  The UI may be stale. Install Node.js from https://nodejs.org/")
+        return False
     if not shutil.which("npm"):
-        log_fn("Warning: npm not found. Cannot auto-rebuild Agent UI frontend.")
-        return
+        warn_fn("Warning: npm not found. Cannot auto-rebuild Agent UI frontend.")
+        return False
 
     # On Windows, npm is a .cmd batch file requiring shell execution
     _shell = sys.platform == "win32"
@@ -84,12 +95,12 @@ def ensure_webui_built(log_fn=print, _webui_dir=None):
                 shell=_shell,
             )
         except subprocess.CalledProcessError as e:
-            log_fn(f"Warning: npm install failed: {e.stderr}")
-            log_fn("  Continuing with existing dist/ (may be stale).")
-            return
+            warn_fn(f"Warning: npm install failed: {e.stderr}")
+            warn_fn("  Continuing with existing dist/ (may be stale).")
+            return False
         except FileNotFoundError:
-            log_fn("Warning: npm not found. Skipping frontend rebuild.")
-            return
+            warn_fn("Warning: npm not found. Skipping frontend rebuild.")
+            return False
 
     # Step 2 — npm run build (stream output so user sees progress)
     log_fn("Building Agent UI frontend...")
@@ -101,11 +112,14 @@ def ensure_webui_built(log_fn=print, _webui_dir=None):
             shell=_shell,
         )
         log_fn("Agent UI frontend built successfully.")
+        return True
     except subprocess.CalledProcessError as e:
-        log_fn(f"Warning: Frontend build failed (exit code {e.returncode}).")
+        warn_fn(f"Warning: Frontend build failed (exit code {e.returncode}).")
         if dist_index.exists():
-            log_fn("  Continuing with existing (possibly stale) build.")
+            warn_fn("  Continuing with existing (possibly stale) build.")
         else:
-            log_fn("  No existing build found. The UI will show a build hint.")
+            warn_fn("  No existing build found. The UI will show a build hint.")
+        return False
     except FileNotFoundError:
-        log_fn("Warning: npm not found. Skipping frontend rebuild.")
+        warn_fn("Warning: npm not found. Skipping frontend rebuild.")
+        return False

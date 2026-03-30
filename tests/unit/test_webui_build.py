@@ -36,9 +36,9 @@ class TestEnsureWebuiBuilt(unittest.TestCase):
                 side_effect=run_side_effect,
             ) as mock_run,
         ):
-            ensure_webui_built(log_fn=log_fn, _webui_dir=webui_dir)
+            result = ensure_webui_built(log_fn=log_fn, _webui_dir=webui_dir)
 
-        return msgs, mock_run
+        return msgs, mock_run, result
 
     # ------------------------------------------------------------------
     # Test 1: skip when src/ is absent (pip install, no source tree)
@@ -50,9 +50,10 @@ class TestEnsureWebuiBuilt(unittest.TestCase):
             webui_dir = Path(tmpdir)
             # src/ deliberately NOT created
 
-            msgs, mock_run = self._call(webui_dir)
+            msgs, mock_run, result = self._call(webui_dir)
 
         mock_run.assert_not_called()
+        self.assertFalse(result, "Expected False (silent skip) when src/ is absent")
 
     # ------------------------------------------------------------------
     # Test 2: skip when dist is fresh (staleness check)
@@ -82,9 +83,10 @@ class TestEnsureWebuiBuilt(unittest.TestCase):
             new_time = time.time()
             os.utime(str(dist_index), (new_time, new_time))
 
-            msgs, mock_run = self._call(webui_dir)
+            msgs, mock_run, result = self._call(webui_dir)
 
         mock_run.assert_not_called()
+        self.assertTrue(result, "Expected True when dist is already up-to-date")
 
     # ------------------------------------------------------------------
     # Test 3: node missing — logs warning, no exception
@@ -97,9 +99,10 @@ class TestEnsureWebuiBuilt(unittest.TestCase):
             (webui_dir / "src").mkdir()
             # No dist/index.html — build is needed
 
-            msgs, mock_run = self._call(webui_dir, which_return=None)
+            msgs, mock_run, result = self._call(webui_dir, which_return=None)
 
         mock_run.assert_not_called()
+        self.assertFalse(result, "Expected False when Node.js is missing")
         self.assertTrue(
             any("Node.js not found" in m for m in msgs),
             f"Expected 'Node.js not found' in log output, got: {msgs}",
@@ -121,13 +124,14 @@ class TestEnsureWebuiBuilt(unittest.TestCase):
             (webui_dir / "node_modules").mkdir()
             # No dist/index.html — build needed
 
-            msgs, mock_run = self._call(webui_dir)
+            msgs, mock_run, result = self._call(webui_dir)
 
         called_cmds = [c.args[0] for c in mock_run.call_args_list]
         self.assertTrue(
             any(c == ["npm", "run", "build"] for c in called_cmds),
             f"Expected ['npm', 'run', 'build'] call, got: {called_cmds}",
         )
+        self.assertTrue(result, "Expected True when build succeeds")
 
     # ------------------------------------------------------------------
     # Test 5: npm install failure — no exception propagated
@@ -147,9 +151,88 @@ class TestEnsureWebuiBuilt(unittest.TestCase):
                 return MagicMock(returncode=0)
 
             try:
-                msgs, mock_run = self._call(webui_dir, run_side_effect=fail_install)
+                msgs, mock_run, result = self._call(
+                    webui_dir, run_side_effect=fail_install
+                )
             except Exception as e:
                 self.fail(f"ensure_webui_built raised unexpectedly: {e}")
+
+        self.assertFalse(result, "Expected False when npm install fails")
+
+    # ------------------------------------------------------------------
+    # Test 6: npm run build failure — caught, returns False, no exception
+    # ------------------------------------------------------------------
+
+    def test_build_step_failure_continues(self):
+        """npm run build CalledProcessError is caught; returns False without raising."""
+        from gaia.ui.build import ensure_webui_built
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            webui_dir = Path(tmpdir)
+            (webui_dir / "src").mkdir()
+            # node_modules present so npm install is skipped
+            (webui_dir / "node_modules").mkdir()
+            # No dist/index.html — build is needed
+
+            def fail_build(cmd, **kwargs):
+                if "build" in cmd:
+                    raise subprocess.CalledProcessError(1, cmd)
+                return MagicMock(returncode=0)
+
+            warnings = []
+            result = None
+            try:
+                with (
+                    patch("gaia.ui.build.shutil.which", return_value="/usr/bin/node"),
+                    patch("gaia.ui.build.subprocess.run", side_effect=fail_build),
+                ):
+                    result = ensure_webui_built(
+                        _webui_dir=webui_dir, warn_fn=warnings.append
+                    )
+            except Exception as e:
+                self.fail(f"ensure_webui_built raised unexpectedly: {e}")
+
+        self.assertFalse(result, "Expected False when build step fails")
+        self.assertTrue(
+            any(
+                "build failed" in w.lower() or "Frontend build failed" in w
+                for w in warnings
+            ),
+            f"Expected build-failure warning, got: {warnings}",
+        )
+
+    # ------------------------------------------------------------------
+    # Test 7: node found, npm missing — warns and skips build
+    # ------------------------------------------------------------------
+
+    def test_npm_missing_warns_and_skips(self):
+        """If node is present but npm is missing, warn_fn is called and build is skipped."""
+        from gaia.ui.build import ensure_webui_built
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            webui_dir = Path(tmpdir)
+            (webui_dir / "src").mkdir()
+            # No dist/index.html — build would be needed
+
+            warnings = []
+
+            def fake_which(cmd):
+                return "/usr/bin/node" if cmd == "node" else None
+
+            with (
+                patch("gaia.ui.build.shutil.which", side_effect=fake_which),
+                patch("gaia.ui.build.subprocess.run") as mock_run,
+            ):
+                result = ensure_webui_built(
+                    _webui_dir=webui_dir, warn_fn=warnings.append
+                )
+
+        mock_run.assert_not_called()
+        self.assertFalse(result, "Expected False when npm is missing")
+        self.assertTrue(
+            any("npm" in w.lower() for w in warnings),
+            f"Expected npm warning in warn_fn output, got: {warnings}",
+        )
 
 
 class TestInitCommandWebuiBuild(unittest.TestCase):

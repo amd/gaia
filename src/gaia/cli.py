@@ -688,8 +688,10 @@ def _ensure_webui_built(log=None):
     """Rebuild the Agent UI frontend if source files are newer than dist."""
     from gaia.ui.build import ensure_webui_built
 
-    log_fn = log.info if log else print
-    ensure_webui_built(log_fn=log_fn)
+    ensure_webui_built(
+        log_fn=log.info if log else print,
+        warn_fn=log.warning if log else print,
+    )
 
 
 def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False):

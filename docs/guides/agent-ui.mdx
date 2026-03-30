@@ -104,7 +104,11 @@ Choose one of the two install paths:
     The Agent UI starts on [http://localhost:4200](http://localhost:4200). Open this URL in your browser.
 
     <Note>
-      **Source/dev installs:** The frontend is built during `gaia init`. If you see a JSON response instead of the UI, run `gaia init` or manually build with `cd src/gaia/apps/webui && npm install && npm run build`.
+      **Source/dev installs:** The frontend is built during `gaia init`. If you see a JSON response instead of the UI, run `gaia init` or manually build (from the repo root):
+
+      ```bash
+      cd src/gaia/apps/webui && npm install && npm run build
+      ```
     </Note>
 
     **Options:**
@@ -206,7 +210,7 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
 
     **npm install (`gaia-ui`):** This is handled automatically — `gaia-ui` tells the Python server where to find the pre-built frontend. If you still see this error, try reinstalling: `npm install -g @amd-gaia/agent-ui@latest`
 
-    **Source/dev installs (git clone):** Run `gaia init` to build it automatically, or manually:
+    **Source/dev installs (git clone):** Run `gaia init` to build it automatically, or manually (from the repo root):
 
     ```bash
     cd src/gaia/apps/webui && npm install && npm run build
