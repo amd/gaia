@@ -188,15 +188,6 @@ CodeAgent builds:
 
 **Every team is unique.** Different users get different agents with different tools, different schedules, and different context. The platform grows with the user's needs, not with templates maintained by developers.
 
-### Use-Case Specialists (v0.23.0+)
-
-| Agent | Focus | Why It's a Specialist |
-|-------|-------|----------------------|
-| **EmailAgent** | Inbox management, triage, draft responses, daily digest | Email requires always-on scheduling, IMAP/OAuth credentials, and privacy-sensitive processing — fundamentally different from document Q&A |
-| **CalendarAgent** | Schedule management, conflict detection, daily agenda | Calendar needs real-time event monitoring and temporal reasoning — a distinct skill from document search or file management |
-| **HomeAgent** | Home Assistant integration, device control, routines | IoT device control has unique safety concerns (physical actuators) and protocol requirements (HA REST/WebSocket API) |
-| **InfraAgent** | Server monitoring, health checks, auto-restart, alerts | Infrastructure monitoring requires continuous background operation and self-healing logic — not a conversational task |
-
 ### Model Sharing Across Specialists
 
 **Specialists reuse LLMs — they don't each need their own model.** Multiple specialists can run on the same base model with different LoRA adapters:
@@ -683,7 +674,7 @@ Some specialists need to run on a schedule, not just on-demand:
 - FinanceAgent: "Daily, reconcile transactions"
 - InfraAgent: "Every 5 minutes, run health checks"
 
-Schedules are defined in the blueprint and registered with the scheduler (v0.23.0). Each scheduled run:
+Schedules are defined at spawn time and registered with the scheduler (v0.23.0). Each scheduled run:
 1. Agent loads its memory context
 2. Checks for pending tasks
 3. Executes highest-priority task
