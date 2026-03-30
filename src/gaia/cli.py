@@ -694,7 +694,7 @@ def _ensure_webui_built(log=None):
     )
 
 
-def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False):
+def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist=None):
     """Launch the Agent UI server (FastAPI + uvicorn).
 
     Reused by top-level --ui, gaia chat --ui, and the interactive menu.
@@ -728,7 +728,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False):
 
         import uvicorn
 
-        app = create_app()
+        app = create_app(webui_dist=webui_dist)
         uvicorn.run(
             app,
             host="127.0.0.1",
@@ -883,6 +883,11 @@ def main():
         type=int,
         default=4200,
         help="Port for the Agent UI server (default: 4200, used with --ui)",
+    )
+    parser.add_argument(
+        "--ui-dist",
+        default=None,
+        help="Path to pre-built Agent UI frontend dist directory (used with --ui)",
     )
     parser.add_argument(
         "--cli",
@@ -1055,6 +1060,11 @@ def main():
         type=int,
         default=4200,
         help="Port for the Agent UI server (default: 4200)",
+    )
+    chat_parser.add_argument(
+        "--ui-dist",
+        default=None,
+        help="Path to pre-built Agent UI frontend dist directory (used with --ui)",
     )
     talk_parser = subparsers.add_parser(
         "talk", help="Start voice conversation with Gaia", parents=[parent_parser]
@@ -2627,6 +2637,7 @@ Examples:
                 base_url=getattr(args, "base_url", None),
                 log=log,
                 debug=getattr(args, "debug", False),
+                webui_dist=getattr(args, "ui_dist", None),
             )
             return
 
@@ -2641,6 +2652,7 @@ Examples:
             base_url=getattr(args, "base_url", None),
             log=log,
             debug=getattr(args, "debug", False),
+            webui_dist=getattr(args, "ui_dist", None),
         )
         return
 
@@ -2660,6 +2672,7 @@ Examples:
             base_url=getattr(args, "base_url", None),
             log=log,
             debug=getattr(args, "debug", False),
+            webui_dist=getattr(args, "ui_dist", None),
         )
         return
 
