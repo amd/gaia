@@ -18,16 +18,16 @@ The current ChatAgent is a monolith: 35+ tools, a 1,477-line system prompt, and 
 
 ### The Solution
 
-GAIA evolves to a multi-agent system orchestrated by **GaiaAgent** — a lightweight, personality-driven agent running on a 0.6B model at NPU speed. Specialist agents handle tool-heavy work. All agents communicate freely through a shared MCP bus with full observability.
+GAIA evolves to a multi-agent system orchestrated by **GaiaAgent** — a lightweight, personality-driven agent running on a 4B model at NPU speed. Specialist agents handle tool-heavy work. All agents communicate freely through a shared MCP bus with full observability.
 
 ### Why This Matters
 
 | Problem | Monolithic (today) | Multi-Agent (proposed) | User Impact |
 |---------|-------------------|----------------------|-------------|
-| Chat response time | 2-5s (35B model) | <500ms (0.6B on NPU) | **Instant, natural conversation** |
+| Chat response time | 2-5s (35B model) | <1s (4B on NPU/GPU) | **Fast, natural conversation** |
 | Tool accuracy | ~60% (35 tools) | ~90%+ (3-10 tools per specialist) | **Agent does the right thing** |
 | Adding use cases | Bloats prompt, degrades all tasks | New specialist, zero impact on existing | **Platform gets better, never worse** |
-| Memory usage | 35B model = 20GB+ | 0.6B + specialists on demand = <10GB | **Runs on any Ryzen AI PC** |
+| Memory usage | 35B model = 20GB+ | 4B shared base + LoRA adapters = ~8GB | **Runs on any Ryzen AI PC** |
 | Cloud API cost | $600-$3,600/yr for 35B quality | $0 — all local, NPU-accelerated | **Zero ongoing cost** |
 
 ### Design Principles
@@ -42,7 +42,7 @@ GAIA evolves to a multi-agent system orchestrated by **GaiaAgent** — a lightwe
 
 ## 2. GaiaAgent
 
-**Model:** Qwen3-0.6B on NPU (instant inference, <500ms response)
+**Model:** Qwen3.5-4B on NPU/GPU (fast inference, <1s response)
 **Role:** Orchestrator + chat + personality
 **Prompt:** ~50-150 lines (vs 1,477 monolithic)
 **Tools:** 4-5 delegation tools via Agent MCP Server
@@ -51,7 +51,7 @@ GAIA evolves to a multi-agent system orchestrated by **GaiaAgent** — a lightwe
 
 Users don't want a tool-calling machine. They want an assistant that's **fun to talk to** and gets work done. By separating personality from tool execution:
 
-- **Instant responses for 60-70% of interactions** — greetings, follow-ups, humor, and small talk don't need a 35B model or any tools. A 0.6B model on NPU handles them in milliseconds.
+- **Instant responses for 60-70% of interactions** — greetings, follow-ups, humor, and small talk don't need a 35B model or any tools. A 4B model on NPU handles them in milliseconds.
 - **Consistent personality** — one model owns the voice. It doesn't change when switching between document analysis and calendar management.
 - **Better tool accuracy** — specialists focus on their domain with 3-10 tools, not 35. Smaller decision space = fewer mistakes.
 - **The user never sees the plumbing** — GaiaAgent weaves specialist results into natural conversation. The user talks to one agent, not a committee.
@@ -119,12 +119,14 @@ These foundational agents enable everything else. They ship with GAIA and are al
 
 | Agent | Model | Role |
 |-------|-------|------|
-| **GaiaAgent** | 0.6B (NPU) | Orchestrator, personality, user interaction — the face of GAIA |
+| **GaiaAgent** | 4B (NPU/GPU) | Orchestrator, personality, user interaction — the face of GAIA |
 | **CodeAgent** | 4B+ (GPU) | Agent factory — builds new agents for any use case on demand |
-| **DocAgent** | 1.7B (shared) | Document search, RAG Q&A, indexing — core capability used by all workflows |
-| **FileAgent** | 1.7B (shared) | File system operations — agents need to read/write files |
-| **ShellAgent** | 1.7B (shared) | System commands, script execution — agents need to interact with the OS |
-| **WebAgent** | 1.7B (shared) | Web search, page fetching — agents need internet access |
+| **DocAgent** | 4B (shared) | Document search, RAG Q&A, indexing — core capability used by all workflows |
+| **FileAgent** | 4B (shared) | File system operations — agents need to read/write files |
+| **ShellAgent** | 4B (shared) | System commands, script execution — agents need to interact with the OS |
+| **WebAgent** | 4B (shared) | Web search, page fetching — agents need internet access |
+
+All platform agents share the same Qwen3.5-4B base model with different LoRA adapters. One model loaded, all agents served.
 
 ### Use-Case Agents (built by CodeAgent on demand)
 
@@ -383,6 +385,30 @@ ComplianceAgent reads it on next run: recall(agent_id="formation", category="fac
 
 Simple, queryable, no parsing required.
 
+### Scaling Memory Over Time
+
+As agents work over weeks and months, memory grows. An agent that's processed hundreds of tasks has thousands of insights, tool calls, and conversation turns. This is a feature — not a problem.
+
+**Memory IS the context. No summarization needed.**
+
+The key insight: agents don't carry conversation history in their context window. Everything important is already stored as discrete facts in memory. The context window holds:
+
+1. **System prompt** (~200 lines)
+2. **Current task** (what am I doing right now)
+3. **Retrieved memories** (searched via FTS5, relevant to THIS task)
+4. **Current conversation** (last few turns of the active task)
+
+This means the context window doesn't grow with time — it grows with the *current task's complexity*. An agent that's been running for 6 months uses the same amount of context as one that started yesterday, because it retrieves only what's relevant.
+
+**How memory stays useful as it scales:**
+
+- **FTS5 search** — agents search memory by keywords and categories, not scan linearly. "What do I know about tax deadlines?" returns relevant insights instantly, even from thousands of entries.
+- **Recency weighting** — recent memories are ranked higher in search results. An EIN obtained yesterday surfaces before a filing date researched 6 months ago.
+- **No information loss** — nothing is summarized, compressed, or deleted. Every fact, every tool call, every conversation turn is preserved in full. The database grows, not the context window.
+- **Per-task retrieval** — at the start of each task, the agent searches memory for relevant context: `recall(query="tax deadlines Texas LLC")`. Only matching results enter the context window. Irrelevant history stays in the database, retrievable if needed later.
+
+This is how a 16K context window handles months of accumulated knowledge without summarization — the database is unlimited, the context window is a focused view into it.
+
 ### Collective Intelligence in Practice
 
 **Why this is the killer feature for local AI:** Cloud agents can't share behavioral data without transmitting it to third-party servers. GAIA's memory is entirely local — agents build a deeply personalized, private understanding of the user that improves with every interaction.
@@ -539,7 +565,7 @@ When a specialist agent fails or times out:
 
 - **Max iterations per task:** 8 (default). Agent forced to reflect and either complete or escalate after 8 tool-call loops.
 - **Stuck detection:** If an agent retries the same tool call 3 times with the same arguments, mark task as `stuck` and notify GaiaAgent.
-- **Per-agent context budget:** Each agent has a token budget per task (default: 4K for 0.6B GaiaAgent, 8K for 1.7B specialists, 16K for 4B CodeAgent). Exceeding budget triggers forced summarization of context.
+- **Per-agent context budget:** Each agent has a token budget per task (default: 16K for 4B GaiaAgent/specialists, 32K for 8B+ CodeAgent). Exceeding budget triggers summarization of older context.
 - **Deadlock detection:** Before executing `depends_on`, check for circular dependencies in the task graph. Reject cycles at creation time.
 
 ### Semantic Checkpointing
@@ -567,7 +593,7 @@ Running multiple AI models simultaneously requires careful memory management. Us
 
 ### Model Loading Strategy
 
-**GaiaAgent (0.6B):** Always loaded on NPU. Instant responses. ~500MB memory. This is the agent that's always ready — the user never waits for GaiaAgent.
+**GaiaAgent (4B):** Always loaded on NPU/GPU. Fast responses (<1s). ~4GB memory. This is the agent that's always ready — capable enough for real orchestration and conversation, small enough to stay loaded alongside specialists.
 
 **Specialist models (1.7-4B):** Loaded on demand, with LRU eviction:
 - First request to a specialist → load model (2-5s cold start)
@@ -578,17 +604,16 @@ Running multiple AI models simultaneously requires careful memory management. Us
 
 ### Memory Budget (Ryzen AI, 32GB system)
 ```
-GaiaAgent (0.6B, NPU):          ~500MB
-Specialist 1 (1.7B, GPU/NPU):   ~2GB
-Specialist 2 (1.7B, GPU/NPU):   ~2GB
-Specialist 3 (4B, GPU):         ~4GB
+GaiaAgent (4B, NPU/GPU):        ~4GB
+Specialist base (4B, shared):   ~4GB  (shared across all specialists via LoRA)
+LoRA adapters (4x 10MB):        ~40MB
 RAG embeddings (FAISS):         ~500MB
 Memory DB + overhead:           ~200MB
 ─────────────────────────────────────
-Total active:                   ~9.2GB (fits easily in 32GB)
+Total active:                   ~8.7GB (fits easily in 32GB)
 ```
 
-With LoRA adapters, specialists share a base model and swap adapters (~10-100MB each) — dramatically reducing memory for multiple agents on the same model family. Four specialists using the same Qwen3-1.7B base + different LoRA adapters = ~2.4GB total instead of ~8GB.
+Key insight: GaiaAgent and specialists can share the SAME base model (Qwen3.5-4B). GaiaAgent uses a personality/orchestration LoRA, specialists use domain-specific LoRAs. One model loaded = ~4GB. All agents served. LoRA swap takes milliseconds.
 
 ---
 
@@ -758,7 +783,174 @@ Simple, readable, no framework overhead. The guardrails are in the prompt where 
 
 ---
 
-## 12. Scaling: Adding New Use Cases
+## 12. Adaptability — Handling Change
+
+### Why This Matters
+
+Real use cases don't stay static. A user starts a Texas LLC, then moves to California. A portfolio agent tracks 5 stocks, then the user adds crypto. A home automation agent handles lights, then the user installs a security system. Agents must adapt without requiring the user to start over.
+
+### How Agents Adapt
+
+**Context changes flow through memory.** When the user says "I'm moving to California," GaiaAgent stores this in shared memory. On their next task, specialists read the updated context and adjust:
+
+```
+User: "Actually, I'm relocating to California."
+GaiaAgent stores: {key: "state", value: "CA", previous: "TX"} in user_profile
+ComplianceAgent (next run): reads user_profile → "State changed from TX to CA"
+  → Creates tasks: "Research CA franchise tax", "Check CA-specific permits"
+  → Updates compliance.md with new state requirements
+```
+
+No rebuild needed. Agents read fresh context at the start of each task. If the change is large enough (entirely different industry, for example), GaiaAgent can ask CodeAgent to build additional specialists.
+
+### When to Rebuild vs. Adapt
+
+| Change | Action | Why |
+|--------|--------|-----|
+| State changes (TX → CA) | Adapt — agents read new context | Same domain, different parameters |
+| New capability needed (add marketing) | Spawn — CodeAgent builds MarketingAgent | New domain, existing agents can't cover it |
+| Fundamental pivot (food truck → SaaS) | Rebuild — new team from scratch | Everything changes, old agents are irrelevant |
+| User preferences change (concise → detailed) | Adapt — stored in memory, all agents read it | Behavioral change, not structural |
+
+GaiaAgent decides which action to take based on the magnitude of the change. Small changes = memory update. Medium = spawn new agent. Large = interview again and rebuild team.
+
+### Growing With the User
+
+As the business evolves (idea → forming → operating → scaling), GaiaAgent proactively suggests new capabilities:
+
+```
+GaiaAgent: "Your LLC is formed, EIN is set, and bookkeeping is running.
+Now that you're operating, would you like help with marketing or hiring?"
+User: "Yeah, I need help with social media"
+GaiaAgent → CodeAgent: build a MarketingAgent for food truck social media
+```
+
+The system grows with the user's needs. It doesn't wait to be asked — GaiaAgent reads the current state and suggests next steps.
+
+---
+
+## 13. Reliability — Honest Constraints of Small LLMs
+
+### The Core Challenge
+
+A 4B model orchestrating specialists is ambitious. Small models have real limitations:
+
+| Limitation | Impact | How Common |
+|-----------|--------|------------|
+| **Hallucinated tool calls** | Agent calls a tool that doesn't exist or with wrong arguments | 20-40% on untrained models |
+| **Bad delegation decisions** | GaiaAgent sends a file task to DocAgent instead of FileAgent | 10-20% of delegations |
+| **Lost context mid-conversation** | Agent forgets what it was doing after 3-4 turns | Common at 4K context |
+| **Instruction non-compliance** | Agent ignores system prompt rules (e.g., adds planning text) | 15-30% on small models |
+| **Format errors** | Agent outputs malformed JSON for tool calls | 10-25% on untrained models |
+
+**This is not a showstopper — it's an engineering problem.** Every limitation has a mitigation.
+
+### Mitigation: Validate Before Executing
+
+Every tool call is validated before execution:
+
+```python
+def execute_tool_call(agent, tool_name, tool_args):
+    # 1. Does the tool exist in this agent's registry?
+    if tool_name not in agent.tools:
+        return error(f"Unknown tool: {tool_name}. Available: {agent.tools.keys()}")
+
+    # 2. Are the required arguments present and correctly typed?
+    tool = agent.tools[tool_name]
+    validation_error = tool.validate_args(tool_args)
+    if validation_error:
+        return error(f"Invalid args for {tool_name}: {validation_error}")
+
+    # 3. Execute with timeout
+    result = tool.execute(tool_args, timeout=30)
+    return result
+```
+
+The validation layer catches hallucinated tools and wrong arguments **before** anything runs. The model gets an error message and can retry with correct arguments. This is already implemented in GAIA's base Agent class.
+
+### Mitigation: Retry With Fallback
+
+When a small model fails, the system has a fallback chain:
+
+```
+Attempt 1: Small model (0.6B/1.7B) tries the task
+  ↓ fails (wrong tool, bad args, format error)
+Attempt 2: Same model retries with error feedback
+  ↓ fails again
+Attempt 3: Escalate to larger model (4B) for this specific task
+  ↓ fails again (rare at this point)
+Fallback: Ask user for guidance via Agent UI
+```
+
+Most failures are caught by attempt 1-2. The error message from validation gives the model enough context to self-correct. Escalation to a larger model is a last resort — it's slower but more reliable.
+
+### Mitigation: Constrained Output Format
+
+Instead of asking the model to output arbitrary JSON, constrain its output to a strict format:
+
+```
+You have these tools: [query_documents, read_file, search_web]
+
+To use a tool, respond EXACTLY like this:
+{"tool": "query_documents", "tool_args": {"query": "your question"}}
+
+Do NOT add any text before or after the JSON.
+```
+
+Smaller prompts with explicit format instructions reduce hallucination. The fewer choices the model has (3 tools vs 35), the more reliable it is.
+
+### Mitigation: Graceful Degradation
+
+If the multi-agent system fails entirely (GaiaAgent can't delegate, specialists crash), the system falls back to the existing monolithic ChatAgent:
+
+```
+Multi-agent mode:  GaiaAgent → specialist → result → narrate
+Fallback mode:     ChatAgent (35B, monolithic) → direct response
+```
+
+Users always get a response. The multi-agent architecture is an optimization — the monolith is the safety net. As small models improve through fine-tuning (v0.19.0), the fallback triggers less and less.
+
+### Mitigation: Fine-Tuning Closes the Gap
+
+The reliability problems above are **pre-fine-tuning numbers.** After training on GAIA-specific tool calling patterns (v0.19.0 #666-668):
+
+| Metric | Before Fine-Tuning | After Fine-Tuning (projected) |
+|--------|-------------------|------------------------------|
+| Tool call format accuracy | 60-75% | 90-95% |
+| Tool selection accuracy | 60-80% | 85-95% |
+| Argument accuracy | 70-85% | 90-95% |
+| Instruction compliance | 70-85% | 85-95% |
+
+Research shows a 350M fine-tuned model achieved 77% tool calling accuracy vs 26% for GPT-class models on specific tasks. The gap between small and large models is primarily a training gap, not a capability gap — for focused, well-defined tasks.
+
+### What This Means Practically
+
+**Day 1 (before fine-tuning):** Multi-agent works for simple tasks (single delegation, known tools). Complex multi-step workflows may need fallback to monolithic mode. Users will see occasional errors that self-correct on retry.
+
+**After fine-tuning (v0.19.0):** Multi-agent handles most workflows reliably. Fallback to monolithic is rare. Tool calling accuracy matches or exceeds the monolithic 35B model on GAIA-specific tasks because each specialist is focused on fewer tools.
+
+**Long-term (v0.20.0+):** Memory and preference learning make agents more reliable over time. Agents learn from past mistakes. The system gets better with use — the opposite of cloud agents that reset every session.
+
+---
+
+## 14. Known Limitations
+
+Being honest about what this architecture does NOT solve:
+
+| Limitation | Impact | Workaround |
+|-----------|--------|------------|
+| **Single-user only** | No multi-user or team collaboration | Could be extended later with per-user memory namespaces |
+| **No real-time event streams** | Can't watch stock prices continuously or monitor live feeds | Scheduled polling (every N minutes) covers most cases |
+| **External auth is manual** | User must log into Gmail/Calendar themselves (via Playwright browser session) | OAuth flows could be added per-service later |
+| **CodeAgent needs a capable model** | Building new agents requires 4B+ model — can't run on NPU alone | CodeAgent runs on GPU. Only GaiaAgent needs NPU. |
+| **Cold start for new specialists** | First request to a new specialist = 2-5s model load time | GaiaAgent masks with "Let me bring in my expert..." |
+| **Context window pressure** | 4B GaiaAgent with 16K context can track many tasks but long conversations still need management | Semantic checkpointing + summarization keeps context lean |
+
+These are real constraints, not aspirational goals. The architecture is designed to work well within them, not pretend they don't exist.
+
+---
+
+## 15. Scaling: Adding New Use Cases
 
 ### Why This Architecture Scales
 
