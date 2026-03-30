@@ -2862,12 +2862,16 @@ class LemonadeClient:
             status.version = health.get("version")
 
             # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
+            # Skip embedding models — their ctx_size is irrelevant for LLM context checks.
             all_models = health.get("all_models_loaded", [])
-            if all_models:
-                status.context_size = (
-                    all_models[0].get("recipe_options", {}).get("ctx_size", 0)
-                )
-            else:
+            for m in all_models:
+                if m.get("type") == "embedding":
+                    continue
+                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
+                if ctx:
+                    status.context_size = ctx
+                    break
+            if not status.context_size:
                 # Fallback for older Lemonade versions
                 status.context_size = health.get("context_size", 0)
 
