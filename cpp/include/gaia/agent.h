@@ -13,7 +13,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -41,13 +43,11 @@ public:
     explicit Agent(const AgentConfig& config = {});
     virtual ~Agent();
 
-    // Non-copyable
+    // Non-copyable, non-movable (mutex member prevents move)
     Agent(const Agent&) = delete;
     Agent& operator=(const Agent&) = delete;
-
-    // Movable (base-class only — derived subclasses must declare their own move ops)
-    Agent(Agent&&) = default;
-    Agent& operator=(Agent&&) = default;
+    Agent(Agent&&) = delete;
+    Agent& operator=(Agent&&) = delete;
 
     /// Process a user query through the agent loop.
     /// This is the main entry point — mirrors Python Agent.process_query().
@@ -103,6 +103,25 @@ public:
     /// Get the Lemonade client (for explicit model loading at startup).
     LemonadeClient& lemonade() { return lemonade_; }
 
+    // ---- Dynamic reconfiguration ----
+
+    /// Get a copy of the current config (thread-safe snapshot).
+    AgentConfig config() const;
+
+    /// Replace the entire config. Validates before applying; propagates to LemonadeClient.
+    /// Throws std::invalid_argument if the config is invalid.
+    /// Changes take effect on the next processQuery() call.
+    void setConfig(const AgentConfig& newConfig);
+
+    /// Change the active model. Resets modelEnsured_ so the next processQuery() reloads it.
+    void setModel(const std::string& modelId);
+
+    /// Convenience setters — take effect on the next processQuery() call.
+    void setMaxSteps(int maxSteps);
+    void setMaxTokens(int maxTokens);
+    void setTemperature(double temperature);
+    void setDebug(bool debug);
+
 protected:
     /// Initialize the agent after construction.
     /// Call this at the end of subclass constructors to register tools.
@@ -125,7 +144,9 @@ private:
 
     /// Send messages to the LLM and get a response.
     /// Uses OpenAI-compatible chat completions API.
-    std::string callLlm(const std::vector<Message>& messages, const std::string& systemPrompt);
+    /// @param cfg  Config snapshot from the current processQuery() call.
+    std::string callLlm(const std::vector<Message>& messages, const std::string& systemPrompt,
+                        const AgentConfig& cfg);
 
     // ---- Execution Helpers ----
 
@@ -149,7 +170,7 @@ private:
     ToolRegistry tools_;
     std::unique_ptr<OutputHandler> console_;
     LemonadeClient lemonade_;
-    bool modelEnsured_ = false;
+    std::atomic<bool> modelEnsured_{false};
 
     AgentState executionState_ = AgentState::PLANNING;
     json currentPlan_;
@@ -170,6 +191,9 @@ private:
     // Cached system prompt
     mutable std::string cachedSystemPrompt_;
     mutable bool systemPromptDirty_ = true;
+
+    // Mutex protecting config_ for concurrent setters / processQuery()
+    mutable std::mutex configMutex_;
 
     // Response format template (shared across all agents)
     static const std::string RESPONSE_FORMAT_TEMPLATE;
