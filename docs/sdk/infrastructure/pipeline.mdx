@@ -1,0 +1,795 @@
+---
+title: "Pipeline Orchestration SDK"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/pipeline/`](https://github.com/amd/gaia/blob/main/src/gaia/pipeline/)
+</Info>
+
+<Note>
+**Imports:**
+```python
+from gaia.pipeline.engine import PipelineEngine, PipelineConfig
+from gaia.pipeline.state import PipelineContext, PipelineSnapshot, PipelineState
+from gaia.pipeline.audit_logger import AuditLogger, AuditEventType
+from gaia.pipeline.defect_router import DefectRouter, DefectType, DefectSeverity, create_defect
+from gaia.pipeline.defect_remediation_tracker import DefectRemediationTracker, DefectStatus
+from gaia.pipeline.recursive_template import RecursivePipelineTemplate, get_recursive_template
+```
+</Note>
+
+---
+
+**Detailed Spec:** [spec/pipeline-engine](/spec/pipeline-engine)
+
+**User Guide:** [guides/pipeline](/guides/pipeline)
+
+---
+
+## PipelineContext
+
+**Import:** `from gaia.pipeline.state import PipelineContext`
+
+Immutable frozen dataclass that defines what a pipeline should accomplish and under what constraints. Created once and never modified during execution.
+
+```python
+from gaia.pipeline.state import PipelineContext
+
+context = PipelineContext(
+    pipeline_id="prod-001",
+    user_goal="Build a secure REST API with JWT authentication",
+    quality_threshold=0.90,   # Required quality score (0–1)
+    max_iterations=10,        # Maximum loop-back iterations
+    concurrent_loops=5,       # Concurrent loops within this pipeline
+    template="STANDARD",      # Informational label only (not used for routing)
+    metadata={"project": "auth-service", "team": "backend"},
+)
+```
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `pipeline_id` | `str` | required | Unique pipeline identifier |
+| `user_goal` | `str` | required | Natural language goal description |
+| `quality_threshold` | `float` | `0.90` | Required quality score (0–1) |
+| `max_iterations` | `int` | `10` | Maximum loop iterations before FAIL |
+| `concurrent_loops` | `int` | `5` | Number of concurrent loops to support |
+| `template` | `str` | `"STANDARD"` | Informational label; routing template is set via config dict |
+| `created_at` | `datetime` | `datetime.now(UTC)` | Auto-set creation timestamp |
+| `metadata` | `dict` | `{}` | Additional key/value context |
+
+### `with_updates(**kwargs) -> PipelineContext`
+
+Creates a new immutable context with updated fields. The original is unchanged.
+
+```python
+stricter = context.with_updates(quality_threshold=0.95, max_iterations=15)
+```
+
+---
+
+## PipelineSnapshot
+
+**Import:** `from gaia.pipeline.state import PipelineSnapshot`
+
+Mutable snapshot of live pipeline state. Returned by `engine.start()`, `engine.pause()`, `engine.resume()`, and `engine.cancel()`. Call `engine.get_snapshot()` at any time to read current state.
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `state` | `PipelineState` | Current lifecycle state |
+| `current_phase` | `Optional[str]` | Active phase name (`"PLANNING"`, `"DEVELOPMENT"`, `"QUALITY"`, `"DECISION"`) |
+| `current_loop` | `Optional[int]` | Active loop number |
+| `iteration_count` | `int` | Total iterations completed |
+| `quality_score` | `Optional[float]` | Latest quality score (0–1) |
+| `error_message` | `Optional[str]` | Set on `FAILED` state |
+| `artifacts` | `Dict[str, Any]` | Phase outputs keyed by name |
+| `chronicle` | `List[Dict]` | Ordered event log |
+| `started_at` | `Optional[datetime]` | When pipeline entered `RUNNING` |
+| `completed_at` | `Optional[datetime]` | When pipeline reached terminal state |
+| `defects` | `List[Dict]` | Defects detected in the quality phase |
+| `context_injected` | `Dict[str, Any]` | Context added by `ContextInjectionHook` |
+
+### Methods
+
+```python
+snapshot.to_dict()       # -> Dict — serialize to JSON-safe dict
+snapshot.elapsed_time()  # -> Optional[float] — seconds since start
+```
+
+---
+
+## PipelineState
+
+**Import:** `from gaia.pipeline.state import PipelineState`
+
+```python
+class PipelineState(Enum):
+    INITIALIZING  # Being configured
+    READY         # Configured, ready to run
+    RUNNING       # Actively executing phases
+    PAUSED        # Waiting for external signal
+    COMPLETED     # Finished successfully  [terminal]
+    FAILED        # Encountered unrecoverable error  [terminal]
+    CANCELLED     # Cancelled by caller  [terminal]
+```
+
+```python
+state.is_terminal()  # True for COMPLETED, FAILED, CANCELLED
+state.is_active()    # True for INITIALIZING, READY, RUNNING, PAUSED
+```
+
+Valid transitions: `INITIALIZING -> READY -> RUNNING -> COMPLETED/FAILED`. `RUNNING -> PAUSED -> RUNNING/CANCELLED`. See [spec/pipeline-engine](/spec/pipeline-engine) for the full transition graph.
+
+---
+
+## PipelineEngine
+
+**Import:** `from gaia.pipeline.engine import PipelineEngine`
+
+Main orchestrator. Async. Each instance manages one pipeline lifecycle.
+
+### Constructor
+
+```python
+engine = PipelineEngine(
+    agents_dir=None,          # str: custom agent definitions directory
+    enable_logging=True,      # bool: configure GAIA logging
+    log_level=20,             # int: logging level (20 = INFO)
+    max_concurrent_loops=100, # int: outer semaphore cap
+    worker_pool_size=4,       # int: inner worker semaphore cap
+)
+```
+
+The engine creates two `asyncio.Semaphore` instances at construction time: `_semaphore(max_concurrent_loops)` and `_worker_semaphore(worker_pool_size)`.
+
+### `async initialize(context, config=None) -> None`
+
+Initializes all subsystems. Must be called before `start()`.
+
+```python
+await engine.initialize(
+    context=context,
+    config={
+        "template": "enterprise",     # RecursivePipelineTemplate name (lowercase)
+        "concurrent_loops": 8,        # Override context.concurrent_loops
+        "agents_dir": "/path/agents", # Override constructor agents_dir
+        "enable_hooks": True,         # Register default production hooks
+    },
+)
+```
+
+Template name lookup: the value of `config["template"]` is lowercased and looked up in `RECURSIVE_TEMPLATES`. If not found, `"generic"` is used and a warning is logged.
+
+**Raises:**
+- `PipelineAlreadyRunningError` — if `initialize()` called twice on the same instance.
+
+### `async start() -> PipelineSnapshot`
+
+Runs all four phases sequentially. Returns the final snapshot when all phases complete or a failure occurs.
+
+```python
+snapshot = await engine.start()
+print(snapshot.state.name)        # "COMPLETED" or "FAILED"
+print(snapshot.quality_score)     # float 0–1
+print(snapshot.iteration_count)   # int
+```
+
+**Raises:**
+- `PipelineNotInitializedError` — if `initialize()` was not called.
+- `PipelineAlreadyRunningError` — if `start()` called while running.
+
+### `async execute(workload) -> Any`
+
+Single-workload execution primitive used by `execute_with_backpressure`. Delegates to `start()` if initialized; returns the workload unchanged otherwise.
+
+### `async execute_with_backpressure(workloads, progress_callback=None) -> list`
+
+Executes a list of workloads concurrently with dual-semaphore backpressure. Exceptions are returned as exception objects (not raised) because `asyncio.gather` is called with `return_exceptions=True`.
+
+```python
+results = await engine.execute_with_backpressure(
+    workloads=["task-a", "task-b", "task-c"],
+    progress_callback=lambda result: print(f"Done: {result}"),
+)
+# Check for exceptions in results
+for r in results:
+    if isinstance(r, Exception):
+        print(f"Failed: {r}")
+```
+
+### `async pause(reason) -> PipelineSnapshot`
+
+Transitions to `PAUSED`. Returns the snapshot at pause time.
+
+### `async resume() -> PipelineSnapshot`
+
+Resumes from `PAUSED`. Raises `PipelineNotInitializedError` if not paused.
+
+### `async cancel() -> PipelineSnapshot`
+
+Cancels all active loops and transitions to `CANCELLED`.
+
+### `async wait_for_completion(timeout=None) -> bool`
+
+Awaits the internal `asyncio.Event`. Returns `True` if completed within timeout, `False` on timeout.
+
+```python
+completed = await engine.wait_for_completion(timeout=30.0)
+```
+
+### `get_snapshot() -> PipelineSnapshot`
+
+Returns the current state snapshot without awaiting completion.
+
+### `get_chronicle() -> List[Dict[str, Any]]`
+
+Returns the ordered chronicle (event log) from the internal state machine.
+
+```python
+chronicle = engine.get_chronicle()
+for event in chronicle:
+    print(f"{event['timestamp']}: {event['event']}")
+```
+
+### `get_loop_manager() -> LoopManager`
+
+Returns the `LoopManager` for direct loop inspection.
+
+### `shutdown() -> None`
+
+Synchronous cleanup. Shuts down loop manager, agent registry, and quality scorer. Call after the pipeline completes.
+
+```python
+engine.shutdown()
+```
+
+---
+
+## AuditLogger
+
+**Import:** `from gaia.pipeline.audit_logger import AuditLogger, AuditEventType`
+
+Tamper-proof SHA-256 hash-chained event log. Each `AuditEvent` is a frozen dataclass whose `current_hash` is computed over all its fields plus the previous event's hash.
+
+### Constructor
+
+```python
+audit = AuditLogger(
+    logger_id="pipeline-001",  # Optional; auto-generated if omitted
+    genesis_hash=None,          # Optional custom 64-char hex seed
+)
+```
+
+### `log(event_type, loop_id=None, phase=None, agent_id=None, **kwargs) -> AuditEvent`
+
+Appends an immutable event to the chain. Thread-safe (RLock).
+
+```python
+from gaia.pipeline.audit_logger import AuditEventType
+
+event = audit.log(
+    event_type=AuditEventType.PHASE_ENTER,
+    phase="PLANNING",
+    loop_id="loop-001",
+    agent_id="planning-analysis-strategist",
+    custom_key="custom_value",   # Stored in event.payload
+)
+print(event.sequence_number)   # int
+print(event.current_hash)      # 64-char hex string
+```
+
+### Event Types
+
+```python
+class AuditEventType(Enum):
+    PIPELINE_START      # Pipeline lifecycle start
+    PIPELINE_COMPLETE   # Pipeline lifecycle complete
+    PHASE_ENTER         # Phase entered
+    PHASE_EXIT          # Phase exited
+    AGENT_SELECTED      # Agent chosen for a phase
+    AGENT_EXECUTED      # Agent execution completed
+    QUALITY_EVALUATED   # Quality scorer ran
+    DECISION_MADE       # DecisionEngine made a verdict
+    DEFECT_DISCOVERED   # Quality found a defect
+    DEFECT_REMEDIATED   # Defect was fixed
+    LOOP_BACK           # Pipeline looped back to PLANNING
+    TOOL_EXECUTED       # A tool was called
+```
+
+Each event has a `.category()` method returning one of: `"lifecycle"`, `"phase_transition"`, `"agent_operation"`, `"quality"`, `"decision"`, `"defect"`, `"loop"`, `"tool"`.
+
+### `verify_integrity() -> bool`
+
+Walks the entire chain verifying each hash. Returns `True` if intact.
+
+**Raises:** `IntegrityVerificationError` with `failed_event_id`, `failure_type` (`"HASH_MISMATCH"` or `"BROKEN_CHAIN"`), and expected/actual hash values.
+
+```python
+try:
+    audit.verify_integrity()
+except IntegrityVerificationError as e:
+    print(f"Tamper detected at event {e.failed_event_id}: {e.failure_type}")
+```
+
+### Query Methods
+
+```python
+# Filter by any combination of criteria
+events = audit.get_events(
+    filters={
+        "phase": "PLANNING",
+        "category": "quality",
+        "event_type": AuditEventType.QUALITY_EVALUATED,
+        "loop_id": "loop-001",
+        "agent_id": "senior-developer",
+        "start_time": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        "end_time": datetime(2026, 12, 31, tzinfo=timezone.utc),
+        "payload_contains": ("score", 0.95),
+    },
+    limit=20,
+    offset=0,
+)
+
+audit.get_event("evt-abc123")              # -> Optional[AuditEvent]
+audit.get_events_by_type(AuditEventType.PHASE_ENTER)  # -> List[AuditEvent]
+audit.get_events_by_loop("loop-001")       # -> List[AuditEvent]
+audit.get_events_by_phase("QUALITY")       # -> List[AuditEvent]
+audit.get_events_in_range(start, end)      # -> List[AuditEvent]
+```
+
+### Export Methods
+
+```python
+json_str = audit.export_log(format="json", indent=2)
+csv_str  = audit.export_log(format="csv")
+
+summary  = audit.get_chain_summary()
+# {
+#   "logger_id": str, "total_events": int,
+#   "by_type": Dict[str, int], "by_category": Dict[str, int],
+#   "first_event": str (ISO), "last_event": str (ISO),
+#   "genesis_hash": str, "latest_hash": str, "loop_count": int
+# }
+
+report = audit.get_integrity_report()
+# {"is_valid": bool, "verified_at": str, "total_events": int,
+#  "genesis_hash": str, "latest_hash": str, "failure_details": Optional[Dict]}
+```
+
+---
+
+## DefectRouter
+
+**Import:** `from gaia.pipeline.defect_router import DefectRouter, DefectType, DefectSeverity, create_defect`
+
+Maps defect types to the pipeline phase best equipped to remediate them.
+
+### Constructor
+
+```python
+from gaia.pipeline.defect_router import RoutingRule
+
+router = DefectRouter(
+    custom_rules=None  # Optional[List[RoutingRule]] — overrides defaults
+)
+```
+
+### Defect Types (21 total)
+
+```python
+class DefectType(Enum):
+    # Code quality
+    CODE_STYLE, CODE_COMPLEXITY, MISSING_DOCSTRING, DUPLICATE_CODE
+    # Testing
+    MISSING_TESTS, INSUFFICIENT_COVERAGE, FLAKY_TESTS
+    # Security
+    SECURITY_VULNERABILITY, INJECTION_RISK, AUTHORIZATION_ISSUE
+    # Requirements
+    MISSING_REQUIREMENT, INCORRECT_IMPLEMENTATION, EDGE_CASE_NOT_HANDLED
+    # Performance
+    PERFORMANCE_ISSUE, MEMORY_LEAK, INEFFICIENT_ALGORITHM
+    # Architecture
+    ARCHITECTURE_VIOLATION, CIRCULAR_DEPENDENCY, TIGHT_COUPLING
+    # Unclassified
+    UNKNOWN
+```
+
+### `create_defect(defect_type, description, severity, ...) -> Defect`
+
+Helper function for constructing `Defect` objects:
+
+```python
+defect = create_defect(
+    defect_type="MISSING_TESTS",      # DefectType name string
+    description="No tests for auth",
+    severity="HIGH",                  # "CRITICAL", "HIGH", "MEDIUM", "LOW"
+    phase_detected="QUALITY",
+    location="src/auth.py:45",
+    metadata={"module": "auth"},
+)
+```
+
+### Routing Methods
+
+```python
+# Route a single Defect object to its target phase name
+target = router.route_defect(defect)   # -> str, e.g. "DEVELOPMENT"
+
+# Route a list of defect dicts, grouped by target phase
+routed = router.route_defects([d.to_dict() for d in defects])
+# -> {"DEVELOPMENT": [Defect, ...], "PLANNING": [Defect, ...]}
+
+# Summary statistics
+summary = router.get_defect_summary([d.to_dict() for d in defects])
+# -> {"total": int, "by_type": Dict, "by_severity": Dict,
+#     "by_phase": Dict, "critical_count": int, "high_count": int}
+```
+
+### Custom Routing Rules
+
+```python
+from gaia.pipeline.defect_router import RoutingRule, DefectType
+
+rule = RoutingRule(
+    defect_types={DefectType.SECURITY_VULNERABILITY, DefectType.INJECTION_RISK},
+    target_phase="PLANNING",   # Escalate security issues to re-planning
+    priority=0,                # Lower number = higher priority
+    conditions={"environment": "production"},
+)
+router.add_rule(rule)
+router.remove_rule(DefectType.CODE_STYLE)  # Remove all rules for this type
+```
+
+---
+
+## DefectRemediationTracker
+
+**Import:** `from gaia.pipeline.defect_remediation_tracker import DefectRemediationTracker, DefectStatus`
+
+Thread-safe lifecycle state machine for defect remediation across loop iterations. All operations are protected by an `RLock`.
+
+### Constructor
+
+```python
+tracker = DefectRemediationTracker(tracker_id="loop-001")
+```
+
+### Status Lifecycle
+
+```python
+class DefectStatus(Enum):
+    OPEN         # Newly discovered
+    IN_PROGRESS  # Being fixed
+    RESOLVED     # Fix implemented, awaiting verification
+    VERIFIED     # Fix confirmed by quality check  [terminal]
+    DEFERRED     # Blocked or low priority  [terminal]
+    CANNOT_FIX   # Fundamental limitation  [terminal]
+```
+
+```python
+status.is_terminal()  # True for VERIFIED, DEFERRED, CANNOT_FIX
+status.is_active()    # True for OPEN, IN_PROGRESS
+```
+
+### Lifecycle Methods
+
+```python
+# Add a defect (must be OPEN status; auto-corrected with warning if not)
+tracker.add_defect(defect, phase="QUALITY")
+
+# Progress through the lifecycle
+tracker.start_fix("defect-id", changed_by="senior-developer")
+tracker.mark_resolved("defect-id", "Added 15 unit tests", changed_by="developer")
+tracker.mark_verified("defect-id", "QA confirmed", changed_by="quality-reviewer")
+
+# Alternate paths
+tracker.mark_deferred("defect-id", "Low priority, next sprint")
+tracker.mark_cannot_fix("defect-id", "Platform limitation")
+```
+
+Each method returns a `DefectStatusChange` record with `defect_id`, `old_status`, `new_status`, `changed_at`, `changed_by`, and `description`.
+
+**Raises `InvalidStatusTransitionError`** if an invalid transition is attempted (e.g., calling `mark_verified()` from `OPEN`).
+
+### Query Methods
+
+```python
+pending = tracker.get_pending_defects()
+# -> List[Defect] sorted by severity (CRITICAL first)
+
+by_phase = tracker.get_defects_by_phase("QUALITY")
+by_status = tracker.get_defects_by_status(DefectStatus.IN_PROGRESS)
+defect = tracker.get_defect("defect-001")
+all_defects = tracker.get_all_defects()
+```
+
+### Analytics and Export
+
+```python
+summary = tracker.get_summary()
+# {
+#   "total": int, "by_status": Dict, "by_severity": Dict,
+#   "by_type": Dict, "by_phase": Dict,
+#   "pending_count": int, "verified_count": int,
+#   "deferred_count": int, "cannot_fix_count": int,
+#   "resolution_rate": float  # 0-1
+# }
+
+analytics = tracker.get_analytics()
+# {
+#   "mean_time_to_resolve": Optional[float],   # hours from OPEN to RESOLVED
+#   "mean_time_to_verify": Optional[float],    # hours from RESOLVED to VERIFIED
+#   "defects_by_severity_priority": Dict,
+#   "phase_distribution": Dict,
+#   "status_trend": {"OPEN": int, "IN_PROGRESS": int, ...}
+# }
+
+audit_log = tracker.export_audit_log()
+# -> List[Dict] with "event_type", "defect_id", "timestamp",
+#    "actor", "action" (e.g. "OPEN -> IN_PROGRESS"), "description"
+```
+
+---
+
+## QualityScorer
+
+**Import:** `from gaia.quality.scorer import QualityScorer`
+
+Evaluates artifacts across 27 validation categories organized into 6 dimensions. Used internally by the pipeline's QUALITY phase.
+
+```python
+from gaia.quality.scorer import QualityScorer
+
+scorer = QualityScorer()
+
+quality_report = await scorer.evaluate(
+    artifact={"code": "...", "tests": "..."},
+    context={
+        "requirements": ["Build a REST API"],
+        "template": "rapid",
+    },
+)
+
+print(f"Overall score: {quality_report.overall_score}")   # 0–100
+print(f"Normalized:    {quality_report.overall_score / 100:.2f}")  # 0–1
+
+for dim_score in quality_report.dimension_scores:
+    print(f"  {dim_score.dimension}: {dim_score.score:.1f}")
+
+scorer.shutdown()
+```
+
+### Quality Dimensions
+
+| Dimension | Validators | Focus |
+|-----------|:----------:|-------|
+| Code Quality | CQ-01 — CQ-06 | Style, complexity, documentation, duplication |
+| Requirements Coverage | RC-01 — RC-05 | Completeness, accuracy, edge cases |
+| Testing | TE-01 — TE-05 | Coverage, quality, integration tests |
+| Security | SE-01 — SE-04 | Vulnerabilities, injection, authorization |
+| Performance | PE-01 — PE-04 | Efficiency, memory, algorithms |
+| Architecture & Compliance | AC-01 — AC-03 | SOLID, coupling, dependency cycles |
+
+The `QualityReport.overall_score` is `0–100`. Divide by `100` to compare against `PipelineContext.quality_threshold` (which is `0–1`).
+
+### Weight Profiles
+
+The `RecursivePipelineTemplate` carries a `quality_weights` dict and optionally a `QualityWeightConfig` that determines how dimension scores are aggregated. Available built-in profiles: `"balanced"`, `"security_heavy"`, `"speed_heavy"`, `"documentation_heavy"`.
+
+```python
+from gaia.pipeline.recursive_template import get_recursive_template
+
+template = get_recursive_template("enterprise")
+template.set_weight_profile("security_heavy")  # Shift weight to security dimension
+```
+
+---
+
+## RecursivePipelineTemplate
+
+**Import:** `from gaia.pipeline.recursive_template import RecursivePipelineTemplate, get_recursive_template`
+
+Controls pipeline phase routing: which agents run per phase, quality threshold for loop-back, and conditional routing rules.
+
+### Built-in Templates
+
+```python
+from gaia.pipeline.recursive_template import get_recursive_template
+
+generic    = get_recursive_template("generic")     # threshold=0.90, max_iter=10
+rapid      = get_recursive_template("rapid")       # threshold=0.75, max_iter=5
+enterprise = get_recursive_template("enterprise")  # threshold=0.95, max_iter=15
+```
+
+Passing an unknown name raises `KeyError`. The `PipelineEngine` catches this and falls back to `"generic"` with a warning.
+
+### Custom Template
+
+```python
+from gaia.pipeline.recursive_template import RecursivePipelineTemplate, RoutingRule
+
+template = RecursivePipelineTemplate(
+    name="strict-api",
+    description="API development with security focus",
+    quality_threshold=0.92,
+    max_iterations=12,
+    agent_categories={
+        "planning": ["planning-analysis-strategist", "solutions-architect"],
+        "development": ["senior-developer"],
+        "quality": ["quality-reviewer", "security-auditor"],
+        "decision": ["software-program-manager"],
+    },
+    routing_rules=[
+        RoutingRule(
+            condition="defect_type == 'security'",
+            route_to="security-auditor",
+            priority=1,
+            loop_back=True,
+            guidance="Fix security issue before continuing",
+        ),
+    ],
+    quality_weights={
+        "code_quality": 0.20,
+        "requirements_coverage": 0.20,
+        "testing": 0.20,
+        "security": 0.30,
+        "performance": 0.05,
+        "architecture": 0.05,
+    },
+)
+
+# Validate weights sum to 1.0
+template.validate_weights()
+
+# Check if loop-back is needed
+should_loop = template.should_loop_back(
+    quality_score=0.88,
+    iteration=3,
+    has_defects=True,
+)  # -> True (0.88 < 0.92 threshold and has defects)
+```
+
+---
+
+## PhaseContract and PhaseContractRegistry
+
+**Import:** `from gaia.pipeline.phase_contract import PhaseContract, PhaseContractRegistry`
+
+Type-safe validation of phase input/output data structures. Prevents phases from receiving malformed data.
+
+```python
+from gaia.pipeline.phase_contract import PhaseContract, PhaseContractRegistry
+
+registry = PhaseContractRegistry()
+
+contract = PhaseContract(
+    phase_name="PLANNING",
+    required_inputs=["user_goal"],
+    required_outputs=["technical_plan"],
+    input_schema={"user_goal": str},
+    output_schema={"technical_plan": dict},
+)
+registry.register(contract)
+
+# Validate before phase execution
+is_valid = registry.validate_inputs("PLANNING", {"user_goal": "Build REST API"})
+```
+
+---
+
+## MetricsCollector
+
+**Import:** `from gaia.pipeline.metrics import MetricsCollector` (if available)
+
+SQLite-backed time-series storage for pipeline execution metrics. All data remains local.
+
+```python
+# MetricsCollector is optional — import defensively
+try:
+    from gaia.pipeline.metrics import MetricsCollector, MetricsAnalyzer
+
+    collector = MetricsCollector(db_path="./gaia_metrics.db")
+
+    # Record metrics during pipeline execution
+    collector.record(
+        pipeline_id="prod-001",
+        metric_name="quality_score",
+        value=0.87,
+        phase="QUALITY",
+        iteration=2,
+    )
+
+    # Analyze trends
+    analyzer = MetricsAnalyzer(collector)
+    trend = analyzer.get_trend("quality_score", window=10)
+    print(f"Trend direction: {trend['direction']}")   # "improving" | "declining" | "stable"
+
+except ImportError:
+    print("MetricsCollector not available in this installation.")
+```
+
+---
+
+## Exceptions
+
+**Import:** `from gaia.exceptions import ...`
+
+| Exception | Raised When |
+|-----------|-------------|
+| `PipelineNotInitializedError` | `start()`, `pause()`, `resume()`, `cancel()`, `get_snapshot()` called before `initialize()` |
+| `PipelineAlreadyRunningError` | `initialize()` called twice, or `start()` called while running |
+| `InvalidQualityThresholdError` | `quality_threshold` outside `[0, 1]` in `PipelineContext` or `PipelineConfig` |
+| `InvalidStateTransition` | `PipelineStateMachine.transition()` called with an invalid target state |
+| `IntegrityVerificationError` | `AuditLogger.verify_integrity()` detects hash mismatch or broken chain |
+| `InvalidStatusTransitionError` | `DefectRemediationTracker` transition not in `ALLOWED_TRANSITIONS` |
+
+---
+
+## Complete Async Example
+
+```python title="complete_sdk_example.py"
+import asyncio
+from gaia.pipeline.engine import PipelineEngine
+from gaia.pipeline.state import PipelineContext, PipelineState
+from gaia.pipeline.audit_logger import AuditLogger, AuditEventType
+from gaia.pipeline.defect_router import DefectRouter, create_defect
+from gaia.pipeline.defect_remediation_tracker import DefectRemediationTracker
+
+async def main():
+    # 1. Create engine and context
+    engine = PipelineEngine(max_concurrent_loops=10, worker_pool_size=4)
+    context = PipelineContext(
+        pipeline_id="sdk-example-001",
+        user_goal="Build a REST API with JWT authentication",
+        quality_threshold=0.85,
+        max_iterations=5,
+    )
+
+    # 2. Initialize with enterprise template
+    await engine.initialize(context, config={"template": "enterprise"})
+
+    # 3. Run pipeline
+    snapshot = await engine.start()
+    print(f"State:   {snapshot.state.name}")
+    print(f"Quality: {snapshot.quality_score:.2f}")
+
+    # 4. Process any defects found
+    if snapshot.defects:
+        router = DefectRouter()
+        tracker = DefectRemediationTracker(tracker_id=context.pipeline_id)
+        routed = router.route_defects(snapshot.defects)
+        print(f"Defects by phase: { {k: len(v) for k, v in routed.items()} }")
+
+    # 5. Review the audit chronicle
+    chronicle = engine.get_chronicle()
+    print(f"Events: {len(chronicle)}")
+
+    # 6. Cleanup
+    engine.shutdown()
+
+asyncio.run(main())
+```
+
+---
+
+## Related Topics
+
+- [Pipeline User Guide](/guides/pipeline) - Quickstart, demos, and AMD/NPU tuning
+- [Pipeline Engine Specification](/spec/pipeline-engine) - Architecture and internals
+- [Core Agent System](/sdk/core/agent-system) - Build agents that plug into pipeline phases
+- [API Server](/sdk/infrastructure/api-server) - Expose pipeline results via REST
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

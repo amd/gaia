@@ -1,0 +1,346 @@
+---
+title: "Pipeline Engine Specification"
+description: "Architecture, state machine, phase contracts, decision engine, and internal component design for GAIA Pipeline Orchestration"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/pipeline/`](https://github.com/amd/gaia/blob/main/src/gaia/pipeline/)
+</Info>
+
+<Note>
+  **User Guide:** [guides/pipeline](/guides/pipeline) — Quickstart, demos, AMD tuning
+
+  **SDK Reference:** [sdk/infrastructure/pipeline](/sdk/infrastructure/pipeline) — Class and method API
+</Note>
+
+---
+
+## 1. Overview
+
+The GAIA Pipeline Orchestration engine implements a **quality-gated recursive iteration** pattern. A user goal enters the system and is worked on through four ordered phases. After each full pass, a `DecisionEngine` evaluates the quality score against a configurable threshold and either approves the result or routes it back to `PLANNING` for another iteration.
+
+### 1.1 Design Goals
+
+- **Self-improving**: Quality scores drive automatic loop-back until the threshold is met or iterations are exhausted.
+- **Tamper-proof**: SHA-256 hash-chained `AuditLogger` detects any post-hoc modification of the event log.
+- **Bounded concurrency**: Dual `asyncio.Semaphore` prevents runaway parallelism under load.
+- **Type-safe data flow**: `PhaseContract` and `PhaseContractRegistry` validate inputs and outputs at phase boundaries.
+- **Local-first**: All quality scoring, audit logging, defect tracking, and metrics storage run in-process with no external I/O required.
+
+### 1.2 Component Map
+
+```
+PipelineEngine
+  ├── PipelineStateMachine   (state transitions, chronicle)
+  │     └── PipelineSnapshot (mutable state view)
+  ├── LoopManager            (concurrent loop lifecycle)
+  ├── DecisionEngine         (pass/fail/loop-back verdict)
+  ├── QualityScorer          (27 validators, 6 dimensions)
+  ├── AgentRegistry          (agent discovery and selection)
+  ├── RoutingEngine          (defect-to-agent routing)
+  ├── HookRegistry + HookExecutor  (pre/post phase hooks)
+  └── RecursivePipelineTemplate    (phase and agent config)
+```
+
+---
+
+## 2. State Machine
+
+### 2.1 States
+
+| State | Description | Terminal |
+|-------|-------------|:--------:|
+| `INITIALIZING` | Engine is being configured | No |
+| `READY` | `initialize()` completed successfully | No |
+| `RUNNING` | Executing pipeline phases | No |
+| `PAUSED` | Awaiting external resume signal | No |
+| `COMPLETED` | All phases passed quality gate | Yes |
+| `FAILED` | Unrecoverable error or iterations exhausted | Yes |
+| `CANCELLED` | Cancelled by caller | Yes |
+
+### 2.2 Valid Transitions
+
+```
+INITIALIZING --> READY         (initialize() succeeded)
+INITIALIZING --> FAILED        (initialize() error)
+READY        --> RUNNING       (start() called)
+READY        --> CANCELLED     (cancel() before start)
+RUNNING      --> PAUSED        (pause() called)
+RUNNING      --> COMPLETED     (final phase passed)
+RUNNING      --> FAILED        (exception or iterations exhausted)
+PAUSED       --> RUNNING       (resume() called)
+PAUSED       --> CANCELLED     (cancel() while paused)
+```
+
+Terminal states have no outgoing transitions. `PipelineStateMachine.transition()` raises `InvalidStateTransition` for any attempt to leave a terminal state.
+
+### 2.3 Thread Safety
+
+`PipelineStateMachine` uses a `threading.RLock` (reentrant) for all state reads and writes. This allows the same thread to acquire the lock multiple times without deadlocking during nested calls.
+
+---
+
+## 3. Phase Execution Model
+
+### 3.1 Phase Sequence
+
+Each call to `engine.start()` executes phases in order:
+
+```
+PLANNING -> DEVELOPMENT -> QUALITY -> DECISION
+```
+
+Each phase entry and exit fires hooks via `HookExecutor`. A hook result with `halt_pipeline=True` stops the pipeline immediately.
+
+### 3.2 Loop-Back Mechanism
+
+The `DecisionEngine` inspects the quality score after the `DECISION` phase:
+
+```python
+if quality_score >= quality_threshold:
+    return DecisionType.COMPLETE
+elif iteration < max_iterations:
+    return DecisionType.LOOP_BACK   # -> back to PLANNING
+else:
+    return DecisionType.FAIL
+```
+
+A `LOOP_BACK` decision does not transition to a new `PipelineState` — it resets the phase pointer and increments `iteration_count`. The `LoopManager` creates a new `LoopConfig` for each iteration.
+
+### 3.3 Phase Artifacts
+
+Each phase writes named artifacts to `PipelineSnapshot.artifacts`:
+
+| Phase | Artifact Key | Content |
+|-------|-------------|---------|
+| `PLANNING` | `planning_agent` | Selected agent ID |
+| `DEVELOPMENT` | `implementation` | Implementation output |
+| `QUALITY` | `quality_report` | Full `QualityReport` dict |
+| `DECISION` | `decision` | `Decision.to_dict()` output |
+| `DECISION` | `routing_decisions` | Defect routing results (if defects present) |
+
+---
+
+## 4. Phase Contracts
+
+### 4.1 Purpose
+
+`PhaseContract` defines the required input and output schema for each phase. The `PhaseContractRegistry` validates actual data against contracts before phase execution begins.
+
+### 4.2 Structure
+
+```python
+@dataclass
+class PhaseContract:
+    phase_name: str
+    required_inputs: List[str]        # Keys that must be present in input dict
+    required_outputs: List[str]       # Keys that must be present in output dict
+    input_schema: Dict[str, type]     # Type mapping for inputs
+    output_schema: Dict[str, type]    # Type mapping for outputs
+```
+
+### 4.3 Registry
+
+The `PhaseContractRegistry` provides contract lookup by phase name and validates data dicts against the contract schema. Missing required keys or type mismatches raise validation errors before any phase work begins.
+
+---
+
+## 5. Audit Logger
+
+### 5.1 Hash Chain Structure
+
+The `AuditLogger` maintains an ordered list of `AuditEvent` frozen dataclasses. Each event carries:
+
+- A UUID-based `event_id`
+- The `current_hash`: SHA-256 of all fields including `previous_hash`
+- The `previous_hash`: `current_hash` of the preceding event (or 64 zeros for the genesis)
+
+Any modification to an event after the fact changes its `compute_hash()` result but not its stored `current_hash`, which `verify_integrity()` detects as `HASH_MISMATCH`. Removal of an event creates a `BROKEN_CHAIN` error where the next event's `previous_hash` no longer matches the prior event's `current_hash`.
+
+### 5.2 Loop Isolation
+
+When events are logged with a `loop_id`, the logger maintains a `_loop_buckets` dict mapping each `loop_id` to its event IDs. This enables efficient retrieval of all events for a specific iteration via `get_events_by_loop()`.
+
+### 5.3 Concurrency
+
+All `AuditLogger` operations acquire a `threading.RLock`. The sequence counter (`_sequence_counter`) and hash chain (`_events`) are modified atomically within the lock.
+
+---
+
+## 6. Defect Routing Engine
+
+### 6.1 RoutingRule Priority System
+
+`DefectRouter` holds a list of `RoutingRule` objects sorted by `priority` (ascending; lower number = higher priority). When `route_defect()` is called, rules are evaluated in priority order and the first match wins. Unmatched defects default to `"DEVELOPMENT"`.
+
+### 6.2 21 Defect Types
+
+The 21 `DefectType` values map to four default target phases:
+
+- **DEVELOPMENT** (14 types): `CODE_STYLE`, `CODE_COMPLEXITY`, `MISSING_DOCSTRING`, `DUPLICATE_CODE`, `MISSING_TESTS`, `INSUFFICIENT_COVERAGE`, `FLAKY_TESTS`, `SECURITY_VULNERABILITY`, `INJECTION_RISK`, `AUTHORIZATION_ISSUE`, `EDGE_CASE_NOT_HANDLED`, `PERFORMANCE_ISSUE`, `MEMORY_LEAK`, `INEFFICIENT_ALGORITHM`
+- **PLANNING** (5 types): `MISSING_REQUIREMENT`, `INCORRECT_IMPLEMENTATION`, `ARCHITECTURE_VIOLATION`, `CIRCULAR_DEPENDENCY`, `TIGHT_COUPLING`
+- **Default fallback**: `UNKNOWN` -> `DEVELOPMENT`
+
+### 6.3 RoutingEngine
+
+`RoutingEngine` wraps `DefectRouter` and integrates with `AgentRegistry` to resolve defect routing decisions to specific agent IDs rather than just phase names. It is invoked by `PipelineEngine._execute_decision()` when defects are present in the snapshot.
+
+---
+
+## 7. Quality Scoring
+
+### 7.1 27 Validators Across 6 Dimensions
+
+The `QualityScorer` runs all validators asynchronously using a `ThreadPoolExecutor`. Each validator returns a `ValidationResult` with a `score` (0–100), defect list, and detail dict.
+
+| Dimension | IDs | Validator Count |
+|-----------|-----|:--------------:|
+| Code Quality | CQ-01 — CQ-06 | 6 |
+| Requirements Coverage | RC-01 — RC-05 | 5 |
+| Testing | TE-01 — TE-05 | 5 |
+| Security | SE-01 — SE-04 | 4 |
+| Performance | PE-01 — PE-04 | 4 |
+| Architecture & Compliance | AC-01 — AC-03 | 3 |
+
+### 7.2 Score Normalization
+
+The `QualityReport.overall_score` is `0–100`. The pipeline engine normalizes it: `quality_score = quality_report.overall_score / 100`. This normalized value is compared against `PipelineContext.quality_threshold` (0–1).
+
+### 7.3 Pluggable Weight Profiles
+
+Dimension weights are carried by `RecursivePipelineTemplate.quality_weights`. The `QualityWeightConfigManager` provides built-in profiles and a `merge_weights` method for partial overrides.
+
+---
+
+## 8. Concurrency Model
+
+### 8.1 Dual Semaphore Design
+
+`PipelineEngine` creates two semaphores at construction:
+
+```python
+self._semaphore        = asyncio.Semaphore(max_concurrent_loops)
+self._worker_semaphore = asyncio.Semaphore(worker_pool_size)
+```
+
+`execute_with_backpressure` acquires both in sequence:
+
+```python
+async with self._semaphore:       # Outer cap: total concurrent pipelines
+    async with self._worker_semaphore:  # Inner cap: parallel worker threads
+        result = await self.execute(workload)
+```
+
+This prevents both total concurrency explosion and local thread pool saturation.
+
+### 8.2 LoopManager
+
+The `LoopManager` manages the lifecycle of `LoopConfig` instances. Each phase creates a loop, which the manager tracks. The manager exposes `start_loop()`, `cancel_loop()`, and `get_all_loops()`. On `engine.cancel()`, all active loops are cancelled.
+
+---
+
+## 9. Hook System
+
+### 9.1 Default Production Hooks
+
+Eight hooks are registered by default when `enable_hooks=True` (the default):
+
+| Hook Class | Event | Purpose |
+|-----------|-------|---------|
+| `PreActionValidationHook` | `PHASE_ENTER` | Validate inputs before phase runs |
+| `PostActionValidationHook` | `PHASE_EXIT` | Validate outputs after phase completes |
+| `ContextInjectionHook` | `PHASE_ENTER` | Inject additional context into snapshot |
+| `OutputProcessingHook` | `PHASE_EXIT` | Post-process phase outputs |
+| `QualityGateHook` | `PHASE_EXIT` | Apply quality gate rules |
+| `DefectExtractionHook` | `PHASE_EXIT` | Extract defects from quality report |
+| `PipelineNotificationHook` | `PHASE_EXIT` | Send notifications |
+| `ChronicleHarvestHook` | `PHASE_EXIT` | Persist chronicle entries |
+
+### 9.2 Hook Result
+
+A hook returning `halt_pipeline=True` stops phase execution immediately. The engine checks this result after both `PHASE_ENTER` and `PHASE_EXIT` hook batches.
+
+---
+
+## 10. Template System Reference
+
+### 10.1 RecursivePipelineTemplate Registry
+
+| Name | Threshold | Max Iter | Planning Agents | Quality Agents |
+|------|:---------:|:--------:|-----------------|----------------|
+| `generic` | 0.90 | 10 | `planning-analysis-strategist` | `quality-reviewer` |
+| `rapid` | 0.75 | 5 | `planning-analysis-strategist` | `quality-reviewer` |
+| `enterprise` | 0.95 | 15 | `planning-analysis-strategist`, `solutions-architect` | `quality-reviewer`, `security-auditor`, `performance-analyst` |
+
+### 10.2 QualityTemplate Registry (System B)
+
+The `gaia.quality.templates` module maintains a separate registry for `QualityTemplate` objects. These are used internally by `QualityScorer` to apply auto-pass/auto-fail bands and select agent sequences for quality evaluation.
+
+| Name | Threshold | Auto-Pass | Auto-Fail |
+|------|:---------:|:---------:|:---------:|
+| `STANDARD` | 0.90 | 0.95 | 0.85 |
+| `RAPID` | 0.75 | 0.80 | 0.70 |
+| `ENTERPRISE` | 0.95 | 0.98 | 0.90 |
+| `DOCUMENTATION` | 0.85 | 0.90 | 0.80 |
+
+These names are **uppercase** and accessed via `gaia.quality.templates.get_template("STANDARD")`. They are distinct from the lowercase names used by `get_recursive_template()`.
+
+---
+
+## 11. Error Handling and Recovery
+
+### 11.1 Exception Hierarchy
+
+All pipeline-specific exceptions inherit from a common base in `gaia.exceptions`:
+
+- `PipelineNotInitializedError` — operation called before `initialize()`
+- `PipelineAlreadyRunningError` — duplicate `initialize()` or concurrent `start()`
+- `InvalidQualityThresholdError` — threshold outside `[0, 1]`
+- `InvalidStateTransition` — state machine transition violation
+- `QualityScoringError` — failure in quality evaluation subsystem
+- `ValidatorNotFoundError` — requested validator not in registry
+
+### 11.2 Phase Error Isolation
+
+Exceptions within a phase are caught by `PipelineEngine._execute_pipeline()`. The engine logs the exception, transitions to `PipelineState.FAILED`, sets `snapshot.error_message`, and signals the `_completion_event` before re-raising control. Callers receive the `FAILED` snapshot from `start()` rather than a bare exception.
+
+### 11.3 Backpressure Failures
+
+`execute_with_backpressure()` uses `asyncio.gather(..., return_exceptions=True)`. Any exception from a bounded execution is captured as an exception object in the results list. Callers must inspect each result and check `isinstance(result, Exception)`.
+
+---
+
+## 12. Metrics and Observability
+
+### 12.1 MetricsCollector
+
+SQLite-backed time-series storage. Records named metrics with phase and iteration context. All data written to a local `.db` file — no network I/O.
+
+### 12.2 MetricsAnalyzer and BenchmarkSuite
+
+`MetricsAnalyzer` reads collected metrics and computes trend direction (`"improving"`, `"declining"`, `"stable"`). `BenchmarkSuite` provides repeatable performance benchmarks for pipeline throughput measurement.
+
+### 12.3 Chronicle
+
+The `PipelineStateMachine` maintains `snapshot.chronicle`: a list of dicts representing every state transition and custom event. Accessible via `engine.get_chronicle()`. Each entry contains at minimum: `event`, `timestamp`, `pipeline_id`, `phase`, and transition-specific keys.
+
+---
+
+## Related Documents
+
+- [guides/pipeline](/guides/pipeline) - User guide with quickstart and AMD tuning
+- [sdk/infrastructure/pipeline](/sdk/infrastructure/pipeline) - Class API reference
+- [spec/orchestrator](/spec/orchestrator) - CodeAgent orchestration (separate system)
+- [sdk/core/agent-system](/sdk/core/agent-system) - Base Agent class
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

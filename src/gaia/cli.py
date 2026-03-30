@@ -2598,6 +2598,17 @@ Examples:
         "--all", action="store_true", help="Clear all caches"
     )
 
+    # Pipeline command (programmatic orchestration engine - CLI coming soon)
+    pipeline_parser = subparsers.add_parser(
+        "pipeline",
+        help="Pipeline orchestration engine (coming soon — use Python SDK)",
+    )
+    pipeline_parser.add_argument(
+        "--info",
+        action="store_true",
+        help="Show pipeline engine information and documentation links",
+    )
+
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
     init_parser = subparsers.add_parser(
@@ -4761,6 +4772,18 @@ Let me know your answer!
     # Handle Cache command
     if args.action == "cache":
         handle_cache_command(args)
+        return
+
+    # Handle Pipeline command
+    if args.action == "pipeline":
+        print("The pipeline orchestration engine is programmatic-only.")
+        print("")
+        print("Use the Python SDK directly:")
+        print("  from gaia.pipeline.engine import PipelineEngine")
+        print("  from gaia.pipeline.state import PipelineContext")
+        print("")
+        print("Documentation: https://amd-gaia.ai/guides/pipeline")
+        print("SDK Reference:  https://amd-gaia.ai/sdk/infrastructure/pipeline")
         return
 
     # Handle Blender command

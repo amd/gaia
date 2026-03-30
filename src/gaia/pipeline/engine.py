@@ -6,6 +6,7 @@ Main pipeline orchestrator that coordinates all components.
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Any, Optional, Callable
 
 from gaia.pipeline.recursive_template import get_recursive_template
@@ -44,13 +45,13 @@ from gaia.exceptions import (
     InvalidQualityThresholdError,
 )
 
-
 logger = get_logger(__name__)
 
 
 # Pipeline phases
 class PipelinePhase:
     """Pipeline phase constants."""
+
     PLANNING = "PLANNING"
     DEVELOPMENT = "DEVELOPMENT"
     QUALITY = "QUALITY"
@@ -73,6 +74,7 @@ class PipelineConfig:
         enable_hooks: Whether to enable hooks
         hooks: List of hooks to register
     """
+
     template: str = "generic"
     quality_threshold: float = 0.90
     max_iterations: int = 10
@@ -192,20 +194,32 @@ class PipelineEngine:
         # Initialize state machine
         self._state_machine = PipelineStateMachine(context)
 
-        # Initialize loop manager
-        concurrent_loops = self._config.get("concurrent_loops", context.concurrent_loops)
-        self._loop_manager = LoopManager(max_concurrent=concurrent_loops)
-
         # Initialize decision engine
         self._decision_engine = DecisionEngine(self._config)
 
         # Initialize quality scorer
         self._quality_scorer = QualityScorer()
 
-        # Initialize agent registry
+        # Resolve agents_dir — use config, then constructor arg, then default path
         agents_dir = self._config.get("agents_dir", self._agents_dir)
+        if agents_dir is None:
+            _default = Path(__file__).parent.parent.parent.parent / "config" / "agents"
+            if _default.exists():
+                agents_dir = str(_default)
+        logger.info(f"AgentRegistry agents_dir: {agents_dir}")
+
+        # Initialize agent registry BEFORE loop manager so it can be wired in
         self._agent_registry = AgentRegistry(agents_dir=agents_dir)
         await self._agent_registry.initialize()
+
+        # Initialize loop manager with agent registry wired in
+        concurrent_loops = self._config.get(
+            "concurrent_loops", context.concurrent_loops
+        )
+        self._loop_manager = LoopManager(
+            max_concurrent=concurrent_loops,
+            agent_registry=self._agent_registry,
+        )
 
         # Initialize routing engine
         self._routing_engine = RoutingEngine(agent_registry=self._agent_registry)
@@ -316,6 +330,7 @@ class PipelineEngine:
             PipelinePhase.DECISION,
         ]
 
+        phase_failed = False
         for phase in phases:
             if not self._running:
                 break
@@ -324,13 +339,20 @@ class PipelineEngine:
 
             if not phase_complete:
                 logger.warning(f"Phase {phase} did not complete successfully")
+                phase_failed = True
                 break
 
-        # Pipeline complete
-        self._state_machine.transition(
-            PipelineState.COMPLETED,
-            "Pipeline execution complete",
-        )
+        # Determine terminal state: cancellation vs. failure vs. success
+        if phase_failed:
+            self._state_machine.transition(
+                PipelineState.FAILED,
+                "Pipeline phase failed",
+            )
+        else:
+            self._state_machine.transition(
+                PipelineState.COMPLETED,
+                "Pipeline execution complete",
+            )
         self._running = False
         self._completion_event.set()
 
@@ -422,7 +444,10 @@ class PipelineEngine:
             loop_state = await asyncio.wrap_future(future)
             logger.info(
                 f"Planning loop completed: status={loop_state.status.name}",
-                extra={"loop_id": loop_config.loop_id, "status": loop_state.status.name},
+                extra={
+                    "loop_id": loop_config.loop_id,
+                    "status": loop_state.status.name,
+                },
             )
 
         self._state_machine.increment_iteration()
@@ -464,7 +489,10 @@ class PipelineEngine:
             loop_state = await asyncio.wrap_future(future)
             logger.info(
                 f"Development loop completed: status={loop_state.status.name}",
-                extra={"loop_id": loop_config.loop_id, "status": loop_state.status.name},
+                extra={
+                    "loop_id": loop_config.loop_id,
+                    "status": loop_state.status.name,
+                },
             )
 
         self._state_machine.increment_iteration()
@@ -512,7 +540,11 @@ class PipelineEngine:
                 routing_decisions = []
                 for defect in defects:
                     # Normalize defect to dict if needed
-                    defect_dict = defect if isinstance(defect, dict) else {"description": str(defect)}
+                    defect_dict = (
+                        defect
+                        if isinstance(defect, dict)
+                        else {"description": str(defect)}
+                    )
                     routing_decision = self._routing_engine.route_defect(defect_dict)
                     routing_decisions.append(routing_decision.to_dict())
                 self._state_machine.add_artifact("routing_decisions", routing_decisions)
@@ -588,6 +620,7 @@ class PipelineEngine:
             List of results in the same order as workloads. Exceptions are
             returned as exception objects (not raised) due to return_exceptions=True.
         """
+
         async def bounded_execute(workload):
             async with self._semaphore:
                 async with self._worker_semaphore:
@@ -763,5 +796,3 @@ class PipelineEngine:
 
         self._initialized = False
         self._running = False
-
-

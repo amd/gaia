@@ -10,7 +10,6 @@ from typing import Dict, List, Any, Optional
 from gaia.hooks.base import BaseHook, HookContext, HookResult, HookPriority
 from gaia.utils.logging import get_logger
 
-
 logger = get_logger(__name__)
 
 
@@ -51,7 +50,8 @@ class QualityGateHook(BaseHook):
         quality_report = context.data.get("quality_report")
 
         if not quality_report:
-            return HookResult.failure_result(
+            return HookResult(
+                success=False,
                 error_message="No quality report available for phase exit",
                 blocking=True,
                 halt_pipeline=False,  # Loop back instead of halt
@@ -80,7 +80,8 @@ class QualityGateHook(BaseHook):
         # Check critical defects
         critical_defects = quality_report.get("critical_defects", 0)
         if critical_defects > 0:
-            return HookResult.failure_result(
+            return HookResult(
+                success=False,
                 error_message=f"{critical_defects} critical defects found",
                 blocking=True,
                 halt_pipeline=True,  # Critical defects halt pipeline
@@ -183,7 +184,8 @@ class DefectExtractionHook(BaseHook):
             extra={"defect_count": len(defects)},
         )
 
-        return HookResult.success_result(
+        return HookResult(
+            success=True,
             defects=defects,
             metadata={"defects_extracted": len(defects)},
         )

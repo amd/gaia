@@ -1,0 +1,531 @@
+---
+title: "Pipeline Orchestration"
+description: "Build self-improving AI workflows with quality-gated recursive iteration on AMD hardware"
+icon: "diagram-project"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/pipeline/`](https://github.com/amd/gaia/blob/main/src/gaia/pipeline/)
+</Info>
+
+<Note>
+  **Looking for the API?** See the [Pipeline SDK Reference](/sdk/infrastructure/pipeline) for full class and method documentation.
+</Note>
+
+<Note>
+  **Programmatic API only.** The `gaia pipeline` command is registered as a placeholder and prints SDK usage instructions. Full interactive CLI support is not yet implemented. Use the Python SDK for all pipeline operations.
+</Note>
+
+## What Is Pipeline Orchestration?
+
+The GAIA Pipeline Orchestration engine executes goals as **self-improving recursive loops**. Each iteration moves through four phases: planning a strategy, implementing it, scoring the output against 27 quality validators, and then deciding whether the result is good enough to ship or needs another pass.
+
+```
+User Goal
+    |
+    v
++----------+      +-------------+      +---------+      +------------------+
+| PLANNING | ---> | DEVELOPMENT | ---> | QUALITY | ---> |  DecisionEngine  |
++----------+      +-------------+      +---------+      +------------------+
+    ^                                                            |
+    |                                           score >= threshold: COMPLETE
+    |                                           score <  threshold
+    |                                             + iterations left: LOOP_BACK
+    +----------------------------<loop-back>------+
+                                                  iterations exhausted: FAIL
+```
+
+The engine is fully async, uses `asyncio.Semaphore` for bounded concurrency, and writes every event to a SHA-256 hash-chained `AuditLogger` for tamper-proof traceability.
+
+---
+
+## Prerequisites
+
+- **Python 3.11+**
+- GAIA installed with dev extras:
+  ```bash
+  uv pip install -e ".[dev]"
+  ```
+- No Lemonade Server required — the pipeline engine runs entirely in-process.
+
+---
+
+## Quick Start
+
+Run a pipeline against a user goal in under 10 lines of code.
+
+```python title="quickstart_pipeline.py"
+import asyncio
+from gaia.pipeline.engine import PipelineEngine
+from gaia.pipeline.state import PipelineContext
+
+async def run():
+    engine = PipelineEngine()
+
+    context = PipelineContext(
+        pipeline_id="demo-001",
+        user_goal="Build a REST API with authentication and unit tests",
+        quality_threshold=0.75,    # 75% quality floor
+        max_iterations=3,
+    )
+
+    await engine.initialize(context, config={"template": "rapid"})
+    snapshot = await engine.start()
+
+    print(f"State:   {snapshot.state.name}")
+    print(f"Quality: {snapshot.quality_score:.2f}")
+    print(f"Loops:   {snapshot.iteration_count}")
+    engine.shutdown()
+
+asyncio.run(run())
+```
+
+Expected output:
+
+```
+State:   COMPLETED
+Quality: 0.83
+Loops:   2
+```
+
+---
+
+## Template Systems
+
+The pipeline has **two independent template systems** that serve different purposes. Confusing them is the most common source of misconfiguration.
+
+### System A: RecursivePipelineTemplate (pipeline routing)
+
+**Import:** `gaia.pipeline.recursive_template`
+
+Controls **phase routing** — which agents run in each phase, what the loop-back threshold is, and how defects trigger re-routing. Pass the name as the `"template"` key in the config dict passed to `engine.initialize()`.
+
+| Name | Quality Threshold | Max Iterations | Use Case |
+|------|:-----------------:|:--------------:|----------|
+| `"generic"` | 0.90 | 10 | General development tasks (default fallback) |
+| `"rapid"` | 0.75 | 5 | Prototypes, MVPs, quick iterations |
+| `"enterprise"` | 0.95 | 15 | Production systems, security-critical work |
+
+Passing an unrecognized name silently falls back to `"generic"` — no exception is raised.
+
+```python
+# Pass to engine.initialize() config dict
+await engine.initialize(context, config={"template": "enterprise"})
+```
+
+### System B: QualityTemplate (scoring thresholds)
+
+**Import:** `gaia.quality.templates`
+
+Controls **quality scoring** — auto-pass bands, auto-fail bands, and the agent sequence used by `QualityScorer`. Used internally by the quality phase; you do not normally construct these directly.
+
+| Name | Threshold | Auto-Pass | Auto-Fail | Use Case |
+|------|:---------:|:---------:|:---------:|----------|
+| `STANDARD` | 0.90 | 0.95 | 0.85 | Features, APIs, general development |
+| `RAPID` | 0.75 | 0.80 | 0.70 | Prototypes, MVPs |
+| `ENTERPRISE` | 0.95 | 0.98 | 0.90 | Production, security-critical |
+| `DOCUMENTATION` | 0.85 | 0.90 | 0.80 | API docs, guides |
+
+<Warning>
+  These are **uppercase** string keys (`"STANDARD"`, `"RAPID"`, `"ENTERPRISE"`, `"DOCUMENTATION"`), not the lowercase names used by `RecursivePipelineTemplate`. They are accessed via `gaia.quality.templates.get_template("STANDARD")`, not through the pipeline config dict.
+</Warning>
+
+---
+
+## Step-by-Step Demo
+
+### Act 1: Start the Audit Logger
+
+The `AuditLogger` creates a cryptographic hash chain so that any tampering with the event log is immediately detectable.
+
+```python title="demo_audit.py"
+import asyncio
+from gaia.pipeline.audit_logger import AuditLogger, AuditEventType
+
+def run_audit_demo():
+    audit = AuditLogger(logger_id="demo-audit")
+
+    # Log events — each is linked to the previous via SHA-256
+    audit.log(AuditEventType.PIPELINE_START, pipeline_id="demo-001")
+    audit.log(AuditEventType.PHASE_ENTER, phase="PLANNING")
+    audit.log(AuditEventType.AGENT_SELECTED, agent_id="planning-analysis-strategist")
+    audit.log(AuditEventType.PHASE_EXIT, phase="PLANNING")
+    audit.log(AuditEventType.QUALITY_EVALUATED, payload={"score": 0.83})
+
+    # Verify chain integrity
+    is_valid = audit.verify_integrity()
+    print(f"Chain valid: {is_valid}")          # True
+
+    # Query events by phase
+    planning_events = audit.get_events_by_phase("PLANNING")
+    print(f"Planning events: {len(planning_events)}")   # 2
+
+    # Export to JSON for storage
+    summary = audit.get_chain_summary()
+    print(f"Total events: {summary['total_events']}")   # 5
+
+run_audit_demo()
+```
+
+### Act 2: Route Defects
+
+The `DefectRouter` maps defect types to the phase best equipped to fix them.
+
+```python title="demo_routing.py"
+from gaia.pipeline.defect_router import (
+    DefectRouter,
+    DefectType,
+    DefectSeverity,
+    create_defect,
+)
+
+def run_routing_demo():
+    router = DefectRouter()
+
+    defects = [
+        create_defect("MISSING_TESTS", "No unit tests for auth module", severity="HIGH"),
+        create_defect("SECURITY_VULNERABILITY", "SQL injection risk in login", severity="CRITICAL"),
+        create_defect("MISSING_REQUIREMENT", "OAuth flow not implemented", severity="HIGH"),
+        create_defect("CODE_COMPLEXITY", "Cyclomatic complexity > 15", severity="MEDIUM"),
+    ]
+
+    routed = router.route_defects([d.to_dict() for d in defects])
+
+    for phase, phase_defects in routed.items():
+        print(f"{phase}: {len(phase_defects)} defect(s)")
+    # DEVELOPMENT: 3 defect(s)
+    # PLANNING: 1 defect(s)
+
+    summary = router.get_defect_summary([d.to_dict() for d in defects])
+    print(f"Critical: {summary['critical_count']}, High: {summary['high_count']}")
+
+run_routing_demo()
+```
+
+Routing rules by defect category:
+
+| Defect Category | Default Target Phase |
+|-----------------|---------------------|
+| `MISSING_TESTS`, `INSUFFICIENT_COVERAGE`, `FLAKY_TESTS` | `DEVELOPMENT` |
+| `CODE_STYLE`, `CODE_COMPLEXITY`, `MISSING_DOCSTRING`, `DUPLICATE_CODE` | `DEVELOPMENT` |
+| `SECURITY_VULNERABILITY`, `INJECTION_RISK`, `AUTHORIZATION_ISSUE` | `DEVELOPMENT` |
+| `PERFORMANCE_ISSUE`, `MEMORY_LEAK`, `INEFFICIENT_ALGORITHM` | `DEVELOPMENT` |
+| `EDGE_CASE_NOT_HANDLED` | `DEVELOPMENT` |
+| `MISSING_REQUIREMENT`, `INCORRECT_IMPLEMENTATION` | `PLANNING` |
+| `ARCHITECTURE_VIOLATION`, `CIRCULAR_DEPENDENCY`, `TIGHT_COUPLING` | `PLANNING` |
+
+### Act 3: Track Defect Remediation
+
+The `DefectRemediationTracker` enforces a governed lifecycle state machine for each defect.
+
+```
+OPEN -> IN_PROGRESS -> RESOLVED -> VERIFIED
+  |                                   (quality check confirms fix)
+  +-> DEFERRED    (low priority / blocked)
+  +-> CANNOT_FIX  (fundamental limitation)
+```
+
+```python title="demo_tracker.py"
+from gaia.pipeline.defect_router import Defect, DefectType, DefectSeverity
+from gaia.pipeline.defect_remediation_tracker import DefectRemediationTracker, DefectStatus
+
+def run_tracker_demo():
+    tracker = DefectRemediationTracker(tracker_id="loop-001")
+
+    defect = Defect(
+        id="defect-001",
+        type=DefectType.MISSING_TESTS,
+        severity=DefectSeverity.HIGH,
+        description="No unit tests for authentication module",
+    )
+
+    tracker.add_defect(defect, phase="QUALITY")
+    tracker.start_fix("defect-001", changed_by="senior-developer")
+    tracker.mark_resolved("defect-001", "Added 18 unit tests, 94% coverage")
+    tracker.mark_verified("defect-001", "Quality check passed", changed_by="quality-reviewer")
+
+    summary = tracker.get_summary()
+    print(f"Total: {summary['total']}")
+    print(f"Verified: {summary['verified_count']}")
+    print(f"Resolution rate: {summary['resolution_rate']:.0%}")
+
+    analytics = tracker.get_analytics()
+    print(f"MTTR: {analytics['mean_time_to_resolve']} hours")
+
+run_tracker_demo()
+```
+
+### Act 4: Run a Full Pipeline
+
+Combine all components in a complete pipeline run:
+
+```python title="demo_full_pipeline.py"
+import asyncio
+from gaia.pipeline.engine import PipelineEngine
+from gaia.pipeline.state import PipelineContext, PipelineState
+
+async def run():
+    engine = PipelineEngine(
+        max_concurrent_loops=10,   # Cap total concurrent loops
+        worker_pool_size=4,         # Bounded worker execution
+    )
+
+    context = PipelineContext(
+        pipeline_id="full-demo-001",
+        user_goal="Build a user authentication REST API with JWT tokens",
+        quality_threshold=0.80,
+        max_iterations=5,
+        concurrent_loops=3,
+    )
+
+    await engine.initialize(context, config={"template": "rapid"})
+    snapshot = await engine.start()
+
+    print(f"Final state:     {snapshot.state.name}")
+    print(f"Quality score:   {snapshot.quality_score:.2f}")
+    print(f"Iterations used: {snapshot.iteration_count}")
+    print(f"Defects found:   {len(snapshot.defects)}")
+
+    # Inspect the event chronicle
+    chronicle = engine.get_chronicle()
+    print(f"Events recorded: {len(chronicle)}")
+    for event in chronicle[:3]:
+        print(f"  {event['event']} ({event.get('from_state', '')} -> {event.get('to_state', '')})")
+
+    engine.shutdown()
+
+asyncio.run(run())
+```
+
+---
+
+## Failure Mode: Forcing LOOP_BACK
+
+Set `quality_threshold` to a value that the scorer cannot reach to observe loop-back and eventual failure:
+
+```python title="demo_failure.py"
+import asyncio
+from gaia.pipeline.engine import PipelineEngine
+from gaia.pipeline.state import PipelineContext, PipelineState
+
+async def run():
+    engine = PipelineEngine()
+
+    context = PipelineContext(
+        pipeline_id="fail-demo-001",
+        user_goal="Simple hello world script",
+        quality_threshold=0.99,    # Unreachably high threshold
+        max_iterations=2,          # Only allow 2 loop-back attempts
+    )
+
+    await engine.initialize(context, config={"template": "rapid"})
+    snapshot = await engine.start()
+
+    if snapshot.state == PipelineState.FAILED:
+        print("Pipeline exhausted iterations without reaching quality threshold.")
+        print(f"Best quality score: {snapshot.quality_score:.2f}")
+        print(f"Error: {snapshot.error_message}")
+
+asyncio.run(run())
+```
+
+When `max_iterations` is exhausted and quality is still below threshold, the `DecisionEngine` emits `DecisionType.FAIL` and the state machine transitions to `PipelineState.FAILED`.
+
+---
+
+## Batch Execution with Backpressure
+
+Use `execute_with_backpressure` to run multiple workloads concurrently while respecting the dual-semaphore concurrency limits:
+
+```python title="demo_batch.py"
+import asyncio
+from gaia.pipeline.engine import PipelineEngine
+from gaia.pipeline.state import PipelineContext
+
+async def run():
+    engine = PipelineEngine(
+        max_concurrent_loops=20,
+        worker_pool_size=4,
+    )
+
+    context = PipelineContext(
+        pipeline_id="batch-parent",
+        user_goal="Batch processing demo",
+    )
+    await engine.initialize(context)
+
+    workloads = [f"task-{i}" for i in range(8)]
+
+    completed = 0
+    def on_progress(result):
+        nonlocal completed
+        completed += 1
+        print(f"Completed {completed}/{len(workloads)}")
+
+    results = await engine.execute_with_backpressure(
+        workloads,
+        progress_callback=on_progress,
+    )
+
+    engine.shutdown()
+
+asyncio.run(run())
+```
+
+The outer `_semaphore` (size: `max_concurrent_loops`) limits total concurrent pipelines. The inner `_worker_semaphore` (size: `worker_pool_size`) limits parallel worker execution. Exceptions are returned as exception objects in the results list rather than raised, so all workloads complete even if some fail.
+
+---
+
+## AMD and NPU Optimization
+
+The pipeline engine is designed to run efficiently on AMD hardware without requiring a Lemonade Server or remote LLM backend.
+
+### Tuning for Ryzen AI NPU
+
+```python
+engine = PipelineEngine(
+    max_concurrent_loops=50,   # High for NPU parallel throughput
+    worker_pool_size=8,        # Match NPU compute unit count
+)
+
+context = PipelineContext(
+    pipeline_id="npu-optimized",
+    user_goal="Production API with security audit",
+    concurrent_loops=8,        # Per-pipeline parallelism
+    quality_threshold=0.95,
+    max_iterations=15,
+)
+
+await engine.initialize(context, config={"template": "enterprise"})
+```
+
+### Key Parameters for AMD Workloads
+
+| Parameter | Conservative | Balanced | High-Throughput |
+|-----------|:-----------:|:--------:|:---------------:|
+| `max_concurrent_loops` | 5 | 20 | 100 |
+| `worker_pool_size` | 2 | 4 | 8 |
+| `concurrent_loops` (context) | 2 | 5 | 10 |
+
+### Local Execution Benefits
+
+- All quality scoring (27 validators) runs in-process — no LLM calls required for evaluation.
+- The `AuditLogger` and `DefectRemediationTracker` are pure Python with no I/O dependencies.
+- SQLite-backed metrics storage (`MetricsCollector`) keeps all telemetry local.
+- No data leaves your machine — suitable for air-gapped or privacy-sensitive workloads.
+
+---
+
+## Pipeline States
+
+The `PipelineStateMachine` enforces valid transitions only:
+
+```
+INITIALIZING ---> READY ---> RUNNING ---> COMPLETED
+     |                           |
+     +---> FAILED                +---> PAUSED ---> RUNNING
+                                 |              |
+                                 |              +---> CANCELLED
+                                 +---> FAILED
+                                 +---> CANCELLED (from READY)
+```
+
+Terminal states (`COMPLETED`, `FAILED`, `CANCELLED`) have no outgoing transitions.
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="PipelineNotInitializedError when calling start()">
+    You must call `await engine.initialize(context, config)` before `await engine.start()`. The engine raises `PipelineNotInitializedError` if `start()` is called on an uninitialized engine.
+
+    ```python
+    # Correct order
+    await engine.initialize(context, config={"template": "rapid"})
+    snapshot = await engine.start()
+    ```
+  </Accordion>
+
+  <Accordion title="PipelineAlreadyRunningError">
+    Each `PipelineEngine` instance can only be initialized once. To run a second pipeline, create a new engine instance:
+
+    ```python
+    engine1 = PipelineEngine()
+    await engine1.initialize(context1, config)
+    snapshot1 = await engine1.start()
+    engine1.shutdown()
+
+    engine2 = PipelineEngine()  # New instance for second run
+    await engine2.initialize(context2, config)
+    ```
+  </Accordion>
+
+  <Accordion title="InvalidQualityThresholdError">
+    `quality_threshold` must be between `0.0` and `1.0` inclusive. Values outside this range raise `InvalidQualityThresholdError` during `PipelineContext` construction.
+
+    ```python
+    # Wrong — raises InvalidQualityThresholdError
+    context = PipelineContext(pipeline_id="x", user_goal="y", quality_threshold=1.5)
+
+    # Correct
+    context = PipelineContext(pipeline_id="x", user_goal="y", quality_threshold=0.90)
+    ```
+  </Accordion>
+
+  <Accordion title="Pipeline completes immediately with low quality_score">
+    Check that `quality_threshold` is set intentionally. The default is `0.90`. If you set `max_iterations=1` the pipeline may complete after a single pass regardless of score — increase `max_iterations` to allow loop-backs.
+  </Accordion>
+
+  <Accordion title="Template name not found — silently using generic">
+    `RecursivePipelineTemplate` names are **lowercase**: `"generic"`, `"rapid"`, `"enterprise"`. Passing `"RAPID"` or `"STANDARD"` will silently fall back to `"generic"` with a warning in the logs. Check your logs for:
+    ```
+    WARNING  Template 'RAPID' not found in registry, using 'generic' fallback
+    ```
+  </Accordion>
+
+  <Accordion title="IntegrityVerificationError from AuditLogger">
+    The audit log hash chain has been broken — this indicates the event log was modified after the fact. This should not occur in normal operation. If you see this in tests, ensure you are not mutating `AuditEvent` objects (they are frozen dataclasses). Call `audit.get_integrity_report()` for full details.
+  </Accordion>
+
+  <Accordion title="InvalidStatusTransitionError from DefectRemediationTracker">
+    Status transitions are governed. You cannot, for example, call `mark_verified()` directly from `OPEN` — you must go through `start_fix()` then `mark_resolved()` first. Consult the lifecycle:
+    ```
+    OPEN -> IN_PROGRESS -> RESOLVED -> VERIFIED
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Pipeline SDK Reference" icon="code" href="/sdk/infrastructure/pipeline">
+    Complete API for PipelineEngine, AuditLogger, DefectRouter, QualityScorer, and MetricsCollector
+  </Card>
+
+  <Card title="Pipeline Engine Specification" icon="file-code" href="/spec/pipeline-engine">
+    Architecture deep-dive: state machine, phase contracts, decision engine internals
+  </Card>
+
+  <Card title="MCP Integration" icon="plug" href="/sdk/infrastructure/mcp">
+    Connect the pipeline engine to MCP-compatible tools and IDEs
+  </Card>
+
+  <Card title="Agent System" icon="robot" href="/sdk/core/agent-system">
+    Build custom agents that plug into pipeline phases
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

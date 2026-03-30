@@ -24,17 +24,22 @@ def _run_async(coro):
     except RuntimeError:
         return asyncio.run(coro)
 
+
 try:
     import yaml
 except ImportError:
     yaml = None  # type: ignore
 
-from gaia.agents.base import AgentDefinition, AgentTriggers, AgentCapabilities, AgentConstraints
+from gaia.agents.base import (
+    AgentDefinition,
+    AgentTriggers,
+    AgentCapabilities,
+    AgentConstraints,
+)
 from gaia.exceptions import AgentNotFoundError, AgentLoadError, AgentSelectionError
 from gaia.utils.logging import get_logger
 from gaia.utils.id_generator import generate_id
 from gaia.pipeline.defect_types import DEFECT_SPECIALISTS, DefectType
-
 
 logger = get_logger(__name__)
 
@@ -219,15 +224,24 @@ class AgentRegistry:
                 triggers=AgentTriggers(
                     keywords=triggers_data.get("keywords", []),
                     phases=triggers_data.get("phases", []),
-                    complexity_range=tuple(
-                        triggers_data.get("complexity_range", {"min": 0, "max": 1}).values()
-                    ) if isinstance(triggers_data.get("complexity_range"), dict)
-                    else (0.0, 1.0),
+                    complexity_range=(
+                        tuple(
+                            triggers_data.get(
+                                "complexity_range", {"min": 0, "max": 1}
+                            ).values()
+                        )
+                        if isinstance(triggers_data.get("complexity_range"), dict)
+                        else (0.0, 1.0)
+                    ),
                 ),
                 capabilities=AgentCapabilities(
-                    capabilities=capabilities_data if isinstance(capabilities_data, list) else [],
+                    capabilities=(
+                        capabilities_data if isinstance(capabilities_data, list) else []
+                    ),
                     tools=agent_data.get("tools", []),
-                    execution_targets=execution_targets if isinstance(execution_targets, dict) else {},
+                    execution_targets=(
+                        execution_targets if isinstance(execution_targets, dict) else {}
+                    ),
                 ),
                 system_prompt=agent_data.get("system_prompt", ""),
                 tools=agent_data.get("tools", []),
@@ -389,6 +403,7 @@ class AgentRegistry:
             ...     required_capabilities=["api-design", "security"]
             ... )
         """
+
         async def _select() -> Optional[str]:
             async with self._lock:
                 if not self._agents:
@@ -397,10 +412,7 @@ class AgentRegistry:
                 candidates = set(self._agents.keys())
 
                 # Filter by enabled
-                candidates = {
-                    aid for aid in candidates
-                    if self._agents[aid].enabled
-                }
+                candidates = {aid for aid in candidates if self._agents[aid].enabled}
 
                 # Filter by required capabilities
                 if required_capabilities:
@@ -473,22 +485,28 @@ class AgentRegistry:
         """
         return self._agents.get(agent_id)
 
+    # Aliases allow callers to use alternative category names that map to canonical ones.
+    CATEGORY_ALIASES: Dict[str, str] = {
+        "quality": "review",
+    }
+
     def get_agents_by_category(self, category: str) -> List[AgentDefinition]:
         """
         Get all agents in a category.
 
+        Supports category aliases so that e.g. ``"quality"`` resolves to
+        the canonical ``"review"`` category used in agent YAML definitions.
+
         Args:
             category: Category name (planning, development, review, management)
+                or an alias (e.g. "quality")
 
         Returns:
             List of AgentDefinition instances
         """
-        agent_ids = self._category_index.get(category, [])
-        return [
-            self._agents[aid]
-            for aid in agent_ids
-            if aid in self._agents
-        ]
+        resolved = self.CATEGORY_ALIASES.get(category, category)
+        agent_ids = self._category_index.get(resolved, [])
+        return [self._agents[aid] for aid in agent_ids if aid in self._agents]
 
     def get_agents_by_capability(self, capability: str) -> List[AgentDefinition]:
         """
@@ -503,11 +521,7 @@ class AgentRegistry:
             List of AgentDefinition instances
         """
         agent_ids = self._get_agents_by_capability_cached(capability)
-        return [
-            self._agents[aid]
-            for aid in agent_ids
-            if aid in self._agents
-        ]
+        return [self._agents[aid] for aid in agent_ids if aid in self._agents]
 
     def get_all_agents(self) -> Dict[str, AgentDefinition]:
         """Get all registered agents."""
@@ -515,11 +529,7 @@ class AgentRegistry:
 
     def get_enabled_agents(self) -> Dict[str, AgentDefinition]:
         """Get all enabled agents."""
-        return {
-            aid: agent
-            for aid, agent in self._agents.items()
-            if agent.enabled
-        }
+        return {aid: agent for aid, agent in self._agents.items() if agent.enabled}
 
     def register_agent(self, definition: AgentDefinition) -> None:
         """
@@ -528,6 +538,7 @@ class AgentRegistry:
         Args:
             definition: AgentDefinition to register
         """
+
         async def _register():
             async with self._lock:
                 self._agents[definition.id] = definition
@@ -546,6 +557,7 @@ class AgentRegistry:
         Returns:
             True if agent was removed, False if not found
         """
+
         async def _unregister():
             async with self._lock:
                 if agent_id in self._agents:
@@ -563,8 +575,7 @@ class AgentRegistry:
             "total_agents": len(self._agents),
             "enabled_agents": sum(1 for a in self._agents.values() if a.enabled),
             "categories": {
-                cat: len(agents)
-                for cat, agents in self._category_index.items()
+                cat: len(agents) for cat, agents in self._category_index.items()
             },
             "capabilities": len(self._capability_index),
             "trigger_keywords": len(self._trigger_index),
@@ -592,8 +603,8 @@ class AgentRegistry:
 
         Should be called when agents are added or removed.
         """
-        if hasattr(self, '_get_agents_by_capability_cached') and hasattr(
-            self._get_agents_by_capability_cached, 'cache_clear'
+        if hasattr(self, "_get_agents_by_capability_cached") and hasattr(
+            self._get_agents_by_capability_cached, "cache_clear"
         ):
             self._get_agents_by_capability_cached.cache_clear()
 
