@@ -131,6 +131,9 @@ struct ToolParameter {
 // Takes JSON arguments, returns JSON result.
 using ToolCallback = std::function<json(const json&)>;
 
+// Callback invoked for each token as it arrives during streaming inference.
+using StreamCallback = std::function<void(const std::string& token)>;
+
 // ---- Security Types ----
 
 enum class ToolPolicy { ALLOW, CONFIRM, DENY };
@@ -174,6 +177,12 @@ struct ParsedResponse {
 
 // ---- Agent Configuration ----
 
+/// Return the default streaming setting, honoring the GAIA_STREAMING
+/// environment variable if set (1 = enabled, anything else = disabled).
+inline bool defaultStreaming() {
+    return getEnvVar("GAIA_STREAMING") == "1";
+}
+
 /// Return the default LLM base URL, honoring the LEMONADE_BASE_URL
 /// environment variable if set (matching the Python CLI behavior).
 inline std::string defaultBaseUrl() {
@@ -200,7 +209,7 @@ struct AgentConfig {
     int maxTokens = 4096;       // Max tokens in LLM response
     bool debug = false;
     bool showPrompts = false;
-    bool streaming = false;
+    bool streaming = defaultStreaming();  // also controlled by GAIA_STREAMING=1
     bool silentMode = false;
     double temperature = 0.7;  // LLM sampling temperature (0.0 = deterministic)
 

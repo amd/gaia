@@ -441,4 +441,12 @@ void CleanConsole::printOutputPreview(const std::string& output) {
               << color::RESET << std::endl;
 }
 
+void CleanConsole::printStreamToken(const std::string& token) {
+    std::cout << token << std::flush;
+}
+
+void CleanConsole::printStreamEnd() {
+    std::cout << "\n";
+}
+
 } // namespace gaia

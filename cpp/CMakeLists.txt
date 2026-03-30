@@ -13,6 +13,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Enable C++ exception handling on MSVC (required for try/catch/throw)
+if(MSVC)
+    add_compile_options(/EHsc)
+endif()
+
 # ---------------------------------------------------------------------------
 # Options -- default ON when this is the top-level project, OFF as a sub-
 # project so consumers only get the library.
@@ -96,6 +101,7 @@ add_library(gaia_core
     src/agent.cpp
     src/mcp_client.cpp
     src/security.cpp
+    src/sse_parser.cpp
 )
 
 add_library(gaia::gaia_core ALIAS gaia_core)
@@ -205,6 +211,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_tool_integration.cpp
         tests/test_decision.cpp
         tests/test_security.cpp
+        tests/test_sse_parser.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
