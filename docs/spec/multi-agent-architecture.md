@@ -113,35 +113,80 @@ Each specialist has:
 - **Domain-specific LoRA adapter** — fine-tuned for its vertical
 - **Own memory namespace** — tracks its conversations, tool calls, tasks, and insights
 
-### Core Specialists (v0.19.0)
+### Platform Agents (ship with GAIA)
 
-| Agent | Tools | Focus | Why Separate? |
-|-------|-------|-------|---------------|
-| **DocAgent** | query_documents, query_specific_file, index_document, search_indexed_chunks, summarize_document | Document search and Q&A over indexed docs | RAG requires specialized prompting (citation, grounding, anti-hallucination) that would bloat a general prompt |
-| **FileAgent** | read_file, write_file, search_file, browse_directory, tree, file_info | File system navigation and operations | File operations need platform-aware path handling and security validation — a different skill than document comprehension |
-| **ShellAgent** | run_shell_command, execute_python_file, get_system_info | System commands and script execution | Shell commands have the highest security risk — isolation enables strict sandboxing without constraining other agents |
-| **WebAgent** | search_web, fetch_webpage, download_file | Web search and content extraction | Web access needs SSRF prevention, rate limiting, and content extraction — concerns orthogonal to other specialists |
+These foundational agents enable everything else. They ship with GAIA and are always available:
 
-### CodeAgent — The Self-Extending Specialist
+| Agent | Model | Role |
+|-------|-------|------|
+| **GaiaAgent** | 0.6B (NPU) | Orchestrator, personality, user interaction — the face of GAIA |
+| **CodeAgent** | 4B+ (GPU) | Agent factory — builds new agents for any use case on demand |
+| **DocAgent** | 1.7B (shared) | Document search, RAG Q&A, indexing — core capability used by all workflows |
+| **FileAgent** | 1.7B (shared) | File system operations — agents need to read/write files |
+| **ShellAgent** | 1.7B (shared) | System commands, script execution — agents need to interact with the OS |
+| **WebAgent** | 1.7B (shared) | Web search, page fetching — agents need internet access |
+
+### Use-Case Agents (built by CodeAgent on demand)
+
+These are NOT pre-built. CodeAgent creates them when a user describes a project or use case, tailored to the specific situation. All use-case agents are **fully autonomous** — they run on schedules, communicate freely with other agents, and work independently.
+
+| Project | Agents CodeAgent Builds | Each Agent Is Autonomous |
+|---------|------------------------|------------------------|
+| **Start a business** | FormationAgent, ComplianceAgent, FinanceAgent, PermitAgent | ComplianceAgent checks deadlines weekly. FinanceAgent reconciles daily. |
+| **Manage investments** | PortfolioAgent, NewsAgent, AlertAgent | NewsAgent monitors feeds continuously. AlertAgent fires on price targets. |
+| **Run a home** | ThermostatAgent, SecurityAgent, EnergyAgent | SecurityAgent monitors 24/7. EnergyAgent optimizes hourly. |
+| **Dev team** | CIAgent, ReviewAgent, DeployAgent | CIAgent watches for failures. DeployAgent handles rollouts. |
+| **Research project** | LitReviewAgent, DataAgent, WritingAgent | LitReviewAgent crawls papers. DataAgent processes results. |
+
+**Every team is unique.** Different users get different agents with different tools, different schedules, and different context. The platform grows with the user's needs.
+
+### CodeAgent — The Agent Factory
 
 | Agent | Focus | Why It's Critical |
 |-------|-------|-------------------|
-| **CodeAgent** | Implement new Python-based GAIA agents, tools, and integrations | The platform needs to grow itself. When a user needs a capability that doesn't exist, CodeAgent builds it — a new specialist, a new tool, a new integration — using the full GAIA open-source codebase and documentation as context. |
+| **CodeAgent** | Build purpose-built agents for any use case | CodeAgent is the **agent factory**. When a user describes what they need, GaiaAgent reasons about the problem and CodeAgent builds an entire team of autonomous agents tailored to that specific situation. No pre-built specialists needed — CodeAgent creates them fresh. |
+
+**Why this changes everything:** Traditional platforms ship with a fixed set of agents (email agent, calendar agent, etc.). GAIA ships with GaiaAgent + CodeAgent. Everything else is built on demand, tailored to the specific user's situation. A food truck in Austin gets different agents than a SaaS company in Delaware — not because different templates exist, but because CodeAgent builds different agents.
 
 CodeAgent has access to:
 - **Full GAIA codebase** — `src/gaia/` as RAG-indexed context. Understands the agent base class, tool decorator, MCP integration, and all existing patterns.
 - **GAIA documentation** — `docs/` including SDK reference, playbooks, and this architecture spec.
-- **Agent templates** — knows how to create a new specialist by extending Base Agent, registering tools, writing a focused prompt.
-- **Test framework** — can write and run tests for new agents.
+- **All existing agents** — reads their code as reference patterns for building new ones.
+- **Test framework** — writes and runs tests for new agents.
+- **Agent MCP Server** — registers new agents, creates initial tasks, wires up communication.
 
-**Example:** User says "I need an agent that monitors my stock portfolio." CodeAgent:
-1. Reads existing agent patterns (DocAgent, FileAgent) as reference
-2. Creates `src/gaia/agents/stocks/agent.py` with focused tools (fetch_price, get_portfolio, set_alert)
-3. Registers in Agent Registry
-4. Writes tests
-5. GaiaAgent auto-discovers and starts delegating stock queries to it
+**Example — Small Business Team:**
+```
+User: "I want to start a food truck in Austin"
 
-This makes GAIA **self-extending** — the platform can build new capabilities without human developers.
+GaiaAgent interviews → understands the need → asks CodeAgent to build the team
+
+CodeAgent builds:
+  1. FormationAgent — tailored for Texas LLC filing, Austin-specific requirements
+  2. ComplianceAgent — tailored for TX franchise tax, food service permits
+  3. FinanceAgent — tailored for food truck economics, Square POS integration
+  4. PermitAgent — tailored for Austin health department, food handler's cert
+
+Each agent:
+  - Has its own focused system prompt with business context baked in
+  - Has only the tools relevant to its job
+  - Registers in Agent Registry
+  - Gets initial tasks with dependencies
+  - Runs autonomously on a schedule
+  - Communicates freely with all other agents via MCP
+```
+
+**Example — Stock Portfolio:**
+```
+User: "I need help tracking my investments"
+
+CodeAgent builds:
+  1. PortfolioAgent — fetches prices, tracks positions, calculates P&L
+  2. NewsAgent — monitors financial news for held positions
+  3. AlertAgent — sends notifications on price targets, earnings dates
+```
+
+**Every team is unique.** Different users get different agents with different tools, different schedules, and different context. The platform grows with the user's needs, not with templates maintained by developers.
 
 ### Use-Case Specialists (v0.23.0+)
 
@@ -410,7 +455,22 @@ Without this, the multi-agent system is a black box. Users won't trust agents th
 2. **Per-task conversation windows** — Each task is its own conversation thread. Multiple participants: user + GaiaAgent + specialist agents. Click between tasks like browser tabs.
 3. **Agent status panel** — All agents with current task, status (active/idle/unavailable), memory stats, model info, device (NPU/GPU).
 4. **Full observability** — Tool calls with expandable args/results, inter-agent messages, memory writes, task dependency visualization. Nothing hidden.
-5. **User participation** — User can chat into any task conversation, create tasks manually, pause/cancel/retry tasks. The user is always in control.
+5. **User participation and feedback** — The Agent UI is not a read-only dashboard. It is the primary way users interact with the multi-agent system:
+   - **Chat into any task** — send messages, corrections, additional context to any agent working on any task
+   - **Provide feedback** — "That's wrong, the deadline is April 15 not March 15" → agent updates its memory
+   - **Approve actions** — agents that need human input (filing, spending, sending) request approval through the task conversation. User approves or denies in-line.
+   - **Create tasks** — user can directly assign work to any agent
+   - **Pause/cancel/retry** — full control over agent execution
+   - **Course correct** — "Stop working on marketing, focus on compliance first" → GaiaAgent reprioritizes the team
+
+### Human-in-the-Loop
+
+**Agents are autonomous but not unsupervised.** The Agent UI ensures the user is always in control:
+
+- **Agents request input when they need it.** "I found two possible filing addresses — which one should I use?" appears in the task conversation. The agent waits for the user's response before proceeding.
+- **User feedback improves agents.** When the user corrects an agent, the correction is stored in memory. The agent learns and doesn't repeat the mistake.
+- **Approval gates are conversational.** Instead of a modal popup, the agent asks naturally in the task thread: "Ready to file the LLC with Texas SOS for $300. Should I proceed?" The user responds in the conversation.
+- **GaiaAgent mediates when needed.** If the user provides conflicting instructions to two agents, GaiaAgent resolves the conflict and communicates the decision.
 
 ### SSE Events
 
