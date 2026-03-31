@@ -127,6 +127,15 @@ def build_scorecard(run_id, results, config):
         key=lambda x: str(x) if x is not None else "",
     )
 
+    # Add performance field to each scenario for backward-compatible metrics access
+    for r in results:
+        if "performance" not in r:
+            r["performance"] = {
+                "duration_seconds": r.get("elapsed_s", 0.0),
+                "cost_estimate_usd": r.get("cost_estimate", {}).get("estimated_usd", 0.0),
+                "tokens_estimate": r.get("cost_estimate", {}).get("turns", 0) * 100,
+            }
+
     scorecard = {
         "run_id": run_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -215,6 +224,8 @@ def write_summary_md(scorecard):
         )
 
     lines += ["", "## Scenarios"]
+    lines.append("| Scenario | Status | Score | Duration (s) | Cost (USD) |")
+    lines.append("|----------|--------|-------|--------------|------------|")
     for r in scorecard.get("scenarios", []):
         icon = {
             "PASS": "\u2705",
@@ -223,11 +234,14 @@ def write_summary_md(scorecard):
         }.get(r.get("status"), "\u26a0\ufe0f")
         score = r.get("overall_score")
         score_str = f"{score:.1f}/10" if isinstance(score, (int, float)) else "n/a"
+        duration = r.get("performance", {}).get("duration_seconds", 0.0)
+        cost = r.get("performance", {}).get("cost_estimate_usd", 0.0)
         lines.append(
-            f"- {icon} **{r.get('scenario_id', '?')}** — {r.get('status', '?')} ({score_str})"
+            f"| {icon} **{r.get('scenario_id', '?')}** | {r.get('status', '?')} | "
+            f"{score_str} | {duration:.1f} | ${cost:.4f} |"
         )
         if r.get("root_cause"):
-            lines.append(f"  - Root cause: {r['root_cause']}")
+            lines.append(f"|   - Root cause: {r['root_cause']} |")
 
     lines += [
         "",

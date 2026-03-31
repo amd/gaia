@@ -49,6 +49,7 @@ from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
 from .routers import chat as chat_router_mod
 from .routers import documents as documents_router_mod
+from .routers import eval_metrics as eval_metrics_router_mod
 from .routers import files as files_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import pipeline as pipeline_router_mod
@@ -286,6 +287,7 @@ def create_app(db_path: str = None) -> FastAPI:
     app.include_router(mcp_router_mod.router)
     app.include_router(pipeline_router_mod.router)
     app.include_router(pipeline_metrics_router_mod.router)
+    app.include_router(eval_metrics_router_mod.router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.
