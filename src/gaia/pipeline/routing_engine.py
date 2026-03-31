@@ -6,18 +6,17 @@ Routes defects to appropriate agents and phases based on type, severity, and con
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
+from gaia.agents.registry import AgentRegistry
 from gaia.pipeline.defect_types import (
+    DEFECT_KEYWORDS,
     DefectType,
     defect_type_from_string,
     get_defect_specialists,
-    DEFECT_KEYWORDS,
 )
-from gaia.agents.registry import AgentRegistry
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -84,7 +83,8 @@ class RoutingDecision:
             target_agent=target_agent,
             target_phase=target_phase,
             loop_back=loop_back,
-            guidance=guidance or f"Route to {target_phase} for remediation by {target_agent}",
+            guidance=guidance
+            or f"Route to {target_phase} for remediation by {target_agent}",
             matched_rule=matched_rule,
             defect_type=defect_type,
             confidence=confidence,
@@ -122,7 +122,9 @@ class RoutingRule:
     guidance: str = ""
     enabled: bool = True
 
-    def matches(self, defect_type: DefectType, context: Optional[Dict[str, Any]] = None) -> bool:
+    def matches(
+        self, defect_type: DefectType, context: Optional[Dict[str, Any]] = None
+    ) -> bool:
         """
         Check if this rule matches a defect.
 
@@ -175,7 +177,11 @@ class RoutingRule:
         elif operator == "lte":
             return actual is not None and actual <= expected_value
         elif operator == "in":
-            return actual in expected_value if isinstance(expected_value, (list, set)) else False
+            return (
+                actual in expected_value
+                if isinstance(expected_value, (list, set))
+                else False
+            )
         elif operator == "contains":
             return expected_value in actual if isinstance(actual, str) else False
 
@@ -430,7 +436,11 @@ class RoutingEngine:
         loop_back = matched_rule.loop_back if matched_rule else True
 
         # Step 5: Create routing decision
-        guidance = matched_rule.guidance if matched_rule else self._generate_guidance(defect_type)
+        guidance = (
+            matched_rule.guidance
+            if matched_rule
+            else self._generate_guidance(defect_type)
+        )
 
         decision = RoutingDecision.create(
             target_agent=target_agent,
@@ -540,7 +550,9 @@ class RoutingEngine:
             return DefectType.CODE_QUALITY
 
         # Check for missing/incomplete patterns
-        if any(p in desc_lower for p in ["missing", "not found", "absent", "incomplete"]):
+        if any(
+            p in desc_lower for p in ["missing", "not found", "absent", "incomplete"]
+        ):
             if "test" in desc_lower:
                 return DefectType.TESTING
             elif "doc" in desc_lower or "comment" in desc_lower:
@@ -634,7 +646,10 @@ class RoutingEngine:
                 if agent:
                     logger.debug(
                         f"Selected specialist {specialist_id} for {defect_type.name}",
-                        extra={"specialist_id": specialist_id, "defect_type": defect_type.name},
+                        extra={
+                            "specialist_id": specialist_id,
+                            "defect_type": defect_type.name,
+                        },
                     )
                     return specialist_id
             else:
@@ -663,7 +678,9 @@ class RoutingEngine:
             DefectType.DATA_INTEGRITY: "Fix data handling - ensure data integrity and type safety",
             DefectType.UNKNOWN: "Review and categorize defect - determine appropriate fix",
         }
-        return guidance_templates.get(defect_type, "Review and fix the identified issue")
+        return guidance_templates.get(
+            defect_type, "Review and fix the identified issue"
+        )
 
     def _calculate_confidence(self, defect_type: DefectType, description: str) -> float:
         """
@@ -753,7 +770,9 @@ class RoutingEngine:
             for dt in rule.defect_types:
                 type_name = dt.name
                 rules_by_type[type_name] = rules_by_type.get(type_name, 0) + 1
-            rules_by_phase[rule.target_phase] = rules_by_phase.get(rule.target_phase, 0) + 1
+            rules_by_phase[rule.target_phase] = (
+                rules_by_phase.get(rule.target_phase, 0) + 1
+            )
 
         return {
             "total_rules": len(self._rules),

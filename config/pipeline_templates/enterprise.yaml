@@ -1,0 +1,38 @@
+# Enterprise Pipeline Template
+# Comprehensive review for enterprise-grade deliverables
+
+name: enterprise
+description: Enterprise-grade pipeline with comprehensive review
+quality_threshold: 0.95
+max_iterations: 15
+
+agent_categories:
+  planning:
+    - planning-analysis-strategist
+    - solutions-architect
+  development:
+    - senior-developer
+  quality:
+    - quality-reviewer
+    - security-auditor
+    - performance-analyst
+  decision:
+    - software-program-manager
+
+routing_rules:
+  - condition: "defect_type == 'security'"
+    route_to: security-auditor
+    priority: 1
+    loop_back: true
+
+  - condition: "defect_type == 'performance'"
+    route_to: performance-analyst
+    priority: 2
+    loop_back: true
+
+quality_weights:
+  code_quality: 0.25
+  requirements_coverage: 0.25
+  testing: 0.20
+  documentation: 0.15
+  best_practices: 0.15

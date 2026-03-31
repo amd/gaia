@@ -4,22 +4,22 @@ GAIA Template Loader
 YAML template loading and parsing for recursive pipeline configurations.
 """
 
-import yaml
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
-from gaia.pipeline.recursive_template import (
-    RecursivePipelineTemplate,
-    PhaseConfig,
-    AgentCategory,
-    SelectionMode,
-    RoutingRule,
-)
-from gaia.quality.models import QualityWeightConfig
+import yaml
+
 from gaia.agents.registry import AgentRegistry
 from gaia.exceptions import AgentLoadError
+from gaia.pipeline.recursive_template import (
+    AgentCategory,
+    PhaseConfig,
+    RecursivePipelineTemplate,
+    RoutingRule,
+    SelectionMode,
+)
+from gaia.quality.models import QualityWeightConfig
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -67,7 +67,9 @@ class TemplateLoader:
         Args:
             template_dir: Directory containing template YAML files
         """
-        self._template_dir = Path(template_dir) if template_dir else self.DEFAULT_TEMPLATE_DIR
+        self._template_dir = (
+            Path(template_dir) if template_dir else self.DEFAULT_TEMPLATE_DIR
+        )
         self._loaded_templates: Dict[str, RecursivePipelineTemplate] = {}
 
         logger.info(
@@ -75,7 +77,9 @@ class TemplateLoader:
             extra={"template_dir": str(self._template_dir)},
         )
 
-    def load_from_file(self, file_path: Union[str, Path]) -> Dict[str, RecursivePipelineTemplate]:
+    def load_from_file(
+        self, file_path: Union[str, Path]
+    ) -> Dict[str, RecursivePipelineTemplate]:
         """
         Load templates from a YAML file.
 
@@ -101,7 +105,9 @@ class TemplateLoader:
 
         return self._parse_yaml(data, source=str(file_path))
 
-    def load_from_string(self, yaml_string: str) -> Dict[str, RecursivePipelineTemplate]:
+    def load_from_string(
+        self, yaml_string: str
+    ) -> Dict[str, RecursivePipelineTemplate]:
         """
         Load templates from a YAML string.
 
@@ -215,9 +221,7 @@ class TemplateLoader:
         templates_data = data.get("templates", {})
 
         if not templates_data:
-            raise TemplateValidationError(
-                f"No 'templates' section found in {source}"
-            )
+            raise TemplateValidationError(f"No 'templates' section found in {source}")
 
         for template_name, template_config in templates_data.items():
             try:
@@ -292,7 +296,9 @@ class TemplateLoader:
                     weight_config = QualityWeightConfig(
                         name=quality_weights_data.get("name", f"{name}_weights"),
                         weights=quality_weights_data.get("weights", {}),
-                        category_overrides=quality_weights_data.get("category_overrides", {}),
+                        category_overrides=quality_weights_data.get(
+                            "category_overrides", {}
+                        ),
                         description=quality_weights_data.get("description", ""),
                     )
                     weight_config.validate()
@@ -350,10 +356,18 @@ class TemplateLoader:
                     ]
                 else:
                     # List of objects with 'id' field
-                    agents = category_config.get("items", category_config.get("agents_list", []))
-                    if isinstance(agents, list) and len(agents) > 0 and isinstance(agents[0], dict):
+                    agents = category_config.get(
+                        "items", category_config.get("agents_list", [])
+                    )
+                    if (
+                        isinstance(agents, list)
+                        and len(agents) > 0
+                        and isinstance(agents[0], dict)
+                    ):
                         categories[cat_lower] = [
-                            str(agent.get("id", "")) for agent in agents if agent.get("id")
+                            str(agent.get("id", ""))
+                            for agent in agents
+                            if agent.get("id")
                         ]
                     else:
                         categories[cat_lower] = [str(a) for a in agents if a]
@@ -405,7 +419,9 @@ class TemplateLoader:
                 category = AgentCategory[category_str.upper()]
             except KeyError:
                 # Default to PLANNING if unknown
-                logger.warning(f"Unknown category '{category_str}', defaulting to PLANNING")
+                logger.warning(
+                    f"Unknown category '{category_str}', defaulting to PLANNING"
+                )
                 category = AgentCategory.PLANNING
 
             # Map selection mode

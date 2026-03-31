@@ -10,14 +10,14 @@ from gaia.utils.file_watcher import (
     compute_bytes_hash,
     compute_file_hash,
 )
+from gaia.utils.id_generator import generate_id, generate_pipeline_id
+from gaia.utils.logging import get_logger
 from gaia.utils.parsing import (
     detect_field_changes,
     extract_json_from_text,
     pdf_page_to_image,
     validate_required_fields,
 )
-from gaia.utils.logging import get_logger
-from gaia.utils.id_generator import generate_id, generate_pipeline_id
 
 __all__ = [
     # File watching

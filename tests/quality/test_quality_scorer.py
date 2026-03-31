@@ -10,12 +10,12 @@ Tests cover:
 
 import pytest
 
-from gaia.quality.scorer import QualityScorer
 from gaia.quality.models import CertificationStatus, QualityReport
+from gaia.quality.scorer import QualityScorer
 from gaia.quality.templates import (
     QUALITY_TEMPLATES,
-    get_template,
     create_custom_template,
+    get_template,
 )
 
 
@@ -41,8 +41,12 @@ class TestCertificationStatus:
 
     def test_from_score_needs_improvement(self):
         """Test NEEDS_IMPROVEMENT status threshold."""
-        assert CertificationStatus.from_score(65) == CertificationStatus.NEEDS_IMPROVEMENT
-        assert CertificationStatus.from_score(74) == CertificationStatus.NEEDS_IMPROVEMENT
+        assert (
+            CertificationStatus.from_score(65) == CertificationStatus.NEEDS_IMPROVEMENT
+        )
+        assert (
+            CertificationStatus.from_score(74) == CertificationStatus.NEEDS_IMPROVEMENT
+        )
 
     def test_from_score_fail(self):
         """Test FAIL status threshold."""
@@ -59,9 +63,7 @@ class TestQualityScorer:
         return QualityScorer()
 
     @pytest.mark.asyncio
-    async def test_evaluate_code_sample(
-        self, scorer: QualityScorer, sample_code: str
-    ):
+    async def test_evaluate_code_sample(self, scorer: QualityScorer, sample_code: str):
         """Test quality evaluation of code sample."""
         report = await scorer.evaluate(
             artifact=sample_code,

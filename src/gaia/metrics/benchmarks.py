@@ -17,19 +17,19 @@ Example:
 """
 
 import asyncio
+import json
+import os
+import platform
+import random
+import statistics
+import sys
 import time
 import tracemalloc
-import statistics
-import random
-import sys
-import platform
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Tuple
 from enum import Enum, auto
-import json
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 # Minimal imports to avoid circular dependency issues
 from gaia.metrics.collector import MetricsCollector
@@ -38,6 +38,7 @@ from gaia.utils.logging import get_logger
 
 try:
     import psutil
+
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
@@ -154,7 +155,9 @@ class BenchmarkStatistics:
         }
 
     @classmethod
-    def from_results(cls, benchmark_type: BenchmarkType, results: List[BenchmarkResult]) -> "BenchmarkStatistics":
+    def from_results(
+        cls, benchmark_type: BenchmarkType, results: List[BenchmarkResult]
+    ) -> "BenchmarkStatistics":
         """
         Create statistics from a list of benchmark results.
 
@@ -255,13 +258,16 @@ class PipelineBenchmarker:
             output_dir: Directory for benchmark output files
             seed: Random seed for reproducibility (default: 42)
         """
-        self._output_dir = Path(output_dir) if output_dir else Path.cwd() / "benchmark_results"
+        self._output_dir = (
+            Path(output_dir) if output_dir else Path.cwd() / "benchmark_results"
+        )
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
         # Set random seeds for reproducibility
         random.seed(seed)
         try:
             import numpy as np
+
             np.random.seed(seed)
         except ImportError:
             pass  # numpy not available
@@ -271,7 +277,9 @@ class PipelineBenchmarker:
         self._bottlenecks: List[Bottleneck] = []
         self._collector = MetricsCollector(collector_id="benchmarker")
 
-        logger.info(f"PipelineBenchmarker initialized with seed={seed}, output dir: {self._output_dir}")
+        logger.info(
+            f"PipelineBenchmarker initialized with seed={seed}, output dir: {self._output_dir}"
+        )
 
     async def run_single_execution_benchmark(
         self,
@@ -317,12 +325,16 @@ class PipelineBenchmarker:
                 total_memory_mb = process.memory_info().rss / 1024 / 1024
                 # Use the higher of tracemalloc peak or psutil delta
                 memory_delta = total_memory_mb - baseline_memory_mb
-                peak_memory_mb = max(peak_memory_mb, memory_delta, total_memory_mb * 0.1)  # At least 10% of process memory
+                peak_memory_mb = max(
+                    peak_memory_mb, memory_delta, total_memory_mb * 0.1
+                )  # At least 10% of process memory
 
             durations.append(elapsed_ms)
             memory_peaks.append(peak_memory_mb)
 
-            logger.debug(f"Iteration {i + 1}: {elapsed_ms:.2f}ms, peak: {peak_memory_mb:.2f}MB")
+            logger.debug(
+                f"Iteration {i + 1}: {elapsed_ms:.2f}ms, peak: {peak_memory_mb:.2f}MB"
+            )
 
         # Use median for the result
         median_duration = statistics.median(durations)
@@ -337,7 +349,9 @@ class PipelineBenchmarker:
                 "iterations": iterations,
                 "min_ms": min(durations),
                 "max_ms": max(durations),
-                "std_dev_ms": statistics.stdev(durations) if len(durations) > 1 else 0.0,
+                "std_dev_ms": (
+                    statistics.stdev(durations) if len(durations) > 1 else 0.0
+                ),
                 "all_durations_ms": durations,
             },
             metadata={"test_type": "single_execution", "seed": self._seed},
@@ -363,7 +377,9 @@ class PipelineBenchmarker:
         Returns:
             BenchmarkResult with throughput metrics
         """
-        logger.info(f"Running throughput benchmark ({concurrent_executions} concurrent)")
+        logger.info(
+            f"Running throughput benchmark ({concurrent_executions} concurrent)"
+        )
 
         # Get baseline memory
         baseline_memory_mb = 0.0
@@ -410,7 +426,9 @@ class PipelineBenchmarker:
         )
 
         self._results.append(result)
-        logger.info(f"Throughput benchmark complete: {throughput_per_hour:.1f} executions/hour")
+        logger.info(
+            f"Throughput benchmark complete: {throughput_per_hour:.1f} executions/hour"
+        )
 
         return result
 
@@ -456,12 +474,16 @@ class PipelineBenchmarker:
                 total_memory = process.memory_info().rss / 1024 / 1024
                 # Use actual process memory as the primary measurement
                 current_mb = total_memory
-                peak_mb = max(peak_mb, total_memory - baseline_memory_mb, total_memory * 0.15)
+                peak_mb = max(
+                    peak_mb, total_memory - baseline_memory_mb, total_memory * 0.15
+                )
 
             memory_snapshots.append(current_mb)
             peak_memory.append(peak_mb)
 
-            logger.debug(f"Iteration {i + 1}: current={current_mb:.2f}MB, peak={peak_mb:.2f}MB")
+            logger.debug(
+                f"Iteration {i + 1}: current={current_mb:.2f}MB, peak={peak_mb:.2f}MB"
+            )
 
         result = BenchmarkResult(
             benchmark_type=BenchmarkType.MEMORY,
@@ -480,7 +502,9 @@ class PipelineBenchmarker:
         )
 
         self._results.append(result)
-        logger.info(f"Memory benchmark complete: peak={statistics.mean(peak_memory):.2f}MB")
+        logger.info(
+            f"Memory benchmark complete: peak={statistics.mean(peak_memory):.2f}MB"
+        )
 
         return result
 
@@ -520,18 +544,25 @@ class PipelineBenchmarker:
         result = BenchmarkResult(
             benchmark_type=BenchmarkType.TOKEN_EFFICIENCY,
             timestamp=datetime.now(timezone.utc),
-            duration_ms=statistics.mean(token_usages) / 10,  # Convert back to time estimate
+            duration_ms=statistics.mean(token_usages)
+            / 10,  # Convert back to time estimate
             metrics={
                 "iterations": iterations,
                 "avg_tokens_per_execution": avg_tokens,
                 "token_usage_samples": token_usages,
                 "estimated_tokens_per_feature": avg_tokens,
             },
-            metadata={"test_type": "token_efficiency", "estimation_method": "time_based", "seed": self._seed},
+            metadata={
+                "test_type": "token_efficiency",
+                "estimation_method": "time_based",
+                "seed": self._seed,
+            },
         )
 
         self._results.append(result)
-        logger.info(f"Token efficiency benchmark complete: {avg_tokens:.0f} tokens/execution")
+        logger.info(
+            f"Token efficiency benchmark complete: {avg_tokens:.0f} tokens/execution"
+        )
 
         return result
 
@@ -581,7 +612,9 @@ class PipelineBenchmarker:
                 process = psutil.Process(os.getpid())
                 total_memory_mb = process.memory_info().rss / 1024 / 1024
                 memory_delta = total_memory_mb - baseline_memory_mb
-                peak_memory_mb = max(peak_memory_mb, memory_delta, total_memory_mb * 0.1)
+                peak_memory_mb = max(
+                    peak_memory_mb, memory_delta, total_memory_mb * 0.1
+                )
 
             result = BenchmarkResult(
                 benchmark_type=BenchmarkType.SCALE,
@@ -594,7 +627,11 @@ class PipelineBenchmarker:
                     "avg_duration_per_loop_ms": elapsed_ms / level,
                     "loops_per_second": level / (elapsed_ms / 1000),
                 },
-                metadata={"test_type": "scale", "scale_level": level, "seed": self._seed},
+                metadata={
+                    "test_type": "scale",
+                    "scale_level": level,
+                    "seed": self._seed,
+                },
             )
 
             results.append(result)
@@ -671,9 +708,13 @@ class PipelineBenchmarker:
         memory_growth_percent = 0.0
         if len(memory_samples) >= 4:
             first_half_avg = statistics.mean(memory_samples[: len(memory_samples) // 2])
-            second_half_avg = statistics.mean(memory_samples[len(memory_samples) // 2 :])
+            second_half_avg = statistics.mean(
+                memory_samples[len(memory_samples) // 2 :]
+            )
             if first_half_avg > 0:
-                memory_growth_percent = (second_half_avg - first_half_avg) / first_half_avg * 100
+                memory_growth_percent = (
+                    (second_half_avg - first_half_avg) / first_half_avg * 100
+                )
                 # Only flag as leak if growth is > 20% AND absolute increase is > 5MB
                 absolute_increase = second_half_avg - first_half_avg
                 if memory_growth_percent > 20 and absolute_increase > 5.0:
@@ -689,7 +730,9 @@ class PipelineBenchmarker:
                 "target_duration_s": duration_seconds,
                 "actual_duration_ms": elapsed_ms,
                 "iterations_completed": iterations,
-                "iterations_per_second": iterations / (elapsed_ms / 1000) if elapsed_ms > 0 else 0,
+                "iterations_per_second": (
+                    iterations / (elapsed_ms / 1000) if elapsed_ms > 0 else 0
+                ),
                 "error_count": error_count,
                 "memory_samples_mb": memory_samples,
                 "memory_leak_detected": memory_leak_detected,
@@ -772,49 +815,63 @@ class PipelineBenchmarker:
         bottlenecks = []
 
         # Analyze latency results
-        latency_results = [r for r in self._results if r.benchmark_type == BenchmarkType.LATENCY]
+        latency_results = [
+            r for r in self._results if r.benchmark_type == BenchmarkType.LATENCY
+        ]
         if latency_results:
             avg_latency = statistics.mean([r.duration_ms for r in latency_results])
             if avg_latency > 15000:  # > 15 seconds
-                bottlenecks.append(Bottleneck(
-                    name="High Single Execution Latency",
-                    location="pipeline/engine.py",
-                    severity="high",
-                    description=f"Single pipeline execution averages {avg_latency:.0f}ms (target: <15000ms)",
-                    impact_ms=avg_latency - 15000,
-                    recommendation="Optimize pipeline phase transitions and reduce validator overhead",
-                ))
+                bottlenecks.append(
+                    Bottleneck(
+                        name="High Single Execution Latency",
+                        location="pipeline/engine.py",
+                        severity="high",
+                        description=f"Single pipeline execution averages {avg_latency:.0f}ms (target: <15000ms)",
+                        impact_ms=avg_latency - 15000,
+                        recommendation="Optimize pipeline phase transitions and reduce validator overhead",
+                    )
+                )
 
         # Analyze throughput results
-        throughput_results = [r for r in self._results if r.benchmark_type == BenchmarkType.THROUGHPUT]
+        throughput_results = [
+            r for r in self._results if r.benchmark_type == BenchmarkType.THROUGHPUT
+        ]
         if throughput_results:
             throughput = throughput_results[0].metrics.get("throughput_per_hour", 0)
             if throughput < 1000:  # < 1000 executions/hour
-                bottlenecks.append(Bottleneck(
-                    name="Low Throughput",
-                    location="pipeline/loop_manager.py",
-                    severity="medium",
-                    description=f"Throughput is {throughput:.0f} executions/hour (target: >1000)",
-                    impact_ms=0,
-                    recommendation="Implement async I/O for validators and parallel execution",
-                ))
+                bottlenecks.append(
+                    Bottleneck(
+                        name="Low Throughput",
+                        location="pipeline/loop_manager.py",
+                        severity="medium",
+                        description=f"Throughput is {throughput:.0f} executions/hour (target: >1000)",
+                        impact_ms=0,
+                        recommendation="Implement async I/O for validators and parallel execution",
+                    )
+                )
 
         # Analyze memory results
-        memory_results = [r for r in self._results if r.benchmark_type == BenchmarkType.MEMORY]
+        memory_results = [
+            r for r in self._results if r.benchmark_type == BenchmarkType.MEMORY
+        ]
         if memory_results:
             avg_memory = statistics.mean([r.memory_peak_mb for r in memory_results])
             if avg_memory > 500:  # > 500MB
-                bottlenecks.append(Bottleneck(
-                    name="High Memory Footprint",
-                    location="pipeline/state.py",
-                    severity="high",
-                    description=f"Peak memory usage is {avg_memory:.0f}MB (target: <500MB)",
-                    impact_ms=0,
-                    recommendation="Implement artifact compression and optimize state storage",
-                ))
+                bottlenecks.append(
+                    Bottleneck(
+                        name="High Memory Footprint",
+                        location="pipeline/state.py",
+                        severity="high",
+                        description=f"Peak memory usage is {avg_memory:.0f}MB (target: <500MB)",
+                        impact_ms=0,
+                        recommendation="Implement artifact compression and optimize state storage",
+                    )
+                )
 
         # Analyze endurance results
-        endurance_results = [r for r in self._results if r.benchmark_type == BenchmarkType.ENDURANCE]
+        endurance_results = [
+            r for r in self._results if r.benchmark_type == BenchmarkType.ENDURANCE
+        ]
         if endurance_results:
             for result in endurance_results:
                 # Only flag memory leak if:
@@ -824,47 +881,63 @@ class PipelineBenchmarker:
                 if result.metrics.get("memory_leak_detected"):
                     memory_growth = result.metrics.get("memory_growth_percent", 0)
                     if memory_growth > 20:  # Consistent with detection threshold
-                        bottlenecks.append(Bottleneck(
-                            name="Memory Leak Detected",
-                            location="pipeline/state.py or metrics/collector.py",
-                            severity="critical",
-                            description=f"Memory increases {memory_growth:.1f}% over extended execution period",
-                            impact_ms=0,
-                            recommendation="Review object lifecycle and ensure proper cleanup in loops",
-                        ))
+                        bottlenecks.append(
+                            Bottleneck(
+                                name="Memory Leak Detected",
+                                location="pipeline/state.py or metrics/collector.py",
+                                severity="critical",
+                                description=f"Memory increases {memory_growth:.1f}% over extended execution period",
+                                impact_ms=0,
+                                recommendation="Review object lifecycle and ensure proper cleanup in loops",
+                            )
+                        )
 
         # Analyze scale results
-        scale_results = [r for r in self._results if r.benchmark_type == BenchmarkType.SCALE]
+        scale_results = [
+            r for r in self._results if r.benchmark_type == BenchmarkType.SCALE
+        ]
         if len(scale_results) >= 2:
             # Check for non-linear scaling
             first = scale_results[0]
             last = scale_results[-1]
-            scale_factor = last.metrics["concurrent_loops"] / first.metrics["concurrent_loops"]
-            time_factor = last.duration_ms / first.duration_ms if first.duration_ms > 0 else 0
+            scale_factor = (
+                last.metrics["concurrent_loops"] / first.metrics["concurrent_loops"]
+            )
+            time_factor = (
+                last.duration_ms / first.duration_ms if first.duration_ms > 0 else 0
+            )
 
             if time_factor > scale_factor * 1.5:  # 50% worse than linear
-                bottlenecks.append(Bottleneck(
-                    name="Poor Scale Efficiency",
-                    location="pipeline/loop_manager.py",
-                    severity="medium",
-                    description=f"Scaling shows {time_factor/scale_factor:.2f}x overhead (target: <1.5x)",
-                    impact_ms=0,
-                    recommendation="Reduce contention in concurrent loop execution",
-                ))
+                bottlenecks.append(
+                    Bottleneck(
+                        name="Poor Scale Efficiency",
+                        location="pipeline/loop_manager.py",
+                        severity="medium",
+                        description=f"Scaling shows {time_factor/scale_factor:.2f}x overhead (target: <1.5x)",
+                        impact_ms=0,
+                        recommendation="Reduce contention in concurrent loop execution",
+                    )
+                )
 
         # Check for token efficiency issues
-        token_results = [r for r in self._results if r.benchmark_type == BenchmarkType.TOKEN_EFFICIENCY]
+        token_results = [
+            r
+            for r in self._results
+            if r.benchmark_type == BenchmarkType.TOKEN_EFFICIENCY
+        ]
         if token_results:
             avg_tokens = token_results[0].metrics.get("avg_tokens_per_execution", 0)
             if avg_tokens > 10000:  # > 10k tokens per execution
-                bottlenecks.append(Bottleneck(
-                    name="High Token Consumption",
-                    location="quality/scorer.py or agents/",
-                    severity="low",
-                    description=f"Average {avg_tokens:.0f} tokens per execution (target: <10000)",
-                    impact_ms=0,
-                    recommendation="Optimize prompts and reduce context overhead",
-                ))
+                bottlenecks.append(
+                    Bottleneck(
+                        name="High Token Consumption",
+                        location="quality/scorer.py or agents/",
+                        severity="low",
+                        description=f"Average {avg_tokens:.0f} tokens per execution (target: <10000)",
+                        impact_ms=0,
+                        recommendation="Optimize prompts and reduce context overhead",
+                    )
+                )
 
         self._bottlenecks = bottlenecks
         return bottlenecks
@@ -897,12 +970,14 @@ class PipelineBenchmarker:
         # Statistics summary
         stats = self._generate_statistics()
 
-        lines.extend([
-            "## Baseline Metrics Table",
-            "",
-            "| Metric | Baseline Value | P3 Target | Status | Notes |",
-            "|--------|---------------|-----------|--------|-------|",
-        ])
+        lines.extend(
+            [
+                "## Baseline Metrics Table",
+                "",
+                "| Metric | Baseline Value | P3 Target | Status | Notes |",
+                "|--------|---------------|-----------|--------|-------|",
+            ]
+        )
 
         # Single execution latency
         latency_status = "PASS"
@@ -958,7 +1033,11 @@ class PipelineBenchmarker:
         token_value = "N/A"
         if "token_efficiency" in stats:
             s = stats["token_efficiency"]
-            token_value = f"{s.get('avg_tokens', 0):.0f} tokens/exec" if isinstance(s.get('avg_tokens'), (int, float)) else f"{s['mean_ms']:.0f}ms equiv."
+            token_value = (
+                f"{s.get('avg_tokens', 0):.0f} tokens/exec"
+                if isinstance(s.get("avg_tokens"), (int, float))
+                else f"{s['mean_ms']:.0f}ms equiv."
+            )
             if s.get("throughput_per_hour", 0) > 0 or s["mean_ms"] < 100:
                 token_status = "PASS"
             else:
@@ -972,7 +1051,11 @@ class PipelineBenchmarker:
         scale_value = "N/A"
         if "scale" in stats:
             s = stats["scale"]
-            scale_value = f"{s.get('loops_per_second', 0):.0f} loops/sec" if isinstance(s.get('loops_per_second'), (int, float)) else "Tested"
+            scale_value = (
+                f"{s.get('loops_per_second', 0):.0f} loops/sec"
+                if isinstance(s.get("loops_per_second"), (int, float))
+                else "Tested"
+            )
         lines.append(
             f"| Scale Performance (100 loops) | {scale_value} | >100 loops/sec | {scale_status} | Linear scaling target |"
         )
@@ -989,15 +1072,24 @@ class PipelineBenchmarker:
                 if r.benchmark_type.name == "ENDURANCE":
                     # Only flag if significant memory growth detected
                     memory_samples = r.metrics.get("memory_samples_mb", [])
-                    if len(memory_samples) >= 4 and r.metrics.get("memory_leak_detected", False):
-                        first_half = statistics.mean(memory_samples[: len(memory_samples) // 2])
-                        second_half = statistics.mean(memory_samples[len(memory_samples) // 2 :])
+                    if len(memory_samples) >= 4 and r.metrics.get(
+                        "memory_leak_detected", False
+                    ):
+                        first_half = statistics.mean(
+                            memory_samples[: len(memory_samples) // 2]
+                        )
+                        second_half = statistics.mean(
+                            memory_samples[len(memory_samples) // 2 :]
+                        )
                         if first_half > 0 and second_half > first_half * 1.5:
                             memory_leak = "Yes"
                             endurance_status = "FAIL"
                             break
                     # If leak flag set but samples are empty/zero, it's simulated (ignore)
-                    elif r.metrics.get("memory_leak_detected", False) and len(memory_samples) < 2:
+                    elif (
+                        r.metrics.get("memory_leak_detected", False)
+                        and len(memory_samples) < 2
+                    ):
                         pass  # Simulated benchmark - don't flag
         lines.append(
             f"| Endurance (30s) | {endurance_value} | No memory leaks | {endurance_status} | Memory leak: {memory_leak} |"
@@ -1008,29 +1100,43 @@ class PipelineBenchmarker:
         lines.extend(["", ""])
 
         # Detailed results by benchmark type
-        lines.extend([
-            "## Detailed Benchmark Results",
-            "",
-        ])
+        lines.extend(
+            [
+                "## Detailed Benchmark Results",
+                "",
+            ]
+        )
 
         for benchmark_type in BenchmarkType:
-            type_results = [r for r in self._results if r.benchmark_type == benchmark_type]
+            type_results = [
+                r for r in self._results if r.benchmark_type == benchmark_type
+            ]
             if not type_results:
                 continue
 
             latest = type_results[-1]
-            lines.extend([
-                f"### {benchmark_type.name}",
-                "",
-                f"- **Duration:** {latest.duration_ms:.2f}ms",
-                f"- **Peak Memory:** {latest.memory_peak_mb:.2f}MB",
-            ])
+            lines.extend(
+                [
+                    f"### {benchmark_type.name}",
+                    "",
+                    f"- **Duration:** {latest.duration_ms:.2f}ms",
+                    f"- **Peak Memory:** {latest.memory_peak_mb:.2f}MB",
+                ]
+            )
 
             if latest.metrics:
                 lines.append("- **Key Metrics:**")
                 for key, value in latest.metrics.items():
-                    if key not in ["all_durations_ms", "token_usage_samples", "peak_memory_mb", "current_memory_mb", "memory_samples_mb"]:
-                        if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    if key not in [
+                        "all_durations_ms",
+                        "token_usage_samples",
+                        "peak_memory_mb",
+                        "current_memory_mb",
+                        "memory_samples_mb",
+                    ]:
+                        if isinstance(value, (int, float)) and not isinstance(
+                            value, bool
+                        ):
                             lines.append(f"  - `{key}`: {value:.2f}")
                         elif isinstance(value, bool):
                             lines.append(f"  - `{key}`: {value}")
@@ -1039,24 +1145,30 @@ class PipelineBenchmarker:
             lines.append("")
 
         # Bottleneck Analysis
-        lines.extend([
-            "## Bottleneck Analysis",
-            "",
-            "Top 5 identified performance bottlenecks:",
-            "",
-        ])
+        lines.extend(
+            [
+                "## Bottleneck Analysis",
+                "",
+                "Top 5 identified performance bottlenecks:",
+                "",
+            ]
+        )
 
         bottlenecks = self.identify_bottlenecks()
 
         if bottlenecks:
-            lines.extend([
-                "| # | Severity | Bottleneck | Location | Impact | Recommendation |",
-                "|---|----------|------------|----------|--------|----------------|",
-            ])
+            lines.extend(
+                [
+                    "| # | Severity | Bottleneck | Location | Impact | Recommendation |",
+                    "|---|----------|------------|----------|--------|----------------|",
+                ]
+            )
 
             sorted_bottlenecks = sorted(
                 bottlenecks,
-                key=lambda x: {"critical": 0, "high": 1, "medium": 2, "low": 3}[x.severity]
+                key=lambda x: {"critical": 0, "high": 1, "medium": 2, "low": 3}[
+                    x.severity
+                ],
             )
 
             for i, bn in enumerate(sorted_bottlenecks[:5], 1):
@@ -1070,12 +1182,14 @@ class PipelineBenchmarker:
         lines.extend(["", ""])
 
         # P3.2 Quick Wins Recommendations
-        lines.extend([
-            "## P3.2 Quick Wins Recommendations",
-            "",
-            "Based on the baseline benchmark results, the following quick wins are recommended for P3.2:",
-            "",
-        ])
+        lines.extend(
+            [
+                "## P3.2 Quick Wins Recommendations",
+                "",
+                "Based on the baseline benchmark results, the following quick wins are recommended for P3.2:",
+                "",
+            ]
+        )
 
         quick_wins = [
             {
@@ -1120,76 +1234,84 @@ class PipelineBenchmarker:
             },
         ]
 
-        lines.extend([
-            "| ID | Quick Win | Location | Expected Impact | Effort |",
-            "|----|-----------|----------|-----------------|--------|",
-        ])
+        lines.extend(
+            [
+                "| ID | Quick Win | Location | Expected Impact | Effort |",
+                "|----|-----------|----------|-----------------|--------|",
+            ]
+        )
 
         for qw in quick_wins:
             lines.append(
                 f"| {qw['id']} | {qw['title']} | {qw['location']} | {qw['expected_impact']} | {qw['effort']} |"
             )
 
-        lines.extend([
-            "",
-            "### Implementation Priority",
-            "",
-            "Recommended implementation order for P3.2:",
-            "",
-            "1. **QW-001** (Deprecation warnings) - Quick fix, improves code quality",
-            "2. **QW-002** (Tool caching) - Simple change with immediate latency benefits",
-            "3. **QW-003** (Artifact compression) - Addresses memory footprint concerns",
-            "4. **QW-004** (Parallel validators) - Significant quality phase speedup",
-            "5. **QW-005** (Connection pooling) - Improves scale performance",
-            "",
-        ])
+        lines.extend(
+            [
+                "",
+                "### Implementation Priority",
+                "",
+                "Recommended implementation order for P3.2:",
+                "",
+                "1. **QW-001** (Deprecation warnings) - Quick fix, improves code quality",
+                "2. **QW-002** (Tool caching) - Simple change with immediate latency benefits",
+                "3. **QW-003** (Artifact compression) - Addresses memory footprint concerns",
+                "4. **QW-004** (Parallel validators) - Significant quality phase speedup",
+                "5. **QW-005** (Connection pooling) - Improves scale performance",
+                "",
+            ]
+        )
 
         # Test Configuration
-        lines.extend([
-            "## Test Configuration",
-            "",
-            "### Benchmark Parameters",
-            "",
-            "- **Latency iterations:** 5 runs (median reported)",
-            "- **Throughput concurrent executions:** 10",
-            "- **Memory iterations:** 3 runs",
-            "- **Token efficiency iterations:** 3 runs",
-            "- **Scale levels tested:** 10, 50, 100 concurrent loops",
-            "- **Endurance duration:** 30 seconds",
-            "",
-            "### Environment",
-            "",
-            f"- **Platform:** Windows 11 Pro",
-            f"- **Python:** 3.12+",
-            f"- **Test Date:** {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
-            "",
-        ])
+        lines.extend(
+            [
+                "## Test Configuration",
+                "",
+                "### Benchmark Parameters",
+                "",
+                "- **Latency iterations:** 5 runs (median reported)",
+                "- **Throughput concurrent executions:** 10",
+                "- **Memory iterations:** 3 runs",
+                "- **Token efficiency iterations:** 3 runs",
+                "- **Scale levels tested:** 10, 50, 100 concurrent loops",
+                "- **Endurance duration:** 30 seconds",
+                "",
+                "### Environment",
+                "",
+                f"- **Platform:** Windows 11 Pro",
+                f"- **Python:** 3.12+",
+                f"- **Test Date:** {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                "",
+            ]
+        )
 
         # Summary and Next Steps
-        lines.extend([
-            "## Summary and Next Steps",
-            "",
-            "### P3.1 Completion Status",
-            "",
-            "- [x] Benchmark suite created",
-            "- [x] Baseline performance measured",
-            "- [x] Bottlenecks identified and documented",
-            "- [x] Baseline metrics recorded",
-            "",
-            "### Recommended Next Steps (P3.2)",
-            "",
-            "1. Implement quick wins QW-001 through QW-005",
-            "2. Re-run benchmarks to validate improvements",
-            "3. Proceed to P3.3 Deep Optimization if targets not met",
-            "",
-            "---",
-            "",
-            "*Report generated by GAIA PipelineBenchmarker v1.2.0*",
-            "",
-            "## Appendix: Raw Data",
-            "",
-            "Full benchmark data exported to: `benchmark_results.json`",
-        ])
+        lines.extend(
+            [
+                "## Summary and Next Steps",
+                "",
+                "### P3.1 Completion Status",
+                "",
+                "- [x] Benchmark suite created",
+                "- [x] Baseline performance measured",
+                "- [x] Bottlenecks identified and documented",
+                "- [x] Baseline metrics recorded",
+                "",
+                "### Recommended Next Steps (P3.2)",
+                "",
+                "1. Implement quick wins QW-001 through QW-005",
+                "2. Re-run benchmarks to validate improvements",
+                "3. Proceed to P3.3 Deep Optimization if targets not met",
+                "",
+                "---",
+                "",
+                "*Report generated by GAIA PipelineBenchmarker v1.2.0*",
+                "",
+                "## Appendix: Raw Data",
+                "",
+                "Full benchmark data exported to: `benchmark_results.json`",
+            ]
+        )
 
         return "\n".join(lines)
 
@@ -1227,7 +1349,9 @@ class PipelineBenchmarker:
         stats = {}
 
         for benchmark_type in BenchmarkType:
-            type_results = [r for r in self._results if r.benchmark_type == benchmark_type]
+            type_results = [
+                r for r in self._results if r.benchmark_type == benchmark_type
+            ]
             if type_results:
                 try:
                     benchmark_stats = BenchmarkStatistics.from_results(
@@ -1238,23 +1362,31 @@ class PipelineBenchmarker:
                     if benchmark_type == BenchmarkType.TOKEN_EFFICIENCY:
                         for r in type_results:
                             if "avg_tokens_per_execution" in r.metrics:
-                                stats_dict["avg_tokens"] = r.metrics["avg_tokens_per_execution"]
+                                stats_dict["avg_tokens"] = r.metrics[
+                                    "avg_tokens_per_execution"
+                                ]
                                 break
                     # Add loops_per_second for scale
                     if benchmark_type == BenchmarkType.SCALE:
                         for r in type_results:
                             if "loops_per_second" in r.metrics:
-                                stats_dict["loops_per_second"] = r.metrics["loops_per_second"]
+                                stats_dict["loops_per_second"] = r.metrics[
+                                    "loops_per_second"
+                                ]
                                 break
                     # Add iterations_per_second for endurance
                     if benchmark_type == BenchmarkType.ENDURANCE:
                         for r in type_results:
                             if "iterations_per_second" in r.metrics:
-                                stats_dict["iterations_per_second"] = r.metrics["iterations_per_second"]
+                                stats_dict["iterations_per_second"] = r.metrics[
+                                    "iterations_per_second"
+                                ]
                                 break
                     stats[benchmark_type.name.lower()] = stats_dict
                 except (ValueError, statistics.StatisticsError) as e:
-                    logger.warning(f"Could not compute statistics for {benchmark_type}: {e}")
+                    logger.warning(
+                        f"Could not compute statistics for {benchmark_type}: {e}"
+                    )
 
         return stats
 
@@ -1349,19 +1481,22 @@ if __name__ == "__main__":
 
         parser = argparse.ArgumentParser(description="GAIA Pipeline Benchmarker")
         parser.add_argument(
-            "--output", "-o",
+            "--output",
+            "-o",
             default="benchmark_report.md",
             help="Output report file path",
         )
         parser.add_argument(
-            "--scale", "-s",
+            "--scale",
+            "-s",
             nargs="+",
             type=int,
             default=[10, 50, 100],
             help="Scale levels to test",
         )
         parser.add_argument(
-            "--endurance", "-e",
+            "--endurance",
+            "-e",
             type=int,
             default=30,
             help="Endurance test duration (seconds)",

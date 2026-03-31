@@ -9,10 +9,12 @@ Run with: pytest gaia-proposal/gaia/tests/production/test_smoke.py -v
 All three test classes must pass before production sign-off is granted.
 """
 
-import pytest
 import asyncio
 import time
-from gaia.metrics.production_monitor import ProductionMonitor, ProductionMetrics
+
+import pytest
+
+from gaia.metrics.production_monitor import ProductionMetrics, ProductionMonitor
 from gaia.pipeline.engine import PipelineEngine
 
 
@@ -56,7 +58,9 @@ class TestProductionMonitorSmoke:
         for _ in range(98):
             monitor.record_loop_execution(success=True, latency_ms=50.0)
         for _ in range(2):
-            monitor.record_loop_execution(success=False, latency_ms=50.0, error_description="fail")
+            monitor.record_loop_execution(
+                success=False, latency_ms=50.0, error_description="fail"
+            )
 
         asyncio.run(monitor._check_thresholds())
         assert len(alerts) > 0
@@ -73,7 +77,9 @@ class TestProductionMonitorSmoke:
         # Seed exactly 99 successes + 1 failure => success_rate == 0.99 (at threshold)
         for _ in range(99):
             monitor.record_loop_execution(success=True, latency_ms=50.0)
-        monitor.record_loop_execution(success=False, latency_ms=50.0, error_description="e")
+        monitor.record_loop_execution(
+            success=False, latency_ms=50.0, error_description="e"
+        )
 
         asyncio.run(monitor._check_thresholds())
         success_rate_alerts = [a for a in alerts if a["type"] == "success_rate"]
@@ -168,7 +174,7 @@ class TestPipelineEngineSmoke:
     def test_engine_instantiation_with_defaults(self):
         """PipelineEngine creates with bounded concurrency defaults."""
         engine = PipelineEngine()
-        assert hasattr(engine, 'max_concurrent_loops') or hasattr(engine, '_semaphore')
+        assert hasattr(engine, "max_concurrent_loops") or hasattr(engine, "_semaphore")
 
     def test_engine_instantiation_with_custom_limits(self):
         """PipelineEngine accepts custom concurrency limits."""
@@ -176,40 +182,50 @@ class TestPipelineEngineSmoke:
             engine = PipelineEngine(max_concurrent_loops=50, worker_pool_size=2)
             assert True  # succeeded
         except TypeError:
-            pytest.fail("PipelineEngine should accept max_concurrent_loops and worker_pool_size")
+            pytest.fail(
+                "PipelineEngine should accept max_concurrent_loops and worker_pool_size"
+            )
 
     def test_engine_has_semaphore_attribute(self):
         """PipelineEngine initializes _semaphore for bounded concurrency."""
         try:
             engine = PipelineEngine(max_concurrent_loops=100, worker_pool_size=4)
-            assert hasattr(engine, '_semaphore'), "_semaphore attribute must exist on PipelineEngine"
+            assert hasattr(
+                engine, "_semaphore"
+            ), "_semaphore attribute must exist on PipelineEngine"
         except TypeError:
             # If constructor signature not yet updated, skip rather than fail
-            pytest.skip("PipelineEngine constructor not yet updated with concurrency params")
+            pytest.skip(
+                "PipelineEngine constructor not yet updated with concurrency params"
+            )
 
     def test_engine_has_worker_semaphore_attribute(self):
         """PipelineEngine initializes _worker_semaphore for worker pool."""
         try:
             engine = PipelineEngine(max_concurrent_loops=100, worker_pool_size=4)
-            assert hasattr(engine, '_worker_semaphore'), "_worker_semaphore attribute must exist"
+            assert hasattr(
+                engine, "_worker_semaphore"
+            ), "_worker_semaphore attribute must exist"
         except TypeError:
-            pytest.skip("PipelineEngine constructor not yet updated with concurrency params")
+            pytest.skip(
+                "PipelineEngine constructor not yet updated with concurrency params"
+            )
 
     def test_engine_has_backpressure_method(self):
         """PipelineEngine has execute_with_backpressure method."""
         engine = PipelineEngine()
-        assert hasattr(engine, 'execute_with_backpressure'), (
-            "execute_with_backpressure() method must exist on PipelineEngine"
-        )
-        assert callable(getattr(engine, 'execute_with_backpressure')), (
-            "execute_with_backpressure must be callable"
-        )
+        assert hasattr(
+            engine, "execute_with_backpressure"
+        ), "execute_with_backpressure() method must exist on PipelineEngine"
+        assert callable(
+            getattr(engine, "execute_with_backpressure")
+        ), "execute_with_backpressure must be callable"
 
     def test_engine_max_concurrent_loops_attribute(self):
         """PipelineEngine stores max_concurrent_loops attribute."""
         try:
             engine = PipelineEngine(max_concurrent_loops=100, worker_pool_size=4)
-            if hasattr(engine, 'max_concurrent_loops'):
+            if hasattr(engine, "max_concurrent_loops"):
                 assert engine.max_concurrent_loops == 100
         except TypeError:
             pytest.skip("PipelineEngine constructor not yet updated")
@@ -224,59 +240,70 @@ class TestImportSmoke:
 
     def test_import_production_monitor(self):
         """ProductionMonitor and ProductionMetrics are importable."""
-        from gaia.metrics.production_monitor import ProductionMonitor, ProductionMetrics
+        from gaia.metrics.production_monitor import ProductionMetrics, ProductionMonitor
+
         assert ProductionMonitor is not None
         assert ProductionMetrics is not None
 
     def test_import_defect_types(self):
         """DefectType taxonomy module is importable."""
         from gaia.pipeline.defect_types import DefectType
+
         assert DefectType is not None
 
     def test_import_weight_config(self):
         """WeightConfig module is importable."""
         from gaia.quality.weight_config import QualityWeightConfigManager
+
         assert QualityWeightConfigManager is not None
 
     def test_import_routing_engine(self):
         """RoutingEngine is importable."""
         from gaia.pipeline.routing_engine import RoutingEngine
+
         assert RoutingEngine is not None
 
     def test_import_recursive_template(self):
         """RecursivePipelineTemplate is importable."""
         from gaia.pipeline.recursive_template import RecursivePipelineTemplate
+
         assert RecursivePipelineTemplate is not None
 
     def test_import_template_loader(self):
         """TemplateLoader is importable."""
         from gaia.pipeline.template_loader import TemplateLoader
+
         assert TemplateLoader is not None
 
     def test_import_pipeline_engine(self):
         """PipelineEngine is importable."""
         from gaia.pipeline.engine import PipelineEngine
+
         assert PipelineEngine is not None
 
     def test_import_quality_weight_config_model(self):
         """QualityWeightConfig model is importable from quality.models."""
         from gaia.quality.models import QualityWeightConfig
+
         assert QualityWeightConfig is not None
 
     def test_import_defect_type_from_string(self):
         """defect_type_from_string utility is importable."""
         from gaia.pipeline.defect_types import defect_type_from_string
+
         assert defect_type_from_string is not None
 
     def test_routing_engine_instantiation(self):
         """RoutingEngine instantiates without error."""
         from gaia.pipeline.routing_engine import RoutingEngine
+
         engine = RoutingEngine()
         assert engine is not None
 
     def test_production_metrics_defaults(self):
         """ProductionMetrics instantiates with expected defaults."""
         from gaia.metrics.production_monitor import ProductionMetrics
+
         m = ProductionMetrics()
         assert m.loops_executed == 0
         assert m.loops_successful == 0
@@ -285,8 +312,8 @@ class TestImportSmoke:
 
     def test_routing_engine_routes_security_defect(self):
         """RoutingEngine correctly routes a security defect."""
-        from gaia.pipeline.routing_engine import RoutingEngine
         from gaia.pipeline.defect_types import DefectType
+        from gaia.pipeline.routing_engine import RoutingEngine
 
         engine = RoutingEngine()
         decision = engine.route_defect({"description": "SQL injection vulnerability"})

@@ -6,11 +6,11 @@ Dynamic agent registry with hot-reload support and capability-based routing.
 
 import asyncio
 import concurrent.futures
+import threading
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Callable
-import threading
+from typing import Any, Callable, Dict, List, Optional
 
 
 def _run_async(coro):
@@ -31,15 +31,15 @@ except ImportError:
     yaml = None  # type: ignore
 
 from gaia.agents.base import (
-    AgentDefinition,
-    AgentTriggers,
     AgentCapabilities,
     AgentConstraints,
+    AgentDefinition,
+    AgentTriggers,
 )
-from gaia.exceptions import AgentNotFoundError, AgentLoadError, AgentSelectionError
-from gaia.utils.logging import get_logger
-from gaia.utils.id_generator import generate_id
+from gaia.exceptions import AgentLoadError, AgentNotFoundError, AgentSelectionError
 from gaia.pipeline.defect_types import DEFECT_SPECIALISTS, DefectType
+from gaia.utils.id_generator import generate_id
+from gaia.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -296,8 +296,8 @@ class AgentRegistry:
     async def _setup_hot_reload(self) -> None:
         """Set up file watcher for hot-reload."""
         try:
-            from watchdog.observers import Observer
             from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
 
             class AgentFileHandler(FileSystemEventHandler):
                 def __init__(self, registry: "AgentRegistry"):

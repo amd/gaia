@@ -4,24 +4,25 @@ Tests for GAIA Template Loader
 Tests YAML template loading, parsing, and validation functionality.
 """
 
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 import yaml
-from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
 
+from gaia.agents.base import AgentCapabilities, AgentDefinition, AgentTriggers
+from gaia.agents.registry import AgentRegistry
+from gaia.pipeline.recursive_template import (
+    AgentCategory,
+    PhaseConfig,
+    RecursivePipelineTemplate,
+    RoutingRule,
+    SelectionMode,
+)
 from gaia.pipeline.template_loader import (
     TemplateLoader,
     TemplateValidationError,
 )
-from gaia.pipeline.recursive_template import (
-    RecursivePipelineTemplate,
-    PhaseConfig,
-    AgentCategory,
-    SelectionMode,
-    RoutingRule,
-)
-from gaia.agents.registry import AgentRegistry
-from gaia.agents.base import AgentDefinition, AgentTriggers, AgentCapabilities
 
 
 class TestTemplateLoader:
@@ -88,6 +89,7 @@ templates:
         planning_agent = AgentDefinition(
             id="planning-analysis-strategist",
             name="Planning Strategist",
+            version="1.0.0",
             category="planning",
             description="Test planning agent",
             triggers=AgentTriggers(keywords=["planning"], phases=["PLANNING"]),
@@ -97,6 +99,7 @@ templates:
         dev_agent = AgentDefinition(
             id="senior-developer",
             name="Senior Developer",
+            version="1.0.0",
             category="development",
             description="Test developer agent",
             triggers=AgentTriggers(keywords=["development"], phases=["DEVELOPMENT"]),
@@ -266,30 +269,29 @@ templates:
         assert len(errors) > 0
         assert any("non-existent-agent" in error for error in errors)
 
-    def test_validate_template_invalid_threshold(self, template_loader, mock_agent_registry):
+    def test_validate_template_invalid_threshold(
+        self, template_loader, mock_agent_registry
+    ):
         """Test validation catches invalid quality threshold."""
-        # Create template with invalid threshold
-        template = RecursivePipelineTemplate(
-            name="bad-template",
-            quality_threshold=1.5,  # Invalid: > 1
-            max_iterations=5,
-        )
+        # Creating template with invalid threshold raises ValueError
+        with pytest.raises(ValueError, match="quality_threshold must be between 0 and 1"):
+            RecursivePipelineTemplate(
+                name="bad-template",
+                quality_threshold=1.5,  # Invalid: > 1
+                max_iterations=5,
+            )
 
-        errors = template_loader.validate_template(template, mock_agent_registry)
-
-        assert any("quality_threshold" in error for error in errors)
-
-    def test_validate_template_invalid_iterations(self, template_loader, mock_agent_registry):
+    def test_validate_template_invalid_iterations(
+        self, template_loader, mock_agent_registry
+    ):
         """Test validation catches invalid max iterations."""
-        template = RecursivePipelineTemplate(
-            name="bad-template",
-            quality_threshold=0.9,
-            max_iterations=0,  # Invalid: < 1
-        )
-
-        errors = template_loader.validate_template(template, mock_agent_registry)
-
-        assert any("max_iterations" in error for error in errors)
+        # Creating template with invalid iterations raises ValueError
+        with pytest.raises(ValueError, match="max_iterations must be at least 1"):
+            RecursivePipelineTemplate(
+                name="bad-template",
+                quality_threshold=0.9,
+                max_iterations=0,  # Invalid: < 1
+            )
 
     def test_load_template_caching(self, template_loader, sample_yaml_template):
         """Test that loaded templates are cached."""
@@ -381,7 +383,9 @@ templates:
         with pytest.raises(FileNotFoundError):
             template_loader.load_from_file("/nonexistent/path/templates.yml")
 
-    def test_load_template_by_name(self, template_loader, sample_yaml_template, tmp_path):
+    def test_load_template_by_name(
+        self, template_loader, sample_yaml_template, tmp_path
+    ):
         """Test loading a single template by name."""
         # Create temporary file
         yaml_file = tmp_path / "test_templates.yml"
@@ -394,7 +398,9 @@ templates:
         assert template.description == "A test template for unit tests"
         assert template.quality_threshold == 0.85
 
-    def test_load_template_cache_hit(self, template_loader, sample_yaml_template, tmp_path):
+    def test_load_template_cache_hit(
+        self, template_loader, sample_yaml_template, tmp_path
+    ):
         """Test that load_template uses cache when available."""
         yaml_file = tmp_path / "test_templates.yml"
         yaml_file.write_text(sample_yaml_template)

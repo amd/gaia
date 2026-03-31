@@ -6,7 +6,7 @@ Routes defects to appropriate pipeline phases based on defect type, severity, an
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Dict, List, Optional, Any, Set
+from typing import Any, Dict, List, Optional, Set
 
 
 class DefectType(Enum):
@@ -273,9 +273,7 @@ class DefectRouter:
         # Default: route to DEVELOPMENT
         return "DEVELOPMENT"
 
-    def route_defects(
-        self, defects: List[Dict[str, Any]]
-    ) -> Dict[str, List[Defect]]:
+    def route_defects(self, defects: List[Dict[str, Any]]) -> Dict[str, List[Defect]]:
         """
         Route multiple defects to their target phases.
 
@@ -312,9 +310,7 @@ class DefectRouter:
         # Remove empty buckets
         return {k: v for k, v in routed.items() if v}
 
-    def get_defect_summary(
-        self, defects: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    def get_defect_summary(self, defects: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Generate summary statistics for defects.
 
@@ -368,9 +364,7 @@ class DefectRouter:
 
     def remove_rule(self, defect_type: DefectType) -> None:
         """Remove routing rules for a specific defect type."""
-        self._rules = [
-            r for r in self._rules if defect_type not in r.defect_types
-        ]
+        self._rules = [r for r in self._rules if defect_type not in r.defect_types]
 
 
 def create_defect(

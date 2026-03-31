@@ -18,23 +18,22 @@ Example:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Any, Optional, Tuple, Callable
-import threading
-import statistics
-import math
 import json
+import math
+import statistics
+import threading
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from gaia.metrics.collector import MetricsCollector
 from gaia.metrics.models import (
     MetricSnapshot,
-    MetricType,
-    MetricStatistics,
     MetricsReport,
+    MetricStatistics,
+    MetricType,
 )
-from gaia.metrics.collector import MetricsCollector
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -108,7 +107,9 @@ class TrendAnalysis:
             "end_value": self.end_value,
             "change_percent": self.change_percent,
             "data_points": self.data_points,
-            "period_start": self.period_start.isoformat() if self.period_start else None,
+            "period_start": (
+                self.period_start.isoformat() if self.period_start else None
+            ),
             "period_end": self.period_end.isoformat() if self.period_end else None,
         }
 
@@ -195,7 +196,9 @@ class AnomalyCallback:
 
         return True
 
-    def invoke(self, anomaly: Anomaly, context: Optional[Dict[str, Any]] = None) -> None:
+    def invoke(
+        self, anomaly: Anomaly, context: Optional[Dict[str, Any]] = None
+    ) -> None:
         """
         Invoke the callback with the anomaly.
 
@@ -211,11 +214,15 @@ class AnomalyCallback:
 
         metadata = {
             "triggered_at": datetime.now(timezone.utc).isoformat(),
-            "anomaly_data": anomaly.to_dict() if self.include_context else {
-                "metric_type": anomaly.metric_type.name,
-                "anomaly_type": anomaly.anomaly_type,
-                "severity": anomaly.severity,
-            },
+            "anomaly_data": (
+                anomaly.to_dict()
+                if self.include_context
+                else {
+                    "metric_type": anomaly.metric_type.name,
+                    "anomaly_type": anomaly.anomaly_type,
+                    "severity": anomaly.severity,
+                }
+            ),
         }
         if context:
             metadata["context"] = context
@@ -466,7 +473,9 @@ class MetricsAnalyzer:
         x_mean = statistics.mean(time_deltas)
         y_mean = statistics.mean(values)
 
-        numerator = sum((x - x_mean) * (y - y_mean) for x, y in zip(time_deltas, values))
+        numerator = sum(
+            (x - x_mean) * (y - y_mean) for x, y in zip(time_deltas, values)
+        )
         denominator = sum((x - x_mean) ** 2 for x in time_deltas)
 
         if denominator == 0:
@@ -486,7 +495,9 @@ class MetricsAnalyzer:
 
         if volatility > abs(slope):
             direction = TrendDirection.VOLATILE
-            confidence = min(1.0, volatility / (abs(slope) + volatility)) if slope != 0 else 0.5
+            confidence = (
+                min(1.0, volatility / (abs(slope) + volatility)) if slope != 0 else 0.5
+            )
         elif relative_slope > 0.05:
             direction = TrendDirection.INCREASING
             confidence = min(1.0, abs(relative_slope) * 10)
@@ -498,7 +509,9 @@ class MetricsAnalyzer:
             confidence = 1.0 - min(1.0, abs(relative_slope) * 10)
 
         # Calculate percentage change
-        change_percent = ((values[-1] - values[0]) / values[0] * 100) if values[0] != 0 else 0
+        change_percent = (
+            ((values[-1] - values[0]) / values[0] * 100) if values[0] != 0 else 0
+        )
 
         return TrendAnalysis(
             metric_type=metric_type,
@@ -615,11 +628,14 @@ class MetricsAnalyzer:
                         # Invoke callback if provided
                         if callback:
                             try:
-                                callback.invoke(anomaly, {
-                                    "loop_id": loop_id,
-                                    "detection_method": "z_score",
-                                    "threshold_std": threshold_std,
-                                })
+                                callback.invoke(
+                                    anomaly,
+                                    {
+                                        "loop_id": loop_id,
+                                        "detection_method": "z_score",
+                                        "threshold_std": threshold_std,
+                                    },
+                                )
                             except Exception as e:
                                 logger.error(
                                     f"Anomaly callback failed: {e}",
@@ -656,7 +672,8 @@ class MetricsAnalyzer:
                                     )
                                     # Avoid duplicates
                                     if not any(
-                                        a.timestamp == ts and a.metric_type == metric_type
+                                        a.timestamp == ts
+                                        and a.metric_type == metric_type
                                         for a in anomalies
                                     ):
                                         anomalies.append(anomaly)
@@ -664,11 +681,14 @@ class MetricsAnalyzer:
                                         # Invoke callback if provided
                                         if callback:
                                             try:
-                                                callback.invoke(anomaly, {
-                                                    "loop_id": loop_id,
-                                                    "detection_method": "pattern_break",
-                                                    "threshold_std": threshold_std,
-                                                })
+                                                callback.invoke(
+                                                    anomaly,
+                                                    {
+                                                        "loop_id": loop_id,
+                                                        "detection_method": "pattern_break",
+                                                        "threshold_std": threshold_std,
+                                                    },
+                                                )
                                             except Exception as e:
                                                 logger.error(
                                                     f"Anomaly callback failed: {e}",
@@ -716,7 +736,7 @@ class MetricsAnalyzer:
             metric_types = list(MetricType)
 
             for i, metric_a in enumerate(metric_types):
-                for metric_b in metric_types[i + 1:]:
+                for metric_b in metric_types[i + 1 :]:
                     corr = self._compute_correlation(
                         metric_a, metric_b, loop_id, min_samples
                     )
@@ -773,7 +793,7 @@ class MetricsAnalyzer:
         if abs(r) >= 1:
             p_value = 0.0
         else:
-            t_stat = r * math.sqrt((n - 2) / (1 - r ** 2))
+            t_stat = r * math.sqrt((n - 2) / (1 - r**2))
             # Approximate p-value (two-tailed) for large n
             p_value = 2 * (1 - self._normal_cdf(abs(t_stat)))
 
@@ -878,8 +898,12 @@ class MetricsAnalyzer:
                 "summary": self._generate_summary(trends, anomalies, correlations),
                 "trends": {k.name: v.to_dict() for k, v in trends.items()},
                 "anomalies": [a.to_dict() for a in anomalies],
-                "correlations": [c.to_dict() for c in correlations if c.is_significant()],
-                "recommendations": self._generate_recommendations(trends, anomalies, correlations),
+                "correlations": [
+                    c.to_dict() for c in correlations if c.is_significant()
+                ],
+                "recommendations": self._generate_recommendations(
+                    trends, anomalies, correlations
+                ),
                 "risk_assessment": self._assess_risk(trends, anomalies),
             }
 
@@ -899,7 +923,9 @@ class MetricsAnalyzer:
         total_trends = len(trends)
 
         if total_trends > 0:
-            parts.append(f"Analyzed {total_trends} metrics: {positive_trends} showing improvement.")
+            parts.append(
+                f"Analyzed {total_trends} metrics: {positive_trends} showing improvement."
+            )
 
         # Anomaly summary
         if anomalies:
@@ -916,8 +942,7 @@ class MetricsAnalyzer:
             strong_corrs = [c for c in significant_corrs if c.strength == "strong"]
             if strong_corrs:
                 parts.append(
-                    f"Found {len(strong_corrs)} strong correlations "
-                    "between metrics."
+                    f"Found {len(strong_corrs)} strong correlations " "between metrics."
                 )
 
         return " ".join(parts) if parts else "Insufficient data for analysis."
@@ -940,7 +965,9 @@ class MetricsAnalyzer:
                 )
 
         # Based on anomalies
-        critical_anomalies = [a for a in anomalies if a.severity in ("critical", "high")]
+        critical_anomalies = [
+            a for a in anomalies if a.severity in ("critical", "high")
+        ]
         for anomaly in critical_anomalies[:3]:  # Top 3
             recommendations.append(
                 f"Investigate {anomaly.anomaly_type} in {anomaly.metric_type.name}: "
@@ -970,28 +997,34 @@ class MetricsAnalyzer:
         # Risk from negative trends
         for metric_type, trend in trends.items():
             if not trend.is_positive() and trend.confidence > 0.7:
-                risk_factors.append({
-                    "type": "negative_trend",
-                    "metric": metric_type.name,
-                    "severity": "medium",
-                })
+                risk_factors.append(
+                    {
+                        "type": "negative_trend",
+                        "metric": metric_type.name,
+                        "severity": "medium",
+                    }
+                )
                 risk_score += 1
 
         # Risk from anomalies
         for anomaly in anomalies:
             if anomaly.severity == "critical":
-                risk_factors.append({
-                    "type": "anomaly",
-                    "metric": anomaly.metric_type.name,
-                    "severity": "critical",
-                })
+                risk_factors.append(
+                    {
+                        "type": "anomaly",
+                        "metric": anomaly.metric_type.name,
+                        "severity": "critical",
+                    }
+                )
                 risk_score += 3
             elif anomaly.severity == "high":
-                risk_factors.append({
-                    "type": "anomaly",
-                    "metric": anomaly.metric_type.name,
-                    "severity": "high",
-                })
+                risk_factors.append(
+                    {
+                        "type": "anomaly",
+                        "metric": anomaly.metric_type.name,
+                        "severity": "high",
+                    }
+                )
                 risk_score += 2
 
         # Determine overall risk level

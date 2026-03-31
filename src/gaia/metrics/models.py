@@ -23,11 +23,11 @@ Example:
     0.85
 """
 
+import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import Dict, List, Any, Optional, Tuple
-import statistics
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class MetricType(Enum):
@@ -40,6 +40,8 @@ class MetricType(Enum):
     Efficiency Metrics:
         - TOKEN_EFFICIENCY: Tokens used per feature delivered
         - CONTEXT_UTILIZATION: Percentage of context window used effectively
+        - TPS: Tokens per second (LLM generation speed)
+        - TTFT: Time to first token (latency from request to first token)
 
     Quality Metrics:
         - QUALITY_VELOCITY: Iterations to reach quality threshold
@@ -49,11 +51,18 @@ class MetricType(Enum):
         - MTTR: Mean time to remediate defects (in hours)
         - AUDIT_COMPLETENESS: Percentage of actions logged
 
+    Performance Metrics:
+        - PHASE_DURATION: Time spent in a pipeline phase
+        - LOOP_ITERATION_COUNT: Number of iterations per loop
+        - HOOK_EXECUTION_TIME: Duration per hook execution
+
     Example:
         >>> MetricType.TOKEN_EFFICIENCY.category()
         'efficiency'
         >>> MetricType.QUALITY_VELOCITY.category()
         'quality'
+        >>> MetricType.TPS.category()
+        'performance'
     """
 
     # Efficiency Metrics
@@ -68,16 +77,28 @@ class MetricType(Enum):
     MTTR = auto()
     AUDIT_COMPLETENESS = auto()
 
+    # Performance Metrics (Phase 2 additions)
+    TPS = auto()  # Tokens per second
+    TTFT = auto()  # Time to first token (seconds)
+    PHASE_DURATION = auto()  # Time spent in pipeline phase (seconds)
+    LOOP_ITERATION_COUNT = auto()  # Number of iterations per loop
+    HOOK_EXECUTION_TIME = auto()  # Hook execution duration (seconds)
+    STATE_TRANSITION = auto()  # State transition timestamp
+    AGENT_SELECTION = auto()  # Agent selection decision tracking
+    RESOURCE_UTILIZATION = auto()  # CPU/memory utilization (percentage)
+
     def category(self) -> str:
         """
         Get the category of this metric type.
 
         Returns:
-            Category string: 'efficiency', 'quality', or 'reliability'
+            Category string: 'efficiency', 'quality', 'reliability', or 'performance'
 
         Example:
             >>> MetricType.DEFECT_DENSITY.category()
             'quality'
+            >>> MetricType.TPS.category()
+            'performance'
         """
         name = self.name
         if name in {"TOKEN_EFFICIENCY", "CONTEXT_UTILIZATION"}:
@@ -86,6 +107,17 @@ class MetricType(Enum):
             return "quality"
         elif name in {"MTTR", "AUDIT_COMPLETENESS"}:
             return "reliability"
+        elif name in {
+            "TPS",
+            "TTFT",
+            "PHASE_DURATION",
+            "LOOP_ITERATION_COUNT",
+            "HOOK_EXECUTION_TIME",
+            "STATE_TRANSITION",
+            "AGENT_SELECTION",
+            "RESOURCE_UTILIZATION",
+        }:
+            return "performance"
         return "unknown"
 
     def unit(self) -> str:
@@ -100,6 +132,8 @@ class MetricType(Enum):
             'hours'
             >>> MetricType.AUDIT_COMPLETENESS.unit()
             'percentage'
+            >>> MetricType.TPS.unit()
+            'tokens/second'
         """
         units = {
             "TOKEN_EFFICIENCY": "tokens/feature",
@@ -108,6 +142,15 @@ class MetricType(Enum):
             "DEFECT_DENSITY": "defects/KLOC",
             "MTTR": "hours",
             "AUDIT_COMPLETENESS": "percentage",
+            # Phase 2 additions
+            "TPS": "tokens/second",
+            "TTFT": "seconds",
+            "PHASE_DURATION": "seconds",
+            "LOOP_ITERATION_COUNT": "iterations",
+            "HOOK_EXECUTION_TIME": "seconds",
+            "STATE_TRANSITION": "timestamp",
+            "AGENT_SELECTION": "decision",
+            "RESOURCE_UTILIZATION": "percentage",
         }
         return units.get(self.name, "unknown")
 
@@ -123,9 +166,19 @@ class MetricType(Enum):
             True
             >>> MetricType.DEFECT_DENSITY.is_higher_better()
             False
+            >>> MetricType.TPS.is_higher_better()
+            True
+            >>> MetricType.TTFT.is_higher_better()
+            False
         """
-        # Higher is better for efficiency and audit completeness
-        return self.name in {"TOKEN_EFFICIENCY", "CONTEXT_UTILIZATION", "AUDIT_COMPLETENESS"}
+        # Higher is better for efficiency, audit completeness, and throughput (TPS)
+        return self.name in {
+            "TOKEN_EFFICIENCY",
+            "CONTEXT_UTILIZATION",
+            "AUDIT_COMPLETENESS",
+            "TPS",
+            "RESOURCE_UTILIZATION",
+        }
 
 
 @dataclass(frozen=True)
@@ -300,10 +353,7 @@ class MetricSnapshot:
             ... }
             >>> snapshot = MetricSnapshot.from_dict(data)
         """
-        metrics = {
-            MetricType[k]: v
-            for k, v in data.get("metrics", {}).items()
-        }
+        metrics = {MetricType[k]: v for k, v in data.get("metrics", {}).items()}
         return cls(
             timestamp=datetime.fromisoformat(data["timestamp"]),
             loop_id=data["loop_id"],
@@ -333,7 +383,11 @@ class MetricSnapshot:
         failures = []
 
         for metric_type, value in self.metrics.items():
-            if metric_type in {MetricType.CONTEXT_UTILIZATION, MetricType.AUDIT_COMPLETENESS}:
+            if metric_type in {
+                MetricType.CONTEXT_UTILIZATION,
+                MetricType.AUDIT_COMPLETENESS,
+                MetricType.RESOURCE_UTILIZATION,
+            }:
                 # Percentage metrics - higher is better, check against threshold
                 if value < threshold:
                     failures.append(metric_type.name)
@@ -353,6 +407,27 @@ class MetricSnapshot:
                 # Mean time to resolve - lower is better (assume <4 hours is acceptable)
                 if value > 4:
                     failures.append(metric_type.name)
+            # Phase 2 performance metrics
+            elif metric_type == MetricType.TPS:
+                # Tokens per second - higher is better (assume <10 is too slow)
+                if value < 10:
+                    failures.append(metric_type.name)
+            elif metric_type == MetricType.TTFT:
+                # Time to first token - lower is better (assume >5 seconds is too slow)
+                if value > 5:
+                    failures.append(metric_type.name)
+            elif metric_type == MetricType.PHASE_DURATION:
+                # Phase duration - lower is better (assume >300 seconds is too long)
+                if value > 300:
+                    failures.append(metric_type.name)
+            elif metric_type == MetricType.LOOP_ITERATION_COUNT:
+                # Loop iterations - lower is better (assume >10 is too many)
+                if value > 10:
+                    failures.append(metric_type.name)
+            elif metric_type == MetricType.HOOK_EXECUTION_TIME:
+                # Hook execution time - lower is better (assume >1 second is too slow)
+                if value > 1:
+                    failures.append(metric_type.name)
 
         return len(failures) == 0, failures
 
@@ -370,14 +445,35 @@ class MetricSnapshot:
               Context Utilization: 72.0%
               ...
         """
-        lines = [f"Metrics for {self.loop_id} ({self.phase}) @ {self.timestamp.isoformat()}"]
+        lines = [
+            f"Metrics for {self.loop_id} ({self.phase}) @ {self.timestamp.isoformat()}"
+        ]
 
         for metric_type, value in sorted(self.metrics.items(), key=lambda x: x[0].name):
             unit = metric_type.unit()
             if "percentage" in unit:
                 formatted_value = f"{value * 100:.1f}%"
-            elif metric_type == MetricType.QUALITY_VELOCITY:
+            elif metric_type in {
+                MetricType.QUALITY_VELOCITY,
+                MetricType.LOOP_ITERATION_COUNT,
+            }:
                 formatted_value = f"{int(value)} iterations"
+            elif metric_type == MetricType.TPS:
+                formatted_value = f"{value:.1f} {unit}"
+            elif metric_type in {
+                MetricType.TTFT,
+                MetricType.PHASE_DURATION,
+                MetricType.HOOK_EXECUTION_TIME,
+            }:
+                formatted_value = f"{value:.3f} {unit}"
+            elif metric_type == MetricType.STATE_TRANSITION:
+                formatted_value = (
+                    f"{datetime.fromtimestamp(value).isoformat()}"
+                    if isinstance(value, (int, float))
+                    else str(value)
+                )
+            elif metric_type == MetricType.AGENT_SELECTION:
+                formatted_value = str(value)
             else:
                 formatted_value = f"{value:.2f} {unit}"
 
@@ -453,7 +549,9 @@ class MetricStatistics:
         }
 
     @classmethod
-    def from_values(cls, metric_type: MetricType, values: List[float]) -> "MetricStatistics":
+    def from_values(
+        cls, metric_type: MetricType, values: List[float]
+    ) -> "MetricStatistics":
         """
         Create statistics from raw values.
 
@@ -603,7 +701,9 @@ class MetricsReport:
             "loop_id": self.loop_id,
             "phase": self.phase,
             "snapshot_count": self.snapshot_count,
-            "metric_statistics": {k.name: v.to_dict() for k, v in self.metric_statistics.items()},
+            "metric_statistics": {
+                k.name: v.to_dict() for k, v in self.metric_statistics.items()
+            },
             "overall_health": self.overall_health,
             "recommendations": self.recommendations,
         }
@@ -653,7 +753,9 @@ class MetricsReport:
             "Metric Statistics:",
         ]
 
-        for metric_type, stats in sorted(self.metric_statistics.items(), key=lambda x: x[0].name):
+        for metric_type, stats in sorted(
+            self.metric_statistics.items(), key=lambda x: x[0].name
+        ):
             lines.append(f"  {metric_type.name}:")
             lines.append(f"    Mean: {stats.mean:.3f}, Median: {stats.median:.3f}")
             lines.append(f"    Range: [{stats.min_value:.3f}, {stats.max_value:.3f}]")

@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import Dict, List, Any, Optional, Callable, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 class AgentState(Enum):

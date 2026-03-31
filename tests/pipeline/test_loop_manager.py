@@ -9,17 +9,18 @@ Tests cover:
 - Cancellation
 """
 
-import pytest
 import asyncio
 import time
 
+import pytest
+
+from gaia.exceptions import LoopCreationError, LoopNotFoundError
 from gaia.pipeline.loop_manager import (
-    LoopManager,
     LoopConfig,
+    LoopManager,
     LoopState,
     LoopStatus,
 )
-from gaia.exceptions import LoopNotFoundError, LoopCreationError
 
 
 class TestLoopStatus:

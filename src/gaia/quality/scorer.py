@@ -6,26 +6,28 @@ Evaluates artifacts across 27 validation categories organized into 6 dimensions.
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Optional
 
+from gaia.exceptions import (
+    InvalidQualityThresholdError,
+    QualityScoringError,
+    ValidatorNotFoundError,
+)
 from gaia.quality.models import (
     CategoryScore,
+    CertificationStatus,
     DimensionScore,
     QualityReport,
-    CertificationStatus,
     QualityWeightConfig,
 )
 from gaia.quality.templates import QualityTemplate, get_template
-from gaia.quality.weight_config import QualityWeightConfigManager, get_profile as get_weight_profile
-from gaia.exceptions import (
-    QualityScoringError,
-    InvalidQualityThresholdError,
-    ValidatorNotFoundError,
+from gaia.quality.weight_config import (
+    QualityWeightConfigManager,
 )
+from gaia.quality.weight_config import get_profile as get_weight_profile
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -295,7 +297,11 @@ class QualityScorer:
         "additional": "Additional Categories",
     }
 
-    def __init__(self, validators: Optional[Dict[str, BaseValidator]] = None, max_workers: int = 4):
+    def __init__(
+        self,
+        validators: Optional[Dict[str, BaseValidator]] = None,
+        max_workers: int = 4,
+    ):
         """
         Initialize the quality scorer.
 
@@ -308,7 +314,9 @@ class QualityScorer:
         self._max_workers = max_workers
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._register_default_validators()
-        logger.info(f"QualityScorer initialized with {len(self._validators)} validators and {max_workers} workers")
+        logger.info(
+            f"QualityScorer initialized with {len(self._validators)} validators and {max_workers} workers"
+        )
 
     def _register_default_validators(self) -> None:
         """
@@ -410,7 +418,9 @@ class QualityScorer:
                 weight_config = get_weight_profile(context["weight_profile"])
                 logger.info(f"Using weight profile: {context['weight_profile']}")
             except KeyError:
-                logger.warning(f"Unknown weight profile: {context['weight_profile']}, using defaults")
+                logger.warning(
+                    f"Unknown weight profile: {context['weight_profile']}, using defaults"
+                )
 
         category_scores: List[CategoryScore] = []
         dimension_data: Dict[str, Dict[str, Any]] = {}
@@ -456,11 +466,14 @@ class QualityScorer:
                 dim_weight = weight_config.get_weight(dimension)
                 if dim_weight > 0:
                     dim_categories = [
-                        cid for cid, cdef in self.CATEGORIES.items()
+                        cid
+                        for cid, cdef in self.CATEGORIES.items()
                         if cdef["dimension"] == dimension
                     ]
                     base_weight = dim_weight / len(dim_categories)
-                base_weight = weight_config.get_category_weight(dimension, category_id, base_weight)
+                base_weight = weight_config.get_category_weight(
+                    dimension, category_id, base_weight
+                )
 
             if isinstance(result, Exception):
                 logger.error(
@@ -690,9 +703,7 @@ class QualityScorer:
         """
         return self.CATEGORIES.get(category_id)
 
-    def get_categories_by_dimension(
-        self, dimension: str
-    ) -> List[Dict[str, Any]]:
+    def get_categories_by_dimension(self, dimension: str) -> List[Dict[str, Any]]:
         """
         Get all categories in a dimension.
 
@@ -724,9 +735,7 @@ class QualityScorer:
             if cdef["dimension"] == dimension
         )
 
-    def register_validator(
-        self, category_id: str, validator: BaseValidator
-    ) -> None:
+    def register_validator(self, category_id: str, validator: BaseValidator) -> None:
         """
         Register a custom validator for a category.
 
@@ -762,6 +771,6 @@ class QualityScorer:
         Args:
             wait: Whether to wait for pending tasks to complete
         """
-        if hasattr(self, '_executor') and self._executor:
+        if hasattr(self, "_executor") and self._executor:
             self._executor.shutdown(wait=wait)
             logger.info("QualityScorer executor shutdown complete")

@@ -1,11 +1,20 @@
 """Tests for specialist agent routing via get_specialist_agent and get_specialist_agents."""
+
 import pytest
+
+from gaia.agents.base import (
+    AgentCapabilities,
+    AgentConstraints,
+    AgentDefinition,
+    AgentTriggers,
+)
 from gaia.agents.registry import AgentRegistry
-from gaia.agents.base import AgentDefinition, AgentTriggers, AgentCapabilities, AgentConstraints
-from gaia.pipeline.defect_types import DefectType, DEFECT_SPECIALISTS
+from gaia.pipeline.defect_types import DEFECT_SPECIALISTS, DefectType
 
 
-def _make_agent(agent_id: str, enabled: bool = True, capabilities: list = None) -> AgentDefinition:
+def _make_agent(
+    agent_id: str, enabled: bool = True, capabilities: list = None
+) -> AgentDefinition:
     """Create a minimal AgentDefinition for testing."""
     return AgentDefinition(
         id=agent_id,
@@ -62,38 +71,44 @@ def populated_registry() -> AgentRegistry:
 class TestGetSpecialistAgent:
     """Tests for AgentRegistry.get_specialist_agent()."""
 
-    def test_security_defect_routes_to_security_auditor(self, populated_registry: AgentRegistry):
+    def test_security_defect_routes_to_security_auditor(
+        self, populated_registry: AgentRegistry
+    ):
         """SECURITY defect type should return the first enabled candidate from DEFECT_SPECIALISTS."""
         result = populated_registry.get_specialist_agent("SECURITY")
         # The result must be one of the DEFECT_SPECIALISTS candidates for SECURITY
         candidates = DEFECT_SPECIALISTS.get(DefectType.SECURITY, [])
-        assert result in candidates, (
-            f"Expected result '{result}' to be in DEFECT_SPECIALISTS[SECURITY]={candidates}"
-        )
+        assert (
+            result in candidates
+        ), f"Expected result '{result}' to be in DEFECT_SPECIALISTS[SECURITY]={candidates}"
         # The returned agent must be enabled
         agent = populated_registry.get_agent(result)
         assert agent is not None
         assert agent.enabled is True
 
-    def test_performance_defect_routes_to_performance_analyst(self, populated_registry: AgentRegistry):
+    def test_performance_defect_routes_to_performance_analyst(
+        self, populated_registry: AgentRegistry
+    ):
         """PERFORMANCE defect type should return the first enabled candidate."""
         result = populated_registry.get_specialist_agent("PERFORMANCE")
         candidates = DEFECT_SPECIALISTS.get(DefectType.PERFORMANCE, [])
-        assert result in candidates, (
-            f"Expected result '{result}' to be in DEFECT_SPECIALISTS[PERFORMANCE]={candidates}"
-        )
+        assert (
+            result in candidates
+        ), f"Expected result '{result}' to be in DEFECT_SPECIALISTS[PERFORMANCE]={candidates}"
         agent = populated_registry.get_agent(result)
         assert agent is not None
         assert agent.enabled is True
 
-    def test_unknown_defect_type_falls_back_to_senior_developer(self, populated_registry: AgentRegistry):
+    def test_unknown_defect_type_falls_back_to_senior_developer(
+        self, populated_registry: AgentRegistry
+    ):
         """An unrecognised defect type key should fall back to the specified fallback agent."""
         result = populated_registry.get_specialist_agent(
             "NONEXISTENT_XYZ", fallback="senior-developer"
         )
-        assert result == "senior-developer", (
-            f"Expected fallback 'senior-developer', got '{result}'"
-        )
+        assert (
+            result == "senior-developer"
+        ), f"Expected fallback 'senior-developer', got '{result}'"
 
     def test_custom_fallback_agent(self, populated_registry: AgentRegistry):
         """
@@ -121,7 +136,9 @@ class TestGetSpecialistAgent:
         # candidates list, so the fallback branch is reached and it is returned.
         assert result == "quality-reviewer"
 
-    def test_disabled_specialist_skipped_to_fallback(self, populated_registry: AgentRegistry):
+    def test_disabled_specialist_skipped_to_fallback(
+        self, populated_registry: AgentRegistry
+    ):
         """
         When the primary SECURITY specialist is disabled the method must skip it.
 
@@ -146,9 +163,9 @@ class TestGetSpecialistAgent:
             # With all SECURITY candidates disabled, we expect the fallback or any enabled agent
             # quality-reviewer is registered and enabled
             enabled_agents = populated_registry.get_enabled_agents()
-            assert result in enabled_agents or result == "quality-reviewer", (
-                f"Expected an enabled agent, got '{result}'"
-            )
+            assert (
+                result in enabled_agents or result == "quality-reviewer"
+            ), f"Expected an enabled agent, got '{result}'"
         finally:
             # Restore
             for cid, was_enabled in originally_enabled.items():
@@ -182,7 +199,9 @@ class TestGetSpecialistAgent:
 class TestGetSpecialistAgents:
     """Tests for AgentRegistry.get_specialist_agents() batch routing."""
 
-    def test_multiple_defect_types_all_resolved(self, populated_registry: AgentRegistry):
+    def test_multiple_defect_types_all_resolved(
+        self, populated_registry: AgentRegistry
+    ):
         """Passing multiple known defect types returns a dict with one entry per type."""
         result = populated_registry.get_specialist_agents(["SECURITY", "PERFORMANCE"])
         assert isinstance(result, dict)
@@ -195,7 +214,9 @@ class TestGetSpecialistAgents:
         result = populated_registry.get_specialist_agents([])
         assert result == {}
 
-    def test_duplicate_types_deduplicated_in_result(self, populated_registry: AgentRegistry):
+    def test_duplicate_types_deduplicated_in_result(
+        self, populated_registry: AgentRegistry
+    ):
         """
         get_specialist_agents iterates the list as given; if the caller passes
         duplicates the dict will naturally collapse them to one key.
@@ -206,7 +227,9 @@ class TestGetSpecialistAgents:
         assert len(result) == 1
         assert "SECURITY" in result
 
-    def test_returns_dict_keyed_by_input_strings(self, populated_registry: AgentRegistry):
+    def test_returns_dict_keyed_by_input_strings(
+        self, populated_registry: AgentRegistry
+    ):
         """The returned dict keys must be the exact strings passed in the input list."""
         input_types = ["SECURITY", "PERFORMANCE"]
         result = populated_registry.get_specialist_agents(input_types)
@@ -217,4 +240,6 @@ class TestGetSpecialistAgents:
         result = populated_registry.get_specialist_agents(["NONEXISTENT_XYZ"])
         assert "NONEXISTENT_XYZ" in result
         # Value is None or a string (last-resort enabled agent)
-        assert result["NONEXISTENT_XYZ"] is None or isinstance(result["NONEXISTENT_XYZ"], str)
+        assert result["NONEXISTENT_XYZ"] is None or isinstance(
+            result["NONEXISTENT_XYZ"], str
+        )

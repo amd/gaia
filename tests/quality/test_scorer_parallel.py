@@ -10,15 +10,16 @@ Work Package B / WPB-3 — covers:
   - evaluate() uses executor (submission path)
   - weight_config parameter and metadata recording
 """
+
 import asyncio
-import pytest
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from gaia.quality.scorer import QualityScorer
+import pytest
+
 from gaia.quality.models import CategoryScore
+from gaia.quality.scorer import QualityScorer
 from gaia.quality.weight_config import get_profile as get_weight_profile
-
 
 # ---------------------------------------------------------------------------
 # Module-level fixtures
@@ -61,9 +62,9 @@ class TestExecutorWiring:
 
     def test_scorer_creates_executor_on_init(self, scorer: QualityScorer):
         """_executor must be a ThreadPoolExecutor immediately after construction."""
-        assert isinstance(scorer._executor, ThreadPoolExecutor), (
-            "QualityScorer._executor must be a ThreadPoolExecutor instance after __init__"
-        )
+        assert isinstance(
+            scorer._executor, ThreadPoolExecutor
+        ), "QualityScorer._executor must be a ThreadPoolExecutor instance after __init__"
 
     def test_scorer_accepts_max_workers_param(self):
         """max_workers=2 must be reflected in the executor's internal worker count."""
@@ -200,7 +201,9 @@ class TestWeightConfigIntegration:
         Post-WPA-2: metadata["weight_profile"] must equal the config name.
         """
         try:
-            report = await scorer.evaluate(minimal_artifact, {}, weight_config=balanced_profile)
+            report = await scorer.evaluate(
+                minimal_artifact, {}, weight_config=balanced_profile
+            )
             assert report is not None
             assert report.overall_score >= 0
             weight_profile = report.metadata.get("weight_profile")
@@ -230,7 +233,9 @@ class TestWeightConfigIntegration:
             if weight_profile is not None:
                 assert weight_profile == "security_heavy"
         except TypeError:
-            pytest.skip("evaluate() does not accept weight_config yet (WPA-2 not complete)")
+            pytest.skip(
+                "evaluate() does not accept weight_config yet (WPA-2 not complete)"
+            )
 
     async def test_unknown_weight_profile_logs_warning_uses_defaults(
         self, scorer: QualityScorer, minimal_artifact: str
@@ -246,7 +251,11 @@ class TestWeightConfigIntegration:
         assert 0 <= report.overall_score <= 100
 
     async def test_weight_config_takes_priority_over_context_profile(
-        self, scorer: QualityScorer, minimal_artifact: str, balanced_profile, security_heavy_profile
+        self,
+        scorer: QualityScorer,
+        minimal_artifact: str,
+        balanced_profile,
+        security_heavy_profile,
     ):
         """
         Two consecutive evaluate() calls with different weight_config values must
@@ -278,4 +287,6 @@ class TestWeightConfigIntegration:
                 # scores will be equal. We assert profiles are recorded, not scores.
                 assert profile_b != profile_s
         except TypeError:
-            pytest.skip("evaluate() does not accept weight_config yet (WPA-2 not complete)")
+            pytest.skip(
+                "evaluate() does not accept weight_config yet (WPA-2 not complete)"
+            )

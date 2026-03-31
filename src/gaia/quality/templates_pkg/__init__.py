@@ -5,8 +5,8 @@ Pipeline template configurations (separate from quality templates).
 """
 
 from gaia.quality.templates.pipeline_templates import (
-    PipelineTemplate,
     PIPELINE_TEMPLATES,
+    PipelineTemplate,
     get_pipeline_template,
 )
 

@@ -5,16 +5,19 @@ Registry for hook management and executor for hook execution.
 """
 
 import asyncio
-from datetime import datetime
-from typing import Dict, List, Any, Optional, Type, Callable
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
-import threading
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Optional, Type
 
-from gaia.hooks.base import BaseHook, HookContext, HookResult, HookPriority
-from gaia.exceptions import HookRegistrationError, HookExecutionError, HookHaltPipelineError
+from gaia.exceptions import (
+    HookExecutionError,
+    HookHaltPipelineError,
+    HookRegistrationError,
+)
+from gaia.hooks.base import BaseHook, HookContext, HookPriority, HookResult
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -97,18 +100,14 @@ class HookRegistry:
             removed = False
 
             # Remove from global hooks
-            self._global_hooks = [
-                h for h in self._global_hooks
-                if h.name != hook_name
-            ]
+            self._global_hooks = [h for h in self._global_hooks if h.name != hook_name]
 
             # Remove from event-specific hooks
             if event:
                 if event in self._hooks:
                     before = len(self._hooks[event])
                     self._hooks[event] = [
-                        h for h in self._hooks[event]
-                        if h.name != hook_name
+                        h for h in self._hooks[event] if h.name != hook_name
                     ]
                     removed = len(self._hooks[event]) < before
             else:
@@ -116,8 +115,7 @@ class HookRegistry:
                 for evt in list(self._hooks.keys()):
                     before = len(self._hooks[evt])
                     self._hooks[evt] = [
-                        h for h in self._hooks[evt]
-                        if h.name != hook_name
+                        h for h in self._hooks[evt] if h.name != hook_name
                     ]
                     if len(self._hooks[evt]) < before:
                         removed = True
@@ -169,7 +167,8 @@ class HookRegistry:
         """Get registry statistics."""
         with self._lock:
             return {
-                "total_hooks": sum(len(h) for h in self._hooks.values()) + len(self._global_hooks),
+                "total_hooks": sum(len(h) for h in self._hooks.values())
+                + len(self._global_hooks),
                 "event_hooks": {evt: len(hooks) for evt, hooks in self._hooks.items()},
                 "global_hooks": len(self._global_hooks),
                 "unique_hook_names": len(self.get_hook_names()),
@@ -186,6 +185,7 @@ class HookRegistry:
 @dataclass
 class HookExecutionRecord:
     """Record of a hook execution."""
+
     hook_name: str
     event: str
     success: bool
@@ -280,13 +280,15 @@ class HookExecutor:
 
         # Log execution summary
         async with self._lock:
-            self._execution_log.append(HookExecutionRecord(
-                hook_name="*",
-                event=event,
-                success=combined_result.success,
-                duration_ms=0,  # Would track in production
-                timestamp=datetime.utcnow(),
-            ))
+            self._execution_log.append(
+                HookExecutionRecord(
+                    hook_name="*",
+                    event=event,
+                    success=combined_result.success,
+                    duration_ms=0,  # Would track in production
+                    timestamp=datetime.now(timezone.utc),
+                )
+            )
 
         return combined_result
 
@@ -305,7 +307,7 @@ class HookExecutor:
         Returns:
             HookResult from execution
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         result = HookResult(success=True)
 
         try:
@@ -333,16 +335,18 @@ class HookExecutor:
             )
 
         # Record execution
-        duration = (datetime.utcnow() - start_time).total_seconds() * 1000
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
         async with self._lock:
-            self._execution_log.append(HookExecutionRecord(
-                hook_name=hook.name,
-                event=context.event,
-                success=result.success,
-                duration_ms=duration,
-                timestamp=datetime.utcnow(),
-                error=result.error_message,
-            ))
+            self._execution_log.append(
+                HookExecutionRecord(
+                    hook_name=hook.name,
+                    event=context.event,
+                    success=result.success,
+                    duration_ms=duration,
+                    timestamp=datetime.now(timezone.utc),
+                    error=result.error_message,
+                )
+            )
 
         return result
 

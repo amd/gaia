@@ -6,12 +6,12 @@ Supports JSON logging for production environments and colored console output
 for development.
 """
 
+import json
 import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
-import json
+from typing import Any, Dict, Optional
 
 
 class LogFormatter(logging.Formatter):
@@ -29,10 +29,10 @@ class LogFormatter(logging.Formatter):
 
     # ANSI color codes for development
     COLORS = {
-        "DEBUG": "\033[36m",     # Cyan
-        "INFO": "\033[32m",      # Green
-        "WARNING": "\033[33m",   # Yellow
-        "ERROR": "\033[31m",     # Red
+        "DEBUG": "\033[36m",  # Cyan
+        "INFO": "\033[32m",  # Green
+        "WARNING": "\033[33m",  # Yellow
+        "ERROR": "\033[31m",  # Red
         "CRITICAL": "\033[35m",  # Magenta
     }
     RESET = "\033[0m"
@@ -134,9 +134,20 @@ class LogFormatter(logging.Formatter):
     def _extract_extra(self, record: logging.LogRecord) -> Optional[str]:
         """Extract extra fields from record."""
         skip_keys = {
-            "pipeline_id", "loop_id", "phase", "agent_id",
-            "msg", "args", "levelname", "levelno", "pathname",
-            "filename", "module", "lineno", "funcName", "created",
+            "pipeline_id",
+            "loop_id",
+            "phase",
+            "agent_id",
+            "msg",
+            "args",
+            "levelname",
+            "levelno",
+            "pathname",
+            "filename",
+            "module",
+            "lineno",
+            "funcName",
+            "created",
         }
 
         extra_items = []

@@ -6,9 +6,9 @@ Base class and context/result types for GAIA hooks.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 
 class HookPriority(Enum):
@@ -19,9 +19,9 @@ class HookPriority(Enum):
     are registered for the same event.
     """
 
-    HIGH = 1      # Execute first (critical hooks)
-    NORMAL = 2    # Execute second (standard hooks)
-    LOW = 3       # Execute last (logging/notification hooks)
+    HIGH = 1  # Execute first (critical hooks)
+    NORMAL = 2  # Execute second (standard hooks)
+    LOW = 3  # Execute last (logging/notification hooks)
 
 
 class HookEvent(Enum):
@@ -94,7 +94,9 @@ class HookContext:
     def __post_init__(self):
         """Set defaults after initialization."""
         if not self.correlation_id:
-            self.correlation_id = f"hook-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
+            self.correlation_id = (
+                f"hook-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -358,7 +360,7 @@ class BaseHook(ABC):
             "suggestion": suggestion,
             "source": "hook",
             "hook_name": self.name,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     def _increment_execution(self) -> None:

@@ -11,8 +11,8 @@ Tests cover:
 import pytest
 
 from gaia.pipeline.decision_engine import (
-    DecisionEngine,
     Decision,
+    DecisionEngine,
     DecisionType,
 )
 
@@ -42,9 +42,7 @@ class TestDecision:
 
     def test_continue_decision(self):
         """Test CONTINUE decision creation."""
-        decision = Decision.continue_decision(
-            reason="Quality threshold met"
-        )
+        decision = Decision.continue_decision(reason="Quality threshold met")
         assert decision.decision_type == DecisionType.CONTINUE
         assert "Quality" in decision.reason
 
@@ -105,13 +103,9 @@ class TestDecisionEngine:
     @pytest.fixture
     def engine(self) -> DecisionEngine:
         """Create test decision engine."""
-        return DecisionEngine(
-            config={"critical_patterns": ["security", "data loss"]}
-        )
+        return DecisionEngine(config={"critical_patterns": ["security", "data loss"]})
 
-    def test_quality_above_threshold_continues(
-        self, engine: DecisionEngine
-    ):
+    def test_quality_above_threshold_continues(self, engine: DecisionEngine):
         """Test decision when quality is above threshold."""
         decision = engine.evaluate(
             phase_name="DEVELOPMENT",
@@ -126,9 +120,7 @@ class TestDecisionEngine:
         assert decision.decision_type == DecisionType.CONTINUE
         assert "threshold" in decision.reason.lower()
 
-    def test_quality_above_threshold_completes_final(
-        self, engine: DecisionEngine
-    ):
+    def test_quality_above_threshold_completes_final(self, engine: DecisionEngine):
         """Test decision when quality is above threshold in final phase."""
         decision = engine.evaluate(
             phase_name="DECISION",
@@ -142,9 +134,7 @@ class TestDecisionEngine:
 
         assert decision.decision_type == DecisionType.COMPLETE
 
-    def test_quality_below_threshold_loops_back(
-        self, engine: DecisionEngine
-    ):
+    def test_quality_below_threshold_loops_back(self, engine: DecisionEngine):
         """Test decision when quality is below threshold."""
         defects = [{"description": "Minor issue"}]
         decision = engine.evaluate(
@@ -161,9 +151,7 @@ class TestDecisionEngine:
         assert decision.target_phase == "PLANNING"
         assert len(decision.defects) == 1
 
-    def test_quality_below_threshold_fails_max_iterations(
-        self, engine: DecisionEngine
-    ):
+    def test_quality_below_threshold_fails_max_iterations(self, engine: DecisionEngine):
         """Test decision when max iterations exceeded."""
         defects = [{"description": "Issue"}]
         decision = engine.evaluate(
@@ -179,9 +167,7 @@ class TestDecisionEngine:
         assert decision.decision_type == DecisionType.FAIL
         assert "max iterations" in decision.reason.lower()
 
-    def test_critical_defect_pauses(
-        self, engine: DecisionEngine
-    ):
+    def test_critical_defect_pauses(self, engine: DecisionEngine):
         """Test decision when critical defect found."""
         defects = [
             {"description": "Security vulnerability detected", "severity": "critical"}
@@ -202,7 +188,10 @@ class TestDecisionEngine:
     def test_critical_pattern_detection(self, engine: DecisionEngine):
         """Test critical pattern detection in defects."""
         defects = [
-            {"description": "Security vulnerability detected in input validation", "severity": "high"}
+            {
+                "description": "Security vulnerability detected in input validation",
+                "severity": "high",
+            }
         ]
         decision = engine.evaluate(
             phase_name="DEVELOPMENT",
@@ -219,9 +208,7 @@ class TestDecisionEngine:
 
     def test_severity_critical_detection(self, engine: DecisionEngine):
         """Test detection based on severity field."""
-        defects = [
-            {"description": "Some issue", "severity": "critical"}
-        ]
+        defects = [{"description": "Some issue", "severity": "critical"}]
         decision = engine.evaluate(
             phase_name="DEVELOPMENT",
             quality_score=0.95,

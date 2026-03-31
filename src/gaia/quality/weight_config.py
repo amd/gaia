@@ -6,13 +6,13 @@ Supports profiles, YAML/JSON loading, and runtime overrides.
 """
 
 import json
-import yaml
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Union
+from typing import Any, Dict, List, Optional, Union
+
+import yaml
 
 from gaia.quality.models import QualityWeightConfig
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -172,9 +172,7 @@ class QualityWeightConfigManager:
         return self._load_from_dict(data, source=str(file_path))
 
     def _load_from_dict(
-        self,
-        data: Dict[str, Any],
-        source: str = "unknown"
+        self, data: Dict[str, Any], source: str = "unknown"
     ) -> QualityWeightConfig:
         """
         Load configuration from dictionary.
@@ -198,7 +196,8 @@ class QualityWeightConfigManager:
         else:
             # Assume flat format with weight values directly
             weights = {
-                k: v for k, v in data.items()
+                k: v
+                for k, v in data.items()
                 if isinstance(v, (int, float)) and k != "category_overrides"
             }
 
@@ -293,16 +292,12 @@ class QualityWeightConfigManager:
         # Calculate remaining weight to distribute
         override_total = sum(overrides.values())
         if override_total > 1.0:
-            raise ValueError(
-                f"Override weights sum to {override_total}, exceeding 1.0"
-            )
+            raise ValueError(f"Override weights sum to {override_total}, exceeding 1.0")
 
         remaining_weight = 1.0 - override_total
 
         # Scale remaining weights proportionally
-        original_remaining = sum(
-            base_config.weights[d] for d in remaining_dims
-        )
+        original_remaining = sum(base_config.weights[d] for d in remaining_dims)
 
         if original_remaining > 0:
             scale_factor = remaining_weight / original_remaining
@@ -323,7 +318,9 @@ class QualityWeightConfigManager:
         config.validate()
         return config
 
-    def validate_weights(self, weights: Dict[str, float], tolerance: float = 0.01) -> bool:
+    def validate_weights(
+        self, weights: Dict[str, float], tolerance: float = 0.01
+    ) -> bool:
         """
         Validate that weights sum to 1.0 within tolerance.
 

@@ -5,7 +5,7 @@ Validators for security practices and other best practices (BP-01 through BP-05)
 """
 
 import re
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from gaia.quality.validators.base import BaseValidator, ValidationResult
 
@@ -43,7 +43,7 @@ class SecurityValidator(BaseValidator):
             (r'api_key\s*=\s*["\'][^"\']+["\']', "Hardcoded API key"),
             (r'secret\s*=\s*["\'][^"\']+["\']', "Hardcoded secret"),
             (r'token\s*=\s*["\'][^"\']+["\']', "Hardcoded token"),
-            (r'AWS_SECRET', "AWS secret in code"),
+            (r"AWS_SECRET", "AWS secret in code"),
         ]
 
         has_hardcoded_secrets = False
@@ -63,13 +63,17 @@ class SecurityValidator(BaseValidator):
         # Check for SQL injection prevention
         sql_keywords = ["SELECT", "INSERT", "UPDATE", "DELETE", "DROP"]
         has_raw_sql = any(
-            kw in code.upper() and "execute(" in code
-            for kw in sql_keywords
+            kw in code.upper() and "execute(" in code for kw in sql_keywords
         )
         has_parameterized = any(
-            kw in code for kw in [
-                "parameterized", "prepared", "placeholder",
-                "?, %s, :", "sqlalchemy", "orm"
+            kw in code
+            for kw in [
+                "parameterized",
+                "prepared",
+                "placeholder",
+                "?, %s, :",
+                "sqlalchemy",
+                "orm",
             ]
         )
         sql_safe = not has_raw_sql or has_parameterized
@@ -87,25 +91,39 @@ class SecurityValidator(BaseValidator):
 
         # Check for input validation
         has_validation = any(
-            kw in code for kw in [
-                "validate", "sanitize", "escape", "html.escape",
-                "isinstance", "assert", "schema", "validator"
+            kw in code
+            for kw in [
+                "validate",
+                "sanitize",
+                "escape",
+                "html.escape",
+                "isinstance",
+                "assert",
+                "schema",
+                "validator",
             ]
         )
         checks.append(has_validation)
 
         # Check for authentication/authorization
         has_auth = any(
-            kw in code for kw in [
-                "authenticate", "authorize", "permission", "login",
-                "auth", "session", "token", "jwt", "oauth"
+            kw in code
+            for kw in [
+                "authenticate",
+                "authorize",
+                "permission",
+                "login",
+                "auth",
+                "session",
+                "token",
+                "jwt",
+                "oauth",
             ]
         )
         # Only check auth if it's a web application
         is_web_app = any(
-            kw in code for kw in [
-                "route", "endpoint", "request", "flask", "django", "fastapi"
-            ]
+            kw in code
+            for kw in ["route", "endpoint", "request", "flask", "django", "fastapi"]
         )
         if is_web_app:
             checks.append(has_auth)
@@ -123,9 +141,14 @@ class SecurityValidator(BaseValidator):
 
         # Check for XSS prevention
         xss_safe = any(
-            kw in code for kw in [
-                "escape", "html.escape", "mark_safe", "sanitize",
-                "XSS", "content_security_policy"
+            kw in code
+            for kw in [
+                "escape",
+                "html.escape",
+                "mark_safe",
+                "sanitize",
+                "XSS",
+                "content_security_policy",
             ]
         )
         has_html_output = "html" in code.lower() or "render" in code.lower()
@@ -179,7 +202,10 @@ class PerformanceValidator(BaseValidator):
 
         # Check for inefficient patterns
         inefficient_patterns = [
-            (r"for\s+\w+\s+in\s+range\(len\(", "Use enumerate() instead of range(len())"),
+            (
+                r"for\s+\w+\s+in\s+range\(len\(",
+                "Use enumerate() instead of range(len())",
+            ),
             (r"\.append\([^)]*\)\s*inside\s*loop", "Consider list comprehension"),
             (r"while\s+True:", "Potential infinite loop"),
         ]
@@ -199,9 +225,15 @@ class PerformanceValidator(BaseValidator):
 
         # Check for caching
         has_caching = any(
-            kw in code for kw in [
-                "cache", "lru_cache", "memoize", "redis", "memcached",
-                "@cache", "@lru_cache"
+            kw in code
+            for kw in [
+                "cache",
+                "lru_cache",
+                "memoize",
+                "redis",
+                "memcached",
+                "@cache",
+                "@lru_cache",
             ]
         )
         checks.append(has_caching)
@@ -209,9 +241,15 @@ class PerformanceValidator(BaseValidator):
         # Check for database optimization
         has_db = any(kw in code for kw in ["SELECT", "query", "database", "db."])
         has_optimization = any(
-            kw in code for kw in [
-                "index", "join", "select_related", "prefetch_related",
-                "LIMIT", "batch", "bulk"
+            kw in code
+            for kw in [
+                "index",
+                "join",
+                "select_related",
+                "prefetch_related",
+                "LIMIT",
+                "batch",
+                "bulk",
             ]
         )
         if has_db:
@@ -286,9 +324,19 @@ class AccessibilityValidator(BaseValidator):
 
         # Check if this is UI code
         is_ui_code = any(
-            kw in code.lower() for kw in [
-                "html", "jsx", "react", "vue", "angular", "component",
-                "<div", "<button", "<input", "<a ", "render"
+            kw in code.lower()
+            for kw in [
+                "html",
+                "jsx",
+                "react",
+                "vue",
+                "angular",
+                "component",
+                "<div",
+                "<button",
+                "<input",
+                "<a ",
+                "render",
             ]
         )
 
@@ -302,7 +350,7 @@ class AccessibilityValidator(BaseValidator):
 
         # Check for alt text on images
         has_images = "<img" in code
-        has_alt = 'alt=' in code
+        has_alt = "alt=" in code
         if has_images:
             checks.append(has_alt)
             if not has_alt:
@@ -399,9 +447,7 @@ class LoggingMonitoringValidator(BaseValidator):
 
         # Check for logging imports
         has_logging = any(
-            kw in code for kw in [
-                "import logging", "from logging", "logger", "log."
-            ]
+            kw in code for kw in ["import logging", "from logging", "logger", "log."]
         )
         checks.append(has_logging)
 
@@ -412,17 +458,18 @@ class LoggingMonitoringValidator(BaseValidator):
         checks.append(has_multiple_levels)
 
         # Check for structured logging
-        has_structured = any(
-            kw in code for kw in [
-                "json", "extra=", "context", "structured", "fields"
-            ]
-        ) and has_logging
+        has_structured = (
+            any(
+                kw in code
+                for kw in ["json", "extra=", "context", "structured", "fields"]
+            )
+            and has_logging
+        )
         checks.append(has_structured)
 
         # Check for error logging in exception handlers
-        has_exception_logging = (
-            "except" in code and
-            any(f".{level}(" in code for level in ["error", "exception", "critical"])
+        has_exception_logging = "except" in code and any(
+            f".{level}(" in code for level in ["error", "exception", "critical"]
         )
         has_try = "try:" in code
         if has_try:
@@ -440,9 +487,17 @@ class LoggingMonitoringValidator(BaseValidator):
 
         # Check for metrics/telemetry
         has_metrics = any(
-            kw in code for kw in [
-                "metrics", "telemetry", "prometheus", "statsd",
-                "counter", "histogram", "gauge", "trace", "span"
+            kw in code
+            for kw in [
+                "metrics",
+                "telemetry",
+                "prometheus",
+                "statsd",
+                "counter",
+                "histogram",
+                "gauge",
+                "trace",
+                "span",
             ]
         )
         checks.append(has_metrics)
@@ -501,36 +556,53 @@ class ConfigurationValidator(BaseValidator):
 
         # Check for environment variable usage
         has_env_vars = any(
-            kw in code for kw in [
-                "os.environ", "os.getenv", "getenv", "env(",
-                "process.env", "environ["
+            kw in code
+            for kw in [
+                "os.environ",
+                "os.getenv",
+                "getenv",
+                "env(",
+                "process.env",
+                "environ[",
             ]
         )
         checks.append(has_env_vars)
 
         # Check for config file usage
         has_config = any(
-            kw in code for kw in [
-                ".yaml", ".yml", ".json", ".toml", ".ini", ".cfg",
-                "config", "settings", "Config"
+            kw in code
+            for kw in [
+                ".yaml",
+                ".yml",
+                ".json",
+                ".toml",
+                ".ini",
+                ".cfg",
+                "config",
+                "settings",
+                "Config",
             ]
         )
         checks.append(has_config)
 
         # Check for default values
         has_defaults = (
-            "default=" in code or
-            "or " in code or
-            "?? " in code or
-            "get(" in code
+            "default=" in code or "or " in code or "?? " in code or "get(" in code
         )
         checks.append(has_defaults)
 
         # Check for configuration validation
         has_validation = any(
-            kw in code for kw in [
-                "validate", "validator", "schema", "pydantic",
-                "marshmallow", "cerberus", "check", "verify"
+            kw in code
+            for kw in [
+                "validate",
+                "validator",
+                "schema",
+                "pydantic",
+                "marshmallow",
+                "cerberus",
+                "check",
+                "verify",
             ]
         )
         checks.append(has_validation)
@@ -540,7 +612,7 @@ class ConfigurationValidator(BaseValidator):
         patterns = [
             (r'[\'"]localhost[\'"]', "Hardcoded localhost"),
             (r'[\'"]127\.0\.0\.1[\'"]', "Hardcoded IP address"),
-            (r'port\s*=\s*\d{4,5}', "Hardcoded port number"),
+            (r"port\s*=\s*\d{4,5}", "Hardcoded port number"),
             (r'[\'"]postgres://[^$]', "Hardcoded database URL"),
         ]
 

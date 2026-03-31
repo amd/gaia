@@ -16,6 +16,8 @@ interface SidebarProps {
     tunnelActive?: boolean;
     tunnelLoading?: boolean;
     onMobileToggle?: () => void;
+    currentView?: 'chat' | 'templates';
+    onViewChange?: (view: 'chat' | 'templates') => void;
 }
 
 /** Copy a session's hash link to the clipboard. */
@@ -98,7 +100,7 @@ function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSele
     );
 }
 
-export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
+export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle, currentView = 'chat', onViewChange }: SidebarProps) {
     const {
         sessions, currentSessionId, setCurrentSession, removeSession, addSession,
         setMessages, theme, toggleTheme, setShowSettings,
@@ -426,6 +428,30 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                     ))
                 )}
             </nav>
+
+            {/* Navigation section */}
+            {!sidebarCollapsed && onViewChange && (
+                <div className="sidebar-nav">
+                    <button
+                        className={`sidebar-nav-item ${currentView === 'chat' ? 'active' : ''}`}
+                        onClick={() => onViewChange('chat')}
+                        title="Chat"
+                        aria-label="Open chat view"
+                    >
+                        <span className="sidebar-nav-icon">💬</span>
+                        <span>Chat</span>
+                    </button>
+                    <button
+                        className={`sidebar-nav-item ${currentView === 'templates' ? 'active' : ''}`}
+                        onClick={() => onViewChange('templates')}
+                        title="Pipeline Templates"
+                        aria-label="Open pipeline templates"
+                    >
+                        <span className="sidebar-nav-icon">📋</span>
+                        <span>Templates</span>
+                    </button>
+                </div>
+            )}
 
             <div className="sidebar-bottom">
                 <div className="privacy-badge">

@@ -8,10 +8,11 @@ Tests cover:
 """
 
 import os
-import pytest
-import yaml
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+
+import pytest
+import yaml
 
 from gaia.pipeline.recursive_template import (
     RecursivePipelineTemplate,
@@ -21,8 +22,8 @@ from gaia.pipeline.template_loader import TemplateLoader
 from gaia.quality.models import QualityWeightConfig
 from gaia.quality.scorer import QualityScorer
 from gaia.quality.weight_config import (
-    get_profile,
     QualityWeightConfigManager,
+    get_profile,
 )
 
 
@@ -191,7 +192,7 @@ templates:
       best_practices: 0.20
 """
         # Close before reading to avoid Windows exclusive-lock on NamedTemporaryFile
-        with NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+        with NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
             f.write(yaml_content)
             tmp_path = f.name
         try:
@@ -225,7 +226,7 @@ templates:
         testing:
           TS-01: 0.12
 """
-        with NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+        with NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
             f.write(yaml_content)
             tmp_path = f.name
         try:
@@ -247,7 +248,7 @@ templates:
     configuration:
       quality_threshold: 0.80
 """
-        with NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+        with NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
             f.write(yaml_content)
             tmp_path = f.name
         try:
@@ -338,10 +339,14 @@ class TestScorerWeightIntegration:
         if doc_dimension is None:
             # Try alternative name
             doc_dimension = report.get_dimension_score("documentation")
-        assert doc_dimension is not None, "Documentation dimension should exist in report"
+        assert (
+            doc_dimension is not None
+        ), "Documentation dimension should exist in report"
 
     @pytest.mark.asyncio
-    async def test_evaluate_without_weight_config_uses_defaults(self, scorer: QualityScorer):
+    async def test_evaluate_without_weight_config_uses_defaults(
+        self, scorer: QualityScorer
+    ):
         """Test that evaluation without weight_config uses defaults."""
         report = await scorer.evaluate(
             artifact="def add(a, b): return a + b",
@@ -387,7 +392,7 @@ class TestEndToEndWeightConfiguration:
         assert template.weight_config.category_overrides["testing"]["TS-04"] == 0.10
 
         # 4. Save config for reuse (close before re-opening to avoid Windows lock)
-        with NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+        with NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
             tmp_path = f.name
         try:
             manager.save_to_yaml(custom_config, tmp_path)

@@ -2,18 +2,19 @@
 Pytest fixtures for GAIA tests.
 """
 
-import pytest
 import asyncio
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
-from gaia.pipeline.state import PipelineContext, PipelineStateMachine, PipelineState
-from gaia.pipeline.loop_manager import LoopManager, LoopConfig
-from gaia.pipeline.decision_engine import DecisionEngine, DecisionType
-from gaia.quality.scorer import QualityScorer
+import pytest
+
 from gaia.agents.registry import AgentRegistry
-from gaia.hooks.registry import HookRegistry, HookExecutor
 from gaia.hooks.base import HookContext
+from gaia.hooks.registry import HookExecutor, HookRegistry
+from gaia.pipeline.decision_engine import DecisionEngine, DecisionType
+from gaia.pipeline.loop_manager import LoopConfig, LoopManager
+from gaia.pipeline.state import PipelineContext, PipelineState, PipelineStateMachine
+from gaia.quality.scorer import QualityScorer
 
 
 @pytest.fixture
@@ -67,9 +68,7 @@ def sample_loop_manager() -> LoopManager:
 def sample_decision_engine() -> DecisionEngine:
     """Create a sample decision engine for testing."""
     return DecisionEngine(
-        config={
-            "critical_patterns": ["security", "data loss", "breaking change"]
-        }
+        config={"critical_patterns": ["security", "data loss", "breaking change"]}
     )
 
 

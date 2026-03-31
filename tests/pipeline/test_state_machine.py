@@ -9,16 +9,17 @@ Tests cover:
 - Thread safety
 """
 
-import pytest
 from datetime import datetime
 
+import pytest
+
+from gaia.exceptions import InvalidStateTransition
 from gaia.pipeline.state import (
-    PipelineState,
     PipelineContext,
     PipelineSnapshot,
+    PipelineState,
     PipelineStateMachine,
 )
-from gaia.exceptions import InvalidStateTransition
 
 
 class TestPipelineState:
@@ -121,6 +122,7 @@ class TestPipelineSnapshot:
         snapshot.started_at = datetime.now(timezone.utc)
         # Small delay to ensure time difference
         import time
+
         time.sleep(0.01)
         elapsed = snapshot.elapsed_time()
         assert elapsed is not None
@@ -186,9 +188,7 @@ class TestPipelineStateMachine:
         """Test FAILED is terminal state."""
         state_machine.transition(PipelineState.READY, "Config validated")
         state_machine.transition(PipelineState.RUNNING, "Start execution")
-        state_machine.transition(
-            PipelineState.FAILED, "Critical error occurred"
-        )
+        state_machine.transition(PipelineState.FAILED, "Critical error occurred")
 
         # No transitions from FAILED
         with pytest.raises(InvalidStateTransition):
@@ -308,9 +308,7 @@ class TestPipelineStateMachine:
         assert info["quality_score"] == 0.90
         assert info["artifacts_count"] == 1
 
-    def test_valid_transition_check(
-        self, state_machine: PipelineStateMachine
-    ):
+    def test_valid_transition_check(self, state_machine: PipelineStateMachine):
         """Test is_valid_transition method."""
         assert state_machine.is_valid_transition(PipelineState.READY)
         assert not state_machine.is_valid_transition(PipelineState.RUNNING)

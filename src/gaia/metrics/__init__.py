@@ -36,36 +36,36 @@ Example:
     >>> report = analyzer.generate_insights(loop_id="loop-001")
 """
 
-from gaia.metrics.models import (
-    MetricType,
-    MetricSnapshot,
-    MetricStatistics,
-    MetricsReport,
-)
-from gaia.metrics.collector import (
-    MetricsCollector,
-    TokenTracking,
-    ContextTracking,
-    QualityIteration,
-)
 from gaia.metrics.analyzer import (
+    Anomaly,
+    AnomalyCallback,
+    AnomalyType,
+    CorrelationResult,
     MetricsAnalyzer,
     TrendAnalysis,
     TrendDirection,
-    Anomaly,
-    AnomalyType,
-    CorrelationResult,
-    AnomalyCallback,
 )
 from gaia.metrics.benchmarks import (
-    PipelineBenchmarker,
-    BenchmarkType,
     BenchmarkResult,
     BenchmarkStatistics,
+    BenchmarkType,
     Bottleneck,
+    PipelineBenchmarker,
     run_benchmarks_and_generate_report,
 )
-from gaia.metrics.production_monitor import ProductionMonitor, ProductionMetrics
+from gaia.metrics.collector import (
+    ContextTracking,
+    MetricsCollector,
+    QualityIteration,
+    TokenTracking,
+)
+from gaia.metrics.models import (
+    MetricSnapshot,
+    MetricsReport,
+    MetricStatistics,
+    MetricType,
+)
+from gaia.metrics.production_monitor import ProductionMetrics, ProductionMonitor
 
 __all__ = [
     # Models

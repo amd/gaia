@@ -6,7 +6,7 @@ Provides standardized defect categorization and keyword-based detection.
 """
 
 from enum import Enum, auto
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 
 class DefectType(Enum):
@@ -322,7 +322,10 @@ DEFECT_SPECIALISTS: Dict[DefectType, List[str]] = {
     DefectType.TESTING: ["test-coverage-analyzer", "quality-reviewer"],
     DefectType.DOCUMENTATION: ["technical-writer", "senior-developer"],
     DefectType.CODE_QUALITY: ["quality-reviewer", "senior-developer"],
-    DefectType.REQUIREMENTS: ["software-program-manager", "planning-analysis-strategist"],
+    DefectType.REQUIREMENTS: [
+        "software-program-manager",
+        "planning-analysis-strategist",
+    ],
     DefectType.ARCHITECTURE: ["solutions-architect", "senior-developer"],
     DefectType.ACCESSIBILITY: ["accessibility-reviewer", "frontend-specialist"],
     DefectType.COMPATIBILITY: ["frontend-specialist", "devops-engineer"],

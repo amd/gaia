@@ -7,6 +7,7 @@ No real LLM or external services are required.
 """
 
 import asyncio
+
 import pytest
 
 
@@ -26,13 +27,13 @@ class TestPipelineImports:
         from gaia.pipeline.state import PipelineState  # noqa: F401
 
     def test_import_audit_logger(self):
-        from gaia.pipeline.audit_logger import AuditLogger, AuditEventType  # noqa: F401
+        from gaia.pipeline.audit_logger import AuditEventType, AuditLogger  # noqa: F401
 
     def test_import_defect_router(self):
         from gaia.pipeline.defect_router import (  # noqa: F401
             DefectRouter,
-            DefectType,
             DefectSeverity,
+            DefectType,
             create_defect,
         )
 
@@ -124,7 +125,7 @@ class TestPipelineStateEnum:
 class TestAuditLoggerDemo:
 
     def test_audit_logger_chain(self):
-        from gaia.pipeline.audit_logger import AuditLogger, AuditEventType
+        from gaia.pipeline.audit_logger import AuditEventType, AuditLogger
 
         audit = AuditLogger(logger_id="smoke-audit")
         audit.log(AuditEventType.PIPELINE_START, pipeline_id="demo-001")
@@ -137,7 +138,7 @@ class TestAuditLoggerDemo:
         assert audit.verify_integrity() is True
 
     def test_audit_export_json(self):
-        from gaia.pipeline.audit_logger import AuditLogger, AuditEventType
+        from gaia.pipeline.audit_logger import AuditEventType, AuditLogger
 
         audit = AuditLogger(logger_id="smoke-audit-json")
         audit.log(AuditEventType.PIPELINE_START, pipeline_id="x")

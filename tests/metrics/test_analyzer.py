@@ -4,18 +4,20 @@ Tests for GAIA Metrics Analyzer
 Tests for MetricsAnalyzer class and related analysis classes.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
-from datetime import datetime, timezone, timedelta
-from gaia.metrics.collector import MetricsCollector
+
 from gaia.metrics.analyzer import (
+    Anomaly,
+    AnomalyCallback,
+    AnomalyType,
+    CorrelationResult,
     MetricsAnalyzer,
     TrendAnalysis,
     TrendDirection,
-    Anomaly,
-    AnomalyType,
-    CorrelationResult,
-    AnomalyCallback,
 )
+from gaia.metrics.collector import MetricsCollector
 from gaia.metrics.models import MetricType
 
 
@@ -376,11 +378,18 @@ class TestMetricsAnalyzer:
         assert len(anomalies) > 0
 
         # Check anomaly properties
-        token_anomalies = [a for a in anomalies if a.metric_type == MetricType.TOKEN_EFFICIENCY]
+        token_anomalies = [
+            a for a in anomalies if a.metric_type == MetricType.TOKEN_EFFICIENCY
+        ]
         if token_anomalies:
             anomaly = token_anomalies[0]
             # Anomaly type can be spike, drop, outlier, or pattern_break
-            assert anomaly.anomaly_type in [AnomalyType.SPIKE, AnomalyType.DROP, AnomalyType.OUTLIER, AnomalyType.PATTERN_BREAK]
+            assert anomaly.anomaly_type in [
+                AnomalyType.SPIKE,
+                AnomalyType.DROP,
+                AnomalyType.OUTLIER,
+                AnomalyType.PATTERN_BREAK,
+            ]
             assert anomaly.severity in ["low", "medium", "high", "critical"]
 
     def test_detect_anomalies_with_loop_filter(self, analyzer):
@@ -585,11 +594,13 @@ class TestAnomalyCallback:
         callback_data = []
 
         def test_handler(anomaly, metadata):
-            callback_data.append({
-                "metric_type": anomaly.metric_type.name,
-                "severity": anomaly.severity,
-                "metadata": metadata,
-            })
+            callback_data.append(
+                {
+                    "metric_type": anomaly.metric_type.name,
+                    "severity": anomaly.severity,
+                    "metadata": metadata,
+                }
+            )
 
         callback = AnomalyCallback(
             callback_fn=test_handler,
@@ -641,10 +652,12 @@ class TestAnomalyCallback:
         callback_triggered = []
 
         def test_handler(anomaly, metadata):
-            callback_triggered.append({
-                "anomaly": anomaly,
-                "metadata": metadata,
-            })
+            callback_triggered.append(
+                {
+                    "anomaly": anomaly,
+                    "metadata": metadata,
+                }
+            )
 
         callback = AnomalyCallback(
             callback_fn=test_handler,

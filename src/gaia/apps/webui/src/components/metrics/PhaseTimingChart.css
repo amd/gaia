@@ -1,0 +1,83 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/** PhaseTimingChart component styles. */
+
+.phase-timing-chart {
+  background: var(--card-bg, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.phase-timing-chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}
+
+.phase-timing-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.phase-timing-header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary, #1e293b);
+  margin: 0;
+}
+
+.phase-timing-subtitle {
+  font-size: 0.75rem;
+  color: var(--text-muted, #94a3b8);
+  background: var(--bg-secondary, #f1f5f9);
+  padding: 4px 10px;
+  border-radius: 12px;
+}
+
+.chart-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary, #64748b);
+}
+
+.empty-icon {
+  font-size: 32px;
+  opacity: 0.5;
+}
+
+.phase-timing-tooltip {
+  background: var(--card-bg, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  min-width: 150px;
+}
+
+.phase-timing-tooltip-name {
+  font-weight: 600;
+  color: var(--text-primary, #1e293b);
+  margin: 0 0 8px 0;
+  font-size: 0.875rem;
+}
+
+.phase-timing-tooltip-item {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #64748b);
+  margin: 4px 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tooltip-label {
+  font-weight: 500;
+  color: var(--text-muted, #94a3b8);
+}

@@ -4,16 +4,18 @@ Tests for GAIA Performance Benchmarks Module
 Tests for PipelineBenchmarker and related benchmark functionality.
 """
 
-import pytest
 import asyncio
 import statistics
 from datetime import datetime, timezone
+
+import pytest
+
 from gaia.metrics.benchmarks import (
-    PipelineBenchmarker,
-    BenchmarkType,
     BenchmarkResult,
     BenchmarkStatistics,
+    BenchmarkType,
     Bottleneck,
+    PipelineBenchmarker,
 )
 
 
@@ -242,7 +244,9 @@ class TestSingleExecutionBenchmark:
 
         # Duration should be similar (allowing for small timing variations)
         # Using 50% tolerance for timing variations in async tests
-        assert abs(result1.duration_ms - result2.duration_ms) / result1.duration_ms < 0.5
+        assert (
+            abs(result1.duration_ms - result2.duration_ms) / result1.duration_ms < 0.5
+        )
 
 
 class TestThroughputBenchmark:
@@ -386,7 +390,10 @@ class TestEnduranceBenchmark:
 
         # Short runs with minimal work shouldn't show memory leaks
         # The detection logic requires > 20% growth AND > 5MB absolute increase
-        assert result.metrics["memory_leak_detected"] is False or result.metrics["memory_growth_percent"] <= 20
+        assert (
+            result.metrics["memory_leak_detected"] is False
+            or result.metrics["memory_growth_percent"] <= 20
+        )
 
 
 class TestRunAllBenchmarks:
@@ -470,7 +477,8 @@ class TestBottleneckIdentification:
         if memory_leak_bn:
             # If bottleneck flagged, endurance result should have detected leak
             endurance_results = [
-                r for r in benchmarker._results
+                r
+                for r in benchmarker._results
                 if r.benchmark_type == BenchmarkType.ENDURANCE
             ]
             assert len(endurance_results) > 0
@@ -530,6 +538,7 @@ class TestExportFunctionality:
         assert export_path.exists()
 
         import json
+
         with open(export_path, "r") as f:
             data = json.load(f)
 
@@ -611,12 +620,18 @@ class TestIntegration:
         memory_result = await benchmarker.run_memory_benchmark(iterations=3)
 
         # Memory should NOT be 0.0MB (the original defect)
-        assert memory_result.memory_peak_mb > 0, "DEF-002: Memory measurement should not be 0.0MB"
-        assert memory_result.memory_current_mb > 0, "DEF-002: Current memory should not be 0.0MB"
+        assert (
+            memory_result.memory_peak_mb > 0
+        ), "DEF-002: Memory measurement should not be 0.0MB"
+        assert (
+            memory_result.memory_current_mb > 0
+        ), "DEF-002: Current memory should not be 0.0MB"
 
         # Also check other benchmarks report memory
         latency_result = await benchmarker.run_single_execution_benchmark(iterations=3)
-        assert latency_result.memory_peak_mb > 0, "DEF-002: Latency benchmark memory should not be 0.0MB"
+        assert (
+            latency_result.memory_peak_mb > 0
+        ), "DEF-002: Latency benchmark memory should not be 0.0MB"
 
     @pytest.mark.asyncio
     async def test_seed_metadata_in_results(self, tmp_path):
@@ -642,7 +657,8 @@ class TestIntegration:
 
         # Check consistency between detection and bottleneck reporting
         endurance_result = [
-            r for r in benchmarker._results
+            r
+            for r in benchmarker._results
             if r.benchmark_type == BenchmarkType.ENDURANCE
         ][0]
 

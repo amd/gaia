@@ -26,20 +26,19 @@ Example:
     True
 """
 
-from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import Dict, List, Optional, Any
-from datetime import datetime, timezone
-import threading
-import hashlib
-import json
 import csv
+import hashlib
 import io
+import json
+import threading
 import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum, auto
+from typing import Any, Dict, List, Optional
 
 from gaia.pipeline.state import PipelineState
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -170,7 +169,7 @@ class AuditEvent:
     def __post_init__(self):
         """Compute hash after initialization."""
         if not self.current_hash:
-            object.__setattr__(self, 'current_hash', self.compute_hash())
+            object.__setattr__(self, "current_hash", self.compute_hash())
 
     def compute_hash(self) -> str:
         """
@@ -200,8 +199,8 @@ class AuditEvent:
             "payload": json.dumps(self.payload, sort_keys=True),
             "metadata": json.dumps(self.metadata, sort_keys=True),
         }
-        canonical = json.dumps(hash_data, sort_keys=True, separators=(',', ':'))
-        return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+        canonical = json.dumps(hash_data, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def verify_hash(self) -> bool:
         """
@@ -414,7 +413,10 @@ class AuditLogger:
 
         logger.info(
             "AuditLogger initialized",
-            extra={"logger_id": self.logger_id, "genesis_hash": self._genesis_hash[:16] + "..."},
+            extra={
+                "logger_id": self.logger_id,
+                "genesis_hash": self._genesis_hash[:16] + "...",
+            },
         )
 
     def log(
@@ -577,10 +579,14 @@ class AuditLogger:
 
             if filters:
                 if "event_type" in filters:
-                    events = [e for e in events if e.event_type == filters["event_type"]]
+                    events = [
+                        e for e in events if e.event_type == filters["event_type"]
+                    ]
 
                 if "event_types" in filters:
-                    events = [e for e in events if e.event_type in filters["event_types"]]
+                    events = [
+                        e for e in events if e.event_type in filters["event_types"]
+                    ]
 
                 if "loop_id" in filters:
                     events = [e for e in events if e.loop_id == filters["loop_id"]]
@@ -598,12 +604,17 @@ class AuditLogger:
                     events = [e for e in events if e.timestamp <= filters["end_time"]]
 
                 if "category" in filters:
-                    events = [e for e in events if e.event_type.category() == filters["category"]]
+                    events = [
+                        e
+                        for e in events
+                        if e.event_type.category() == filters["category"]
+                    ]
 
                 if "payload_contains" in filters:
                     key, value = filters["payload_contains"]
                     events = [
-                        e for e in events
+                        e
+                        for e in events
                         if key in e.payload and e.payload[key] == value
                     ]
 
@@ -655,7 +666,9 @@ class AuditLogger:
             export_data["integrity_verified"] = True
         except IntegrityVerificationError:
             export_data["integrity_verified"] = False
-            export_data["integrity_warning"] = "Chain verification failed - possible tampering"
+            export_data["integrity_warning"] = (
+                "Chain verification failed - possible tampering"
+            )
 
         return json.dumps(export_data, indent=indent)
 
@@ -679,17 +692,19 @@ class AuditLogger:
         writer.writeheader()
 
         for event in self._events:
-            writer.writerow({
-                "sequence_number": event.sequence_number,
-                "event_id": event.event_id,
-                "event_type": event.event_type.name,
-                "timestamp": event.timestamp.isoformat(),
-                "loop_id": event.loop_id or "",
-                "phase": event.phase or "",
-                "agent_id": event.agent_id or "",
-                "payload_summary": json.dumps(event.payload),
-                "current_hash": event.current_hash[:16] + "...",
-            })
+            writer.writerow(
+                {
+                    "sequence_number": event.sequence_number,
+                    "event_id": event.event_id,
+                    "event_type": event.event_type.name,
+                    "timestamp": event.timestamp.isoformat(),
+                    "loop_id": event.loop_id or "",
+                    "phase": event.phase or "",
+                    "agent_id": event.agent_id or "",
+                    "payload_summary": json.dumps(event.payload),
+                    "current_hash": event.current_hash[:16] + "...",
+                }
+            )
 
         return output.getvalue()
 
@@ -742,7 +757,9 @@ class AuditLogger:
         """
         with self._lock:
             event_ids = self._loop_buckets.get(loop_id, [])
-            return [self._event_index[eid] for eid in event_ids if eid in self._event_index]
+            return [
+                self._event_index[eid] for eid in event_ids if eid in self._event_index
+            ]
 
     def get_events_by_phase(self, phase: str) -> List[AuditEvent]:
         """
@@ -781,10 +798,7 @@ class AuditLogger:
             >>> recent = logger.get_events_in_range(hour_ago, datetime.now())
         """
         with self._lock:
-            return [
-                e for e in self._events
-                if start <= e.timestamp <= end
-            ]
+            return [e for e in self._events if start <= e.timestamp <= end]
 
     def get_chain_summary(self) -> Dict[str, Any]:
         """

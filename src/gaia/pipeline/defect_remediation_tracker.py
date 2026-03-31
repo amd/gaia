@@ -34,16 +34,22 @@ Example:
     >>> summary = tracker.get_summary()
 """
 
-from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import Dict, List, Optional, Any, Set
-from datetime import datetime, timezone
-import threading
 import copy
+import threading
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum, auto
+from typing import Any, Dict, List, Optional, Set
 
-from gaia.pipeline.defect_router import Defect, DefectType, DefectSeverity, DefectStatus as RouterDefectStatus
+from gaia.pipeline.defect_router import (
+    Defect,
+    DefectSeverity,
+)
+from gaia.pipeline.defect_router import DefectStatus as RouterDefectStatus
+from gaia.pipeline.defect_router import (
+    DefectType,
+)
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -91,7 +97,11 @@ class DefectStatus(Enum):
             >>> DefectStatus.OPEN.is_terminal()
             False
         """
-        return self in {DefectStatus.VERIFIED, DefectStatus.DEFERRED, DefectStatus.CANNOT_FIX}
+        return self in {
+            DefectStatus.VERIFIED,
+            DefectStatus.DEFERRED,
+            DefectStatus.CANNOT_FIX,
+        }
 
     def is_active(self) -> bool:
         """
@@ -441,7 +451,9 @@ class DefectRemediationTracker:
             'loop-001'
             >>> tracker2 = DefectRemediationTracker()  # Auto-generated ID
         """
-        self.tracker_id = tracker_id or f"tracker-{datetime.now(timezone.utc).isoformat()}"
+        self.tracker_id = (
+            tracker_id or f"tracker-{datetime.now(timezone.utc).isoformat()}"
+        )
         self._defects: Dict[str, Defect] = {}
         self._history: List[DefectStatusChange] = []
         self._phase_buckets: Dict[str, Set[str]] = {}  # phase -> set of defect IDs
@@ -493,7 +505,10 @@ class DefectRemediationTracker:
                 logger.warning(
                     f"Defect {defect.id} added with non-OPEN status: {defect.status.name}. "
                     f"Setting to OPEN.",
-                    extra={"defect_id": defect.id, "original_status": defect.status.name},
+                    extra={
+                        "defect_id": defect.id,
+                        "original_status": defect.status.name,
+                    },
                 )
                 # Create a deep copy to avoid modifying the original
                 defect = copy.deepcopy(defect)
@@ -526,7 +541,9 @@ class DefectRemediationTracker:
                 },
             )
 
-    def start_fix(self, defect_id: str, changed_by: Optional[str] = None) -> DefectStatusChange:
+    def start_fix(
+        self, defect_id: str, changed_by: Optional[str] = None
+    ) -> DefectStatusChange:
         """
         Start working on a defect (OPEN -> IN_PROGRESS).
 
@@ -809,8 +826,10 @@ class DefectRemediationTracker:
         """
         with self._lock:
             pending = [
-                d for d in self._defects.values()
-                if d.status in {DefectStatus.OPEN, DefectStatus.IN_PROGRESS, DefectStatus.RESOLVED}
+                d
+                for d in self._defects.values()
+                if d.status
+                in {DefectStatus.OPEN, DefectStatus.IN_PROGRESS, DefectStatus.RESOLVED}
             ]
             # Sort by severity (CRITICAL=1, HIGH=2, MEDIUM=3, LOW=4)
             pending.sort(key=lambda d: d.severity.value)
@@ -856,7 +875,9 @@ class DefectRemediationTracker:
             for defect in self._defects.values():
                 # Count by status
                 status_name = defect.status.name
-                summary["by_status"][status_name] = summary["by_status"].get(status_name, 0) + 1
+                summary["by_status"][status_name] = (
+                    summary["by_status"].get(status_name, 0) + 1
+                )
 
                 # Count pending vs terminal
                 if defect.status == DefectStatus.VERIFIED:
@@ -884,7 +905,9 @@ class DefectRemediationTracker:
 
             # Calculate resolution rate
             resolved_or_verified = (
-                summary["verified_count"] + summary["deferred_count"] + summary["cannot_fix_count"]
+                summary["verified_count"]
+                + summary["deferred_count"]
+                + summary["cannot_fix_count"]
             )
             if summary["total"] > 0:
                 summary["resolution_rate"] = resolved_or_verified / summary["total"]
@@ -1057,13 +1080,19 @@ class DefectRemediationTracker:
                         verified_time = change.changed_at
 
                 if open_time and resolve_time:
-                    resolve_times.append((resolve_time - open_time).total_seconds() / 3600)
+                    resolve_times.append(
+                        (resolve_time - open_time).total_seconds() / 3600
+                    )
 
                 if resolve_time and verified_time:
-                    verify_times.append((verified_time - resolve_time).total_seconds() / 3600)
+                    verify_times.append(
+                        (verified_time - resolve_time).total_seconds() / 3600
+                    )
 
             if resolve_times:
-                analytics["mean_time_to_resolve"] = sum(resolve_times) / len(resolve_times)
+                analytics["mean_time_to_resolve"] = sum(resolve_times) / len(
+                    resolve_times
+                )
 
             if verify_times:
                 analytics["mean_time_to_verify"] = sum(verify_times) / len(verify_times)
@@ -1080,12 +1109,44 @@ class DefectRemediationTracker:
 
             # Status trend
             analytics["status_trend"] = {
-                "OPEN": len([d for d in self._defects.values() if d.status == DefectStatus.OPEN]),
-                "IN_PROGRESS": len([d for d in self._defects.values() if d.status == DefectStatus.IN_PROGRESS]),
-                "RESOLVED": len([d for d in self._defects.values() if d.status == DefectStatus.RESOLVED]),
-                "VERIFIED": len([d for d in self._defects.values() if d.status == DefectStatus.VERIFIED]),
-                "DEFERRED": len([d for d in self._defects.values() if d.status == DefectStatus.DEFERRED]),
-                "CANNOT_FIX": len([d for d in self._defects.values() if d.status == DefectStatus.CANNOT_FIX]),
+                "OPEN": len(
+                    [d for d in self._defects.values() if d.status == DefectStatus.OPEN]
+                ),
+                "IN_PROGRESS": len(
+                    [
+                        d
+                        for d in self._defects.values()
+                        if d.status == DefectStatus.IN_PROGRESS
+                    ]
+                ),
+                "RESOLVED": len(
+                    [
+                        d
+                        for d in self._defects.values()
+                        if d.status == DefectStatus.RESOLVED
+                    ]
+                ),
+                "VERIFIED": len(
+                    [
+                        d
+                        for d in self._defects.values()
+                        if d.status == DefectStatus.VERIFIED
+                    ]
+                ),
+                "DEFERRED": len(
+                    [
+                        d
+                        for d in self._defects.values()
+                        if d.status == DefectStatus.DEFERRED
+                    ]
+                ),
+                "CANNOT_FIX": len(
+                    [
+                        d
+                        for d in self._defects.values()
+                        if d.status == DefectStatus.CANNOT_FIX
+                    ]
+                ),
             }
 
             return analytics
@@ -1104,4 +1165,7 @@ class DefectRemediationTracker:
             self._defects.clear()
             self._history.clear()
             self._phase_buckets.clear()
-            logger.info("DefectRemediationTracker cleared", extra={"tracker_id": self.tracker_id})
+            logger.info(
+                "DefectRemediationTracker cleared",
+                extra={"tracker_id": self.tracker_id},
+            )

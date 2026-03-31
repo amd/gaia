@@ -5,12 +5,11 @@ Dynamically configurable agent that loads tools and prompts from YAML definition
 """
 
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
-from gaia.agents.base import Agent, _TOOL_REGISTRY
+from gaia.agents.base import _TOOL_REGISTRY, Agent
 from gaia.agents.base.context import AgentDefinition
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -65,7 +64,9 @@ class ConfigurableAgent(Agent):
         # Tools will be registered in _register_tools()
         super().__init__(
             model_id=kwargs.get("model_id"),
-            max_steps=definition.constraints.max_steps if definition.constraints else 100,
+            max_steps=(
+                definition.constraints.max_steps if definition.constraints else 100
+            ),
             **kwargs,
         )
 
@@ -74,7 +75,11 @@ class ConfigurableAgent(Agent):
             extra={
                 "agent_id": definition.id,
                 "tools_count": len(definition.tools),
-                "capabilities": definition.capabilities.capabilities if definition.capabilities else [],
+                "capabilities": (
+                    definition.capabilities.capabilities
+                    if definition.capabilities
+                    else []
+                ),
             },
         )
 
@@ -140,7 +145,10 @@ class ConfigurableAgent(Agent):
                     logger.debug(f"Loaded tool module: {tool_name}")
                 else:
                     # Tool might be a built-in or MCP tool
-                    logger.warning(f"Tool not found as module: {tool_name}")
+                    logger.debug(
+                        f"Tool '{tool_name}' not found as standalone module. "
+                        f"Checking for built-in or MCP tool implementation."
+                    )
 
             except ImportError as e:
                 logger.error(f"Failed to import tool {tool_name}: {e}")

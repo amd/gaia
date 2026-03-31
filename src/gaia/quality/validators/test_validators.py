@@ -5,7 +5,7 @@ Validators for the Testing dimension (TS-01 through TS-04).
 """
 
 import re
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from gaia.quality.validators.base import BaseValidator, ValidationResult
 
@@ -44,8 +44,8 @@ class UnitTestCoverageValidator(BaseValidator):
             function_coverage = coverage_report.get("function_coverage", 0)
         else:
             # Estimate coverage from test content
-            line_coverage, branch_coverage, function_coverage = (
-                self._estimate_coverage(code, tests)
+            line_coverage, branch_coverage, function_coverage = self._estimate_coverage(
+                code, tests
             )
 
         # Calculate overall coverage score
@@ -83,11 +83,13 @@ class UnitTestCoverageValidator(BaseValidator):
         return self._create_validation_result(
             score=score,
             tests_run=3,
-            tests_passed=sum([
-                line_coverage >= 75,
-                branch_coverage >= 50,
-                function_coverage >= 75,
-            ]),
+            tests_passed=sum(
+                [
+                    line_coverage >= 75,
+                    branch_coverage >= 50,
+                    function_coverage >= 75,
+                ]
+            ),
             details={
                 "line_coverage": line_coverage,
                 "branch_coverage": branch_coverage,
@@ -118,7 +120,8 @@ class UnitTestCoverageValidator(BaseValidator):
         # Estimate function coverage
         func_coverage = (
             len(tested_functions) / len(code_functions) * 100
-            if code_functions else 100.0
+            if code_functions
+            else 100.0
         )
 
         # Estimate line coverage (rough approximation)
@@ -162,37 +165,54 @@ class IntegrationTestCoverageValidator(BaseValidator):
 
         # Check for API tests
         has_api_tests = any(
-            kw in tests.lower() for kw in [
-                "api", "endpoint", "route", "request", "response",
-                "client.get", "client.post", "http"
+            kw in tests.lower()
+            for kw in [
+                "api",
+                "endpoint",
+                "route",
+                "request",
+                "response",
+                "client.get",
+                "client.post",
+                "http",
             ]
         )
         checks.append(has_api_tests)
 
         # Check for component integration
         has_component_tests = any(
-            kw in tests.lower() for kw in [
-                "integration", "component", "service", "database",
-                "repository", "mock", "fixture"
+            kw in tests.lower()
+            for kw in [
+                "integration",
+                "component",
+                "service",
+                "database",
+                "repository",
+                "mock",
+                "fixture",
             ]
         )
         checks.append(has_component_tests)
 
         # Check for end-to-end flows
         has_e2e_tests = any(
-            kw in tests.lower() for kw in [
-                "e2e", "end-to-end", "end to end", "workflow",
-                "scenario", "flow", "full"
+            kw in tests.lower()
+            for kw in [
+                "e2e",
+                "end-to-end",
+                "end to end",
+                "workflow",
+                "scenario",
+                "flow",
+                "full",
             ]
         )
         checks.append(has_e2e_tests)
 
         # Check for external service mocking
         has_service_mocking = any(
-            kw in tests for kw in [
-                "patch", "Mock", "MagicMock", "responses",
-                "httpretty", "vcr"
-            ]
+            kw in tests
+            for kw in ["patch", "Mock", "MagicMock", "responses", "httpretty", "vcr"]
         )
         checks.append(has_service_mocking)
 
@@ -255,9 +275,15 @@ class TestQualityValidator(BaseValidator):
 
         # Check for assertions
         has_assertions = any(
-            kw in tests for kw in [
-                "assert", "assertEquals", "assertTrue", "assertFalse",
-                "assertThat", "expect", "should"
+            kw in tests
+            for kw in [
+                "assert",
+                "assertEquals",
+                "assertTrue",
+                "assertFalse",
+                "assertThat",
+                "expect",
+                "should",
             ]
         )
         checks.append(has_assertions)
@@ -271,9 +297,14 @@ class TestQualityValidator(BaseValidator):
 
         # Check for test isolation (setup/teardown or fixtures)
         has_isolation = any(
-            kw in tests for kw in [
-                "setUp", "tearDown", "@pytest.fixture", "fixture",
-                "beforeEach", "afterEach"
+            kw in tests
+            for kw in [
+                "setUp",
+                "tearDown",
+                "@pytest.fixture",
+                "fixture",
+                "beforeEach",
+                "afterEach",
             ]
         )
         checks.append(has_isolation)
@@ -359,25 +390,25 @@ class MockStubValidator(BaseValidator):
 
         # Check for mock usage
         has_mocks = any(
-            kw in tests for kw in [
-                "Mock", "MagicMock", "mock", "patch", "stub", "fake"
-            ]
+            kw in tests for kw in ["Mock", "MagicMock", "mock", "patch", "stub", "fake"]
         )
         checks.append(has_mocks)
 
         # Check for proper mock configuration
         has_proper_config = any(
-            kw in tests for kw in [
-                "return_value", "side_effect", "spec=", "wraps="
-            ]
+            kw in tests for kw in ["return_value", "side_effect", "spec=", "wraps="]
         )
         checks.append(has_proper_config)
 
         # Check for mock assertions
         has_mock_assertions = any(
-            kw in tests for kw in [
-                "assert_called", "assert_not_called", "assert_called_with",
-                "called_once", "call_count"
+            kw in tests
+            for kw in [
+                "assert_called",
+                "assert_not_called",
+                "assert_called_with",
+                "called_once",
+                "call_count",
             ]
         )
         checks.append(has_mock_assertions)

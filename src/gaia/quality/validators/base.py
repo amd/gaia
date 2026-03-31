@@ -6,8 +6,8 @@ Base class for all quality validators.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List, Any, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -120,7 +120,7 @@ class BaseValidator(ABC):
             "location": location,
             "suggestion": suggestion,
             "code_snippet": code_snippet,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "validator": self.category_name,
         }
 
@@ -168,9 +168,7 @@ class BaseValidator(ABC):
         passed = sum(1 for c in checks if c)
         return (passed / len(checks)) * 100
 
-    def _score_from_weights(
-        self, weighted_checks: List[tuple]
-    ) -> float:
+    def _score_from_weights(self, weighted_checks: List[tuple]) -> float:
         """
         Calculate score from weighted checks.
 
@@ -234,9 +232,7 @@ class BaseValidator(ABC):
 
         return defects
 
-    async def _check_hardcoded_values(
-        self, code: str
-    ) -> List[Dict[str, Any]]:
+    async def _check_hardcoded_values(self, code: str) -> List[Dict[str, Any]]:
         """
         Check for hardcoded values that should be configuration.
 

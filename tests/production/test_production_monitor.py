@@ -12,16 +12,17 @@ Tests cover:
 """
 
 import asyncio
-import pytest
-from unittest.mock import MagicMock, patch
 from typing import Dict, List
+from unittest.mock import MagicMock, patch
 
-from gaia.metrics.production_monitor import ProductionMonitor, ProductionMetrics
+import pytest
 
+from gaia.metrics.production_monitor import ProductionMetrics, ProductionMonitor
 
 # ---------------------------------------------------------------------------
 # ProductionMetrics unit tests
 # ---------------------------------------------------------------------------
+
 
 class TestProductionMetrics:
     """Tests for ProductionMetrics dataclass."""
@@ -75,6 +76,7 @@ class TestProductionMetrics:
 # ---------------------------------------------------------------------------
 # ProductionMonitor – record_loop_execution / record_execution
 # ---------------------------------------------------------------------------
+
 
 class TestProductionMonitorRecording:
     """Tests for recording executions into ProductionMonitor."""
@@ -151,6 +153,7 @@ class TestProductionMonitorRecording:
 # ProductionMonitor – get_summary
 # ---------------------------------------------------------------------------
 
+
 class TestProductionMonitorSummary:
     """Tests for get_summary() output."""
 
@@ -177,7 +180,9 @@ class TestProductionMonitorSummary:
         """get_summary() values match recorded data."""
         monitor = ProductionMonitor()
         monitor.record_loop_execution(success=True, latency_ms=80.0)
-        monitor.record_loop_execution(success=False, latency_ms=20.0, error_description="oops")
+        monitor.record_loop_execution(
+            success=False, latency_ms=20.0, error_description="oops"
+        )
 
         summary = monitor.get_summary()
 
@@ -197,12 +202,15 @@ class TestProductionMonitorSummary:
         assert len(summary["snapshot_at"]) > 0
         # Should parse without error
         from datetime import datetime
+
         datetime.fromisoformat(summary["snapshot_at"].replace("Z", "+00:00"))
 
     def test_get_summary_errors_is_copy(self):
         """Modifying returned errors list must not affect internal state."""
         monitor = ProductionMonitor()
-        monitor.record_loop_execution(success=False, latency_ms=10.0, error_description="e1")
+        monitor.record_loop_execution(
+            success=False, latency_ms=10.0, error_description="e1"
+        )
         summary = monitor.get_summary()
         summary["errors"].append("injected")
         assert len(monitor.metrics.errors) == 1
@@ -212,6 +220,7 @@ class TestProductionMonitorSummary:
 # ProductionMonitor – reset
 # ---------------------------------------------------------------------------
 
+
 class TestProductionMonitorReset:
     """Tests for reset() behaviour."""
 
@@ -220,7 +229,9 @@ class TestProductionMonitorReset:
         monitor = ProductionMonitor()
         for _ in range(10):
             monitor.record_loop_execution(success=True, latency_ms=50.0)
-        monitor.record_loop_execution(success=False, latency_ms=10.0, error_description="err")
+        monitor.record_loop_execution(
+            success=False, latency_ms=10.0, error_description="err"
+        )
 
         monitor.reset()
 
@@ -248,6 +259,7 @@ class TestProductionMonitorReset:
 # ProductionMonitor – threshold checks (alert logic)
 # ---------------------------------------------------------------------------
 
+
 class TestProductionMonitorThresholds:
     """Tests for alert threshold evaluation."""
 
@@ -263,7 +275,9 @@ class TestProductionMonitorThresholds:
         # 99 successes, 1 failure => 0.99 success rate (exactly at threshold, not below)
         for _ in range(99):
             monitor.record_loop_execution(success=True, latency_ms=50.0)
-        monitor.record_loop_execution(success=False, latency_ms=50.0, error_description="e")
+        monitor.record_loop_execution(
+            success=False, latency_ms=50.0, error_description="e"
+        )
 
         await monitor._check_thresholds()
         success_rate_alerts = [a for a in alerts if a["type"] == "success_rate"]
@@ -282,7 +296,9 @@ class TestProductionMonitorThresholds:
         for _ in range(98):
             monitor.record_loop_execution(success=True, latency_ms=50.0)
         for _ in range(2):
-            monitor.record_loop_execution(success=False, latency_ms=50.0, error_description="fail")
+            monitor.record_loop_execution(
+                success=False, latency_ms=50.0, error_description="fail"
+            )
 
         await monitor._check_thresholds()
 
@@ -316,7 +332,9 @@ class TestProductionMonitorThresholds:
         for _ in range(1000):
             monitor.record_loop_execution(success=True, latency_ms=50.0)
         for i in range(10):
-            monitor.record_loop_execution(success=False, latency_ms=50.0, error_description=f"err-{i}")
+            monitor.record_loop_execution(
+                success=False, latency_ms=50.0, error_description=f"err-{i}"
+            )
 
         await monitor._check_thresholds()
         error_alerts = [a for a in alerts if a["type"] == "error_count"]
@@ -335,7 +353,9 @@ class TestProductionMonitorThresholds:
         for _ in range(10000):
             monitor.record_loop_execution(success=True, latency_ms=50.0)
         for i in range(11):
-            monitor.record_loop_execution(success=False, latency_ms=50.0, error_description=f"err-{i}")
+            monitor.record_loop_execution(
+                success=False, latency_ms=50.0, error_description=f"err-{i}"
+            )
 
         await monitor._check_thresholds()
 
@@ -357,7 +377,9 @@ class TestProductionMonitorThresholds:
         for _ in range(88):
             monitor.record_loop_execution(success=True, latency_ms=50.0)
         for i in range(12):
-            monitor.record_loop_execution(success=False, latency_ms=50.0, error_description=f"err-{i}")
+            monitor.record_loop_execution(
+                success=False, latency_ms=50.0, error_description=f"err-{i}"
+            )
 
         await monitor._check_thresholds()
 
@@ -369,6 +391,7 @@ class TestProductionMonitorThresholds:
 # ---------------------------------------------------------------------------
 # ProductionMonitor – alert callback
 # ---------------------------------------------------------------------------
+
 
 class TestProductionMonitorAlertCallback:
     """Tests for alert callback invocation."""
@@ -390,7 +413,9 @@ class TestProductionMonitorAlertCallback:
         for _ in range(97):
             monitor.record_loop_execution(success=True, latency_ms=50.0)
         for _ in range(3):
-            monitor.record_loop_execution(success=False, latency_ms=50.0, error_description="x")
+            monitor.record_loop_execution(
+                success=False, latency_ms=50.0, error_description="x"
+            )
 
         await monitor._check_thresholds()
 
@@ -404,6 +429,7 @@ class TestProductionMonitorAlertCallback:
     @pytest.mark.asyncio
     async def test_callback_exception_does_not_propagate(self):
         """An exception raised inside the callback must not propagate to the monitor."""
+
         def bad_callback(alert: Dict) -> None:
             raise RuntimeError("callback exploded")
 
@@ -416,7 +442,9 @@ class TestProductionMonitorAlertCallback:
         for _ in range(97):
             monitor.record_loop_execution(success=True, latency_ms=50.0)
         for _ in range(3):
-            monitor.record_loop_execution(success=False, latency_ms=50.0, error_description="x")
+            monitor.record_loop_execution(
+                success=False, latency_ms=50.0, error_description="x"
+            )
 
         # Should not raise
         await monitor._check_thresholds()
@@ -429,7 +457,9 @@ class TestProductionMonitorAlertCallback:
         for _ in range(97):
             monitor.record_loop_execution(success=True, latency_ms=50.0)
         for _ in range(3):
-            monitor.record_loop_execution(success=False, latency_ms=50.0, error_description="x")
+            monitor.record_loop_execution(
+                success=False, latency_ms=50.0, error_description="x"
+            )
 
         # Should not raise even though threshold is exceeded
         await monitor._check_thresholds()
@@ -438,6 +468,7 @@ class TestProductionMonitorAlertCallback:
 # ---------------------------------------------------------------------------
 # ProductionMonitor – start / stop monitoring lifecycle
 # ---------------------------------------------------------------------------
+
 
 class TestProductionMonitorLifecycle:
     """Tests for start_monitoring / stop_monitoring."""
@@ -480,6 +511,7 @@ class TestProductionMonitorLifecycle:
 # Integration tests
 # ---------------------------------------------------------------------------
 
+
 class TestProductionMonitorIntegration:
     """Integration tests for ProductionMonitor."""
 
@@ -495,7 +527,9 @@ class TestProductionMonitorIntegration:
         # Record mixed executions below the alert threshold
         for _ in range(99):
             monitor.record_loop_execution(success=True, latency_ms=60.0)
-        monitor.record_loop_execution(success=False, latency_ms=60.0, error_description="single-err")
+        monitor.record_loop_execution(
+            success=False, latency_ms=60.0, error_description="single-err"
+        )
 
         # Threshold check – success_rate == 0.99, no alert expected
         await monitor._check_thresholds()
@@ -503,7 +537,9 @@ class TestProductionMonitorIntegration:
 
         # Push below threshold
         for _ in range(2):
-            monitor.record_loop_execution(success=False, latency_ms=60.0, error_description="extra-err")
+            monitor.record_loop_execution(
+                success=False, latency_ms=60.0, error_description="extra-err"
+            )
 
         await monitor._check_thresholds()
         assert len([a for a in alerts if a["type"] == "success_rate"]) == 1

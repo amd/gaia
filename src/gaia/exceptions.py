@@ -30,7 +30,9 @@ class GAIAException(Exception):
 class InvalidStateTransition(GAIAException):
     """Raised when an invalid state transition is attempted."""
 
-    def __init__(self, message: str, from_state: str | None = None, to_state: str | None = None):
+    def __init__(
+        self, message: str, from_state: str | None = None, to_state: str | None = None
+    ):
         super().__init__(message, {"from_state": from_state, "to_state": to_state})
         self.from_state = from_state
         self.to_state = to_state
@@ -60,7 +62,9 @@ class PipelineNotRunningError(GAIAException):
 class PipelineTerminatedError(GAIAException):
     """Raised when operations are attempted on a terminated pipeline."""
 
-    def __init__(self, message: str = "Pipeline has terminated", reason: str | None = None):
+    def __init__(
+        self, message: str = "Pipeline has terminated", reason: str | None = None
+    ):
         super().__init__(message, {"reason": reason})
         self.reason = reason
 
@@ -147,7 +151,10 @@ class ValidatorNotFoundError(GAIAException):
     """Raised when a validator is not found for a category."""
 
     def __init__(self, category_id: str):
-        super().__init__(f"Validator not found for category: {category_id}", {"category_id": category_id})
+        super().__init__(
+            f"Validator not found for category: {category_id}",
+            {"category_id": category_id},
+        )
         self.category_id = category_id
 
 
@@ -193,7 +200,9 @@ class AgentLoadError(GAIAException):
     """Raised when agent loading fails."""
 
     def __init__(self, file_path: str, error: str):
-        super().__init__(f"Failed to load agent from {file_path}: {error}", {"file_path": file_path})
+        super().__init__(
+            f"Failed to load agent from {file_path}: {error}", {"file_path": file_path}
+        )
         self.file_path = file_path
         self.load_error = error
 
@@ -224,7 +233,9 @@ class HookRegistrationError(GAIAException):
     """Raised when hook registration fails."""
 
     def __init__(self, hook_name: str, error: str):
-        super().__init__(f"Failed to register hook '{hook_name}': {error}", {"hook_name": hook_name})
+        super().__init__(
+            f"Failed to register hook '{hook_name}': {error}", {"hook_name": hook_name}
+        )
         self.hook_name = hook_name
         self.registration_error = error
 
@@ -271,7 +282,9 @@ class TemplateNotFoundError(GAIAException):
     """Raised when a quality template is not found."""
 
     def __init__(self, template_name: str):
-        super().__init__(f"Template not found: {template_name}", {"template_name": template_name})
+        super().__init__(
+            f"Template not found: {template_name}", {"template_name": template_name}
+        )
         self.template_name = template_name
 
 

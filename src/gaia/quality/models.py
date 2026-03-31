@@ -4,10 +4,10 @@ GAIA Quality Models
 Data models for quality scoring results.
 """
 
-from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
 # Import DefectType for defect categorization support
 try:
@@ -208,7 +208,9 @@ class QualityReport:
             "critical_defects": self.critical_defects,
             "tests_run": self.tests_run,
             "tests_passed": self.tests_passed,
-            "pass_rate": self.tests_passed / self.tests_run if self.tests_run > 0 else 0,
+            "pass_rate": (
+                self.tests_passed / self.tests_run if self.tests_run > 0 else 0
+            ),
             "metadata": self.metadata,
             "evaluated_at": self.evaluated_at.isoformat(),
         }
@@ -253,9 +255,7 @@ class QualityReport:
                 return cs
         return None
 
-    def get_defects_by_severity(
-        self, severity: str
-    ) -> List[Dict[str, Any]]:
+    def get_defects_by_severity(self, severity: str) -> List[Dict[str, Any]]:
         """
         Get all defects of a specific severity.
 
@@ -284,7 +284,9 @@ class QualityReport:
             List of defects with matching type
         """
         defects = []
-        target_type = defect_type.upper() if isinstance(defect_type, str) else defect_type.name
+        target_type = (
+            defect_type.upper() if isinstance(defect_type, str) else defect_type.name
+        )
 
         for cs in self.category_scores:
             for defect in cs.defects:
@@ -388,10 +390,7 @@ class QualityWeightConfig:
         return self.weights.get(dimension, 0.0)
 
     def get_category_weight(
-        self,
-        dimension: str,
-        category_id: str,
-        default_weight: float
+        self, dimension: str, category_id: str, default_weight: float
     ) -> float:
         """
         Get weight for a specific category with override support.

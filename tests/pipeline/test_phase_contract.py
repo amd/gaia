@@ -11,36 +11,36 @@ Tests cover:
 - Defect routing validation
 """
 
-import pytest
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any, Dict
 
+import pytest
+
+from gaia.pipeline.defect_router import Defect, DefectSeverity, DefectType
 from gaia.pipeline.phase_contract import (
     ContractTerm,
+    ContractViolationError,
     ContractViolationSeverity,
     InputType,
-    ValidationResult,
     PhaseContract,
     PhaseContractRegistry,
-    ContractViolationError,
     PhaseExecutionError,
-    create_default_phase_contracts,
-    create_planning_contract,
-    create_development_contract,
-    create_quality_contract,
-    create_decision_contract,
-    _validate_quality_completeness,
+    ValidationResult,
     _validate_decision_context,
+    _validate_quality_completeness,
+    create_decision_contract,
+    create_default_phase_contracts,
+    create_development_contract,
+    create_planning_contract,
+    create_quality_contract,
     validate_defect_routing,
 )
 from gaia.pipeline.state import (
-    PipelineState,
     PipelineContext,
     PipelineSnapshot,
+    PipelineState,
     PipelineStateMachine,
 )
-from gaia.pipeline.defect_router import Defect, DefectType, DefectSeverity
-
 
 # =============================================================================
 # Fixtures
@@ -545,7 +545,10 @@ class TestPhaseContractRegistry:
         )
         assert result.is_valid is False
         # The violation message mentions either source phase outputs or target phase inputs
-        assert "missing" in result.violations[0].lower() or "not produced" in result.violations[0].lower()
+        assert (
+            "missing" in result.violations[0].lower()
+            or "not produced" in result.violations[0].lower()
+        )
 
     def test_get_all_contracts(self):
         """Test getting all registered contracts."""
@@ -679,7 +682,9 @@ class TestCreateDefaultContracts:
 class TestValidatorFunctions:
     """Tests for internal validator functions."""
 
-    def test_validate_quality_completeness_with_artifacts(self, state_with_quality_outputs):
+    def test_validate_quality_completeness_with_artifacts(
+        self, state_with_quality_outputs
+    ):
         """Test quality completeness validator with artifacts present."""
         result = _validate_quality_completeness(state_with_quality_outputs)
         assert result.is_valid is True
@@ -810,9 +815,7 @@ class TestPhaseContractIntegration:
         state.add_artifact("quality_template", "STANDARD")
 
         # Execute quality evaluation
-        state.add_artifact(
-            "quality_report", {"code_quality": 0.85, "coverage": 0.70}
-        )
+        state.add_artifact("quality_report", {"code_quality": 0.85, "coverage": 0.70})
         state.add_artifact(
             "defects",
             [
@@ -820,7 +823,9 @@ class TestPhaseContractIntegration:
                 {"type": "CODE_COMPLEXITY", "severity": "MEDIUM"},
             ],
         )
-        state.add_artifact("quality_score", 0.75)  # Add as artifact for output validation
+        state.add_artifact(
+            "quality_score", 0.75
+        )  # Add as artifact for output validation
         state.set_quality_score(0.75)
 
         # Validate quality phase outputs

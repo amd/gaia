@@ -5,12 +5,12 @@ Provides utilities for generating unique identifiers for pipelines, loops,
 agents, and other GAIA components.
 """
 
-import uuid
-import time
 import random
 import string
+import time
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
-from datetime import datetime
 
 
 def generate_id(prefix: str = "", separator: str = "-") -> str:
@@ -34,7 +34,7 @@ def generate_id(prefix: str = "", separator: str = "-") -> str:
         >>> generate_id("loop", separator="_")
         'loop_20260323_9c4e1d'
     """
-    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     random_part = "".join(random.choices(string.hexdigits.lower(), k=6))
 
     parts = []
@@ -241,7 +241,7 @@ class IDGenerator:
         self._counter += 1
 
         if include_timestamp:
-            timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
             parts = [timestamp, str(self._counter)]
         else:
             parts = [str(self._counter)]

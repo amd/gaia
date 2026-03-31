@@ -5,13 +5,12 @@ Determines pipeline progression based on quality scores and defects.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
-from gaia.utils.logging import get_logger
 from gaia.exceptions import QualityGateFailedError
-
+from gaia.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -28,11 +27,11 @@ class DecisionType(Enum):
     - FAIL: Pipeline failed
     """
 
-    CONTINUE = auto()      # Continue to next phase
-    LOOP_BACK = auto()     # Return to planning with defects
-    PAUSE = auto()         # Wait for user input
-    COMPLETE = auto()      # Pipeline complete
-    FAIL = auto()          # Pipeline failed
+    CONTINUE = auto()  # Continue to next phase
+    LOOP_BACK = auto()  # Return to planning with defects
+    PAUSE = auto()  # Wait for user input
+    COMPLETE = auto()  # Pipeline complete
+    FAIL = auto()  # Pipeline failed
 
     def is_terminal(self) -> bool:
         """Check if decision is terminal (ends pipeline)."""
@@ -62,7 +61,7 @@ class Decision:
     target_phase: Optional[str] = None
     defects: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    made_at: datetime = field(default_factory=datetime.utcnow)
+    made_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -413,7 +412,10 @@ class DecisionEngine:
         if max_iterations > 0 and iteration >= max_iterations:
             return False, f"Max iterations ({max_iterations}) exceeded"
 
-        return True, f"Quality {quality_score:.2f} below threshold {quality_threshold:.2f}"
+        return (
+            True,
+            f"Quality {quality_score:.2f} below threshold {quality_threshold:.2f}",
+        )
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get engine configuration statistics."""

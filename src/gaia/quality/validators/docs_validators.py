@@ -5,7 +5,7 @@ Validators for the Documentation dimension (DC-01 through DC-04).
 """
 
 import re
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from gaia.quality.validators.base import BaseValidator, ValidationResult
 
@@ -36,7 +36,9 @@ class DocstringsValidator(BaseValidator):
         defects = []
 
         # Parse code for functions and classes
-        functions = re.findall(r"def (\w+)\s*\([^)]*\)\s*(?:->[^:]+)?:\s*\n\s*(['\"]{3})", code)
+        functions = re.findall(
+            r"def (\w+)\s*\([^)]*\)\s*(?:->[^:]+)?:\s*\n\s*(['\"]{3})", code
+        )
         classes = re.findall(r"class (\w+)[^(]*:", code)
 
         # Count docstrings
@@ -87,12 +89,14 @@ class DocstringsValidator(BaseValidator):
         return self._create_validation_result(
             score=score,
             tests_run=4,
-            tests_passed=sum([
-                docstring_coverage >= 75,
-                comment_count > 0,
-                len(todos) <= 5,
-                len(docstrings) > 0,
-            ]),
+            tests_passed=sum(
+                [
+                    docstring_coverage >= 75,
+                    comment_count > 0,
+                    len(todos) <= 5,
+                    len(docstrings) > 0,
+                ]
+            ),
             details={
                 "functions": len(functions),
                 "classes": len(classes),
@@ -148,44 +152,64 @@ class ReadmeValidator(BaseValidator):
 
         # Check for installation section
         has_installation = any(
-            kw in readme.lower() for kw in [
-                "install", "setup", "installation", "requirements",
-                "pip install", "npm install", "dependencies"
+            kw in readme.lower()
+            for kw in [
+                "install",
+                "setup",
+                "installation",
+                "requirements",
+                "pip install",
+                "npm install",
+                "dependencies",
             ]
         )
         checks.append(has_installation)
 
         # Check for usage examples
         has_usage = any(
-            kw in readme.lower() for kw in [
-                "usage", "example", "quickstart", "getting started",
-                "```", "code"
+            kw in readme.lower()
+            for kw in [
+                "usage",
+                "example",
+                "quickstart",
+                "getting started",
+                "```",
+                "code",
             ]
         )
         checks.append(has_usage)
 
         # Check for API overview
         has_api = any(
-            kw in readme.lower() for kw in [
-                "api", "reference", "methods", "functions", "classes",
-                "interface", "endpoint"
+            kw in readme.lower()
+            for kw in [
+                "api",
+                "reference",
+                "methods",
+                "functions",
+                "classes",
+                "interface",
+                "endpoint",
             ]
         )
         checks.append(has_api)
 
         # Check for contributing guide
         has_contributing = any(
-            kw in readme.lower() for kw in [
-                "contribut", "develop", "development", "pull request",
-                "issue", "license"
+            kw in readme.lower()
+            for kw in [
+                "contribut",
+                "develop",
+                "development",
+                "pull request",
+                "issue",
+                "license",
             ]
         )
         checks.append(has_contributing)
 
         # Check for project description
-        has_description = len(readme.split()) > 50 and (
-            "#" in readme or "##" in readme
-        )
+        has_description = len(readme.split()) > 50 and ("#" in readme or "##" in readme)
         checks.append(has_description)
 
         score = self._score_from_checks(checks)
@@ -269,27 +293,44 @@ class ApiDocumentationValidator(BaseValidator):
 
         # Check for parameter descriptions
         has_params = any(
-            kw in (api_docs or code).lower() for kw in [
-                "param", "argument", "args", "request body",
-                "query param", "path param"
+            kw in (api_docs or code).lower()
+            for kw in [
+                "param",
+                "argument",
+                "args",
+                "request body",
+                "query param",
+                "path param",
             ]
         )
         checks.append(has_params)
 
         # Check for response documentation
         has_response = any(
-            kw in (api_docs or code).lower() for kw in [
-                "returns", "response", "return type", "example",
-                "200", "400", "404", "500"
+            kw in (api_docs or code).lower()
+            for kw in [
+                "returns",
+                "response",
+                "return type",
+                "example",
+                "200",
+                "400",
+                "404",
+                "500",
             ]
         )
         checks.append(has_response)
 
         # Check for error documentation
         has_errors = any(
-            kw in (api_docs or code).lower() for kw in [
-                "error", "exception", "raises", "throws",
-                "status code", "http error"
+            kw in (api_docs or code).lower()
+            for kw in [
+                "error",
+                "exception",
+                "raises",
+                "throws",
+                "status code",
+                "http error",
             ]
         )
         checks.append(has_errors)
@@ -336,11 +377,13 @@ class ApiDocumentationValidator(BaseValidator):
         endpoints.extend(flask_routes)
 
         # Express.js style routes
-        express_routes = re.findall(r'\w+\.(get|post|put|delete)\([\'"]([^\'"]+)[\'"]', content)
+        express_routes = re.findall(
+            r'\w+\.(get|post|put|delete)\([\'"]([^\'"]+)[\'"]', content
+        )
         endpoints.extend([r[1] for r in express_routes])
 
         # OpenAPI/Swagger paths
-        openapi_paths = re.findall(r'^\s{2}(/[\w{/}-]+):\s*$', content, re.MULTILINE)
+        openapi_paths = re.findall(r"^\s{2}(/[\w{/}-]+):\s*$", content, re.MULTILINE)
         endpoints.extend(openapi_paths)
 
         return endpoints
@@ -398,27 +441,46 @@ class UsageExamplesValidator(BaseValidator):
 
         # Check for step-by-step content
         has_steps = any(
-            kw in docs.lower() for kw in [
-                "step", "first", "then", "next", "finally",
-                "1.", "2.", "3.", "##"
+            kw in docs.lower()
+            for kw in [
+                "step",
+                "first",
+                "then",
+                "next",
+                "finally",
+                "1.",
+                "2.",
+                "3.",
+                "##",
             ]
         )
         checks.append(has_steps)
 
         # Check for common patterns
         has_patterns = any(
-            kw in docs.lower() for kw in [
-                "pattern", "common", "typical", "example",
-                "use case", "scenario"
+            kw in docs.lower()
+            for kw in [
+                "pattern",
+                "common",
+                "typical",
+                "example",
+                "use case",
+                "scenario",
             ]
         )
         checks.append(has_patterns)
 
         # Check for edge case examples
         has_edge_cases = any(
-            kw in docs.lower() for kw in [
-                "edge", "corner", "special", "boundary",
-                "error", "invalid", "empty"
+            kw in docs.lower()
+            for kw in [
+                "edge",
+                "corner",
+                "special",
+                "boundary",
+                "error",
+                "invalid",
+                "empty",
             ]
         )
         checks.append(has_edge_cases)

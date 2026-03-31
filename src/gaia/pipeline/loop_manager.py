@@ -5,23 +5,22 @@ Manages concurrent loop execution with priority-based scheduling.
 """
 
 import asyncio
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-from concurrent.futures import ThreadPoolExecutor, Future
-import threading
+from typing import Any, Dict, List, Optional
 
-from gaia.utils.logging import get_logger
+from gaia.agents.configurable import ConfigurableAgent
+from gaia.agents.registry import AgentRegistry
 from gaia.exceptions import (
+    AgentNotFoundError,
     LoopCreationError,
     LoopNotFoundError,
-    AgentNotFoundError,
 )
-from gaia.agents.registry import AgentRegistry
-from gaia.agents.configurable import ConfigurableAgent
-
+from gaia.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -139,7 +138,9 @@ class LoopState:
             "defects": self.defects,
             "error": self.error,
             "started_at": self.started_at.isoformat() if self.started_at else None,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "completed_at": (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
             "result": self.result,
         }
 
@@ -241,7 +242,9 @@ class LoopManager:
             if config.loop_id in self._loops:
                 raise LoopCreationError(
                     f"Loop already exists: {config.loop_id}",
-                    config=config.to_dict() if hasattr(config, "to_dict") else str(config),
+                    config=(
+                        config.to_dict() if hasattr(config, "to_dict") else str(config)
+                    ),
                 )
 
             # Create loop state
@@ -295,7 +298,7 @@ class LoopManager:
             # Start loop
             self._running_count += 1
             loop_state.status = LoopStatus.RUNNING
-            loop_state.started_at = datetime.utcnow()
+            loop_state.started_at = datetime.now(timezone.utc)
 
             # Submit to executor
             future = self._executor.submit(self._execute_loop, loop_id)
@@ -402,7 +405,7 @@ class LoopManager:
                 # In production, would extract defects and pass to next iteration
 
             # Loop complete
-            loop_state.completed_at = datetime.utcnow()
+            loop_state.completed_at = datetime.now(timezone.utc)
             loop_state.result = {
                 "success": loop_state.status == LoopStatus.COMPLETED,
                 "iterations": loop_state.iteration,
@@ -412,7 +415,7 @@ class LoopManager:
         except Exception as e:
             loop_state.status = LoopStatus.FAILED
             loop_state.error = str(e)
-            loop_state.completed_at = datetime.utcnow()
+            loop_state.completed_at = datetime.now(timezone.utc)
             logger.exception(f"Loop {loop_id} execution error: {e}")
 
         finally:
@@ -463,7 +466,11 @@ class LoopManager:
             extra={
                 "agent_id": agent_id,
                 "tools": agent_def.tools,
-                "capabilities": agent_def.capabilities.capabilities if agent_def.capabilities else [],
+                "capabilities": (
+                    agent_def.capabilities.capabilities
+                    if agent_def.capabilities
+                    else []
+                ),
             },
         )
 
@@ -487,7 +494,9 @@ class LoopManager:
 
             # Prepare execution context
             context = {
-                "goal": loop_state.config.exit_criteria.get("goal", "Complete the task"),
+                "goal": loop_state.config.exit_criteria.get(
+                    "goal", "Complete the task"
+                ),
                 "phase": loop_state.config.phase_name,
                 "iteration": loop_state.iteration,
                 "defects": loop_state.defects,
@@ -566,7 +575,9 @@ class LoopManager:
                     next_loop_id = self._pending_queue.pop(0)
                     if next_loop_id in self._loops:
                         self._loops[next_loop_id].status = LoopStatus.RUNNING
-                        self._loops[next_loop_id].started_at = datetime.utcnow()
+                        self._loops[next_loop_id].started_at = datetime.now(
+                            timezone.utc
+                        )
                         self._running_count += 1
 
                         future = self._executor.submit(self._execute_loop, next_loop_id)
@@ -579,7 +590,7 @@ class LoopManager:
                         )
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             loop.create_task(_release())
         except RuntimeError:
             # No event loop - create one
@@ -629,7 +640,7 @@ class LoopManager:
                 return False
 
             loop_state.status = LoopStatus.CANCELLED
-            loop_state.completed_at = datetime.utcnow()
+            loop_state.completed_at = datetime.now(timezone.utc)
 
             # Cancel future if running
             with self._futures_lock:

@@ -6,7 +6,7 @@ Validators for the Code Quality dimension (CQ-01 through CQ-07).
 
 import ast
 import re
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from gaia.quality.validators.base import BaseValidator, ValidationResult
 
@@ -109,10 +109,7 @@ class CodeStyleValidator(BaseValidator):
             )
 
         # Check for trailing whitespace
-        trailing_ws = sum(
-            1 for line in code.splitlines()
-            if line.rstrip() != line
-        )
+        trailing_ws = sum(1 for line in code.splitlines() if line.rstrip() != line)
         if trailing_ws > 0:
             violations.append(f"{trailing_ws} lines with trailing whitespace")
 
@@ -120,9 +117,7 @@ class CodeStyleValidator(BaseValidator):
         func_pattern = r"def\s+([A-Z]\w+)\s*\("
         uppercase_funcs = re.findall(func_pattern, code)
         if uppercase_funcs:
-            violations.append(
-                f"Functions with uppercase names: {uppercase_funcs[:3]}"
-            )
+            violations.append(f"Functions with uppercase names: {uppercase_funcs[:3]}")
 
         # Calculate score based on violations
         violation_count = len(violations)
@@ -198,11 +193,13 @@ class ComplexityValidator(BaseValidator):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 complexity = self._calculate_complexity(node)
                 if complexity > 10:
-                    complex_functions.append({
-                        "name": node.name,
-                        "complexity": complexity,
-                        "line": node.lineno,
-                    })
+                    complex_functions.append(
+                        {
+                            "name": node.name,
+                            "complexity": complexity,
+                            "line": node.lineno,
+                        }
+                    )
                 max_complexity = max(max_complexity, complexity)
 
         # Determine score
@@ -429,7 +426,8 @@ class SolidValidator(BaseValidator):
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 methods = [
-                    n for n in node.body
+                    n
+                    for n in node.body
                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
                 ]
                 if len(methods) > 15:
@@ -498,9 +496,7 @@ class ErrorHandlingValidator(BaseValidator):
         has_try_except = "try:" in code and "except" in code
         checks.append(has_try_except)
         if not has_try_except:
-            if any(
-                kw in code for kw in ["open(", "requests.", "db.", "cursor"]
-            ):
+            if any(kw in code for kw in ["open(", "requests.", "db.", "cursor"]):
                 defects.append(
                     self._create_defect(
                         description="No exception handling for risky operations",
@@ -601,8 +597,7 @@ class TypeSafetyValidator(BaseValidator):
 
                 # Check argument annotations
                 args_with_type = sum(
-                    1 for arg in node.args.args
-                    if arg.annotation is not None
+                    1 for arg in node.args.args if arg.annotation is not None
                 )
                 if args_with_type == len(node.args.args):
                     arg_typed += 1

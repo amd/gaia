@@ -15,12 +15,16 @@ load_dotenv()
 # pylint: disable=wrong-import-position
 from gaia.agents.base import Agent, MCPAgent, tool  # noqa: F401, E402
 from gaia.database import DatabaseAgent, DatabaseMixin  # noqa: F401, E402
-from gaia.utils import FileChangeHandler, FileWatcher, FileWatcherMixin  # noqa: F401
+from gaia.hooks import BaseHook, HookRegistry  # noqa: F401, E402
 
 # Pipeline orchestration imports
-from gaia.pipeline import PipelineEngine, PipelineContext, PipelineState  # noqa: F401, E402
-from gaia.quality import QualityScorer, QualityReport  # noqa: F401, E402
-from gaia.hooks import HookRegistry, BaseHook  # noqa: F401, E402
+from gaia.pipeline import (  # noqa: F401, E402
+    PipelineContext,
+    PipelineEngine,
+    PipelineState,
+)
+from gaia.quality import QualityReport, QualityScorer  # noqa: F401, E402
+from gaia.utils import FileChangeHandler, FileWatcher, FileWatcherMixin  # noqa: F401
 
 __all__ = [
     # Existing exports

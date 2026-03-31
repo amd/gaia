@@ -4,22 +4,22 @@ GAIA Hooks Module
 Hook system for pipeline event interception and modification.
 """
 
-from gaia.hooks.base import BaseHook, HookContext, HookResult, HookPriority
-from gaia.hooks.registry import HookRegistry, HookExecutor
-from gaia.hooks.production.validation_hooks import (
-    PreActionValidationHook,
-    PostActionValidationHook,
-)
+from gaia.hooks.base import BaseHook, HookContext, HookPriority, HookResult
 from gaia.hooks.production.context_hooks import (
     ContextInjectionHook,
     OutputProcessingHook,
 )
 from gaia.hooks.production.quality_hooks import (
-    QualityGateHook,
+    ChronicleHarvestHook,
     DefectExtractionHook,
     PipelineNotificationHook,
-    ChronicleHarvestHook,
+    QualityGateHook,
 )
+from gaia.hooks.production.validation_hooks import (
+    PostActionValidationHook,
+    PreActionValidationHook,
+)
+from gaia.hooks.registry import HookExecutor, HookRegistry
 
 __all__ = [
     # Base

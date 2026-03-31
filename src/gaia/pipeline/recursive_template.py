@@ -22,7 +22,10 @@ Usage:
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Dict, List, Optional, Any
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import yaml
 
 from gaia.quality.models import QualityWeightConfig
 from gaia.quality.weight_config import get_profile as get_weight_profile
@@ -30,6 +33,7 @@ from gaia.quality.weight_config import get_profile as get_weight_profile
 
 class SelectionMode(Enum):
     """Agent selection mode within a category."""
+
     AUTO = "auto"  # Auto-select based on task triggers
     SEQUENTIAL = "sequential"  # Run agents one by one
     PARALLEL = "parallel"  # Run agents concurrently (future)
@@ -41,6 +45,7 @@ class AgentCategory(Enum):
 
     These categories map to the agent registry's AGENT_CATEGORIES.
     """
+
     PLANNING = "planning"
     DEVELOPMENT = "development"
     REVIEW = "review"
@@ -61,6 +66,7 @@ class RoutingRule:
         loop_back: Whether to loop back to previous phase
         guidance: Optional guidance message for the agent
     """
+
     condition: str
     route_to: str
     priority: int = 0
@@ -118,6 +124,7 @@ class PhaseConfig:
         agents: List of agent IDs in this category
         exit_criteria: Conditions to exit this phase
     """
+
     name: str
     category: AgentCategory
     selection_mode: SelectionMode = SelectionMode.AUTO
@@ -239,10 +246,7 @@ class RecursivePipelineTemplate:
                     return self.phases[i - 1]
         return None
 
-    def evaluate_routing_rules(
-        self,
-        context: Dict[str, Any]
-    ) -> Optional[RoutingRule]:
+    def evaluate_routing_rules(self, context: Dict[str, Any]) -> Optional[RoutingRule]:
         """
         Evaluate routing rules against current context.
 
@@ -260,10 +264,7 @@ class RecursivePipelineTemplate:
         return None
 
     def should_loop_back(
-        self,
-        quality_score: float,
-        iteration: int,
-        has_defects: bool = True
+        self, quality_score: float, iteration: int, has_defects: bool = True
     ) -> bool:
         """
         Determine if pipeline should loop back.
@@ -344,9 +345,7 @@ class RecursivePipelineTemplate:
         """
         total = sum(self.quality_weights.values())
         if abs(total - 1.0) > tolerance:
-            raise ValueError(
-                f"Template '{self.name}' weights sum to {total}, not 1.0"
-            )
+            raise ValueError(f"Template '{self.name}' weights sum to {total}, not 1.0")
         return True
 
 
@@ -463,3 +462,90 @@ def get_recursive_template(name: str) -> RecursivePipelineTemplate:
             f"Available: {list(RECURSIVE_TEMPLATES.keys())}"
         )
     return RECURSIVE_TEMPLATES[name]
+
+
+# Default templates directory for YAML files
+DEFAULT_TEMPLATES_DIR = (
+    Path(__file__).parent.parent.parent.parent / "config" / "pipeline_templates"
+)
+
+
+def load_template_from_yaml(
+    name: str, templates_dir: Optional[Path] = None
+) -> RecursivePipelineTemplate:
+    """
+    Load a pipeline template from a YAML file.
+
+    Args:
+        name: Template name (filename without .yaml extension)
+        templates_dir: Directory containing template YAML files.
+                      Defaults to config/pipeline_templates.
+
+    Returns:
+        RecursivePipelineTemplate instance
+
+    Raises:
+        FileNotFoundError: If template YAML file not found
+        yaml.YAMLError: If YAML is invalid
+        ValueError: If template data is invalid
+    """
+    templates_dir = templates_dir or DEFAULT_TEMPLATES_DIR
+    yaml_path = templates_dir / f"{name}.yaml"
+
+    if not yaml_path.exists():
+        raise FileNotFoundError(f"Template YAML file not found: {yaml_path}")
+
+    with open(yaml_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Template YAML must contain a dictionary: {yaml_path}")
+
+    # Convert routing rules from list of dicts to RoutingRule objects
+    routing_rules = []
+    if "routing_rules" in data and data["routing_rules"]:
+        for rule_data in data["routing_rules"]:
+            routing_rules.append(RoutingRule(**rule_data))
+
+    # Create template instance
+    template = RecursivePipelineTemplate(
+        name=data.get("name", name),
+        description=data.get("description", ""),
+        quality_threshold=data.get("quality_threshold", 0.90),
+        max_iterations=data.get("max_iterations", 10),
+        agent_categories=data.get("agent_categories", {}),
+        routing_rules=routing_rules,
+        quality_weights=data.get("quality_weights", {}),
+    )
+
+    return template
+
+
+def load_all_templates_from_directory(
+    templates_dir: Optional[Path] = None,
+) -> Dict[str, RecursivePipelineTemplate]:
+    """
+    Load all template YAML files from a directory.
+
+    Args:
+        templates_dir: Directory containing template YAML files.
+                      Defaults to config/pipeline_templates.
+
+    Returns:
+        Dictionary mapping template names to RecursivePipelineTemplate instances
+    """
+    templates_dir = templates_dir or DEFAULT_TEMPLATES_DIR
+    templates = {}
+
+    if not templates_dir.exists():
+        return templates
+
+    for yaml_file in templates_dir.glob("*.yaml"):
+        try:
+            name = yaml_file.stem
+            templates[name] = load_template_from_yaml(name, templates_dir)
+        except Exception as e:
+            # Log warning but continue loading other templates
+            print(f"Warning: Failed to load template {yaml_file}: {e}")
+
+    return templates

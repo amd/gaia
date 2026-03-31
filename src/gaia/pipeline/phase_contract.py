@@ -11,17 +11,16 @@ This enables:
 - Recursive loop-back support with defect accumulation
 """
 
-from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import Dict, List, Any, Optional, Callable, Type, TypeVar, Generic
-from datetime import datetime, timezone
 import threading
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum, auto
+from typing import Any, Callable, Dict, Generic, List, Optional, Type, TypeVar
 
-from gaia.pipeline.state import PipelineState, PipelineSnapshot
 from gaia.exceptions import GAIAException
 from gaia.pipeline.defect_router import Defect
+from gaia.pipeline.state import PipelineSnapshot, PipelineState
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -1276,7 +1275,10 @@ def validate_defect_routing(
         )
 
     # Check if target phase can accept defects
-    if "defects" not in contract.optional_inputs and "defects" not in contract.required_inputs:
+    if (
+        "defects" not in contract.optional_inputs
+        and "defects" not in contract.required_inputs
+    ):
         return ValidationResult.failure(
             [f"Phase '{target_phase}' does not accept defects as input"]
         )

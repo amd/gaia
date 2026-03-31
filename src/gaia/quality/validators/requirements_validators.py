@@ -4,8 +4,8 @@ GAIA Requirements Validators
 Validators for the Requirements Coverage dimension (RC-01 through RC-04).
 """
 
-from typing import Dict, List, Any, Optional
 import re
+from typing import Any, Dict, List, Optional
 
 from gaia.quality.validators.base import BaseValidator, ValidationResult
 
@@ -88,12 +88,61 @@ class FeatureCompletenessValidator(BaseValidator):
         """Extract significant keywords from text."""
         # Remove common stop words
         stop_words = {
-            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-            "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
-            "being", "have", "has", "had", "do", "does", "did", "will", "would",
-            "could", "should", "may", "might", "must", "shall", "can", "need",
-            "it", "its", "this", "that", "these", "those", "i", "you", "he",
-            "she", "we", "they", "what", "which", "who", "whom", "whose",
+            "the",
+            "a",
+            "an",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "with",
+            "by",
+            "from",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "must",
+            "shall",
+            "can",
+            "need",
+            "it",
+            "its",
+            "this",
+            "that",
+            "these",
+            "those",
+            "i",
+            "you",
+            "he",
+            "she",
+            "we",
+            "they",
+            "what",
+            "which",
+            "who",
+            "whom",
+            "whose",
         }
 
         # Extract words
@@ -129,21 +178,21 @@ class EdgeCaseValidator(BaseValidator):
 
         # Check for None/null handling
         has_none_check = (
-            "is None" in code or
-            "is not None" in code or
-            "if not " in code or
-            "!= None" in code or
-            "== None" in code
+            "is None" in code
+            or "is not None" in code
+            or "if not " in code
+            or "!= None" in code
+            or "== None" in code
         )
         checks.append(has_none_check)
 
         # Check for empty collection handling
         has_empty_check = (
-            "len(" in code or
-            "if not " in code or
-            "== []" in code or
-            "== {}" in code or
-            '== ""' in code
+            "len(" in code
+            or "if not " in code
+            or "== []" in code
+            or "== {}" in code
+            or '== ""' in code
         )
         checks.append(has_empty_check)
 
@@ -155,9 +204,15 @@ class EdgeCaseValidator(BaseValidator):
 
         # Check for input validation
         has_validation = any(
-            kw in code for kw in [
-                "isinstance", "validate", "assert", "raise",
-                "if not isinstance", "TypeError", "ValueError"
+            kw in code
+            for kw in [
+                "isinstance",
+                "validate",
+                "assert",
+                "raise",
+                "if not isinstance",
+                "TypeError",
+                "ValueError",
             ]
         )
         checks.append(has_validation)
@@ -244,12 +299,12 @@ class AcceptanceCriteriaValidator(BaseValidator):
             ac_lower = ac.lower()
 
             # Check if AC is mentioned in code or tests
-            in_code = any(
-                kw in code.lower() for kw in self._extract_keywords(ac)
+            in_code = any(kw in code.lower() for kw in self._extract_keywords(ac))
+            in_tests = (
+                any(kw in tests.lower() for kw in self._extract_keywords(ac))
+                if tests
+                else False
             )
-            in_tests = any(
-                kw in tests.lower() for kw in self._extract_keywords(ac)
-            ) if tests else False
 
             if in_tests:
                 verified.append(ac)
@@ -262,7 +317,8 @@ class AcceptanceCriteriaValidator(BaseValidator):
         total = len(acceptance_criteria)
         score = (
             (len(verified) * 1.0 + len(partial) * 0.5) / total * 100
-            if total > 0 else 80.0
+            if total > 0
+            else 80.0
         )
 
         # Add defects for unverified criteria
@@ -291,8 +347,27 @@ class AcceptanceCriteriaValidator(BaseValidator):
     def _extract_keywords(self, text: str) -> List[str]:
         """Extract significant keywords from text."""
         stop_words = {
-            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-            "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+            "the",
+            "a",
+            "an",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "with",
+            "by",
+            "from",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
         }
         words = re.findall(r"\b[a-zA-Z]{4,}\b", text.lower())
         return [w for w in words if w not in stop_words]
@@ -414,8 +489,20 @@ class UserStoryAlignmentValidator(BaseValidator):
         """Check if code provides user-facing value."""
         # Look for API endpoints, UI components, or business logic
         indicators = [
-            "route", "endpoint", "view", "template", "render",
-            "request", "response", "api", "controller",
-            "service", "handler", "process", "create", "update", "delete",
+            "route",
+            "endpoint",
+            "view",
+            "template",
+            "render",
+            "request",
+            "response",
+            "api",
+            "controller",
+            "service",
+            "handler",
+            "process",
+            "create",
+            "update",
+            "delete",
         ]
         return any(ind in code.lower() for ind in indicators)

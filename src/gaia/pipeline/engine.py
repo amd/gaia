@@ -7,43 +7,48 @@ Main pipeline orchestrator that coordinates all components.
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Callable
+from typing import Any, Callable, Dict, List, Optional
 
-from gaia.pipeline.recursive_template import get_recursive_template
-from gaia.pipeline.routing_engine import RoutingEngine
-from gaia.pipeline.state import (
-    PipelineState,
-    PipelineContext,
-    PipelineSnapshot,
-    PipelineStateMachine,
-)
-from gaia.pipeline.loop_manager import LoopManager, LoopConfig
-from gaia.pipeline.decision_engine import DecisionEngine, Decision, DecisionType
-from gaia.quality.scorer import QualityScorer
 from gaia.agents.registry import AgentRegistry
-from gaia.hooks.base import HookContext
-from gaia.hooks.registry import HookRegistry, HookExecutor
-from gaia.hooks.production.validation_hooks import (
-    PreActionValidationHook,
-    PostActionValidationHook,
+from gaia.exceptions import (
+    InvalidQualityThresholdError,
+    PipelineAlreadyRunningError,
+    PipelineNotInitializedError,
 )
+from gaia.hooks.base import HookContext
 from gaia.hooks.production.context_hooks import (
     ContextInjectionHook,
     OutputProcessingHook,
 )
 from gaia.hooks.production.quality_hooks import (
-    QualityGateHook,
+    ChronicleHarvestHook,
     DefectExtractionHook,
     PipelineNotificationHook,
-    ChronicleHarvestHook,
+    QualityGateHook,
 )
-from gaia.utils.logging import get_logger, setup_logging
+from gaia.hooks.production.validation_hooks import (
+    PostActionValidationHook,
+    PreActionValidationHook,
+)
+from gaia.hooks.registry import HookExecutor, HookRegistry
+from gaia.pipeline.decision_engine import Decision, DecisionEngine, DecisionType
+from gaia.pipeline.loop_manager import LoopConfig, LoopManager
+from gaia.pipeline.metrics_collector import (
+    PipelineMetricsCollector,
+    get_pipeline_collector,
+)
+from gaia.pipeline.metrics_hooks import create_metrics_hook_group
+from gaia.pipeline.recursive_template import get_recursive_template
+from gaia.pipeline.routing_engine import RoutingEngine
+from gaia.pipeline.state import (
+    PipelineContext,
+    PipelineSnapshot,
+    PipelineState,
+    PipelineStateMachine,
+)
+from gaia.quality.scorer import QualityScorer
 from gaia.utils.id_generator import generate_loop_id
-from gaia.exceptions import (
-    PipelineNotInitializedError,
-    PipelineAlreadyRunningError,
-    InvalidQualityThresholdError,
-)
+from gaia.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -163,6 +168,9 @@ class PipelineEngine:
         # Template-driven phase configuration (not yet wired — see _get_phase_config)
         self._current_template = None
 
+        # Metrics collector (initialized in initialize())
+        self._metrics_collector: Optional[PipelineMetricsCollector] = None
+
         logger.info("PipelineEngine created")
 
     async def initialize(
@@ -193,6 +201,11 @@ class PipelineEngine:
 
         # Initialize state machine
         self._state_machine = PipelineStateMachine(context)
+
+        # Initialize metrics collector
+        self._metrics_collector = get_pipeline_collector(
+            pipeline_id=context.pipeline_id,
+        )
 
         # Initialize decision engine
         self._decision_engine = DecisionEngine(self._config)
@@ -277,6 +290,15 @@ class PipelineEngine:
 
         for hook in hooks:
             self._hook_registry.register(hook)
+
+        # Register metrics hooks if metrics collector is available
+        if self._metrics_collector:
+            from gaia.pipeline.metrics_hooks import create_metrics_hook_group
+
+            metrics_hooks = create_metrics_hook_group(self._metrics_collector)
+            for hook in metrics_hooks:
+                self._hook_registry.register(hook)
+            logger.info(f"Registered {len(metrics_hooks)} metrics hooks")
 
         logger.info(f"Registered {len(hooks)} default hooks")
 

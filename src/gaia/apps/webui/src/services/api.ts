@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateCreateRequest, TemplateUpdateRequest, PipelineMetricsResponse, PipelineMetricsHistory, PipelineAggregateMetrics } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -458,4 +458,130 @@ export async function getMCPCatalog(): Promise<{ catalog: MCPCatalogEntry[] }> {
 
 export async function getMCPRuntimeStatus(): Promise<{ servers: MCPServerStatus[] }> {
     return apiFetch('GET', '/mcp/status');
+}
+
+// ── Pipeline Template Management ─────────────────────────────────────────
+
+/** List all available pipeline templates. */
+export async function listTemplates(): Promise<TemplateListResponse> {
+    return apiFetch('GET', '/api/v1/pipeline/templates');
+}
+
+/** Get a specific pipeline template by name. */
+export async function getTemplate(templateName: string): Promise<PipelineTemplate> {
+    return apiFetch('GET', `/api/v1/pipeline/templates/${templateName}`);
+}
+
+/** Get raw YAML content for a pipeline template. */
+export async function getTemplateRaw(templateName: string): Promise<string> {
+    const url = `${API_BASE}/api/v1/pipeline/templates/${templateName}/raw`;
+    const t = log.api.time();
+    log.api.info(`GET ${url}`);
+
+    const res = await fetch(url);
+
+    if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        log.api.error(`GET ${url} - HTTP ${res.status}`, { errorText });
+        let detail = errorText;
+        try { detail = JSON.parse(errorText).detail || errorText; } catch {}
+        throw new Error(getFriendlyError(res.status, detail));
+    }
+
+    const content = await res.text();
+    log.api.timed(`GET ${url} -> ${res.status}`, t);
+    return content;
+}
+
+/** Create a new pipeline template. */
+export async function createTemplate(data: TemplateCreateRequest): Promise<PipelineTemplate> {
+    return apiFetch('POST', '/api/v1/pipeline/templates', data);
+}
+
+/** Update an existing pipeline template. */
+export async function updateTemplate(templateName: string, data: TemplateUpdateRequest): Promise<PipelineTemplate> {
+    return apiFetch('PUT', `/api/v1/pipeline/templates/${templateName}`, data);
+}
+
+/** Delete a pipeline template. */
+export async function deleteTemplate(templateName: string): Promise<{ deleted: boolean; template: string }> {
+    return apiFetch('DELETE', `/api/v1/pipeline/templates/${templateName}`);
+}
+
+/** Validate a pipeline template YAML. */
+export async function validateTemplate(templateName: string): Promise<TemplateValidateResponse> {
+    return apiFetch('GET', `/api/v1/pipeline/templates/${templateName}/validate`);
+}
+
+// ── Pipeline Metrics ─────────────────────────────────────────────────────
+
+/** Get comprehensive metrics for a specific pipeline execution. */
+export async function getPipelineMetrics(pipelineId: string): Promise<PipelineMetricsResponse> {
+    return apiFetch('GET', `/api/v1/pipeline/metrics/${pipelineId}`);
+}
+
+/** Get metrics history for a pipeline. */
+export async function getMetricsHistory(pipelineId: string, metricType?: string): Promise<PipelineMetricsHistory> {
+    const params = new URLSearchParams();
+    if (metricType) params.set('metric_type', metricType);
+    const query = params.toString() ? `?${params}` : '';
+    return apiFetch('GET', `/api/v1/pipeline/metrics/${pipelineId}/history${query}`);
+}
+
+/** Get aggregate metrics across all pipelines. */
+export async function getAggregateMetrics(): Promise<PipelineAggregateMetrics> {
+    return apiFetch('GET', '/api/v1/pipeline/metrics/aggregate');
+}
+
+/** Get phase-specific timing metrics. */
+export async function getPhaseMetrics(pipelineId: string): Promise<Record<string, { phase_name: string; duration_seconds: number; tps: number; ttft?: number }>> {
+    const metrics = await getPipelineMetrics(pipelineId);
+    return metrics.phase_breakdown;
+}
+
+/** Get loop iteration metrics. */
+export async function getLoopMetrics(pipelineId: string): Promise<Record<string, { loop_id: string; iteration_count: number; average_quality?: number }>> {
+    const metrics = await getPipelineMetrics(pipelineId);
+    return metrics.loop_metrics;
+}
+
+/** Get quality score history for a pipeline. */
+export async function getQualityHistory(pipelineId: string): Promise<{ loop_id: string; phase: string; score: number; timestamp: string }[]> {
+    const history = await getMetricsHistory(pipelineId, 'QUALITY_VELOCITY');
+    return history.history.map((h) => ({
+        loop_id: h.loop_id,
+        phase: h.phase,
+        score: h.value,
+        timestamp: h.timestamp,
+    }));
+}
+
+/** Get defect metrics for a pipeline. */
+export async function getDefectMetrics(pipelineId: string): Promise<{ defects_by_type: Record<string, number>; total_defects: number }> {
+    const metrics = await getPipelineMetrics(pipelineId);
+    const totalDefects = Object.values(metrics.defects_by_type).reduce((sum, count) => sum + count, 0);
+    return { defects_by_type: metrics.defects_by_type, total_defects: totalDefects };
+}
+
+/** Get state transition history for a pipeline. */
+export async function getStateTransitions(pipelineId: string): Promise<{ from_state: string; to_state: string; timestamp: string; reason: string }[]> {
+    const metrics = await getPipelineMetrics(pipelineId);
+    return metrics.state_transitions.map((st) => ({
+        from_state: st.from_state,
+        to_state: st.to_state,
+        timestamp: st.timestamp,
+        reason: st.reason,
+    }));
+}
+
+/** Get agent selection decisions for a pipeline. */
+export async function getAgentSelections(pipelineId: string): Promise<{ phase: string; agent_id: string; reason: string; alternatives: string[]; timestamp: string }[]> {
+    const metrics = await getPipelineMetrics(pipelineId);
+    return metrics.agent_selections.map((as) => ({
+        phase: as.phase,
+        agent_id: as.agent_id,
+        reason: as.reason,
+        alternatives: as.alternatives,
+        timestamp: as.timestamp,
+    }));
 }

@@ -4,13 +4,15 @@ Tests for GAIA Metrics Models
 Tests for MetricType, MetricSnapshot, MetricStatistics, and MetricsReport.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
-from datetime import datetime, timezone, timedelta
+
 from gaia.metrics.models import (
-    MetricType,
     MetricSnapshot,
-    MetricStatistics,
     MetricsReport,
+    MetricStatistics,
+    MetricType,
 )
 
 
@@ -121,7 +123,10 @@ class TestMetricSnapshot:
 
         assert restored.loop_id == sample_snapshot.loop_id
         assert restored.phase == sample_snapshot.phase
-        assert restored[MetricType.TOKEN_EFFICIENCY] == sample_snapshot[MetricType.TOKEN_EFFICIENCY]
+        assert (
+            restored[MetricType.TOKEN_EFFICIENCY]
+            == sample_snapshot[MetricType.TOKEN_EFFICIENCY]
+        )
 
     def test_snapshot_quality_check_pass(self):
         """Test quality check with passing metrics."""

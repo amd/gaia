@@ -11,11 +11,11 @@ The state machine ensures valid transitions and maintains a complete
 audit trail of all state changes.
 """
 
-from enum import Enum, auto
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Set
-import threading
+from enum import Enum, auto
+from typing import Any, Dict, List, Optional, Set
 
 from gaia.exceptions import InvalidStateTransition
 
@@ -174,7 +174,9 @@ class PipelineSnapshot:
             "artifacts": self.artifacts,
             "chronicle": self.chronicle,
             "started_at": self.started_at.isoformat() if self.started_at else None,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "completed_at": (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
             "defects": self.defects,
             "context_injected": self.context_injected,
         }
@@ -200,10 +202,14 @@ class PipelineSnapshot:
             artifacts=data.get("artifacts", {}),
             chronicle=data.get("chronicle", []),
             started_at=(
-                datetime.fromisoformat(data["started_at"]) if data.get("started_at") else None
+                datetime.fromisoformat(data["started_at"])
+                if data.get("started_at")
+                else None
             ),
             completed_at=(
-                datetime.fromisoformat(data["completed_at"]) if data.get("completed_at") else None
+                datetime.fromisoformat(data["completed_at"])
+                if data.get("completed_at")
+                else None
             ),
             defects=data.get("defects", []),
             context_injected=data.get("context_injected", {}),
@@ -574,10 +580,14 @@ class PipelineStateMachine:
                 "iteration": self._snapshot.iteration_count,
                 "quality_score": self._snapshot.quality_score,
                 "started_at": (
-                    self._snapshot.started_at.isoformat() if self._snapshot.started_at else None
+                    self._snapshot.started_at.isoformat()
+                    if self._snapshot.started_at
+                    else None
                 ),
                 "completed_at": (
-                    self._snapshot.completed_at.isoformat() if self._snapshot.completed_at else None
+                    self._snapshot.completed_at.isoformat()
+                    if self._snapshot.completed_at
+                    else None
                 ),
                 "artifacts_count": len(self._snapshot.artifacts),
                 "defects_count": len(self._snapshot.defects),

@@ -9,20 +9,21 @@ Tests cover:
 - Weight merging and overrides
 """
 
-import os
-import pytest
 import json
-import yaml
+import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+import pytest
+import yaml
+
 from gaia.quality.models import QualityWeightConfig
 from gaia.quality.weight_config import (
-    QualityWeightConfigManager,
     PROFILES,
+    QualityWeightConfigManager,
+    get_default_profile,
     get_manager,
     get_profile,
-    get_default_profile,
 )
 
 
@@ -326,10 +327,11 @@ class TestQualityWeightConfigIntegration:
         second open() on the same path fails with PermissionError.
         """
         import os
+
         manager = QualityWeightConfigManager()
         original = manager.get_profile("balanced")
 
-        with NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+        with NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
             tmp_path = f.name
         # File is now closed; safe to open again on Windows
         try:

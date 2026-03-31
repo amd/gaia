@@ -21,14 +21,13 @@ import pytest
 
 from gaia.pipeline.engine import PipelineEngine
 from gaia.pipeline.recursive_template import (
+    RECURSIVE_TEMPLATES,
     AgentCategory,
     PhaseConfig,
     RecursivePipelineTemplate,
-    RECURSIVE_TEMPLATES,
     SelectionMode,
     get_recursive_template,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared fixture
@@ -260,12 +259,12 @@ def test_no_stale_review_management_keys_in_registered_templates():
     the old 'review' or 'management' keys after the WP2 rename.
     """
     for name, template in RECURSIVE_TEMPLATES.items():
-        assert "review" not in template.agent_categories, (
-            f"Template '{name}' still has stale 'review' key in agent_categories"
-        )
-        assert "management" not in template.agent_categories, (
-            f"Template '{name}' still has stale 'management' key in agent_categories"
-        )
+        assert (
+            "review" not in template.agent_categories
+        ), f"Template '{name}' still has stale 'review' key in agent_categories"
+        assert (
+            "management" not in template.agent_categories
+        ), f"Template '{name}' still has stale 'management' key in agent_categories"
 
 
 def test_get_agents_for_phase_uses_agent_categories_fallback():

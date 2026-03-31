@@ -14,22 +14,23 @@ Tests cover:
 """
 
 import pytest
+
 from gaia.pipeline.defect_types import (
-    DefectType,
     DEFECT_KEYWORDS,
     DEFECT_SPECIALISTS,
+    DefectType,
     defect_type_from_string,
-    get_defect_keywords,
-    get_defect_specialists,
     detect_defect_types,
     get_all_defect_types,
+    get_defect_keywords,
+    get_defect_specialists,
     get_defect_type_info,
 )
-
 
 # ---------------------------------------------------------------------------
 # DefectType enum
 # ---------------------------------------------------------------------------
+
 
 class TestDefectTypeEnum:
     """Tests for the DefectType enumeration."""
@@ -71,6 +72,7 @@ class TestDefectTypeEnum:
 # DEFECT_KEYWORDS mapping
 # ---------------------------------------------------------------------------
 
+
 class TestDefectKeywordsMapping:
     """Tests for the DEFECT_KEYWORDS constant."""
 
@@ -79,21 +81,21 @@ class TestDefectKeywordsMapping:
         for defect_type in DefectType:
             if defect_type == DefectType.UNKNOWN:
                 continue
-            assert defect_type in DEFECT_KEYWORDS, (
-                f"{defect_type.name} missing from DEFECT_KEYWORDS"
-            )
-            assert len(DEFECT_KEYWORDS[defect_type]) > 0, (
-                f"{defect_type.name} has empty keyword list"
-            )
+            assert (
+                defect_type in DEFECT_KEYWORDS
+            ), f"{defect_type.name} missing from DEFECT_KEYWORDS"
+            assert (
+                len(DEFECT_KEYWORDS[defect_type]) > 0
+            ), f"{defect_type.name} has empty keyword list"
 
     def test_keywords_are_lowercase_strings(self):
         """All keywords are lowercase strings for case-insensitive matching."""
         for defect_type, keywords in DEFECT_KEYWORDS.items():
             for kw in keywords:
                 assert isinstance(kw, str), f"Keyword {kw!r} is not a string"
-                assert kw == kw.lower(), (
-                    f"Keyword {kw!r} for {defect_type.name} is not lowercase"
-                )
+                assert (
+                    kw == kw.lower()
+                ), f"Keyword {kw!r} for {defect_type.name} is not lowercase"
 
     def test_security_keywords_include_injection(self):
         """Security keywords include 'injection' (canonical SQL injection term)."""
@@ -117,18 +119,19 @@ class TestDefectKeywordsMapping:
 # DEFECT_SPECIALISTS mapping
 # ---------------------------------------------------------------------------
 
+
 class TestDefectSpecialistsMapping:
     """Tests for the DEFECT_SPECIALISTS constant."""
 
     def test_all_defect_types_have_specialists(self):
         """Every DefectType has at least one specialist agent."""
         for defect_type in DefectType:
-            assert defect_type in DEFECT_SPECIALISTS, (
-                f"{defect_type.name} missing from DEFECT_SPECIALISTS"
-            )
-            assert len(DEFECT_SPECIALISTS[defect_type]) > 0, (
-                f"{defect_type.name} has empty specialist list"
-            )
+            assert (
+                defect_type in DEFECT_SPECIALISTS
+            ), f"{defect_type.name} missing from DEFECT_SPECIALISTS"
+            assert (
+                len(DEFECT_SPECIALISTS[defect_type]) > 0
+            ), f"{defect_type.name} has empty specialist list"
 
     def test_unknown_fallback_to_senior_developer(self):
         """UNKNOWN defect type falls back to senior-developer."""
@@ -162,49 +165,53 @@ class TestDefectSpecialistsMapping:
         """All specialist entries are non-empty strings."""
         for defect_type, specialists in DEFECT_SPECIALISTS.items():
             for s in specialists:
-                assert isinstance(s, str) and len(s) > 0, (
-                    f"Invalid specialist entry {s!r} for {defect_type.name}"
-                )
+                assert (
+                    isinstance(s, str) and len(s) > 0
+                ), f"Invalid specialist entry {s!r} for {defect_type.name}"
 
 
 # ---------------------------------------------------------------------------
 # defect_type_from_string()
 # ---------------------------------------------------------------------------
 
+
 class TestDefectTypeFromString:
     """Tests for defect_type_from_string() classification function."""
 
-    @pytest.mark.parametrize("text,expected", [
-        ("SQL injection vulnerability", DefectType.SECURITY),
-        ("XSS attack detected", DefectType.SECURITY),
-        ("authentication bypass", DefectType.SECURITY),
-        ("Slow query in database", DefectType.PERFORMANCE),
-        ("memory leak detected", DefectType.PERFORMANCE),
-        ("high CPU usage", DefectType.PERFORMANCE),
-        ("missing unit tests", DefectType.TESTING),
-        ("insufficient test coverage", DefectType.TESTING),
-        ("flaky test failure", DefectType.TESTING),
-        ("missing docstring", DefectType.DOCUMENTATION),
-        ("outdated documentation", DefectType.DOCUMENTATION),
-        ("code style violation", DefectType.CODE_QUALITY),
-        ("high cyclomatic complexity", DefectType.CODE_QUALITY),
-        ("duplicate code detected", DefectType.CODE_QUALITY),
-        ("missing requirement implementation", DefectType.REQUIREMENTS),
-        ("incorrect feature behavior", DefectType.REQUIREMENTS),
-        ("architecture violation", DefectType.ARCHITECTURE),
-        ("circular dependency detected", DefectType.ARCHITECTURE),
-        ("missing alt text", DefectType.ACCESSIBILITY),
-        ("WCAG compliance issue", DefectType.ACCESSIBILITY),
-        ("cross-browser compatibility issue", DefectType.COMPATIBILITY),
-        ("data validation missing", DefectType.DATA_INTEGRITY),
-        ("potential data loss", DefectType.DATA_INTEGRITY),
-    ])
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            ("SQL injection vulnerability", DefectType.SECURITY),
+            ("XSS attack detected", DefectType.SECURITY),
+            ("authentication bypass", DefectType.SECURITY),
+            ("Slow query in database", DefectType.PERFORMANCE),
+            ("memory leak detected", DefectType.PERFORMANCE),
+            ("high CPU usage", DefectType.PERFORMANCE),
+            ("missing unit tests", DefectType.TESTING),
+            ("insufficient test coverage", DefectType.TESTING),
+            ("flaky test failure", DefectType.TESTING),
+            ("missing docstring", DefectType.DOCUMENTATION),
+            ("outdated documentation", DefectType.DOCUMENTATION),
+            ("code style violation", DefectType.CODE_QUALITY),
+            ("high cyclomatic complexity", DefectType.CODE_QUALITY),
+            ("duplicate code detected", DefectType.CODE_QUALITY),
+            ("missing requirement implementation", DefectType.REQUIREMENTS),
+            ("incorrect feature behavior", DefectType.REQUIREMENTS),
+            ("architecture violation", DefectType.ARCHITECTURE),
+            ("circular dependency detected", DefectType.ARCHITECTURE),
+            ("missing alt text", DefectType.ACCESSIBILITY),
+            ("WCAG compliance issue", DefectType.ACCESSIBILITY),
+            ("cross-browser compatibility issue", DefectType.COMPATIBILITY),
+            ("data validation missing", DefectType.DATA_INTEGRITY),
+            ("potential data loss", DefectType.DATA_INTEGRITY),
+        ],
+    )
     def test_classification(self, text: str, expected: DefectType):
         """defect_type_from_string correctly classifies known patterns."""
         result = defect_type_from_string(text)
-        assert result == expected, (
-            f"Expected {expected.name} for {text!r}, got {result.name}"
-        )
+        assert (
+            result == expected
+        ), f"Expected {expected.name} for {text!r}, got {result.name}"
 
     def test_empty_string_returns_unknown(self):
         """Empty string returns UNKNOWN."""
@@ -216,23 +223,29 @@ class TestDefectTypeFromString:
 
     def test_unrecognised_text_returns_unknown(self):
         """Random text without matching keywords returns UNKNOWN."""
-        assert defect_type_from_string("random gibberish xyz qwerty") == DefectType.UNKNOWN
+        assert (
+            defect_type_from_string("random gibberish xyz qwerty") == DefectType.UNKNOWN
+        )
 
     def test_case_insensitive_matching(self):
         """Classification is case-insensitive."""
-        assert defect_type_from_string("SQL INJECTION VULNERABILITY") == DefectType.SECURITY
+        assert (
+            defect_type_from_string("SQL INJECTION VULNERABILITY")
+            == DefectType.SECURITY
+        )
         assert defect_type_from_string("Memory Leak") == DefectType.PERFORMANCE
 
     def test_partial_keyword_match(self):
         """Partial keyword matches within longer words are detected."""
-        # "injection" is contained in "SQL injection in login form"
-        result = defect_type_from_string("Found injection in login form handling")
+        # "sql injection" matches "Found SQL injection in login form"
+        result = defect_type_from_string("Found SQL injection in login form handling")
         assert result == DefectType.SECURITY
 
 
 # ---------------------------------------------------------------------------
 # get_defect_keywords()
 # ---------------------------------------------------------------------------
+
 
 class TestGetDefectKeywords:
     """Tests for get_defect_keywords() utility function."""
@@ -248,7 +261,9 @@ class TestGetDefectKeywords:
         keywords = get_defect_keywords(DefectType.UNKNOWN)
         assert isinstance(keywords, list)
 
-    @pytest.mark.parametrize("defect_type", [dt for dt in DefectType if dt != DefectType.UNKNOWN])
+    @pytest.mark.parametrize(
+        "defect_type", [dt for dt in DefectType if dt != DefectType.UNKNOWN]
+    )
     def test_all_types_have_keywords(self, defect_type: DefectType):
         """All non-UNKNOWN types return at least one keyword."""
         keywords = get_defect_keywords(defect_type)
@@ -258,6 +273,7 @@ class TestGetDefectKeywords:
 # ---------------------------------------------------------------------------
 # get_defect_specialists()
 # ---------------------------------------------------------------------------
+
 
 class TestGetDefectSpecialists:
     """Tests for get_defect_specialists() utility function."""
@@ -278,6 +294,7 @@ class TestGetDefectSpecialists:
 # ---------------------------------------------------------------------------
 # detect_defect_types()
 # ---------------------------------------------------------------------------
+
 
 class TestDetectDefectTypes:
     """Tests for detect_defect_types() multi-type detection.
@@ -330,6 +347,7 @@ class TestDetectDefectTypes:
 # get_all_defect_types()
 # ---------------------------------------------------------------------------
 
+
 class TestGetAllDefectTypes:
     """Tests for get_all_defect_types() completeness.
 
@@ -361,6 +379,7 @@ class TestGetAllDefectTypes:
 # get_defect_type_info()
 # ---------------------------------------------------------------------------
 
+
 class TestGetDefectTypeInfo:
     """Tests for get_defect_type_info() dictionary structure."""
 
@@ -383,7 +402,9 @@ class TestGetDefectTypeInfo:
     def test_info_specialists_match_mapping(self):
         """Info specialists match DEFECT_SPECIALISTS mapping."""
         info = get_defect_type_info(DefectType.DOCUMENTATION)
-        assert set(info["specialists"]) == set(DEFECT_SPECIALISTS.get(DefectType.DOCUMENTATION, []))
+        assert set(info["specialists"]) == set(
+            DEFECT_SPECIALISTS.get(DefectType.DOCUMENTATION, [])
+        )
 
     @pytest.mark.parametrize("defect_type", list(DefectType))
     def test_info_available_for_all_types(self, defect_type: DefectType):

@@ -15,10 +15,12 @@ correctly.
 
 All tests exercise the None-template fallback path (Gap 4 is deferred to P6).
 """
-import pytest
-from unittest.mock import patch
-from gaia.pipeline.engine import PipelineEngine
 
+from unittest.mock import patch
+
+import pytest
+
+from gaia.pipeline.engine import PipelineEngine
 
 # ---------------------------------------------------------------------------
 # Shared fixture
@@ -158,6 +160,7 @@ class TestGetOutputArtifactName:
         When the template provides an artifact name via exit_criteria,
         it must override the default_artifacts mapping.
         """
+
         class MockPhaseConfig:
             exit_criteria = {"artifact": "custom_plan_v2"}
 

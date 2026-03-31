@@ -4,7 +4,7 @@ GAIA Agent Definitions
 Predefined agent definitions for the 17 core GAIA agents.
 """
 
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 
 # Agent definitions as YAML-style dictionaries
 # These can be loaded into AgentDefinition objects
@@ -23,40 +23,41 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "plan", "strategy", "analyze", "breakdown",
-                    "roadmap", "architecture", "design", "requirements"
+                    "plan",
+                    "strategy",
+                    "analyze",
+                    "breakdown",
+                    "roadmap",
+                    "architecture",
+                    "design",
+                    "requirements",
                 ],
                 "phases": ["PLANNING", "ANALYSIS"],
-                "complexity_range": {"min": 0.3, "max": 1.0}
+                "complexity_range": {"min": 0.3, "max": 1.0},
             },
             "capabilities": [
                 "requirements-analysis",
                 "task-breakdown",
                 "strategic-planning",
                 "risk-assessment",
-                "roadmap-creation"
+                "roadmap-creation",
             ],
             "system_prompt": "prompts/planning-analysis-strategist.md",
-            "tools": [
-                "file_read", "search_codebase", "analyze_requirements"
-            ],
-            "execution_targets": {
-                "default": "cpu"
-            },
+            "tools": ["file_read", "search_codebase", "analyze_requirements"],
+            "execution_targets": {"default": "cpu"},
             "constraints": {
                 "max_file_changes": 10,
                 "max_lines_per_file": 300,
                 "requires_review": True,
-                "timeout_seconds": 600
+                "timeout_seconds": 600,
             },
             "metadata": {
                 "author": "GAIA Team",
                 "created": "2026-03-23",
-                "tags": ["planning", "analysis", "strategy"]
-            }
+                "tags": ["planning", "analysis", "strategy"],
+            },
         }
     },
-
     "solutions-architect": {
         "agent": {
             "id": "solutions-architect",
@@ -69,30 +70,31 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "architecture", "system design", "component",
-                    "microservices", "scalability", "infrastructure"
+                    "architecture",
+                    "system design",
+                    "component",
+                    "microservices",
+                    "scalability",
+                    "infrastructure",
                 ],
                 "phases": ["PLANNING", "DESIGN"],
-                "complexity_range": {"min": 0.5, "max": 1.0}
+                "complexity_range": {"min": 0.5, "max": 1.0},
             },
             "capabilities": [
                 "system-architecture",
                 "component-design",
                 "technology-selection",
-                "scalability-planning"
+                "scalability-planning",
             ],
             "system_prompt": "prompts/solutions-architect.md",
-            "tools": [
-                "file_read", "file_write", "diagram_generation"
-            ],
+            "tools": ["file_read", "file_write", "diagram_generation"],
             "constraints": {
                 "max_file_changes": 15,
                 "requires_review": True,
-                "timeout_seconds": 900
-            }
+                "timeout_seconds": 900,
+            },
         }
     },
-
     "api-designer": {
         "agent": {
             "id": "api-designer",
@@ -105,29 +107,29 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "api", "rest", "graphql", "grpc", "endpoint",
-                    "openapi", "swagger", "graphql schema"
+                    "api",
+                    "rest",
+                    "graphql",
+                    "grpc",
+                    "endpoint",
+                    "openapi",
+                    "swagger",
+                    "graphql schema",
                 ],
                 "phases": ["PLANNING", "DESIGN", "DEVELOPMENT"],
-                "complexity_range": {"min": 0.3, "max": 1.0}
+                "complexity_range": {"min": 0.3, "max": 1.0},
             },
             "capabilities": [
                 "api-design",
                 "openapi-specification",
                 "graphql-schema",
-                "api-documentation"
+                "api-documentation",
             ],
             "system_prompt": "prompts/api-designer.md",
-            "tools": [
-                "file_read", "file_write", "api_validation"
-            ],
-            "constraints": {
-                "max_file_changes": 20,
-                "requires_review": True
-            }
+            "tools": ["file_read", "file_write", "api_validation"],
+            "constraints": {"max_file_changes": 20, "requires_review": True},
         }
     },
-
     "database-architect": {
         "agent": {
             "id": "database-architect",
@@ -140,29 +142,29 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "database", "schema", "sql", "nosql", "migration",
-                    "index", "data model", "entity"
+                    "database",
+                    "schema",
+                    "sql",
+                    "nosql",
+                    "migration",
+                    "index",
+                    "data model",
+                    "entity",
                 ],
                 "phases": ["PLANNING", "DESIGN", "DEVELOPMENT"],
-                "complexity_range": {"min": 0.4, "max": 1.0}
+                "complexity_range": {"min": 0.4, "max": 1.0},
             },
             "capabilities": [
                 "database-design",
                 "schema-modeling",
                 "query-optimization",
-                "migration-planning"
+                "migration-planning",
             ],
             "system_prompt": "prompts/database-architect.md",
-            "tools": [
-                "file_read", "file_write", "sql_validation"
-            ],
-            "constraints": {
-                "max_file_changes": 15,
-                "requires_review": True
-            }
+            "tools": ["file_read", "file_write", "sql_validation"],
+            "constraints": {"max_file_changes": 15, "requires_review": True},
         }
     },
-
     # Development Agents (5)
     "senior-developer": {
         "agent": {
@@ -176,11 +178,18 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "implement", "develop", "code", "build", "create",
-                    "feature", "endpoint", "component", "function"
+                    "implement",
+                    "develop",
+                    "code",
+                    "build",
+                    "create",
+                    "feature",
+                    "endpoint",
+                    "component",
+                    "function",
                 ],
                 "phases": ["DEVELOPMENT", "REFACTORING"],
-                "complexity_range": {"min": 0.3, "max": 1.0}
+                "complexity_range": {"min": 0.3, "max": 1.0},
             },
             "capabilities": [
                 "full-stack-development",
@@ -189,7 +198,7 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
                 "testing",
                 "code-review",
                 "debugging",
-                "refactoring"
+                "refactoring",
             ],
             "system_prompt": "prompts/senior-developer.md",
             "tools": [
@@ -198,26 +207,22 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
                 "bash_execute",
                 "git_operations",
                 "search_codebase",
-                "run_tests"
+                "run_tests",
             ],
-            "execution_targets": {
-                "default": "cpu",
-                "fallback": ["gpu"]
-            },
+            "execution_targets": {"default": "cpu", "fallback": ["gpu"]},
             "constraints": {
                 "max_file_changes": 20,
                 "max_lines_per_file": 500,
                 "requires_review": True,
-                "timeout_seconds": 600
+                "timeout_seconds": 600,
             },
             "metadata": {
                 "author": "GAIA Team",
                 "created": "2026-03-23",
-                "tags": ["development", "full-stack", "core"]
-            }
+                "tags": ["development", "full-stack", "core"],
+            },
         }
     },
-
     "frontend-specialist": {
         "agent": {
             "id": "frontend-specialist",
@@ -230,11 +235,19 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "react", "vue", "angular", "frontend", "ui",
-                    "component", "jsx", "typescript", "css", "html"
+                    "react",
+                    "vue",
+                    "angular",
+                    "frontend",
+                    "ui",
+                    "component",
+                    "jsx",
+                    "typescript",
+                    "css",
+                    "html",
                 ],
                 "phases": ["DEVELOPMENT"],
-                "complexity_range": {"min": 0.2, "max": 1.0}
+                "complexity_range": {"min": 0.2, "max": 1.0},
             },
             "capabilities": [
                 "react-development",
@@ -242,19 +255,13 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
                 "angular-development",
                 "typescript",
                 "css-styling",
-                "responsive-design"
+                "responsive-design",
             ],
             "system_prompt": "prompts/frontend-specialist.md",
-            "tools": [
-                "file_read", "file_write", "npm_install", "run_tests"
-            ],
-            "constraints": {
-                "max_file_changes": 25,
-                "requires_review": True
-            }
+            "tools": ["file_read", "file_write", "npm_install", "run_tests"],
+            "constraints": {"max_file_changes": 25, "requires_review": True},
         }
     },
-
     "backend-specialist": {
         "agent": {
             "id": "backend-specialist",
@@ -267,30 +274,32 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "backend", "api", "service", "server", "endpoint",
-                    "flask", "django", "fastapi", "express", "node"
+                    "backend",
+                    "api",
+                    "service",
+                    "server",
+                    "endpoint",
+                    "flask",
+                    "django",
+                    "fastapi",
+                    "express",
+                    "node",
                 ],
                 "phases": ["DEVELOPMENT"],
-                "complexity_range": {"min": 0.3, "max": 1.0}
+                "complexity_range": {"min": 0.3, "max": 1.0},
             },
             "capabilities": [
                 "api-development",
                 "service-architecture",
                 "database-integration",
                 "authentication",
-                "caching"
+                "caching",
             ],
             "system_prompt": "prompts/backend-specialist.md",
-            "tools": [
-                "file_read", "file_write", "bash_execute", "run_tests"
-            ],
-            "constraints": {
-                "max_file_changes": 20,
-                "requires_review": True
-            }
+            "tools": ["file_read", "file_write", "bash_execute", "run_tests"],
+            "constraints": {"max_file_changes": 20, "requires_review": True},
         }
     },
-
     "devops-engineer": {
         "agent": {
             "id": "devops-engineer",
@@ -303,30 +312,30 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "deploy", "ci/cd", "docker", "kubernetes", "terraform",
-                    "infrastructure", "pipeline", "container"
+                    "deploy",
+                    "ci/cd",
+                    "docker",
+                    "kubernetes",
+                    "terraform",
+                    "infrastructure",
+                    "pipeline",
+                    "container",
                 ],
                 "phases": ["DEVELOPMENT", "DEPLOYMENT"],
-                "complexity_range": {"min": 0.4, "max": 1.0}
+                "complexity_range": {"min": 0.4, "max": 1.0},
             },
             "capabilities": [
                 "ci-cd-pipeline",
                 "docker-containerization",
                 "kubernetes-orchestration",
                 "terraform-iac",
-                "cloud-deployment"
+                "cloud-deployment",
             ],
             "system_prompt": "prompts/devops-engineer.md",
-            "tools": [
-                "bash_execute", "file_write", "docker_commands"
-            ],
-            "constraints": {
-                "max_file_changes": 15,
-                "requires_review": True
-            }
+            "tools": ["bash_execute", "file_write", "docker_commands"],
+            "constraints": {"max_file_changes": 15, "requires_review": True},
         }
     },
-
     "data-engineer": {
         "agent": {
             "id": "data-engineer",
@@ -339,29 +348,28 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "etl", "pipeline", "data processing", "spark",
-                    "analytics", "data warehouse", "streaming"
+                    "etl",
+                    "pipeline",
+                    "data processing",
+                    "spark",
+                    "analytics",
+                    "data warehouse",
+                    "streaming",
                 ],
                 "phases": ["DEVELOPMENT"],
-                "complexity_range": {"min": 0.4, "max": 1.0}
+                "complexity_range": {"min": 0.4, "max": 1.0},
             },
             "capabilities": [
                 "etl-development",
                 "data-pipeline",
                 "spark-processing",
-                "data-modeling"
+                "data-modeling",
             ],
             "system_prompt": "prompts/data-engineer.md",
-            "tools": [
-                "file_read", "file_write", "bash_execute"
-            ],
-            "constraints": {
-                "max_file_changes": 15,
-                "requires_review": True
-            }
+            "tools": ["file_read", "file_write", "bash_execute"],
+            "constraints": {"max_file_changes": 15, "requires_review": True},
         }
     },
-
     # Review Agents (5)
     "quality-reviewer": {
         "agent": {
@@ -375,29 +383,28 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "review", "quality", "code review", "audit",
-                    "improve", "refactor", "best practices"
+                    "review",
+                    "quality",
+                    "code review",
+                    "audit",
+                    "improve",
+                    "refactor",
+                    "best practices",
                 ],
                 "phases": ["QUALITY", "REVIEW"],
-                "complexity_range": {"min": 0.0, "max": 1.0}
+                "complexity_range": {"min": 0.0, "max": 1.0},
             },
             "capabilities": [
                 "code-review",
                 "quality-assessment",
                 "best-practices-validation",
-                "improvement-suggestions"
+                "improvement-suggestions",
             ],
             "system_prompt": "prompts/quality-reviewer.md",
-            "tools": [
-                "file_read", "search_codebase", "run_linters"
-            ],
-            "constraints": {
-                "max_file_changes": 0,
-                "requires_review": False
-            }
+            "tools": ["file_read", "search_codebase", "run_linters"],
+            "constraints": {"max_file_changes": 0, "requires_review": False},
         }
     },
-
     "security-auditor": {
         "agent": {
             "id": "security-auditor",
@@ -410,29 +417,28 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "security", "vulnerability", "audit", "penetration",
-                    "owasp", "encryption", "authentication"
+                    "security",
+                    "vulnerability",
+                    "audit",
+                    "penetration",
+                    "owasp",
+                    "encryption",
+                    "authentication",
                 ],
                 "phases": ["QUALITY", "REVIEW"],
-                "complexity_range": {"min": 0.3, "max": 1.0}
+                "complexity_range": {"min": 0.3, "max": 1.0},
             },
             "capabilities": [
                 "security-audit",
                 "vulnerability-detection",
                 "compliance-check",
-                "threat-modeling"
+                "threat-modeling",
             ],
             "system_prompt": "prompts/security-auditor.md",
-            "tools": [
-                "file_read", "security_scan", "dependency_check"
-            ],
-            "constraints": {
-                "max_file_changes": 0,
-                "requires_review": True
-            }
+            "tools": ["file_read", "security_scan", "dependency_check"],
+            "constraints": {"max_file_changes": 0, "requires_review": True},
         }
     },
-
     "performance-analyst": {
         "agent": {
             "id": "performance-analyst",
@@ -445,29 +451,28 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "performance", "optimize", "bottleneck", "slow",
-                    "scalability", "profiling", "benchmark"
+                    "performance",
+                    "optimize",
+                    "bottleneck",
+                    "slow",
+                    "scalability",
+                    "profiling",
+                    "benchmark",
                 ],
                 "phases": ["QUALITY", "REVIEW", "REFACTORING"],
-                "complexity_range": {"min": 0.4, "max": 1.0}
+                "complexity_range": {"min": 0.4, "max": 1.0},
             },
             "capabilities": [
                 "performance-analysis",
                 "bottleneck-detection",
                 "optimization",
-                "benchmarking"
+                "benchmarking",
             ],
             "system_prompt": "prompts/performance-analyst.md",
-            "tools": [
-                "file_read", "profiling", "benchmark"
-            ],
-            "constraints": {
-                "max_file_changes": 0,
-                "requires_review": True
-            }
+            "tools": ["file_read", "profiling", "benchmark"],
+            "constraints": {"max_file_changes": 0, "requires_review": True},
         }
     },
-
     "accessibility-reviewer": {
         "agent": {
             "id": "accessibility-reviewer",
@@ -480,29 +485,28 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "accessibility", "wcag", "a11y", "inclusive",
-                    "aria", "screen reader", "keyboard navigation"
+                    "accessibility",
+                    "wcag",
+                    "a11y",
+                    "inclusive",
+                    "aria",
+                    "screen reader",
+                    "keyboard navigation",
                 ],
                 "phases": ["QUALITY", "REVIEW"],
-                "complexity_range": {"min": 0.0, "max": 1.0}
+                "complexity_range": {"min": 0.0, "max": 1.0},
             },
             "capabilities": [
                 "wcag-compliance",
                 "accessibility-audit",
                 "aria-validation",
-                "inclusive-design"
+                "inclusive-design",
             ],
             "system_prompt": "prompts/accessibility-reviewer.md",
-            "tools": [
-                "file_read", "accessibility_scan"
-            ],
-            "constraints": {
-                "max_file_changes": 0,
-                "requires_review": True
-            }
+            "tools": ["file_read", "accessibility_scan"],
+            "constraints": {"max_file_changes": 0, "requires_review": True},
         }
     },
-
     "test-coverage-analyzer": {
         "agent": {
             "id": "test-coverage-analyzer",
@@ -515,29 +519,28 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "test", "coverage", "unit test", "integration test",
-                    "test gap", "mock", "assertion"
+                    "test",
+                    "coverage",
+                    "unit test",
+                    "integration test",
+                    "test gap",
+                    "mock",
+                    "assertion",
                 ],
                 "phases": ["QUALITY", "REVIEW"],
-                "complexity_range": {"min": 0.0, "max": 1.0}
+                "complexity_range": {"min": 0.0, "max": 1.0},
             },
             "capabilities": [
                 "coverage-analysis",
                 "test-quality-assessment",
                 "gap-identification",
-                "test-generation"
+                "test-generation",
             ],
             "system_prompt": "prompts/test-coverage-analyzer.md",
-            "tools": [
-                "file_read", "run_tests", "coverage_report"
-            ],
-            "constraints": {
-                "max_file_changes": 10,
-                "requires_review": True
-            }
+            "tools": ["file_read", "run_tests", "coverage_report"],
+            "constraints": {"max_file_changes": 10, "requires_review": True},
         }
     },
-
     # Management Agents (3)
     "software-program-manager": {
         "agent": {
@@ -551,29 +554,29 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "manage", "coordinate", "track", "progress",
-                    "milestone", "deadline", "status", "report"
+                    "manage",
+                    "coordinate",
+                    "track",
+                    "progress",
+                    "milestone",
+                    "deadline",
+                    "status",
+                    "report",
                 ],
                 "phases": ["PLANNING", "DECISION", "MANAGEMENT"],
-                "complexity_range": {"min": 0.0, "max": 1.0}
+                "complexity_range": {"min": 0.0, "max": 1.0},
             },
             "capabilities": [
                 "project-management",
                 "task-coordination",
                 "progress-tracking",
-                "status-reporting"
+                "status-reporting",
             ],
             "system_prompt": "prompts/software-program-manager.md",
-            "tools": [
-                "file_read", "file_write", "chronicle_access"
-            ],
-            "constraints": {
-                "max_file_changes": 5,
-                "requires_review": False
-            }
+            "tools": ["file_read", "file_write", "chronicle_access"],
+            "constraints": {"max_file_changes": 5, "requires_review": False},
         }
     },
-
     "technical-writer": {
         "agent": {
             "id": "technical-writer",
@@ -586,29 +589,28 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "document", "write", "readme", "guide",
-                    "api doc", "tutorial", "manual"
+                    "document",
+                    "write",
+                    "readme",
+                    "guide",
+                    "api doc",
+                    "tutorial",
+                    "manual",
                 ],
                 "phases": ["DEVELOPMENT", "DOCUMENTATION"],
-                "complexity_range": {"min": 0.0, "max": 1.0}
+                "complexity_range": {"min": 0.0, "max": 1.0},
             },
             "capabilities": [
                 "technical-writing",
                 "api-documentation",
                 "tutorial-creation",
-                "documentation-review"
+                "documentation-review",
             ],
             "system_prompt": "prompts/technical-writer.md",
-            "tools": [
-                "file_read", "file_write", "markdown_format"
-            ],
-            "constraints": {
-                "max_file_changes": 15,
-                "requires_review": True
-            }
+            "tools": ["file_read", "file_write", "markdown_format"],
+            "constraints": {"max_file_changes": 15, "requires_review": True},
         }
     },
-
     "release-manager": {
         "agent": {
             "id": "release-manager",
@@ -621,26 +623,26 @@ AGENT_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             """,
             "triggers": {
                 "keywords": [
-                    "release", "version", "changelog", "tag",
-                    "publish", "deploy", "rollout"
+                    "release",
+                    "version",
+                    "changelog",
+                    "tag",
+                    "publish",
+                    "deploy",
+                    "rollout",
                 ],
                 "phases": ["DEPLOYMENT", "MANAGEMENT"],
-                "complexity_range": {"min": 0.3, "max": 1.0}
+                "complexity_range": {"min": 0.3, "max": 1.0},
             },
             "capabilities": [
                 "release-management",
                 "versioning",
                 "changelog-generation",
-                "deployment-coordination"
+                "deployment-coordination",
             ],
             "system_prompt": "prompts/release-manager.md",
-            "tools": [
-                "file_read", "file_write", "git_operations", "bash_execute"
-            ],
-            "constraints": {
-                "max_file_changes": 10,
-                "requires_review": True
-            }
+            "tools": ["file_read", "file_write", "git_operations", "bash_execute"],
+            "constraints": {"max_file_changes": 10, "requires_review": True},
         }
     },
 }
@@ -670,7 +672,8 @@ def get_agents_by_category(category: str) -> List[Dict[str, Any]]:
         List of agent definitions
     """
     return [
-        defn for defn in AGENT_DEFINITIONS.values()
+        defn
+        for defn in AGENT_DEFINITIONS.values()
         if defn.get("agent", {}).get("category") == category
     ]
 

@@ -3,15 +3,17 @@
 Import chain assertion: confirms that DefectType from gaia.pipeline.defect_types
 is the real enum and not the fallback defined inside models.py.
 """
+
 import pytest
-from gaia.quality.models import QualityReport, CategoryScore, CertificationStatus
-from gaia.pipeline.defect_types import DefectType
 
 # ---------------------------------------------------------------------------
 # Import chain assertion — fires at module collection time if broken.
 # ---------------------------------------------------------------------------
+from gaia.pipeline.defect_types import DefectType
 from gaia.pipeline.defect_types import DefectType as RealDefectType
+from gaia.quality.models import CategoryScore, CertificationStatus
 from gaia.quality.models import DefectType as ModelDefectType
+from gaia.quality.models import QualityReport
 
 assert ModelDefectType is RealDefectType, (
     "models.py is using the fallback DefectType enum. "
@@ -61,7 +63,11 @@ class TestGetDefectsByType:
 
     def test_string_defect_type_match(self):
         """A single SECURITY defect is returned when queried by uppercase string "SECURITY"."""
-        defect = {"defect_type": "SECURITY", "description": "sql_injection", "severity": "high"}
+        defect = {
+            "defect_type": "SECURITY",
+            "description": "sql_injection",
+            "severity": "high",
+        }
         report = make_report(make_category_score(defects=[defect]))
 
         result = report.get_defects_by_type("SECURITY")
@@ -83,7 +89,11 @@ class TestGetDefectsByType:
 
     def test_no_match_returns_empty(self):
         """Querying for PERFORMANCE when only SECURITY defects exist returns empty list."""
-        defect = {"defect_type": "SECURITY", "description": "auth bypass", "severity": "critical"}
+        defect = {
+            "defect_type": "SECURITY",
+            "description": "auth bypass",
+            "severity": "critical",
+        }
         report = make_report(make_category_score(defects=[defect]))
 
         result = report.get_defects_by_type("PERFORMANCE")
@@ -92,8 +102,16 @@ class TestGetDefectsByType:
 
     def test_multiple_categories_aggregated(self):
         """Defects of the same type spread across multiple CategoryScores are all returned."""
-        defect_a = {"defect_type": "SECURITY", "description": "xss in form A", "severity": "high"}
-        defect_b = {"defect_type": "SECURITY", "description": "xss in form B", "severity": "high"}
+        defect_a = {
+            "defect_type": "SECURITY",
+            "description": "xss in form A",
+            "severity": "high",
+        }
+        defect_b = {
+            "defect_type": "SECURITY",
+            "description": "xss in form B",
+            "severity": "high",
+        }
 
         cs_a = make_category_score(category_id="BP-01", defects=[defect_a])
         cs_b = make_category_score(category_id="CQ-01", defects=[defect_b])
@@ -112,7 +130,10 @@ class TestGetDefectsByType:
         hasattr(defect_type_value, 'name') branch in get_defects_by_type().
         """
         # The defect dict stores the enum instance as defect_type value
-        defect = {"defect_type": DefectType.SECURITY, "description": "enum-stored defect"}
+        defect = {
+            "defect_type": DefectType.SECURITY,
+            "description": "enum-stored defect",
+        }
         report = make_report(make_category_score(defects=[defect]))
 
         # Query with the enum
@@ -165,7 +186,10 @@ class TestGetRoutingDecisions:
 
     def test_defect_with_target_phase_key_returned(self):
         """A defect dict that contains "target_phase" must be included in results."""
-        defect = {"description": "needs security review", "target_phase": "SECURITY_REVIEW"}
+        defect = {
+            "description": "needs security review",
+            "target_phase": "SECURITY_REVIEW",
+        }
         report = make_report(make_category_score(defects=[defect]))
 
         result = report.get_routing_decisions()

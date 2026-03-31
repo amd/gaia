@@ -7,13 +7,12 @@ alert thresholds and callback-based notification.
 """
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Callable
-import logging
+from typing import Callable, Dict, List, Optional
 
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -135,10 +134,14 @@ class ProductionMonitor:
                 background monitoring loop (default: 60.0).
         """
         self.metrics = metrics if metrics is not None else ProductionMetrics()
-        self.alert_thresholds = alert_thresholds if alert_thresholds is not None else {
-            "min_success_rate": 0.99,
-            "max_errors": 10,
-        }
+        self.alert_thresholds = (
+            alert_thresholds
+            if alert_thresholds is not None
+            else {
+                "min_success_rate": 0.99,
+                "max_errors": 10,
+            }
+        )
         self.alert_callback = alert_callback
         # Retain underscore alias so legacy internal references still resolve
         self._alert_callback = alert_callback
@@ -201,7 +204,10 @@ class ProductionMonitor:
             self.metrics.loops_successful += 1
         else:
             self.metrics.loops_failed += 1
-            description = error_description or f"Loop execution failed at {datetime.now(timezone.utc).isoformat()}"
+            description = (
+                error_description
+                or f"Loop execution failed at {datetime.now(timezone.utc).isoformat()}"
+            )
             self.metrics.errors.append(description)
 
     def record_execution(
@@ -244,7 +250,10 @@ class ProductionMonitor:
         min_success_rate = self.alert_thresholds.get("min_success_rate", 0.99)
         max_errors = self.alert_thresholds.get("max_errors", 10)
 
-        if self.metrics.loops_executed > 0 and self.metrics.success_rate < min_success_rate:
+        if (
+            self.metrics.loops_executed > 0
+            and self.metrics.success_rate < min_success_rate
+        ):
             alert = {
                 "level": "WARNING",
                 "type": "success_rate",

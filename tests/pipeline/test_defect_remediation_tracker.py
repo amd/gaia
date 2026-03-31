@@ -13,23 +13,30 @@ Tests cover:
 - Integration with PhaseContract
 """
 
-import pytest
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any
 import threading
 import time
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict
 
-from gaia.pipeline.defect_router import Defect, DefectType, DefectSeverity, DefectStatus as RouterDefectStatus
+import pytest
+
 from gaia.pipeline.defect_remediation_tracker import (
+    TRANSITION_FROM_STATUS,
+    TRANSITION_TO_STATUS,
+    DefectRemediationTracker,
     DefectStatus,
     DefectStatusChange,
     DefectStatusTransition,
-    DefectRemediationTracker,
     InvalidStatusTransitionError,
-    TRANSITION_FROM_STATUS,
-    TRANSITION_TO_STATUS,
 )
-
+from gaia.pipeline.defect_router import (
+    Defect,
+    DefectSeverity,
+)
+from gaia.pipeline.defect_router import DefectStatus as RouterDefectStatus
+from gaia.pipeline.defect_router import (
+    DefectType,
+)
 
 # =============================================================================
 # Fixtures
@@ -128,21 +135,57 @@ class TestDefectStatusTransition:
 
     def test_transition_from_status(self):
         """Test transition source status mapping."""
-        assert TRANSITION_FROM_STATUS[DefectStatusTransition.OPEN_TO_IN_PROGRESS] == DefectStatus.OPEN
-        assert TRANSITION_FROM_STATUS[DefectStatusTransition.IN_PROGRESS_TO_RESOLVED] == DefectStatus.IN_PROGRESS
-        assert TRANSITION_FROM_STATUS[DefectStatusTransition.RESOLVED_TO_VERIFIED] == DefectStatus.RESOLVED
-        assert TRANSITION_FROM_STATUS[DefectStatusTransition.VERIFIED_TO_IN_PROGRESS] == DefectStatus.VERIFIED
-        assert TRANSITION_FROM_STATUS[DefectStatusTransition.DEFERRED_TO_OPEN] == DefectStatus.DEFERRED
-        assert TRANSITION_FROM_STATUS[DefectStatusTransition.CANNOT_FIX_TO_OPEN] == DefectStatus.CANNOT_FIX
+        assert (
+            TRANSITION_FROM_STATUS[DefectStatusTransition.OPEN_TO_IN_PROGRESS]
+            == DefectStatus.OPEN
+        )
+        assert (
+            TRANSITION_FROM_STATUS[DefectStatusTransition.IN_PROGRESS_TO_RESOLVED]
+            == DefectStatus.IN_PROGRESS
+        )
+        assert (
+            TRANSITION_FROM_STATUS[DefectStatusTransition.RESOLVED_TO_VERIFIED]
+            == DefectStatus.RESOLVED
+        )
+        assert (
+            TRANSITION_FROM_STATUS[DefectStatusTransition.VERIFIED_TO_IN_PROGRESS]
+            == DefectStatus.VERIFIED
+        )
+        assert (
+            TRANSITION_FROM_STATUS[DefectStatusTransition.DEFERRED_TO_OPEN]
+            == DefectStatus.DEFERRED
+        )
+        assert (
+            TRANSITION_FROM_STATUS[DefectStatusTransition.CANNOT_FIX_TO_OPEN]
+            == DefectStatus.CANNOT_FIX
+        )
 
     def test_transition_to_status(self):
         """Test transition target status mapping."""
-        assert TRANSITION_TO_STATUS[DefectStatusTransition.OPEN_TO_IN_PROGRESS] == DefectStatus.IN_PROGRESS
-        assert TRANSITION_TO_STATUS[DefectStatusTransition.IN_PROGRESS_TO_RESOLVED] == DefectStatus.RESOLVED
-        assert TRANSITION_TO_STATUS[DefectStatusTransition.RESOLVED_TO_VERIFIED] == DefectStatus.VERIFIED
-        assert TRANSITION_TO_STATUS[DefectStatusTransition.VERIFIED_TO_IN_PROGRESS] == DefectStatus.IN_PROGRESS
-        assert TRANSITION_TO_STATUS[DefectStatusTransition.DEFERRED_TO_OPEN] == DefectStatus.OPEN
-        assert TRANSITION_TO_STATUS[DefectStatusTransition.CANNOT_FIX_TO_OPEN] == DefectStatus.OPEN
+        assert (
+            TRANSITION_TO_STATUS[DefectStatusTransition.OPEN_TO_IN_PROGRESS]
+            == DefectStatus.IN_PROGRESS
+        )
+        assert (
+            TRANSITION_TO_STATUS[DefectStatusTransition.IN_PROGRESS_TO_RESOLVED]
+            == DefectStatus.RESOLVED
+        )
+        assert (
+            TRANSITION_TO_STATUS[DefectStatusTransition.RESOLVED_TO_VERIFIED]
+            == DefectStatus.VERIFIED
+        )
+        assert (
+            TRANSITION_TO_STATUS[DefectStatusTransition.VERIFIED_TO_IN_PROGRESS]
+            == DefectStatus.IN_PROGRESS
+        )
+        assert (
+            TRANSITION_TO_STATUS[DefectStatusTransition.DEFERRED_TO_OPEN]
+            == DefectStatus.OPEN
+        )
+        assert (
+            TRANSITION_TO_STATUS[DefectStatusTransition.CANNOT_FIX_TO_OPEN]
+            == DefectStatus.OPEN
+        )
 
 
 # =============================================================================
@@ -469,7 +512,9 @@ class TestDefectRemediationTrackerTransitions:
         tracker.mark_resolved("defect-001", "Fix applied")
 
         # Can reopen from RESOLVED
-        tracker._transition_status("defect-001", DefectStatus.IN_PROGRESS, "Needs more work")
+        tracker._transition_status(
+            "defect-001", DefectStatus.IN_PROGRESS, "Needs more work"
+        )
         assert tracker.get_defect("defect-001").status == DefectStatus.IN_PROGRESS
 
     def test_verified_regression(self, tracker, sample_defect):
@@ -480,7 +525,9 @@ class TestDefectRemediationTrackerTransitions:
         tracker.mark_verified("defect-001", "QA passed")
 
         # Regression - reopen
-        tracker._transition_status("defect-001", DefectStatus.IN_PROGRESS, "Regression found")
+        tracker._transition_status(
+            "defect-001", DefectStatus.IN_PROGRESS, "Regression found"
+        )
         assert tracker.get_defect("defect-001").status == DefectStatus.IN_PROGRESS
 
     def test_not_found_raises_keyerror(self, tracker):
@@ -592,7 +639,9 @@ class TestDefectRemediationTrackerQueries:
         assert summary["deferred_count"] == 1
         assert summary["cannot_fix_count"] == 1
         assert summary["pending_count"] == 2  # 2 resolved but not verified
-        assert summary["resolution_rate"] == 4 / 6  # 4 out of 6 have terminal status (verified + deferred + cannot_fix)
+        assert (
+            summary["resolution_rate"] == 4 / 6
+        )  # 4 out of 6 have terminal status (verified + deferred + cannot_fix)
 
     def test_get_defect_history(self, tracker, sample_defect):
         """Test getting defect history."""
@@ -630,7 +679,9 @@ class TestDefectRemediationTrackerQueries:
         tracker.mark_resolved("defect-001", "Fixed")
         tracker.mark_verified("defect-001", "Verified")
 
-        verified_history = tracker.get_defect_history(status_filter=DefectStatus.VERIFIED)
+        verified_history = tracker.get_defect_history(
+            status_filter=DefectStatus.VERIFIED
+        )
         assert len(verified_history) == 1
         assert verified_history[0].new_status == DefectStatus.VERIFIED
 

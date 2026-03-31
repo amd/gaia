@@ -21,23 +21,30 @@ Example:
     >>> snapshot = collector.get_latest_snapshot("loop-001", "DEVELOPMENT")
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Tuple, Callable
-import threading
-import uuid
-import statistics
 import json
 import sqlite3
-from pathlib import Path
+import statistics
+import threading
+import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from gaia.metrics.models import MetricSnapshot, MetricType, MetricStatistics, MetricsReport
-from gaia.pipeline.audit_logger import AuditLogger, AuditEventType
-from gaia.pipeline.defect_remediation_tracker import DefectRemediationTracker, DefectStatus
-from gaia.pipeline.state import PipelineStateMachine, PipelineSnapshot
+from gaia.metrics.models import (
+    MetricSnapshot,
+    MetricsReport,
+    MetricStatistics,
+    MetricType,
+)
+from gaia.pipeline.audit_logger import AuditEventType, AuditLogger
+from gaia.pipeline.defect_remediation_tracker import (
+    DefectRemediationTracker,
+    DefectStatus,
+)
+from gaia.pipeline.state import PipelineSnapshot, PipelineStateMachine
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -79,7 +86,9 @@ class TokenTracking:
             "tokens_output": self.tokens_output,
             "total_tokens": self.total_tokens(),
             "feature_name": self.feature_name,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "completed_at": (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
         }
 
 
@@ -285,7 +294,10 @@ class SQLiteConnectionPool:
             sqlite3.Connection
         """
         # Check if this thread already has a connection
-        if not hasattr(self._connection_local, 'connection') or self._connection_local.connection is None:
+        if (
+            not hasattr(self._connection_local, "connection")
+            or self._connection_local.connection is None
+        ):
             with self._lock:
                 if len(self._connections) < self.pool_size:
                     # Create new connection
@@ -328,7 +340,7 @@ class SQLiteConnectionPool:
                     pass
             self._connections.clear()
             # Clear thread-local connections
-            if hasattr(self._connection_local, 'connection'):
+            if hasattr(self._connection_local, "connection"):
                 self._connection_local.connection = None
 
 
@@ -387,7 +399,9 @@ class MetricsCollector:
         self._db_path = db_path
         self._connection_pool: Optional[SQLiteConnectionPool] = None
         if db_path:
-            self._connection_pool = SQLiteConnectionPool.get_instance(db_path, pool_size)
+            self._connection_pool = SQLiteConnectionPool.get_instance(
+                db_path, pool_size
+            )
 
         # Thread-safe storage
         self._lock = threading.RLock()
@@ -719,7 +733,9 @@ class MetricsCollector:
         """
         with self._lock:
             # Track discovery loop
-            self._defect_counts[loop_id_discovered] = self._defect_counts.get(loop_id_discovered, 0) + 1
+            self._defect_counts[loop_id_discovered] = (
+                self._defect_counts.get(loop_id_discovered, 0) + 1
+            )
 
             # Update code volume if provided
             if kloc > 0:
@@ -790,7 +806,9 @@ class MetricsCollector:
                 self._defect_resolution_times[actual_loop_resolved] = []
 
             resolved_at = resolved_at or datetime.now(timezone.utc)
-            resolution_time = (resolved_at - discovered_at).total_seconds() / 3600  # hours
+            resolution_time = (
+                resolved_at - discovered_at
+            ).total_seconds() / 3600  # hours
 
             # Store resolution time with cross-loop metadata
             resolution_record = {
@@ -801,7 +819,9 @@ class MetricsCollector:
                 "is_cross_loop": actual_loop_discovered != actual_loop_resolved,
             }
 
-            self._defect_resolution_times[actual_loop_resolved].append(resolution_record)
+            self._defect_resolution_times[actual_loop_resolved].append(
+                resolution_record
+            )
 
             # Record MTTR metric
             mttr = self._calculate_mttr(actual_loop_resolved)
@@ -863,42 +883,53 @@ class MetricsCollector:
         """
         with self._lock:
             resolved_at = resolved_at or datetime.now(timezone.utc)
-            total_resolution_time = (resolved_at - discovered_at).total_seconds() / 3600  # hours
+            total_resolution_time = (
+                resolved_at - discovered_at
+            ).total_seconds() / 3600  # hours
 
             # Estimate cross-loop overhead (time between loop transitions)
             # This is a heuristic: assume 1 hour overhead per loop transition
             loop_transitions = abs(
-                int(loop_id_resolved.split("-")[-1]) - int(loop_id_discovered.split("-")[-1])
+                int(loop_id_resolved.split("-")[-1])
+                - int(loop_id_discovered.split("-")[-1])
             )
             cross_loop_overhead = loop_transitions * 1.0  # 1 hour per transition
 
             # Adjusted MTTR values
-            discovery_loop_mttr = total_resolution_time * 0.3  # 30% attributed to discovery
-            resolution_loop_mttr = total_resolution_time * 0.7  # 70% attributed to resolution
+            discovery_loop_mttr = (
+                total_resolution_time * 0.3
+            )  # 30% attributed to discovery
+            resolution_loop_mttr = (
+                total_resolution_time * 0.7
+            )  # 70% attributed to resolution
 
             # Record in discovery loop
             if loop_id_discovered not in self._defect_resolution_times:
                 self._defect_resolution_times[loop_id_discovered] = []
-            self._defect_resolution_times[loop_id_discovered].append({
-                "resolution_hours": discovery_loop_mttr,
-                "defect_id": defect_id,
-                "loop_discovered": loop_id_discovered,
-                "loop_resolved": loop_id_resolved,
-                "is_cross_loop": True,
-                "cross_loop_overhead": cross_loop_overhead,
-            })
+            self._defect_resolution_times[loop_id_discovered].append(
+                {
+                    "resolution_hours": discovery_loop_mttr,
+                    "defect_id": defect_id,
+                    "loop_discovered": loop_id_discovered,
+                    "loop_resolved": loop_id_resolved,
+                    "is_cross_loop": True,
+                    "cross_loop_overhead": cross_loop_overhead,
+                }
+            )
 
             # Record in resolution loop
             if loop_id_resolved not in self._defect_resolution_times:
                 self._defect_resolution_times[loop_id_resolved] = []
-            self._defect_resolution_times[loop_id_resolved].append({
-                "resolution_hours": resolution_loop_mttr,
-                "defect_id": defect_id,
-                "loop_discovered": loop_id_discovered,
-                "loop_resolved": loop_id_resolved,
-                "is_cross_loop": True,
-                "cross_loop_overhead": cross_loop_overhead,
-            })
+            self._defect_resolution_times[loop_id_resolved].append(
+                {
+                    "resolution_hours": resolution_loop_mttr,
+                    "defect_id": defect_id,
+                    "loop_discovered": loop_id_discovered,
+                    "loop_resolved": loop_id_resolved,
+                    "is_cross_loop": True,
+                    "cross_loop_overhead": cross_loop_overhead,
+                }
+            )
 
             # Record cross-loop MTTR metric in resolution loop
             self.record_metric(
@@ -948,7 +979,9 @@ class MetricsCollector:
             # Calculate and record audit completeness
             expected_count = self._audit_expected.get(loop_id, 1)
             logged_count = self._audit_logged.get(loop_id, 0)
-            completeness = min(1.0, logged_count / expected_count) if expected_count > 0 else 1.0
+            completeness = (
+                min(1.0, logged_count / expected_count) if expected_count > 0 else 1.0
+            )
 
             self.record_metric(
                 loop_id=loop_id,
@@ -1012,14 +1045,20 @@ class MetricsCollector:
             for loop_id, records in self._defect_resolution_times.items():
                 for record in records:
                     if isinstance(record, dict) and record.get("is_cross_loop", False):
-                        cross_loop_defects.append({
-                            "defect_id": record.get("defect_id", "unknown"),
-                            "loop_discovered": record.get("loop_discovered", loop_id),
-                            "loop_resolved": record.get("loop_resolved", loop_id),
-                            "resolution_hours": record.get("resolution_hours", 0.0),
-                            "cross_loop_overhead": record.get("cross_loop_overhead", 0.0),
-                            "is_cross_loop": True,
-                        })
+                        cross_loop_defects.append(
+                            {
+                                "defect_id": record.get("defect_id", "unknown"),
+                                "loop_discovered": record.get(
+                                    "loop_discovered", loop_id
+                                ),
+                                "loop_resolved": record.get("loop_resolved", loop_id),
+                                "resolution_hours": record.get("resolution_hours", 0.0),
+                                "cross_loop_overhead": record.get(
+                                    "cross_loop_overhead", 0.0
+                                ),
+                                "is_cross_loop": True,
+                            }
+                        )
 
             return cross_loop_defects
 
@@ -1398,12 +1437,19 @@ class MetricsCollector:
                 "total_snapshots": sum(len(v) for v in self._snapshots.values()),
                 "loops_tracked": len(set(k[0] for k in self._snapshots.keys())),
                 "phases_tracked": len(set(k[1] for k in self._snapshots.keys())),
-                "token_tracking": {k: v.to_dict() for k, v in self._token_tracking.items()},
-                "context_tracking": {k: v.to_dict() for k, v in self._context_tracking.items()},
-                "quality_iterations": {k: v.to_dict() for k, v in self._quality_iterations.items()},
+                "token_tracking": {
+                    k: v.to_dict() for k, v in self._token_tracking.items()
+                },
+                "context_tracking": {
+                    k: v.to_dict() for k, v in self._context_tracking.items()
+                },
+                "quality_iterations": {
+                    k: v.to_dict() for k, v in self._quality_iterations.items()
+                },
                 "defect_counts": self._defect_counts,
                 "mttr_by_loop": {
-                    k: self._calculate_mttr(k) for k in self._defect_resolution_times.keys()
+                    k: self._calculate_mttr(k)
+                    for k in self._defect_resolution_times.keys()
                 },
             }
 
@@ -1559,12 +1605,13 @@ class MetricsCollector:
                 finally:
                     conn.close()
 
-    def _create_sqlite_tables(self, cursor: sqlite3.Cursor, include_metadata: bool) -> None:
+    def _create_sqlite_tables(
+        self, cursor: sqlite3.Cursor, include_metadata: bool
+    ) -> None:
         """Create SQLite tables if they don't exist."""
 
         # Core snapshots table
-        cursor.execute(
-            """
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 export_timestamp TEXT NOT NULL,
@@ -1575,12 +1622,10 @@ class MetricsCollector:
                 metadata TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
-            """
-        )
+            """)
 
         # Individual metric values
-        cursor.execute(
-            """
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS snapshot_metrics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 snapshot_id INTEGER NOT NULL,
@@ -1588,19 +1633,15 @@ class MetricsCollector:
                 value REAL NOT NULL,
                 FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
             )
-            """
-        )
+            """)
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_metric_type ON snapshot_metrics(metric_type)"
         )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_loop_id ON snapshots(loop_id)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_loop_id ON snapshots(loop_id)")
 
         if include_metadata:
             # Token tracking
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS token_tracking (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     export_timestamp TEXT NOT NULL,
@@ -1611,12 +1652,10 @@ class MetricsCollector:
                     feature_name TEXT,
                     completed_at TEXT
                 )
-                """
-            )
+                """)
 
             # Context tracking
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS context_tracking (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     export_timestamp TEXT NOT NULL,
@@ -1628,12 +1667,10 @@ class MetricsCollector:
                     effectiveness_ratio REAL,
                     tracked_at TEXT
                 )
-                """
-            )
+                """)
 
             # Quality iterations
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS quality_iterations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     export_timestamp TEXT NOT NULL,
@@ -1644,12 +1681,10 @@ class MetricsCollector:
                     reached_threshold INTEGER DEFAULT 0,
                     started_at TEXT
                 )
-                """
-            )
+                """)
 
             # Defects table
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS defects (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     export_timestamp TEXT NOT NULL,
@@ -1659,12 +1694,10 @@ class MetricsCollector:
                     defect_density REAL,
                     recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
-                """
-            )
+                """)
 
             # Cross-loop defects
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS cross_loop_defects (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     export_timestamp TEXT NOT NULL,
@@ -1675,12 +1708,10 @@ class MetricsCollector:
                     cross_loop_overhead REAL,
                     recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
-                """
-            )
+                """)
 
             # Export history
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS export_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     export_timestamp TEXT NOT NULL,
@@ -1690,8 +1721,7 @@ class MetricsCollector:
                     export_path TEXT,
                     recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
-                """
-            )
+                """)
 
     def _export_tracking_to_sqlite(
         self,
@@ -1716,7 +1746,11 @@ class MetricsCollector:
                     tracking.tokens_output,
                     tracking.total_tokens(),
                     tracking.feature_name,
-                    tracking.completed_at.isoformat() if tracking.completed_at else None,
+                    (
+                        tracking.completed_at.isoformat()
+                        if tracking.completed_at
+                        else None
+                    ),
                 ),
             )
 

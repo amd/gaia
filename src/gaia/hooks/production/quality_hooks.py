@@ -4,10 +4,10 @@ GAIA Production Quality Hooks
 Quality gate and defect extraction hooks for pipeline quality management.
 """
 
-from datetime import datetime
-from typing import Dict, List, Any, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-from gaia.hooks.base import BaseHook, HookContext, HookResult, HookPriority
+from gaia.hooks.base import BaseHook, HookContext, HookPriority, HookResult
 from gaia.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -272,7 +272,7 @@ class DefectExtractionHook(BaseHook):
             "severity": severity,
             "source": source or "defect_extraction",
             "suggestion": suggestion,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
 
@@ -340,7 +340,7 @@ class PipelineNotificationHook(BaseHook):
             "pipeline_id": context.pipeline_id,
             "phase": context.phase,
             "agent_id": context.agent_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "correlation_id": context.correlation_id,
             "metadata": context.metadata,
         }
@@ -439,6 +439,6 @@ class ChronicleHarvestHook(BaseHook):
             "loop_id": context.loop_id,
             "agent_id": context.agent_id,
             "data": context.data,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "correlation_id": context.correlation_id,
         }

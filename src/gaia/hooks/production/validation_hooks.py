@@ -4,11 +4,10 @@ GAIA Production Validation Hooks
 Pre-action and post-action validation hooks for pipeline quality gates.
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
-from gaia.hooks.base import BaseHook, HookContext, HookResult, HookPriority
+from gaia.hooks.base import BaseHook, HookContext, HookPriority, HookResult
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -83,9 +82,7 @@ class PreActionValidationHook(BaseHook):
             extra={"pipeline_id": context.pipeline_id},
         )
 
-        return HookResult.success_result(
-            metadata={"validation": "passed"}
-        )
+        return HookResult.success_result(metadata={"validation": "passed"})
 
     def _check_required_context(self, state: Dict[str, Any]) -> List[str]:
         """
@@ -118,7 +115,8 @@ class PreActionValidationHook(BaseHook):
         """
         defects = state.get("defects", [])
         return [
-            d for d in defects
+            d
+            for d in defects
             if d.get("blocking", False) or d.get("severity") == "critical"
         ]
 
@@ -279,5 +277,7 @@ class PostActionValidationHook(BaseHook):
             "severity": severity,
             "suggestion": suggestion,
             "source": "post_action_validation",
-            "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+            "timestamp": __import__("datetime")
+            .datetime.now(__import__("datetime").timezone.utc)
+            .isoformat(),
         }

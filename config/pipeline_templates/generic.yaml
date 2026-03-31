@@ -1,0 +1,43 @@
+# Generic Recursive Pipeline Template
+# For most development tasks with balanced quality and speed
+
+name: generic
+description: Generic recursive pipeline for most development tasks
+quality_threshold: 0.90
+max_iterations: 10
+
+agent_categories:
+  planning:
+    - planning-analysis-strategist
+  development:
+    - senior-developer
+  quality:
+    - quality-reviewer
+  decision:
+    - software-program-manager
+
+routing_rules:
+  - condition: "defect_type == 'security'"
+    route_to: security-auditor
+    priority: 1
+    loop_back: true
+    guidance: Address security vulnerability before proceeding
+
+  - condition: "defect_type == 'missing_tests'"
+    route_to: DEVELOPMENT
+    priority: 2
+    loop_back: true
+    guidance: Add unit tests for new functionality
+
+  - condition: "quality_score < 0.75"
+    route_to: PLANNING
+    priority: 3
+    loop_back: true
+    guidance: Significant rework needed - revisit requirements
+
+quality_weights:
+  code_quality: 0.25
+  requirements_coverage: 0.25
+  testing: 0.20
+  documentation: 0.15
+  best_practices: 0.15

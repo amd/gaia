@@ -4,12 +4,11 @@ GAIA Production Context Hooks
 Context injection and output processing hooks for pipeline data flow.
 """
 
-from datetime import datetime
-from typing import Dict, List, Any, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-from gaia.hooks.base import BaseHook, HookContext, HookResult, HookPriority
+from gaia.hooks.base import BaseHook, HookContext, HookPriority, HookResult
 from gaia.utils.logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -109,7 +108,7 @@ class ContextInjectionHook(BaseHook):
             # Try alternative key
             results = state.get("iteration_results", [])
 
-        return results[-self.MAX_PREVIOUS_RESULTS:]
+        return results[-self.MAX_PREVIOUS_RESULTS :]
 
     def _get_relevant_chronicle(
         self,
@@ -129,7 +128,7 @@ class ContextInjectionHook(BaseHook):
             return []
 
         # Return most recent entries
-        return chronicle[-self.MAX_CHRONICLE_ENTRIES:]
+        return chronicle[-self.MAX_CHRONICLE_ENTRIES :]
 
     def _get_defect_history(
         self,
@@ -151,14 +150,11 @@ class ContextInjectionHook(BaseHook):
         # Filter by current phase if available
         current_phase = state.get("current_phase")
         if current_phase:
-            phase_defects = [
-                d for d in defects
-                if d.get("phase") == current_phase
-            ]
+            phase_defects = [d for d in defects if d.get("phase") == current_phase]
             if phase_defects:
-                return phase_defects[-self.MAX_DEFECT_HISTORY:]
+                return phase_defects[-self.MAX_DEFECT_HISTORY :]
 
-        return defects[-self.MAX_DEFECT_HISTORY:]
+        return defects[-self.MAX_DEFECT_HISTORY :]
 
     def _get_quality_history(
         self,
@@ -180,7 +176,7 @@ class ContextInjectionHook(BaseHook):
             if quality_report:
                 quality_scores = [quality_report]
 
-        return quality_scores[-self.MAX_PREVIOUS_RESULTS:]
+        return quality_scores[-self.MAX_PREVIOUS_RESULTS :]
 
 
 class OutputProcessingHook(BaseHook):
@@ -334,7 +330,7 @@ class OutputProcessingHook(BaseHook):
         metadata = dict(existing_metadata)
 
         # Add processing timestamp
-        metadata["processed_at"] = datetime.utcnow().isoformat()
+        metadata["processed_at"] = datetime.now(timezone.utc).isoformat()
 
         # Add agent info
         if context.agent_id:

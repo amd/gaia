@@ -4,15 +4,17 @@ Tests for GAIA Metrics Collector
 Tests for MetricsCollector class and related tracking classes.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
-from datetime import datetime, timezone, timedelta
+
 from gaia.metrics.collector import (
-    MetricsCollector,
-    TokenTracking,
     ContextTracking,
+    MetricsCollector,
     QualityIteration,
+    TokenTracking,
 )
-from gaia.metrics.models import MetricType, MetricSnapshot
+from gaia.metrics.models import MetricSnapshot, MetricType
 
 
 class TestTokenTracking:
@@ -329,6 +331,7 @@ class TestMetricsCollector:
 
         # Wait a tiny bit to ensure different timestamp
         import time
+
         time.sleep(0.001)
 
         collector.record_metric(
@@ -583,6 +586,7 @@ class TestPersistenceLayer:
         assert export_path.exists()
 
         import json
+
         with open(export_path, "r") as f:
             data = json.load(f)
 
@@ -606,6 +610,7 @@ class TestPersistenceLayer:
         assert export_path.exists()
 
         import json
+
         with open(export_path, "r") as f:
             data = json.load(f)
 
@@ -653,6 +658,7 @@ class TestPersistenceLayer:
         )
 
         import sqlite3
+
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
 
@@ -689,6 +695,7 @@ class TestPersistenceLayer:
         collector.export_to_json(str(export_path))
 
         import json
+
         with open(export_path, "r") as f:
             data = json.load(f)
 

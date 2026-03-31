@@ -14,22 +14,22 @@ Tests cover:
 - Integration with PipelineState and LoopManager
 """
 
-import pytest
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any
-import threading
-import time
-import json
 import csv
 import io
+import json
+import threading
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict
+
+import pytest
 
 from gaia.pipeline.audit_logger import (
-    AuditLogger,
     AuditEvent,
     AuditEventType,
+    AuditLogger,
     IntegrityVerificationError,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -45,10 +45,22 @@ def logger() -> AuditLogger:
 @pytest.fixture
 def logger_with_events(logger: AuditLogger) -> AuditLogger:
     """Create a logger with sample events for testing."""
-    logger.log(AuditEventType.PIPELINE_START, pipeline_id="pipe-001", user_goal="Test goal")
-    logger.log(AuditEventType.PHASE_ENTER, phase="PLANNING", inputs_available=["user_goal"])
-    logger.log(AuditEventType.AGENT_SELECTED, agent_id="senior-developer", capabilities=["coding"])
-    logger.log(AuditEventType.AGENT_EXECUTED, agent_id="senior-developer", execution_time_ms=1500)
+    logger.log(
+        AuditEventType.PIPELINE_START, pipeline_id="pipe-001", user_goal="Test goal"
+    )
+    logger.log(
+        AuditEventType.PHASE_ENTER, phase="PLANNING", inputs_available=["user_goal"]
+    )
+    logger.log(
+        AuditEventType.AGENT_SELECTED,
+        agent_id="senior-developer",
+        capabilities=["coding"],
+    )
+    logger.log(
+        AuditEventType.AGENT_EXECUTED,
+        agent_id="senior-developer",
+        execution_time_ms=1500,
+    )
     logger.log(AuditEventType.PHASE_EXIT, phase="PLANNING", outputs_produced=["plan"])
     return logger
 
@@ -447,7 +459,7 @@ class TestAuditLoggerTamperingDetection:
         )
         # The hash was computed with tampered payload, but we'll swap in the old hash
         # to simulate someone trying to hide tampering
-        object.__setattr__(corrupted_event, 'current_hash', event2.current_hash)
+        object.__setattr__(corrupted_event, "current_hash", event2.current_hash)
 
         logger2._events[1] = corrupted_event
         del logger2._event_index[event2.event_id]
@@ -496,7 +508,7 @@ class TestAuditLoggerTamperingDetection:
             payload={"corrupted": True},
         )
         # Set the old hash to simulate tampering
-        object.__setattr__(corrupted, 'current_hash', event3.current_hash)
+        object.__setattr__(corrupted, "current_hash", event3.current_hash)
 
         logger._events[2] = corrupted
 
@@ -542,6 +554,7 @@ class TestAuditLoggerThreadSafety:
 
     def test_concurrent_logging_integrity(self, logger):
         """Test integrity after concurrent logging."""
+
         def log_events():
             for i in range(20):
                 logger.log(AuditEventType.TOOL_EXECUTED, tool_name=f"tool_{i}")
@@ -577,7 +590,9 @@ class TestAuditLoggerThreadSafety:
         def writer():
             try:
                 for i in range(10):
-                    logger.log(AuditEventType.TOOL_EXECUTED, tool_name=f"writer_tool_{i}")
+                    logger.log(
+                        AuditEventType.TOOL_EXECUTED, tool_name=f"writer_tool_{i}"
+                    )
             except Exception as e:
                 errors.append(e)
 
@@ -681,7 +696,7 @@ class TestAuditLoggerExport:
             sequence_number=event2.sequence_number,
             payload={"tampered": True},
         )
-        object.__setattr__(corrupted, 'current_hash', event2.current_hash)
+        object.__setattr__(corrupted, "current_hash", event2.current_hash)
 
         logger._events[1] = corrupted
 
@@ -903,7 +918,7 @@ class TestAuditLoggerSummary:
             sequence_number=event2.sequence_number,
             payload={"tampered": True},
         )
-        object.__setattr__(corrupted, 'current_hash', event2.current_hash)
+        object.__setattr__(corrupted, "current_hash", event2.current_hash)
 
         logger._events[1] = corrupted
 
@@ -1061,15 +1076,31 @@ class TestAuditLoggerIntegration:
 
         # Phase: PLANNING
         logger.log(AuditEventType.PHASE_ENTER, phase="PLANNING")
-        logger.log(AuditEventType.AGENT_SELECTED, agent_id="senior-developer", phase="PLANNING")
-        logger.log(AuditEventType.AGENT_EXECUTED, agent_id="senior-developer", phase="PLANNING")
-        logger.log(AuditEventType.PHASE_EXIT, phase="PLANNING", outputs_produced=["plan"])
+        logger.log(
+            AuditEventType.AGENT_SELECTED, agent_id="senior-developer", phase="PLANNING"
+        )
+        logger.log(
+            AuditEventType.AGENT_EXECUTED, agent_id="senior-developer", phase="PLANNING"
+        )
+        logger.log(
+            AuditEventType.PHASE_EXIT, phase="PLANNING", outputs_produced=["plan"]
+        )
 
         # Phase: DEVELOPMENT
         logger.log(AuditEventType.PHASE_ENTER, phase="DEVELOPMENT")
-        logger.log(AuditEventType.AGENT_SELECTED, agent_id="senior-developer", phase="DEVELOPMENT")
-        logger.log(AuditEventType.AGENT_EXECUTED, agent_id="senior-developer", phase="DEVELOPMENT")
-        logger.log(AuditEventType.PHASE_EXIT, phase="DEVELOPMENT", outputs_produced=["code.py"])
+        logger.log(
+            AuditEventType.AGENT_SELECTED,
+            agent_id="senior-developer",
+            phase="DEVELOPMENT",
+        )
+        logger.log(
+            AuditEventType.AGENT_EXECUTED,
+            agent_id="senior-developer",
+            phase="DEVELOPMENT",
+        )
+        logger.log(
+            AuditEventType.PHASE_EXIT, phase="DEVELOPMENT", outputs_produced=["code.py"]
+        )
 
         # Phase: QUALITY
         logger.log(AuditEventType.PHASE_ENTER, phase="QUALITY")

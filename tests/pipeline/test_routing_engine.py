@@ -9,21 +9,22 @@ Tests cover:
 - Routing decision creation
 """
 
-import pytest
 from datetime import datetime
 from typing import Dict, List
 
-from gaia.pipeline.routing_engine import (
-    RoutingEngine,
-    RoutingDecision,
-    RoutingRule,
-)
+import pytest
+
+from gaia.agents.registry import AgentRegistry
 from gaia.pipeline.defect_types import (
     DefectType,
     defect_type_from_string,
     get_defect_specialists,
 )
-from gaia.agents.registry import AgentRegistry
+from gaia.pipeline.routing_engine import (
+    RoutingDecision,
+    RoutingEngine,
+    RoutingRule,
+)
 
 
 class TestDefectTypeDetection:
@@ -31,9 +32,15 @@ class TestDefectTypeDetection:
 
     def test_detect_security_defect(self):
         """Test detection of security defects."""
-        assert defect_type_from_string("SQL injection vulnerability") == DefectType.SECURITY
+        assert (
+            defect_type_from_string("SQL injection vulnerability")
+            == DefectType.SECURITY
+        )
         assert defect_type_from_string("XSS attack possible") == DefectType.SECURITY
-        assert defect_type_from_string("Authentication bypass detected") == DefectType.SECURITY
+        assert (
+            defect_type_from_string("Authentication bypass detected")
+            == DefectType.SECURITY
+        )
 
     def test_detect_performance_defect(self):
         """Test detection of performance defects."""
@@ -44,50 +51,103 @@ class TestDefectTypeDetection:
     def test_detect_testing_defect(self):
         """Test detection of testing defects."""
         assert defect_type_from_string("Missing tests for module") == DefectType.TESTING
-        assert defect_type_from_string("Insufficient test coverage") == DefectType.TESTING
+        assert (
+            defect_type_from_string("Insufficient test coverage") == DefectType.TESTING
+        )
         assert defect_type_from_string("Flaky test failure") == DefectType.TESTING
 
     def test_detect_documentation_defect(self):
         """Test detection of documentation defects."""
         assert defect_type_from_string("Missing docstring") == DefectType.DOCUMENTATION
-        assert defect_type_from_string("Outdated documentation") == DefectType.DOCUMENTATION
-        assert defect_type_from_string("Missing API comments") == DefectType.DOCUMENTATION
+        assert (
+            defect_type_from_string("Outdated documentation")
+            == DefectType.DOCUMENTATION
+        )
+        assert (
+            defect_type_from_string("Missing API comments") == DefectType.DOCUMENTATION
+        )
 
     def test_detect_code_quality_defect(self):
         """Test detection of code quality defects."""
-        assert defect_type_from_string("Code style violation") == DefectType.CODE_QUALITY
-        assert defect_type_from_string("High cyclomatic complexity") == DefectType.CODE_QUALITY
-        assert defect_type_from_string("Duplicate code detected") == DefectType.CODE_QUALITY
+        assert (
+            defect_type_from_string("Code style violation") == DefectType.CODE_QUALITY
+        )
+        assert (
+            defect_type_from_string("High cyclomatic complexity")
+            == DefectType.CODE_QUALITY
+        )
+        assert (
+            defect_type_from_string("Duplicate code detected")
+            == DefectType.CODE_QUALITY
+        )
 
     def test_detect_requirements_defect(self):
         """Test detection of requirements defects."""
-        assert defect_type_from_string("Missing requirement implementation") == DefectType.REQUIREMENTS
-        assert defect_type_from_string("Incorrect feature behavior") == DefectType.REQUIREMENTS
-        assert defect_type_from_string("Edge case not handled") == DefectType.REQUIREMENTS
+        assert (
+            defect_type_from_string("Missing requirement implementation")
+            == DefectType.REQUIREMENTS
+        )
+        assert (
+            defect_type_from_string("Incorrect feature behavior")
+            == DefectType.REQUIREMENTS
+        )
+        assert (
+            defect_type_from_string("Edge case not handled") == DefectType.REQUIREMENTS
+        )
 
     def test_detect_architecture_defect(self):
         """Test detection of architecture defects."""
-        assert defect_type_from_string("Architecture violation") == DefectType.ARCHITECTURE
-        assert defect_type_from_string("Circular dependency detected") == DefectType.ARCHITECTURE
-        assert defect_type_from_string("Architectural pattern violation") == DefectType.ARCHITECTURE
+        assert (
+            defect_type_from_string("Architecture violation") == DefectType.ARCHITECTURE
+        )
+        assert (
+            defect_type_from_string("Circular dependency detected")
+            == DefectType.ARCHITECTURE
+        )
+        assert (
+            defect_type_from_string("Architectural pattern violation")
+            == DefectType.ARCHITECTURE
+        )
 
     def test_detect_accessibility_defect(self):
         """Test detection of accessibility defects."""
-        assert defect_type_from_string("Missing alt text for images") == DefectType.ACCESSIBILITY
-        assert defect_type_from_string("WCAG compliance issue") == DefectType.ACCESSIBILITY
-        assert defect_type_from_string("Keyboard navigation broken") == DefectType.ACCESSIBILITY
+        assert (
+            defect_type_from_string("Missing alt text for images")
+            == DefectType.ACCESSIBILITY
+        )
+        assert (
+            defect_type_from_string("WCAG compliance issue") == DefectType.ACCESSIBILITY
+        )
+        assert (
+            defect_type_from_string("Keyboard navigation broken")
+            == DefectType.ACCESSIBILITY
+        )
 
     def test_detect_compatibility_defect(self):
         """Test detection of compatibility defects."""
-        assert defect_type_from_string("Cross-browser compatibility issue") == DefectType.COMPATIBILITY
-        assert defect_type_from_string("Not working on mobile Safari") == DefectType.COMPATIBILITY
-        assert defect_type_from_string("Breaking change in API") == DefectType.COMPATIBILITY
+        assert (
+            defect_type_from_string("Cross-browser compatibility issue")
+            == DefectType.COMPATIBILITY
+        )
+        assert (
+            defect_type_from_string("Not working on mobile Safari")
+            == DefectType.COMPATIBILITY
+        )
+        assert (
+            defect_type_from_string("Breaking change in API")
+            == DefectType.COMPATIBILITY
+        )
 
     def test_detect_data_integrity_defect(self):
         """Test detection of data integrity defects."""
-        assert defect_type_from_string("Data validation missing") == DefectType.DATA_INTEGRITY
+        assert (
+            defect_type_from_string("Data validation missing")
+            == DefectType.DATA_INTEGRITY
+        )
         assert defect_type_from_string("Type safety issue") == DefectType.DATA_INTEGRITY
-        assert defect_type_from_string("Potential data loss") == DefectType.DATA_INTEGRITY
+        assert (
+            defect_type_from_string("Potential data loss") == DefectType.DATA_INTEGRITY
+        )
 
     def test_detect_unknown_defect(self):
         """Test detection returns UNKNOWN for unclassifiable defects."""
@@ -303,7 +363,11 @@ class TestRoutingEngine:
     def test_route_multiple_defects(self, engine: RoutingEngine):
         """Test routing multiple defects at once."""
         defects = [
-            {"id": "d1", "description": "SQL injection vulnerability", "severity": "critical"},
+            {
+                "id": "d1",
+                "description": "SQL injection vulnerability",
+                "severity": "critical",
+            },
             {"id": "d2", "description": "Missing unit tests", "severity": "medium"},
             {"id": "d3", "description": "Slow database query", "severity": "high"},
         ]
@@ -458,10 +522,26 @@ class TestRoutingEngineIntegration:
 
         # Simulate defects from quality report
         defects = [
-            {"id": "sec-1", "description": "SQL injection in login", "severity": "critical"},
-            {"id": "perf-1", "description": "Slow query in user endpoint", "severity": "high"},
-            {"id": "test-1", "description": "No tests for auth module", "severity": "medium"},
-            {"id": "doc-1", "description": "Missing API documentation", "severity": "low"},
+            {
+                "id": "sec-1",
+                "description": "SQL injection in login",
+                "severity": "critical",
+            },
+            {
+                "id": "perf-1",
+                "description": "Slow query in user endpoint",
+                "severity": "high",
+            },
+            {
+                "id": "test-1",
+                "description": "No tests for auth module",
+                "severity": "medium",
+            },
+            {
+                "id": "doc-1",
+                "description": "Missing API documentation",
+                "severity": "low",
+            },
         ]
 
         # Route all defects
@@ -475,7 +555,9 @@ class TestRoutingEngineIntegration:
         assert len(all_decisions) == 4
 
         # Check specific routings
-        sec_decision = next(d for d in all_decisions if d.metadata.get("defect_id") == "sec-1")
+        sec_decision = next(
+            d for d in all_decisions if d.metadata.get("defect_id") == "sec-1"
+        )
         assert sec_decision.target_agent == "security-auditor"
         assert sec_decision.defect_type == DefectType.SECURITY
 
@@ -555,16 +637,32 @@ class TestRoutingEnginePerformance:
     @pytest.fixture
     def sample_defects(self) -> List[Dict[str, str]]:
         """Generate sample defects for performance testing."""
-        return [
-            {"id": f"perf-{i}", "description": f"SQL injection vulnerability in module {i}", "severity": "critical"}
-            for i in range(50)
-        ] + [
-            {"id": f"perf-{i+50}", "description": f"Memory leak detected in loop iteration {i}", "severity": "high"}
-            for i in range(50)
-        ] + [
-            {"id": f"perf-{i+100}", "description": f"Missing unit tests for service {i}", "severity": "medium"}
-            for i in range(50)
-        ]
+        return (
+            [
+                {
+                    "id": f"perf-{i}",
+                    "description": f"SQL injection vulnerability in module {i}",
+                    "severity": "critical",
+                }
+                for i in range(50)
+            ]
+            + [
+                {
+                    "id": f"perf-{i+50}",
+                    "description": f"Memory leak detected in loop iteration {i}",
+                    "severity": "high",
+                }
+                for i in range(50)
+            ]
+            + [
+                {
+                    "id": f"perf-{i+100}",
+                    "description": f"Missing unit tests for service {i}",
+                    "severity": "medium",
+                }
+                for i in range(50)
+            ]
+        )
 
     def test_defect_type_detection_performance(self, engine: RoutingEngine):
         """Benchmark test for defect type detection performance."""
@@ -586,9 +684,13 @@ class TestRoutingEnginePerformance:
         elapsed = time.perf_counter() - start_time
 
         # Should process 100 defect type detections in under 0.5 seconds
-        assert elapsed < 0.5, f"Defect type detection took {elapsed:.3f}s, expected < 0.5s"
+        assert (
+            elapsed < 0.5
+        ), f"Defect type detection took {elapsed:.3f}s, expected < 0.5s"
 
-    def test_routing_decision_performance(self, engine: RoutingEngine, sample_defects: List[Dict]):
+    def test_routing_decision_performance(
+        self, engine: RoutingEngine, sample_defects: List[Dict]
+    ):
         """Benchmark test for full routing decision performance."""
         import time
 
@@ -597,7 +699,9 @@ class TestRoutingEnginePerformance:
         elapsed = time.perf_counter() - start_time
 
         # Should route 150 defects in under 2 seconds
-        assert elapsed < 2.0, f"Routing 150 defects took {elapsed:.3f}s, expected < 2.0s"
+        assert (
+            elapsed < 2.0
+        ), f"Routing 150 defects took {elapsed:.3f}s, expected < 2.0s"
 
         # Verify all defects were routed
         total_routed = sum(len(decisions) for decisions in routed.values())
@@ -610,7 +714,9 @@ class TestRoutingEnginePerformance:
         engine = RoutingEngine()
 
         # Description with many keywords - should exit early on high-confidence match
-        long_description = " ".join(["security"] * 50 + ["vulnerability"] * 50 + ["injection"] * 50)
+        long_description = " ".join(
+            ["security"] * 50 + ["vulnerability"] * 50 + ["injection"] * 50
+        )
 
         start_time = time.perf_counter()
         for _ in range(100):
@@ -618,7 +724,9 @@ class TestRoutingEnginePerformance:
         elapsed = time.perf_counter() - start_time
 
         # Should complete 100 detections quickly due to early exit
-        assert elapsed < 1.0, f"Early exit detection took {elapsed:.3f}s, expected < 1.0s"
+        assert (
+            elapsed < 1.0
+        ), f"Early exit detection took {elapsed:.3f}s, expected < 1.0s"
         assert result == DefectType.SECURITY
 
     def test_confidence_calculation_performance(self, engine: RoutingEngine):
@@ -639,12 +747,14 @@ class TestRoutingEnginePerformance:
         elapsed = time.perf_counter() - start_time
 
         # Should calculate confidence for 150 defects in under 1 second
-        assert elapsed < 1.0, f"Confidence calculation took {elapsed:.3f}s, expected < 1.0s"
+        assert (
+            elapsed < 1.0
+        ), f"Confidence calculation took {elapsed:.3f}s, expected < 1.0s"
 
     def test_max_keyword_matches_tracking(self, engine: RoutingEngine):
         """Test that keyword matching tracks max matches for optimization."""
         # This test verifies the MAX_KEYWORD_MATCHES_TO_TRACK constant is used
-        assert hasattr(engine, 'MAX_KEYWORD_MATCHES_TO_TRACK')
+        assert hasattr(engine, "MAX_KEYWORD_MATCHES_TO_TRACK")
         assert engine.MAX_KEYWORD_MATCHES_TO_TRACK >= 1
 
         # Description that would match many keywords
@@ -696,7 +806,11 @@ class TestComplexRuleConditions:
         """Test rule evaluation with 'in' operator condition."""
         # Should match - severity is in allowed values
         context = {"severity": "critical", "confidence": 0.8}
-        rule = next(r for r in engine_with_custom_rules._rules if r.rule_id == "complex-security-001")
+        rule = next(
+            r
+            for r in engine_with_custom_rules._rules
+            if r.rule_id == "complex-security-001"
+        )
         assert rule.matches(DefectType.SECURITY, context) is True
 
         # Should not match - severity not in allowed values
@@ -705,29 +819,63 @@ class TestComplexRuleConditions:
 
     def test_rule_with_gte_condition(self, engine_with_custom_rules: RoutingEngine):
         """Test rule evaluation with 'gte' operator condition."""
-        rule = next(r for r in engine_with_custom_rules._rules if r.rule_id == "complex-security-001")
+        rule = next(
+            r
+            for r in engine_with_custom_rules._rules
+            if r.rule_id == "complex-security-001"
+        )
 
         # Should match - confidence >= 0.7 and severity in allowed values
-        assert rule.matches(DefectType.SECURITY, {"severity": "high", "confidence": 0.8}) is True
-        assert rule.matches(DefectType.SECURITY, {"severity": "critical", "confidence": 0.7}) is True
+        assert (
+            rule.matches(DefectType.SECURITY, {"severity": "high", "confidence": 0.8})
+            is True
+        )
+        assert (
+            rule.matches(
+                DefectType.SECURITY, {"severity": "critical", "confidence": 0.7}
+            )
+            is True
+        )
 
         # Should not match - confidence < 0.7 (even with valid severity)
-        assert rule.matches(DefectType.SECURITY, {"severity": "high", "confidence": 0.5}) is False
+        assert (
+            rule.matches(DefectType.SECURITY, {"severity": "high", "confidence": 0.5})
+            is False
+        )
 
         # Should not match - severity not in allowed values (even with valid confidence)
-        assert rule.matches(DefectType.SECURITY, {"severity": "low", "confidence": 0.8}) is False
+        assert (
+            rule.matches(DefectType.SECURITY, {"severity": "low", "confidence": 0.8})
+            is False
+        )
 
     def test_rule_with_gt_condition(self, engine_with_custom_rules: RoutingEngine):
         """Test rule evaluation with 'gt' operator condition."""
-        rule = next(r for r in engine_with_custom_rules._rules if r.rule_id == "complex-performance-001")
+        rule = next(
+            r
+            for r in engine_with_custom_rules._rules
+            if r.rule_id == "complex-performance-001"
+        )
 
         # Should match - impact > 5
-        assert rule.matches(DefectType.PERFORMANCE, {"severity": "high", "impact": 6}) is True
-        assert rule.matches(DefectType.PERFORMANCE, {"severity": "high", "impact": 10}) is True
+        assert (
+            rule.matches(DefectType.PERFORMANCE, {"severity": "high", "impact": 6})
+            is True
+        )
+        assert (
+            rule.matches(DefectType.PERFORMANCE, {"severity": "high", "impact": 10})
+            is True
+        )
 
         # Should not match - impact <= 5
-        assert rule.matches(DefectType.PERFORMANCE, {"severity": "high", "impact": 5}) is False
-        assert rule.matches(DefectType.PERFORMANCE, {"severity": "high", "impact": 3}) is False
+        assert (
+            rule.matches(DefectType.PERFORMANCE, {"severity": "high", "impact": 5})
+            is False
+        )
+        assert (
+            rule.matches(DefectType.PERFORMANCE, {"severity": "high", "impact": 3})
+            is False
+        )
 
     def test_rule_with_multiple_complex_conditions(self):
         """Test rule with multiple complex dict-based conditions."""
@@ -826,8 +974,12 @@ class TestTemplateRuleMerging:
         assert priorities == sorted(priorities)
 
         # High priority template should come before low priority
-        high_idx = next(i for i, r in enumerate(engine._rules) if r.rule_id == "template-high")
-        low_idx = next(i for i, r in enumerate(engine._rules) if r.rule_id == "template-low")
+        high_idx = next(
+            i for i, r in enumerate(engine._rules) if r.rule_id == "template-high"
+        )
+        low_idx = next(
+            i for i, r in enumerate(engine._rules) if r.rule_id == "template-low"
+        )
         assert high_idx < low_idx
 
     def test_template_rule_overrides_default_behavior(self):

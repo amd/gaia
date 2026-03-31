@@ -10,14 +10,15 @@ Tests cover:
 """
 
 import asyncio
-import pytest
+from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import List, Any
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
+
 
 def make_engine(max_concurrent_loops: int = 100, worker_pool_size: int = 4):
     """Create a PipelineEngine with bounded concurrency params without full init."""
@@ -38,6 +39,7 @@ def make_engine(max_concurrent_loops: int = 100, worker_pool_size: int = 4):
 # ---------------------------------------------------------------------------
 # execute() delegate tests
 # ---------------------------------------------------------------------------
+
 
 class TestPipelineEngineExecute:
     """Tests for PipelineEngine.execute() single-workload method."""
@@ -66,6 +68,7 @@ class TestPipelineEngineExecute:
 # ---------------------------------------------------------------------------
 # execute_with_backpressure() tests
 # ---------------------------------------------------------------------------
+
 
 class TestExecuteWithBackpressure:
     """Tests for PipelineEngine.execute_with_backpressure()."""
@@ -134,7 +137,9 @@ class TestExecuteWithBackpressure:
     async def test_semaphore_limits_concurrency(self):
         """At most max_concurrent_loops tasks run concurrently."""
         MAX_CONCURRENT = 3
-        engine = make_engine(max_concurrent_loops=MAX_CONCURRENT, worker_pool_size=MAX_CONCURRENT)
+        engine = make_engine(
+            max_concurrent_loops=MAX_CONCURRENT, worker_pool_size=MAX_CONCURRENT
+        )
 
         active_count = 0
         peak_active = 0
@@ -235,12 +240,14 @@ class TestExecuteWithBackpressure:
 # Default parameter tests
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineEngineConcurrencyDefaults:
     """Tests verifying PipelineEngine default concurrency parameter values."""
 
     def test_default_max_concurrent_loops(self):
         """max_concurrent_loops defaults to 100."""
         import inspect
+
         from gaia.pipeline.engine import PipelineEngine
 
         sig = inspect.signature(PipelineEngine.__init__)
@@ -251,6 +258,7 @@ class TestPipelineEngineConcurrencyDefaults:
     def test_default_worker_pool_size(self):
         """worker_pool_size defaults to 4."""
         import inspect
+
         from gaia.pipeline.engine import PipelineEngine
 
         sig = inspect.signature(PipelineEngine.__init__)
