@@ -1,0 +1,83 @@
+---
+title: "v0.17.1"
+description: "Agent UI works out of the box — automatic frontend build on gaia init, no manual npm steps"
+---
+
+# GAIA v0.17.1 Release Notes
+
+Agent UI now works from the moment you finish `gaia init` — no manual frontend build steps, no hunting for the right `npm` command. This patch release makes the first-install experience reliable and cleans up how you point to a custom frontend dist directory.
+
+```bash
+npm install -g @amd-gaia/agent-ui
+gaia-ui
+```
+
+**Why upgrade:**
+- **Agent UI works immediately after `gaia init`** — The frontend build now runs automatically during initialization on dev/source installs, so `gaia chat --ui` is ready to go without any extra steps
+- **Cleaner configuration with `--ui-dist`** — A new CLI flag replaces the opaque `GAIA_WEBUI_DIST` environment variable, making it obvious how to point to a custom frontend dist directory
+- **More reliable publishing pipeline** — The `@amd-gaia/agent-ui` npm package now publishes via OIDC trusted publishing, eliminating NPM token rotation issues that could delay releases
+
+Get started with the [Agent UI guide](/guides/agent-ui).
+
+---
+
+## What's New
+
+### Agent UI First-Install Reliability
+
+Previously, after running `gaia init` on a dev or source install, launching `gaia chat --ui` would fail because the React frontend hadn't been built yet. Users had to manually run `cd src/gaia/apps/webui && npm install && npm run build` — a step easy to miss and not clearly documented (commit f89810a3).
+
+**What you can do:**
+- Run `gaia init` once and immediately launch `gaia chat --ui` — the frontend is built automatically
+- Skip the manual build step entirely on dev/source installs
+
+**Under the hood:**
+- Extracted `_ensure_webui_built()` into a shared `gaia/ui/build.py` module used by both `gaia init` and `gaia chat --ui`
+- `gaia chat --ui` retains its staleness check and auto-rebuild as a safety net
+- Added unit tests for all new build code paths
+- Fixed Agent UI docs to clarify the Setup → Quickstart → Agent UI prerequisite chain
+
+---
+
+### `--ui-dist` Configuration Flag
+
+The `GAIA_WEBUI_DIST` environment variable for pointing to a custom frontend dist directory has been replaced with a `--ui-dist` CLI argument (commits f3af9b29, 1fa20969). This follows GAIA's CLI-first configuration pattern and makes the option discoverable via `--help`.
+
+**What you can do:**
+- `gaia chat --ui --ui-dist /path/to/dist` — point to a custom frontend build
+- `gaia-ui` npm launcher passes this automatically — no manual env var setup needed
+
+**Under the hood:**
+- `--ui-dist` accepted by both `gaia chat --ui` and the UI server directly
+- Code review advisory items A1–A5 addressed (commit b6114a42)
+
+---
+
+## Infrastructure
+
+- **OIDC trusted publishing** — `@amd-gaia/agent-ui` npm package now publishes via OIDC, removing the NPM_TOKEN secret requirement and making the publishing pipeline more reliable (PRs #638, #639)
+- **Merge queue fix** — Resolved phantom failures in the merge-queue-notify CI workflow (PR #640)
+
+---
+
+## Upgrade
+
+```bash
+npm install -g @amd-gaia/agent-ui@latest
+```
+
+---
+
+## Full Changelog
+
+**7 commits** since v0.17.0:
+
+- `1fa20969` - fix: replace GAIA_WEBUI_DIST env var with --ui-dist CLI argument
+- `b6114a42` - fix: address code review advisory items A1-A5
+- `f3af9b29` - fix: pass GAIA_WEBUI_DIST env var from gaia-ui to Python server
+- `f89810a3` - fix: build Agent UI frontend during gaia init and fix doc prerequisites
+- `334b011c` - fix: remove registry-url to enable OIDC trusted publishing (#639)
+- `776dc34a` - fix: resolve merge-queue-notify phantom failures (#640)
+- `83a4db1b` - fix: switch npm publish to OIDC trusted publishing (#638)
+
+Full Changelog: [v0.17.0...v0.17.1](https://github.com/amd/gaia/compare/v0.17.0...v0.17.1)
