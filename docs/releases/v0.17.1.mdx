@@ -1,0 +1,82 @@
+---
+title: "v0.17.1"
+description: "C++ streaming, runtime configuration, eval improvements, and reliability fixes"
+---
+
+# GAIA v0.17.1 Release Notes
+
+GAIA v0.17.1 hardens the framework with better version safety, richer eval insights, and a smoother Agent UI setup experience. The C++ agent framework also gains SSE streaming, runtime reconfiguration, and CI benchmarks.
+
+```bash
+pip install --upgrade amd-gaia
+gaia chat
+```
+
+**Why upgrade:**
+- **Catch Lemonade mismatches early** — GAIA now warns you at startup if your running Lemonade Server version differs from the expected version, so you fix compatibility issues before they bite
+- **See where eval time goes** — Per-turn performance data rolls up into scenario-level summaries in the eval scorecard, making it easy to spot slow steps
+- **Agent UI works out of the box** — `gaia init` now builds the frontend automatically, so you no longer need a manual `npm run build` step
+
+---
+
+## What's New
+
+### Lemonade Version Mismatch Warning
+
+GAIA now detects when your running Lemonade Server version differs from the expected version and displays a clear warning with upgrade instructions (PR #637). No more silent incompatibilities.
+
+### Eval Performance Tracking
+
+The eval scorecard now aggregates per-turn performance data — token counts, latency, throughput — into scenario-level summaries, so you can identify bottlenecks across multi-step evaluations (PR #637).
+
+### MCP Inference Stats
+
+MCP responses now capture inference statistics from SSE events, giving you visibility into model performance during tool-augmented conversations (PR #637).
+
+### Agent UI Frontend Auto-Build
+
+`gaia init` now builds the Agent UI frontend automatically via a new `_ensure_webui_built()` helper extracted into `gaia/ui/build.py` (PR #657). The Agent UI documentation prerequisites have also been corrected. Includes 7 new unit tests.
+
+---
+
+## C++ Agent Framework
+
+The C++ agent framework continues to mature with three updates:
+
+- **SSE streaming** — `SseParser` for chunked SSE delivery, `LemonadeClient` streaming via httplib, and console streaming helpers. Enable with `GAIA_STREAMING=1`. Includes 18 new SSE parser tests (PR #518)
+- **Runtime reconfiguration** — `AgentConfig` serialization, environment variable overrides (`GAIA_BASE_URL`, `GAIA_MODEL_ID`, etc.), dynamic setters (`setModel()`, `setConfig()`, `setMaxSteps()`), and thread-safe tool enable/disable via `ToolRegistry` (PR #531)
+- **Performance benchmarks** — New `benchmark_cpp.yml` CI workflow tracks binary size, startup time, loop latency, and memory. PR runs compare against cached baselines with configurable thresholds (PR #519)
+
+---
+
+## Bug Fixes
+
+- **MCP test isolation** — Added `isolate_home` autouse fixture to prevent unit tests from reading or writing to the real `~/.gaia/mcp_servers.json` (PR #658)
+- **npm publish** — Switched to OIDC trusted publishing and removed `registry-url` to enable it (PRs #638, #639)
+- **Merge queue notifications** — Resolved phantom failures in the `merge-queue-notify` workflow (PR #640)
+
+---
+
+## Upgrade
+
+```bash
+pip install --upgrade amd-gaia
+```
+
+---
+
+## Full Changelog
+
+**9 commits** since v0.17.0:
+
+- `780a711` - feat: Lemonade version mismatch warning, eval perf tracking, MCP stats (#637)
+- `7ed2db3` - feat(cpp): SSE streaming response support for C++ agent framework (#518)
+- `9c4101d` - feat(cpp): performance benchmarks and binary size tracking (#519)
+- `878a976` - feat(cpp): runtime configuration and dynamic reconfiguration (#531)
+- `e0e5695` - fix: isolate MCP unit tests from real ~/.gaia/mcp_servers.json (#658)
+- `bb010a0` - fix: build Agent UI frontend in gaia init and fix doc prerequisites (#657)
+- `334b011` - fix: remove registry-url to enable OIDC trusted publishing (#639)
+- `776dc34` - fix: resolve merge-queue-notify phantom failures (#640)
+- `83a4db1` - fix: switch npm publish to OIDC trusted publishing (#638)
+
+Full Changelog: [v0.17.0...v0.17.1](https://github.com/amd/gaia/compare/v0.17.0...v0.17.1)
