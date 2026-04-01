@@ -794,6 +794,238 @@
     justify-content: flex-end;
 }
 
+/* ── Expandable detail row ───────────────────────────────────── */
+.mem-expanded-row {
+    background: var(--tint-subtle) !important;
+}
+.mem-detail-row td {
+    padding: 0 !important;
+    border-bottom: 1px solid var(--border) !important;
+}
+.mem-detail-panel {
+    padding: 14px 20px 16px;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-light);
+    animation: detailExpand 200ms var(--ease);
+}
+@keyframes detailExpand {
+    from { opacity: 0; max-height: 0; }
+    to { opacity: 1; max-height: 500px; }
+}
+.mem-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px 20px;
+    margin-bottom: 10px;
+}
+.mem-detail-field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.mem-detail-field.mem-detail-full {
+    grid-column: 1 / -1;
+}
+.mem-detail-label {
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+}
+.mem-detail-value {
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    word-break: break-all;
+}
+.mem-detail-chain {
+    color: var(--accent-blue);
+}
+.mem-detail-content-full {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-light);
+}
+.mem-detail-content-text {
+    font-size: 13px;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin-top: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+/* ── Embedding Coverage (header) ─────────────────────────────── */
+.mem-embedding-coverage {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+}
+.mem-embedding-bar {
+    width: 60px; height: 5px;
+    background: var(--border);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+}
+.mem-embedding-fill {
+    height: 100%;
+    background: var(--accent-green);
+    border-radius: var(--radius-full);
+    transition: width 400ms var(--ease);
+}
+.mem-embedding-label {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+/* ── Maintenance dropdown ───────────────────────────────────── */
+.mem-maintenance-wrap {
+    position: relative;
+}
+.mem-maintenance-wrap .btn-icon {
+    display: flex; align-items: center; gap: 0;
+}
+.mem-maintenance-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 220px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: 4px;
+    z-index: 20;
+    animation: modalPanelIn 150ms var(--ease);
+}
+.mem-maintenance-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 14px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    border-radius: var(--radius-md);
+    transition: background var(--duration-fast) var(--ease);
+    text-align: left;
+}
+.mem-maintenance-item:hover:not(:disabled) {
+    background: var(--tint-subtle);
+}
+.mem-maintenance-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.mem-maintenance-divider {
+    height: 1px;
+    background: var(--border-light);
+    margin: 4px 8px;
+}
+
+.mem-spinner-sm {
+    width: 14px; height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--amd-red);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+/* ── Embedding status dot (per knowledge row) ───────────────── */
+.mem-embed-dot {
+    display: inline-flex;
+    align-items: center;
+    margin-right: 5px;
+    vertical-align: middle;
+}
+.mem-embed-dot.embedded { color: var(--accent-green); }
+.mem-embed-dot.missing { color: var(--accent-danger); opacity: 0.6; }
+
+/* ── Superseded entries ─────────────────────────────────────── */
+.mem-superseded-row {
+    opacity: 0.55;
+}
+.mem-superseded-text {
+    text-decoration: line-through;
+    color: var(--text-muted);
+}
+
+/* ── Filter toggle (checkbox) ───────────────────────────────── */
+.mem-filter-toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    transition: border-color var(--duration) var(--ease);
+}
+.mem-filter-toggle:hover { border-color: var(--border); }
+.mem-filter-toggle input { margin: 0; cursor: pointer; }
+
+/* ── Consolidated badge (conversation list) ─────────────────── */
+.mem-consolidated-badge {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    color: var(--accent-green);
+    opacity: 0.7;
+    vertical-align: middle;
+}
+
+/* ── Additional category badges ─────────────────────────────── */
+.mem-cat-badge.note { background: rgba(245, 158, 11, 0.12); color: var(--accent-gold); }
+.mem-cat-badge.reminder { background: rgba(239, 68, 68, 0.12); color: var(--accent-danger); }
+
+/* ── Toast notifications ────────────────────────────────────── */
+.mem-toast-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+}
+.mem-toast {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    animation: toastIn 250ms var(--ease);
+    pointer-events: auto;
+}
+.mem-toast-success { border-left: 3px solid var(--accent-green); }
+.mem-toast-error { border-left: 3px solid var(--accent-danger); }
+.mem-toast-info { border-left: 3px solid var(--accent-blue); }
+
+@keyframes toastIn {
+    from { opacity: 0; transform: translateY(10px) scale(0.96); }
+    to { opacity: 1; transform: none; }
+}
+
 /* ── DB size footer ──────────────────────────────────────────── */
 .mem-db-footer {
     margin-top: 20px;
@@ -815,6 +1047,12 @@
     .mem-two-col {
         grid-template-columns: 1fr;
     }
+    .mem-embedding-coverage {
+        display: none;
+    }
+    .mem-detail-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }
 
 @media (max-width: 600px) {
@@ -831,5 +1069,10 @@
     }
     .mem-filters {
         flex-direction: column;
+    }
+    .mem-toast-container {
+        right: 12px;
+        bottom: 12px;
+        left: 12px;
     }
 }

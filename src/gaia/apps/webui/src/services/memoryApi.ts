@@ -49,6 +49,8 @@ export interface KnowledgeListParams {
     context?: string;
     entity?: string;
     sensitive?: boolean;
+    include_sensitive?: boolean;
+    include_superseded?: boolean;
     search?: string;
     sort_by?: string;
     order?: 'asc' | 'desc';
@@ -141,7 +143,33 @@ export function getUpcomingItems(days = 7) {
     return memFetch<any[]>('GET', `/memory/upcoming?days=${days}`);
 }
 
+// ── Embedding Coverage ──────────────────────────────────────────────────────
+
+export function getEmbeddingCoverage() {
+    return memFetch<{ total_items: number; with_embedding: number; without_embedding: number; coverage_pct: number }>(
+        'GET', '/memory/embedding-coverage'
+    );
+}
+
 // ── Maintenance ─────────────────────────────────────────────────────────────
+
+export function consolidateSessions() {
+    return memFetch<{ status: string; consolidated: number; extracted_items: number }>(
+        'POST', '/memory/consolidate'
+    );
+}
+
+export function rebuildEmbeddings() {
+    return memFetch<{ backfilled: number; total_without: number }>(
+        'POST', '/memory/rebuild-embeddings'
+    );
+}
+
+export function reconcileMemory() {
+    return memFetch<{ pairs_checked: number; reinforced: number; contradicted: number; weakened: number; neutral: number }>(
+        'POST', '/memory/reconcile'
+    );
+}
 
 export function rebuildFts() {
     return memFetch<{ status: string }>('POST', '/memory/rebuild-fts');
