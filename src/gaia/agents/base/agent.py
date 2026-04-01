@@ -243,8 +243,13 @@ You must respond ONLY in valid JSON. No text before { or after }.
         """
         Auto-collect system prompt fragments from inherited mixins.
 
-        Checks for mixin methods following the pattern: get_*_system_prompt()
+        Discovers all methods matching the pattern get_*_system_prompt() on
+        the instance and calls each one. This means any mixin that defines
+        a method like get_foo_system_prompt() will automatically have its
+        prompt fragment included — no manual registration needed.
+
         Override this method to modify, reorder, or filter mixin prompts.
+        Always call super()._get_mixin_prompts() to preserve auto-discovery.
 
         Returns:
             List of prompt fragments from mixins (empty list if no mixins provide prompts)
@@ -252,30 +257,26 @@ You must respond ONLY in valid JSON. No text before { or after }.
         Example:
             def _get_mixin_prompts(self) -> list[str]:
                 prompts = super()._get_mixin_prompts()
-                # Modify SD prompt
-                if prompts:
-                    prompts[0] = prompts[0].replace("whimsical", "serious")
-                return prompts
+                # Filter out SD prompt if not needed
+                return [p for p in prompts if "Stable Diffusion" not in p]
         """
         prompts = []
 
-        # Check for SD mixin prompts
-        if hasattr(self, "get_sd_system_prompt"):
-            fragment = self.get_sd_system_prompt()
-            if fragment:
-                prompts.append(fragment)
-
-        # Check for VLM mixin prompts
-        if hasattr(self, "get_vlm_system_prompt"):
-            fragment = self.get_vlm_system_prompt()
-            if fragment:
-                prompts.append(fragment)
-
-        # Check for Memory mixin prompts
-        if hasattr(self, "get_memory_system_prompt"):
-            fragment = self.get_memory_system_prompt()
-            if fragment:
-                prompts.append(fragment)
+        # Auto-discover all get_*_system_prompt() methods on this instance.
+        # This eliminates the need to hardcode each mixin's prompt method.
+        for attr_name in dir(self):
+            if (
+                attr_name.startswith("get_")
+                and attr_name.endswith("_system_prompt")
+                and attr_name != "_get_system_prompt"
+                and callable(getattr(self, attr_name, None))
+            ):
+                try:
+                    fragment = getattr(self, attr_name)()
+                    if fragment:
+                        prompts.append(fragment)
+                except Exception:
+                    pass
 
         return prompts
 

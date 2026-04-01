@@ -3772,6 +3772,53 @@ class TestStoreEmbedding:
         recovered = np.frombuffer(row[0], dtype=np.float32)
         assert np.array_equal(original, recovered)
 
+    def test_update_content_clears_embedding(self, store):
+        """update(content=...) sets embedding to NULL so item gets re-embedded."""
+        import numpy as np
+
+        kid = store.store(category="fact", content="Original content for embedding clear test")
+        vec = np.random.rand(768).astype(np.float32)
+        store.store_embedding(kid, vec.tobytes())
+
+        # Verify embedding exists
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT embedding FROM knowledge WHERE id = ?", (kid,)
+            ).fetchone()
+        assert row[0] is not None
+
+        # Update content — embedding should be cleared
+        store.update(kid, content="Completely new content replacing the old")
+
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT embedding FROM knowledge WHERE id = ?", (kid,)
+            ).fetchone()
+        assert row[0] is None, "Embedding should be NULL after content update"
+
+    def test_dedup_clears_embedding(self, store):
+        """store() dedup (>80% overlap) sets embedding to NULL on the existing entry."""
+        import numpy as np
+
+        kid = store.store(
+            category="fact",
+            content="The deployment pipeline uses Docker containers",
+        )
+        vec = np.random.rand(768).astype(np.float32)
+        store.store_embedding(kid, vec.tobytes())
+
+        # Store a high-overlap entry — should dedup and clear embedding
+        store.store(
+            category="fact",
+            content="The deployment pipeline uses Kubernetes containers",
+        )
+
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT embedding FROM knowledge WHERE id = ?", (kid,)
+            ).fetchone()
+        assert row[0] is None, "Embedding should be NULL after dedup content replace"
+
 
 # ===========================================================================
 # v2 Tests — Superseded By (Fact Lineage)
@@ -3897,6 +3944,63 @@ class TestSupersededBy:
 
         prefs = store.get_by_category("preference")
         ids = [r["id"] for r in prefs]
+        assert new_id in ids
+        assert old_id not in ids
+
+    def test_get_by_entity_excludes_superseded(self, store):
+        """get_by_entity() excludes superseded items."""
+        old_id = store.store(
+            category="fact",
+            content="Sarah was a junior engineer when she joined",
+            entity="person:sarah_chen",
+        )
+        new_id = store.store(
+            category="fact",
+            content="Sarah was promoted to VP of Engineering",
+            entity="person:sarah_chen",
+        )
+        store.update(old_id, superseded_by=new_id)
+
+        results = store.get_by_entity("person:sarah_chen")
+        ids = [r["id"] for r in results]
+        assert new_id in ids
+        assert old_id not in ids
+
+    def test_get_upcoming_excludes_superseded(self, store):
+        """get_upcoming() excludes superseded reminders."""
+        old_id = store.store(
+            category="reminder",
+            content="Old reminder about project deadline",
+            due_at=_future_iso(3),
+        )
+        new_id = store.store(
+            category="reminder",
+            content="Updated deadline is next month",
+            due_at=_future_iso(3),
+        )
+        store.update(old_id, superseded_by=new_id)
+
+        upcoming = store.get_upcoming(within_days=7)
+        ids = [r["id"] for r in upcoming]
+        assert new_id in ids
+        assert old_id not in ids
+
+    def test_get_by_category_contexts_excludes_superseded(self, store):
+        """get_by_category_contexts() excludes superseded items."""
+        old_id = store.store(
+            category="fact",
+            content="Project uses PostgreSQL for data storage",
+            context="work",
+        )
+        new_id = store.store(
+            category="fact",
+            content="Team migrated to DynamoDB last quarter",
+            context="work",
+        )
+        store.update(old_id, superseded_by=new_id)
+
+        results = store.get_by_category_contexts("fact", "work")
+        ids = [r["id"] for r in results]
         assert new_id in ids
         assert old_id not in ids
 

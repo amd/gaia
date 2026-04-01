@@ -99,11 +99,11 @@ decide what knowledge operations to perform. Return a JSON array only.
 
 Each item must have an "op" field:
 - "add": New knowledge not already in memory
-  Required: {op, category, content, entity?, domain?, confidence: 0.4}
+  Required: {{op, category, content, entity?, domain?, confidence: 0.4}}
 - "update": Modify an existing memory item (correction, enrichment, or supersession)
-  Required: {op, knowledge_id, content, entity?, domain?}
+  Required: {{op, knowledge_id, content, entity?, domain?}}
 - "delete": Remove a memory item contradicted or invalidated by new information
-  Required: {op, knowledge_id, reason}
+  Required: {{op, knowledge_id, reason}}
 - "noop": Information already captured accurately. Do not include in output.
 
 Categories: fact, preference, error, skill, note, reminder
