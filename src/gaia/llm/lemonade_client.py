@@ -634,10 +634,13 @@ class LemonadeClient:
             self.port = port if port is not None else env_port
             self.base_url = f"http://{self.host}:{self.port}/api/{LEMONADE_API_VERSION}"
         elif base_url is not None:
-            # base_url parameter provided - normalize and use it
-            if not base_url.rstrip("/").endswith(f"/api/{LEMONADE_API_VERSION}"):
-                base_url = f"{base_url.rstrip('/')}/api/{LEMONADE_API_VERSION}"
-            self.base_url = base_url
+            # base_url parameter provided - use as-is for non-Lemonade backends
+            # (e.g. llama.cpp uses /v1, not /api/v1)
+            self.base_url = base_url.rstrip("/")
+            # Only append /api/v1 if it looks like a bare Lemonade URL (no path)
+            parsed_path = urlparse(base_url).path.rstrip("/")
+            if not parsed_path or parsed_path == "/":
+                self.base_url = f"{base_url.rstrip('/')}/api/{LEMONADE_API_VERSION}"
             # Parse for backwards compatibility with code accessing self.host/self.port
             parsed = urlparse(base_url)
             self.host = parsed.hostname or DEFAULT_HOST
@@ -2331,6 +2334,17 @@ class LemonadeClient:
             return  # Skip if auto_download disabled
 
         try:
+            # Quick check: if /health doesn't have Lemonade-specific fields,
+            # this is a plain OpenAI-compatible server (llama.cpp, etc.)
+            # that always has its model loaded. Skip the Lemonade load dance.
+            try:
+                health = self.health_check()
+                if "all_models_loaded" not in health and "model_loaded" not in health:
+                    self.log.debug("Non-Lemonade backend detected — skipping model load check")
+                    return
+            except Exception:
+                pass  # If health check fails, continue with normal flow
+
             # Check current server state
             status = self.get_status()
             loaded_models = [m.get("id", "") for m in status.loaded_models]
