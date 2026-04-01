@@ -1,0 +1,363 @@
+# Messaging Platform Integrations Plan
+
+> **Target release:** v0.23.0
+>
+> **Status:** Planning (no implementation)
+>
+> **Priority:** P2
+>
+> **Prerequisites:**
+> - Memory system (v0.20.0)
+> - Autonomy engine (v0.23.0 — ships alongside messaging)
+> - Agent UI foundations -- see [agent-ui.md](agent-ui.md)
+>
+> **Related plans:**
+> - [Agent UI](agent-ui.md) -- Settings UI, conversation history
+> - [Autonomy Engine](autonomy-engine.md) -- Background service, heartbeat
+> - [Security Model](security-model.md) -- Messaging security, tool restrictions
+
+---
+
+## 1. Executive Summary
+
+This plan scopes how GAIA integrates with messaging platforms (Discord, Slack,
+Telegram, WhatsApp) as **bi-directional channels**, letting users interact with
+GAIA agents from their preferred messaging app while keeping the Electron desktop
+UI as the primary interface.
+
+**Key architectural decision:** Build a thin **Messaging Adapter Layer** in the
+GAIA SDK that translates between platform-specific message formats and GAIA's
+existing ChatSDK / Agent system. Each platform adapter handles auth, message
+ingestion, and response delivery. The agent logic remains unchanged -- adapters
+are pure I/O translation.
+
+**Scope:** Top 4 platforms first (Signal, Discord, Slack, Telegram), with WhatsApp as a
+stretch goal due to its API complexity and cost.
+
+---
+
+## 2. Why This Architecture
+
+Three options were evaluated:
+
+### Option A: MCP-Native (External MCP Servers)
+
+Use community MCP servers for each platform. GAIA connects as an MCP client.
+
+**Rejected.** MCP is tool-oriented (call a tool, get a result), not event-driven
+(listen for incoming messages). MCP has no subscription or event stream primitive.
+This makes it useful for *outbound* messaging (agent sends a Slack notification
+as a tool action) but unsuitable as the primary architecture for bi-directional
+chat. No community MCP servers exist for bi-directional messaging as of 2026-03.
+
+### Option B: Adapter Layer in GAIA SDK (Selected)
+
+Build a `MessagingAdapter` abstraction in the SDK. Each platform gets an adapter
+that receives messages, translates to ChatSDK format, and routes responses back.
+
+**Why this wins:**
+- Clean separation: adapters handle I/O, agents handle intelligence
+- Adapters are independently deployable and testable
+- Session management solves the multi-user gap that no current pathway covers
+- Follows GAIA's mixin pattern
+- ~500-800 lines per adapter, manageable maintenance burden
+
+**Trade-offs:** Requires running GAIA as a persistent service (not just CLI) and
+handling webhook endpoints for some platforms.
+
+### Option C: n8n External Orchestrator
+
+Use n8n as the messaging bridge. n8n receives messages, calls GAIA MCP, sends
+responses back.
+
+**Not selected as primary.** Requires running n8n alongside GAIA, adds two extra
+network hops of latency, provides no session management, and cannot be embedded
+in the Electron UI. However, n8n remains available as a no-code alternative for
+platforms without a native adapter -- this is already documented and requires no
+new work.
+
+---
+
+## 3. Architecture
+
+```
++----------------------------------------------------------+
+|                    GAIA Messaging Layer                    |
+|                  src/gaia/messaging/                      |
+|                                                           |
+|  +--------------+  +--------------+  +-----------------+  |
+|  |  Discord     |  |  Slack       |  |  Telegram       |  |
+|  |  Adapter     |  |  Adapter     |  |  Adapter        |  |
+|  |              |  |              |  |                 |  |
+|  | - Bot API    |  | - Events API |  | - Bot API       |  |
+|  | - Gateway WS |  | - Webhooks   |  | - Polling/WH    |  |
+|  | - Slash cmds |  | - Slash cmds |  | - Commands      |  |
+|  +------+-------+  +------+-------+  +--------+--------+  |
+|         |                 |                    |           |
+|  +------v-----------------v--------------------v--------+  |
+|  |              MessageRouter                           |  |
+|  |                                                      |  |
+|  |  - Platform message -> GAIA message normalization    |  |
+|  |  - Session management (platform user -> session)     |  |
+|  |  - Rate limiting per user/channel                    |  |
+|  |  - Response formatting (markdown -> platform fmt)    |  |
+|  +-------------------------+----------------------------+  |
+|                            |                               |
+|  +-------------------------v----------------------------+  |
+|  |              SessionManager                          |  |
+|  |                                                      |  |
+|  |  - Maps platform_id -> ChatSDK session               |  |
+|  |  - Persistent conversation storage (SQLite)          |  |
+|  |  - Session TTL and cleanup                           |  |
+|  |  - Concurrent session handling                       |  |
+|  +-------------------------+----------------------------+  |
+|                            |                               |
++----------------------------+-------------------------------+
+                             |
+                 +-----------v-----------+
+                 |    ChatSDK / Agent    |
+                 |  (existing, unchanged)|
+                 +-----------------------+
+```
+
+The adapter layer lives in `src/gaia/messaging/` as a new SDK module. Core
+components: `MessagingAdapter` ABC, `MessageRouter` for dispatch and rate
+limiting, `SessionManager` for SQLite-backed persistent conversations, and
+per-platform adapter implementations.
+
+---
+
+## 4. Platform Comparison
+
+| Factor | Signal | Discord | Slack | Telegram | WhatsApp |
+|--------|--------|---------|-------|----------|----------|
+| **Public URL needed?** | No (signal-cli) | No (Gateway WS) | No (Socket Mode) | No (long-poll) | Yes (webhook) |
+| **Auth complexity** | Medium (phone #) | Low (bot token) | Medium (2 tokens) | Low (bot token) | High (business verification) |
+| **Rich formatting** | Basic (text) | Good (embeds) | Great (Block Kit) | Basic (markdown) | Minimal (text) |
+| **Max message length** | 6000 chars | 2000 chars | 4000 chars | 4096 chars | 4096 chars |
+| **Interactive UI** | None | Reactions, buttons | Buttons, modals | Inline keyboards | Buttons, lists |
+| **Free to operate?** | Yes | Yes | Yes (free tier) | Yes | No (per-message cost) |
+| **Python library** | semaphore / signal-cli-rest-api | discord.py | slack-bolt | python-telegram-bot | twilio |
+| **Estimated effort** | 2-3 days | 2-3 days | 3-4 days | 1-2 days | 4-5 days |
+| **Local-first compatible?** | Yes | Yes | Yes | Yes | No |
+| **Privacy alignment** | **Best** (E2E encrypted) | Low | Low | Medium | Medium |
+| **Priority** | **P0** | **P1** | **P1** | **P1** | **P3 (defer)** |
+
+### Platform Notes
+
+**Discord.** Well-documented API with mature Python libraries. Uses Gateway
+WebSocket for real-time message events, supports slash commands and bot mentions.
+Embeds provide rich card-style formatting. Auth is a single bot token. Medium
+complexity overall.
+
+**Slack.** Socket Mode is critical -- it avoids the need for a public URL, which
+aligns with GAIA's local-first design. Block Kit formatting is verbose but
+powerful. Requires two tokens (bot + app-level). Slightly higher complexity than
+Discord due to Block Kit and workspace installation flows.
+
+**Telegram.** Simplest API of all platforms. Long-polling via `getUpdates`
+eliminates webhook requirements entirely. Single bot token from @BotFather, no
+OAuth. MarkdownV2 has quirky escaping rules but is workable. Ideal first adapter
+for development.
+
+**Signal (P0 — privacy-first priority).** Best privacy alignment with GAIA — end-to-end
+encrypted messaging means the full pipeline (local LLM + E2E encrypted transport) keeps
+data completely private. Two implementation paths: (a) `signal-cli` as a subprocess
+bridge (Java-based, mature, supports groups/attachments), or (b) `signal-cli-rest-api`
+which wraps signal-cli in a REST API accessible from Python. Auth requires a phone
+number for registration. No public URL needed — signal-cli polls locally. No interactive
+UI elements (buttons/reactions) — responses are plain text only. GitHub issue: #693.
+
+**WhatsApp.** Deferred. Requires a public webhook URL (conflicts with local-first
+design), Meta Business verification (days/weeks), per-message costs via Twilio or
+Meta, and a 24-hour messaging window after which only template messages are
+allowed.
+
+---
+
+## 5. The Local-First vs. Webhook Dilemma
+
+GAIA runs locally on the user's machine. Several messaging platforms expect to
+send webhooks to a public URL. This is the core architectural tension.
+
+| Solution | Platforms Supported | Complexity | User Effort |
+|----------|-------------------|-----------|-------------|
+| **WebSocket/polling** | Discord (Gateway), Telegram (long-poll) | Low | None |
+| **Slack Socket Mode** | Slack | Low | Create Slack app |
+| **ngrok/cloudflare tunnel** | All webhook-based | Medium | Install + configure tunnel |
+| **GAIA Cloud Relay** | All | High | AMD hosts relay service |
+| **User's own server** | All | High | Self-host GAIA |
+
+**v1 strategy:** Support Discord + Telegram first (both work without a public
+URL). Slack via Socket Mode (also no public URL). Defer WhatsApp and any platform
+that requires webhook-only integration.
+
+This means GAIA's first three messaging adapters all work on a home machine
+behind NAT with zero network configuration.
+
+---
+
+## 6. Concurrency Model
+
+`Agent.process_query()` is synchronous and blocking. A Discord bot serving 10
+concurrent users needs 10 concurrent agent instances.
+
+**Decision: Thread pool** for v1. Each incoming message is dispatched via
+`asyncio.run_in_executor(ThreadPoolExecutor(max_workers=N), ...)`. This is the
+simplest approach and matches how the JiraAgent already bridges sync/async.
+
+Each agent instance consumes ~50-100MB (ChatSDK + model context). Ten concurrent
+sessions across three platforms totals ~800MB-1.2GB. The default
+`max_concurrent_sessions` should be 10, with documentation recommending lower
+values for 8GB-RAM machines.
+
+Process pool isolation or agent pool with session pinning are potential future
+upgrades if thread-safety issues emerge, but are not needed for v1.
+
+All three target platforms support "typing indicator" APIs. Adapters should send
+a typing indicator immediately on message receipt, then deliver the actual
+response when inference completes. This masks LLM latency (typically 0.5-5s).
+
+---
+
+## 7. Security
+
+Messaging exposes GAIA to untrusted external input. The security model must be
+restrictive by default.
+
+**Key policies:**
+
+- **Restricted default tool set.** Messaging users get read-only tools (RAG
+  queries, document search, summarization) by default. File I/O and shell tools
+  require explicit opt-in via configuration. See
+  [security-model.md](security-model.md) for the full tool classification and
+  trust-level definitions.
+
+- **Allow-listing.** Adapters support allow-lists for guilds, channels, and
+  users. An empty allow-list means "accept all" for Discord/Slack (guild-scoped)
+  but should default to "accept none" for Telegram (user-scoped, higher risk).
+
+- **Rate limiting.** Per-user, per-channel, and global rate limits. Defaults:
+  10 RPM per user, 30 RPM per channel, 100 RPM global. See
+  [security-model.md](security-model.md) for rate limiting design.
+
+- **Input sanitization.** Strip platform formatting before passing to agents.
+  Limit message length. Guard against prompt injection via messaging.
+
+- **Credential handling.** Bot tokens via environment variables only, never in
+  config files, never logged.
+
+- **Tool confirmation over messaging.** Write operations that require
+  confirmation in the desktop UI must also require confirmation over messaging,
+  using platform-native affordances (Discord emoji reactions, Slack interactive
+  buttons, Telegram inline keyboards).
+
+---
+
+## 8. UI Integration
+
+The Electron UI integrates with messaging in three ways. See
+[agent-ui.md](agent-ui.md) for the broader UI framework.
+
+**Settings panel.** A "Messaging" section in Settings (following the same pattern
+as MCP Server settings) with per-platform enable/disable toggles, token
+configuration, allow-list management, connection status indicators, and tool
+permission checkboxes.
+
+**Conversation history.** Messaging conversations appear alongside local
+conversations in the sidebar, tagged with platform icons. Users can click a
+messaging conversation to view the full history and optionally continue it in the
+desktop UI.
+
+**Desktop notifications.** When a user messages GAIA via a messaging platform,
+the Electron UI optionally shows a desktop notification bridging the two
+experiences.
+
+---
+
+## 9. Configuration
+
+All messaging configuration lives in `~/.gaia/messaging.yaml`. Platform
+dependencies are optional extras in `pyproject.toml`:
+
+```yaml
+# ~/.gaia/messaging.yaml (abbreviated)
+messaging:
+  enabled: true
+  max_concurrent_sessions: 10
+  session_ttl_hours: 24
+
+  discord:
+    enabled: true
+    bot_token: "${DISCORD_BOT_TOKEN}"
+    allowed_guilds: []
+    slash_commands: true
+
+  slack:
+    enabled: false
+    bot_token: "${SLACK_BOT_TOKEN}"
+    app_token: "${SLACK_APP_TOKEN}"
+
+  telegram:
+    enabled: false
+    bot_token: "${TELEGRAM_BOT_TOKEN}"
+    allowed_users: []
+```
+
+Install adapters with: `uv pip install -e ".[discord]"` or
+`uv pip install -e ".[messaging]"` for all three.
+
+Messaging adapters run as a separate daemon process (`gaia messaging start`),
+following the same pattern as `gaia mcp start`. Each user gets an isolated
+ChatSDK session keyed by `(platform, user_id, channel_id)` for privacy. File
+attachments from messaging platforms are downloaded and passed to RAG indexing.
+
+---
+
+## 10. Implementation Phases
+
+| Phase | Duration | Goal |
+|-------|----------|------|
+| **1. Foundation + Telegram** | 1 week | Adapter ABC, MessageRouter, SessionManager (SQLite), rate limiter, response chunking, Telegram adapter (simplest platform). Deliverable: GAIA responds to Telegram messages with persistent conversation history. |
+| **2. Discord + Slack** | 1 week | Discord adapter (Gateway WS, slash commands, embeds), Slack adapter (Socket Mode, Block Kit), CLI commands (`gaia messaging start/stop/status`). |
+| **3. UI + Security** | 1 week | Electron Settings panel, tool restriction per adapter, tool confirmation over messaging, conversation history view. |
+| **4. Polish + Docs** | 0.5-1 week | Setup guides per platform, integration tests, rate limit tuning, bug fixes. |
+| **Total** | **3.5-4 weeks** | |
+
+---
+
+## 11. What This Plan Does NOT Cover
+
+- **Multi-agent routing over messaging** -- RoutingAgent support is a future
+  extension.
+- **Group chat with multiple GAIA agents** -- one bot per platform for now.
+- **Cross-platform conversation continuity** -- starting in Discord and
+  continuing in Slack is complex with low v1 value.
+- **Voice messages** -- ASR/TTS integration with messaging platforms is a
+  separate effort.
+- **WhatsApp implementation** -- deferred due to public URL requirement,
+  business verification, and per-message cost.
+
+---
+
+## 12. Risks
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| Prompt injection via messaging | High | High | Input sanitization, restricted default tools |
+| Bot token compromise | Low | Critical | Env vars only, never in config, rotation docs |
+| Resource exhaustion (many users) | Medium | High | `max_concurrent_sessions`, memory monitoring |
+| Platform API breaking changes | Medium | Medium | Pin library versions, monitor changelogs |
+| Scope creep during implementation | High | Medium | Strict phase gates, no WhatsApp in v1 |
+| Session data privacy (SQLite) | Low | Medium | Clear TTL policy, optional encryption at rest |
+
+---
+
+## 13. Key Design Principles
+
+1. **Adapters are pure I/O** -- no intelligence in adapters, all logic in agents
+2. **Local-first** -- prefer polling/WebSocket over webhooks (no public URL)
+3. **Secure by default** -- restricted tool set, confirm-first for writes
+4. **Optional dependencies** -- `pip install gaia[discord]`, not mandatory
+5. **Desktop UI is primary** -- messaging is a supplementary channel
+6. **Session isolation** -- each user gets independent conversation context
