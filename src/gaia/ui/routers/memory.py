@@ -20,6 +20,20 @@ router = APIRouter(tags=["memory"])
 # in sync automatically when categories are added or removed.
 from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
 
+# Safe defaults returned when the data-layer lacks v2 methods.
+# Defined once here so memory_stats() doesn't repeat the literals.
+_DEFAULT_EMBEDDING_STATS: Dict = {
+    "total_items": 0,
+    "with_embedding": 0,
+    "without_embedding": 0,
+    "coverage_pct": 0.0,
+}
+_DEFAULT_RECONCILIATION_STATS: Dict = {
+    "last_run": None,
+    "pairs_checked": 0,
+    "contradictions_found": 0,
+}
+
 # ---------------------------------------------------------------------------
 # Pydantic Models
 # ---------------------------------------------------------------------------
@@ -159,8 +173,37 @@ def close_store() -> None:
 
 @router.get("/api/memory/stats")
 def memory_stats() -> Dict:
-    """Aggregate stats for dashboard header cards."""
-    return _get_store().get_stats()
+    """Aggregate stats for dashboard header cards.
+
+    Includes v2 embedding coverage and reconciliation stats when the
+    data layer supports them.
+    """
+    store = _get_store()
+    stats = store.get_stats()
+
+    # v2: embedding coverage stats
+    # AttributeError → method not on store yet; Exception → graceful degrade
+    # but log at warning so real bugs aren't swallowed silently.
+    try:
+        stats["embedding"] = store.get_embedding_coverage()
+    except AttributeError:
+        logger.debug("[memory router] get_embedding_coverage not available yet")
+        stats["embedding"] = _DEFAULT_EMBEDDING_STATS.copy()
+    except Exception as exc:
+        logger.warning("[memory router] embedding coverage failed: %s", exc)
+        stats["embedding"] = _DEFAULT_EMBEDDING_STATS.copy()
+
+    # v2: reconciliation stats
+    try:
+        stats["reconciliation"] = store.get_reconciliation_stats()
+    except AttributeError:
+        logger.debug("[memory router] get_reconciliation_stats not available yet")
+        stats["reconciliation"] = _DEFAULT_RECONCILIATION_STATS.copy()
+    except Exception as exc:
+        logger.warning("[memory router] reconciliation stats failed: %s", exc)
+        stats["reconciliation"] = _DEFAULT_RECONCILIATION_STATS.copy()
+
+    return stats
 
 
 @router.get("/api/memory/activity")
@@ -184,6 +227,19 @@ def list_knowledge(
         False,
         description="Include sensitive items in results. Defaults to False.",
     ),
+    include_superseded: bool = Query(
+        False,
+        description="Include items superseded by newer knowledge. "
+        "By default, superseded items are hidden.",
+    ),
+    time_from: Optional[str] = Query(
+        None,
+        description="ISO 8601 lower bound for created_at (inclusive).",
+    ),
+    time_to: Optional[str] = Query(
+        None,
+        description="ISO 8601 upper bound for created_at (inclusive).",
+    ),
     search: Optional[str] = Query(None, max_length=500),
     sort_by: str = Query(
         "updated_at",
@@ -197,7 +253,23 @@ def list_knowledge(
 
     Sensitive items are excluded by default. Pass include_sensitive=true
     to include them, or sensitive=true to show only sensitive items.
+
+    Superseded items (replaced by newer knowledge) are hidden by default.
+    Pass include_superseded=true to include them.
+
+    Use time_from / time_to for temporal range filtering on created_at.
     """
+    # Validate ISO 8601 time boundaries (if provided).
+    # _validate_iso8601 raises ValueError which Pydantic converts to 422 in
+    # model validators.  In route handlers we must catch it ourselves.
+    try:
+        if time_from is not None:
+            _validate_iso8601("time_from", time_from)
+        if time_to is not None:
+            _validate_iso8601("time_to", time_to)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
     # Exclude sensitive items unless the caller explicitly opts in.
     # sensitive=True overrides to show only sensitive items.
     # sensitive=False keeps the non-sensitive-only filter.
@@ -206,7 +278,13 @@ def list_knowledge(
     effective_sensitive = sensitive
     if sensitive is None and not include_sensitive:
         effective_sensitive = False
-    return _get_store().get_all_knowledge(
+
+    # Build kwargs for the store.  v2 params are added incrementally so
+    # the router degrades gracefully across MemoryStore versions:
+    #   - v2 full:  include_superseded + time_from + time_to
+    #   - v2 partial:  include_superseded only (time filters not yet in store)
+    #   - v1:  base params only
+    base_kwargs = dict(
         category=category,
         context=context,
         entity=entity,
@@ -217,6 +295,34 @@ def list_knowledge(
         offset=offset,
         limit=limit,
     )
+
+    # Only add non-None time boundaries so we don't trigger TypeError
+    # on stores that lack time_from/time_to params.
+    v2_kwargs: Dict = {"include_superseded": include_superseded}
+    if time_from is not None:
+        v2_kwargs["time_from"] = time_from
+    if time_to is not None:
+        v2_kwargs["time_to"] = time_to
+
+    store = _get_store()
+    try:
+        return store.get_all_knowledge(**base_kwargs, **v2_kwargs)
+    except TypeError:
+        # Store may not support time_from/time_to yet — retry with
+        # just include_superseded (which the v2 store does support).
+        if "time_from" in v2_kwargs or "time_to" in v2_kwargs:
+            try:
+                return store.get_all_knowledge(
+                    **base_kwargs, include_superseded=include_superseded
+                )
+            except TypeError:
+                pass  # fall through to full v1 fallback
+        # Full v1 fallback — store supports none of the v2 params
+        logger.debug(
+            "[memory router] get_all_knowledge does not accept v2 params, "
+            "falling back to base query"
+        )
+        return store.get_all_knowledge(**base_kwargs)
 
 
 @router.post("/api/memory/knowledge")
@@ -352,6 +458,75 @@ def upcoming_items(days: int = Query(7, ge=1, le=90)) -> List[Dict]:
 # ---------------------------------------------------------------------------
 # Maintenance
 # ---------------------------------------------------------------------------
+
+
+@router.post("/api/memory/consolidate")
+def trigger_consolidation(
+    max_sessions: int = Query(5, ge=1, le=50),
+) -> Dict:
+    """Manually trigger conversation consolidation.
+
+    Distils old conversation sessions into semantic knowledge entries.
+    Returns ``{consolidated: int, extracted_items: int}``.
+    """
+    try:
+        result = _get_store().consolidate_old_sessions(max_sessions=max_sessions)
+        return result
+    except AttributeError:
+        raise HTTPException(501, "Consolidation not yet implemented in data layer")
+    except Exception as exc:
+        logger.error("[memory router] consolidation failed: %s", exc)
+        raise HTTPException(500, f"Consolidation failed: {type(exc).__name__}")
+
+
+@router.post("/api/memory/rebuild-embeddings")
+def rebuild_embeddings() -> Dict:
+    """Trigger embedding backfill for items missing embeddings.
+
+    Returns ``{backfilled: int, total_without: int}``.
+    """
+    try:
+        result = _get_store().backfill_embeddings()
+        return result
+    except AttributeError:
+        raise HTTPException(501, "Embedding backfill not yet implemented in data layer")
+    except Exception as exc:
+        logger.error("[memory router] rebuild-embeddings failed: %s", exc)
+        raise HTTPException(500, f"Embedding rebuild failed: {type(exc).__name__}")
+
+
+@router.post("/api/memory/reconcile")
+def trigger_reconciliation() -> Dict:
+    """Manually trigger background memory reconciliation.
+
+    Compares knowledge entries for contradictions and reinforcements.
+    Returns ``{pairs_checked, reinforced, contradicted, weakened, neutral}``.
+    """
+    try:
+        result = _get_store().reconcile()
+        return result
+    except AttributeError:
+        raise HTTPException(501, "Reconciliation not yet implemented in data layer")
+    except Exception as exc:
+        logger.error("[memory router] reconciliation failed: %s", exc)
+        raise HTTPException(500, f"Reconciliation failed: {type(exc).__name__}")
+
+
+@router.get("/api/memory/embedding-coverage")
+def embedding_coverage() -> Dict:
+    """Return embedding status for all knowledge items.
+
+    Returns ``{total_items, with_embedding, without_embedding, coverage_pct}``.
+    """
+    try:
+        return _get_store().get_embedding_coverage()
+    except AttributeError:
+        raise HTTPException(501, "Embedding coverage not yet implemented in data layer")
+    except Exception as exc:
+        logger.error("[memory router] embedding-coverage failed: %s", exc)
+        raise HTTPException(
+            500, f"Embedding coverage query failed: {type(exc).__name__}"
+        )
 
 
 @router.post("/api/memory/rebuild-fts")

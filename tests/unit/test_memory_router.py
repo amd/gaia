@@ -7,9 +7,9 @@ Tests all endpoints using FastAPI TestClient with an injected in-memory
 MemoryStore — no real database file or running server required.
 
 Endpoints covered:
-  GET  /api/memory/stats
+  GET  /api/memory/stats              (v1 + v2 embedding/reconciliation)
   GET  /api/memory/activity
-  GET  /api/memory/knowledge
+  GET  /api/memory/knowledge          (v1 + v2 include_superseded, time_from, time_to)
   POST /api/memory/knowledge
   PUT  /api/memory/knowledge/{id}
   DELETE /api/memory/knowledge/{id}
@@ -22,9 +22,15 @@ Endpoints covered:
   GET  /api/memory/conversations/search
   GET  /api/memory/conversations/{session_id}
   GET  /api/memory/upcoming
+  POST /api/memory/consolidate        (v2)
+  POST /api/memory/rebuild-embeddings (v2)
+  POST /api/memory/reconcile          (v2)
+  GET  /api/memory/embedding-coverage (v2)
   POST /api/memory/rebuild-fts
   POST /api/memory/prune
 """
+
+import sqlite3
 
 import pytest
 from fastapi import FastAPI
@@ -678,3 +684,478 @@ class TestListKnowledgeSensitiveDefault:
         assert all(
             item.get("sensitive") for item in items
         ), "Only sensitive items should appear when sensitive=true"
+
+
+# ===========================================================================
+# v2 Router Tests — Consolidation Endpoint
+# ===========================================================================
+
+
+class TestConsolidateEndpoint:
+    """Test POST /api/memory/consolidate endpoint."""
+
+    def test_consolidate_returns_501_when_not_implemented(self, client, test_store):
+        """POST /api/memory/consolidate returns 501 when store lacks method."""
+        if hasattr(test_store, "consolidate_old_sessions"):
+            pytest.skip("MemoryStore now implements consolidate_old_sessions")
+        resp = client.post("/api/memory/consolidate")
+        assert resp.status_code == 501
+
+    def test_consolidate_returns_200_when_implemented(self, client, test_store):
+        """POST /api/memory/consolidate returns 200 with store method present."""
+        test_store.consolidate_old_sessions = lambda max_sessions=5: {
+            "consolidated": 2,
+            "extracted_items": 8,
+        }
+        resp = client.post("/api/memory/consolidate")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["consolidated"] == 2
+        assert data["extracted_items"] == 8
+
+    def test_consolidate_max_sessions_param(self, client, test_store):
+        """POST /api/memory/consolidate accepts max_sessions query param."""
+        captured = {}
+
+        def mock_consolidate(max_sessions=5):
+            captured["max_sessions"] = max_sessions
+            return {"consolidated": 0, "extracted_items": 0}
+
+        test_store.consolidate_old_sessions = mock_consolidate
+        resp = client.post("/api/memory/consolidate?max_sessions=10")
+        assert resp.status_code == 200
+        assert captured["max_sessions"] == 10
+
+    def test_consolidate_max_sessions_validation(self, client, test_store):
+        """POST /api/memory/consolidate rejects invalid max_sessions."""
+        assert client.post("/api/memory/consolidate?max_sessions=0").status_code == 422
+        assert client.post("/api/memory/consolidate?max_sessions=51").status_code == 422
+
+    def test_consolidate_runtime_error_returns_500(self, client, test_store):
+        """POST /api/memory/consolidate returns 500 on internal errors."""
+
+        def boom(max_sessions=5):
+            raise RuntimeError("LLM connection failed")
+
+        test_store.consolidate_old_sessions = boom
+        resp = client.post("/api/memory/consolidate")
+        assert resp.status_code == 500
+        assert "RuntimeError" in resp.json()["detail"]
+
+
+# ===========================================================================
+# v2 Router Tests — Rebuild Embeddings Endpoint
+# ===========================================================================
+
+
+class TestRebuildEmbeddingsEndpoint:
+    """Test POST /api/memory/rebuild-embeddings endpoint."""
+
+    def test_rebuild_embeddings_returns_501_when_not_implemented(
+        self, client, test_store
+    ):
+        """POST /api/memory/rebuild-embeddings returns 501 without store method."""
+        if hasattr(test_store, "backfill_embeddings"):
+            pytest.skip("MemoryStore now implements backfill_embeddings")
+        resp = client.post("/api/memory/rebuild-embeddings")
+        assert resp.status_code == 501
+
+    def test_rebuild_embeddings_returns_200_when_implemented(self, client, test_store):
+        """POST /api/memory/rebuild-embeddings returns 200 with mock method."""
+        test_store.backfill_embeddings = lambda: {
+            "backfilled": 5,
+            "total_without": 10,
+        }
+        resp = client.post("/api/memory/rebuild-embeddings")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["backfilled"] == 5
+        assert data["total_without"] == 10
+
+    def test_rebuild_embeddings_runtime_error_returns_500(self, client, test_store):
+        """POST /api/memory/rebuild-embeddings returns 500 on internal errors."""
+
+        def boom():
+            raise RuntimeError("Lemonade server unreachable")
+
+        test_store.backfill_embeddings = boom
+        resp = client.post("/api/memory/rebuild-embeddings")
+        assert resp.status_code == 500
+
+
+# ===========================================================================
+# v2 Router Tests — Reconcile Endpoint
+# ===========================================================================
+
+
+class TestReconcileEndpoint:
+    """Test POST /api/memory/reconcile endpoint."""
+
+    def test_reconcile_returns_501_when_not_implemented(self, client, test_store):
+        """POST /api/memory/reconcile returns 501 without store method."""
+        if hasattr(test_store, "reconcile"):
+            pytest.skip("MemoryStore now implements reconcile")
+        resp = client.post("/api/memory/reconcile")
+        assert resp.status_code == 501
+
+    def test_reconcile_returns_200_when_implemented(self, client, test_store):
+        """POST /api/memory/reconcile returns 200 with mock method."""
+        test_store.reconcile = lambda: {
+            "pairs_checked": 10,
+            "reinforced": 3,
+            "contradicted": 1,
+            "weakened": 2,
+            "neutral": 4,
+        }
+        resp = client.post("/api/memory/reconcile")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["pairs_checked"] == 10
+        assert data["contradicted"] == 1
+
+    def test_reconcile_runtime_error_returns_500(self, client, test_store):
+        """POST /api/memory/reconcile returns 500 on internal errors."""
+
+        def boom():
+            raise ValueError("Invalid embedding dimension")
+
+        test_store.reconcile = boom
+        resp = client.post("/api/memory/reconcile")
+        assert resp.status_code == 500
+
+
+# ===========================================================================
+# v2 Router Tests — Embedding Coverage Endpoint
+# ===========================================================================
+
+
+class TestEmbeddingCoverageEndpoint:
+    """Test GET /api/memory/embedding-coverage endpoint."""
+
+    def test_embedding_coverage_returns_501_when_not_implemented(
+        self, client, test_store
+    ):
+        """GET /api/memory/embedding-coverage returns 501 without store method."""
+        if hasattr(test_store, "get_embedding_coverage"):
+            pytest.skip("MemoryStore now implements get_embedding_coverage")
+        resp = client.get("/api/memory/embedding-coverage")
+        assert resp.status_code == 501
+
+    def test_embedding_coverage_returns_200_when_implemented(self, client, test_store):
+        """GET /api/memory/embedding-coverage returns 200 with mock method."""
+        test_store.get_embedding_coverage = lambda: {
+            "total_items": 100,
+            "with_embedding": 80,
+            "without_embedding": 20,
+            "coverage_pct": 80.0,
+        }
+        resp = client.get("/api/memory/embedding-coverage")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_items"] == 100
+        assert data["coverage_pct"] == 80.0
+
+    def test_embedding_coverage_runtime_error_returns_500(self, client, test_store):
+        """GET /api/memory/embedding-coverage returns 500 on internal errors."""
+
+        def boom():
+            raise sqlite3.OperationalError("no such table: knowledge")
+
+        test_store.get_embedding_coverage = boom
+        resp = client.get("/api/memory/embedding-coverage")
+        assert resp.status_code == 500
+
+
+# ===========================================================================
+# v2 Router Tests — Knowledge with Superseded Filter
+# ===========================================================================
+
+
+class TestKnowledgeSupersededFilter:
+    """Test GET /api/memory/knowledge with include_superseded parameter."""
+
+    def test_include_superseded_param_accepted(self, client):
+        """Router accepts include_superseded query param."""
+        resp = client.get("/api/memory/knowledge?include_superseded=true")
+        assert resp.status_code == 200
+
+    def test_include_superseded_false_accepted(self, client):
+        """Router accepts include_superseded=false."""
+        resp = client.get("/api/memory/knowledge?include_superseded=false")
+        assert resp.status_code == 200
+
+    def test_superseded_filtering_delegates_to_store(self, client, test_store):
+        """When store supports v2 params, include_superseded is passed through."""
+        captured = {}
+        original = test_store.get_all_knowledge
+
+        def mock_get_all(include_superseded=False, time_from=None, time_to=None, **kw):
+            captured["include_superseded"] = include_superseded
+            return original(**kw)
+
+        test_store.get_all_knowledge = mock_get_all
+
+        client.get("/api/memory/knowledge?include_superseded=true")
+        assert captured.get("include_superseded") is True
+
+        client.get("/api/memory/knowledge?include_superseded=false")
+        assert captured.get("include_superseded") is False
+
+    def test_superseded_works_with_real_store(self, client, test_store):
+        """include_superseded filters correctly with the real MemoryStore.
+
+        The data layer's get_all_knowledge now accepts include_superseded,
+        so this tests actual filtering without mocks.
+        """
+        # Content must be completely different to avoid dedup (>80% overlap)
+        old_id = test_store.store(
+            category="fact",
+            content="The deployment pipeline uses Jenkins with Docker agents",
+        )
+        new_id = test_store.store(
+            category="skill",
+            content="Always run pytest before merging pull requests",
+        )
+        test_store.update(old_id, superseded_by=new_id)
+
+        # Default: superseded items hidden
+        resp = client.get("/api/memory/knowledge?include_sensitive=true")
+        assert resp.status_code == 200
+        ids = [item["id"] for item in resp.json()["items"]]
+        assert new_id in ids
+        assert old_id not in ids
+
+        # With include_superseded=true: both visible
+        resp = client.get(
+            "/api/memory/knowledge?include_superseded=true&include_sensitive=true"
+        )
+        assert resp.status_code == 200
+        ids = [item["id"] for item in resp.json()["items"]]
+        assert new_id in ids
+        assert old_id in ids
+
+    def test_include_superseded_fallback_when_time_params_unsupported(
+        self, client, test_store
+    ):
+        """include_superseded still works even when time_from causes TypeError.
+
+        When the store supports include_superseded but not time_from/time_to,
+        the router should fall back to passing just include_superseded.
+        """
+        captured = {}
+        original = test_store.get_all_knowledge
+
+        def mock_only_superseded(include_superseded=False, **kw):
+            # Accepts include_superseded but NOT time_from/time_to
+            captured["include_superseded"] = include_superseded
+            return original(include_superseded=include_superseded, **kw)
+
+        test_store.get_all_knowledge = mock_only_superseded
+
+        # Passes time_from which mock rejects → cascades to just include_superseded
+        resp = client.get(
+            "/api/memory/knowledge"
+            "?include_superseded=true"
+            "&time_from=2026-01-01T00:00:00%2B00:00"
+        )
+        assert resp.status_code == 200
+        assert captured.get("include_superseded") is True
+
+
+# ===========================================================================
+# v2 Router Tests — Time Filter Parameters
+# ===========================================================================
+
+
+class TestTimeFilterParams:
+    """Test GET /api/memory/knowledge with time_from/time_to parameters."""
+
+    def test_time_from_param_accepted(self, client):
+        """time_from with valid ISO 8601 is accepted."""
+        resp = client.get("/api/memory/knowledge?time_from=2026-01-01T00:00:00%2B00:00")
+        assert resp.status_code == 200
+
+    def test_time_to_param_accepted(self, client):
+        """time_to with valid ISO 8601 is accepted."""
+        resp = client.get("/api/memory/knowledge?time_to=2026-12-31T23:59:59%2B00:00")
+        assert resp.status_code == 200
+
+    def test_both_time_params(self, client):
+        """Both time_from and time_to are accepted together."""
+        resp = client.get(
+            "/api/memory/knowledge"
+            "?time_from=2026-01-01T00:00:00%2B00:00"
+            "&time_to=2026-12-31T23:59:59%2B00:00"
+        )
+        assert resp.status_code == 200
+
+    def test_invalid_time_from_returns_422(self, client):
+        """Invalid time_from returns 422."""
+        resp = client.get("/api/memory/knowledge?time_from=not-a-date")
+        assert resp.status_code == 422
+
+    def test_invalid_time_to_returns_422(self, client):
+        """Invalid time_to returns 422."""
+        resp = client.get("/api/memory/knowledge?time_to=tomorrow")
+        assert resp.status_code == 422
+
+    def test_time_params_delegated_to_store(self, client, test_store):
+        """When store supports v2 params, time_from/time_to are passed through."""
+        captured = {}
+        original = test_store.get_all_knowledge
+
+        def mock_get_all(time_from=None, time_to=None, **kw):
+            captured["time_from"] = time_from
+            captured["time_to"] = time_to
+            return original(**kw)
+
+        test_store.get_all_knowledge = mock_get_all
+
+        client.get(
+            "/api/memory/knowledge"
+            "?time_from=2026-03-01T00:00:00%2B00:00"
+            "&time_to=2026-03-31T23:59:59%2B00:00"
+        )
+        assert captured.get("time_from") == "2026-03-01T00:00:00+00:00"
+        assert captured.get("time_to") == "2026-03-31T23:59:59+00:00"
+
+
+# ===========================================================================
+# v2 Router Tests — Stats with v2 Fields
+# ===========================================================================
+
+
+class TestStatsV2Fields:
+    """Test GET /api/memory/stats includes v2 embedding and reconciliation fields."""
+
+    def test_stats_includes_embedding_section(self, client):
+        """GET /api/memory/stats response includes 'embedding' section."""
+        resp = client.get("/api/memory/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "embedding" in data
+        emb = data["embedding"]
+        assert "total_items" in emb
+        assert "with_embedding" in emb
+        assert "without_embedding" in emb
+        assert "coverage_pct" in emb
+
+    def test_stats_includes_reconciliation_section(self, client):
+        """GET /api/memory/stats response includes 'reconciliation' section."""
+        resp = client.get("/api/memory/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "reconciliation" in data
+        recon = data["reconciliation"]
+        assert "pairs_checked" in recon
+        assert "contradictions_found" in recon
+
+    def test_stats_embedding_populated_when_store_supports(self, client, test_store):
+        """When store supports get_embedding_coverage, stats are populated."""
+        test_store.get_embedding_coverage = lambda: {
+            "total_items": 50,
+            "with_embedding": 45,
+            "without_embedding": 5,
+            "coverage_pct": 90.0,
+        }
+        resp = client.get("/api/memory/stats")
+        data = resp.json()
+        assert data["embedding"]["total_items"] == 50
+        assert data["embedding"]["coverage_pct"] == 90.0
+
+    def test_stats_reconciliation_populated_when_store_supports(
+        self, client, test_store
+    ):
+        """When store supports get_reconciliation_stats, stats are populated."""
+        test_store.get_reconciliation_stats = lambda: {
+            "last_run": "2026-04-01T10:00:00-07:00",
+            "pairs_checked": 25,
+            "contradictions_found": 3,
+        }
+        resp = client.get("/api/memory/stats")
+        data = resp.json()
+        assert data["reconciliation"]["pairs_checked"] == 25
+        assert data["reconciliation"]["contradictions_found"] == 3
+
+    def test_stats_defaults_when_store_lacks_v2_methods(self, client, test_store):
+        """Stats returns safe defaults when store lacks v2 methods."""
+        v2_methods = ("get_embedding_coverage", "get_reconciliation_stats")
+        if all(hasattr(test_store, m) for m in v2_methods):
+            pytest.skip("MemoryStore now implements v2 stats methods")
+        resp = client.get("/api/memory/stats")
+        data = resp.json()
+        # Should still have embedding/reconciliation with default values
+        assert data["embedding"]["total_items"] == 0
+        assert data["reconciliation"]["pairs_checked"] == 0
+
+
+# ===========================================================================
+# v2 Router Tests — Upcoming Endpoint
+# ===========================================================================
+
+
+class TestUpcomingV2:
+    """Test GET /api/memory/upcoming returns list."""
+
+    def test_upcoming_returns_list(self, client):
+        """GET /api/memory/upcoming returns 200 with list."""
+        resp = client.get("/api/memory/upcoming")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+
+
+# ===========================================================================
+# v2 Router Tests — Knowledge CRUD with v2 Fields
+# ===========================================================================
+
+
+class TestKnowledgeCRUDV2:
+    """Test knowledge CRUD endpoints handle v2 fields."""
+
+    def test_create_knowledge_returns_id(self, client):
+        """POST /api/memory/knowledge response includes knowledge_id."""
+        resp = client.post(
+            "/api/memory/knowledge",
+            json={"content": "Created knowledge v2 field test", "category": "fact"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "knowledge_id" in data
+
+    def test_superseded_by_not_user_settable_via_api(self, client, test_store):
+        """PUT /api/memory/knowledge/{id} rejects superseded_by (pipeline-managed)."""
+        kid = test_store.store(
+            category="fact", content="Some fact for superseded API test"
+        )
+        # superseded_by is not in the KnowledgeUpdate model, so it gets
+        # stripped from the body → empty kwargs → 400 "No fields to update"
+        resp = client.put(
+            f"/api/memory/knowledge/{kid}",
+            json={"superseded_by": "some-other-id"},
+        )
+        assert resp.status_code == 400
+
+
+# ===========================================================================
+# v2 Router Tests — Conversations with Consolidation Status
+# ===========================================================================
+
+
+class TestConversationsV2:
+    """Test conversation endpoints include consolidation information."""
+
+    def test_list_sessions_returns_200(self, client, test_store):
+        """GET /api/memory/conversations returns 200."""
+        test_store.store_turn("sess-v2-test", "user", "Hello from v2 session test")
+        resp = client.get("/api/memory/conversations")
+        assert resp.status_code == 200
+
+    def test_conversation_search_returns_200(self, client, test_store):
+        """GET /api/memory/conversations/search returns 200."""
+        test_store.store_turn(
+            "sess-search-v2", "user", "Searchable v2 conversation content test"
+        )
+        resp = client.get(
+            "/api/memory/conversations/search?query=Searchable+v2+conversation"
+        )
+        assert resp.status_code == 200
