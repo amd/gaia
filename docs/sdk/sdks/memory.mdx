@@ -24,16 +24,19 @@ The memory system has three layers:
 
 | Layer | Class | File | Purpose |
 |-------|-------|------|---------|
-| **Agent integration** | `MemoryMixin` | `memory.py` | Hooks memory into the Agent lifecycle (system prompt, tool logging, conversation storage) |
-| **Data layer** | `MemoryStore` | `memory_store.py` | Pure SQLite + FTS5 storage with search, dedup, and decay. No agent dependencies. |
+| **Agent integration** | `MemoryMixin` | `memory.py` | Hooks memory into the Agent lifecycle — embedding pipeline, FAISS index, hybrid search orchestration, Mem0-style LLM extraction, consolidation, reconciliation |
+| **Data layer** | `MemoryStore` | `memory_store.py` | Pure SQLite + FTS5 storage with schema v2 (embedding BLOB, `superseded_by`, `consolidated_at`), vector data retrieval, temporal filtering, consolidation queries, reconciliation queries. No agent dependencies. |
 | **Bootstrap** | `SystemDiscovery` | `discovery.py` | Local system scanner for day-zero onboarding. Returns facts for user review. |
 
 ```
 Agent
   ├── MemoryMixin (hooks into prompt, tool exec, post-query)
+  │     ├── Embedding pipeline (Lemonade → nomic-embed-text-v2, 768-dim)
+  │     ├── FAISS index (IndexFlatIP, cosine similarity)
+  │     ├── Cross-encoder reranker (ms-marco-MiniLM-L-6-v2)
   │     └── MemoryStore (SQLite: ~/.gaia/memory.db)
-  │           ├── conversations table
-  │           ├── knowledge table (FTS5)
+  │           ├── conversations table (+ consolidated_at column)
+  │           ├── knowledge table (FTS5 + embedding BLOB + superseded_by)
   │           └── tool_history table
   └── SystemDiscovery (file system, git, apps, browser scans)
 ```
@@ -84,6 +87,22 @@ def init_memory(
 | `db_path` | `Path` | `~/.gaia/memory.db` | Path to the SQLite database file |
 | `context` | `str` | `"global"` | Active context scope (e.g., `"work"`, `"personal"`, `"global"`) |
 
+**v2 startup sequence:**
+
+1. Open/create DB, apply schema migrations (v1 → v2: adds `embedding BLOB`, `superseded_by TEXT`, `consolidated_at TEXT`)
+2. Validate Lemonade embedding service connectivity — raises `RuntimeError` if unreachable
+3. Backfill embeddings for items missing them (up to 100 per startup)
+4. Rebuild FAISS index from stored embeddings
+5. `apply_confidence_decay()` — 30-day decay
+6. `reconcile_memory()` — Hindsight-inspired, max 20 pairs
+7. `consolidate_old_sessions()` — max 5 sessions
+8. `prune()` — 90-day hard delete
+9. Generate session UUID
+
+<Warning>
+  Embedding is a hard requirement in v2. If the Lemonade embedding service is unavailable, `init_memory()` raises `RuntimeError("Lemonade embedding service required for memory system")`. There is no silent degradation to keyword-only search.
+</Warning>
+
 ### get_memory_system_prompt()
 
 Returns the **stable frozen prefix** for the system prompt. Contains preferences, facts, and known errors -- nothing time-sensitive. This method is called automatically by `Agent._get_mixin_prompts()`.
@@ -104,15 +123,22 @@ Known facts:
   - Project uses React 19 with app router (confidence: 0.82)
   - User's name is Alex, role is tech lead (confidence: 0.95)
 
+Skills:
+  - Deploy workflow: test → build → push → verify (confidence: 0.88)
+  - Docker compose: always use --build flag on first run (confidence: 0.72)
+  - Git bisect: use binary search for regression hunting (confidence: 0.65)
+
 Known errors to avoid:
   - execute_code: "import torch" fails -- torch not installed on this machine
+  - pip install: always use --index-url for PyTorch packages
 ```
 
 **Filters applied:**
 - Includes items from `global` context + active context
 - Excludes items where `sensitive=1`
+- Excludes items where `superseded_by IS NOT NULL` (only current/active items)
 - Sorted by confidence descending
-- Hard limits: max 10 preferences, 5 facts, 5 errors
+- Hard limits: max 10 preferences, 5 facts, 3 skills, 5 errors
 
 ### get_memory_dynamic_context()
 
@@ -177,6 +203,149 @@ Confidence decay multiplies the confidence of items not accessed in 30+ days by 
 | `memory_session_id` | `str` | Current session UUID |
 | `memory_context` | `str` | Current active context (e.g., `"work"`, `"global"`) |
 
+### Embedding Pipeline
+
+These methods handle the vector embedding pipeline for hybrid search. All are internal (`_`-prefixed) — you do not call them directly.
+
+```python
+def _get_embedder(self) -> Any
+```
+
+Lazy-initializes a `LemonadeProvider` for embedding. Cached for the process lifetime. Raises `RuntimeError` if Lemonade is unreachable.
+
+```python
+def _embed_text(self, text: str) -> np.ndarray
+```
+
+Embeds a single text string into a 768-dimensional vector via `nomic-embed-text-v2-moe-GGUF`. Returns a normalized `numpy` array suitable for cosine similarity via FAISS `IndexFlatIP`.
+
+```python
+def _backfill_embeddings(self, limit: int = 100) -> int
+```
+
+Embeds knowledge items that are missing embeddings (e.g., after a v1 → v2 migration). Called automatically during `init_memory()` startup. Returns the number of items backfilled.
+
+### Hybrid Search
+
+```python
+def _hybrid_search(
+    self,
+    query: str,
+    category: str = None,
+    context: str = None,
+    entity: str = None,
+    include_sensitive: bool = False,
+    top_k: int = 5,
+    time_from: str = None,
+    time_to: str = None,
+) -> List[Dict]:
+```
+
+Combines vector similarity (FAISS) and keyword matching (FTS5 BM25) via Reciprocal Rank Fusion (RRF), then reranks with a cross-encoder. The full pipeline:
+
+1. Embed query via Lemonade (`nomic-embed-text-v2`, 768-dim)
+2. FAISS cosine search: top-K × 4 candidates (oversample)
+3. FTS5 BM25 search: top-K × 4 candidates (oversample)
+4. Deduplicate by ID, apply RRF weights: `0.6 / (60 + rank_vector) + 0.4 / (60 + rank_bm25)`
+5. Cross-encoder reranking (`cross-encoder/ms-marco-MiniLM-L-6-v2`, ~22MB, CPU) on fused candidates
+6. Return final top-K results
+7. Bump confidence +0.02 and increment `use_count` on recalled items
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | `str` | required | Natural language search query |
+| `category` | `str` | `None` | Filter by category |
+| `context` | `str` | `None` | Filter by context scope |
+| `entity` | `str` | `None` | Filter by entity |
+| `include_sensitive` | `bool` | `False` | Include sensitive items |
+| `top_k` | `int` | `5` | Maximum results returned |
+| `time_from` | `str` | `None` | ISO 8601 lower bound on `created_at` |
+| `time_to` | `str` | `None` | ISO 8601 upper bound on `created_at` |
+
+### Complexity-Aware Recall Depth
+
+```python
+def _classify_query_complexity(self, query: str) -> int
+```
+
+Adapts retrieval depth based on query complexity. Returns an adaptive `top_k` value — no LLM call needed, purely heuristic:
+
+| Complexity | Heuristic Signals | top_k |
+|---|---|---|
+| **Simple** | < 8 words, single entity, no comparison words | 3 |
+| **Medium** | 8–20 words, or contains "how", "why", "explain" | 5 |
+| **Complex** | > 20 words, or contains "compare", "across", "all", "history", "everything" | 10 |
+
+### Mem0-Style LLM Extraction
+
+```python
+def _extract_via_llm(
+    self,
+    user_input: str,
+    assistant_response: str,
+    existing_items: List[Dict],
+) -> List[Dict]:
+```
+
+Sends the conversation turn plus existing memory to the LLM, which returns a JSON array of operations:
+
+| Operation | Description | Required fields |
+|-----------|-------------|-----------------|
+| `add` | New knowledge not already in memory | `op`, `category`, `content`, optional: `entity`, `domain`, `confidence` (default 0.4) |
+| `update` | Modify existing item (correction, enrichment, supersession) | `op`, `knowledge_id`, `content`, optional: `entity`, `domain` |
+| `delete` | Remove item contradicted or invalidated | `op`, `knowledge_id`, `reason` |
+| `noop` | Information already captured — not included in output | — |
+
+The extraction fetches top-10 relevant existing items first via `_hybrid_search()`, so the LLM can see what already exists and decide whether to add, update, delete, or do nothing. This replaces v1's regex-based heuristic extraction.
+
+**Error handling:** Invalid JSON → logged error, skip this turn. Timeout (3s) → logged warning, skip. Individual operation failure → logged, continue with remaining operations. No fallback to regex heuristics.
+
+### Consolidation
+
+```python
+def consolidate_old_sessions(self, max_sessions: int = 5) -> Dict:
+```
+
+Distills old conversation sessions into durable knowledge before they age out at the 90-day prune boundary. Called automatically during `init_memory()` startup.
+
+**Returns:** `{"consolidated": int, "extracted_items": int}`
+
+**Criteria for consolidation:**
+- All turns in the session are > 14 days old
+- Session has ≥ 5 turns
+- At least one turn has `consolidated_at IS NULL`
+
+**Process:**
+1. Fetch up to 20 turns per session (oldest first)
+2. Call LLM with consolidation prompt → returns summary + extracted knowledge
+3. Store summary as `knowledge(category="note", source="consolidation", domain="session:{id[:8]}")`
+4. Store each extracted item via `store()` (normal dedup applies)
+5. Mark all fetched turns with `consolidated_at = now`
+
+### Reconciliation
+
+```python
+def reconcile_memory(self, max_pairs: int = 20) -> Dict:
+```
+
+Background reconciliation of high-similarity knowledge pairs. Detects and resolves contradictory, reinforcing, or weakening facts that were never co-retrieved during extraction. Called on startup after decay, before consolidation.
+
+**Returns:** `{"pairs_checked": int, "reinforced": int, "contradicted": int, "weakened": int, "neutral": int}`
+
+**Process:**
+1. For each context, compute pairwise embedding similarity among active items
+2. Flag pairs with cosine similarity > 0.85
+3. For each flagged pair, a single LLM call classifies the relationship:
+
+| Relationship | Action |
+|---|---|
+| **reinforce** | Boost confidence of both items by +0.05 |
+| **contradict** | Supersede the older item (`superseded_by = newer_id`), boost newer confidence +0.1 |
+| **weaken** | Reduce confidence of the older item by 0.1 |
+| **neutral** | No action (similar words, different topics) |
+
+Rate-limited to `max_pairs` classifications per startup (~20s on local LLM). Highest-similarity pairs processed first.
+
 ### Lifecycle Hooks
 
 MemoryMixin hooks into the Agent lifecycle at 3 points. These are automatic -- you do not call them directly.
@@ -191,7 +360,7 @@ Wraps every non-memory tool call to auto-log it to `tool_history`. If a tool fai
 
 **Hook 3: `_after_process_query()` callback**
 
-Called after `process_query()` completes. Stores both conversation turns (user + assistant) in the conversations table and runs lightweight heuristic extraction (regex patterns for preferences and facts).
+Called after `process_query()` completes. Stores both conversation turns (user + assistant) in the conversations table and runs Mem0-style LLM extraction (ADD/UPDATE/DELETE/NOOP operations against existing memory). For turns ≥ 20 words, the extraction pipeline fetches top-10 relevant existing items via `_hybrid_search()`, then asks the LLM to decide what operations to perform — no regex heuristic fallback.
 
 ---
 
@@ -231,13 +400,20 @@ class MemoryStore:
         Uses WAL mode. Thread-safe."""
 ```
 
-### Database Schema
+### Database Schema (v2)
 
-Three tables in a single SQLite file:
+Three tables in a single SQLite file. Schema version 2 adds vector embedding support and fact lineage tracking.
 
-- **`conversations`** -- every conversation turn, persistent across sessions, with FTS5 index
-- **`knowledge`** -- persistent facts, preferences, errors, skills with FTS5 index, confidence scoring, context scoping, entity linking, temporal fields (`due_at`, `reminded_at`)
+- **`conversations`** -- every conversation turn, persistent across sessions, with FTS5 index. v2 adds `consolidated_at TEXT` column for tracking which turns have been distilled to knowledge.
+- **`knowledge`** -- persistent facts, preferences, errors, skills with FTS5 index, confidence scoring, context scoping, entity linking, temporal fields (`due_at`, `reminded_at`). v2 adds `embedding BLOB` (768-dim float32 vector) and `superseded_by TEXT` (fact lineage — ID of newer item that replaced this one).
 - **`tool_history`** -- every tool call the agent makes, auto-logged with success/failure, duration, error messages
+
+**Schema migrations** run automatically in `MemoryStore.__init__()`. v1 → v2 adds:
+```sql
+ALTER TABLE knowledge ADD COLUMN embedding BLOB;
+ALTER TABLE knowledge ADD COLUMN superseded_by TEXT;
+ALTER TABLE conversations ADD COLUMN consolidated_at TEXT;
+```
 
 ### Knowledge Methods
 
@@ -252,7 +428,7 @@ def store(
     metadata: dict = None,      # JSON blob for structured data
     confidence: float = 0.5,    # 0.0 to 1.0
     due_at: str = None,         # ISO 8601 for time-sensitive items
-    source: str = "tool",       # 'tool' | 'heuristic' | 'error_auto' | 'user' | 'discovery'
+    source: str = "tool",       # 'tool' | 'llm_extract' | 'error_auto' | 'user' | 'discovery' | 'consolidation'
     context: str = "global",    # Context scope
     sensitive: bool = False,    # Exclude from system prompt if True
     entity: str = None,         # Entity reference (e.g., 'person:sarah_chen')
@@ -263,21 +439,27 @@ def store(
 
 **Validation:** `content` must be non-empty (raises `ValueError` otherwise). Content longer than 2000 characters is silently truncated. `due_at`, if provided, is normalized to timezone-aware ISO 8601.
 
+**Embedding:** After storage, `MemoryMixin` immediately embeds the new item via `_embed_text()` and writes the embedding BLOB back via `store_embedding()`. The FAISS index is incrementally updated.
+
 #### search()
 
 ```python
 def search(
     self,
-    query: str,                     # FTS5 search query
+    query: str,                     # Search query (used for both FTS5 and vector search)
     category: str = None,           # Filter by category
     context: str = None,            # Filter by context
     entity: str = None,             # Filter by entity
     include_sensitive: bool = False, # Include sensitive items
     top_k: int = 5,                 # Max results
+    time_from: str = None,          # ISO 8601 lower bound on created_at
+    time_to: str = None,            # ISO 8601 upper bound on created_at
 ) -> List[Dict]:
 ```
 
-Uses FTS5 with AND semantics by default. If zero results, falls back to OR. BM25 ranking. Bumps confidence +0.02 on each recalled item.
+Uses hybrid search combining vector similarity (FAISS) and keyword matching (FTS5 BM25) via Reciprocal Rank Fusion (RRF), followed by cross-encoder reranking. FTS5 uses AND semantics by default with automatic OR fallback. Bumps confidence +0.02 on each recalled item. Filters on `superseded_by IS NULL` to return only current/active items.
+
+The `time_from` and `time_to` parameters add temporal filtering on `created_at`, narrowing results before the vector/BM25 ranking pipeline.
 
 #### get_by_category()
 
@@ -290,6 +472,8 @@ def get_by_category(
 ) -> List[Dict]:
 ```
 
+Filters on `superseded_by IS NULL` to return only current/active items.
+
 #### get_by_entity()
 
 ```python
@@ -300,7 +484,7 @@ def get_by_entity(
 ) -> List[Dict]:
 ```
 
-Returns all knowledge linked to a specific entity.
+Returns all knowledge linked to a specific entity. Filters on `superseded_by IS NULL` to return only current/active items.
 
 #### get_upcoming()
 
@@ -314,7 +498,7 @@ def get_upcoming(
 ) -> List[Dict]:
 ```
 
-Returns time-sensitive items due within N days or overdue. Filters out items that have already been reminded about (unless the due date has passed since the last reminder).
+Returns time-sensitive items due within N days or overdue. Filters out items that have already been reminded about (unless the due date has passed since the last reminder). Filters on `superseded_by IS NULL` to return only current/active items.
 
 #### update()
 
@@ -331,10 +515,11 @@ def update(
     entity: str = None,
     due_at: str = None,
     reminded_at: str = None,
+    superseded_by: str = None,  # ID of newer item that replaces this one
 ) -> bool:                  # False if ID not found
 ```
 
-Only provided fields are changed. Sets `updated_at` to the current time.
+Only provided fields are changed. Sets `updated_at` to the current time. The `superseded_by` parameter is used by the LLM extraction pipeline to mark old items as replaced by newer versions while preserving fact lineage.
 
 #### delete()
 
@@ -395,8 +580,10 @@ def get_stats(self) -> Dict
 
 def get_all_knowledge(self, category=None, context=None, entity=None,
                       sensitive=None, search=None, sort_by="updated_at",
-                      order="desc", offset=0, limit=50) -> Dict
+                      order="desc", offset=0, limit=50,
+                      include_superseded=False) -> Dict
     # Returns: {"items": [...], "total": 142, "offset": 0, "limit": 50}
+    # When include_superseded=False (default), filters on superseded_by IS NULL
 
 def get_tool_summary(self) -> List[Dict]
     # Per-tool stats: total_calls, success_rate, avg_duration_ms, last_error
@@ -416,6 +603,72 @@ def rebuild_fts(self) -> None
     # Rebuild all FTS5 indexes from source tables.
     # Use if search results seem wrong or incomplete.
     # Also available via POST /api/memory/rebuild-fts
+```
+
+### Embedding & Vector Methods (v2)
+
+```python
+def store_embedding(self, knowledge_id: str, embedding: bytes) -> bool
+    # Store a float32 embedding BLOB for a knowledge item.
+    # Called by MemoryMixin after store() to persist the vector.
+    # Returns False if knowledge_id not found.
+
+def get_items_with_embeddings(
+    self,
+    category: str = None,
+    context: str = None,
+    entity: str = None,
+    include_sensitive: bool = False,
+) -> List[Dict]
+    # Returns knowledge items that have embeddings (embedding IS NOT NULL).
+    # Used to build/rebuild the FAISS index.
+
+def get_items_without_embeddings(self, limit: int = 100) -> List[Dict]
+    # Returns knowledge items missing embeddings (embedding IS NULL).
+    # Used by _backfill_embeddings() during startup.
+```
+
+### Consolidation Methods (v2)
+
+```python
+def get_unconsolidated_sessions(
+    self,
+    older_than_days: int = 14,
+    min_turns: int = 5,
+    limit: int = 5,
+) -> List[str]
+    # Returns session_ids eligible for consolidation.
+    # Criteria: all turns > older_than_days old, >= min_turns, at least one
+    # turn with consolidated_at IS NULL.
+
+def mark_turns_consolidated(self, turn_ids: List[int]) -> int
+    # Sets consolidated_at = now for the given conversation turn IDs.
+    # Returns count of turns marked. Turns remain until 90-day prune;
+    # consolidated_at prevents re-processing.
+```
+
+### Reconciliation Methods (v2)
+
+```python
+def get_items_for_reconciliation(
+    self,
+    context: str = None,
+    limit: int = 100,
+) -> List[Dict]
+    # Returns active knowledge items (superseded_by IS NULL) with embeddings,
+    # suitable for pairwise similarity comparison during reconciliation.
+
+def get_sessions(self, limit: int = 20) -> List[Dict]
+    # List conversation sessions with turn counts and preview text.
+    # Used by the Memory Dashboard.
+
+def get_entities(self, limit: int = 100) -> List[Dict]
+    # List all unique entities with knowledge counts.
+    # Returns: [{"entity": "person:sarah_chen", "count": 5}, ...]
+
+def get_contexts(self, limit: int = 100) -> List[Dict]
+    # List all contexts with knowledge counts.
+    # Returns: [{"context": "work", "count": 42}, ...]
 ```
 
 ---
@@ -593,7 +846,7 @@ These 5 tools are registered by `register_memory_tools()` and exposed to the LLM
   </Card>
 
   <Card title="recall" icon="magnifying-glass">
-    Search memory by query (FTS5), category, context, or entity. Returns results with IDs for use with update/forget.
+    Search memory by query (hybrid: vector + BM25 + cross-encoder), category, context, entity, or time range. Returns results with IDs for use with update/forget.
   </Card>
 
   <Card title="update_memory" icon="pen">
@@ -618,10 +871,15 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | Source | How created | Default confidence |
 |--------|------------|-------------------|
 | `tool` | LLM called `remember()` | 0.5 |
-| `heuristic` | Auto-extracted via regex patterns | 0.3 |
+| `llm_extract` | Auto-extracted by LLM from conversation, Mem0-style | 0.4 |
 | `error_auto` | Auto-stored from tool failure | 0.5 |
 | `user` | Manually created via dashboard | 0.8 |
 | `discovery` | System scan during bootstrap | 0.4 |
+| `consolidation` | Distilled from old conversation sessions | 0.5 |
+
+<Note>
+  v2 replaces the v1 `heuristic` source (regex-based) with `llm_extract` (Mem0-style LLM extraction). The LLM sees both the conversation and existing memory, then decides what operations to perform (ADD/UPDATE/DELETE/NOOP). This produces higher-quality extractions with proper deduplication and contradiction resolution.
+</Note>
 
 ---
 
@@ -631,25 +889,39 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 
 | Method | Description |
 |--------|-------------|
-| `init_memory(db_path, context)` | Initialize memory subsystem |
-| `get_memory_system_prompt()` | Stable frozen prefix for system prompt |
+| `init_memory(db_path, context)` | Initialize memory subsystem (v2: includes embedding validation, FAISS rebuild, reconciliation, consolidation) |
+| `get_memory_system_prompt()` | Stable frozen prefix for system prompt (includes Skills section) |
 | `get_memory_dynamic_context()` | Per-turn time + upcoming items |
 | `register_memory_tools()` | Register 5 LLM-facing tools |
 | `set_memory_context(context)` | Switch active context |
 | `reset_memory_session()` | New session ID + confidence decay |
+| `_get_embedder()` | Lazy-init Lemonade embedding provider |
+| `_embed_text(text)` | Embed text to 768-dim vector via nomic-embed-text-v2 |
+| `_backfill_embeddings(limit)` | Embed items missing embeddings |
+| `_hybrid_search(query, ...)` | Vector + BM25 + RRF + cross-encoder search |
+| `_classify_query_complexity(query)` | Returns adaptive top_k: 3, 5, or 10 |
+| `_extract_via_llm(user_input, assistant_response, existing_items)` | Mem0-style extraction: ADD/UPDATE/DELETE/NOOP |
+| `consolidate_old_sessions(max_sessions)` | Distill old sessions to durable knowledge |
+| `reconcile_memory(max_pairs)` | Detect and resolve contradictory/reinforcing facts |
 
 ### MemoryStore Methods
 
 | Method | Description |
 |--------|-------------|
-| `store(category, content, ...)` | Store knowledge with dedup |
-| `search(query, category, ...)` | FTS5 search with BM25 ranking |
-| `get_by_category(category, ...)` | Filter by category |
-| `get_by_entity(entity, ...)` | Get all knowledge about an entity |
-| `get_upcoming(within_days, ...)` | Time-sensitive items |
-| `update(knowledge_id, ...)` | Update existing entry |
+| `store(category, content, ...)` | Store knowledge with dedup (v2: embedding follows via `store_embedding`) |
+| `search(query, category, ...)` | Hybrid search: vector + BM25 + RRF + cross-encoder (v2: adds `time_from`/`time_to`, `superseded_by IS NULL` filter) |
+| `get_by_category(category, ...)` | Filter by category (v2: `superseded_by IS NULL` filter) |
+| `get_by_entity(entity, ...)` | Get all knowledge about an entity (v2: `superseded_by IS NULL` filter) |
+| `get_upcoming(within_days, ...)` | Time-sensitive items (v2: `superseded_by IS NULL` filter) |
+| `update(knowledge_id, ...)` | Update existing entry (v2: adds `superseded_by` parameter) |
 | `delete(knowledge_id)` | Delete entry |
 | `apply_confidence_decay(...)` | Decay unused knowledge |
+| `store_embedding(knowledge_id, embedding)` | Store float32 embedding BLOB for a knowledge item **(v2)** |
+| `get_items_with_embeddings(...)` | Get items that have embeddings for FAISS index **(v2)** |
+| `get_items_without_embeddings(limit)` | Get items missing embeddings for backfill **(v2)** |
+| `get_unconsolidated_sessions(...)` | Get session IDs eligible for consolidation **(v2)** |
+| `mark_turns_consolidated(turn_ids)` | Mark conversation turns as consolidated **(v2)** |
+| `get_items_for_reconciliation(...)` | Get active items with embeddings for pairwise comparison **(v2)** |
 | `store_turn(session_id, ...)` | Store conversation turn |
 | `get_history(session_id, ...)` | Get turns for a session |
 | `search_conversations(query, ...)` | FTS5 conversation search |
@@ -658,9 +930,9 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `get_tool_errors(tool_name, ...)` | Recent tool errors |
 | `get_tool_stats(tool_name)` | Per-tool success rate and duration |
 | `get_stats()` | Aggregate dashboard statistics |
-| `get_all_knowledge(...)` | Paginated knowledge browser |
-| `get_entities()` | List all unique entities with counts |
-| `get_contexts()` | List all contexts with counts |
+| `get_all_knowledge(...)` | Paginated knowledge browser (v2: adds `include_superseded` parameter) |
+| `get_entities(limit)` | List all unique entities with counts |
+| `get_contexts(limit)` | List all contexts with counts |
 | `get_tool_summary()` | Per-tool stats for dashboard |
 | `get_tool_history(tool_name, limit)` | Recent call history for one tool |
 | `get_sessions(limit)` | List conversation sessions with previews |
