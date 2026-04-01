@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,6 +17,7 @@
 #include <nlohmann/json.hpp>
 
 #include "gaia/export.h"
+#include "gaia/types.h"
 
 namespace gaia {
 
@@ -195,6 +197,18 @@ public:
     std::string chatCompletions(const json& requestBody,
                                 int timeoutSec = LEMONADE_REQUEST_TIMEOUT);
 
+    /// POST /chat/completions with "stream": true and invoke onToken for each
+    /// delta token as it arrives. Returns the raw HTTP response bytes for
+    /// fallback non-streaming parsing (e.g. when the server ignores "stream").
+    ///
+    /// @param requestBody  OpenAI-compatible request JSON (stream field added automatically)
+    /// @param onToken      Callback invoked for each content token
+    /// @param timeoutSec   Max seconds to wait (default: LEMONADE_REQUEST_TIMEOUT)
+    /// @throws std::runtime_error on HTTP or connection error
+    std::string chatCompletionsStreaming(const json& requestBody,
+                                         StreamCallback onToken,
+                                         int timeoutSec = LEMONADE_REQUEST_TIMEOUT);
+
     // ---- Configuration ----
 
     const std::string& baseUrl() const { return baseUrl_; }
@@ -230,6 +244,15 @@ private:
     /// POST request; returns response body or throws.
     std::string httpPost(const std::string& path, const std::string& body,
                          int timeoutSec = 30);
+
+    /// Streaming POST request using httplib::Client::send().
+    /// Calls receiver for each response body chunk. Sets streamDone=true when
+    /// receiver returns false (i.e. SseParser got [DONE]) so the caller can
+    /// distinguish intentional stream completion from a real cancellation error.
+    /// @throws std::runtime_error on connection error or non-2xx status
+    void httpPostStreaming(const std::string& path, const std::string& body,
+                           std::function<bool(const char*, size_t)> receiver,
+                           bool& streamDone, int timeoutSec);
 
     std::string baseUrl_;
     std::string model_;

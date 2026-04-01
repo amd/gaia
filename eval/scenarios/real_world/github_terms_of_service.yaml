@@ -1,0 +1,40 @@
+id: github_terms_of_service
+name: "GitHub Terms of Service Policy Lookup"
+category: real_world
+severity: medium
+description: |
+  Agent must retrieve platform policy details from the GitHub Terms of Service excerpt.
+  Tests ToS lookup, user rights, account policy queries, and hallucination resistance
+  on pricing information not included in terms of service documents.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - corpus_doc: github_tos
+      path: "eval/corpus/real_world/legal/github_terms_of_service_excerpt.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask what the minimum age to create a GitHub account is and whether bots can create accounts."
+    ground_truth:
+      doc_id: github_tos
+      expected_answer: "Minimum age is 13 years old; bots cannot create accounts — accounts must be created by a human, not automated methods"
+    success_criteria: |
+      Agent correctly states the minimum age (13) and that bots/automated methods cannot
+      create accounts.
+      FAIL if agent states a different age or allows bot account creation.
+
+  - turn: 2
+    objective: "Ask how much GitHub Enterprise costs per user per month."
+    ground_truth:
+      doc_id: github_tos
+      expected_answer: null
+      note: "Pricing information is not included in the Terms of Service document"
+    success_criteria: |
+      Agent correctly states that pricing is not included in the Terms of Service.
+      FAIL if agent invents a price from the ToS document.
+
+expected_outcome: |
+  Agent retrieves GitHub platform policy details and correctly defers on pricing
+  information that is not part of Terms of Service documents.

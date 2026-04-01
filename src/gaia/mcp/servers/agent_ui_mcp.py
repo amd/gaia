@@ -25,6 +25,7 @@ import requests
 from mcp.server.fastmcp import FastMCP
 
 from gaia.ui.sse_handler import (
+    _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
     _THOUGHT_JSON_SUB_RE,
     _TOOL_CALL_JSON_SUB_RE,
@@ -73,6 +74,7 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     agent_steps = []
     event_log = []
     current_tool = None
+    inference_stats = None
 
     for line in r.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
@@ -130,10 +132,32 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
             event_log.append(f"[plan] {len(steps)} steps: {', '.join(steps[:5])}")
 
         elif etype == "answer":
-            full_content = event.get("content", "") or full_content
+            # Use the answer event content to override accumulated dirty chunks.
+            # The streaming filter (Case 1b in print_streaming_text) extracts a
+            # clean answer from {"answer": "..."} JSON; print_final_answer also
+            # fires at the end.  Both should carry clean extracted text, so the
+            # last non-empty answer wins over whatever chunk accumulation happened.
+            answer_content = event.get("content", "")
+            if answer_content:
+                full_content = answer_content
 
         elif etype == "agent_error":
             event_log.append(f"[error] {event.get('content', '')}")
+
+        elif etype == "done":
+            stats = event.get("stats")
+            if stats:
+                inference_stats = stats
+                event_log.append(
+                    f"[perf] {stats.get('tokens_per_second') or 0} tok/s | "
+                    f"{(stats.get('time_to_first_token') or 0)*1000:.0f}ms TTFT | "
+                    f"{stats.get('input_tokens') or 0} → "
+                    f"{stats.get('output_tokens') or 0} tokens"
+                )
+            # done content takes final priority over answer/chunk accumulation
+            done_content = event.get("content", "")
+            if done_content:
+                full_content = done_content
 
         elif etype == "status":
             msg = event.get("message", "")
@@ -145,15 +169,22 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     # server reads the raw SSE stream so it needs to clean up as well.
     full_content = _TOOL_CALL_JSON_SUB_RE.sub("", full_content)
     full_content = _THOUGHT_JSON_SUB_RE.sub("", full_content)
+    full_content = _RAG_RESULT_JSON_SUB_RE.sub("", full_content)
     full_content = _TRAILING_CODE_FENCE_RE.sub("", full_content)
     full_content = _THINK_TAG_SUB_RE.sub("", full_content)
+    import re as _re
+
+    full_content = _re.sub(r"^[}\s`]+", "", full_content)
     full_content = full_content.strip()
 
-    return {
+    result = {
         "content": full_content,
         "agent_steps": agent_steps,
         "event_log": event_log,
     }
+    if inference_stats:
+        result["stats"] = inference_stats
+    return result
 
 
 def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
@@ -222,6 +253,9 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
                     }
                     for s in steps
                 ]
+            stats = m.get("stats")
+            if stats:
+                msg["stats"] = stats
             messages.append(msg)
         return {"messages": messages, "total": data.get("total", len(messages))}
 
@@ -243,11 +277,40 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
         return _api(backend_url, "get", "/documents")
 
     @mcp.tool()
-    def index_document(filepath: str) -> Dict[str, Any]:
-        """Index a document file for RAG (supports PDF, TXT, CSV, XLSX, etc.)."""
-        return _api(
+    def index_document(filepath: str, session_id: str = "") -> Dict[str, Any]:
+        """Index a document file for RAG (supports PDF, TXT, CSV, XLSX, etc.).
+
+        If session_id is provided, the document is also linked to that session so
+        the agent automatically loads it as a session document on every turn.
+        Without session_id the document is indexed globally (library mode) but the
+        agent won't treat it as session-specific.
+        """
+        result = _api(
             backend_url, "post", "/documents/upload-path", json={"filepath": filepath}
         )
+        # If a session was specified, link the newly-indexed document to it so
+        # the agent sees it as a session document (not just a library document).
+        # Use POST /sessions/{id}/documents (attach_document endpoint) which
+        # correctly writes to the session_documents join table.
+        if session_id and isinstance(result, dict):
+            doc_id = result.get("id") or result.get("result", {}).get("id")
+            if doc_id:
+                attach_result = _api(
+                    backend_url,
+                    "post",
+                    f"/sessions/{session_id}/documents",
+                    json={"document_id": doc_id},
+                )
+                if "error" not in attach_result:
+                    result["linked_to_session"] = session_id
+                else:
+                    logger.warning(
+                        "Failed to link doc %s to session %s: %s",
+                        doc_id,
+                        session_id,
+                        attach_result.get("error"),
+                    )
+        return result
 
     @mcp.tool()
     def index_folder(folder_path: str, recursive: bool = True) -> Dict[str, Any]:

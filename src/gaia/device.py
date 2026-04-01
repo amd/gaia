@@ -14,7 +14,7 @@ import sys
 _SUPPORTED_CPU_KEYWORDS = ["RYZEN AI MAX"]
 
 # AMD Radeon discrete GPU keyword — must be paired with a >= 24 GB VRAM check.
-# 24 GB is the minimum to load Qwen3-Coder-30B-A3B-Instruct-GGUF (Q4_K_M ~17 GB).
+# 24 GB is the minimum to load Qwen3.5-35B-A3B-GGUF (Q4_K_M ~17 GB).
 _RADEON_GPU_KEYWORD = "AMD RADEON"
 _MIN_GPU_VRAM_GB = 24.0
 
@@ -118,7 +118,7 @@ def check_device_supported(log=None) -> tuple[bool, str]:
     Supported configurations (Windows only — Linux/macOS support coming soon):
 
     - **AMD Ryzen AI Max** (Strix Halo) — unified HBM memory (64 GB+).
-    - **AMD Radeon discrete GPU** with >= 24 GB VRAM to fit Qwen3-Coder-30B.
+    - **AMD Radeon discrete GPU** with >= 24 GB VRAM to fit Qwen3.5-35B.
 
     When the processor name cannot be detected the function returns
     ``(True, "unknown")`` to avoid false-blocking unknown hardware.

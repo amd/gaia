@@ -1,13 +1,15 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link, Brain } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore } from '../stores/notificationStore';
+import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
+import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { getSessionHash } from '../utils/format';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment } from '../types';
 import './ChatView.css';
@@ -24,10 +26,10 @@ const EMPTY_SUGGESTIONS = [
  *
  * Primary filtering happens server-side in sse_handler.py (see _TOOL_CALL_JSON_RE).
  * This frontend regex is a secondary safety net in case any tool-call JSON leaks
- * through the SSE stream. Uses quote-aware matching to avoid stripping answer
- * content from JSON-wrapped responses. Keep in sync with the server-side pattern.
+ * through the SSE stream. The canonical pattern is defined in sse_handler.py;
+ * keep this in sync if the server-side pattern changes.
  */
-const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*"[^}]*\}/g;
+const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*"[^}]*(?:"?tool_args"?\s*:\s*\{[^}]*\})?\s*\}/g;
 
 /**
  * Strip the LLM JSON envelope from streamed/accumulated content.
@@ -129,7 +131,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         systemStatus,
     } = useChatStore();
 
+    const { addNotification } = useNotificationStore();
+
     const session = sessions.find((s) => s.id === sessionId);
+    const sessionDocIds = new Set(session?.document_ids ?? []);
+    const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useState('');
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
@@ -139,6 +145,31 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [completedSteps, setCompletedSteps] = useState<AgentStep[]>([]);
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [docsExpanded, setDocsExpanded] = useState(false);
+    const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
+    // Smooth streaming exit — snapshot last content so fade-out shows real text
+    const [streamEnding, setStreamEnding] = useState(false);
+    const lastStreamContentRef = useRef('');
+    const lastAgentStepsRef = useRef<AgentStep[]>([]);
+    const prevStreamingRef = useRef(false);
+    // Continuously snapshot the streaming state so we have it when streaming ends
+    useEffect(() => {
+        if (streamingContent) lastStreamContentRef.current = streamingContent;
+    }, [streamingContent]);
+    useEffect(() => {
+        if (agentSteps.length > 0) lastAgentStepsRef.current = agentSteps.map(s => ({ ...s, active: false }));
+    }, [agentSteps]);
+    useEffect(() => {
+        if (!isStreaming && prevStreamingRef.current) {
+            setStreamEnding(true);
+            const timer = setTimeout(() => {
+                setStreamEnding(false);
+                lastStreamContentRef.current = '';
+                lastAgentStepsRef.current = [];
+            }, 350);
+            return () => clearTimeout(timer);
+        }
+        prevStreamingRef.current = isStreaming;
+    }, [isStreaming]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -177,14 +208,18 @@ export function ChatView({ sessionId }: ChatViewProps) {
         log.chat.info(`ChatView mounted for session=${sessionId}, loading messages...`);
         const t = log.chat.time();
         setLoadingMessages(true);
+        let cancelled = false;
 
         const loadMessages = (isInitial = false) => {
             api.getMessages(sessionId)
                 .then((data) => {
+                    if (cancelled) return;
                     const msgs = (data.messages || []).map((m: any) => ({
                         ...m,
                         // Map snake_case agent_steps from API to camelCase agentSteps
                         agentSteps: m.agentSteps || m.agent_steps || undefined,
+                        // Map inference_stats from API to stats field
+                        stats: m.stats || m.inference_stats || undefined,
                     }));
                     if (isInitial) {
                         setMessages(msgs);
@@ -198,12 +233,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     }
                 })
                 .catch((err) => {
+                    if (cancelled) return;
                     if (isInitial) {
                         log.chat.error(`Failed to load messages for session=${sessionId}`, err);
                         setMessages([]);
                     }
                 })
-                .finally(() => { if (isInitial) setLoadingMessages(false); });
+                .finally(() => { if (!cancelled && isInitial) setLoadingMessages(false); });
         };
 
         loadMessages(true);
@@ -211,6 +247,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // Poll every 3s for messages added by external tools (MCP API, etc.)
         msgPollRef.current = setInterval(() => loadMessages(false), 3_000);
         return () => {
+            cancelled = true;
             if (msgPollRef.current) clearInterval(msgPollRef.current);
         };
     }, [sessionId, setMessages, setLoadingMessages]);
@@ -580,6 +617,75 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
             },
             onAgentEvent: (event) => {
+                // ── Tool confirmation popup ──────────────────────────────
+                if (event.type === 'tool_confirm') {
+                    if (!event.confirm_id) {
+                        console.error('[ChatView] tool_confirm event missing confirm_id, ignoring');
+                        return;
+                    }
+                    const toolName = event.tool || '';
+                    const alwaysAllowed: string[] = JSON.parse(
+                        localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
+                    );
+                    if (alwaysAllowed.includes(toolName)) {
+                        // Auto-approve without showing the modal
+                        api.confirmToolExecution(sessionId, event.confirm_id, 'allow', false).catch(
+                            (err) => console.error('[ChatView] auto-confirm failed:', err)
+                        );
+                        return;
+                    }
+                    // Show the PermissionPrompt modal via notificationStore
+                    const notification: GaiaNotification = {
+                        id: event.confirm_id,
+                        type: 'permission_request',
+                        agentId: 'chat',
+                        agentName: 'GAIA',
+                        title: `Allow ${toolName}?`,
+                        message: `The agent wants to execute: ${toolName}`,
+                        timestamp: Date.now(),
+                        read: false,
+                        dismissed: false,
+                        priority: 'high',
+                        tool: toolName,
+                        toolArgs: event.args as Record<string, unknown> | undefined,
+                        timeoutSeconds: event.timeout_seconds ?? 60,
+                    };
+                    addNotification(notification);
+                    return;
+                }
+
+                // Permission request — check always-allow list, then push to
+                // notification store for the PermissionPrompt overlay.
+                if (event.type === 'permission_request') {
+                    const toolName = event.tool || '';
+                    const alwaysAllowed: string[] = JSON.parse(
+                        localStorage.getItem(ALWAYS_ALLOW_TOOLS_KEY) || '[]'
+                    );
+                    if (alwaysAllowed.includes(toolName)) {
+                        api.confirmTool(sessionId, true).catch(
+                            (err) => console.error('[ChatView] auto-confirm failed:', err)
+                        );
+                        return;
+                    }
+                    const { addNotification: addNotif } = useNotificationStore.getState();
+                    addNotif({
+                        id: event.confirm_id ?? `perm-${Date.now()}`,
+                        type: 'permission_request',
+                        agentId: sessionId,
+                        agentName: 'GAIA',
+                        title: `Allow ${toolName}?`,
+                        message: `The agent wants to execute: ${toolName}`,
+                        timestamp: Date.now(),
+                        read: false,
+                        dismissed: false,
+                        priority: 'high',
+                        tool: toolName,
+                        toolArgs: event.args as Record<string, unknown> | undefined,
+                        timeoutSeconds: event.timeout_seconds ?? 60,
+                    });
+                    return;
+                }
+
                 // Tool completion updates the last TOOL step (not just the last step,
                 // since thinking/status events may have been interleaved during execution)
                 if (event.type === 'tool_end') {
@@ -640,15 +746,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // Instead of creating a new step for every thought, update
                 // the existing thinking step so we get ONE "Thinking" entry
                 // that shows the latest thought, not a massive stream.
+                // Uses appendThinkingContent() which atomically reads the
+                // current detail and appends inside a single set() call,
+                // preventing stale-read races that can lose accumulated text.
                 if (event.type === 'thinking') {
                     const currentSteps = useChatStore.getState().agentSteps;
                     const lastStep = currentSteps[currentSteps.length - 1];
                     if (lastStep && lastStep.type === 'thinking') {
-                        // Update the existing thinking step with new content
-                        updateLastAgentStep({
-                            detail: event.content,
-                            active: true,
-                        });
+                        appendThinkingContent(event.content || '');
                         return;
                     }
                     // First thinking step or after a non-thinking step - create it
@@ -668,12 +773,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (status === 'working' || status === 'warning' || status === 'info') {
                         const currentSteps = useChatStore.getState().agentSteps;
                         const lastStep = currentSteps[currentSteps.length - 1];
-                        // Consolidate with previous status/thinking step
-                        if (lastStep && (lastStep.type === 'status' || lastStep.type === 'thinking') && lastStep.active) {
+                        // Consolidate with previous status step (but NOT thinking —
+                        // overwriting a thinking step's detail would discard all
+                        // accumulated thinking text).
+                        if (lastStep && lastStep.type === 'status' && lastStep.active) {
                             updateLastAgentStep({
                                 label: msg || 'Working',
                                 detail: msg,
                             });
+                            return;
+                        }
+                        // If the last step is thinking, update only the label
+                        // so the summary bar shows the status, but preserve the
+                        // accumulated thinking detail.
+                        if (lastStep && lastStep.type === 'thinking' && lastStep.active) {
+                            updateLastAgentStep({ label: msg || 'Thinking' });
                             return;
                         }
                         const step = agentEventToStep(event, stepIdRef);
@@ -684,27 +798,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
                 if (event.type === 'step') {
                     return; // Step headers are redundant with actual tool/thinking steps
-                }
-
-                // Permission request — push to notification store for the
-                // PermissionPrompt overlay, which calls confirmTool() on response.
-                if (event.type === 'permission_request') {
-                    const { addNotification } = useNotificationStore.getState();
-                    addNotification({
-                        id: `perm-${Date.now()}`,
-                        type: 'permission_request',
-                        agentId: sessionId,
-                        agentName: 'GAIA Agent',
-                        title: `Tool: ${event.tool}`,
-                        message: `The agent wants to run "${event.tool}". Allow?`,
-                        timestamp: Date.now(),
-                        read: false,
-                        dismissed: false,
-                        priority: 'high',
-                        tool: event.tool,
-                        toolArgs: event.args,
-                    });
-                    return;
                 }
 
                 const step = agentEventToStep(event, stepIdRef);
@@ -745,6 +838,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         created_at: new Date().toISOString(),
                         rag_sources: null,
                         agentSteps: stepsSnapshot.length > 0 ? stepsSnapshot : undefined,
+                        stats: event.stats || undefined,
                     };
                     addMessage(assistantMsg);
                 }
@@ -764,9 +858,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 setTimeout(() => {
                     api.getMessages(sessionId)
                         .then((data) => {
+                            if (useChatStore.getState().currentSessionId !== sessionId) return;
                             const msgs = (data.messages || []).map((m: any) => ({
                                 ...m,
                                 agentSteps: m.agentSteps || m.agent_steps || undefined,
+                                stats: m.stats || m.inference_stats || undefined,
                             }));
                             setMessages(msgs);
                             lastMsgCountRef.current = msgs.length;
@@ -834,7 +930,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         });
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, updateLastToolStep, clearAgentSteps]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
@@ -852,17 +948,24 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const handleDeleteMessage = useCallback(async (messageId: number) => {
         if (isStreaming) return;
         log.chat.info(`Deleting message ${messageId} from session=${sessionId}`);
-        // Optimistic removal
-        removeMessage(messageId);
-        try {
-            await api.deleteMessage(sessionId, messageId);
-        } catch (err) {
-            log.chat.error(`Failed to delete message ${messageId}`, err);
-            // Reload messages on error to restore accurate state
-            api.getMessages(sessionId)
-                .then((data) => setMessages(data.messages || []))
-                .catch(() => {});
-        }
+        // Animate first, then remove after 250ms
+        setDeletingMsgId(messageId);
+        setTimeout(async () => {
+            removeMessage(messageId);
+            setDeletingMsgId(null);
+            try {
+                await api.deleteMessage(sessionId, messageId);
+            } catch (err) {
+                log.chat.error(`Failed to delete message ${messageId}`, err);
+                // Reload messages on error to restore accurate state
+                api.getMessages(sessionId)
+                    .then((data) => {
+                        if (useChatStore.getState().currentSessionId !== sessionId) return;
+                        setMessages(data.messages || []);
+                    })
+                    .catch(() => {});
+            }
+        }, 250);
     }, [sessionId, isStreaming, removeMessage, setMessages]);
 
     // Resend a user message: delete it and everything below, then re-send
@@ -880,7 +983,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
             log.chat.error(`Failed to delete messages from ${message.id}`, err);
             // Reload messages on error
             api.getMessages(sessionId)
-                .then((data) => setMessages(data.messages || []))
+                .then((data) => {
+                    if (useChatStore.getState().currentSessionId !== sessionId) return;
+                    setMessages(data.messages || []);
+                })
                 .catch(() => {});
             return;
         }
@@ -895,6 +1001,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
             sendMessage();
         }
     };
+
+    // Session hash link copy
+    const [hashCopied, setHashCopied] = useState(false);
+    const handleCopyHash = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        const hash = getSessionHash(sessionId);
+        const url = `${window.location.origin}${window.location.pathname}#${hash}`;
+        navigator.clipboard.writeText(url).then(() => {
+            log.ui.info(`Copied session link: ${url}`);
+            setHashCopied(true);
+            setTimeout(() => setHashCopied(false), 1500);
+        }).catch(() => {
+            log.ui.warn('Clipboard write failed');
+        });
+    }, [sessionId]);
 
     // Title editing
     const startEditTitle = () => {
@@ -928,22 +1049,25 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     };
 
-    /** Remove a document from the index directly from the context bar. */
+    /** Detach a document from this session via the context bar (does not delete from library). */
     const handleRemoveDocument = useCallback(async (e: React.MouseEvent, docId: string) => {
         e.stopPropagation(); // Don't trigger the context bar click
         const doc = documents.find((d) => d.id === docId);
-        log.doc.info(`Removing document from context bar: ${doc?.filename || docId}`);
+        log.doc.info(`Detaching document from session: ${doc?.filename || docId}`);
         try {
-            await api.deleteDocument(docId);
-            const remaining = documents.filter((d) => d.id !== docId);
-            setDocuments(remaining);
-            // Auto-collapse when 3 or fewer docs remain
+            await api.detachDocument(sessionId, docId);
+            // Read fresh state after await to avoid stale-closure bugs when
+            // the user removes multiple documents in quick succession.
+            const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
+            const remaining = (freshSession?.document_ids ?? []).filter(id => id !== docId);
+            updateSessionInList(sessionId, { document_ids: remaining });
+            // Auto-collapse when 3 or fewer session docs remain after removal
             if (remaining.length <= 3) setDocsExpanded(false);
-            log.doc.info(`Removed document: ${doc?.filename || docId}`);
+            log.doc.info(`Detached document from session: ${doc?.filename || docId}`);
         } catch (err) {
-            log.doc.error(`Failed to remove document: ${doc?.filename || docId}`, err);
+            log.doc.error(`Failed to detach document: ${doc?.filename || docId}`, err);
         }
-    }, [documents, setDocuments]);
+    }, [documents, sessionId, updateSessionInList]);
 
     // Drag & drop
     const handleDrop = useCallback(async (e: React.DragEvent) => {
@@ -955,13 +1079,25 @@ export function ChatView({ sessionId }: ChatViewProps) {
             for (const file of Array.from(e.dataTransfer.files)) {
                 const filepath = (file as any).path || file.name;
                 try {
-                    await api.uploadDocumentByPath(filepath);
+                    const doc = await api.uploadDocumentByPath(filepath);
+                    if (sessionId && doc?.id) {
+                        try {
+                            await api.attachDocument(sessionId, doc.id);
+                            const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
+                            const existing = freshSession?.document_ids ?? [];
+                            if (!existing.includes(doc.id)) {
+                                updateSessionInList(sessionId, { document_ids: [...existing, doc.id] });
+                            }
+                        } catch (attachErr) {
+                            log.doc.warn(`Could not attach dropped document to session: ${attachErr}`);
+                        }
+                    }
                 } catch (err) {
                     log.doc.error(`Upload failed: ${filepath}`, err);
                 }
             }
         }
-    }, [setShowDocLibrary]);
+    }, [sessionId, updateSessionInList, setShowDocLibrary]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -972,6 +1108,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
     };
 
     const showEmptyState = !isLoadingMessages && messages.length === 0 && !isStreaming;
+
+    // Pre-compute per-message latency: time from preceding user message to each
+    // assistant message. O(N) single pass, avoids repeated backward scans in render.
+    const latencyByMsgId = useMemo(() => {
+        const map = new Map<number, number>();
+        let lastUserTime: number | undefined;
+        for (const msg of messages) {
+            if (msg.role === 'user' && msg.created_at) {
+                lastUserTime = new Date(msg.created_at).getTime();
+            } else if (msg.role === 'assistant' && msg.created_at && lastUserTime !== undefined) {
+                const assistTime = new Date(msg.created_at).getTime();
+                if (assistTime > lastUserTime) map.set(msg.id, assistTime - lastUserTime);
+                lastUserTime = undefined;
+            }
+        }
+        return map;
+    }, [messages]);
 
     return (
         <main
@@ -1003,7 +1156,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                 </div>
                 <div className="chat-header-right">
-                    <span className="model-badge">{session?.model || 'Local LLM'}</span>
+                    <a
+                        className={`session-hash-badge ${hashCopied ? 'copied' : ''}`}
+                        href={`#${getSessionHash(sessionId)}`}
+                        onClick={handleCopyHash}
+                        title={hashCopied ? 'Copied!' : `Copy session link #${getSessionHash(sessionId)}`}
+                        aria-label={`Copy link for session ${getSessionHash(sessionId)}`}
+                    >
+                        <Link size={10} />
+                        <span>#{getSessionHash(sessionId)}</span>
+                    </a>
+                    <span className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}>{systemStatus?.model_loaded || 'No model loaded'}</span>
                     <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Attach documents">
                         <Paperclip size={15} />
                     </button>
@@ -1019,10 +1182,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 </div>
             </header>
 
-            {/* Indexed documents context bar */}
-            {documents.length > 0 && (() => {
+            {/* Indexed documents context bar — shows only docs attached to this session */}
+            {sessionDocs.length > 0 && (() => {
                 // Sort by most recently accessed (last_accessed_at), falling back to indexed_at
-                const sorted = [...documents].sort((a, b) => {
+                const sorted = [...sessionDocs].sort((a, b) => {
                     const aTime = a.last_accessed_at || a.indexed_at || '';
                     const bTime = b.last_accessed_at || b.indexed_at || '';
                     return bTime.localeCompare(aTime);
@@ -1032,7 +1195,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 return (
                     <div
                         className={`doc-context-bar${docsExpanded ? ' doc-context-expanded' : ''}`}
-                        aria-label={`${documents.length} indexed document${documents.length !== 1 ? 's' : ''}`}
+                        aria-label={`${sessionDocs.length} indexed document${sessionDocs.length !== 1 ? 's' : ''}`}
                     >
                         <CheckCircle2 size={12} className="doc-context-icon" />
                         <span
@@ -1042,7 +1205,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             role="button"
                             tabIndex={0}
                         >
-                            {documents.length} indexed
+                            {sessionDocs.length} indexed
                         </span>
                         <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
                             {visibleDocs.map((d) => (
@@ -1052,8 +1215,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     <button
                                         className="doc-pill-remove"
                                         onClick={(e) => handleRemoveDocument(e, d.id)}
-                                        title={`Remove ${d.filename} from index`}
-                                        aria-label={`Remove ${d.filename}`}
+                                        title={`Remove ${d.filename} from this session`}
+                                        aria-label={`Remove ${d.filename} from this session`}
                                     >
                                         <X size={10} />
                                     </button>
@@ -1127,32 +1290,54 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     </div>
                 )}
 
-                {messages.map((msg) => (
-                    <div key={msg.id}>
-                        <MessageBubble
-                            message={msg}
-                            agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
-                            onDelete={!isStreaming ? handleDeleteMessage : undefined}
-                            onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
-                        />
-                    </div>
-                ))}
+                {messages.map((msg, idx) => {
+                    // Show a solid terminal cursor on the last assistant message
+                    // (only when not actively streaming — the streaming bubble has its own cursor)
+                    const isLastAssistant = !isStreaming && !streamEnding
+                        && msg.role === 'assistant'
+                        && messages.slice(idx + 1).every((m) => m.role !== 'assistant');
+                    // During stream-ending, skip rendering the just-completed
+                    // assistant message entirely — the streaming bubble shows it.
+                    // This prevents the flash/jump when transitioning.
+                    const isStreamEndingMsg = streamEnding
+                        && msg.role === 'assistant'
+                        && idx === messages.length - 1;
+                    if (isStreamEndingMsg) return null;
+
+                    const latencyMs = latencyByMsgId.get(msg.id);
+
+                    return (
+                        <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
+                            <MessageBubble
+                                message={msg}
+                                showTerminalCursor={isLastAssistant}
+                                agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
+                                onDelete={!isStreaming ? handleDeleteMessage : undefined}
+                                onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
+                                latencyMs={latencyMs}
+                            />
+                        </div>
+                    );
+                })}
 
                 {/* Active streaming message with agent activity inside */}
-                {isStreaming && (
-                    <MessageBubble
-                        message={{
-                            id: -1,
-                            session_id: sessionId,
-                            role: 'assistant',
-                            content: streamingContent || '',
-                            created_at: '',
-                            rag_sources: null,
-                        }}
-                        isStreaming
-                        agentSteps={agentSteps}
-                        agentStepsActive={true}
-                    />
+                {(isStreaming || streamEnding) && (
+                    <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
+                        <MessageBubble
+                            message={{
+                                id: -1,
+                                session_id: sessionId,
+                                role: 'assistant',
+                                content: (isStreaming ? streamingContent : lastStreamContentRef.current) || '',
+                                created_at: '',
+                                rag_sources: null,
+                            }}
+                            isStreaming={isStreaming}
+                            showTerminalCursor={streamEnding}
+                            agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
+                            agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
+                        />
+                    </div>
                 )}
                 <div ref={messagesEndRef} />
             </div>

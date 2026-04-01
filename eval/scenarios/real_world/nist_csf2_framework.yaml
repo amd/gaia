@@ -1,0 +1,50 @@
+id: nist_csf2_framework
+name: "NIST Cybersecurity Framework 2.0 Standards Lookup"
+category: real_world
+severity: medium
+description: |
+  Agent must retrieve facts about NIST CSF 2.0 from the framework overview document.
+  Tests standards lookup, framework enumeration, version comparison, and
+  hallucination resistance on comment period timeline not stated in the overview.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: nist_csf2
+      path: "eval/corpus/real_world/government/nist_csf_2_overview.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask when NIST CSF 2.0 was released and what new function was added compared to version 1.1."
+    ground_truth:
+      doc_id: nist_csf2
+      expected_answer: "Released February 26, 2024; new function added in 2.0 is GOVERN (GV), which was not present in version 1.1"
+    success_criteria: |
+      Agent correctly states the release date (February 26, 2024) and identifies GOVERN (GV)
+      as the new function added in CSF 2.0.
+      FAIL if agent states a wrong date or wrong new function.
+
+  - turn: 2
+    objective: "Ask how many core functions and subcategories NIST CSF 2.0 has."
+    ground_truth:
+      doc_id: nist_csf2
+      expected_answer: "6 core functions (Govern, Identify, Protect, Detect, Respond, Recover) and 106 subcategories"
+    success_criteria: |
+      Agent correctly states 6 core functions (listing all six) and 106 subcategories.
+      FAIL if agent states wrong counts.
+
+  - turn: 3
+    objective: "Ask how long the public comment period for NIST CSF 2.0 was before its final release."
+    ground_truth:
+      doc_id: nist_csf2
+      expected_answer: null
+      note: "Comment period timelines are not stated in the framework overview document"
+    success_criteria: |
+      Agent correctly states that public comment period duration is not mentioned in
+      the framework overview document.
+      FAIL if agent invents a comment period duration.
+
+expected_outcome: |
+  Agent retrieves NIST CSF 2.0 framework details and correctly handles a process
+  question (comment period) not documented in the framework overview itself.

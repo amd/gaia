@@ -1,0 +1,33 @@
+id: captured_eval_cross_turn_file_recall
+name: "Captured: Cross-Turn File Recall"
+category: captured
+description: 'Captured from session: Eval: cross_turn_file_recall'
+note: "Subset of cross_turn_file_recall (2 of 3 turns captured from a real session)"
+persona: casual_user
+setup:
+  index_documents:
+    - corpus_doc: product_comparison
+      path: "eval/corpus/documents/product_comparison.html"
+turns:
+- turn: 1
+  objective: '[REVIEW] hey what docs do you have loaded up?'
+  user_message: hey what docs do you have loaded up?
+  expected_tools:
+  - list_indexed_documents
+  ground_truth:
+    expected_behavior: "Agent lists the indexed document (product_comparison.html or product_comparison)"
+  success_criteria: "Agent lists the indexed document (product_comparison.html or product_comparison)"
+- turn: 2
+  objective: '[REVIEW] how much do the two products cost?'
+  user_message: how much do the two products cost?
+  expected_tools:
+  - query_specific_file
+  ground_truth:
+    doc_id: product_comparison
+    fact_ids: [price_a, price_b]
+    expected_answer: "StreamLine $49/month, ProFlow $79/month"
+  success_criteria: "Agent states StreamLine costs $49/month and ProFlow costs $79/month"
+captured_from:
+  session_id: 7855ef89-1804-493f-a125-e405aa8ff59a
+  title: 'Eval: cross_turn_file_recall'
+  captured_at: '2026-03-20T16:21:40.135563'

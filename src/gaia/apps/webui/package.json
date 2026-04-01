@@ -1,6 +1,6 @@
 {
   "name": "@amd-gaia/agent-ui",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "type": "module",
   "productName": "GAIA Agent UI",
   "description": "Privacy-first agentic AI interface with document Q&A - runs 100% locally on AMD Ryzen AI",
@@ -58,14 +58,7 @@
     "forge": "./forge.config.cjs"
   },
   "dependencies": {
-    "lucide-react": "^0.312.0",
-    "qrcode": "^1.5.4",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-markdown": "^9.1.0",
-    "rehype-raw": "^7.0.0",
-    "remark-gfm": "^4.0.1",
-    "zustand": "^4.5.0"
+    "electron-squirrel-startup": "^1.0.0"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.2.0",
@@ -75,7 +68,16 @@
     "@types/react-dom": "^18.2.18",
     "@vitejs/plugin-react": "^4.2.1",
     "electron": "^40.6.1",
+    "lucide-react": "^0.312.0",
+    "qrcode": "^1.5.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-markdown": "^9.1.0",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
     "typescript": "^5.3.3",
-    "vite": "^5.0.12"
+    "vite": "^5.0.12",
+    "zustand": "^4.5.0"
   }
 }

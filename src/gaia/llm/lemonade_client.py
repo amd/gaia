@@ -81,7 +81,10 @@ def _get_lemonade_config() -> tuple:
 # =========================================================================
 # Model Configuration Defaults
 # =========================================================================
-# Default model for text generation - lightweight CPU model for testing
+# Default model for simple `gaia llm` queries — intentionally lightweight (0.6B).
+# Agents use Qwen3.5-35B-A3B-GGUF via AGENT_PROFILES (see below), NOT this default.
+# Do NOT change this to 35B — it would break CI tests and force large downloads
+# in minimal setups. The UI default lives in ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Qwen3-0.6B-GGUF"
 # DEFAULT_MODEL_NAME = "Llama-3.2-3B-Instruct-Hybrid"
 
@@ -141,6 +144,7 @@ class LemonadeStatus:
     url: str = field(
         default_factory=lambda: os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
     )
+    version: Optional[str] = None
     context_size: int = 0
     loaded_models: list = field(default_factory=list)
     health_data: dict = field(default_factory=dict)
@@ -150,9 +154,15 @@ class LemonadeStatus:
 # Define available models
 MODELS = {
     # LLM Models
+    "qwen3.5-35b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="Qwen3.5-35B-A3B-GGUF",
+        display_name="Qwen3.5 35B",
+        min_ctx_size=32768,
+    ),
     "qwen3-coder-30b": ModelRequirement(
         model_type=ModelType.LLM,
-        model_id="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+        model_id="Qwen3.5-35B-A3B-GGUF",
         display_name="Qwen3 Coder 30B",
         min_ctx_size=32768,
     ),
@@ -183,49 +193,49 @@ AGENT_PROFILES = {
     "chat": AgentProfile(
         name="chat",
         display_name="Chat Agent",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Interactive chat with RAG and vision support",
     ),
     "code": AgentProfile(
         name="code",
         display_name="Code Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Autonomous coding assistant",
     ),
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Voice-enabled chat",
     ),
     "rag": AgentProfile(
         name="rag",
         display_name="RAG System",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Document Q&A with retrieval and vision",
     ),
     "blender": AgentProfile(
         name="blender",
         display_name="Blender Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="3D content generation in Blender",
     ),
     "jira": AgentProfile(
         name="jira",
         display_name="Jira Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Jira issue management",
     ),
     "docker": AgentProfile(
         name="docker",
         display_name="Docker Agent",
-        models=["qwen3-coder-30b"],
+        models=["qwen3.5-35b"],
         min_ctx_size=32768,
         description="Docker container management",
     ),
@@ -246,7 +256,7 @@ AGENT_PROFILES = {
     "mcp": AgentProfile(
         name="mcp",
         display_name="MCP Bridge",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
         min_ctx_size=32768,
         description="Model Context Protocol bridge server with vision",
     ),
@@ -886,7 +896,7 @@ class LemonadeClient:
         # Check for MoE models first (e.g., "30b-a3b" = 30B total, 3B active)
         # MoE models are smaller than their total parameter count suggests
         if "a3b" in model_lower or "a2b" in model_lower:
-            return 18.0  # MoE models like Qwen3-Coder-30B-A3B are ~18GB
+            return 18.0  # MoE models like Qwen3.5-35B-A3B are ~18GB
 
         # Look for billion parameter indicators (dense models)
         if "70b" in model_lower or "72b" in model_lower:
@@ -1818,7 +1828,7 @@ class LemonadeClient:
         Get detailed information about a specific model.
 
         Args:
-            model_id: The model identifier (e.g., "Qwen3-Coder-30B-GGUF")
+            model_id: The model identifier (e.g., "Qwen3.5-35B-A3B-GGUF")
 
         Returns:
             Dict containing model metadata:
@@ -1834,7 +1844,7 @@ class LemonadeClient:
 
         Examples:
             # Get model checkpoint and recipe
-            model = client.get_model_details("Qwen3-Coder-30B-GGUF")
+            model = client.get_model_details("Qwen3.5-35B-A3B-GGUF")
             print(f"Checkpoint: {model['checkpoint']}")
             print(f"Recipe: {model['recipe']}")
 
@@ -2849,14 +2859,19 @@ class LemonadeClient:
             health = self.health_check()
             status.running = True
             status.health_data = health
+            status.version = health.get("version")
 
             # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
+            # Skip embedding models — their ctx_size is irrelevant for LLM context checks.
             all_models = health.get("all_models_loaded", [])
-            if all_models:
-                status.context_size = (
-                    all_models[0].get("recipe_options", {}).get("ctx_size", 0)
-                )
-            else:
+            for m in all_models:
+                if m.get("type") == "embedding":
+                    continue
+                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
+                if ctx:
+                    status.context_size = ctx
+                    break
+            if not status.context_size:
                 # Fallback for older Lemonade versions
                 status.context_size = health.get("context_size", 0)
 
@@ -2899,7 +2914,7 @@ class LemonadeClient:
             agent: Agent name or "all" for all unique models
 
         Returns:
-            List of model IDs (e.g., ["Qwen3-Coder-30B-A3B-Instruct-GGUF", ...])
+            List of model IDs (e.g., ["Qwen3.5-35B-A3B-GGUF", ...])
         """
         model_ids = set()
 
@@ -3097,21 +3112,28 @@ class LemonadeClient:
             return None
 
     def _check_version_compatibility(
-        self, expected_version: str, quiet: bool = False
+        self,
+        expected_version: str,
+        actual_version: Optional[str] = None,
+        quiet: bool = False,
     ) -> bool:
         """
-        Check if the installed lemonade-server version is compatible.
+        Check if the lemonade-server version is compatible.
 
-        Checks only the major version for compatibility.
+        Checks major version for hard incompatibility, and warns on
+        minor/patch mismatches.
 
         Args:
-            expected_version: Expected version string (e.g., "8.2.2")
+            expected_version: Expected version string (e.g., "10.0.0")
+            actual_version: Actual version string. If None, detected from
+                            the local ``lemonade-server --version`` CLI.
             quiet: Suppress warning output
 
         Returns:
             True if compatible (or version check failed), False if incompatible major version
         """
-        actual_version = self.get_lemonade_version()
+        if actual_version is None:
+            actual_version = self.get_lemonade_version()
 
         if not actual_version:
             # Can't determine version, assume compatible (don't block)
@@ -3142,6 +3164,15 @@ class LemonadeClient:
                     print("")
 
                 return False
+
+            # Same major version – warn if minor/patch differs
+            if actual_version != expected_version:
+                if not quiet:
+                    print(
+                        f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version: "
+                        f"v{actual_version} (expected v{expected_version})"
+                    )
+                    print("   Consider updating: https://lemonade-server.ai")
 
             return True
 
@@ -3222,7 +3253,10 @@ class LemonadeClient:
         # Check version compatibility (warning only, not fatal)
         from gaia.version import LEMONADE_VERSION
 
-        self._check_version_compatibility(LEMONADE_VERSION, quiet=quiet)
+        cli_version = self.get_lemonade_version()
+        self._check_version_compatibility(
+            LEMONADE_VERSION, actual_version=cli_version, quiet=quiet
+        )
 
         # Check current status
         status = self.get_status()
@@ -3230,7 +3264,18 @@ class LemonadeClient:
         if status.running:
             if not quiet:
                 print("✅ Lemonade Server is running")
+                if status.version:
+                    print(f"   Server version: {status.version}")
                 print(f"   Current context size: {status.context_size}")
+
+            # Check running server version against expected (warning only).
+            # Skip if the server reports the same version the CLI already checked.
+            if status.version and status.version != cli_version:
+                self._check_version_compatibility(
+                    LEMONADE_VERSION,
+                    actual_version=status.version,
+                    quiet=quiet,
+                )
 
             # Check context size (warning only, not fatal)
             if status.context_size < required_ctx:

@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -73,6 +73,24 @@ export async function getHealth(): Promise<{ status: string; stats: Record<strin
     return apiFetch('GET', '/health');
 }
 
+// -- Settings ------------------------------------------------------------------
+
+export async function getSettings(): Promise<Settings> {
+    return apiFetch<Settings>('GET', '/settings');
+}
+
+export async function updateSettings(data: Partial<Settings>): Promise<Settings> {
+    return apiFetch<Settings>('PUT', '/settings', data);
+}
+
+export async function loadModel(modelName: string, ctxSize?: number): Promise<{ status: string; model: string; ctx_size: number }> {
+    return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize });
+}
+
+export async function downloadModel(modelName: string, force = false): Promise<{ status: string; model: string }> {
+    return apiFetch('POST', '/system/download-model', { model_name: modelName, force });
+}
+
 // -- Sessions ------------------------------------------------------------------
 
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
@@ -111,12 +129,6 @@ export async function deleteMessagesFrom(sessionId: string, messageId: number): 
     return apiFetch('DELETE', `/sessions/${sessionId}/messages/${messageId}/and-below`);
 }
 
-// -- Tool Confirmation --------------------------------------------------------
-
-export async function confirmTool(sessionId: string, approved: boolean): Promise<{ status: string; approved: boolean }> {
-    return apiFetch('POST', '/chat/confirm-tool', { session_id: sessionId, approved });
-}
-
 // -- Chat (Streaming with Agent Events) ----------------------------------------
 
 /**
@@ -139,7 +151,7 @@ export interface StreamCallbacks {
 /** Agent event types that represent activity rather than content. */
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
-    'tool_start', 'tool_end', 'tool_result', 'tool_args', 'agent_error',
+    'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
     'permission_request',
 ]);
 
@@ -274,6 +286,23 @@ export function sendMessageStream(
     return controller;
 }
 
+// -- Tool Confirmation ---------------------------------------------------------
+
+/** Resolve a pending tool execution confirmation (Allow or Deny). */
+export async function confirmToolExecution(
+    sessionId: string,
+    confirmId: string,
+    action: 'allow' | 'deny',
+    remember: boolean,
+): Promise<void> {
+    return apiFetch('POST', '/chat/confirm', { session_id: sessionId, confirm_id: confirmId, action, remember });
+}
+
+/** Confirm or deny a tool execution (simplified API for permission_request events). */
+export async function confirmTool(sessionId: string, approved: boolean): Promise<{ status: string; approved: boolean }> {
+    return apiFetch('POST', '/chat/confirm-tool', { session_id: sessionId, approved });
+}
+
 // -- Documents -----------------------------------------------------------------
 
 export async function listDocuments(): Promise<{ documents: Document[]; total: number; total_size_bytes: number; total_chunks: number }> {
@@ -399,4 +428,34 @@ export async function stopTunnel(): Promise<{ active: boolean }> {
 
 export async function getTunnelStatus(): Promise<TunnelStatus> {
     return apiFetch('GET', '/tunnel/status');
+}
+
+// -- MCP Server Management -------------------------------------------------------
+
+export async function listMCPServers(): Promise<{ servers: MCPServerInfo[] }> {
+    return apiFetch('GET', '/mcp/servers');
+}
+
+export async function addMCPServer(data: { name: string; command: string; args?: string[]; env?: Record<string, string> }): Promise<{ status: string; name: string }> {
+    return apiFetch('POST', '/mcp/servers', data);
+}
+
+export async function removeMCPServer(name: string): Promise<{ status: string; name: string }> {
+    return apiFetch('DELETE', `/mcp/servers/${name}`);
+}
+
+export async function enableMCPServer(name: string): Promise<{ status: string; name: string }> {
+    return apiFetch('POST', `/mcp/servers/${name}/enable`);
+}
+
+export async function disableMCPServer(name: string): Promise<{ status: string; name: string }> {
+    return apiFetch('POST', `/mcp/servers/${name}/disable`);
+}
+
+export async function getMCPCatalog(): Promise<{ catalog: MCPCatalogEntry[] }> {
+    return apiFetch('GET', '/mcp/catalog');
+}
+
+export async function getMCPRuntimeStatus(): Promise<{ servers: MCPServerStatus[] }> {
+    return apiFetch('GET', '/mcp/status');
 }

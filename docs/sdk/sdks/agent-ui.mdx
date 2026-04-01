@@ -19,6 +19,10 @@ from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentR
 
 **See also:** [User Guide](/guides/agent-ui) | [Agent SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server)
 
+<Warning>
+  **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Qwen3.5-35B-A3B-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
+</Warning>
+
 ---
 
 ## Overview
@@ -76,7 +80,7 @@ from gaia.ui.database import ChatDatabase
 db = ChatDatabase()  # Uses default path ~/.gaia/chat/gaia_chat.db
 
 # Create a session
-session = db.create_session(title="My Chat", model="Qwen3-Coder-30B-A3B-Instruct-GGUF")
+session = db.create_session(title="My Chat", model="Qwen3.5-35B-A3B-GGUF")
 print(f"Session ID: {session['id']}")
 
 # Add messages
@@ -138,7 +142,7 @@ db = ChatDatabase()
 # Create session with attached documents
 session = db.create_session(
     title="Project Review",
-    model="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    model="Qwen3.5-35B-A3B-GGUF",
     system_prompt="You are a code review assistant.",
     document_ids=["doc-abc123"],
 )
@@ -276,20 +280,6 @@ class SystemStatus(BaseModel):
     memory_available_gb: float = 0.0
     initialized: bool = False
     version: str = "0.1.0"
-    # Extended Lemonade info
-    lemonade_version: Optional[str] = None
-    model_size_gb: Optional[float] = None
-    model_device: Optional[str] = None       # e.g. "npu", "igpu", "cpu"
-    model_context_size: Optional[int] = None
-    model_labels: Optional[List[str]] = None
-    gpu_name: Optional[str] = None
-    gpu_vram_gb: Optional[float] = None
-    # Last inference stats
-    tokens_per_second: Optional[float] = None
-    time_to_first_token: Optional[float] = None
-    # Device compatibility (Windows only — Linux/macOS coming soon)
-    device_supported: bool = True            # False on unsupported OS or hardware
-    processor_name: Optional[str] = None     # Detected CPU or GPU name
 ```
 
 ### Sessions
@@ -352,28 +342,15 @@ class SourceInfo(BaseModel):
 ### Messages
 
 ```python
-class AgentStepResponse(BaseModel):
-    """A single step in the agent's execution history (persisted with the message)."""
-    id: int
-    type: str              # "thinking" | "tool" | "plan" | "status" | "error"
-    label: str             # Human-readable step description
-    detail: Optional[str] = None   # Additional detail text
-    tool: Optional[str] = None     # Tool function name (for type="tool")
-    result: Optional[str] = None   # Tool result summary
-    success: Optional[bool] = None
-    active: bool = False
-    planSteps: Optional[List[str]] = None  # For type="plan"
-    timestamp: int = 0     # Unix ms
-
 class MessageResponse(BaseModel):
     """Individual message in a session."""
     id: int
     session_id: str
-    role: str              # "user", "assistant", or "system"
+    role: str             # "user", "assistant", or "system"
     content: str
     created_at: str
     rag_sources: Optional[List[SourceInfo]] = None
-    agent_steps: Optional[List[AgentStepResponse]] = None  # Tool execution history
+    agent_steps: Optional[List[AgentStepResponse]] = None
 
 class MessageListResponse(BaseModel):
     messages: List[MessageResponse]
@@ -393,8 +370,7 @@ class DocumentResponse(BaseModel):
     indexed_at: str
     last_accessed_at: Optional[str] = None
     sessions_using: int = 0
-    indexing_status: str = "complete"
-    # "pending" | "indexing" | "complete" | "failed" | "cancelled" | "missing"
+    indexing_status: str = "complete"  # pending | indexing | complete | failed | cancelled | missing
 
 class DocumentListResponse(BaseModel):
     documents: List[DocumentResponse]
@@ -425,27 +401,14 @@ class AttachDocumentRequest(BaseModel):
     ```json
     {
       "lemonade_running": true,
-      "model_loaded": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+      "model_loaded": "Qwen3.5-35B-A3B-GGUF",
       "embedding_model_loaded": false,
       "disk_space_gb": 128.5,
       "memory_available_gb": 12.3,
       "initialized": true,
-      "version": "0.1.0",
-      "lemonade_version": "0.18.0",
-      "model_size_gb": 17.4,
-      "model_device": "npu",
-      "model_context_size": 32768,
-      "model_labels": ["chat", "code"],
-      "gpu_name": "AMD Radeon 8060S",
-      "gpu_vram_gb": 64.0,
-      "tokens_per_second": 42.3,
-      "time_to_first_token": 0.85,
-      "device_supported": true,
-      "processor_name": "AMD Ryzen AI MAX+ 395 w/ Radeon 8060S"
+      "version": "0.1.0"
     }
     ```
-
-    `device_supported` is `false` when the OS is not Windows (Linux/macOS support coming soon) or no supported hardware was detected (no AMD Ryzen AI Max and no AMD Radeon GPU with ≥ 24 GB VRAM). The UI displays a **dismissible** warning banner when `false` — no functionality is blocked. Always `true` when `GAIA_SKIP_DEVICE_CHECK` is set or when `LEMONADE_BASE_URL` points to a non-localhost server (remote inference, no local hardware requirements).
   </Accordion>
 
   <Accordion title="GET /api/health">
@@ -466,6 +429,95 @@ class AttachDocumentRequest(BaseModel):
     }
     ```
   </Accordion>
+
+  <Accordion title="POST /api/system/load-model">
+    Trigger loading a model on the Lemonade server. Returns `202` immediately; loading proceeds in the background. Poll `GET /api/system/status` to detect when loading completes.
+
+    **Request:**
+    ```json
+    {
+      "model_name": "Qwen3.5-35B-A3B-GGUF",
+      "ctx_size": 32768
+    }
+    ```
+
+    | Field | Type | Required | Description |
+    |-------|------|----------|-------------|
+    | `model_name` | string | Yes | Name of the model to load. |
+    | `ctx_size` | number | No | Context window size in tokens. Defaults to `32768`. |
+
+    **Response (202):**
+    ```json
+    {
+      "status": "loading",
+      "model": "Qwen3.5-35B-A3B-GGUF",
+      "ctx_size": 32768
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="POST /api/system/download-model">
+    Trigger downloading a model via the Lemonade server. Returns `202` immediately; the download proceeds in the background. Poll `GET /api/system/status` to detect when the model becomes available. Set `force` to `true` to re-download even if the file already exists (repairs corrupted or incomplete downloads).
+
+    **Request:**
+    ```json
+    {
+      "model_name": "Qwen3.5-35B-A3B-GGUF",
+      "force": false
+    }
+    ```
+
+    | Field | Type | Required | Description |
+    |-------|------|----------|-------------|
+    | `model_name` | string | Yes | Name of the model to download. |
+    | `force` | boolean | No | Re-download even if the model already exists. Defaults to `false`. |
+
+    **Response (202):**
+    ```json
+    {
+      "status": "downloading",
+      "model": "Qwen3.5-35B-A3B-GGUF"
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="GET /api/settings">
+    Get current user settings including the custom model override and its status on the Lemonade server.
+
+    **Response:**
+    ```json
+    {
+      "custom_model": "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated",
+      "model_status": {
+        "found": true,
+        "downloaded": true,
+        "loaded": false
+      }
+    }
+    ```
+
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `custom_model` | string or null | HuggingFace model ID overriding the default, or `null` if using the default model. |
+    | `model_status` | object or null | Status of the custom model on Lemonade. `null` when no custom model is set. Contains `found` (in catalog), `downloaded` (on disk), and `loaded` (currently active). |
+  </Accordion>
+
+  <Accordion title="PUT /api/settings">
+    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string / `null` to clear the override and revert to the default model.
+
+    **Request:**
+    ```json
+    {
+      "custom_model": "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated"
+    }
+    ```
+
+    | Field | Type | Required | Description |
+    |-------|------|----------|-------------|
+    | `custom_model` | string or null | No | HuggingFace model ID to use instead of the default. Empty string or `null` clears the override. |
+
+    **Response:** Same shape as `GET /api/settings`.
+  </Accordion>
 </AccordionGroup>
 
 ### Sessions
@@ -478,7 +530,7 @@ class AttachDocumentRequest(BaseModel):
     ```json
     {
       "title": "Code Review",
-      "model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+      "model": "Qwen3.5-35B-A3B-GGUF",
       "system_prompt": "You are a code reviewer.",
       "document_ids": ["doc-abc123"]
     }
@@ -602,7 +654,7 @@ class AttachDocumentRequest(BaseModel):
 
     **Example stream** showing a typical multi-step interaction:
     ```
-    data: {"type": "thinking", "content": "Sending to Qwen3-Coder-30B..."}
+    data: {"type": "thinking", "content": "Sending to Qwen3.5-35B..."}
     data: {"type": "step", "step": 1, "total": 10, "status": "started"}
     data: {"type": "tool_start", "tool": "query_documents", "detail": "Searching indexed documents for relevant content"}
     data: {"type": "tool_args", "tool": "query_documents", "args": {"query": "database init"}, "detail": "query: database init"}
@@ -753,7 +805,7 @@ CREATE TABLE sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT,
     updated_at TEXT,
-    model TEXT NOT NULL DEFAULT 'Qwen3-Coder-30B-A3B-Instruct-GGUF',
+    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-GGUF',
     system_prompt TEXT
 );
 
@@ -885,7 +937,7 @@ from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
 # The server creates a ChatAgent instance per request
 config = ChatAgentConfig(
-    model_id=session.get("model", "Qwen3-Coder-30B-A3B-Instruct-GGUF"),
+    model_id=session.get("model", "Qwen3.5-35B-A3B-GGUF"),
     system_prompt=session.get("system_prompt"),
     allowed_paths=["/path/to/files"],
 )
@@ -902,8 +954,8 @@ from gaia.rag.sdk import RAGSDK, RAGConfig
 
 config = RAGConfig()
 rag = RAGSDK(config)
-result = rag.index_file(filepath)
-chunk_count = result.get("chunk_count", 0)
+result = rag.index_document(filepath)
+chunk_count = result.get("num_chunks", 0)
 ```
 
 ---
@@ -916,16 +968,16 @@ GAIA Agent UI is also available as an npm package for quick installation:
 npm install -g @amd-gaia/agent-ui
 ```
 
-This provides the `gaia` CLI command:
+This provides the `gaia-ui` CLI command:
 
 ```bash
-gaia              # Start Python backend + open browser
-gaia --serve      # Serve frontend only (Node.js static server)
-gaia --port 8080  # Custom port
-gaia --version    # Show version
+gaia-ui              # Start Python backend + open browser
+gaia-ui --serve      # Serve frontend only (Node.js static server)
+gaia-ui --port 8080  # Custom port
+gaia-ui --version    # Show version
 ```
 
-On first run, `gaia` automatically installs the Python backend (uv, Python 3.12, amd-gaia) if not already present.
+On first run, `gaia-ui` automatically installs the Python backend (uv, Python 3.12, amd-gaia) if not already present. On subsequent runs, it auto-updates if the version doesn't match.
 
 ### Package Contents
 

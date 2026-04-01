@@ -4,6 +4,7 @@
 import asyncio
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -683,13 +684,25 @@ def run_cli(action, **kwargs):
     return asyncio.run(async_main(action, **kwargs))
 
 
-def _launch_agent_ui(port=4200, base_url=None, log=None):
+def _ensure_webui_built(log=None):
+    """Rebuild the Agent UI frontend if source files are newer than dist."""
+    from gaia.ui.build import ensure_webui_built
+
+    ensure_webui_built(
+        log_fn=log.info if log else print,
+        warn_fn=log.warning if log else print,
+    )
+
+
+def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist=None):
     """Launch the Agent UI server (FastAPI + uvicorn).
 
     Reused by top-level --ui, gaia chat --ui, and the interactive menu.
     """
     if log is None:
         log = get_logger(__name__)
+
+    _ensure_webui_built(log=log)
 
     try:
         from gaia.ui.server import create_app
@@ -715,8 +728,14 @@ def _launch_agent_ui(port=4200, base_url=None, log=None):
 
         import uvicorn
 
-        app = create_app()
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+        app = create_app(webui_dist=webui_dist)
+        uvicorn.run(
+            app,
+            host="127.0.0.1",
+            port=port,
+            log_level="debug" if debug else "info",
+            access_log=debug,
+        )
     except ImportError as e:
         print(f"\nMissing dependencies for Agent UI: {e}")
         print("\n   The Agent UI requires extra dependencies that are not installed.")
@@ -864,6 +883,11 @@ def main():
         type=int,
         default=4200,
         help="Port for the Agent UI server (default: 4200, used with --ui)",
+    )
+    parser.add_argument(
+        "--ui-dist",
+        default=None,
+        help="Path to pre-built Agent UI frontend dist directory (used with --ui)",
     )
     parser.add_argument(
         "--cli",
@@ -1036,6 +1060,11 @@ def main():
         type=int,
         default=4200,
         help="Port for the Agent UI server (default: 4200)",
+    )
+    chat_parser.add_argument(
+        "--ui-dist",
+        default=None,
+        help="Path to pre-built Agent UI frontend dist directory (used with --ui)",
     )
     talk_parser = subparsers.add_parser(
         "talk", help="Start voice conversation with Gaia", parents=[parent_parser]
@@ -1798,7 +1827,7 @@ Examples:
   gaia eval fix-code src/gaia/eval/fix_code_testbench/off_by_one_bug/off_by_one_bug.py \\
       "Loop stops too early" \\
       output/off_by_one_bug_fixed.py \\
-      --model Qwen3-Coder-30B-A3B-Instruct-GGUF
+      --model Qwen3.5-35B-A3B-GGUF
 
   # Run fix_code testbench and ask for edit_file tool output
   gaia eval fix-code src/app.ts "TS2322 type error" fixed.ts --use-edit-file
@@ -1860,6 +1889,128 @@ Examples:
         type=int,
         default=None,
         help="Last line in the file to include in the prompt (default: EOF)",
+    )
+
+    # Agent eval subcommand: gaia eval agent [OPTIONS]
+    agent_eval_parser = eval_subparsers.add_parser(
+        "agent",
+        help="Run agent eval benchmark scenarios",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run all scenarios
+  gaia eval agent
+
+  # Run a specific scenario by ID
+  gaia eval agent --scenario simple_factual_rag
+
+  # Run all scenarios in a category
+  gaia eval agent --category rag_quality
+
+  # Regenerate corpus documents and validate manifest
+  gaia eval agent --generate-corpus
+
+  # Run architecture audit only (no LLM calls)
+  gaia eval agent --audit-only
+
+  # Run against a custom backend
+  gaia eval agent --backend http://localhost:8080
+
+  # Run eval then auto-fix failures with Claude Code
+  gaia eval agent --fix
+
+  # Fix mode with custom iteration limit and target
+  gaia eval agent --fix --max-fix-iterations 5 --target-pass-rate 0.95
+
+  # Fix a specific category
+  gaia eval agent --category rag_quality --fix
+
+  # Compare two runs for regressions
+  gaia eval agent --compare eval/results/run1/scorecard.json eval/results/run2/scorecard.json
+
+  # Save this run as the new baseline
+  gaia eval agent --save-baseline
+
+  # Compare current run against saved baseline (auto-detects eval/results/baseline.json)
+  gaia eval agent --compare eval/results/latest/scorecard.json
+
+  # Convert a real Agent UI conversation into a scenario YAML
+  gaia eval agent --capture-session 29c211c7-31b5-4084-bb3f-1825c0210942
+        """,
+    )
+    agent_eval_parser.add_argument(
+        "--scenario",
+        default=None,
+        help="Run specific scenario by ID",
+    )
+    agent_eval_parser.add_argument(
+        "--category",
+        default=None,
+        help="Run all scenarios in category",
+    )
+    agent_eval_parser.add_argument(
+        "--audit-only",
+        action="store_true",
+        help="Run architecture audit only (no LLM calls)",
+    )
+    agent_eval_parser.add_argument(
+        "--generate-corpus",
+        action="store_true",
+        help="Regenerate corpus documents (CSV, etc.) and validate manifest.json",
+    )
+    agent_eval_parser.add_argument(
+        "--backend",
+        default="http://localhost:4200",
+        help="Agent UI backend URL (default: http://localhost:4200)",
+    )
+    agent_eval_parser.add_argument(
+        "--model",
+        default="claude-sonnet-4-6",
+        help="Eval model (default: claude-sonnet-4-6)",
+    )
+    agent_eval_parser.add_argument(
+        "--budget",
+        default="2.00",
+        help="Max budget per scenario in USD (default: 2.00)",
+    )
+    agent_eval_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=900,
+        help="Timeout per scenario in seconds (default: 900, scaled up automatically for multi-turn/large-doc scenarios)",
+    )
+    agent_eval_parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="After eval, invoke Claude Code to fix failures and re-eval (up to --max-fix-iterations)",
+    )
+    agent_eval_parser.add_argument(
+        "--max-fix-iterations",
+        type=int,
+        default=3,
+        help="Max fix-then-re-eval iterations in --fix mode (default: 3)",
+    )
+    agent_eval_parser.add_argument(
+        "--target-pass-rate",
+        type=float,
+        default=0.90,
+        help="Stop --fix iterations early when pass rate reaches this threshold (default: 0.90)",
+    )
+    agent_eval_parser.add_argument(
+        "--compare",
+        nargs="+",
+        metavar="PATH",
+        help="Compare two scorecard.json files (BASELINE CURRENT) or compare a run against saved baseline (CURRENT only)",
+    )
+    agent_eval_parser.add_argument(
+        "--save-baseline",
+        action="store_true",
+        help="After eval, save this run's scorecard as eval/results/baseline.json for future --compare",
+    )
+    agent_eval_parser.add_argument(
+        "--capture-session",
+        metavar="SESSION_ID",
+        help="Convert an Agent UI session from the database into a YAML scenario file",
     )
 
     # Add new subparser for generating summary reports from evaluation directories
@@ -2518,6 +2669,8 @@ Examples:
                 port=getattr(args, "ui_port", 4200),
                 base_url=getattr(args, "base_url", None),
                 log=log,
+                debug=getattr(args, "debug", False),
+                webui_dist=getattr(args, "ui_dist", None),
             )
             return
 
@@ -2531,6 +2684,8 @@ Examples:
             port=getattr(args, "ui_port", 4200),
             base_url=getattr(args, "base_url", None),
             log=log,
+            debug=getattr(args, "debug", False),
+            webui_dist=getattr(args, "ui_dist", None),
         )
         return
 
@@ -2549,6 +2704,8 @@ Examples:
             port=getattr(args, "ui_port", 4200),
             base_url=getattr(args, "base_url", None),
             log=log,
+            debug=getattr(args, "debug", False),
+            webui_dist=getattr(args, "ui_dist", None),
         )
         return
 
@@ -3752,6 +3909,76 @@ Let me know your answer!
 
     # Handle evaluation
     if args.action == "eval":
+        if getattr(args, "eval_command", None) == "agent":
+            # --capture-session: convert Agent UI session → YAML scenario
+            capture_sid = getattr(args, "capture_session", None)
+            if capture_sid:
+                from gaia.eval.runner import capture_session
+
+                capture_session(capture_sid)
+                return
+
+            # --generate-corpus: regenerate corpus documents and validate manifest
+            if getattr(args, "generate_corpus", False):
+                from gaia.eval.runner import generate_corpus
+
+                generate_corpus()
+                return
+
+            # --compare: diff two scorecard files, no eval run needed
+            compare_paths = getattr(args, "compare", None)
+            if compare_paths:
+                from gaia.eval.runner import RESULTS_DIR, compare_scorecards
+
+                try:
+                    if len(compare_paths) == 1:
+                        # Single path: compare against saved baseline
+                        baseline_path = RESULTS_DIR / "baseline.json"
+                        if not baseline_path.exists():
+                            print(f"[ERROR] No saved baseline found at {baseline_path}")
+                            print(
+                                "  Run `gaia eval agent --save-baseline` first to save a baseline."
+                            )
+                            return
+                        compare_scorecards(str(baseline_path), compare_paths[0])
+                    elif len(compare_paths) == 2:
+                        compare_scorecards(compare_paths[0], compare_paths[1])
+                    else:
+                        print("[ERROR] --compare accepts 1 or 2 paths")
+                except FileNotFoundError as e:
+                    print(f"[ERROR] {e}")
+                return
+
+            from gaia.eval.runner import AgentEvalRunner
+
+            runner = AgentEvalRunner(
+                backend_url=args.backend,
+                model=args.model,
+                budget_per_scenario=args.budget,
+                timeout_per_scenario=args.timeout,
+            )
+            scorecard = runner.run(
+                scenario_id=getattr(args, "scenario", None),
+                category=getattr(args, "category", None),
+                audit_only=getattr(args, "audit_only", False),
+                fix_mode=getattr(args, "fix", False),
+                max_fix_iterations=getattr(args, "max_fix_iterations", 3),
+                target_pass_rate=getattr(args, "target_pass_rate", 0.90),
+            )
+            # --save-baseline: copy scorecard to eval/results/baseline.json
+            if getattr(args, "save_baseline", False) and scorecard:
+                import json
+
+                from gaia.eval.runner import RESULTS_DIR
+
+                baseline_path = RESULTS_DIR / "baseline.json"
+                baseline_path.write_text(
+                    json.dumps(scorecard, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(f"[BASELINE] Saved baseline → {baseline_path}")
+            return
+
         if getattr(args, "eval_command", None) == "fix-code":
             try:
                 from gaia.eval.fix_code_testbench.fix_code_testbench import (
@@ -4634,8 +4861,6 @@ Let me know your answer!
 
         # Handle model cache clearing
         if args.models:
-            import shutil
-
             try:
                 # Find HuggingFace cache directory
                 hf_cache = Path.home() / ".cache" / "huggingface" / "hub"

@@ -2,17 +2,20 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { X } from 'lucide-react';
+import { X, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import type { SystemStatus } from '../types';
+import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
+import { useModelActions } from '../hooks/useModelActions';
+import type { SystemStatus, MCPServerStatus } from '../types';
 import './SettingsModal.css';
 
 export function SettingsModal() {
     const { setShowSettings, sessions, removeSession } = useChatStore();
     const [status, setStatus] = useState<SystemStatus | null>(null);
     const [loading, setLoading] = useState(true);
+    const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
 
     useEffect(() => {
         log.system.info('Checking system status...');
@@ -28,20 +31,24 @@ export function SettingsModal() {
                     memory: `${s.memory_available_gb}GB available`,
                 });
                 if (!s.lemonade_running) {
-                    log.system.warn('Lemonade Server is NOT running. Chat will not work. Start it with: lemonade-server serve');
-                }
-                if (!s.model_loaded) {
-                    log.system.warn('No model loaded. Download one with: gaia download --agent chat');
+                    log.system.warn('Lemonade Server is NOT running.');
                 }
             })
             .catch((err) => {
-                log.system.error('Failed to get system status (backend not running?)', err);
+                log.system.error('Failed to get system status', err);
                 setStatus(null);
             })
             .finally(() => setLoading(false));
+
+        api.getMCPRuntimeStatus()
+            .then((r) => setMcpServers(r.servers))
+            .catch(() => { /* MCP status is non-critical */ });
     }, []);
 
-    // Two-click confirmation for clear-all (replaces window.confirm)
+    const modelName = status?.default_model_name ?? DEFAULT_MODEL_NAME;
+    const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName);
+
+    // Two-click confirmation for clear-all
     const [confirmClear, setConfirmClear] = useState(false);
     const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -76,6 +83,12 @@ export function SettingsModal() {
 
     const version = __APP_VERSION__;
 
+    // Derive model health flags
+    const wrongModel   = !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false);
+    const smallContext = !!(status?.lemonade_running && status.model_loaded && status.context_size_sufficient === false);
+    const notDownloaded = !!(status?.lemonade_running && !status.model_loaded && status.model_downloaded === false);
+    const needsLoad    = wrongModel || smallContext;
+
     return (
         <div className="modal-overlay" onClick={() => setShowSettings(false)} role="dialog" aria-modal="true" aria-label="Settings">
             <div className="modal-panel settings-modal" onClick={(e) => e.stopPropagation()}>
@@ -93,58 +106,126 @@ export function SettingsModal() {
                         {loading ? (
                             <p className="loading-text">Checking system...</p>
                         ) : status ? (
-                            <div className="status-grid">
-                                <StatusRow
-                                    label="Lemonade Server"
-                                    value={status.lemonade_running ? `Running${status.lemonade_version ? ` v${status.lemonade_version}` : ''}` : 'Not Running'}
-                                    ok={status.lemonade_running}
-                                    hint={!status.lemonade_running
-                                        ? (status.initialized ? 'Run: lemonade-server serve' : 'Run: gaia init --profile chat')
-                                        : undefined}
-                                />
-                                <StatusRow
-                                    label="Model"
-                                    value={status.model_loaded || 'None loaded'}
-                                    ok={!!status.model_loaded}
-                                    hint={!status.model_loaded ? 'Run: gaia init --profile chat' : undefined}
-                                />
-                                {status.model_size_gb != null && (
-                                    <StatusRow label="Model Size" value={`${status.model_size_gb} GB`} ok={true} />
-                                )}
-                                {status.model_device && (
-                                    <StatusRow label="Device" value={status.model_device.toUpperCase()} ok={status.model_device !== 'cpu'} />
-                                )}
-                                {status.model_context_size != null && (
-                                    <StatusRow label="Context Window" value={`${(status.model_context_size / 1024).toFixed(0)}K tokens`} ok={true} />
-                                )}
-                                {status.model_labels && status.model_labels.length > 0 && (
-                                    <StatusRow label="Capabilities" value={status.model_labels.join(', ')} ok={true} />
-                                )}
-                                <StatusRow label="Embedding Model" value={status.embedding_model_loaded ? 'Available' : 'Not loaded'} ok={status.embedding_model_loaded} />
-                                {status.gpu_name && (
-                                    <StatusRow label="GPU" value={`${status.gpu_name}${status.gpu_vram_gb ? ` (${status.gpu_vram_gb} GB)` : ''}`} ok={true} />
-                                )}
-                                <StatusRow
-                                    label="Disk Space"
-                                    value={`${status.disk_space_gb} GB free`}
-                                    ok={status.disk_space_gb > 5}
-                                    hint={!status.model_loaded && status.disk_space_gb < 30 ? `Models require ~25 GB — only ${status.disk_space_gb} GB available` : undefined}
-                                />
-                                <StatusRow label="Memory" value={`${status.memory_available_gb} GB available`} ok={status.memory_available_gb > 2} />
-                                {status.tokens_per_second != null && (
-                                    <StatusRow label="Inference Speed" value={`${status.tokens_per_second} tok/s`} ok={status.tokens_per_second > 10} />
-                                )}
-                                {status.time_to_first_token != null && (
-                                    <StatusRow label="Time to First Token" value={`${(status.time_to_first_token * 1000).toFixed(0)} ms`} ok={status.time_to_first_token < 1} />
-                                )}
-                                {status.processor_name && (
+                            <>
+                                <div className="status-grid">
                                     <StatusRow
-                                        label="Processor"
-                                        value={status.processor_name}
-                                        ok={status.device_supported !== false}
+                                        label="Lemonade Server"
+                                        value={status.lemonade_running ? `Running${status.lemonade_version ? ` v${status.lemonade_version}` : ''}` : 'Not Running'}
+                                        ok={status.lemonade_running}
+                                        hint={!status.lemonade_running
+                                            ? (status.initialized ? 'Run: lemonade-server serve' : 'Run: gaia init --profile chat')
+                                            : undefined}
                                     />
+                                    <StatusRow
+                                        label="Model"
+                                        value={status.model_loaded || 'None loaded'}
+                                        ok={!!status.model_loaded && status.expected_model_loaded !== false}
+                                        hint={!status.model_loaded
+                                            ? 'Run: gaia init --profile chat'
+                                            : status.expected_model_loaded === false
+                                            ? `Expected: ${modelName}`
+                                            : undefined}
+                                    />
+                                    {status.model_size_gb != null && (
+                                        <StatusRow label="Model Size" value={`${status.model_size_gb} GB`} ok={true} />
+                                    )}
+                                    {status.model_device && (
+                                        <StatusRow label="Device" value={status.model_device.toUpperCase()} ok={status.model_device !== 'cpu'} />
+                                    )}
+                                    {status.model_context_size != null && (
+                                        <StatusRow label="Context Window" value={`${(status.model_context_size / 1024).toFixed(0)}K tokens`} ok={status.context_size_sufficient} />
+                                    )}
+                                    {status.model_labels && status.model_labels.length > 0 && (
+                                        <StatusRow label="Capabilities" value={status.model_labels.join(', ')} ok={true} />
+                                    )}
+                                    <StatusRow label="Embedding Model" value={status.embedding_model_loaded ? 'Available' : 'Not loaded'} ok={status.embedding_model_loaded} />
+                                    {status.gpu_name && (
+                                        <StatusRow label="GPU" value={`${status.gpu_name}${status.gpu_vram_gb ? ` (${status.gpu_vram_gb} GB)` : ''}`} ok={true} />
+                                    )}
+                                    <StatusRow
+                                        label="Disk Space"
+                                        value={`${status.disk_space_gb} GB free`}
+                                        ok={status.disk_space_gb > 5}
+                                        hint={!status.model_loaded && status.disk_space_gb < 30 ? `Models require ~25 GB — only ${status.disk_space_gb} GB available` : undefined}
+                                    />
+                                    <StatusRow label="Memory" value={`${status.memory_available_gb} GB available`} ok={status.memory_available_gb > 2} />
+                                    {status.processor_name && (
+                                        <StatusRow
+                                            label="Processor"
+                                            value={status.processor_name}
+                                            ok={status.device_supported !== false}
+                                        />
+                                    )}
+                                </div>
+
+                                {/* Model not downloaded — offer download */}
+                                {notDownloaded && (
+                                    <div className="model-action-row model-action-row--download">
+                                        <div className="model-action-info">
+                                            <span className="model-action-label">Model not downloaded.</span>
+                                            <span className="model-action-desc">
+                                                <strong>{modelName}</strong> is required for GAIA Chat (~25 GB).
+                                            </span>
+                                        </div>
+                                        <button
+                                            className="btn-model-action btn-model-action--download"
+                                            onClick={() => downloadModel(false)}
+                                            disabled={isDownloadingModel}
+                                        >
+                                            {isDownloadingModel ? (
+                                                <><Loader2 size={13} className="btn-spinner" /> Downloading…</>
+                                            ) : (
+                                                'Download'
+                                            )}
+                                        </button>
+                                    </div>
                                 )}
-                            </div>
+
+                                {/* Wrong model or small context — offer load */}
+                                {needsLoad && (
+                                    <div className="model-action-row model-action-row--load">
+                                        <div className="model-action-info">
+                                            <span className="model-action-label">
+                                                {wrongModel ? 'Wrong model loaded.' : 'Context window too small.'}
+                                            </span>
+                                            <span className="model-action-desc">
+                                                Load <strong>{modelName}</strong> with {(MIN_CONTEXT_SIZE / 1024).toFixed(0)}K token context.
+                                            </span>
+                                        </div>
+                                        <button
+                                            className="btn-model-action btn-model-action--load"
+                                            onClick={() => loadModel()}
+                                            disabled={isLoadingModel}
+                                        >
+                                            {isLoadingModel ? (
+                                                <><Loader2 size={13} className="btn-spinner" /> Loading…</>
+                                            ) : (
+                                                'Load Model'
+                                            )}
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* Force re-download — always visible when Lemonade is running */}
+                                {status.lemonade_running && (
+                                    <div className="force-redownload-row">
+                                        <span className="force-redownload-label">
+                                            If the model file is corrupted:
+                                        </span>
+                                        <button
+                                            className="btn-force-redownload"
+                                            onClick={() => downloadModel(true)}
+                                            disabled={isDownloadingModel}
+                                        >
+                                            {isDownloadingModel ? (
+                                                <><Loader2 size={12} className="btn-spinner" /> Downloading…</>
+                                            ) : (
+                                                'Force Re-download'
+                                            )}
+                                        </button>
+                                    </div>
+                                )}
+                            </>
                         ) : (
                             <div className="status-error">
                                 <p>Could not connect to server</p>
@@ -153,20 +234,43 @@ export function SettingsModal() {
                         )}
                     </section>
 
+                    {/* MCP Servers */}
+                    {mcpServers.length > 0 && (
+                        <section className="settings-section">
+                            <h4>MCP Servers</h4>
+                            <div className="status-grid">
+                                {mcpServers.map((s) => (
+                                    <div key={s.name} className="status-row">
+                                        <span className="status-label">{s.name}</span>
+                                        <div className="status-value-wrap">
+                                            {s.connected ? (
+                                                <span className="status-value ok mcp-status-connected">
+                                                    <CheckCircle2 size={12} />
+                                                    {s.tool_count} tool{s.tool_count !== 1 ? 's' : ''}
+                                                </span>
+                                            ) : (
+                                                <span className="status-value warn mcp-status-failed" title={s.error ?? undefined}>
+                                                    <AlertCircle size={12} />
+                                                    Failed
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </section>
+                    )}
+
                     {/* About */}
                     <section className="settings-section">
                         <h4>About</h4>
                         <div className="about-info">
                             <p>GAIA Agent UI v{version} <span className="beta-badge">BETA</span></p>
-                            <p className="about-sub">
-                                Privacy-first AI chat for AMD Ryzen AI PCs.
-                                <br />
-                                No data ever leaves your device.
-                            </p>
+                            <p className="about-sub">Privacy-first AI chat for AMD Ryzen AI PCs.</p>
                         </div>
                     </section>
 
-                    {/* Privacy & Data (danger zone at the bottom) */}
+                    {/* Privacy & Data */}
                     <section className="settings-section danger-zone">
                         <h4>Privacy & Data</h4>
                         <div className="setting-row">
@@ -186,6 +290,8 @@ export function SettingsModal() {
         </div>
     );
 }
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function StatusRow({ label, value, ok, hint }: { label: string; value: string; ok: boolean; hint?: string }) {
     return (

@@ -51,6 +51,7 @@ from .routers import chat as chat_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
 from .routers import memory as memory_router_mod
+from .routers import mcp as mcp_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
@@ -127,11 +128,13 @@ class TunnelAuthMiddleware(BaseHTTPMiddleware):
 # ── Application Factory ────────────────────────────────────────────────────
 
 
-def create_app(db_path: str = None) -> FastAPI:
+def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         db_path: Path to SQLite database. None for default, ":memory:" for testing.
+        webui_dist: Path to the pre-built frontend dist directory. When None,
+            falls back to the default location relative to this package.
 
     Returns:
         Configured FastAPI application.
@@ -146,6 +149,48 @@ def create_app(db_path: str = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage startup/shutdown lifecycle for background services."""
+
+        # Pre-warm LemonadeManager so the first user message skips HTTP calls.
+        # Runs in a thread-pool worker to avoid blocking the event loop.
+        async def _prewarm_lemonade():
+            try:
+                from gaia.llm.lemonade_manager import LemonadeManager
+
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: LemonadeManager.ensure_ready(
+                        quiet=True,
+                        min_context_size=0,  # Only check reachability — don't trigger model reloads
+                    ),
+                )
+                logger.info("LemonadeManager pre-warmed")
+            except Exception as exc:  # server may not be running yet — that's fine
+                logger.debug("LemonadeManager pre-warm skipped: %s", exc)
+
+        asyncio.create_task(_prewarm_lemonade())
+
+        # Pre-import heavy pure-library modules so first-message imports are cached.
+        # Only import libraries with no Lemonade/LLM side-effects at module level.
+        # ChatAgent/RAGSDK/MCPClientManager are intentionally excluded: their import
+        # trees pull in gaia.apps.* modules that instantiate AgentSDK at module level,
+        # which calls LemonadeManager.ensure_ready() and can trigger a model switch.
+        async def _preload_modules():
+            try:
+                loop = asyncio.get_event_loop()
+
+                def _do_imports():
+                    # pylint: disable=unused-import
+                    import faiss  # noqa: F401
+                    import sentence_transformers  # noqa: F401
+
+                await loop.run_in_executor(None, _do_imports)
+                logger.info("Heavy modules pre-loaded")
+            except Exception as exc:
+                logger.debug("Module pre-load skipped: %s", exc)
+
+        asyncio.create_task(_preload_modules())
+
         # Start document file monitor for auto re-indexing
         monitor = DocumentMonitor(
             db=db,
@@ -185,7 +230,7 @@ def create_app(db_path: str = None) -> FastAPI:
             "http://localhost:5173",
             "http://127.0.0.1:5173",
         ],
-        allow_origin_regex=r"https://[a-zA-Z0-9-]+\.ngrok-free\.app",  # Allow ngrok tunnel origins
+        allow_origin_regex=r"https://[a-zA-Z0-9-]+\.(ngrok-free\.app|use\.devtunnels\.ms)",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -214,6 +259,7 @@ def create_app(db_path: str = None) -> FastAPI:
     # Per-session locks prevent the same session from having multiple
     # concurrent requests, which would corrupt conversation state.
     app.state.session_locks: dict = {}  # session_id -> asyncio.Lock
+    app.state.upload_locks: dict = {}  # resolved filepath -> asyncio.Lock
 
     # ── Global Exception Handler ────────────────────────────────────────
     # Prevent stack traces from leaking to external users (CodeQL
@@ -241,6 +287,7 @@ def create_app(db_path: str = None) -> FastAPI:
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)
     app.include_router(memory_router_mod.router)
+    app.include_router(mcp_router_mod.router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.
@@ -254,7 +301,8 @@ def create_app(db_path: str = None) -> FastAPI:
 
     # ── Serve Frontend Static Files ──────────────────────────────────────
     # Look for built frontend assets in the webui dist directory
-    _webui_dist = Path(__file__).resolve().parent.parent / "apps" / "webui" / "dist"
+    _default_dist = Path(__file__).resolve().parent.parent / "apps" / "webui" / "dist"
+    _webui_dist = Path(webui_dist) if webui_dist else _default_dist
     if _webui_dist.is_dir():
         logger.info("Serving frontend from %s", _webui_dist)
 
@@ -270,6 +318,14 @@ def create_app(db_path: str = None) -> FastAPI:
         # Serve index.html for all non-API routes (SPA fallback)
         _resolved_dist = _webui_dist.resolve()
         _index_html = str(_resolved_dist / "index.html")
+        # Prevent browsers and tunnel proxies from caching index.html so
+        # that rebuilt assets (with new content hashes) are always picked up.
+        # Hashed files under /assets/ are cached normally by StaticFiles.
+        _NO_CACHE = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
 
         @app.get("/{full_path:path}")
         async def serve_spa(full_path: str):
@@ -278,7 +334,7 @@ def create_app(db_path: str = None) -> FastAPI:
             # Checks are explicit so static analysis (CodeQL) can verify
             # the user-controlled ``full_path`` is properly constrained.
             if not full_path or "\x00" in full_path or ".." in full_path:
-                return FileResponse(_index_html)
+                return FileResponse(_index_html, headers=_NO_CACHE)
 
             candidate = (_resolved_dist / full_path).resolve()
 
@@ -286,13 +342,13 @@ def create_app(db_path: str = None) -> FastAPI:
             try:
                 candidate.relative_to(_resolved_dist)
             except ValueError:
-                return FileResponse(_index_html)
+                return FileResponse(_index_html, headers=_NO_CACHE)
 
             if candidate.is_file():
                 return FileResponse(str(candidate))
 
             # Default to index.html for SPA routing
-            return FileResponse(_index_html)
+            return FileResponse(_index_html, headers=_NO_CACHE)
 
     else:
         logger.info(
@@ -326,16 +382,22 @@ def main():
         "--port", type=int, default=DEFAULT_PORT, help=f"Port (default: {DEFAULT_PORT})"
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument(
+        "--ui-dist",
+        default=None,
+        help="Path to pre-built Agent UI frontend dist directory",
+    )
     args = parser.parse_args()
 
     log_level = "debug" if args.debug else "info"
     print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
-    server_app = create_app()
+    server_app = create_app(webui_dist=args.ui_dist)
     uvicorn.run(
         server_app,
         host=args.host,
         port=args.port,
         log_level=log_level,
+        access_log=args.debug,  # Only show HTTP access logs in debug mode
     )
 
 

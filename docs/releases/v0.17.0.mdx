@@ -1,0 +1,132 @@
+---
+title: "v0.17.0"
+description: "GAIA Agent UI — a privacy-first web app for running AI agents locally on AMD hardware"
+---
+
+# GAIA v0.17.0 Release Notes
+
+Run AI agents locally on your PC — analyze documents, execute tools, and accomplish tasks without sending data to the cloud. GAIA v0.17.0 introduces the **Agent UI**, a privacy-first web application that puts a local AI agent on your AMD hardware.
+
+```bash
+npm install -g @amd-gaia/agent-ui
+gaia-ui
+```
+
+**Why upgrade:**
+- **Keep sensitive documents on your machine** — Ask questions about medical records, contracts, financial data, or any of 53+ file types and get answers with page citations. Nothing leaves your PC — the agent runs 100% locally on your AMD hardware
+- **An AI agent you can trust** — Tool guardrails require your approval before the agent executes commands or writes files, so you stay in control of what happens on your machine
+- **Works on modest hardware** — A 78% smaller system prompt means GAIA now runs reliably on smaller models like Qwen3.5 without timeouts, so you don't need top-tier hardware to get started
+- **Access from anywhere** — Built-in ngrok tunnel lets you use your local GAIA instance from your phone or tablet while your data stays on your PC
+
+Get started with the [Agent UI guide](/guides/agent-ui) — install, launch, and run your first task in under 60 seconds.
+
+---
+
+## What's New
+
+### GAIA Agent UI
+
+A privacy-first web application for running AI agents locally on your AMD hardware (PR #428). Analyze documents, generate code, search files, execute tools, and accomplish tasks — without sending anything to the cloud.
+
+**What you can do:**
+- **Analyze your documents** — Drag-and-drop PDFs, Word docs, or any of 53+ file formats and get answers with page-level citations, powered by local RAG
+- **Execute tools safely** — The agent can run shell commands, write files, and use MCP tools — but only after you approve each action
+- **Search and browse files** — The agent can find files, explore directories, and locate content across your projects
+- **Access from your phone** — Built-in ngrok tunnel lets you use your local GAIA instance from any device
+- **Watch the agent think** — Real-time streaming with `<think>` block rendering shows the agent's reasoning process inline
+- **Pick up where you left off** — Create, switch, and persist sessions with full history
+- **Monitor performance** — Hover tooltips show token counts, latency, and throughput metrics per response
+
+**Under the hood:**
+- FastAPI backend + React/TypeScript frontend + Electron shell with SSE streaming
+- Redesigned Settings modal with system dashboard, model load/download actions, and live MCP server connection status with tool counts
+- Terminal-inspired design: typewriter welcome animation, pixelated AMD cursor with red glow, glassmorphism, smooth crossfade transitions (PR #568)
+- `prefers-reduced-motion` support — all animations respect OS accessibility settings
+- Path traversal prevention, SQL parameterization, and input validation throughout
+- 13+ bug fixes across backend, frontend, and integration layers
+
+```bash
+npm install -g @amd-gaia/agent-ui
+gaia-ui
+```
+
+See the [Agent UI guide](/guides/agent-ui) for full setup, prerequisites, and onboarding.
+
+---
+
+### Tool Execution Guardrails
+
+AI agents are powerful but can be unpredictable. This release adds a safety layer so you approve every sensitive action before it happens (PR #565):
+
+- **Confirmation popup** — **Allow**, **Deny**, or **Always Allow** before `run_shell_command` and other write/execute tools
+- **60-second timeout** — Auto-denies if you don't respond within a minute
+- **Expanded coverage** — Extended to cover all write/execute tools, not just shell commands (PR #604)
+
+---
+
+### Device Support Detection
+
+Not sure if your hardware is supported? GAIA now tells you upfront and offers workarounds (PR #593):
+
+- **Supported devices** — AMD Ryzen AI Max processors and AMD Radeon GPUs with ≥24 GB VRAM
+- **Clear banner messaging** — Shows your processor name and links to a GitHub feature-request
+- **`--base-url` flag** — Point to a remote Lemonade Server to use GAIA on any machine
+- **`GAIA_SKIP_DEVICE_CHECK=1`** — Environment variable override for advanced users
+
+---
+
+### System Prompt Optimization
+
+If you previously experienced timeouts or slow first responses on smaller models, this release fixes that (PR #617):
+
+- **17,600 → 3,853 tokens (78% reduction)** — Two-tier RAG gating only injects document context when relevant, meaning 4–5× faster prompt processing
+- **Qwen3.5 timeouts eliminated** — Smaller prompt fits within context window of constrained models
+- **Timeout increased to 600s** — Prevents premature timeouts on complex queries
+
+---
+
+## Security
+
+- **Document upload vulnerability fixed** — Closed a TOCTOU race condition that could allow file substitution during upload. Now uses atomic `O_NOFOLLOW` + `fstat` validation and serializes concurrent uploads via per-file `asyncio.Lock` (PR #564)
+
+---
+
+## Bug Fixes
+
+- **LRU eviction silent failure** — Fixed unbounded memory growth: added pre-flight rejection at capacity, logging on all failure paths, and fixed cache-load bug where cached files weren't tracked. New CLI flags: `--max-indexed-files` and `--max-total-chunks` (PR #567)
+- **Lemonade v10 device keys** — Updated device key references: `npu` → `amd_npu`, `gpu` → `amd_igpu`/`amd_dgpu`. Fixed NPU detection in Hardware Advisor (PR #548)
+- **Agent UI rendering** — Fixed post-tool thinking visibility, FileListView layout, and text spacing (PR #566)
+- **Agent UI guardrails & Windows paths** — Tightened JSON safety regex, added platform context to system prompt for native Windows paths, cleared messages before session switch (PR #604)
+- **RAG indexing guards** — `gaia init` now installs RAG dependencies for all profiles. Fixed crashes that occurred when optional dependencies weren't installed (PR #605)
+- **Reverted accidental changes** — Restored per-file upload locking, tool confirmation flow, CSS design system, and formatting utilities accidentally reverted during a stale merge (PR #608)
+- **v0.16.1 release notes** — Added missing PRs to previous release notes (PR #589)
+
+---
+
+## Upgrade
+
+```bash
+npm install -g @amd-gaia/agent-ui@latest
+```
+
+---
+
+## Full Changelog
+
+**13 commits** since v0.16.1:
+
+- `2d08088` - fix: reduce system prompt 78% to fix Qwen3.5 timeouts + MCP runtime status (#609) (#617)
+- `b7a97e6` - Restore changes reverted by accidental PR #566 merge (#564, #565, #568) (#608)
+- `af652d9` - fix: RAG indexing guards, gaia init pip extras, and docs update (#605)
+- `95b304f` - Fix Agent UI guardrails, rendering, LRU eviction, and Windows paths (#604)
+- `5dd71a2` - feat: guard Agent UI against unsupported devices (#593)
+- `cc90935` - Fix Agent UI Round 5: hide post-tool thinking, FileListView, text spacing (#566)
+- `8a6452f` - Fix LRU eviction silent failure allowing unbounded memory growth (#449) (#567)
+- `3df90ff` - Add tool execution guardrails with confirmation popup (#438) (#565)
+- `8c2d24a` - security: fix TOCTOU race condition in document upload endpoint (#448) (#564)
+- `bae3a62` - docs(releases): add missing PRs to v0.16.1 release notes (#589)
+- `25c6d25` - Agent UI: terminal animations, pixelated cursor, and docs fixes (#568)
+- `b2ace80` - Add GAIA Agent UI: privacy-first local agent with document Q&A (#428)
+- `4015bb2` - Fix Lemonade v10 system-info device key compatibility (#548)
+
+Full Changelog: [v0.16.1...v0.17.0](https://github.com/amd/gaia/compare/v0.16.1...v0.17.0)

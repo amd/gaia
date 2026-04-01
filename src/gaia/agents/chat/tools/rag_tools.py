@@ -99,11 +99,13 @@ class RAGToolsMixin:
                 if not self.rag or not self.rag.index or len(self.rag.chunks) == 0:
                     return {
                         "status": "no_documents",
-                        "message": "No documents are indexed. Answer the user's question using your general knowledge.",
+                        "message": "No documents are currently indexed.",
                         "instruction": (
-                            "There are no documents indexed to search. "
-                            "Please answer the user's question using your general knowledge instead. "
-                            "Do NOT apologize or say you can't help - just answer naturally."
+                            "No documents are indexed yet. "
+                            "For domain-specific questions (HR policies, PTO, remote work, company procedures, "
+                            "financial data, project plans, technical specs): use the SMART DISCOVERY WORKFLOW — "
+                            "use search_file to find relevant files, index_document to index them, then query_specific_file to answer. "
+                            "For general knowledge questions (math, science, geography), answer directly from knowledge."
                         ),
                     }
 
@@ -540,6 +542,7 @@ class RAGToolsMixin:
                 )
 
                 # Find the file in indexed files (normalize slashes for cross-platform matching)
+                auto_indexed = False
                 norm_path = str(Path(file_path))
                 matching_files = [
                     f
@@ -548,10 +551,103 @@ class RAGToolsMixin:
                 ]
 
                 if not matching_files:
-                    return {
-                        "status": "error",
-                        "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
-                    }
+                    # Fuzzy basename fallback: agent may pass a guessed absolute path
+                    # like "C:\Users\foo\document.md" when only "document.md" is indexed.
+                    # Extract the basename and try an exact filename match.
+                    basename = Path(file_path).name
+                    matching_files = [
+                        f
+                        for f in self.rag.indexed_files
+                        if Path(str(f)).name == basename
+                    ]
+                    if len(matching_files) == 0:
+                        # Auto-index the file if it exists on disk instead of failing.
+                        # This avoids the slow fail → plan → index → re-query cycle.
+                        if os.path.exists(file_path):
+                            resolved = os.path.realpath(file_path)
+                            # Enforce path restrictions same as index_document does
+                            if hasattr(
+                                self, "_is_path_allowed"
+                            ) and not self._is_path_allowed(resolved):
+                                return {
+                                    "status": "error",
+                                    "error": f"Access denied: '{resolved}' is not in allowed paths",
+                                }
+                            logger.info(
+                                f"[query_specific_file] '{basename}' not indexed — "
+                                f"auto-indexing '{resolved}' before querying"
+                            )
+                            idx_result = self.rag.index_document(resolved)
+                            if idx_result.get("success"):
+                                self.indexed_files.add(file_path)
+                                if (
+                                    hasattr(self, "current_session")
+                                    and self.current_session
+                                ):
+                                    if (
+                                        file_path
+                                        not in self.current_session.indexed_documents
+                                    ):
+                                        self.current_session.indexed_documents.append(
+                                            file_path
+                                        )
+                                        if hasattr(self, "session_manager"):
+                                            self.session_manager.save_session(
+                                                self.current_session
+                                            )
+                                if hasattr(self, "rebuild_system_prompt"):
+                                    self.rebuild_system_prompt()
+                                # Re-match after auto-indexing
+                                # Include resolved (absolute) path since index_document
+                                # stores the absolute path, not the relative one passed in.
+                                matching_files = [
+                                    f
+                                    for f in self.rag.indexed_files
+                                    if norm_path in str(f)
+                                    or file_path in str(f)
+                                    or str(resolved) in str(f)
+                                    or Path(str(f)).name == basename
+                                ]
+                                auto_indexed = True
+                            else:
+                                return {
+                                    "status": "error",
+                                    "error": (
+                                        f"File '{file_path}' not in index and auto-indexing "
+                                        f"failed: {idx_result.get('error', 'unknown error')}"
+                                    ),
+                                }
+                        else:
+                            return {
+                                "status": "error",
+                                "error": (
+                                    f"File '{file_path}' not found in indexed documents "
+                                    f"and does not exist on disk. "
+                                    f"Use search_files to find it first."
+                                ),
+                            }
+                        # After auto-indexing, verify we have a match
+                        if not matching_files:
+                            return {
+                                "status": "error",
+                                "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
+                            }
+                    elif len(matching_files) > 1:
+                        ambiguous = [str(f) for f in matching_files]
+                        return {
+                            "status": "error",
+                            "error": f"Ambiguous filename '{basename}' — multiple matches found: {ambiguous}. Use the full path.",
+                        }
+                    if auto_indexed:
+                        logger.info(
+                            f"[query_specific_file] Auto-indexed and resolved '{file_path}' "
+                            f"to: {matching_files[0]}"
+                        )
+                    else:
+                        logger.info(
+                            f"[query_specific_file] Path '{file_path}' not found directly; "
+                            f"resolved via basename to: {matching_files[0]}"
+                        )
 
                 # For now, use the first match
                 # TODO: Let user disambiguate if multiple matches
@@ -867,6 +963,7 @@ class RAGToolsMixin:
                     "message": f"Found {len(top_chunks)} relevant chunks in {Path(target_file).name}",
                     "chunks": formatted_chunks,
                     "file": str(target_file),
+                    "auto_indexed": auto_indexed,
                     "instruction": f"Use these chunks from {Path(target_file).name} to answer the question. Read through ALL {len(top_chunks)} chunks completely before answering.\n\nCRITICAL CITATION REQUIREMENT:\nYour answer MUST start with: 'According to {Path(target_file).name}, page X:' where X is the page number from the chunk's 'page' field.\n\nExample: If chunk has 'page': 2, say 'According to {Path(target_file).name}, page 2:'\nIf info from multiple pages, say 'According to {Path(target_file).name}, pages 2 and 5:'",
                 }
 
@@ -1091,11 +1188,18 @@ class RAGToolsMixin:
 
         @tool(
             name="index_document",
-            description="Add a document to the RAG index",
+            description=(
+                "Add a document to the RAG index so its contents can be queried. "
+                "IMPORTANT: After successfully indexing a document, you MUST call "
+                "query_specific_file (or query_documents) to retrieve the relevant "
+                "information before answering the user's question. "
+                "Never answer from memory/knowledge after indexing — always query the "
+                "indexed document to get the actual content."
+            ),
             parameters={
                 "file_path": {
                     "type": "str",
-                    "description": "Path to the document (PDF) to index",
+                    "description": "Path to the document (PDF, markdown, text) to index",
                     "required": True,
                 }
             },
@@ -1114,6 +1218,27 @@ class RAGToolsMixin:
 
                 # Resolve to real path for consistent validation
                 real_file_path = os.path.realpath(file_path)
+
+                # Guard: skip re-indexing if already tracked in this session.
+                # self.indexed_files is populated at agent startup (session-attached
+                # docs) and after each successful index_document call.  This prevents
+                # the LLM from calling the tool redundantly within a single request.
+                # The hash-based RAG cache prevents re-processing across requests.
+                if (
+                    file_path in self.indexed_files
+                    or real_file_path in self.indexed_files
+                ):
+                    logger.debug(
+                        "Skipping re-index for already-indexed file: %s", file_path
+                    )
+                    return {
+                        "status": "success",
+                        "message": f"Already indexed: {Path(file_path).name}",
+                        "file_name": Path(file_path).name,
+                        "already_indexed": True,
+                        "from_cache": True,
+                        "total_indexed_files": len(self.indexed_files),
+                    }
 
                 # Validate path with ChatAgent's internal logic (which uses allowed_paths)
                 if hasattr(self, "_is_path_allowed"):
@@ -1140,9 +1265,18 @@ class RAGToolsMixin:
                     self.rebuild_system_prompt()
 
                     # Return detailed stats from RAG SDK
+                    file_name = result.get("file_name", file_path)
+                    if result.get("already_indexed", False):
+                        msg = f"Document already indexed, skipping: {file_name}"
+                    elif result.get("from_cache", False):
+                        msg = f"Loaded from cache: {file_name}"
+                    elif result.get("reindexed", False):
+                        msg = f"Re-indexed (updated): {file_name}"
+                    else:
+                        msg = f"Successfully indexed: {file_name}"
                     return {
                         "status": "success",
-                        "message": f"Successfully indexed: {result.get('file_name', file_path)}",
+                        "message": msg,
                         "file_name": result.get("file_name"),
                         "file_type": result.get("file_type"),
                         "file_size_mb": result.get("file_size_mb"),
@@ -1155,10 +1289,17 @@ class RAGToolsMixin:
                         "reindexed": result.get("reindexed", False),
                     }
                 else:
+                    err = result.get("error", f"Failed to index: {file_path}")
+                    hint = (
+                        "The file is empty (0 bytes) — tell the user there is no content to read."
+                        if "empty" in err.lower()
+                        else "Indexing failed. Tell the user the error and suggest they check the file."
+                    )
                     return {
                         "status": "error",
-                        "error": result.get("error", f"Failed to index: {file_path}"),
+                        "error": err,
                         "file_name": result.get("file_name", Path(file_path).name),
+                        "hint": hint,
                     }
             except Exception as e:
                 logger.error(f"Error indexing document: {e}")
@@ -1174,23 +1315,73 @@ class RAGToolsMixin:
         @tool(
             atomic=True,
             name="list_indexed_documents",
-            description="List all currently indexed documents",
+            description="List all currently indexed documents with per-document chunk counts, file sizes, and types",
             parameters={},
         )
         def list_indexed_documents() -> Dict[str, Any]:
-            """List indexed documents."""
+            """List indexed documents with detailed per-document statistics."""
             try:
                 if not self.rag:
                     return {
-                        "status": "error",
-                        "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
+                        "status": "success",
+                        "documents": [],
+                        "count": 0,
+                        "total_chunks": 0,
+                        "total_size_mb": 0,
                     }
                 docs = list(self.rag.indexed_files)
+
+                # Build per-document details
+                doc_details = []
+                type_counts = {}  # {".pdf": 3, ".txt": 1, ...}
+                total_size_bytes = 0
+
+                for doc_path in docs:
+                    doc_name = str(Path(doc_path).name)
+                    doc_ext = str(Path(doc_path).suffix).lower()
+
+                    # Count chunks for this document
+                    chunk_count = len(
+                        self.rag.file_to_chunk_indices.get(str(doc_path), [])
+                    )
+
+                    # Get file size and metadata
+                    file_size_mb = 0
+                    num_pages = None
+                    metadata = self.rag.file_metadata.get(str(doc_path), {})
+                    if metadata:
+                        file_size_mb = metadata.get("file_size_mb", 0)
+                        num_pages = metadata.get("num_pages")
+                    elif os.path.exists(doc_path):
+                        try:
+                            file_size_mb = round(
+                                os.path.getsize(doc_path) / (1024 * 1024), 2
+                            )
+                        except OSError:
+                            pass
+
+                    total_size_bytes += int(file_size_mb * 1024 * 1024)
+
+                    # Track document types
+                    type_counts[doc_ext] = type_counts.get(doc_ext, 0) + 1
+
+                    doc_info = {
+                        "name": doc_name,
+                        "type": doc_ext,
+                        "chunks": chunk_count,
+                        "size_mb": round(file_size_mb, 2),
+                    }
+                    if num_pages is not None:
+                        doc_info["pages"] = num_pages
+                    doc_details.append(doc_info)
+
                 return {
                     "status": "success",
-                    "documents": [str(Path(d).name) for d in docs],
+                    "documents": doc_details,
                     "count": len(docs),
                     "total_chunks": len(self.rag.chunks),
+                    "total_size_mb": round(total_size_bytes / (1024 * 1024), 2),
+                    "document_types": type_counts,
                 }
             except Exception as e:
                 logger.error(f"Error in list_indexed_documents: {e}")
@@ -1204,11 +1395,11 @@ class RAGToolsMixin:
         @tool(
             atomic=True,
             name="rag_status",
-            description="Get the status of the RAG system",
+            description="Get the status of the RAG system including indexed files, chunks, index size, and configuration",
             parameters={},
         )
         def rag_status() -> Dict[str, Any]:
-            """Get RAG system status."""
+            """Get RAG system status with comprehensive details."""
             try:
                 if not self.rag:
                     return {
@@ -1216,9 +1407,23 @@ class RAGToolsMixin:
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
                     }
                 status = self.rag.get_status()
+
+                # Calculate total index size from file metadata
+                total_size_bytes = 0
+                type_counts = {}
+                for doc_path in self.rag.indexed_files:
+                    metadata = self.rag.file_metadata.get(str(doc_path), {})
+                    file_size_mb = metadata.get("file_size_mb", 0)
+                    total_size_bytes += int(file_size_mb * 1024 * 1024)
+
+                    doc_ext = str(Path(doc_path).suffix).lower()
+                    type_counts[doc_ext] = type_counts.get(doc_ext, 0) + 1
+
                 return {
                     "status": "success",
                     **status,
+                    "total_index_size_mb": round(total_size_bytes / (1024 * 1024), 2),
+                    "document_types": type_counts,
                     "watched_directories": self.watch_directories,
                 }
             except Exception as e:
@@ -1419,6 +1624,8 @@ Document to summarize: {Path(target_file).name}
 Document content:
 {full_text}
 
+CRITICAL GROUNDING RULE: Only include information that is explicitly present in the document content above. Do NOT add, infer, or extrapolate any facts, figures, or details that do not appear verbatim or near-verbatim in the document text. If a metric (e.g., net income, cash flow, retention rate) is not mentioned in the document, do not include it.
+
 Generate a well-structured summary with the following format:
 
 # Document Summary: {Path(target_file).name}
@@ -1429,13 +1636,13 @@ Generate a well-structured summary with the following format:
 - **Total Words**: ~{total_words:,}
 
 ## Overview
-[2-3 sentence overview of what this document is]
+[2-3 sentence overview of what this document is — only from document content]
 
 ## Key Content
-[Main content organized by topics/sections - reference page numbers where applicable]
+[Main content organized by topics/sections — only facts from the document, reference page numbers where applicable]
 
 ## Key Takeaways
-[Bullet points of the most important points]
+[Bullet points of the most important points — only from the document, no extrapolation]
 
 Use the {summary_type} style for the content sections."""
 
@@ -1479,6 +1686,8 @@ Use the {summary_type} style for the content sections."""
 Section content:
 {section_text}
 
+CRITICAL GROUNDING RULE: Only summarize information explicitly present in the section content above. Do NOT add, infer, or extrapolate any facts, figures, or details not in this section.
+
 Generate a summary of this section:"""
 
                     try:
@@ -1514,6 +1723,8 @@ Generate a summary of this section:"""
 
 Section summaries:
 {combined_text}
+
+CRITICAL GROUNDING RULE: Only synthesize information that appears in the section summaries above. Do NOT add, infer, or extrapolate any facts, figures, or details not present in the summaries. Every claim in your output must be traceable to one of the section summaries.
 
 Synthesize these into a single, well-structured summary using this format:
 

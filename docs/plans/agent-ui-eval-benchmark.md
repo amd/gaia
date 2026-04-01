@@ -1,8 +1,43 @@
 # GAIA Agent Eval — Benchmarking Plan
 
 **Date:** 2026-03-17
-**Status:** Draft
+**Status:** In Progress — Fix Phase complete, post-restart re-eval running
 **Priority:** High
+**Last Updated:** 2026-03-20
+
+---
+
+## Current State (2026-03-20)
+
+### Benchmark Run Complete
+All 23 scenarios executed. **17/23 PASS (73.9%), avg 7.93/10.**
+
+| Category | PASS | FAIL | Avg |
+|----------|------|------|-----|
+| context_retention | 5/5 | 0 | 9.23 |
+| adversarial | 3/3 | 0 | 8.10 |
+| personality | 1/2 | 1 | 8.53 |
+| tool_selection | 2/3 | 1 | 7.16 |
+| error_recovery | 2/3 | 1 | 7.58 |
+| rag_quality | 2/6 | 4 | 6.96 |
+
+### Fixes Applied & Validated
+| Fix | File | Before | After |
+|-----|------|--------|-------|
+| Fuzzy basename fallback in `query_specific_file` | `rag_tools.py` | negation_handling 4.62 | 8.10 ✅ |
+| Verbosity rule in system prompt | `agent.py` | concise_response 7.15 | re-eval in progress |
+| Session isolation in `_resolve_rag_paths` | `_chat_helpers.py` | cross_section_rag 6.67 | 9.27 ✅ |
+
+### Still Failing (deeper fixes needed)
+| Scenario | Score | Root Cause |
+|----------|-------|------------|
+| smart_discovery | 2.80 | `search_file` doesn't scan project subdirs |
+| table_extraction | 5.17 | CSV chunked into only 2 RAG chunks |
+| search_empty_fallback | 5.32 | Agent doesn't fall back when search returns empty |
+
+### Important Constraint
+**DO NOT call `delete_session`** in any eval task — conversations must be preserved.
+**Always pass `session_id` to `index_document`** — required for Fix 3 session isolation.
 
 ---
 
@@ -625,7 +660,7 @@ eval/
 | Dimension | Variants | Purpose |
 |-----------|----------|---------|
 | **Format** | PDF, Markdown, TXT, CSV, HTML, Python, JSON | Different RAG extraction paths |
-| **Size** | Small (<50KB), Medium (50KB-1MB), Large (1-10MB), XL (>10MB) | Indexing behavior, chunking |
+| **Size** | Small (&lt;50KB), Medium (50KB-1MB), Large (1-10MB), XL (&gt;10MB) | Indexing behavior, chunking |
 | **Domain** | Finance, HR, sales, technical, medical, general | Vocabulary diversity |
 | **Fact difficulty** | Easy (lookup), Medium (cross-reference), Hard (synthesis/negation) | Retrieval + reasoning depth |
 | **Adversarial** | Empty, unicode, very large, duplicates | Edge case resilience |
@@ -939,7 +974,7 @@ Single-scenario run: ~$0.10-0.15.
   "timestamp": "2026-03-17T10:30:00Z",
   "config": {
     "backend_url": "http://localhost:4200",
-    "local_model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    "local_model": "Qwen3.5-35B-A3B-GGUF",
     "eval_model": "claude-sonnet-4-6",
     "runner": "gaia eval agent (claude -p subprocess)",
     "system_prompt_hash": "sha256:a1b2c3...",
@@ -1396,8 +1431,8 @@ Not pre-planned. Driven by:
 | Synthetic corpus with 100+ verifiable facts | ✅ |
 | `--compare` detects regressions between runs | ✅ |
 | Pre-flight check catches infra failures before spending money | ✅ |
-| Full eval run completes in <60 min on NPU, <3 hrs on CPU | ✅ |
-| Full eval run costs <$5 in cloud LLM usage | ✅ |
+| Full eval run completes in &lt;60 min on NPU, &lt;3 hrs on CPU | ✅ |
+| Full eval run costs &lt;$5 in cloud LLM usage | ✅ |
 
 ---
 

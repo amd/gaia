@@ -215,6 +215,9 @@ cpp/vcpkg_installed/
 CMakeFiles/
 cpp/build_ssl/
 
+# C++ benchmark output (ephemeral — stored in CI cache/artifacts, not source control)
+cpp/benchmark-*.json
+
 # SD test results and artifacts
 sd_model_sweep_results/
 quick_test_results/
@@ -228,3 +231,6 @@ docs/playbooks/sd-agent/index-backup.mdx
 
 # Custom util scripts
 util/custom/*
+
+# Real-world eval corpus documents (sourced from public web, not committed)
+eval/corpus/real_world/

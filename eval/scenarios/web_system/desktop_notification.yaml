@@ -1,0 +1,28 @@
+id: desktop_notification
+name: "Desktop Notification Tool"
+category: web_system
+severity: low
+description: |
+  Tests that notify_desktop tool is registered and handles gracefully whether
+  plyer is installed or uses the Windows fallback.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask agent to send a desktop notification"
+    user_message: "Send a desktop notification saying 'Test complete' with the message 'GAIA eval passed'."
+    ground_truth:
+      expected_behavior: "Agent calls notify_desktop tool with the given title/message"
+    success_criteria: |
+      Agent calls notify_desktop with title='Test complete' and message='GAIA eval passed'.
+      Either the notification succeeds or a graceful error about missing plyer is returned.
+      PASS if agent attempts notify_desktop regardless of success/error.
+      FAIL if agent claims it cannot send notifications at all.
+
+expected_outcome: |
+  Agent calls notify_desktop and either sends the notification or reports the
+  graceful error (plyer not installed / Windows fallback attempted).
