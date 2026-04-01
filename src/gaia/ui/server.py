@@ -130,11 +130,13 @@ class TunnelAuthMiddleware(BaseHTTPMiddleware):
 # ── Application Factory ────────────────────────────────────────────────────
 
 
-def create_app(db_path: str = None) -> FastAPI:
+def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         db_path: Path to SQLite database. None for default, ":memory:" for testing.
+        webui_dist: Path to the pre-built frontend dist directory. When None,
+            falls back to the default location relative to this package.
 
     Returns:
         Configured FastAPI application.
@@ -301,7 +303,8 @@ def create_app(db_path: str = None) -> FastAPI:
 
     # ── Serve Frontend Static Files ──────────────────────────────────────
     # Look for built frontend assets in the webui dist directory
-    _webui_dist = Path(__file__).resolve().parent.parent / "apps" / "webui" / "dist"
+    _default_dist = Path(__file__).resolve().parent.parent / "apps" / "webui" / "dist"
+    _webui_dist = Path(webui_dist) if webui_dist else _default_dist
     if _webui_dist.is_dir():
         logger.info("Serving frontend from %s", _webui_dist)
 
@@ -381,11 +384,16 @@ def main():
         "--port", type=int, default=DEFAULT_PORT, help=f"Port (default: {DEFAULT_PORT})"
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument(
+        "--ui-dist",
+        default=None,
+        help="Path to pre-built Agent UI frontend dist directory",
+    )
     args = parser.parse_args()
 
     log_level = "debug" if args.debug else "info"
     print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
-    server_app = create_app()
+    server_app = create_app(webui_dist=args.ui_dist)
     uvicorn.run(
         server_app,
         host=args.host,

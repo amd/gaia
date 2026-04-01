@@ -144,6 +144,7 @@ class LemonadeStatus:
     url: str = field(
         default_factory=lambda: os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
     )
+    version: Optional[str] = None
     context_size: int = 0
     loaded_models: list = field(default_factory=list)
     health_data: dict = field(default_factory=dict)
@@ -2858,14 +2859,19 @@ class LemonadeClient:
             health = self.health_check()
             status.running = True
             status.health_data = health
+            status.version = health.get("version")
 
             # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
+            # Skip embedding models — their ctx_size is irrelevant for LLM context checks.
             all_models = health.get("all_models_loaded", [])
-            if all_models:
-                status.context_size = (
-                    all_models[0].get("recipe_options", {}).get("ctx_size", 0)
-                )
-            else:
+            for m in all_models:
+                if m.get("type") == "embedding":
+                    continue
+                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
+                if ctx:
+                    status.context_size = ctx
+                    break
+            if not status.context_size:
                 # Fallback for older Lemonade versions
                 status.context_size = health.get("context_size", 0)
 
@@ -3106,21 +3112,28 @@ class LemonadeClient:
             return None
 
     def _check_version_compatibility(
-        self, expected_version: str, quiet: bool = False
+        self,
+        expected_version: str,
+        actual_version: Optional[str] = None,
+        quiet: bool = False,
     ) -> bool:
         """
-        Check if the installed lemonade-server version is compatible.
+        Check if the lemonade-server version is compatible.
 
-        Checks only the major version for compatibility.
+        Checks major version for hard incompatibility, and warns on
+        minor/patch mismatches.
 
         Args:
-            expected_version: Expected version string (e.g., "8.2.2")
+            expected_version: Expected version string (e.g., "10.0.0")
+            actual_version: Actual version string. If None, detected from
+                            the local ``lemonade-server --version`` CLI.
             quiet: Suppress warning output
 
         Returns:
             True if compatible (or version check failed), False if incompatible major version
         """
-        actual_version = self.get_lemonade_version()
+        if actual_version is None:
+            actual_version = self.get_lemonade_version()
 
         if not actual_version:
             # Can't determine version, assume compatible (don't block)
@@ -3151,6 +3164,15 @@ class LemonadeClient:
                     print("")
 
                 return False
+
+            # Same major version – warn if minor/patch differs
+            if actual_version != expected_version:
+                if not quiet:
+                    print(
+                        f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version: "
+                        f"v{actual_version} (expected v{expected_version})"
+                    )
+                    print("   Consider updating: https://lemonade-server.ai")
 
             return True
 
@@ -3231,7 +3253,10 @@ class LemonadeClient:
         # Check version compatibility (warning only, not fatal)
         from gaia.version import LEMONADE_VERSION
 
-        self._check_version_compatibility(LEMONADE_VERSION, quiet=quiet)
+        cli_version = self.get_lemonade_version()
+        self._check_version_compatibility(
+            LEMONADE_VERSION, actual_version=cli_version, quiet=quiet
+        )
 
         # Check current status
         status = self.get_status()
@@ -3239,7 +3264,18 @@ class LemonadeClient:
         if status.running:
             if not quiet:
                 print("✅ Lemonade Server is running")
+                if status.version:
+                    print(f"   Server version: {status.version}")
                 print(f"   Current context size: {status.context_size}")
+
+            # Check running server version against expected (warning only).
+            # Skip if the server reports the same version the CLI already checked.
+            if status.version and status.version != cli_version:
+                self._check_version_compatibility(
+                    LEMONADE_VERSION,
+                    actual_version=status.version,
+                    quiet=quiet,
+                )
 
             # Check context size (warning only, not fatal)
             if status.context_size < required_ctx:

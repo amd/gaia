@@ -108,6 +108,28 @@ def build_scorecard(run_id, results, config):
         r.get("cost_estimate", {}).get("estimated_usd", 0) for r in results
     )
 
+    perf_tps = []
+    perf_ttft = []
+    perf_total_input = 0
+    perf_total_output = 0
+    perf_flags: set = set()
+    perf_scenario_count = 0
+    for r in results:
+        ps = r.get("performance_summary")
+        if not isinstance(ps, dict):
+            continue
+        perf_scenario_count += 1
+        tps = ps.get("avg_tokens_per_second")
+        if isinstance(tps, (int, float)) and tps > 0:
+            perf_tps.append(tps)
+        ttft = ps.get("avg_time_to_first_token")
+        if isinstance(ttft, (int, float)) and ttft > 0:
+            perf_ttft.append(ttft)
+        perf_total_input += ps.get("total_input_tokens", 0) or 0
+        perf_total_output += ps.get("total_output_tokens", 0) or 0
+        for f in ps.get("flags") or []:
+            perf_flags.add(f)
+
     # Collect any statuses not in the known set — these indicate runner bugs or new status codes.
     # ERRORED is produced by the runner when the eval agent itself fails (parse error, crash, etc.)
     # and is correctly bucketed in the errored counter above.
@@ -165,6 +187,18 @@ def build_scorecard(run_id, results, config):
         "scenarios": results,
         "cost": {
             "estimated_total_usd": round(total_cost, 4),
+        },
+        "performance": {
+            "avg_tokens_per_second": (
+                round(sum(perf_tps) / len(perf_tps), 1) if perf_tps else None
+            ),
+            "avg_time_to_first_token": (
+                round(sum(perf_ttft) / len(perf_ttft), 3) if perf_ttft else None
+            ),
+            "total_input_tokens": perf_total_input,
+            "total_output_tokens": perf_total_output,
+            "scenarios_with_data": perf_scenario_count,
+            "flags": sorted(perf_flags),
         },
     }
     if unrecognized:
@@ -242,6 +276,35 @@ def write_summary_md(scorecard):
         )
         if r.get("root_cause"):
             lines.append(f"|   - Root cause: {r['root_cause']} |")
+
+    # Performance section
+    perf = scorecard.get("performance", {})
+    perf_tps = perf.get("avg_tokens_per_second")
+    perf_ttft = perf.get("avg_time_to_first_token")
+    perf_in = perf.get("total_input_tokens", 0)
+    perf_out = perf.get("total_output_tokens", 0)
+    perf_count = perf.get("scenarios_with_data", 0)
+    perf_flags = perf.get("flags", [])
+
+    if perf_count > 0:
+        lines += [
+            "",
+            "## Performance",
+            (
+                f"- **Avg throughput:** {perf_tps:.1f} tok/s"
+                if perf_tps
+                else "- **Avg throughput:** n/a"
+            ),
+            (
+                f"- **Avg TTFT:** {perf_ttft*1000:.0f}ms"
+                if perf_ttft
+                else "- **Avg TTFT:** n/a"
+            ),
+            f"- **Total tokens:** {perf_in:,} input \u2192 {perf_out:,} output",
+            f"- **Scenarios with data:** {perf_count}/{s.get('total_scenarios', 0)}",
+        ]
+        if perf_flags:
+            lines.append(f"- **Flags:** {', '.join(perf_flags)}")
 
     lines += [
         "",

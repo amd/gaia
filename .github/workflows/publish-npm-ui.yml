@@ -142,6 +142,11 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Upgrade npm for OIDC trusted publishing
+        run: |
+          npm install -g npm@latest
+          echo "npm version: $(npm -v)"
+
       - name: Install dependencies
         working-directory: src/gaia/apps/webui
         run: npm ci 2>/dev/null || npm install

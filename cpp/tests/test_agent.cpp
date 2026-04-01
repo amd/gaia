@@ -143,6 +143,29 @@ TEST(AgentTest, CustomOutputHandler) {
     EXPECT_TRUE(agent.tools().hasTool("echo"));
 }
 
+TEST(AgentTest, SetEnabledPlusRebuildSystemPrompt) {
+    AgentConfig config;
+    config.silentMode = true;
+    MockAgent agent(config);
+
+    // "echo(" is the formatForPrompt signature — distinct from the word "echo" in
+    // the agent's custom system prompt string.
+    std::string before = agent.systemPrompt();
+    EXPECT_TRUE(before.find("echo(") != std::string::npos);
+
+    // Disable echo and rebuild — formatForPrompt must no longer list it
+    agent.tools().setEnabled("echo", false);
+    agent.rebuildSystemPrompt();
+    std::string after = agent.systemPrompt();
+    EXPECT_TRUE(after.find("echo(") == std::string::npos);
+
+    // Re-enable and rebuild — formatForPrompt must list it again
+    agent.tools().setEnabled("echo", true);
+    agent.rebuildSystemPrompt();
+    std::string restored = agent.systemPrompt();
+    EXPECT_TRUE(restored.find("echo(") != std::string::npos);
+}
+
 TEST(AgentTest, RebuildSystemPrompt) {
     AgentConfig config;
     config.silentMode = true;
@@ -162,6 +185,128 @@ TEST(AgentTest, RebuildSystemPrompt) {
     EXPECT_TRUE(prompt2.find("newTool") != std::string::npos);
     EXPECT_TRUE(prompt2.size() > prompt1.size());
 }
+
+// ---- Dynamic reconfiguration tests ----
+
+TEST(AgentTest, ConfigAccessorReturnsSnapshot) {
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    cfg.maxSteps = 7;
+    cfg.maxTokens = 512;
+    MockAgent agent(cfg);
+
+    AgentConfig got = agent.config();
+    EXPECT_EQ(got.maxSteps, 7);
+    EXPECT_EQ(got.maxTokens, 512);
+}
+
+TEST(AgentTest, SetModelUpdatesConfig) {
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    MockAgent agent(cfg);
+
+    agent.setModel("new-model-v2");
+    EXPECT_EQ(agent.config().modelId, "new-model-v2");
+}
+
+TEST(AgentTest, SetConfigAppliesNewValues) {
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    MockAgent agent(cfg);
+
+    AgentConfig newCfg;
+    newCfg.silentMode = true;
+    newCfg.maxSteps = 5;
+    newCfg.maxTokens = 256;
+    newCfg.temperature = 0.3;
+    agent.setConfig(newCfg);
+
+    AgentConfig got = agent.config();
+    EXPECT_EQ(got.maxSteps, 5);
+    EXPECT_EQ(got.maxTokens, 256);
+    EXPECT_DOUBLE_EQ(got.temperature, 0.3);
+}
+
+TEST(AgentTest, SetConfigRejectsInvalidValues) {
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    MockAgent agent(cfg);
+
+    AgentConfig bad;
+    bad.maxSteps = 0;  // invalid
+    EXPECT_THROW(agent.setConfig(bad), std::invalid_argument);
+}
+
+TEST(AgentTest, SetMaxStepsUpdatesConfig) {
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    MockAgent agent(cfg);
+
+    agent.setMaxSteps(3);
+    EXPECT_EQ(agent.config().maxSteps, 3);
+}
+
+TEST(AgentTest, SetMaxTokensUpdatesConfig) {
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    MockAgent agent(cfg);
+
+    agent.setMaxTokens(8192);
+    EXPECT_EQ(agent.config().maxTokens, 8192);
+}
+
+TEST(AgentTest, SetTemperatureUpdatesConfig) {
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    MockAgent agent(cfg);
+
+    agent.setTemperature(0.1);
+    EXPECT_DOUBLE_EQ(agent.config().temperature, 0.1);
+}
+
+TEST(AgentTest, SetDebugUpdatesConfig) {
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    cfg.debug = false;
+    MockAgent agent(cfg);
+
+    agent.setDebug(true);
+    EXPECT_TRUE(agent.config().debug);
+}
+
+#ifndef _WIN32
+// Env var override tests — POSIX only (setenv/unsetenv)
+
+TEST(AgentTest, EnvVarGaiaMaxTokensOverridesDefault) {
+    setenv("GAIA_MAX_TOKENS", "2048", 1);
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    MockAgent agent(cfg);
+    unsetenv("GAIA_MAX_TOKENS");
+
+    EXPECT_EQ(agent.config().maxTokens, 2048);
+}
+
+TEST(AgentTest, EnvVarGaiaMaxStepsOverridesDefault) {
+    setenv("GAIA_MAX_STEPS", "7", 1);
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    MockAgent agent(cfg);
+    unsetenv("GAIA_MAX_STEPS");
+
+    EXPECT_EQ(agent.config().maxSteps, 7);
+}
+
+TEST(AgentTest, EnvVarGaiaModelIdOverridesDefault) {
+    setenv("GAIA_MODEL_ID", "env-model", 1);
+    AgentConfig cfg;
+    cfg.silentMode = true;
+    MockAgent agent(cfg);
+    unsetenv("GAIA_MODEL_ID");
+
+    EXPECT_EQ(agent.config().modelId, "env-model");
+}
+#endif
 
 // Note: processQuery tests require an LLM server running,
 // so they are not included here. Use integration tests for full loop testing.

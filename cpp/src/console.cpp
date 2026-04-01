@@ -129,6 +129,14 @@ void TerminalConsole::printToolInfo(const std::string& name, const std::string& 
               << DIM << "  " << description << RESET << "\n\n";
 }
 
+void TerminalConsole::printStreamToken(const std::string& token) {
+    std::cout << token << std::flush;
+}
+
+void TerminalConsole::printStreamEnd() {
+    std::cout << "\n";
+}
+
 // ---- SilentConsole ----
 
 void SilentConsole::printFinalAnswer(const std::string& answer) {

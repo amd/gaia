@@ -184,3 +184,61 @@ TEST(ConsoleTest, OutputHandlerOptionalMethods) {
     console.printResponse("response", "title");
     SUCCEED();
 }
+
+// ---- Streaming Tests ----
+
+TEST(ConsoleTest, TerminalConsoleStreamToken) {
+    std::ostringstream captured;
+    std::streambuf* oldBuf = std::cout.rdbuf(captured.rdbuf());
+
+    TerminalConsole console;
+    console.printStreamToken("tok");
+
+    std::cout.rdbuf(oldBuf);
+    EXPECT_EQ(captured.str(), "tok");
+}
+
+TEST(ConsoleTest, TerminalConsoleStreamTokenNoNewline) {
+    std::ostringstream captured;
+    std::streambuf* oldBuf = std::cout.rdbuf(captured.rdbuf());
+
+    TerminalConsole console;
+    console.printStreamToken("hello");
+    console.printStreamToken(" world");
+
+    std::cout.rdbuf(oldBuf);
+    // Tokens should be concatenated with no separators
+    EXPECT_EQ(captured.str(), "hello world");
+}
+
+TEST(ConsoleTest, TerminalConsoleStreamEnd) {
+    std::ostringstream captured;
+    std::streambuf* oldBuf = std::cout.rdbuf(captured.rdbuf());
+
+    TerminalConsole console;
+    console.printStreamEnd();
+
+    std::cout.rdbuf(oldBuf);
+    EXPECT_EQ(captured.str(), "\n");
+}
+
+TEST(ConsoleTest, SilentConsoleStreamTokenNoop) {
+    std::ostringstream captured;
+    std::streambuf* oldBuf = std::cout.rdbuf(captured.rdbuf());
+
+    SilentConsole console;
+    console.printStreamToken("anything");
+    console.printStreamEnd();
+
+    std::cout.rdbuf(oldBuf);
+    EXPECT_TRUE(captured.str().empty());
+}
+
+TEST(ConsoleTest, OutputHandlerDefaultStreamNoop) {
+    // The base class default no-op implementations must not crash
+    // We test via SilentConsole which relies on the base defaults
+    SilentConsole console;
+    EXPECT_NO_THROW(console.printStreamToken("tok"));
+    EXPECT_NO_THROW(console.printStreamEnd());
+    SUCCEED();
+}
