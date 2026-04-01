@@ -567,10 +567,10 @@ Dangerous mode CANNOT be:
 
 ## 11. Skill/Plugin Security
 
-**Strategy doc requirement; prerequisites for #647 (skill marketplace).**
+**Prerequisites for #647 (skill marketplace).**
 
 The SKILL.md format specification, permission model, security tiers, and sandboxing
-architecture are defined in [skill-format.md](skill-format.md) — the canonical
+architecture are defined in [skill-format.mdx](skill-format.mdx) — the canonical
 reference for all skill/plugin security. Key security properties:
 
 - Skills declare permissions in YAML frontmatter using domain-scoped syntax
@@ -634,7 +634,7 @@ All messages from external platforms are sanitized before reaching the agent:
    (email addresses, phone numbers, SSNs). Detected PII is replaced with
    `[PII REDACTED]` in responses sent back to the messaging platform.
 4. **Rate limiting:** Per-user, per-channel, and global rate limits (see
-   `messaging-integrations-plan.md` Section 4.4 for configuration).
+   `messaging-integrations-plan.mdx` Section 7 for configuration).
 
 ### 12.4 Identity Isolation
 

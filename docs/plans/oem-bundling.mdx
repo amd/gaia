@@ -23,7 +23,7 @@ icon: "box"
 > **Related Plans:**
 > - [installer.mdx](installer.mdx) -- Install scripts, `gaia init`, model download tiers
 > - [agent-hub.mdx](agent-hub.mdx) -- Agent registry and marketplace
-> - [Agent UI](agent-ui.md) -- Phases A-D overview
+> - [Agent UI](agent-ui.mdx) -- Phases A-D overview
 
 ---
 
@@ -132,7 +132,7 @@ Skill bundles define which GAIA capabilities are enabled out of the box. OEMs pi
 
 ## 7. Cost Savings Telemetry
 
-A key value proposition of local AI is cost savings versus cloud APIs. The telemetry module ([#649](https://github.com/amd/gaia/issues/649)) tracks tokens generated and processed locally, then calculates equivalent cloud API costs using published pricing (OpenAI, Anthropic, Google). All data is stored locally in SQLite -- nothing leaves the device unless the user explicitly opts into anonymous aggregate reporting. The Electron UI displays a savings summary card showing monthly and lifetime savings, which OEMs can feature prominently to reinforce the value of local AI hardware.
+A key benefit of local AI is cost savings versus cloud APIs. The telemetry module ([#649](https://github.com/amd/gaia/issues/649)) tracks tokens generated and processed locally, then calculates equivalent cloud API costs using published pricing (OpenAI, Anthropic, Google). All data is stored locally in SQLite — nothing leaves the device unless the user explicitly opts into anonymous aggregate reporting. The Agent UI displays a savings summary card showing monthly and lifetime savings.
 
 ---
 

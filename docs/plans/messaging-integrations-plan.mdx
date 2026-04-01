@@ -15,12 +15,12 @@ icon: "comments"
 > **Prerequisites:**
 > - Memory system (v0.20.0)
 > - Autonomy engine (v0.23.0 — ships alongside messaging)
-> - Agent UI foundations -- see [agent-ui.md](agent-ui.md)
+> - Agent UI foundations -- see [agent-ui.mdx](agent-ui.mdx)
 >
 > **Related plans:**
-> - [Agent UI](agent-ui.md) -- Settings UI, conversation history
-> - [Autonomy Engine](autonomy-engine.md) -- Background service, heartbeat
-> - [Security Model](security-model.md) -- Messaging security, tool restrictions
+> - [Agent UI](agent-ui.mdx) -- Settings UI, conversation history
+> - [Autonomy Engine](autonomy-engine.mdx) -- Background service, heartbeat
+> - [Security Model](security-model.mdx) -- Messaging security, tool restrictions
 
 ---
 
@@ -194,7 +194,7 @@ send webhooks to a public URL. This is the core architectural tension.
 | **GAIA Cloud Relay** | All | High | AMD hosts relay service |
 | **User's own server** | All | High | Self-host GAIA |
 
-**v1 strategy:** Support Discord + Telegram first (both work without a public
+**v1 approach:** Support Signal + Discord + Telegram first (all work without a public
 URL). Slack via Socket Mode (also no public URL). Defer WhatsApp and any platform
 that requires webhook-only integration.
 
@@ -236,7 +236,7 @@ restrictive by default.
 - **Restricted default tool set.** Messaging users get read-only tools (RAG
   queries, document search, summarization) by default. File I/O and shell tools
   require explicit opt-in via configuration. See
-  [security-model.md](security-model.md) for the full tool classification and
+  [security-model.mdx](security-model.mdx) for the full tool classification and
   trust-level definitions.
 
 - **Allow-listing.** Adapters support allow-lists for guilds, channels, and
@@ -245,7 +245,7 @@ restrictive by default.
 
 - **Rate limiting.** Per-user, per-channel, and global rate limits. Defaults:
   10 RPM per user, 30 RPM per channel, 100 RPM global. See
-  [security-model.md](security-model.md) for rate limiting design.
+  [security-model.mdx](security-model.mdx) for rate limiting design.
 
 - **Input sanitization.** Strip platform formatting before passing to agents.
   Limit message length. Guard against prompt injection via messaging.
@@ -263,7 +263,7 @@ restrictive by default.
 ## 8. UI Integration
 
 The Electron UI integrates with messaging in three ways. See
-[agent-ui.md](agent-ui.md) for the broader UI framework.
+[agent-ui.mdx](agent-ui.mdx) for the broader UI framework.
 
 **Settings panel.** A "Messaging" section in Settings (following the same pattern
 as MCP Server settings) with per-platform enable/disable toggles, token
