@@ -185,3 +185,41 @@ def sample_quality_context() -> Dict[str, Any]:
         "language": "python",
         "template": "STANDARD",
     }
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--model-id",
+        action="store",
+        default="Qwen3-0.6B-GGUF",
+        help="Lemonade model ID to use for integration tests",
+    )
+    parser.addoption(
+        "--lemonade-url",
+        action="store",
+        default="http://localhost:11434",
+        help="Lemonade server base URL",
+    )
+
+
+@pytest.fixture(scope="session")
+def lemonade_config(request):
+    return {
+        "model_id": request.config.getoption("--model-id"),
+        "lemonade_url": request.config.getoption("--lemonade-url"),
+    }
+
+
+@pytest.fixture(scope="session")
+def require_lemonade(lemonade_config):
+    """Skip test if Lemonade server is not running."""
+    import requests
+
+    url = lemonade_config["lemonade_url"]
+    try:
+        resp = requests.get(f"{url}/api/tags", timeout=5)
+        if resp.status_code != 200:
+            pytest.skip(f"Lemonade server not available at {url}")
+    except Exception:
+        pytest.skip(f"Lemonade server not running at {url}")
+    return lemonade_config

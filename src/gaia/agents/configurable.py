@@ -62,8 +62,12 @@ class ConfigurableAgent(Agent):
 
         # Initialize base agent with minimal settings
         # Tools will be registered in _register_tools()
+        # Pop model_id from kwargs before passing to super().__init__ to avoid
+        # "multiple values for keyword argument 'model_id'" when it is also
+        # supplied as an explicit keyword.
+        model_id = kwargs.pop("model_id", None)
         super().__init__(
-            model_id=kwargs.get("model_id"),
+            model_id=model_id,
             max_steps=(
                 definition.constraints.max_steps if definition.constraints else 100
             ),
@@ -340,6 +344,15 @@ Follow these constraints:
         ]
 
         try:
+            # Skip real LLM call in stub/CI mode - return placeholder immediately
+            if getattr(self, "skip_lemonade", False):
+                return {
+                    "success": True,
+                    "artifact": f"[stub] Agent {self.definition.id} processed: {user_prompt}",
+                    "agent_id": self.definition.id,
+                    "stats": None,
+                }
+
             # Use ChatSDK to get response
             # Note: This assumes the base Agent has initialized self.chat
             if hasattr(self, "chat") and self.chat:
@@ -352,8 +365,7 @@ Follow these constraints:
                     "success": True,
                     "artifact": response.text,
                     "agent_id": self.definition.id,
-                    "model": response.model,
-                    "tokens": response.usage,
+                    "stats": response.stats,
                 }
             else:
                 # Fallback: return context summary

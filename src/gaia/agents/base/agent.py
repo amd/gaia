@@ -147,6 +147,9 @@ class Agent(abc.ABC):
         if base_url is None:
             base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
 
+        # Store skip_lemonade flag so subclasses can short-circuit LLM calls
+        self.skip_lemonade = skip_lemonade
+
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or use_chatgpt or skip_lemonade):

@@ -197,6 +197,7 @@ class LoopManager:
         agent_registry: Optional[AgentRegistry] = None,
         model_id: Optional[str] = None,
         template_model_id: Optional[str] = None,
+        skip_lemonade: bool = False,
     ):
         """
         Initialize loop manager.
@@ -204,11 +205,15 @@ class LoopManager:
         Args:
             max_concurrent: Maximum concurrent loops (supports 5+)
             agent_registry: Optional agent registry for executing agents
+            model_id: Override model ID for all agents
+            template_model_id: Default model from template definition
+            skip_lemonade: If True, skip Lemonade server initialization in agents (stub/CI mode)
         """
         self.MAX_CONCURRENT_LOOPS = max_concurrent
         self._agent_registry = agent_registry
         self._model_id = model_id
         self._template_model_id = template_model_id
+        self._skip_lemonade = skip_lemonade
 
         # Loop storage
         self._loops: Dict[str, LoopState] = {}
@@ -495,6 +500,7 @@ class LoopManager:
                 prompts_dir=Path("gaia/prompts"),
                 silent_mode=True,  # Suppress console output in pipeline
                 model_id=resolved_model_id,
+                skip_lemonade=self._skip_lemonade,
             )
 
             # Initialize agent (registers tools, builds prompt)

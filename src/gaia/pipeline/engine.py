@@ -128,6 +128,7 @@ class PipelineEngine:
         max_concurrent_loops: int = 100,
         worker_pool_size: int = 4,
         model_id: Optional[str] = None,
+        skip_lemonade: bool = False,
     ):
         """
         Initialize pipeline engine.
@@ -138,12 +139,15 @@ class PipelineEngine:
             log_level: Logging level
             max_concurrent_loops: Maximum number of concurrent pipeline loops (default: 100)
             worker_pool_size: Worker pool semaphore size for bounded execution (default: 4)
+            model_id: Override model ID for all agents (default: None, uses agent YAML or template)
+            skip_lemonade: If True, skip Lemonade server initialization in agents (stub/CI mode)
         """
         if enable_logging:
             setup_logging(level=log_level)
 
         self._agents_dir = agents_dir
         self._model_id = model_id
+        self._skip_lemonade = skip_lemonade
         self._initialized = False
         self._running = False
 
@@ -251,6 +255,7 @@ class PipelineEngine:
             agent_registry=self._agent_registry,
             model_id=self._model_id,
             template_model_id=getattr(self._current_template, "default_model", None),
+            skip_lemonade=self._skip_lemonade,
         )
 
         # Initialize routing engine
