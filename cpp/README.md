@@ -3,7 +3,7 @@
 <!-- Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. -->
 <!-- SPDX-License-Identifier: MIT -->
 
-The [GAIA](https://github.com/amd/gaia) C++ agent framework. Implements the core agentic loop — LLM reasoning, tool execution, multi-step planning, and MCP (Model Context Protocol) client integration — as a lightweight, header-friendly C++ library.
+The [GAIA](https://github.com/amd/gaia) C++ agent framework — a native C++17 port of the Python base agent. Part of AMD's open-source AI agent platform for Ryzen AI hardware. See the [roadmap](https://amd-gaia.ai/roadmap) for the full project direction and the [Agent UI plan](../docs/plans/agent-ui.mdx) for the consumer desktop experience that this framework supports.
 
 Included demos:
 

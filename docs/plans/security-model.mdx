@@ -1,3 +1,9 @@
+---
+title: "Security Model"
+description: "Unified security architecture — guardrails, audit trail, credential vault, and messaging security"
+icon: "shield"
+---
+
 # GAIA Security Model
 
 > **Date:** 2026-04-01
@@ -571,7 +577,7 @@ reference for all skill/plugin security. Key security properties:
 
 - Skills declare permissions in YAML frontmatter using domain-scoped syntax
   (`filesystem:read`, `network:write`, etc.)
-- Three security tiers: AMD Verified (code-signed), Community Reviewed, Experimental
+- Three security tiers: AMD Verified, Community Reviewed, Experimental
 - Skills run in isolated context with restricted `_TOOL_REGISTRY` access
 - Dedicated working directory per skill: `~/.gaia/skills/<skill_name>/`
 - Code signing infrastructure planned for v0.24.0 (#462-#465)

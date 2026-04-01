@@ -348,17 +348,39 @@
             ]
           },
           {
-            "group": "Plans",
+            "group": "Agent UI",
+            "pages": [
+              "plans/agent-ui",
+              "plans/setup-wizard",
+              "plans/security-model",
+              "plans/email-calendar-integration",
+              "plans/messaging-integrations-plan",
+              "plans/autonomy-engine"
+            ]
+          },
+          {
+            "group": "Ecosystem",
             "pages": [
               "plans/agent-hub",
+              "plans/skill-format",
+              "plans/oem-bundling"
+            ]
+          },
+          {
+            "group": "Infrastructure",
+            "pages": [
               "plans/installer",
-              "plans/agent-ui",
               "plans/mcp-client",
               "plans/cua",
               "plans/docker-containers",
-              "plans/image-agent",
-              "plans/vision-sdk",
               "plans/mcp-docs"
+            ]
+          },
+          {
+            "group": "Agents",
+            "pages": [
+              "plans/image-agent",
+              "plans/vision-sdk"
             ]
           }
         ]

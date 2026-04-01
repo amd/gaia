@@ -327,6 +327,37 @@ All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
 
 **Specifications:** See `docs/spec/` for 40+ technical specifications.
 
+## Roadmap & Plans
+
+The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://amd-gaia.ai/roadmap)). Plan documents are in `docs/plans/`:
+
+**Agent UI:**
+- [`docs/plans/agent-ui.mdx`](docs/plans/agent-ui.mdx) - GaiaAgent comprehensive plan (Phases A-D)
+- [`docs/plans/setup-wizard.mdx`](docs/plans/setup-wizard.mdx) - First-run onboarding and system scanner
+- [`docs/plans/security-model.mdx`](docs/plans/security-model.mdx) - Guardrails, audit trail, credential vault
+- [`docs/plans/email-calendar-integration.mdx`](docs/plans/email-calendar-integration.mdx) - Email triage, calendar, meeting notes
+- [`docs/plans/messaging-integrations-plan.mdx`](docs/plans/messaging-integrations-plan.mdx) - Signal, Discord, Slack, Telegram adapters
+- [`docs/plans/autonomy-engine.mdx`](docs/plans/autonomy-engine.mdx) - Heartbeat, scheduler, background service
+
+**Ecosystem:**
+- [`docs/plans/agent-hub.mdx`](docs/plans/agent-hub.mdx) - Agent marketplace and community hub
+- [`docs/plans/skill-format.mdx`](docs/plans/skill-format.mdx) - SKILL.md specification
+- [`docs/plans/oem-bundling.mdx`](docs/plans/oem-bundling.mdx) - OEM hardware pre-configuration
+
+**Infrastructure:**
+- [`docs/plans/installer.mdx`](docs/plans/installer.mdx) - Desktop installer
+- [`docs/plans/mcp-client.mdx`](docs/plans/mcp-client.mdx) - MCP client integration
+- [`docs/plans/cua.mdx`](docs/plans/cua.mdx) - Computer Use Agent
+- [`docs/plans/docker-containers.mdx`](docs/plans/docker-containers.mdx) - Docker deployment
+
+**Key architectural decisions (April 2026):**
+- ChatAgent renamed to **GaiaAgent** in v0.20.0 (#696)
+- Voice-first is P0 enabling technology (#702)
+- No context compaction — memory + RAG handles long conversations
+- Configuration dashboard + Observability dashboard as separate Agent UI panels
+- MCP servers primary for email/calendar (not browser automation)
+- Signal is Phase 1 messaging priority (privacy-first)
+
 ## Issue Response Guidelines
 
 When responding to GitHub issues and pull requests, follow these guidelines:
