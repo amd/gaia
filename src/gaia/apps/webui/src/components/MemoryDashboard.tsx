@@ -67,7 +67,7 @@ interface KnowledgeEntry {
     domain: string | null;
     source: string;
     confidence: number;
-    metadata: string | null;
+    metadata: Record<string, unknown> | string | null;
     use_count: number;
     context: string;
     sensitive: boolean;
@@ -1247,7 +1247,11 @@ export function MemoryDashboard() {
                                                                             {entry.metadata && (
                                                                                 <div className="mem-detail-field mem-detail-full">
                                                                                     <span className="mem-detail-label">Metadata</span>
-                                                                                    <span className="mem-detail-value">{entry.metadata}</span>
+                                                                                    <span className="mem-detail-value">
+                                                                                        {typeof entry.metadata === 'object'
+                                                                                            ? JSON.stringify(entry.metadata, null, 2)
+                                                                                            : entry.metadata}
+                                                                                    </span>
                                                                                 </div>
                                                                             )}
                                                                         </div>
