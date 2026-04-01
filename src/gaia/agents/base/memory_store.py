@@ -173,7 +173,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     role        TEXT NOT NULL,
     content     TEXT NOT NULL,
     context     TEXT DEFAULT 'global',
-    timestamp   TEXT NOT NULL
+    timestamp   TEXT NOT NULL,
+    consolidated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_conv_session ON conversations(session_id);
 CREATE INDEX IF NOT EXISTS idx_conv_ts ON conversations(timestamp DESC);
@@ -204,7 +205,9 @@ CREATE TABLE IF NOT EXISTS knowledge (
     updated_at  TEXT NOT NULL,
     last_used   TEXT,
     due_at      TEXT,
-    reminded_at TEXT
+    reminded_at TEXT,
+    embedding   BLOB,
+    superseded_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_due ON knowledge(due_at)
     WHERE due_at IS NOT NULL;
@@ -256,6 +259,18 @@ _TRIGGER_SQL = [
     """,
 ]
 
+# v2-specific indexes that reference columns added in the v1 → v2 migration.
+# Created AFTER migration in _init_schema() so the columns are guaranteed to
+# exist.  IF NOT EXISTS makes them idempotent.
+_V2_INDEX_SQL = [
+    "CREATE INDEX IF NOT EXISTS idx_knowledge_no_embedding "
+    "ON knowledge(id) WHERE embedding IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_knowledge_superseded "
+    "ON knowledge(superseded_by) WHERE superseded_by IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_conv_not_consolidated "
+    "ON conversations(session_id) WHERE consolidated_at IS NULL",
+]
+
 
 # ============================================================================
 # MemoryStore
@@ -290,7 +305,11 @@ class MemoryStore:
     # ------------------------------------------------------------------
 
     def _init_schema(self):
-        """Create tables, indexes, triggers, and set WAL mode."""
+        """Create tables, indexes, triggers, and set WAL mode.
+
+        Fresh installs get the full v2 schema.  Existing v1 databases are
+        migrated automatically via ALTER TABLE ADD COLUMN.
+        """
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
             # Allow up to 5 s of retries before raising SQLITE_BUSY.  This
@@ -306,15 +325,69 @@ class MemoryStore:
                 except sqlite3.OperationalError:
                     pass  # Trigger already exists
 
-            # Initialize schema_version if empty
+            # Initialize schema_version if empty (fresh install → v2)
             cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
             if cursor.fetchone()[0] == 0:
                 self._conn.execute(
                     "INSERT INTO schema_version VALUES (?, ?)",
-                    (1, _now_iso()),
+                    (2, _now_iso()),
                 )
+            else:
+                # Run migrations for existing databases
+                self._migrate_schema_locked()
+
+            # Create v2-specific indexes AFTER migration ensures the columns
+            # exist.  On fresh installs the columns are in the CREATE TABLE,
+            # so these are also safe.  IF NOT EXISTS makes them idempotent.
+            for idx_sql in _V2_INDEX_SQL:
+                self._conn.execute(idx_sql)
 
             self._conn.commit()
+
+    def _migrate_schema_locked(self):
+        """Run schema migrations if needed. Must hold self._lock.
+
+        Migrations use ALTER TABLE ADD COLUMN which SQLite supports
+        without rewriting the table.  Each column is added individually
+        and errors are caught (column may already exist from a partial
+        prior migration).
+        """
+        cursor = self._conn.execute(
+            "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        current_version = row[0] if row else 1
+
+        if current_version >= 2:
+            return
+
+        logger.info("[MemoryStore] migrating schema v%d -> v2", current_version)
+
+        # v1 -> v2: add embedding, superseded_by to knowledge;
+        #           add consolidated_at to conversations.
+        #           Indexes are created by _init_schema() after this returns.
+        _v2_alter_statements = [
+            "ALTER TABLE knowledge ADD COLUMN embedding BLOB",
+            "ALTER TABLE knowledge ADD COLUMN superseded_by TEXT",
+            "ALTER TABLE conversations ADD COLUMN consolidated_at TEXT",
+        ]
+        for stmt in _v2_alter_statements:
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError as e:
+                # "duplicate column name" — column already exists from
+                # a partial prior migration.  Safe to ignore.
+                if "duplicate column" in str(e).lower():
+                    logger.debug("[MemoryStore] migration column exists: %s", e)
+                else:
+                    raise
+
+        # Update schema version
+        self._conn.execute(
+            "UPDATE schema_version SET version = 2, migrated_at = ?",
+            (_now_iso(),),
+        )
+        logger.info("[MemoryStore] schema migration to v2 complete")
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -328,7 +401,12 @@ class MemoryStore:
             return cursor
 
     def _row_to_knowledge_dict(self, row) -> Dict:
-        """Convert a knowledge row tuple to a dict."""
+        """Convert a knowledge row tuple to a dict.
+
+        Maps the standard 17-column SELECT (``_KNOWLEDGE_COLS``) to a dict.
+        Does NOT include ``embedding`` — that BLOB is large and only fetched
+        by dedicated methods (``get_items_with_embeddings``, etc.).
+        """
         return {
             "id": row[0],
             "category": row[1],
@@ -346,13 +424,29 @@ class MemoryStore:
             "last_used": row[13],
             "due_at": row[14],
             "reminded_at": row[15],
+            "superseded_by": row[16],
         }
 
     _KNOWLEDGE_COLS = (
         "id, category, content, domain, source, confidence, metadata, "
         "use_count, context, sensitive, entity, created_at, updated_at, "
-        "last_used, due_at, reminded_at"
+        "last_used, due_at, reminded_at, superseded_by"
     )
+
+    #: Extended column list that includes the embedding BLOB.  Only used by
+    #: methods that need to return embeddings to the caller (e.g. for FAISS
+    #: index building or reconciliation).
+    _KNOWLEDGE_COLS_WITH_EMBEDDING = (
+        "id, category, content, domain, source, confidence, metadata, "
+        "use_count, context, sensitive, entity, created_at, updated_at, "
+        "last_used, due_at, reminded_at, superseded_by, embedding"
+    )
+
+    def _row_to_knowledge_dict_with_embedding(self, row) -> Dict:
+        """Convert an 18-column row (including embedding) to a dict."""
+        d = self._row_to_knowledge_dict(row)
+        d["embedding"] = row[17]  # bytes or None
+        return d
 
     # ==================================================================
     # Conversations
@@ -623,7 +717,10 @@ class MemoryStore:
             existing_id = self._find_similar_locked(content, category, context, entity)
 
             if existing_id:
-                # Update existing: replace content with newer, take max confidence
+                # Update existing: replace content with newer, take max confidence.
+                # Set embedding = NULL because the old embedding is now stale
+                # (it was computed for the previous content).  This forces the
+                # item into get_items_without_embeddings() for re-embedding.
                 try:
                     self._conn.execute(
                         """
@@ -636,7 +733,8 @@ class MemoryStore:
                             entity = COALESCE(?, entity),
                             sensitive = MAX(sensitive, ?),
                             due_at = COALESCE(?, due_at),
-                            updated_at = ?
+                            updated_at = ?,
+                            embedding = NULL
                         WHERE id = ?
                         """,
                         (
@@ -671,7 +769,7 @@ class MemoryStore:
                 self._conn.execute(
                     f"""
                     INSERT INTO knowledge ({self._KNOWLEDGE_COLS})
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         knowledge_id,
@@ -690,6 +788,7 @@ class MemoryStore:
                         now,  # last_used
                         due_at,
                         None,  # reminded_at
+                        None,  # superseded_by
                     ),
                 )
                 self._insert_knowledge_fts_locked(knowledge_id)
@@ -733,7 +832,7 @@ class MemoryStore:
                     FROM knowledge k
                     JOIN knowledge_fts f ON k.rowid = f.rowid
                     WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
-                          AND k.entity = ?
+                          AND k.entity = ? AND k.superseded_by IS NULL
                     ORDER BY rank
                     LIMIT 10
                     """,
@@ -746,7 +845,7 @@ class MemoryStore:
                     FROM knowledge k
                     JOIN knowledge_fts f ON k.rowid = f.rowid
                     WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
-                          AND k.entity IS NULL
+                          AND k.entity IS NULL AND k.superseded_by IS NULL
                     ORDER BY rank
                     LIMIT 10
                     """,
@@ -810,11 +909,18 @@ class MemoryStore:
         entity: str = None,
         include_sensitive: bool = False,
         top_k: int = 5,
+        time_from: str = None,
+        time_to: str = None,
     ) -> List[Dict]:
         """FTS5 search. AND semantics, OR fallback. BM25 ranking.
 
-        Bumps confidence +0.02 on each recalled item.
+        Bumps confidence +0.02 and increments use_count on each recalled item.
         Filters by context/entity if provided. Excludes sensitive by default.
+        Only returns active items (superseded_by IS NULL).
+
+        Args:
+            time_from: ISO 8601 lower bound on created_at (inclusive).
+            time_to: ISO 8601 upper bound on created_at (inclusive).
         """
         safe_query = _sanitize_fts5_query(query, use_and=True)
         if not safe_query:
@@ -822,7 +928,14 @@ class MemoryStore:
 
         with self._lock:
             results = self._fts5_search_knowledge_locked(
-                safe_query, category, context, entity, include_sensitive, top_k
+                safe_query,
+                category,
+                context,
+                entity,
+                include_sensitive,
+                top_k,
+                time_from,
+                time_to,
             )
             if not results:
                 safe_query_or = _sanitize_fts5_query(query, use_and=False)
@@ -834,6 +947,8 @@ class MemoryStore:
                         entity,
                         include_sensitive,
                         top_k,
+                        time_from,
+                        time_to,
                     )
 
             # Bump confidence +0.02 and update last_used for each result.
@@ -861,6 +976,7 @@ class MemoryStore:
                         r["confidence"] = min(
                             r["confidence"] + CONFIDENCE_BUMP_PER_RECALL, 1.0
                         )
+                        r["use_count"] = r["use_count"] + 1
                         r["last_used"] = now
                     self._conn.commit()
                 except Exception:
@@ -877,9 +993,15 @@ class MemoryStore:
         entity: Optional[str],
         include_sensitive: bool,
         top_k: int,
+        time_from: Optional[str] = None,
+        time_to: Optional[str] = None,
     ) -> List[Dict]:
-        """Execute FTS5 search on knowledge. Must hold self._lock."""
-        conditions = ["knowledge_fts MATCH ?"]
+        """Execute FTS5 search on knowledge. Must hold self._lock.
+
+        Always filters ``superseded_by IS NULL`` (only active items).
+        Optional temporal filtering on ``created_at``.
+        """
+        conditions = ["knowledge_fts MATCH ?", "k.superseded_by IS NULL"]
         params: list = [fts_query]
 
         if category is not None:
@@ -893,6 +1015,12 @@ class MemoryStore:
             params.append(entity)
         if not include_sensitive:
             conditions.append("k.sensitive = 0")
+        if time_from is not None:
+            conditions.append("k.created_at >= ?")
+            params.append(time_from)
+        if time_to is not None:
+            conditions.append("k.created_at <= ?")
+            params.append(time_to)
 
         where = " AND ".join(conditions)
         params.append(top_k)
@@ -923,8 +1051,8 @@ class MemoryStore:
     def get_by_category(
         self, category: str, context: str = None, limit: int = 10
     ) -> List[Dict]:
-        """Get knowledge entries by category, optionally filtered by context."""
-        conditions = ["category = ?"]
+        """Get active knowledge entries by category, optionally filtered by context."""
+        conditions = ["category = ?", "superseded_by IS NULL"]
         params: list = [category]
 
         if context is not None:
@@ -955,10 +1083,10 @@ class MemoryStore:
         during system prompt construction.
         """
         if context == "global":
-            contexts = ("global",)
             sql = f"""
                 SELECT {self._KNOWLEDGE_COLS} FROM knowledge
                 WHERE category = ? AND context = ? AND sensitive = 0
+                      AND superseded_by IS NULL
                 ORDER BY confidence DESC, updated_at DESC
                 LIMIT ?
             """
@@ -967,6 +1095,7 @@ class MemoryStore:
             sql = f"""
                 SELECT {self._KNOWLEDGE_COLS} FROM knowledge
                 WHERE category = ? AND context IN (?, 'global') AND sensitive = 0
+                      AND superseded_by IS NULL
                 ORDER BY confidence DESC, updated_at DESC
                 LIMIT ?
             """
@@ -977,13 +1106,13 @@ class MemoryStore:
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
     def get_by_entity(self, entity: str, limit: int = 20) -> List[Dict]:
-        """Get all knowledge about a specific entity.
+        """Get all active knowledge about a specific entity.
 
         Example: get_by_entity('person:sarah_chen') → all facts about Sarah.
         """
         sql = f"""
             SELECT {self._KNOWLEDGE_COLS} FROM knowledge
-            WHERE entity = ?
+            WHERE entity = ? AND superseded_by IS NULL
             ORDER BY updated_at DESC
             LIMIT ?
         """
@@ -1009,7 +1138,7 @@ class MemoryStore:
             datetime.now().astimezone() + timedelta(days=within_days)
         ).isoformat()
 
-        conditions = ["due_at IS NOT NULL"]
+        conditions = ["due_at IS NOT NULL", "superseded_by IS NULL"]
         params: list = []
 
         if include_overdue:
@@ -1060,10 +1189,16 @@ class MemoryStore:
         entity: str = None,
         due_at: str = None,
         reminded_at: str = None,
+        superseded_by: str = None,
     ) -> bool:
         """Update an existing knowledge entry. Only provided fields are changed.
 
         Sets updated_at to now. Returns False if ID not found.
+
+        Args:
+            superseded_by: ID of the newer knowledge item that replaces this one.
+                When set, this item is considered historical/inactive and will be
+                excluded from active queries (search, get_by_*, system prompt).
         """
         # Normalize empty strings to None — same semantics as store().
         # An empty-string entity or domain would differ from NULL in SQL and
@@ -1125,6 +1260,9 @@ class MemoryStore:
         if reminded_at is not None:
             sets.append("reminded_at = ?")
             params.append(reminded_at)
+        if superseded_by is not None:
+            sets.append("superseded_by = ?")
+            params.append(superseded_by)
 
         params.append(knowledge_id)
         sql = f"UPDATE knowledge SET {', '.join(sets)} WHERE id = ?"
@@ -1179,6 +1317,199 @@ class MemoryStore:
                 ).rowcount
                 self._conn.commit()
                 return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    # ==================================================================
+    # Knowledge — Embeddings (v2)
+    # ==================================================================
+
+    def store_embedding(self, knowledge_id: str, embedding: bytes) -> bool:
+        """Store an embedding BLOB for a knowledge item.
+
+        Args:
+            knowledge_id: UUID of the knowledge item.
+            embedding: Raw bytes (float32 vector, e.g. 768-dim × 4 bytes = 3072 bytes).
+
+        Returns:
+            True if the row was found and updated, False if knowledge_id not found.
+        """
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE knowledge SET embedding = ? WHERE id = ?",
+                    (embedding, knowledge_id),
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def get_items_with_embeddings(
+        self,
+        category: str = None,
+        context: str = None,
+        entity: str = None,
+        include_sensitive: bool = False,
+        top_k: int = 100,
+        time_from: str = None,
+        time_to: str = None,
+    ) -> List[Dict]:
+        """Return active knowledge items that have stored embeddings.
+
+        Filters: superseded_by IS NULL, embedding IS NOT NULL, plus optional
+        category, context, entity, sensitive, and time-range filters.
+
+        Returns items with ALL fields INCLUDING the embedding BLOB.
+        Used by MemoryMixin to build/query the FAISS index.
+        """
+        conditions = ["superseded_by IS NULL", "embedding IS NOT NULL"]
+        params: list = []
+
+        if category is not None:
+            conditions.append("category = ?")
+            params.append(category)
+        if context is not None:
+            conditions.append("context = ?")
+            params.append(context)
+        if entity is not None:
+            conditions.append("entity = ?")
+            params.append(entity)
+        if not include_sensitive:
+            conditions.append("sensitive = 0")
+        if time_from is not None:
+            conditions.append("created_at >= ?")
+            params.append(time_from)
+        if time_to is not None:
+            conditions.append("created_at <= ?")
+            params.append(time_to)
+
+        where = "WHERE " + " AND ".join(conditions)
+        params.append(top_k)
+
+        sql = f"""
+            SELECT {self._KNOWLEDGE_COLS_WITH_EMBEDDING} FROM knowledge
+            {where}
+            ORDER BY confidence DESC, updated_at DESC
+            LIMIT ?
+        """
+
+        with self._lock:
+            cursor = self._conn.execute(sql, tuple(params))
+            return [
+                self._row_to_knowledge_dict_with_embedding(r) for r in cursor.fetchall()
+            ]
+
+    def get_items_without_embeddings(self, limit: int = 100) -> List[Dict]:
+        """Return knowledge items where embedding IS NULL.
+
+        Used for backfill on startup — items created before v2 migration
+        or items whose embedding failed on initial store.
+
+        Returns standard dicts (no embedding field — it's NULL by definition).
+        """
+        sql = f"""
+            SELECT {self._KNOWLEDGE_COLS} FROM knowledge
+            WHERE embedding IS NULL AND superseded_by IS NULL
+            ORDER BY created_at ASC
+            LIMIT ?
+        """
+        with self._lock:
+            cursor = self._conn.execute(sql, (limit,))
+            return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
+
+    def get_items_for_reconciliation(
+        self, context: str = None, limit: int = 100
+    ) -> List[Dict]:
+        """Get active knowledge items with embeddings for pairwise comparison.
+
+        Used by the reconciliation pipeline to find near-duplicates and
+        contradictions via cosine similarity on stored embeddings.
+
+        Filters: superseded_by IS NULL, embedding IS NOT NULL.
+        Returns items with ALL fields including the embedding BLOB.
+        """
+        conditions = ["superseded_by IS NULL", "embedding IS NOT NULL"]
+        params: list = []
+
+        if context is not None:
+            conditions.append("context = ?")
+            params.append(context)
+
+        where = "WHERE " + " AND ".join(conditions)
+        params.append(limit)
+
+        sql = f"""
+            SELECT {self._KNOWLEDGE_COLS_WITH_EMBEDDING} FROM knowledge
+            {where}
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """
+
+        with self._lock:
+            cursor = self._conn.execute(sql, tuple(params))
+            return [
+                self._row_to_knowledge_dict_with_embedding(r) for r in cursor.fetchall()
+            ]
+
+    # ==================================================================
+    # Consolidation (v2)
+    # ==================================================================
+
+    def get_unconsolidated_sessions(
+        self, older_than_days: int = 14, min_turns: int = 5, limit: int = 5
+    ) -> List[str]:
+        """Find session_ids eligible for consolidation.
+
+        A session is eligible when:
+        - ALL its turns are older than ``older_than_days``
+        - It has at least ``min_turns`` turns
+        - At least one turn has ``consolidated_at IS NULL``
+
+        Returns a list of session_id strings (oldest first), up to ``limit``.
+        """
+        cutoff = (
+            datetime.now().astimezone() - timedelta(days=older_than_days)
+        ).isoformat()
+
+        sql = """
+            SELECT session_id
+            FROM conversations
+            GROUP BY session_id
+            HAVING COUNT(*) >= ?
+               AND MAX(timestamp) < ?
+               AND SUM(CASE WHEN consolidated_at IS NULL THEN 1 ELSE 0 END) > 0
+            ORDER BY MAX(timestamp) ASC
+            LIMIT ?
+        """
+
+        with self._lock:
+            cursor = self._conn.execute(sql, (min_turns, cutoff, limit))
+            return [row[0] for row in cursor.fetchall()]
+
+    def mark_turns_consolidated(self, turn_ids: List[int]) -> int:
+        """Set ``consolidated_at`` to now on the specified conversation turn IDs.
+
+        Returns the number of rows actually updated.
+        """
+        if not turn_ids:
+            return 0
+
+        now = _now_iso()
+        placeholders = ", ".join("?" for _ in turn_ids)
+        sql = f"""
+            UPDATE conversations
+            SET consolidated_at = ?
+            WHERE id IN ({placeholders}) AND consolidated_at IS NULL
+        """
+
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(sql, (now, *turn_ids)).rowcount
+                self._conn.commit()
+                return rowcount
             except Exception:
                 self._conn.rollback()
                 raise
@@ -1403,6 +1734,7 @@ class MemoryStore:
                 SELECT COUNT(*) FROM knowledge
                 WHERE due_at IS NOT NULL AND due_at <= ? AND due_at > ?
                 AND (reminded_at IS NULL OR reminded_at < due_at)
+                AND superseded_by IS NULL
                 """,
                 (future_7d, now_iso),
             ).fetchone()[0]
@@ -1412,6 +1744,7 @@ class MemoryStore:
                 SELECT COUNT(*) FROM knowledge
                 WHERE due_at IS NOT NULL AND due_at <= ?
                 AND (reminded_at IS NULL OR reminded_at < due_at)
+                AND superseded_by IS NULL
                 """,
                 (now_iso,),
             ).fetchone()[0]
@@ -1465,8 +1798,13 @@ class MemoryStore:
         order: str = "desc",
         offset: int = 0,
         limit: int = 50,
+        include_superseded: bool = False,
     ) -> Dict:
         """Paginated knowledge browser with full filtering.
+
+        By default excludes superseded items.  Set ``include_superseded=True``
+        to see the full history including superseded entries (their
+        ``superseded_by`` field will be non-None in the returned dicts).
 
         Returns: {"items": [...], "total": N, "offset": N, "limit": N}
         """
@@ -1486,6 +1824,9 @@ class MemoryStore:
 
         conditions: list = []
         params: list = []
+
+        if not include_superseded:
+            conditions.append("k.superseded_by IS NULL")
 
         if category is not None:
             conditions.append("k.category = ?")
@@ -1863,6 +2204,7 @@ class MemoryStore:
                         updated_at = ?
                     WHERE last_used IS NOT NULL AND last_used < ?
                           AND updated_at < ?
+                          AND superseded_by IS NULL
                     """,
                     (decay_factor, now, cutoff, cutoff),
                 )

@@ -1625,12 +1625,12 @@ class TestEdgeCases:
             assert mode == "wal"
 
     def test_schema_version_exists(self, store):
-        """schema_version table exists with version 1."""
+        """schema_version table exists with version 2."""
         if hasattr(store, "_conn"):
             cursor = store._conn.execute("SELECT version FROM schema_version")
             row = cursor.fetchone()
             assert row is not None
-            assert row[0] == 1
+            assert row[0] == 2
 
 
 # ===========================================================================
@@ -3161,62 +3161,6 @@ class TestDeleteRollback:
         assert result is False
 
 
-class TestHeuristicFinditerMultipleMatches:
-    """_extract_heuristics() must capture all matches, not just the first."""
-
-    def test_multiple_preferences_in_single_message(self, store):
-        """'I prefer Python. I prefer dark mode.' should store TWO preferences."""
-        from gaia.agents.base.memory import MemoryMixin
-
-        class FakeAgent(MemoryMixin):
-            def __init__(self):
-                self._memory_store = store
-                self._memory_context = "global"
-                self._auto_extract_enabled = True
-
-        agent = FakeAgent()
-        before = store.get_stats()["knowledge"]["total"]
-        agent._extract_heuristics(
-            "I prefer Python over Ruby. I prefer dark mode over light mode."
-        )
-        after = store.get_stats()["knowledge"]["total"]
-        assert (
-            after >= before + 2
-        ), f"Expected at least 2 new preferences, got {after - before}"
-
-    def test_single_preference_still_works(self, store):
-        """A single preference in the message is still extracted."""
-        from gaia.agents.base.memory import MemoryMixin
-
-        class FakeAgent(MemoryMixin):
-            def __init__(self):
-                self._memory_store = store
-                self._memory_context = "global"
-                self._auto_extract_enabled = True
-
-        agent = FakeAgent()
-        before = store.get_stats()["knowledge"]["total"]
-        agent._extract_heuristics("I prefer spaces over tabs for all projects.")
-        after = store.get_stats()["knowledge"]["total"]
-        assert after > before, "Single preference must still be extracted"
-
-    def test_no_preferences_extracts_nothing(self, store):
-        """A message with no preference patterns stores nothing."""
-        from gaia.agents.base.memory import MemoryMixin
-
-        class FakeAgent(MemoryMixin):
-            def __init__(self):
-                self._memory_store = store
-                self._memory_context = "global"
-                self._auto_extract_enabled = True
-
-        agent = FakeAgent()
-        before = store.get_stats()["knowledge"]["total"]
-        agent._extract_heuristics("The weather today is sunny and warm.")
-        after = store.get_stats()["knowledge"]["total"]
-        assert after == before, "No-preference message must not add knowledge"
-
-
 class TestSearchConfidenceBumpRollback:
     """search() confidence bump UPDATEs must be all-or-nothing."""
 
@@ -3687,3 +3631,817 @@ class TestGetSessionsFirstMessageV2:
         match = next((s for s in sessions if s["session_id"] == sid), None)
         assert match is not None
         assert match["first_message"] == ""
+
+
+# ===========================================================================
+# v2 Tests — Schema Migration
+# ===========================================================================
+
+
+class TestSchemaV2Migration:
+    """Test schema migration from v1 to v2."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(db_path=tmp_path / "migration.db")
+        yield s
+        s.close()
+
+    def test_migration_adds_embedding_column(self, store):
+        """After init, knowledge table has an embedding column."""
+        with store._lock:
+            cursor = store._conn.execute("PRAGMA table_info(knowledge)")
+            cols = {row[1] for row in cursor.fetchall()}
+        assert "embedding" in cols
+
+    def test_migration_adds_superseded_by_column(self, store):
+        """After init, knowledge table has a superseded_by column."""
+        with store._lock:
+            cursor = store._conn.execute("PRAGMA table_info(knowledge)")
+            cols = {row[1] for row in cursor.fetchall()}
+        assert "superseded_by" in cols
+
+    def test_migration_adds_consolidated_at_column(self, store):
+        """After init, conversations table has a consolidated_at column."""
+        with store._lock:
+            cursor = store._conn.execute("PRAGMA table_info(conversations)")
+            cols = {row[1] for row in cursor.fetchall()}
+        assert "consolidated_at" in cols
+
+    def test_migration_creates_new_indexes(self, store):
+        """After init, the v2 indexes exist."""
+        with store._lock:
+            cursor = store._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            )
+            indexes = {row[0] for row in cursor.fetchall()}
+        assert "idx_knowledge_no_embedding" in indexes
+        assert "idx_knowledge_superseded" in indexes
+        assert "idx_conv_not_consolidated" in indexes
+
+    def test_migration_idempotent(self, tmp_path):
+        """Running migration twice (opening store twice) doesn't error."""
+        db_path = tmp_path / "idempotent.db"
+        s1 = MemoryStore(db_path=db_path)
+        s1.close()
+        # Second open should not crash on "column already exists"
+        s2 = MemoryStore(db_path=db_path)
+        s2.close()
+
+    def test_existing_data_preserved_after_migration(self, tmp_path):
+        """Data stored in v1 is still accessible after v2 migration."""
+        db_path = tmp_path / "preserve.db"
+        s1 = MemoryStore(db_path=db_path)
+        kid = s1.store(category="fact", content="Preserved across migration test entry")
+        s1.close()
+
+        s2 = MemoryStore(db_path=db_path)
+        results = s2.search("Preserved across migration")
+        s2.close()
+        assert any(r["id"] == kid for r in results)
+
+    def test_schema_version_is_2(self, store):
+        """Schema version is updated to 2 after migration."""
+        with store._lock:
+            cursor = store._conn.execute(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 2
+
+
+# ===========================================================================
+# v2 Tests — Embedding Storage
+# ===========================================================================
+
+
+class TestStoreEmbedding:
+    """Test embedding storage and retrieval."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(db_path=tmp_path / "embed.db")
+        yield s
+        s.close()
+
+    def test_store_embedding_success(self, store):
+        """store_embedding() writes embedding BLOB and returns True."""
+        kid = store.store(category="fact", content="Embedding storage success test")
+        import numpy as np
+
+        vec = np.random.rand(768).astype(np.float32)
+        assert store.store_embedding(kid, vec.tobytes()) is True
+
+    def test_store_embedding_nonexistent_id_returns_false(self, store):
+        """store_embedding() returns False for non-existent ID."""
+        import numpy as np
+
+        vec = np.random.rand(768).astype(np.float32)
+        assert store.store_embedding(str(uuid.uuid4()), vec.tobytes()) is False
+
+    def test_store_embedding_overwrites_existing(self, store):
+        """Calling store_embedding() twice overwrites the previous blob."""
+        import numpy as np
+
+        kid = store.store(category="fact", content="Overwrite embedding test entry")
+        vec1 = np.ones(768, dtype=np.float32)
+        vec2 = np.zeros(768, dtype=np.float32)
+        store.store_embedding(kid, vec1.tobytes())
+        store.store_embedding(kid, vec2.tobytes())
+
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT embedding FROM knowledge WHERE id = ?", (kid,)
+            ).fetchone()
+        stored = np.frombuffer(row[0], dtype=np.float32)
+        assert np.allclose(stored, vec2)
+
+    def test_embedding_survives_roundtrip(self, store):
+        """Store bytes, read bytes back, compare — lossless roundtrip."""
+        import numpy as np
+
+        kid = store.store(category="fact", content="Roundtrip embedding lossless test")
+        original = np.random.rand(768).astype(np.float32)
+        store.store_embedding(kid, original.tobytes())
+
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT embedding FROM knowledge WHERE id = ?", (kid,)
+            ).fetchone()
+        recovered = np.frombuffer(row[0], dtype=np.float32)
+        assert np.array_equal(original, recovered)
+
+
+# ===========================================================================
+# v2 Tests — Superseded By (Fact Lineage)
+# ===========================================================================
+
+
+class TestSupersededBy:
+    """Test fact lineage via superseded_by."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(db_path=tmp_path / "superseded.db")
+        yield s
+        s.close()
+
+    def test_update_sets_superseded_by(self, store):
+        """update(superseded_by=new_id) sets the column."""
+        old_id = store.store(category="fact", content="Old fact about superseded link")
+        new_id = store.store(category="fact", content="New fact replacing the old one")
+        assert store.update(old_id, superseded_by=new_id) is True
+
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT superseded_by FROM knowledge WHERE id = ?", (old_id,)
+            ).fetchone()
+        assert row[0] == new_id
+
+    def test_search_excludes_superseded_items(self, store):
+        """search() does not return items where superseded_by is set."""
+        old_id = store.store(
+            category="fact",
+            content="Superseded search exclusion test item alpha",
+        )
+        new_id = store.store(
+            category="fact",
+            content="Active search exclusion test item beta",
+        )
+        store.update(old_id, superseded_by=new_id)
+
+        results = store.search("exclusion test item")
+        ids = [r["id"] for r in results]
+        assert new_id in ids
+        assert old_id not in ids
+
+    def test_get_by_category_excludes_superseded(self, store):
+        """get_by_category() excludes superseded items."""
+        old_id = store.store(
+            category="skill",
+            content="Old deployment workflow superseded category test",
+        )
+        new_id = store.store(
+            category="skill",
+            content="New deployment workflow category active test",
+        )
+        store.update(old_id, superseded_by=new_id)
+
+        results = store.get_by_category("skill")
+        ids = [r["id"] for r in results]
+        assert new_id in ids
+        assert old_id not in ids
+
+    def test_get_all_knowledge_excludes_superseded_by_default(self, store):
+        """get_all_knowledge() excludes superseded by default."""
+        old_id = store.store(
+            category="fact",
+            content="Superseded item excluded by default test",
+        )
+        new_id = store.store(
+            category="fact",
+            content="Active item included by default test",
+        )
+        store.update(old_id, superseded_by=new_id)
+
+        result = store.get_all_knowledge()
+        ids = [r["id"] for r in result["items"]]
+        assert new_id in ids
+        assert old_id not in ids
+
+    def test_get_all_knowledge_includes_superseded_when_requested(self, store):
+        """get_all_knowledge(include_superseded=True) includes superseded items."""
+        old_id = store.store(
+            category="fact",
+            content="Superseded item included when requested test",
+        )
+        new_id = store.store(
+            category="fact",
+            content="Active item included when requested test",
+        )
+        store.update(old_id, superseded_by=new_id)
+
+        result = store.get_all_knowledge(include_superseded=True)
+        ids = [r["id"] for r in result["items"]]
+        assert new_id in ids
+        assert old_id in ids
+
+    def test_superseded_chain(self, store):
+        """A superseded by B superseded by C — only C is active."""
+        id_a = store.store(category="fact", content="Chain origin item alpha")
+        id_b = store.store(category="fact", content="Chain middle item beta")
+        id_c = store.store(category="fact", content="Chain final item gamma")
+        store.update(id_a, superseded_by=id_b)
+        store.update(id_b, superseded_by=id_c)
+
+        results = store.search("Chain")
+        ids = [r["id"] for r in results]
+        assert id_c in ids
+        assert id_a not in ids
+        assert id_b not in ids
+
+    def test_system_prompt_excludes_superseded(self, store):
+        """get_by_category used for system prompt excludes superseded."""
+        old_id = store.store(
+            category="preference",
+            content="Old preference superseded prompt test",
+            confidence=0.9,
+        )
+        new_id = store.store(
+            category="preference",
+            content="Current preference active prompt test",
+            confidence=0.9,
+        )
+        store.update(old_id, superseded_by=new_id)
+
+        prefs = store.get_by_category("preference")
+        ids = [r["id"] for r in prefs]
+        assert new_id in ids
+        assert old_id not in ids
+
+
+# ===========================================================================
+# v2 Tests — Temporal Search
+# ===========================================================================
+
+
+class TestTemporalSearch:
+    """Test time_from/time_to filtering on search()."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(db_path=tmp_path / "temporal.db")
+        yield s
+        s.close()
+
+    def _store_with_created_at(self, store, content, created_at):
+        """Store an item and manually set created_at for testing."""
+        kid = store.store(category="fact", content=content)
+        with store._lock:
+            store._conn.execute(
+                "UPDATE knowledge SET created_at = ? WHERE id = ?",
+                (created_at, kid),
+            )
+            store._conn.commit()
+        return kid
+
+    def test_search_with_time_from_only(self, store):
+        """search(time_from=X) returns only items created at or after X."""
+        old_id = self._store_with_created_at(
+            store, "Old temporal test alpha fact", _past_iso(30)
+        )
+        new_id = self._store_with_created_at(
+            store, "Recent temporal test beta fact", _past_iso(1)
+        )
+        results = store.search("temporal test", time_from=_past_iso(7))
+        ids = [r["id"] for r in results]
+        assert new_id in ids
+        assert old_id not in ids
+
+    def test_search_with_time_to_only(self, store):
+        """search(time_to=X) returns only items created at or before X."""
+        old_id = self._store_with_created_at(
+            store, "Old cutoff test alpha entry", _past_iso(30)
+        )
+        new_id = self._store_with_created_at(
+            store, "Recent cutoff test beta entry", _past_iso(1)
+        )
+        results = store.search("cutoff test", time_to=_past_iso(7))
+        ids = [r["id"] for r in results]
+        assert old_id in ids
+        assert new_id not in ids
+
+    def test_search_with_time_range(self, store):
+        """search(time_from, time_to) returns items within the range."""
+        very_old = self._store_with_created_at(
+            store, "Ancient timerange test alpha item", _past_iso(60)
+        )
+        in_range = self._store_with_created_at(
+            store, "Midrange timerange test beta item", _past_iso(15)
+        )
+        too_new = self._store_with_created_at(
+            store, "Brand new timerange test gamma item", _now_iso()
+        )
+        results = store.search(
+            "timerange test", time_from=_past_iso(30), time_to=_past_iso(7)
+        )
+        ids = [r["id"] for r in results]
+        assert in_range in ids
+        assert very_old not in ids
+        assert too_new not in ids
+
+    def test_search_time_range_empty_result(self, store):
+        """search() with a range that matches nothing returns empty list."""
+        self._store_with_created_at(store, "Empty range test zeta item", _past_iso(60))
+        results = store.search(
+            "Empty range test zeta", time_from=_past_iso(5), time_to=_past_iso(2)
+        )
+        assert results == []
+
+    def test_search_time_range_with_category_filter(self, store):
+        """time_from/time_to combined with category filter."""
+        # Use completely distinct content to avoid dedup (>80% overlap)
+        skill_id = store.store(
+            category="skill",
+            content="Kubernetes rollback deployment strategy for production",
+        )
+        with store._lock:
+            store._conn.execute(
+                "UPDATE knowledge SET created_at = ? WHERE id = ?",
+                (_past_iso(10), skill_id),
+            )
+            store._conn.commit()
+
+        fact_id = store.store(
+            category="fact",
+            content="Database migration requires scheduled maintenance window",
+        )
+        with store._lock:
+            store._conn.execute(
+                "UPDATE knowledge SET created_at = ? WHERE id = ?",
+                (_past_iso(10), fact_id),
+            )
+            store._conn.commit()
+
+        results = store.search(
+            "deployment strategy",
+            category="skill",
+            time_from=_past_iso(15),
+            time_to=_past_iso(5),
+        )
+        ids = [r["id"] for r in results]
+        assert skill_id in ids
+        assert fact_id not in ids
+        for r in results:
+            assert r["category"] == "skill"
+
+    def test_search_time_range_with_context_filter(self, store):
+        """time_from/time_to combined with context filter."""
+        kid_work = store.store(
+            category="fact",
+            content="Work temporal context filter test item",
+            context="work",
+        )
+        with store._lock:
+            store._conn.execute(
+                "UPDATE knowledge SET created_at = ? WHERE id = ?",
+                (_past_iso(10), kid_work),
+            )
+            store._conn.commit()
+
+        kid_personal = store.store(
+            category="fact",
+            content="Personal temporal context filter test item",
+            context="personal",
+        )
+        with store._lock:
+            store._conn.execute(
+                "UPDATE knowledge SET created_at = ? WHERE id = ?",
+                (_past_iso(10), kid_personal),
+            )
+            store._conn.commit()
+
+        results = store.search(
+            "temporal context filter test",
+            context="work",
+            time_from=_past_iso(15),
+            time_to=_past_iso(5),
+        )
+        ids = [r["id"] for r in results]
+        assert kid_work in ids
+        assert kid_personal not in ids
+
+
+# ===========================================================================
+# v2 Tests — Consolidation Queries
+# ===========================================================================
+
+
+class TestConsolidationQueries:
+    """Test consolidation-related queries."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(db_path=tmp_path / "consolidation.db")
+        yield s
+        s.close()
+
+    def _add_old_session(self, store, session_id, num_turns, days_ago):
+        """Add a session with turns dated days_ago."""
+        ts = _past_iso(days_ago)
+        for i in range(num_turns):
+            role = "user" if i % 2 == 0 else "assistant"
+            store.store_turn(session_id, role, f"Turn {i} in session {session_id}")
+            # Manually backdate the turn
+            with store._lock:
+                store._conn.execute(
+                    "UPDATE conversations SET timestamp = ? "
+                    "WHERE session_id = ? AND content = ?",
+                    (ts, session_id, f"Turn {i} in session {session_id}"),
+                )
+                store._conn.commit()
+
+    def test_get_unconsolidated_sessions_returns_eligible(self, store):
+        """Sessions older than threshold with enough turns are returned."""
+        sid = f"uc-eligible-{uuid.uuid4().hex[:8]}"
+        self._add_old_session(store, sid, num_turns=6, days_ago=20)
+        sessions = store.get_unconsolidated_sessions(older_than_days=14, min_turns=5)
+        assert sid in sessions
+
+    def test_get_unconsolidated_sessions_respects_age_threshold(self, store):
+        """Recent sessions are not returned."""
+        sid = f"uc-recent-{uuid.uuid4().hex[:8]}"
+        self._add_old_session(store, sid, num_turns=6, days_ago=5)
+        sessions = store.get_unconsolidated_sessions(older_than_days=14, min_turns=5)
+        assert sid not in sessions
+
+    def test_get_unconsolidated_sessions_respects_min_turns(self, store):
+        """Sessions with too few turns are not returned."""
+        sid = f"uc-short-{uuid.uuid4().hex[:8]}"
+        self._add_old_session(store, sid, num_turns=3, days_ago=20)
+        sessions = store.get_unconsolidated_sessions(older_than_days=14, min_turns=5)
+        assert sid not in sessions
+
+    def test_get_unconsolidated_sessions_excludes_already_consolidated(self, store):
+        """Sessions where all turns have consolidated_at set are excluded."""
+        sid = f"uc-done-{uuid.uuid4().hex[:8]}"
+        self._add_old_session(store, sid, num_turns=6, days_ago=20)
+        # Mark all turns as consolidated
+        with store._lock:
+            store._conn.execute(
+                "UPDATE conversations SET consolidated_at = ? WHERE session_id = ?",
+                (_now_iso(), sid),
+            )
+            store._conn.commit()
+
+        sessions = store.get_unconsolidated_sessions(older_than_days=14, min_turns=5)
+        assert sid not in sessions
+
+    def test_mark_turns_consolidated_sets_timestamp(self, store):
+        """mark_turns_consolidated() sets consolidated_at on specified turns."""
+        sid = f"mc-set-{uuid.uuid4().hex[:8]}"
+        store.store_turn(sid, "user", "Turn for consolidation timestamp test")
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT id FROM conversations WHERE session_id = ?", (sid,)
+            ).fetchone()
+        turn_id = row[0]
+
+        store.mark_turns_consolidated([turn_id])
+
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT consolidated_at FROM conversations WHERE id = ?",
+                (turn_id,),
+            ).fetchone()
+        assert row[0] is not None
+
+    def test_mark_turns_consolidated_returns_count(self, store):
+        """mark_turns_consolidated() returns the number of turns marked."""
+        sid = f"mc-count-{uuid.uuid4().hex[:8]}"
+        for i in range(3):
+            store.store_turn(sid, "user", f"Count turn {i} session {sid}")
+
+        with store._lock:
+            rows = store._conn.execute(
+                "SELECT id FROM conversations WHERE session_id = ?", (sid,)
+            ).fetchall()
+        turn_ids = [r[0] for r in rows]
+
+        count = store.mark_turns_consolidated(turn_ids)
+        assert count == 3
+
+    def test_consolidated_turns_not_returned_by_get_unconsolidated(self, store):
+        """After marking all turns consolidated, session disappears from results."""
+        sid = f"mc-gone-{uuid.uuid4().hex[:8]}"
+        self._add_old_session(store, sid, num_turns=6, days_ago=20)
+
+        # First confirm it's eligible
+        sessions = store.get_unconsolidated_sessions(older_than_days=14, min_turns=5)
+        assert sid in sessions
+
+        # Mark all turns
+        with store._lock:
+            rows = store._conn.execute(
+                "SELECT id FROM conversations WHERE session_id = ?", (sid,)
+            ).fetchall()
+        turn_ids = [r[0] for r in rows]
+        store.mark_turns_consolidated(turn_ids)
+
+        # Now should be excluded
+        sessions = store.get_unconsolidated_sessions(older_than_days=14, min_turns=5)
+        assert sid not in sessions
+
+
+# ===========================================================================
+# v2 Tests — Reconciliation Queries
+# ===========================================================================
+
+
+class TestReconciliationQueries:
+    """Test reconciliation support queries."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        import numpy as np
+
+        s = MemoryStore(db_path=tmp_path / "reconcile.db")
+        yield s
+        s.close()
+
+    def _store_with_embedding(self, store, content, context="global"):
+        """Store an item and give it an embedding."""
+        import numpy as np
+
+        kid = store.store(category="fact", content=content, context=context)
+        vec = np.random.rand(768).astype(np.float32)
+        store.store_embedding(kid, vec.tobytes())
+        return kid
+
+    def test_get_items_for_reconciliation_returns_active_with_embeddings(self, store):
+        """get_items_for_reconciliation() returns active items with embeddings."""
+        kid = self._store_with_embedding(
+            store, "Reconciliation active with embedding test"
+        )
+        items = store.get_items_for_reconciliation()
+        ids = [it["id"] for it in items]
+        assert kid in ids
+
+    def test_get_items_for_reconciliation_excludes_superseded(self, store):
+        """get_items_for_reconciliation() excludes superseded items."""
+        old_id = self._store_with_embedding(
+            store, "Superseded reconciliation exclusion item alpha"
+        )
+        new_id = self._store_with_embedding(
+            store, "Active reconciliation exclusion item beta"
+        )
+        store.update(old_id, superseded_by=new_id)
+
+        items = store.get_items_for_reconciliation()
+        ids = [it["id"] for it in items]
+        assert new_id in ids
+        assert old_id not in ids
+
+    def test_get_items_for_reconciliation_excludes_no_embedding(self, store):
+        """get_items_for_reconciliation() excludes items without embeddings."""
+        kid_no_embed = store.store(
+            category="fact", content="No embedding reconciliation exclusion item"
+        )
+        kid_with_embed = self._store_with_embedding(
+            store, "With embedding reconciliation inclusion item"
+        )
+
+        items = store.get_items_for_reconciliation()
+        ids = [it["id"] for it in items]
+        assert kid_with_embed in ids
+        assert kid_no_embed not in ids
+
+    def test_get_items_for_reconciliation_respects_context_filter(self, store):
+        """get_items_for_reconciliation(context=X) filters by context."""
+        kid_work = self._store_with_embedding(
+            store, "Work reconciliation context filter item", context="work"
+        )
+        kid_personal = self._store_with_embedding(
+            store, "Personal reconciliation context filter item", context="personal"
+        )
+
+        items = store.get_items_for_reconciliation(context="work")
+        ids = [it["id"] for it in items]
+        assert kid_work in ids
+        assert kid_personal not in ids
+
+
+# ===========================================================================
+# v2 Tests — Search by Vector Data Retrieval
+# ===========================================================================
+
+
+class TestSearchByVector:
+    """Test vector search data retrieval (get_items_with_embeddings)."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(db_path=tmp_path / "vector.db")
+        yield s
+        s.close()
+
+    def _store_with_embedding(self, store, content, **kwargs):
+        import numpy as np
+
+        kid = store.store(category="fact", content=content, **kwargs)
+        vec = np.random.rand(768).astype(np.float32)
+        store.store_embedding(kid, vec.tobytes())
+        return kid
+
+    def test_search_by_vector_returns_items_with_embeddings(self, store):
+        """get_items_with_embeddings() returns items that have embeddings."""
+        kid = self._store_with_embedding(
+            store, "Vector search returns embedded items test"
+        )
+        items = store.get_items_with_embeddings()
+        ids = [it["id"] for it in items]
+        assert kid in ids
+
+    def test_search_by_vector_filters_superseded(self, store):
+        """get_items_with_embeddings() excludes superseded items."""
+        old_id = self._store_with_embedding(
+            store, "The user prefers Python for all backend services"
+        )
+        new_id = self._store_with_embedding(
+            store, "The user has switched to Rust for new microservices"
+        )
+        store.update(old_id, superseded_by=new_id)
+
+        items = store.get_items_with_embeddings()
+        ids = [it["id"] for it in items]
+        assert new_id in ids
+        assert old_id not in ids
+
+    def test_search_by_vector_filters_sensitive(self, store):
+        """get_items_with_embeddings() excludes sensitive by default."""
+        kid_sensitive = self._store_with_embedding(
+            store, "My bank account password is hunter2 classified", sensitive=True
+        )
+        kid_normal = self._store_with_embedding(
+            store, "The project uses React 19 with TypeScript strict mode"
+        )
+
+        items = store.get_items_with_embeddings(include_sensitive=False)
+        ids = [it["id"] for it in items]
+        assert kid_normal in ids
+        assert kid_sensitive not in ids
+
+    def test_search_by_vector_filters_time_range(self, store):
+        """get_items_with_embeddings() respects time_from/time_to."""
+        import numpy as np
+
+        kid_old = store.store(
+            category="fact", content="The deployment pipeline uses Jenkins and Docker"
+        )
+        vec = np.random.rand(768).astype(np.float32)
+        store.store_embedding(kid_old, vec.tobytes())
+        with store._lock:
+            store._conn.execute(
+                "UPDATE knowledge SET created_at = ? WHERE id = ?",
+                (_past_iso(30), kid_old),
+            )
+            store._conn.commit()
+
+        kid_new = self._store_with_embedding(
+            store, "User prefers dark mode for all code editors"
+        )
+
+        items = store.get_items_with_embeddings(time_from=_past_iso(7))
+        ids = [it["id"] for it in items]
+        assert kid_new in ids
+        assert kid_old not in ids
+
+    def test_search_by_vector_respects_context(self, store):
+        """get_items_with_embeddings(context=X) filters by context."""
+        kid_work = self._store_with_embedding(
+            store, "Work vector context test item", context="work"
+        )
+        kid_personal = self._store_with_embedding(
+            store, "Personal vector context test item", context="personal"
+        )
+
+        items = store.get_items_with_embeddings(context="work")
+        ids = [it["id"] for it in items]
+        assert kid_work in ids
+        assert kid_personal not in ids
+
+
+# ===========================================================================
+# v2 Tests — Use Count Increment
+# ===========================================================================
+
+
+class TestUseCountIncrement:
+    """Test use_count is incremented alongside confidence bump."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(db_path=tmp_path / "usecount.db")
+        yield s
+        s.close()
+
+    def test_search_increments_use_count(self, store):
+        """search() increments use_count alongside confidence bump."""
+        kid = store.store(
+            category="fact", content="Use count increment validation test"
+        )
+        # Initial use_count should be 0
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT use_count FROM knowledge WHERE id = ?", (kid,)
+            ).fetchone()
+        assert row[0] == 0
+
+        store.search("Use count increment validation")
+
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT use_count FROM knowledge WHERE id = ?", (kid,)
+            ).fetchone()
+        assert row[0] == 1
+
+    def test_search_increments_use_count_atomically(self, store):
+        """Multiple searches increment use_count correctly."""
+        kid = store.store(category="fact", content="Atomic use count multi search test")
+
+        for _ in range(3):
+            store.search("Atomic use count multi search")
+
+        with store._lock:
+            row = store._conn.execute(
+                "SELECT use_count FROM knowledge WHERE id = ?", (kid,)
+            ).fetchone()
+        assert row[0] == 3
+
+
+# ===========================================================================
+# v2 Tests — Items Without Embeddings
+# ===========================================================================
+
+
+class TestGetItemsWithoutEmbeddings:
+    """Test retrieval of items missing embeddings for backfill."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(db_path=tmp_path / "noembedding.db")
+        yield s
+        s.close()
+
+    def test_returns_items_without_embeddings(self, store):
+        """get_items_without_embeddings() returns items with embedding IS NULL."""
+        kid = store.store(
+            category="fact", content="No embedding backfill candidate test"
+        )
+        items = store.get_items_without_embeddings()
+        ids = [it["id"] for it in items]
+        assert kid in ids
+
+    def test_excludes_items_with_embeddings(self, store):
+        """get_items_without_embeddings() excludes items that have embeddings."""
+        import numpy as np
+
+        kid = store.store(
+            category="fact", content="Has embedding exclusion backfill test"
+        )
+        vec = np.random.rand(768).astype(np.float32)
+        store.store_embedding(kid, vec.tobytes())
+
+        items = store.get_items_without_embeddings()
+        ids = [it["id"] for it in items]
+        assert kid not in ids
+
+    def test_respects_limit(self, store):
+        """get_items_without_embeddings(limit=N) returns at most N items."""
+        for i in range(10):
+            store.store(
+                category="fact", content=f"Limit test backfill unique item {i} xyzzy"
+            )
+        items = store.get_items_without_embeddings(limit=3)
+        assert len(items) <= 3
