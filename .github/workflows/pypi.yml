@@ -1,9 +1,15 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+#
+# CI-only: verifies the Python package builds correctly on every push/PR.
+# Actual publishing to PyPI is handled by publish.yml on tag pushes.
 
-name: PyPi
+name: PyPI Build Check
+
 on:
   push:
+    tags-ignore:
+      - 'v*'
   pull_request:
 
 jobs:
@@ -26,97 +32,8 @@ jobs:
         run: |
           python -m pip install twine
           twine check dist/*
-      - name: Store the distribution packages
+      - name: Upload distributions
         uses: actions/upload-artifact@v6
         with:
           name: python-package-distributions
           path: dist/
-
-  publish-to-pypi:
-    name: >-
-      Publish Python 🐍 distribution 📦 to PyPI
-    if: startsWith(github.ref, 'refs/tags/') && github.event.repository.default_branch == 'main'
-    needs:
-    - build
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/amd-gaia
-    permissions:
-      id-token: write
-      contents: read  # Needed for checkout
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v6
-    - name: Verify tag matches version.py
-      run: |
-        # Extract version from version.py
-        VERSION_PY=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/gaia/version.py)
-
-        # Get tag name (strip 'v' prefix if present)
-        TAG_VERSION="${GITHUB_REF_NAME#v}"
-
-        echo "version.py version: $VERSION_PY"
-        echo "Git tag version:    $TAG_VERSION"
-
-        if [ "$VERSION_PY" != "$TAG_VERSION" ]; then
-          echo "❌ ERROR: Version mismatch!"
-          echo "   src/gaia/version.py has version '$VERSION_PY'"
-          echo "   Git tag is '$TAG_VERSION'"
-          echo "   Please update version.py to match the tag, or create the correct tag."
-          exit 1
-        fi
-
-        echo "✅ Versions match!"
-    - name: Download all the dists
-      uses: actions/download-artifact@v7
-      with:
-        name: python-package-distributions
-        path: dist/
-    - name: Publish distribution 📦 to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-
-  github-release:
-    name: >-
-      Sign the Python 🐍 distribution 📦 with Sigstore
-      and upload them to GitHub Release
-    needs:
-    - publish-to-pypi
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write  # IMPORTANT: mandatory for making GitHub Releases
-      id-token: write  # IMPORTANT: mandatory for sigstore
-
-    steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v7
-      with:
-        name: python-package-distributions
-        path: dist/
-    - name: Sign the dists with Sigstore
-      uses: sigstore/gh-action-sigstore-python@v3.2.0
-      with:
-        inputs: >-
-          ./dist/*.tar.gz
-          ./dist/*.whl
-    - name: Create GitHub Release (if not exists)
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-      run: |
-        # Only create the release if it doesn't already exist.
-        # publish_installer.yml creates the release with proper notes;
-        # this step is a fallback in case it hasn't run yet.
-        if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" &>/dev/null; then
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes
-        fi
-    - name: Upload artifact signatures to GitHub Release
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-      # Upload to GitHub Release using the `gh` CLI.
-      # `dist/` contains the built packages, and the
-      # sigstore-produced signatures and certificates.
-      run: >-
-        gh release upload
-        "$GITHUB_REF_NAME" dist/**
-        --repo "$GITHUB_REPOSITORY"
