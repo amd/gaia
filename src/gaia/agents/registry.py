@@ -221,6 +221,7 @@ class AgentRegistry:
                 version=agent_data.get("version", "1.0.0"),
                 category=agent_data.get("category", ""),
                 description=agent_data.get("description", ""),
+                model_id=agent_data.get("model_id", None),
                 triggers=AgentTriggers(
                     keywords=triggers_data.get("keywords", []),
                     phases=triggers_data.get("phases", []),

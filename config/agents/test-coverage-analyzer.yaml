@@ -3,6 +3,7 @@ agent:
   name: Test Coverage Analyzer
   version: 1.0.0
   category: review
+  model_id: Qwen3-0.6B-GGUF
   description: |
     Testing specialist that analyzes test coverage,
     identifies gaps, and suggests test improvements.

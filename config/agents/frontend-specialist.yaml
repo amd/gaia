@@ -3,6 +3,7 @@ agent:
   name: Frontend Specialist
   version: 1.0.0
   category: development
+  model_id: Qwen3-0.6B-GGUF
   description: |
     Frontend development specialist for React, Vue, Angular,
     and modern web technologies.

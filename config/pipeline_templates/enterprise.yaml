@@ -5,6 +5,7 @@ name: enterprise
 description: Enterprise-grade pipeline with comprehensive review
 quality_threshold: 0.95
 max_iterations: 15
+default_model: Qwen3-0.6B-GGUF
 
 agent_categories:
   planning:

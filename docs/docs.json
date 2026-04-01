@@ -280,6 +280,13 @@
               "spec/summarizer-app",
               "spec/component-status"
             ]
+          },
+          {
+            "group": "Evaluation",
+            "pages": [
+              "spec/agent-ui-eval-kpis",
+              "spec/agent-ui-eval-kpi-slides"
+            ]
           }
         ]
       },

@@ -3,6 +3,7 @@ agent:
   name: Planning Analysis Strategist
   version: 1.0.0
   category: planning
+  model_id: Qwen3-0.6B-GGUF
   description: |
     Strategic planning agent that analyzes requirements,
     breaks down complex tasks, and creates implementation roadmaps.

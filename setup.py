@@ -30,6 +30,8 @@ setup(
         "gaia.chat",
         "gaia.ui",
         "gaia.ui.routers",
+        "gaia.ui.schemas",
+        "gaia.ui.services",
         "gaia.database",
         "gaia.talk",
         "gaia.testing",

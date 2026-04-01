@@ -127,6 +127,7 @@ class PipelineEngine:
         log_level: int = 20,  # INFO
         max_concurrent_loops: int = 100,
         worker_pool_size: int = 4,
+        model_id: Optional[str] = None,
     ):
         """
         Initialize pipeline engine.
@@ -142,6 +143,7 @@ class PipelineEngine:
             setup_logging(level=log_level)
 
         self._agents_dir = agents_dir
+        self._model_id = model_id
         self._initialized = False
         self._running = False
 
@@ -225,19 +227,7 @@ class PipelineEngine:
         self._agent_registry = AgentRegistry(agents_dir=agents_dir)
         await self._agent_registry.initialize()
 
-        # Initialize loop manager with agent registry wired in
-        concurrent_loops = self._config.get(
-            "concurrent_loops", context.concurrent_loops
-        )
-        self._loop_manager = LoopManager(
-            max_concurrent=concurrent_loops,
-            agent_registry=self._agent_registry,
-        )
-
-        # Initialize routing engine
-        self._routing_engine = RoutingEngine(agent_registry=self._agent_registry)
-
-        # Wire template-driven phase configuration (P6)
+        # Load template BEFORE constructing LoopManager so default_model is available
         template_name = (self._config.get("template") or "generic").lower()
         try:
             self._current_template = get_recursive_template(template_name)
@@ -251,6 +241,20 @@ class PipelineEngine:
                 extra={"template": template_name},
             )
             self._current_template = get_recursive_template("generic")
+
+        # Initialize loop manager with agent registry and resolved model_id wired in
+        concurrent_loops = self._config.get(
+            "concurrent_loops", context.concurrent_loops
+        )
+        self._loop_manager = LoopManager(
+            max_concurrent=concurrent_loops,
+            agent_registry=self._agent_registry,
+            model_id=self._model_id,
+            template_model_id=getattr(self._current_template, "default_model", None),
+        )
+
+        # Initialize routing engine
+        self._routing_engine = RoutingEngine(agent_registry=self._agent_registry)
 
         # Initialize hook system
         if self._config.get("enable_hooks", True):

@@ -125,6 +125,7 @@ class AgentDefinition:
     version: str
     category: str
     description: str
+    model_id: Optional[str] = None
     capabilities: AgentCapabilities = field(default_factory=AgentCapabilities)
     triggers: AgentTriggers = field(default_factory=AgentTriggers)
     system_prompt: str = ""
@@ -144,6 +145,7 @@ class AgentDefinition:
             "version": self.version,
             "category": self.category,
             "description": self.description,
+            "model_id": self.model_id,
             "capabilities": self.capabilities.capabilities,
             "tools": self.tools,
             "execution_targets": self.execution_targets,
@@ -185,6 +187,7 @@ class AgentDefinition:
             version=agent_data.get("version", "1.0.0"),
             category=agent_data.get("category", ""),
             description=agent_data.get("description", ""),
+            model_id=agent_data.get("model_id", None),
             capabilities=AgentCapabilities(
                 capabilities=agent_data.get("capabilities", []),
                 tools=agent_data.get("tools", []),

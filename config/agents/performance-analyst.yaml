@@ -3,6 +3,7 @@ agent:
   name: Performance Analyst
   version: 1.0.0
   category: review
+  model_id: Qwen3-0.6B-GGUF
   description: |
     Performance specialist that identifies bottlenecks,
     optimization opportunities, and scalability issues.

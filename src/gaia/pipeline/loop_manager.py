@@ -195,6 +195,8 @@ class LoopManager:
         self,
         max_concurrent: int = DEFAULT_MAX_CONCURRENT,
         agent_registry: Optional[AgentRegistry] = None,
+        model_id: Optional[str] = None,
+        template_model_id: Optional[str] = None,
     ):
         """
         Initialize loop manager.
@@ -205,6 +207,8 @@ class LoopManager:
         """
         self.MAX_CONCURRENT_LOOPS = max_concurrent
         self._agent_registry = agent_registry
+        self._model_id = model_id
+        self._template_model_id = template_model_id
 
         # Loop storage
         self._loops: Dict[str, LoopState] = {}
@@ -475,12 +479,22 @@ class LoopManager:
         )
 
         try:
+            # Resolve model priority chain:
+            # 1. agent YAML model_id  2. engine-level  3. template default  4. safe fallback
+            resolved_model_id = (
+                agent_def.model_id
+                or self._model_id
+                or self._template_model_id
+                or "Qwen3-0.6B-GGUF"
+            )
+
             # Create configurable agent
             agent = ConfigurableAgent(
                 definition=agent_def,
                 tools_dir=Path("gaia/tools"),
                 prompts_dir=Path("gaia/prompts"),
                 silent_mode=True,  # Suppress console output in pipeline
+                model_id=resolved_model_id,
             )
 
             # Initialize agent (registers tools, builds prompt)

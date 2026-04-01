@@ -158,6 +158,7 @@ class RecursivePipelineTemplate:
     description: str = ""
     quality_threshold: float = 0.90
     max_iterations: int = 10
+    default_model: Optional[str] = None
     agent_categories: Dict[str, List[str]] = field(default_factory=dict)
     phases: List[PhaseConfig] = field(default_factory=list)
     routing_rules: List[RoutingRule] = field(default_factory=list)
@@ -356,6 +357,7 @@ GENERIC_TEMPLATE = RecursivePipelineTemplate(
     description="Generic recursive pipeline for most development tasks",
     quality_threshold=0.90,
     max_iterations=10,
+    default_model="Qwen3-0.6B-GGUF",
     agent_categories={
         "planning": ["planning-analysis-strategist"],
         "development": ["senior-developer"],
@@ -392,6 +394,7 @@ RAPID_TEMPLATE = RecursivePipelineTemplate(
     description="Rapid iteration for prototypes and quick tasks",
     quality_threshold=0.75,
     max_iterations=5,
+    default_model="Qwen3-0.6B-GGUF",
     agent_categories={
         "planning": ["planning-analysis-strategist"],
         "development": ["senior-developer"],
@@ -412,6 +415,7 @@ ENTERPRISE_TEMPLATE = RecursivePipelineTemplate(
     description="Enterprise-grade pipeline with comprehensive review",
     quality_threshold=0.95,
     max_iterations=15,
+    default_model="Qwen3-0.6B-GGUF",
     agent_categories={
         "planning": ["planning-analysis-strategist", "solutions-architect"],
         "development": ["senior-developer"],
@@ -513,6 +517,7 @@ def load_template_from_yaml(
         description=data.get("description", ""),
         quality_threshold=data.get("quality_threshold", 0.90),
         max_iterations=data.get("max_iterations", 10),
+        default_model=data.get("default_model", None),
         agent_categories=data.get("agent_categories", {}),
         routing_rules=routing_rules,
         quality_weights=data.get("quality_weights", {}),

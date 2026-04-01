@@ -3,6 +3,7 @@ agent:
   name: Accessibility Reviewer
   version: 1.0.0
   category: review
+  model_id: Qwen3-0.6B-GGUF
   description: |
     Accessibility specialist that ensures WCAG compliance
     and inclusive design practices.

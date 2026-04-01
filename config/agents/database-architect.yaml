@@ -3,6 +3,7 @@ agent:
   name: Database Architect
   version: 1.0.0
   category: planning
+  model_id: Qwen3-0.6B-GGUF
   description: |
     Database design specialist for schema design,
     indexing strategies, and data modeling.

@@ -3,6 +3,7 @@ agent:
   name: Technical Writer
   version: 1.0.0
   category: management
+  model_id: Qwen3-0.6B-GGUF
   description: |
     Documentation specialist that creates and maintains
     technical documentation, guides, and API references.

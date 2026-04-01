@@ -3,6 +3,7 @@ agent:
   name: Quality Reviewer
   version: 1.0.0
   category: review
+  model_id: Qwen3-0.6B-GGUF
   description: |
     Code quality reviewer that performs comprehensive
     code reviews and identifies improvement areas.

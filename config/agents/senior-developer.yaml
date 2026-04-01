@@ -3,6 +3,7 @@ agent:
   name: Senior Developer
   version: 1.0.0
   category: development
+  model_id: Qwen3-0.6B-GGUF
   description: |
     Full-stack generalist agent capable of handling complex
     development tasks across frontend, backend, and infrastructure.

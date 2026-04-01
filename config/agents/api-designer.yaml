@@ -3,6 +3,7 @@ agent:
   name: API Designer
   version: 1.0.0
   category: planning
+  model_id: Qwen3-0.6B-GGUF
   description: |
     API design specialist for REST, GraphQL, and gRPC APIs.
     Creates OpenAPI specs and API documentation.

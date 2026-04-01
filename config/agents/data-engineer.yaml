@@ -3,6 +3,7 @@ agent:
   name: Data Engineer
   version: 1.0.0
   category: development
+  model_id: Qwen3-0.6B-GGUF
   description: |
     Data engineering specialist for ETL pipelines,
     data processing, and analytics infrastructure.

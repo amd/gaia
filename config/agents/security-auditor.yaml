@@ -3,6 +3,7 @@ agent:
   name: Security Auditor
   version: 1.0.0
   category: review
+  model_id: Qwen3-0.6B-GGUF
   description: |
     Security specialist that identifies vulnerabilities,
     security risks, and compliance issues.

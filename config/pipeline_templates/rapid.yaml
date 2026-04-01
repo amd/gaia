@@ -5,6 +5,7 @@ name: rapid
 description: Rapid iteration for prototypes and quick tasks
 quality_threshold: 0.75
 max_iterations: 5
+default_model: Qwen3-0.6B-GGUF
 
 agent_categories:
   planning:
