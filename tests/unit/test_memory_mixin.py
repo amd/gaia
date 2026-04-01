@@ -1935,8 +1935,18 @@ class TestEmbeddingPipeline:
             category="fact", content="Backfill embedding item beta test"
         )
 
+        # Verify items lack embeddings
+        without = embed_host._memory_store.get_items_without_embeddings()
+        assert len(without) >= 2
+
         count = embed_host._backfill_embeddings()
-        assert count >= 0  # May be 0 if method requires specific setup
+        assert count == len(without), (
+            f"Expected {len(without)} items backfilled, got {count}"
+        )
+
+        # Verify items now have embeddings
+        still_without = embed_host._memory_store.get_items_without_embeddings()
+        assert len(still_without) == 0
 
 
 # ===========================================================================
@@ -1963,48 +1973,94 @@ class TestLLMExtraction:
 
         return host
 
-    def test_extract_via_llm_returns_list(self, extract_host):
-        """_extract_via_llm() returns a list of operation dicts."""
-        from unittest.mock import MagicMock, patch
-
-        # Mock the LLM to return a valid extraction response
-        mock_response = (
-            '[{"op": "add", "category": "fact", "content": "Extracted fact from test"}]'
+    def test_extract_via_llm_parses_valid_json(self, extract_host):
+        """_extract_via_llm() parses valid JSON operations from LLM response."""
+        mock_chat = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = (
+            '[{"op": "add", "category": "fact", '
+            '"content": "User prefers dark mode editors"}]'
         )
-        with patch.object(
-            extract_host,
-            "_extract_via_llm",
-            return_value=[
-                {"op": "add", "category": "fact", "content": "Extracted fact from test"}
-            ],
-        ):
-            result = extract_host._extract_via_llm(
-                "User said something interesting for extraction test",
-                "Assistant responded helpfully to the user",
-                [],
-            )
+        mock_chat.send_messages.return_value = mock_response
+        extract_host.chat = mock_chat
+
+        result = extract_host._extract_via_llm(
+            "I always use dark mode in my editors",
+            "Got it, noted!",
+            [],
+        )
         assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["op"] == "add"
+        assert result[0]["category"] == "fact"
+        assert "dark mode" in result[0]["content"]
 
-    def test_extract_via_llm_handles_empty_extraction(self, extract_host):
-        """_extract_via_llm() returns [] when nothing worth extracting."""
-        from unittest.mock import patch
-
-        with patch.object(extract_host, "_extract_via_llm", return_value=[]):
-            result = extract_host._extract_via_llm("Hi", "Hello!", [])
+    def test_extract_via_llm_returns_empty_on_no_chat_sdk(self, extract_host):
+        """_extract_via_llm() returns [] when no chat SDK is available."""
+        # FakeAgent does not have a chat attribute
+        if hasattr(extract_host, "chat"):
+            delattr(extract_host, "chat")
+        result = extract_host._extract_via_llm(
+            "Some user input text here", "Response", []
+        )
         assert result == []
 
     def test_extract_via_llm_handles_invalid_json(self, extract_host):
         """_extract_via_llm() returns [] on invalid JSON from LLM."""
-        from unittest.mock import patch
+        mock_chat = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = "This is not valid JSON at all"
+        mock_chat.send_messages.return_value = mock_response
+        extract_host.chat = mock_chat
 
-        # If the actual method gets invalid JSON, it should handle gracefully
-        with patch.object(extract_host, "_extract_via_llm", return_value=[]):
-            result = extract_host._extract_via_llm(
-                "Some input that leads to bad JSON extraction test",
-                "Response text that triggered malformed output",
-                [],
-            )
+        result = extract_host._extract_via_llm(
+            "Some input", "Some response", []
+        )
         assert isinstance(result, list)
+        assert result == []
+
+    def test_extract_via_llm_filters_invalid_ops(self, extract_host):
+        """_extract_via_llm() skips operations with missing fields."""
+        mock_chat = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = (
+            '['
+            '{"op": "add", "category": "fact", "content": "Valid entry"},'
+            '{"op": "add"},'
+            '{"op": "update", "knowledge_id": "abc", "content": "Updated"},'
+            '{"no_op_field": true}'
+            ']'
+        )
+        mock_chat.send_messages.return_value = mock_response
+        extract_host.chat = mock_chat
+
+        result = extract_host._extract_via_llm(
+            "Complex discussion about project", "Here is my analysis", []
+        )
+        assert isinstance(result, list)
+        # Only the valid add and update should survive
+        assert len(result) == 2
+        assert result[0]["op"] == "add"
+        assert result[1]["op"] == "update"
+
+    def test_extract_via_llm_handles_markdown_code_blocks(self, extract_host):
+        """_extract_via_llm() strips markdown code blocks from LLM response."""
+        mock_chat = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = (
+            '```json\n[{"op": "add", "category": "preference", '
+            '"content": "User likes Python"}]\n```'
+        )
+        mock_chat.send_messages.return_value = mock_response
+        extract_host.chat = mock_chat
+
+        result = extract_host._extract_via_llm(
+            "I really prefer Python over other languages",
+            "Noted!",
+            [],
+        )
+        assert len(result) == 1
+        assert result[0]["category"] == "preference"
 
     def test_after_process_query_stores_conversation(self, extract_host):
         """_after_process_query() stores both user and assistant turns."""
@@ -2071,38 +2127,46 @@ class TestConversationConsolidation:
                 )
                 store._conn.commit()
 
-    def test_consolidate_old_sessions_returns_dict(self, consol_host):
-        """consolidate_old_sessions() returns a dict with expected keys."""
-        from unittest.mock import patch
-
-        # Mock the LLM consolidation call
-        mock_result = {
-            "summary": "Test consolidation summary",
-            "knowledge": [],
-        }
-
-        with patch.object(
-            consol_host,
-            "consolidate_old_sessions",
-            return_value={"consolidated": 0, "extracted_items": 0},
-        ):
-            result = consol_host.consolidate_old_sessions()
+    def test_consolidate_returns_zeros_with_no_eligible_sessions(self, consol_host):
+        """consolidate_old_sessions() returns zeros when no sessions are eligible."""
+        result = consol_host.consolidate_old_sessions()
         assert isinstance(result, dict)
-        assert "consolidated" in result
+        assert result["consolidated"] == 0
+        assert result["extracted_items"] == 0
 
-    def test_consolidate_with_eligible_sessions(self, consol_host):
-        """consolidate_old_sessions() processes eligible sessions."""
+    def test_consolidate_processes_eligible_session_with_llm(self, consol_host):
+        """consolidate_old_sessions() processes eligible sessions via LLM."""
         import uuid as _uuid
-        from unittest.mock import patch
 
         sid = f"consol-eligible-{_uuid.uuid4().hex[:8]}"
         self._add_old_session(consol_host._memory_store, sid, num_turns=6, days_ago=20)
 
-        # Verify the session is eligible
+        # Verify the session is eligible at data layer
         sessions = consol_host._memory_store.get_unconsolidated_sessions(
             older_than_days=14, min_turns=5
         )
         assert sid in sessions
+
+        # Mock the chat SDK to return a valid consolidation response
+        mock_chat = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = (
+            '{"summary": "Discussed deployment steps", '
+            '"knowledge": [{"category": "skill", '
+            '"content": "Deploy via kubectl apply -f"}]}'
+        )
+        mock_chat.send_messages.return_value = mock_response
+        consol_host.chat = mock_chat
+
+        result = consol_host.consolidate_old_sessions()
+        assert result["consolidated"] >= 1
+        assert result["extracted_items"] >= 1
+
+        # Verify turns are now marked consolidated
+        sessions_after = consol_host._memory_store.get_unconsolidated_sessions(
+            older_than_days=14, min_turns=5
+        )
+        assert sid not in sessions_after
 
     def test_consolidate_skips_recent_sessions(self, consol_host):
         """consolidate_old_sessions() does not process recent sessions."""
@@ -2115,6 +2179,30 @@ class TestConversationConsolidation:
             older_than_days=14, min_turns=5
         )
         assert sid not in sessions
+
+    def test_consolidate_stores_summary_as_note(self, consol_host):
+        """consolidate_old_sessions() stores the LLM summary as a note."""
+        import uuid as _uuid
+
+        sid = f"consol-summary-{_uuid.uuid4().hex[:8]}"
+        self._add_old_session(consol_host._memory_store, sid, num_turns=6, days_ago=20)
+
+        mock_chat = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = (
+            '{"summary": "Weekly review of API migration progress", '
+            '"knowledge": []}'
+        )
+        mock_chat.send_messages.return_value = mock_response
+        consol_host.chat = mock_chat
+
+        consol_host.consolidate_old_sessions()
+
+        # Check that the summary was stored as a note with source=consolidation
+        notes = consol_host._memory_store.search("API migration progress")
+        assert any(
+            n.get("source") == "consolidation" for n in notes
+        ), "Summary should be stored with source='consolidation'"
 
 
 # ===========================================================================
@@ -2145,42 +2233,25 @@ class TestMemoryReconciliation:
 
         return host
 
-    def test_reconcile_memory_returns_dict(self, recon_host):
-        """reconcile_memory() returns a dict with expected keys."""
-        from unittest.mock import patch
-
-        with patch.object(
-            recon_host,
-            "reconcile_memory",
-            return_value={
-                "pairs_checked": 0,
-                "reinforced": 0,
-                "contradicted": 0,
-                "weakened": 0,
-                "neutral": 0,
-            },
-        ):
-            result = recon_host.reconcile_memory()
+    def test_reconcile_memory_returns_dict_with_expected_keys(self, recon_host):
+        """reconcile_memory() returns a dict with all expected keys."""
+        # No FAISS index → returns zeros immediately (real code path)
+        result = recon_host.reconcile_memory()
         assert isinstance(result, dict)
-        assert "pairs_checked" in result
+        assert result == {
+            "pairs_checked": 0,
+            "reinforced": 0,
+            "contradicted": 0,
+            "weakened": 0,
+            "neutral": 0,
+        }
 
-    def test_reconcile_memory_with_no_items(self, recon_host):
+    def test_reconcile_memory_returns_zeros_with_no_knowledge(self, recon_host):
         """reconcile_memory() with no knowledge items returns zeros."""
-        from unittest.mock import patch
-
-        with patch.object(
-            recon_host,
-            "reconcile_memory",
-            return_value={
-                "pairs_checked": 0,
-                "reinforced": 0,
-                "contradicted": 0,
-                "weakened": 0,
-                "neutral": 0,
-            },
-        ):
-            result = recon_host.reconcile_memory()
+        result = recon_host.reconcile_memory()
         assert result["pairs_checked"] == 0
+        assert result["reinforced"] == 0
+        assert result["contradicted"] == 0
 
 
 # ===========================================================================
@@ -2217,8 +2288,8 @@ class TestRecallToolTemporal:
                 host._registered_tools[name] = _TOOL_REGISTRY[name]
         return host
 
-    def test_recall_with_time_from(self, mixin_with_tools):
-        """recall(time_from=X) passes temporal filter and returns dict."""
+    def test_recall_with_time_from_returns_correct_format(self, mixin_with_tools):
+        """recall(time_from=X) returns {status, count, results} format."""
         func_remember = mixin_with_tools._registered_tools["remember"]["function"]
         func_remember(
             fact="Temporal recall alpha fact for time_from test",
@@ -2228,10 +2299,13 @@ class TestRecallToolTemporal:
         func_recall = mixin_with_tools._registered_tools["recall"]["function"]
         result = func_recall(query="Temporal recall alpha", time_from=_past_iso(7))
         assert isinstance(result, dict)
-        assert "status" in result or "results" in result or "items" in result
+        assert "status" in result
+        assert "count" in result
+        assert "results" in result
+        assert isinstance(result["results"], list)
 
-    def test_recall_with_time_range(self, mixin_with_tools):
-        """recall(time_from, time_to) finds items within the time range."""
+    def test_recall_with_time_range_finds_stored_item(self, mixin_with_tools):
+        """recall(time_from, time_to) finds a recently stored item."""
         func_remember = mixin_with_tools._registered_tools["remember"]["function"]
         func_remember(
             fact="Temporal recall beta fact for range test",
@@ -2244,15 +2318,13 @@ class TestRecallToolTemporal:
             time_from=_past_iso(30),
             time_to=_future_iso(1),
         )
-        assert isinstance(result, dict)
-        # The item was just stored, so it should be within the time range
-        results_list = result.get("results", result.get("items", []))
-        if results_list:
-            contents = [r.get("content", "") for r in results_list]
-            assert any("Temporal recall beta" in c for c in contents)
+        assert result["status"] == "found"
+        assert result["count"] >= 1
+        contents = [r.get("content", "") for r in result["results"]]
+        assert any("Temporal recall beta" in c for c in contents)
 
-    def test_recall_by_time_range_only(self, mixin_with_tools):
-        """recall(time_from, time_to) without query returns time-filtered results."""
+    def test_recall_by_time_range_only_finds_items(self, mixin_with_tools):
+        """recall(time_from, time_to) without query returns filtered results."""
         func_remember = mixin_with_tools._registered_tools["remember"]["function"]
         func_remember(
             fact="Time only recall gamma test entry",
@@ -2265,7 +2337,14 @@ class TestRecallToolTemporal:
             time_to=_future_iso(1),
         )
         assert isinstance(result, dict)
-        assert "status" in result or "results" in result or "items" in result
+        assert "status" in result
+        assert result["status"] in ("found", "empty")
+
+    def test_recall_with_no_params_returns_error(self, mixin_with_tools):
+        """recall() with no parameters returns an error status."""
+        func_recall = mixin_with_tools._registered_tools["recall"]["function"]
+        result = func_recall()
+        assert result["status"] == "error"
 
 
 # ===========================================================================
@@ -2303,8 +2382,7 @@ class TestSearchPastConversationsTemporal:
         return host
 
     def test_search_conversations_with_time_from(self, mixin_with_tools):
-        """search_past_conversations(time_from=X) filters by timestamp."""
-        # Store some conversation turns
+        """search_past_conversations(time_from=X) returns correct format."""
         mixin_with_tools._memory_store.store_turn(
             "test-conv-temporal", "user", "Conversation temporal alpha test message"
         )
@@ -2314,9 +2392,15 @@ class TestSearchPastConversationsTemporal:
         ]
         result = func(query="Conversation temporal alpha", time_from=_past_iso(1))
         assert isinstance(result, dict)
+        assert "status" in result
+        assert "count" in result
+        assert "results" in result
+        # The turn was just stored, so it should be found
+        assert result["status"] == "found"
+        assert result["count"] >= 1
 
     def test_search_conversations_with_time_range(self, mixin_with_tools):
-        """search_past_conversations(time_from, time_to) uses time range."""
+        """search_past_conversations(time_from, time_to) filters correctly."""
         mixin_with_tools._memory_store.store_turn(
             "test-conv-range", "user", "Conversation range beta test message"
         )
@@ -2329,7 +2413,18 @@ class TestSearchPastConversationsTemporal:
             time_from=_past_iso(7),
             time_to=_future_iso(1),
         )
-        assert isinstance(result, dict)
+        assert result["status"] == "found"
+        assert result["count"] >= 1
+        contents = [r.get("content", "") for r in result["results"]]
+        assert any("Conversation range beta" in c for c in contents)
+
+    def test_search_conversations_no_params_returns_error(self, mixin_with_tools):
+        """search_past_conversations() with no params returns error."""
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func()
+        assert result["status"] == "error"
 
 
 # ===========================================================================

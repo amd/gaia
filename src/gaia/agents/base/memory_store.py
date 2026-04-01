@@ -1236,6 +1236,10 @@ class MemoryStore:
                 content = content[:MAX_CONTENT_LENGTH]
             sets.append("content = ?")
             params.append(content)
+            # Clear embedding — it was computed for the old content and is now
+            # stale.  Forces the item into get_items_without_embeddings() for
+            # re-embedding by the caller.
+            sets.append("embedding = NULL")
         if category is not None:
             sets.append("category = ?")
             params.append(category)

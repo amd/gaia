@@ -894,15 +894,11 @@ class TestConversationPipeline:
         assert all(r["context"] == "personal" for r in personal_results)
 
         # Work context should NOT find "birthday"
-        work_birthday = memory_store.search_conversations(
-            "birthday", context="work"
-        )
+        work_birthday = memory_store.search_conversations("birthday", context="work")
         assert len(work_birthday) == 0
 
         # "Deploy" only appears in work context
-        work_deploy = memory_store.search_conversations(
-            "Deploy", context="work"
-        )
+        work_deploy = memory_store.search_conversations("Deploy", context="work")
         assert len(work_deploy) >= 1
         assert all(r["context"] == "work" for r in work_deploy)
 
