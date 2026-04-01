@@ -160,7 +160,7 @@ Upcoming/overdue:
 After mentioning a time-sensitive item, call update_memory to set reminded_at so you don't repeat yourself.
 ```
 
-Returns an empty string if no time-sensitive items are active.
+Always returns at least the current time. The upcoming/overdue section is included only when time-sensitive items are active. Returns an empty string only if `init_memory()` has not been called.
 
 ### register_memory_tools()
 
@@ -273,8 +273,8 @@ Adapts retrieval depth based on query complexity. Returns an adaptive `top_k` va
 | Complexity | Heuristic Signals | top_k |
 |---|---|---|
 | **Simple** | < 8 words, single entity, no comparison words | 3 |
-| **Medium** | 8–20 words, or contains "how", "why", "explain" | 5 |
-| **Complex** | > 20 words, or contains "compare", "across", "all", "history", "everything" | 10 |
+| **Medium** | 8–20 words, or contains "how", "why", "explain", "describe", "summarize", or "what happened" | 5 |
+| **Complex** | > 20 words, or contains "compare", "across", "all", "history", "everything", "between", "throughout" | 10 |
 
 ### Mem0-Style LLM Extraction
 
@@ -435,7 +435,7 @@ def store(
 ) -> str:                       # Returns knowledge_id (UUID)
 ```
 
-**Deduplication:** If a new entry has >80% word overlap (Szymkiewicz-Simpson coefficient) with an existing entry in the same `category` + `context`, the existing entry is updated with the newer content. The newer fact is assumed to be more current.
+**Deduplication:** If a new entry has >80% word overlap (Szymkiewicz-Simpson coefficient) with an existing entry in the same `category` + `context` + `entity` scope, the existing entry is updated with the newer content. The newer fact is assumed to be more current.
 
 **Validation:** `content` must be non-empty (raises `ValueError` otherwise). Content longer than 2000 characters is silently truncated. `due_at`, if provided, is normalized to timezone-aware ISO 8601.
 
@@ -446,7 +446,7 @@ def store(
 ```python
 def search(
     self,
-    query: str,                     # Search query (used for both FTS5 and vector search)
+    query: str,                     # FTS5 search query
     category: str = None,           # Filter by category
     context: str = None,            # Filter by context
     entity: str = None,             # Filter by entity
@@ -457,9 +457,13 @@ def search(
 ) -> List[Dict]:
 ```
 
-Uses hybrid search combining vector similarity (FAISS) and keyword matching (FTS5 BM25) via Reciprocal Rank Fusion (RRF), followed by cross-encoder reranking. FTS5 uses AND semantics by default with automatic OR fallback. Bumps confidence +0.02 on each recalled item. Filters on `superseded_by IS NULL` to return only current/active items.
+Pure FTS5 keyword search with BM25 ranking. Uses AND semantics by default; if zero results, falls back to OR. Bumps confidence +0.02 on each recalled item. Filters on `superseded_by IS NULL` to return only current/active items.
 
-The `time_from` and `time_to` parameters add temporal filtering on `created_at`, narrowing results before the vector/BM25 ranking pipeline.
+The `time_from` and `time_to` parameters add temporal filtering on `created_at`, narrowing results before BM25 ranking.
+
+<Note>
+  This is the **keyword component** of search. For full hybrid search (vector + BM25 + RRF + cross-encoder reranking), use `MemoryMixin._hybrid_search()`, which calls this method internally as one of its two retrieval signals.
+</Note>
 
 #### get_by_category()
 
@@ -519,7 +523,7 @@ def update(
 ) -> bool:                  # False if ID not found
 ```
 
-Only provided fields are changed. Sets `updated_at` to the current time. The `superseded_by` parameter is used by the LLM extraction pipeline to mark old items as replaced by newer versions while preserving fact lineage.
+Only provided fields are changed. Sets `updated_at` to the current time. When `content` is updated, the stored embedding is cleared (`embedding = NULL`) to force re-embedding. The `superseded_by` parameter is used by the LLM extraction pipeline to mark old items as replaced by newer versions while preserving fact lineage.
 
 #### delete()
 
@@ -538,6 +542,22 @@ def apply_confidence_decay(
 ```
 
 Multiplies confidence by `decay_factor` for items not accessed in `days_threshold` days. Called once per session start via `reset_memory_session()`.
+
+#### update_confidence()
+
+```python
+def update_confidence(self, knowledge_id: str, delta: float) -> None
+```
+
+Adjust confidence by `delta`, clamped to [0.0, 1.0]. Used internally by reconciliation (+0.05 reinforce, +0.1 contradict newer, -0.1 weaken) and hybrid search (+0.02 per recall for vector-only results).
+
+#### delete_by_source()
+
+```python
+def delete_by_source(self, source: str) -> int
+```
+
+Delete all knowledge entries with a given source (e.g., `"discovery"`). Returns the number of entries deleted. Used by `gaia memory bootstrap --reset` to clear discovery items.
 
 ### Conversation Methods
 
@@ -619,9 +639,13 @@ def get_items_with_embeddings(
     context: str = None,
     entity: str = None,
     include_sensitive: bool = False,
+    top_k: int = 100,
+    time_from: str = None,          # ISO 8601 lower bound on created_at
+    time_to: str = None,            # ISO 8601 upper bound on created_at
 ) -> List[Dict]
-    # Returns knowledge items that have embeddings (embedding IS NOT NULL).
-    # Used to build/rebuild the FAISS index.
+    # Returns knowledge items that have embeddings (embedding IS NOT NULL,
+    # superseded_by IS NULL). Includes the embedding BLOB in each dict.
+    # Used to build/rebuild the FAISS index and for filtered vector retrieval.
 
 def get_items_without_embeddings(self, limit: int = 100) -> List[Dict]
     # Returns knowledge items missing embeddings (embedding IS NULL).
@@ -663,8 +687,8 @@ def get_sessions(self, limit: int = 20) -> List[Dict]
     # Used by the Memory Dashboard.
 
 def get_entities(self, limit: int = 100) -> List[Dict]
-    # List all unique entities with knowledge counts.
-    # Returns: [{"entity": "person:sarah_chen", "count": 5}, ...]
+    # List all unique entities with knowledge counts and last update time.
+    # Returns: [{"entity": "person:sarah_chen", "count": 5, "last_updated": "..."}, ...]
 
 def get_contexts(self, limit: int = 100) -> List[Dict]
     # List all contexts with knowledge counts.
@@ -909,13 +933,15 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | Method | Description |
 |--------|-------------|
 | `store(category, content, ...)` | Store knowledge with dedup (v2: embedding follows via `store_embedding`) |
-| `search(query, category, ...)` | Hybrid search: vector + BM25 + RRF + cross-encoder (v2: adds `time_from`/`time_to`, `superseded_by IS NULL` filter) |
+| `search(query, category, ...)` | FTS5 keyword search with BM25 ranking (v2: adds `time_from`/`time_to`, `superseded_by IS NULL` filter) |
 | `get_by_category(category, ...)` | Filter by category (v2: `superseded_by IS NULL` filter) |
 | `get_by_entity(entity, ...)` | Get all knowledge about an entity (v2: `superseded_by IS NULL` filter) |
 | `get_upcoming(within_days, ...)` | Time-sensitive items (v2: `superseded_by IS NULL` filter) |
 | `update(knowledge_id, ...)` | Update existing entry (v2: adds `superseded_by` parameter) |
 | `delete(knowledge_id)` | Delete entry |
 | `apply_confidence_decay(...)` | Decay unused knowledge |
+| `update_confidence(knowledge_id, delta)` | Adjust confidence by delta, clamped to [0.0, 1.0] |
+| `delete_by_source(source)` | Delete all knowledge entries with a given source |
 | `store_embedding(knowledge_id, embedding)` | Store float32 embedding BLOB for a knowledge item **(v2)** |
 | `get_items_with_embeddings(...)` | Get items that have embeddings for FAISS index **(v2)** |
 | `get_items_without_embeddings(limit)` | Get items missing embeddings for backfill **(v2)** |
