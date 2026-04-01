@@ -21,6 +21,11 @@ def _mock_home(monkeypatch, home_dir: Path):
 class TestMCPClientManager:
     """Test MCPClientManager functionality."""
 
+    @pytest.fixture(autouse=True)
+    def isolate_home(self, monkeypatch, tmp_path):
+        """Redirect Path.home() to tmp_path so tests never touch ~/.gaia/."""
+        _mock_home(monkeypatch, tmp_path)
+
     @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
     def test_add_server_creates_and_connects_client(self, mock_client_class):
         """Test that add_server creates and connects a client using config dict."""
@@ -662,6 +667,11 @@ class TestMCPConfig:
 
 class TestMCPClientManagerStatusReport:
     """Tests for MCPClientManager._failed tracking and get_status_report()."""
+
+    @pytest.fixture(autouse=True)
+    def isolate_home(self, monkeypatch, tmp_path):
+        """Redirect Path.home() to tmp_path so tests never touch ~/.gaia/."""
+        _mock_home(monkeypatch, tmp_path)
 
     def test_get_status_report_empty_when_no_servers(self):
         manager = MCPClientManager()

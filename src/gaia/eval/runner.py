@@ -280,9 +280,23 @@ Return a single JSON object to stdout with this structure:
       "overall_score": 0-10,
       "pass": true,
       "failure_category": null,
-      "reasoning": "..."
+      "reasoning": "...",
+      "performance": {{
+        "tokens_per_second": 39.9 or null,
+        "time_to_first_token": 1.163 or null,
+        "input_tokens": 616 or null,
+        "output_tokens": 320 or null,
+        "flags": []
+      }}
     }}
   ],
+  "performance_summary": {{
+    "avg_tokens_per_second": N.N or null,
+    "avg_time_to_first_token": N.NNN or null,
+    "total_input_tokens": N,
+    "total_output_tokens": N,
+    "flags": []
+  }},
   "root_cause": null,
   "recommended_fix": null,
   "cost_estimate": {{"turns": N, "estimated_usd": 0.00}}
@@ -354,6 +368,63 @@ def _validate_turn_scores(result: dict) -> list:
                 f"score could not be recomputed (reported={reported:.2f})"
             )
     return warnings
+
+
+def _aggregate_performance(result: dict, scenario_id: str) -> None:
+    """Aggregate per-turn performance data into a scenario-level performance_summary.
+
+    Mutates *result* in place.  Performance data is informational — missing data
+    does not affect pass/fail and is expected when using non-Lemonade providers.
+    """
+    tps_values = []
+    ttft_values = []
+    total_input = 0
+    total_output = 0
+    all_flags: set = set()
+
+    for turn in result.get("turns", []):
+        perf = turn.get("performance")
+        if not isinstance(perf, dict):
+            continue
+
+        tps = perf.get("tokens_per_second")
+        if isinstance(tps, (int, float)) and tps > 0:
+            tps_values.append(tps)
+
+        ttft = perf.get("time_to_first_token")
+        if isinstance(ttft, (int, float)) and ttft > 0:
+            ttft_values.append(ttft)
+
+        inp = perf.get("input_tokens")
+        if isinstance(inp, (int, float)):
+            total_input += int(inp)
+
+        out = perf.get("output_tokens")
+        if isinstance(out, (int, float)):
+            total_output += int(out)
+
+        flags = perf.get("flags")
+        if isinstance(flags, list):
+            all_flags.update(flags)
+
+    if tps_values or ttft_values or total_input or total_output:
+        avg_tps = sum(tps_values) / len(tps_values) if tps_values else None
+        avg_ttft = sum(ttft_values) / len(ttft_values) if ttft_values else None
+        result["performance_summary"] = {
+            "avg_tokens_per_second": round(avg_tps, 1) if avg_tps else None,
+            "avg_time_to_first_token": round(avg_ttft, 3) if avg_ttft else None,
+            "total_input_tokens": total_input,
+            "total_output_tokens": total_output,
+            "flags": sorted(all_flags),
+        }
+        if avg_tps:
+            print(
+                f"[PERF] {scenario_id} — {avg_tps:.1f} tok/s avg, "
+                f"{total_input}→{total_output} tokens",
+                file=sys.stderr,
+            )
+    else:
+        result["performance_summary"] = None
 
 
 def preflight_check(backend_url):
@@ -436,7 +507,6 @@ def run_scenario_subprocess(
     cmd = [
         "claude",
         "-p",
-        prompt,
         "--output-format",
         "json",
         "--json-schema",
@@ -457,6 +527,7 @@ def run_scenario_subprocess(
     try:
         proc = subprocess.run(
             cmd,
+            input=prompt,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -714,6 +785,11 @@ def run_scenario_subprocess(
         result["score_warnings"] = score_warnings
         for w in score_warnings:
             print(f"[WARN] {scenario_id} score mismatch — {w}", file=sys.stderr)
+
+    # Validate and aggregate per-turn performance data into scenario-level summary.
+    # Performance data is informational — missing data is expected when using
+    # non-Lemonade providers and does not affect pass/fail.
+    _aggregate_performance(result, scenario_id)
 
     # Write trace file
     traces_dir = run_dir / "traces"

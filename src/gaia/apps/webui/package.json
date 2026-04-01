@@ -1,6 +1,6 @@
 {
   "name": "@amd-gaia/agent-ui",
-  "version": "0.17.1-rc.1",
+  "version": "0.17.1",
   "type": "module",
   "productName": "GAIA Agent UI",
   "description": "Privacy-first agentic AI interface with document Q&A - runs 100% locally on AMD Ryzen AI",

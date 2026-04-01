@@ -369,9 +369,8 @@ function openBrowser(url) {
 function startBackend(gaiaBin, port) {
   console.log(`Starting GAIA backend on port ${port}...`);
 
-  const child = spawn(gaiaBin, ["chat", "--ui", "--ui-port", String(port)], {
+  const child = spawn(gaiaBin, ["chat", "--ui", "--ui-port", String(port), "--ui-dist", join(ROOT_DIR, "dist")], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
     detached: false,
   });
 
