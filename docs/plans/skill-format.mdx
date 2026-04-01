@@ -98,30 +98,6 @@ repository: https://github.com/amd/gaia-skills
 # Web Search Skill
 
 Search the web for current information using the Brave Search API.
-
-## Usage
-
-```python
-from gaia.agents.base import Agent
-
-class MyAgent(Agent):
-    def _register_tools(self):
-        self.load_skill("web-search")
-```
-
-## Configuration
-
-Set the `BRAVE_API_KEY` environment variable before use:
-
-```bash
-export BRAVE_API_KEY="your-api-key-here"
-```
-
-## Examples
-
-```
-User: What is the latest AMD Ryzen processor?
-Agent: [calls search_web(query="latest AMD Ryzen processor")]
 ```
 
 ### 2.2 Field Reference
