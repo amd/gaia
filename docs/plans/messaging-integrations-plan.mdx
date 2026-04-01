@@ -33,7 +33,7 @@ UI as the primary interface.
 
 **Key architectural decision:** Build a thin **Messaging Adapter Layer** in the
 GAIA SDK that translates between platform-specific message formats and GAIA's
-existing ChatSDK / Agent system. Each platform adapter handles auth, message
+existing AgentSDK / Agent system. Each platform adapter handles auth, message
 ingestion, and response delivery. The agent logic remains unchanged -- adapters
 are pure I/O translation.
 
@@ -59,7 +59,7 @@ chat. No community MCP servers exist for bi-directional messaging as of 2026-03.
 ### Option B: Adapter Layer in GAIA SDK (Selected)
 
 Build a `MessagingAdapter` abstraction in the SDK. Each platform gets an adapter
-that receives messages, translates to ChatSDK format, and routes responses back.
+that receives messages, translates to AgentSDK format, and routes responses back.
 
 **Why this wins:**
 - Clean separation: adapters handle I/O, agents handle intelligence
@@ -91,16 +91,15 @@ new work.
 |                    GAIA Messaging Layer                    |
 |                  src/gaia/messaging/                      |
 |                                                           |
-|  +--------------+  +--------------+  +-----------------+  |
-|  |  Discord     |  |  Slack       |  |  Telegram       |  |
-|  |  Adapter     |  |  Adapter     |  |  Adapter        |  |
-|  |              |  |              |  |                 |  |
-|  | - Bot API    |  | - Events API |  | - Bot API       |  |
-|  | - Gateway WS |  | - Webhooks   |  | - Polling/WH    |  |
-|  | - Slash cmds |  | - Slash cmds |  | - Commands      |  |
-|  +------+-------+  +------+-------+  +--------+--------+  |
-|         |                 |                    |           |
-|  +------v-----------------v--------------------v--------+  |
+|  +-------------+ +-----------+ +----------+ +----------+  |
+|  |  Signal     | |  Discord  | |  Slack   | | Telegram |  |
+|  |  Adapter    | |  Adapter  | |  Adapter | | Adapter  |  |
+|  |  (P0)       | |           | |          | |          |  |
+|  | - signal-cli| | - Bot API | | - Events | | - Bot API|  |
+|  | - E2E enc.  | | - Gateway | | - Socket | | - Polling|  |
+|  +------+------+ +-----+----+ +----+-----+ +----+-----+  |
+|         |            |           |            |            |
+|  +------v------------v-----------v------------v---------+  |
 |  |              MessageRouter                           |  |
 |  |                                                      |  |
 |  |  - Platform message -> GAIA message normalization    |  |
@@ -112,7 +111,7 @@ new work.
 |  +-------------------------v----------------------------+  |
 |  |              SessionManager                          |  |
 |  |                                                      |  |
-|  |  - Maps platform_id -> ChatSDK session               |  |
+|  |  - Maps platform_id -> AgentSDK session               |  |
 |  |  - Persistent conversation storage (SQLite)          |  |
 |  |  - Session TTL and cleanup                           |  |
 |  |  - Concurrent session handling                       |  |
@@ -121,7 +120,7 @@ new work.
 +----------------------------+-------------------------------+
                              |
                  +-----------v-----------+
-                 |    ChatSDK / Agent    |
+                 |    AgentSDK / Agent    |
                  |  (existing, unchanged)|
                  +-----------------------+
 ```
@@ -212,7 +211,7 @@ concurrent users needs 10 concurrent agent instances.
 `asyncio.run_in_executor(ThreadPoolExecutor(max_workers=N), ...)`. This is the
 simplest approach and matches how the JiraAgent already bridges sync/async.
 
-Each agent instance consumes ~50-100MB (ChatSDK + model context). Ten concurrent
+Each agent instance consumes ~50-100MB (AgentSDK + model context). Ten concurrent
 sessions across three platforms totals ~800MB-1.2GB. The default
 `max_concurrent_sessions` should be 10, with documentation recommending lower
 values for 8GB-RAM machines.
@@ -315,7 +314,7 @@ Install adapters with: `uv pip install -e ".[discord]"` or
 
 Messaging adapters run as a separate daemon process (`gaia messaging start`),
 following the same pattern as `gaia mcp start`. Each user gets an isolated
-ChatSDK session keyed by `(platform, user_id, channel_id)` for privacy. File
+AgentSDK session keyed by `(platform, user_id, channel_id)` for privacy. File
 attachments from messaging platforms are downloaded and passed to RAG indexing.
 
 ---
