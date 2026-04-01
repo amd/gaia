@@ -112,7 +112,7 @@ enable, editable by hand or through the Settings UI.
 enabled: false                    # Off by default -- user must opt in
 
 triage_model: "Qwen3-0.6B-GGUF"
-action_model: "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+action_model: "Qwen3.5-35B-A3B-GGUF"
 
 notifications: true
 max_concurrent_tasks: 2
@@ -164,7 +164,7 @@ Every task runs through a three-tier escalation:
   and stop. No LLM is loaded.
 - **Tier 1 -- Triage** (Qwen3-0.6B, ~600MB, 50-200 tokens): Ask the cheap model "Is this
   worth notifying the user? YES/NO with a one-line reason." If NO, log and stop.
-- **Tier 2 -- Action** (Qwen3-Coder-30B, ~4GB MoE/3B active, 500-5000 tokens): Create a
+- **Tier 2 -- Action** (Qwen3.5-35B, ~4GB MoE/3B active, 500-5000 tokens): Create a
   new chat session with full context. Agent uses tools, generates summaries, drafts
   responses. Notify the user via desktop notification and activity feed.
 

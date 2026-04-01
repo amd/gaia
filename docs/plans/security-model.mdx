@@ -40,7 +40,7 @@ browser and desktop controls in v0.21.0, and autonomous execution safety in v0.2
 | Network ports | Remote exploitation | MCP bridge on `:8765`, API on `:8080` (localhost only) | Remain localhost-only; firewall rules enforced |
 | MCP tool execution | Malicious or unverified tools | No classification; all tools execute freely | Tiered classification: auto-approve, confirm, deny |
 | Shell commands | Arbitrary code execution | Whitelist in ShellToolsMixin (`ALLOWED_COMMANDS`) | Retain whitelist; extend to all agent types |
-| RAG cache | Pickle deserialization (RCE) | `pickle.load()` on cached data (`src/gaia/rag/sdk.py:1620`) | Migrate to safe serialization (#447) |
+| RAG cache | Pickle deserialization (RCE) | `pickle.load()` on cached data (`src/gaia/rag/sdk.py`) | Migrate to safe serialization (#447) |
 | Credentials | Secret leakage via logs/env | Env vars (`ATLASSIAN_SITE_URL`, `GITHUB_TOKEN`, etc.) | Encrypted credential vault |
 | Browser automation | Navigation to malicious URLs | No URL restrictions on Playwright MCP | URL allowlist + domain restrictions (#459) |
 | Desktop control | Unauthorized system modification | Not yet implemented | Opt-in model with screenshot permissions (#461) |
@@ -655,7 +655,7 @@ Each messaging platform user maps to an isolated GAIA session:
 ### 13.1 Current Vulnerability
 
 The RAG SDK (`src/gaia/rag/sdk.py`) uses `pickle.load()` to deserialize cached
-document indexes (line 1620). Pickle deserialization of untrusted data can lead to
+document indexes. Pickle deserialization of untrusted data can lead to
 arbitrary code execution.
 
 Attack vector: A malicious PDF is indexed, the resulting cache file is tampered with
@@ -775,12 +775,12 @@ The following security measures are already implemented in the codebase:
 
 | Measure | Location | Description |
 |---------|----------|-------------|
-| Shell command whitelist | `src/gaia/agents/chat/tools/shell_tools.py:268` | `ALLOWED_COMMANDS` set restricts CLI tool to read-only commands |
+| Shell command whitelist | `src/gaia/agents/chat/tools/shell_tools.py` | `ALLOWED_COMMANDS` set restricts CLI tool to read-only commands |
 | Git command whitelist | `src/gaia/agents/chat/tools/shell_tools.py` | Only read-only git subcommands (`status`, `log`, `diff`, etc.) |
 | Localhost-only MCP bridge | `src/gaia/mcp/mcp.json` | `GAIA_MCP_HOST` defaults to `localhost` |
-| Subprocess timeout | `src/gaia/mcp/external_services.py:67` | `timeout=30` on MCP subprocess calls |
-| Tool registry validation | `src/gaia/agents/base/agent.py:1052` | Rejects unregistered tool names |
-| Required argument checking | `src/gaia/agents/base/agent.py:1079` | Validates tool arguments before execution |
+| Subprocess timeout | `src/gaia/mcp/external_services.py` | `timeout=30` on MCP subprocess calls |
+| Tool registry validation | `src/gaia/agents/base/agent.py` | Rejects unregistered tool names |
+| Required argument checking | `src/gaia/agents/base/agent.py` | Validates tool arguments before execution |
 
 These provide a baseline. This plan builds on them systematically.
 
