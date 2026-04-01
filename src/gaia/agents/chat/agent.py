@@ -306,7 +306,7 @@ class ChatAgent(
             )
 
     def _get_mixin_prompts(self) -> list[str]:
-        """Only include SD prompt when SD is actually initialized (saves ~1000 tokens)."""
+        """Include SD (only when initialized), VLM, and Memory mixin prompts."""
         prompts = []
         if hasattr(self, "get_sd_system_prompt") and hasattr(self, "sd_default_model"):
             fragment = self.get_sd_system_prompt()
@@ -314,6 +314,10 @@ class ChatAgent(
                 prompts.append(fragment)
         if hasattr(self, "get_vlm_system_prompt"):
             fragment = self.get_vlm_system_prompt()
+            if fragment:
+                prompts.append(fragment)
+        if hasattr(self, "get_memory_system_prompt"):
+            fragment = self.get_memory_system_prompt()
             if fragment:
                 prompts.append(fragment)
         return prompts

@@ -1391,10 +1391,25 @@ class MemoryMixin:
             error_lines = [f"  - {e['content']}" for e in errors]
             sections.append("Known errors to avoid:\n" + "\n".join(error_lines))
 
-        if not sections:
-            return ""
+        # Always include memory instructions — even when 0 memories exist.
+        # Without these, the LLM doesn't know it has persistent memory tools.
+        instructions = (
+            "=== MEMORY (Persistent Second Brain) ===\n"
+            "You have persistent memory across sessions. USE IT PROACTIVELY:\n"
+            "- When the user states a fact, preference, or commitment → call `remember` immediately\n"
+            "- When the user asks what you know, what was discussed, or about a person/project → call `recall`\n"
+            "- When information changes or is corrected → call `recall` to find the old item, then `update_memory`\n"
+            "- When the user mentions a deadline or reminder → call `remember` with due_at (ISO 8601)\n"
+            "- When the user wants to forget something → call `recall` to find it, then `forget`\n"
+            "- BIAS TOWARD REMEMBERING: if in doubt, store it. It's better to remember too much than too little.\n"
+            "- Every fact, preference, name, project detail, deadline, or observation is worth storing.\n"
+        )
 
-        result = "=== MEMORY ===\n" + "\n\n".join(sections)
+        if sections:
+            result = instructions + "\n" + "\n\n".join(sections)
+        else:
+            result = instructions + "\nNo memories stored yet. Start building your knowledge base by remembering what the user tells you.\n"
+
         # Hard cap: prevent context overflow if many large items exist.
         # 4000 chars ≈ 1000 tokens — sufficient for preferences/facts without
         # crowding the actual conversation context.
