@@ -164,12 +164,12 @@ Categories are learned from user behavior:
 
 ### 4.3 Email Providers
 
-| Provider | Phase 1 (Browser) | Phase 1.5 (MCP) | Phase 2 (Native) |
-|----------|-------------------|------------------|-------------------|
-| Gmail | Playwright → mail.google.com | `gmail-mcp-server` | IMAP + OAuth2 |
-| Outlook/365 | Playwright → outlook.office.com | `outlook-mcp-server` | MS Graph API or IMAP + OAuth2 |
+| Provider | Phase 1 (MCP — Primary) | Phase 1 Fallback (Browser) | Phase 2 (Native) |
+|----------|------------------------|---------------------------|-------------------|
+| Gmail | `gmail-mcp-server` | Playwright → mail.google.com | IMAP + OAuth2 |
+| Outlook/365 | `outlook-mcp-server` | Playwright → outlook.office.com | MS Graph API or IMAP + OAuth2 |
 | Outlook Desktop | N/A | N/A | Exchange via `exchangelib` |
-| Yahoo/Other | Playwright → provider URL | N/A | IMAP + app password |
+| Yahoo/Other | N/A | Playwright → provider URL | IMAP + app password |
 
 ### 4.4 Privacy Guarantees
 
@@ -198,11 +198,11 @@ Categories are learned from user behavior:
 
 ### 5.2 Calendar Providers
 
-| Provider | Phase 1 (Browser) | Phase 1.5 (MCP) |
-|----------|-------------------|------------------|
-| Google Calendar | Playwright → calendar.google.com | `@cocal/google-calendar-mcp` |
-| Outlook Calendar | Playwright → outlook.office.com/calendar | `outlook-mcp-server` |
-| Apple Calendar | N/A (no web UI) | N/A |
+| Provider | Phase 1 (MCP — Primary) | Phase 1 Fallback (Browser) |
+|----------|------------------------|---------------------------|
+| Google Calendar | `@cocal/google-calendar-mcp` | Playwright → calendar.google.com |
+| Outlook Calendar | `outlook-mcp-server` | Playwright → outlook.office.com/calendar |
+| Apple Calendar | N/A | N/A (no web UI) |
 
 ---
 
@@ -354,16 +354,6 @@ Phase 3 (v0.23.0+):
 | Auth persistence (Playwright browser context) | 0.5 day | Login once, sessions persist |
 
 **Deliverable:** Fallback path for providers without MCP servers.
-
-### Phase 1.5: Additional MCP Servers (v0.20.0, config only)
-
-| Task | Effort | Output |
-|------|--------|--------|
-| Pre-configure Gmail MCP in Settings catalog | 0.5 day | User can enable Gmail API access |
-| Pre-configure Google Calendar MCP | 0.5 day | User can enable Calendar API access |
-| Document OAuth setup flow | 0.5 day | Step-by-step guide in docs |
-
-**Deliverable:** Power users who set up OAuth get faster, more reliable email/calendar.
 
 ### Phase 2: Dedicated Email Triage Agent (v0.23.0, 2-3 weeks)
 

@@ -324,9 +324,9 @@ attachments from messaging platforms are downloaded and passed to RAG indexing.
 
 | Phase | Duration | Goal |
 |-------|----------|------|
-| **1. Foundation + Telegram** | 1 week | Adapter ABC, MessageRouter, SessionManager (SQLite), rate limiter, response chunking, Telegram adapter (simplest platform). Deliverable: GAIA responds to Telegram messages with persistent conversation history. |
-| **2. Discord + Slack** | 1 week | Discord adapter (Gateway WS, slash commands, embeds), Slack adapter (Socket Mode, Block Kit), CLI commands (`gaia messaging start/stop/status`). |
-| **3. UI + Security** | 1 week | Electron Settings panel, tool restriction per adapter, tool confirmation over messaging, conversation history view. |
+| **1. Foundation + Signal** | 1 week | Adapter ABC, MessageRouter, SessionManager (SQLite), rate limiter, response chunking, Signal adapter (P0 privacy-first priority, #693). Deliverable: GAIA responds to Signal messages with persistent conversation history. |
+| **2. Telegram + Discord** | 1 week | Telegram adapter (long-polling, simplest API), Discord adapter (Gateway WS, slash commands, embeds), CLI commands (`gaia messaging start/stop/status`). |
+| **3. Slack + Security** | 1 week | Slack adapter (Socket Mode, Block Kit), Electron Settings panel, tool restriction per adapter, tool confirmation over messaging, conversation history view. |
 | **4. Polish + Docs** | 0.5-1 week | Setup guides per platform, integration tests, rate limit tuning, bug fixes. |
 | **Total** | **3.5-4 weeks** | |
 
