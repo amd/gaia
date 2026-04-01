@@ -112,7 +112,6 @@ For complete setup instructions including Lemonade Server, see the **[Quickstart
 - **[Quickstart](https://amd-gaia.ai/docs/quickstart)** — Build your first agent in 10 minutes
 - **[SDK Reference](https://amd-gaia.ai/docs/sdk)** — Complete API documentation
 - **[Guides](https://amd-gaia.ai/docs/guides)** — Chat, Voice, RAG, and more
-- **[Roadmap](https://amd-gaia.ai/roadmap)** — What we're building next
 - **[FAQ](https://amd-gaia.ai/docs/reference/faq)** — Frequently asked questions
 
 ---

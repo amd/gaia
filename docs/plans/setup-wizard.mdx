@@ -78,7 +78,7 @@ On any `gaia` CLI command OR Electron app launch:
   },
   "selected_profile": "chat",
   "models_downloaded": ["Qwen3-0.6B-GGUF"],
-  "models_pending": ["Qwen3-Coder-30B-A3B-Instruct-GGUF", "nomic-embed-text-v1.5-GGUF"],
+  "models_pending": ["Qwen3.5-35B-A3B-GGUF", "nomic-embed-text-v1.5-GGUF"],
   "skipped_steps": [],
   "error_log": []
 }
@@ -125,7 +125,7 @@ the state file. It must complete in under 5 seconds.
 | Node.js | `node --version` | same | same | `shutil.which` + subprocess |
 | Python | `sys.version` | same | same | stdlib |
 | Lemonade installed | `lemonade-server --version` | same | same | `shutil.which` + subprocess |
-| Lemonade running | HTTP GET `http://localhost:8399/api/version` | same | same | `requests.get` with 2s timeout |
+| Lemonade running | HTTP GET `http://localhost:8000/api/version` | same | same | `requests.get` with 2s timeout |
 | Models available | Lemonade `/api/models` endpoint | same | same | HTTP GET |
 | Disk write speed | Write 10 MB temp file, measure time | same | same | `tempfile` + `time` |
 
@@ -139,7 +139,7 @@ recommendations:
 | **Tier 1: Full** | 32+ GB | Yes | Discrete or iGPU | `chat` or `code` (30B model) |
 | **Tier 2: Standard** | 16-31 GB | Yes | iGPU | `chat` (8B model) |
 | **Tier 3: Light** | 8-15 GB | Optional | Any | `minimal` (0.6B model) |
-| **Tier 4: Insufficient** | <8 GB | -- | -- | Warning: may not run well |
+| **Tier 4: Insufficient** | &lt;8 GB | -- | -- | Warning: may not run well |
 
 ### Scanner Output (CLI)
 
@@ -247,16 +247,16 @@ Purpose: Let user choose what to download. Defaults are pre-selected based on ha
 |  Based on your hardware (Tier 1: Full), we recommend:              |
 |                                                                    |
 |  (*) Chat        Interactive chat + document Q&A     ~25 GB        |
-|      Models: Qwen3-Coder-30B, Nomic-Embed-Text                    |
+|      Models: Qwen3.5-35B, Nomic-Embed-Text                    |
 |                                                                    |
 |  ( ) Code        Autonomous coding assistant         ~18 GB        |
-|      Models: Qwen3-Coder-30B                                      |
+|      Models: Qwen3.5-35B                                      |
 |                                                                    |
 |  ( ) Minimal     Lightweight quick-start             ~400 MB       |
 |      Models: Qwen3-0.6B                                           |
 |                                                                    |
 |  ( ) All         Every model for every agent         ~26 GB        |
-|      Models: Qwen3-Coder-30B, Nomic-Embed, Qwen3-VL-4B           |
+|      Models: Qwen3.5-35B, Nomic-Embed, Qwen3-VL-4B           |
 |                                                                    |
 |  Estimated download time: ~3 min at 100 Mbps                      |
 |                                                                    |
@@ -278,7 +278,7 @@ Purpose: Download models with clear progress and the ability to resume on failur
 |                                                                    |
 |  Downloading Models                                                |
 |                                                                    |
-|  Qwen3-Coder-30B-A3B-Instruct-GGUF                               |
+|  Qwen3.5-35B-A3B-GGUF                                        |
 |  [===================>          ]  62%   11.2 / 18.0 GB            |
 |  Speed: 45 MB/s    ETA: 2 min 30 sec                              |
 |                                                                    |
@@ -458,7 +458,7 @@ and automated testing.
 The `setup-state.json` file tracks progress at a granular level:
 
 ```
-1. User starts wizard, reaches Step 4 (downloading Qwen3-Coder-30B at 62%)
+1. User starts wizard, reaches Step 4 (downloading Qwen3.5-35B at 62%)
 2. User closes laptop / loses power / kills process
 3. On next launch, GAIA reads setup-state.json
 4. Finds current_step = "model_download", models_downloaded = [], partial file exists
