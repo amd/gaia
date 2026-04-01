@@ -463,7 +463,10 @@ class PipelineEngine:
             loop_id=generate_loop_id(self._context.pipeline_id),
             phase_name=PipelinePhase.PLANNING,
             agent_sequence=agent_sequence,
-            exit_criteria={"quality_threshold": self._context.quality_threshold},
+            exit_criteria={
+                "quality_threshold": self._context.quality_threshold,
+                "goal": self._context.user_goal,
+            },
             quality_threshold=self._context.quality_threshold,
             max_iterations=self._context.max_iterations,
         )
@@ -471,6 +474,7 @@ class PipelineEngine:
         future = await self._loop_manager.start_loop(loop_config.loop_id)
 
         # Wait for loop completion
+        loop_state = None
         if future is not None:
             loop_state = await asyncio.wrap_future(future)
             logger.info(
@@ -478,6 +482,19 @@ class PipelineEngine:
                 extra={
                     "loop_id": loop_config.loop_id,
                     "status": loop_state.status.name,
+                },
+            )
+            # Propagate agent LLM outputs to state machine so they appear in
+            # snapshot.artifacts and are available to QualityScorer
+            for agent_id, artifact_text in loop_state.artifacts.items():
+                if artifact_text is not None:
+                    self._state_machine.add_artifact(f"plan_{agent_id}", artifact_text)
+            self._state_machine.add_chronicle_entry(
+                "PLANNING_ARTIFACTS_PROPAGATED",
+                {
+                    "agent_ids": list(loop_state.artifacts.keys()),
+                    "artifact_count": len(loop_state.artifacts),
+                    "loop_status": loop_state.status.name,
                 },
             )
 
@@ -508,7 +525,10 @@ class PipelineEngine:
             loop_id=generate_loop_id(self._context.pipeline_id),
             phase_name=PipelinePhase.DEVELOPMENT,
             agent_sequence=agent_sequence,
-            exit_criteria={"quality_threshold": self._context.quality_threshold},
+            exit_criteria={
+                "quality_threshold": self._context.quality_threshold,
+                "goal": self._context.user_goal,
+            },
             quality_threshold=self._context.quality_threshold,
             max_iterations=self._context.max_iterations,
         )
@@ -516,6 +536,7 @@ class PipelineEngine:
         future = await self._loop_manager.start_loop(loop_config.loop_id)
 
         # Wait for loop completion
+        loop_state = None
         if future is not None:
             loop_state = await asyncio.wrap_future(future)
             logger.info(
@@ -523,6 +544,19 @@ class PipelineEngine:
                 extra={
                     "loop_id": loop_config.loop_id,
                     "status": loop_state.status.name,
+                },
+            )
+            # Propagate agent LLM outputs to state machine so they appear in
+            # snapshot.artifacts and are available to QualityScorer
+            for agent_id, artifact_text in loop_state.artifacts.items():
+                if artifact_text is not None:
+                    self._state_machine.add_artifact(f"code_{agent_id}", artifact_text)
+            self._state_machine.add_chronicle_entry(
+                "DEVELOPMENT_ARTIFACTS_PROPAGATED",
+                {
+                    "agent_ids": list(loop_state.artifacts.keys()),
+                    "artifact_count": len(loop_state.artifacts),
+                    "loop_status": loop_state.status.name,
                 },
             )
 

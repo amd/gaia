@@ -271,9 +271,15 @@ class HookExecutor:
             combined_result = self._aggregate_results(combined_result, result, hook)
 
             # Check if should halt
-            if result.halt_pipeline or (not result.success and hook.blocking):
+            if result.halt_pipeline:
+                logger.debug(
+                    f"Hook signaled phase halt: {hook.name}",
+                    extra={"hook_name": hook.name},
+                )
+                break
+            elif not result.success and hook.blocking:
                 logger.warning(
-                    f"Halting pipeline due to hook: {hook.name}",
+                    f"Blocking hook failed, halting pipeline: {hook.name}",
                     extra={"hook_name": hook.name},
                 )
                 break

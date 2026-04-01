@@ -359,14 +359,35 @@ class QualityScorer:
                 artifact: Any,
                 context: Dict[str, Any],
             ) -> ValidationResult:
-                # Default validator provides a baseline score
-                # In production, this would be replaced with actual validation
+                # Score based on artifact presence so empty pipelines are penalized.
+                # In production, replace with real category-specific validation logic.
+                artifact_present = False
+                if isinstance(artifact, dict):
+                    artifact_present = any(
+                        v is not None and v != "" for v in artifact.values()
+                    )
+                elif isinstance(artifact, str):
+                    artifact_present = bool(artifact.strip())
+                else:
+                    artifact_present = artifact is not None
+
+                score = 85.0 if artifact_present else 40.0
                 return ValidationResult(
-                    score=85.0,  # Default passing score
+                    score=score,
                     tests_run=1,
-                    tests_passed=1,
-                    details={"validator": "default", "category": self.category_id},
-                    defects=[],
+                    tests_passed=1 if artifact_present else 0,
+                    details={
+                        "validator": "default",
+                        "category": self.category_id,
+                        "artifact_present": artifact_present,
+                    },
+                    defects=[] if artifact_present else [
+                        {
+                            "category": self.category_id,
+                            "description": "No artifact content produced by agents",
+                            "severity": "high",
+                        }
+                    ],
                 )
 
         return DefaultValidator(category_id, category_name)
