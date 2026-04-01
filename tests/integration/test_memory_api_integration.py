@@ -32,10 +32,6 @@ def _future_iso(days: int = 1) -> str:
     return (datetime.now().astimezone() + timedelta(days=days)).isoformat()
 
 
-def _past_iso(days: int = 1) -> str:
-    return (datetime.now().astimezone() - timedelta(days=days)).isoformat()
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

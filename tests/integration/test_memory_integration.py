@@ -876,25 +876,35 @@ class TestConversationPipeline:
         memory_store.store_turn(
             session_work,
             "user",
-            "Deploy the GAIA API to staging",
+            "Deploy the GAIA API to staging environment",
             context="work",
         )
         memory_store.store_turn(
             session_personal,
             "user",
-            "Plan a birthday party for Max",
+            "Plan a birthday party celebration for Max",
             context="personal",
         )
 
-        # Search by context
-        work_results = memory_store.search_conversations("plan", context="work")
-        personal_results = memory_store.search_conversations("plan", context="personal")
-
-        # "Plan" only appears in personal context
+        # "birthday" only appears in personal context
+        personal_results = memory_store.search_conversations(
+            "birthday", context="personal"
+        )
         assert len(personal_results) >= 1
-        # Work context shouldn't have "plan a birthday party"
-        for r in work_results:
-            assert "birthday" not in r["content"].lower()
+        assert all(r["context"] == "personal" for r in personal_results)
+
+        # Work context should NOT find "birthday"
+        work_birthday = memory_store.search_conversations(
+            "birthday", context="work"
+        )
+        assert len(work_birthday) == 0
+
+        # "Deploy" only appears in work context
+        work_deploy = memory_store.search_conversations(
+            "Deploy", context="work"
+        )
+        assert len(work_deploy) >= 1
+        assert all(r["context"] == "work" for r in work_deploy)
 
     def test_conversation_history_ordering(self, memory_store):
         """get_history returns turns in chronological order (oldest first)."""
@@ -1589,6 +1599,15 @@ class TestInputValidation:
         assert len(history) == 1
         assert history[0]["content"] == "Real turn content"
 
+    def test_store_rejects_invalid_due_at(self, memory_store):
+        """store() raises ValueError for invalid ISO 8601 due_at strings."""
+        with pytest.raises(ValueError):
+            memory_store.store(
+                category="reminder",
+                content="Reminder with bad date",
+                due_at="not-a-date",
+            )
+
     def test_update_nonexistent_returns_false(self, memory_store):
         """update() returns False for nonexistent knowledge_id."""
         result = memory_store.update("nonexistent-id-123", content="New content")
@@ -1598,6 +1617,24 @@ class TestInputValidation:
         """delete() returns False for nonexistent knowledge_id."""
         result = memory_store.delete("nonexistent-id-456")
         assert result is False
+
+    def test_mark_turns_consolidated_empty_list(self, memory_store):
+        """mark_turns_consolidated() with empty list returns 0."""
+        result = memory_store.mark_turns_consolidated([])
+        assert result == 0
+
+    def test_get_history_respects_limit(self, memory_store):
+        """get_history() limit parameter caps returned turns."""
+        session = str(uuid.uuid4())
+        for i in range(10):
+            memory_store.store_turn(session, "user", f"Limited turn {i}")
+
+        history = memory_store.get_history(session_id=session, limit=3)
+        assert len(history) == 3
+        # Should return the LAST 3 turns (most recent), ordered oldest-first
+        assert history[0]["content"] == "Limited turn 7"
+        assert history[1]["content"] == "Limited turn 8"
+        assert history[2]["content"] == "Limited turn 9"
 
 
 # ===========================================================================
