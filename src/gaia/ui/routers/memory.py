@@ -8,8 +8,11 @@ import threading
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
+
+from ..database import ChatDatabase
+from ..dependencies import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -554,3 +557,36 @@ def prune_memory(days: int = Query(90, ge=7, le=365)) -> Dict:
     except Exception as exc:
         logger.error("[memory router] prune failed: %s", exc)
         raise HTTPException(500, f"Prune failed: {type(exc).__name__}")
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+_MCP_MEMORY_ENABLED_KEY = "mcp_memory_enabled"
+
+
+@router.get("/api/memory/settings")
+def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
+    """Return memory-related feature settings."""
+    return {
+        "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false") == "true",
+    }
+
+
+@router.put("/api/memory/settings")
+def update_memory_settings(
+    body: Dict,
+    db: ChatDatabase = Depends(get_db),
+) -> Dict:
+    """Update memory-related feature settings.
+
+    Currently supported keys:
+    - ``mcp_memory_enabled`` (bool): expose memory read tools to MCP clients
+      for debug/troubleshooting. Default false.
+    """
+    if "mcp_memory_enabled" in body:
+        db.set_setting(_MCP_MEMORY_ENABLED_KEY, "true" if body["mcp_memory_enabled"] else "false")
+    return {
+        "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false") == "true",
+    }

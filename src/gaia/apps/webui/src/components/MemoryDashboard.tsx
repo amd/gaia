@@ -307,6 +307,10 @@ export function MemoryDashboard() {
     // Revealed sensitive items
     const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
 
+    // Settings
+    const [mcpMemoryEnabled, setMcpMemoryEnabled] = useState(false);
+    const [settingsLoading, setSettingsLoading] = useState(false);
+
     // Maintenance state
     const [consolidating, setConsolidating] = useState(false);
     const [rebuildingEmbeddings, setRebuildingEmbeddings] = useState(false);
@@ -446,6 +450,15 @@ export function MemoryDashboard() {
         }
     }, []);
 
+    const loadSettings = useCallback(async () => {
+        try {
+            const s = await memoryApi.getMemorySettings();
+            setMcpMemoryEnabled(s.mcp_memory_enabled);
+        } catch (err) {
+            log.system.warn('Failed to load memory settings', err);
+        }
+    }, []);
+
     const loadAll = useCallback(async () => {
         setLoading(true);
         setError(null);
@@ -459,6 +472,7 @@ export function MemoryDashboard() {
                 loadUpcoming(),
                 loadEmbeddingCoverage(),
                 loadEntities(),
+                loadSettings(),
             ]);
         } catch (err) {
             setError('Failed to load memory data. Is the backend running?');
@@ -466,7 +480,7 @@ export function MemoryDashboard() {
         } finally {
             setLoading(false);
         }
-    }, [loadStats, loadActivity, loadKnowledge, loadTools, loadConversations, loadUpcoming, loadEmbeddingCoverage, loadEntities]);
+    }, [loadStats, loadActivity, loadKnowledge, loadTools, loadConversations, loadUpcoming, loadEmbeddingCoverage, loadEntities, loadSettings]);
 
     useEffect(() => {
         loadAll();
@@ -1504,6 +1518,42 @@ export function MemoryDashboard() {
                                     </div>
                                 </div>
                             )}
+
+                            {/* ── Settings ─────────────────────── */}
+                            <div className="mem-section">
+                                <div className="mem-section-title">
+                                    <Shield size={14} /> Settings
+                                </div>
+                                <div className="mem-settings-row">
+                                    <div className="mem-settings-label">
+                                        <span>MCP Memory Access</span>
+                                        <span className="mem-settings-hint">
+                                            Expose read-only memory tools to MCP clients
+                                            (for debug/troubleshooting). Requires MCP server restart.
+                                        </span>
+                                    </div>
+                                    <button
+                                        className={`mem-toggle${mcpMemoryEnabled ? ' mem-toggle-on' : ''}`}
+                                        disabled={settingsLoading}
+                                        onClick={async () => {
+                                            setSettingsLoading(true);
+                                            try {
+                                                const updated = await memoryApi.updateMemorySettings({
+                                                    mcp_memory_enabled: !mcpMemoryEnabled,
+                                                });
+                                                setMcpMemoryEnabled(updated.mcp_memory_enabled);
+                                            } catch (err) {
+                                                log.system.warn('Failed to update memory settings', err);
+                                            } finally {
+                                                setSettingsLoading(false);
+                                            }
+                                        }}
+                                        aria-label="Toggle MCP memory access"
+                                    >
+                                        <span className="mem-toggle-knob" />
+                                    </button>
+                                </div>
+                            </div>
 
                             {/* DB size footer */}
                             {stats && (

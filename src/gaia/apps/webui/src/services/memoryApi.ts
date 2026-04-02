@@ -180,3 +180,17 @@ export function pruneMemory(days = 90) {
         'POST', `/memory/prune?days=${days}`
     );
 }
+
+// ── Settings ─────────────────────────────────────────────────────────────────
+
+export interface MemorySettings {
+    mcp_memory_enabled: boolean;
+}
+
+export function getMemorySettings() {
+    return memFetch<MemorySettings>('GET', '/memory/settings');
+}
+
+export function updateMemorySettings(settings: Partial<MemorySettings>) {
+    return memFetch<MemorySettings>('PUT', '/memory/settings', settings);
+}
