@@ -1,7 +1,7 @@
 # Autonomous Agent Mode — Design Specification
 
 **Branch:** `feature/agent-always-running` (branch off `feature/agent-memory`)
-**Status:** Draft v3 — design finalized
+**Status:** Draft v4 — aligned with OpenClaw Strategy
 **Date:** 2026-04-01
 
 ---
@@ -13,13 +13,27 @@ user to send a message, the agent observes its environment, infers goals from
 context, and works on them continuously — stopping only when it has nothing
 left to do, is waiting for input, or has been paused.
 
+**Strategic context:** This spec implements the *autonomy engine* component of
+AMD's Agent Computer vision. The CES 2027 demo target is an agent that has
+autonomously managed a developer's email, code reviews, infrastructure
+monitoring, and daily briefs for 6 months — zero cloud costs, zero security
+incidents, complete auditable local history. That target directly drives the
+design decisions here.
+
+GAIA's autonomous mode is AMD's answer to OpenClaw's heartbeat model, with a
+critical differentiator: all goal data, memory, and activity logs stay on
+device. Cloud agents cost $1–45/day per agent in API fees; GAIA's local-first
+architecture makes that cost zero. Privacy-sensitive use cases (legal, medical,
+financial) that are architecturally impossible for cloud agents are GAIA's
+primary target.
+
 The agent's behavior is controlled by a single `agent_mode` setting:
 
-| Mode | Behaviour |
-|------|-----------|
-| `manual` | Classic request/response — no background activity |
-| `goal_driven` | Executes user-approved goals in the background |
-| `autonomous` | Observes environment, infers and executes its own goals |
+| Mode | Behaviour | Maps to |
+|------|-----------|---------|
+| `manual` | Classic request/response — no background activity | Chatbot |
+| `goal_driven` | Executes user-approved goals in the background | Automation |
+| `autonomous` | Observes environment, infers and executes its own goals | Agent |
 
 Default: `autonomous`. Users can downgrade at any time from Settings.
 
@@ -60,6 +74,9 @@ The agent stops (or pauses) only when it:
 | G10 | GoalStore is separate from MemoryStore — work queue must not be LLM-rewritten |
 | G11 | Private sessions are never touched by the autonomous loop |
 | G12 | Memory/MemoryStore cannot be used as a prompt injection vector |
+| G13 | Hybrid model routing: lightweight model for observation/classification, full model for execution — keeps per-tick cost near zero |
+| G14 | All goal data, task history, and audit logs stay on-device — never transmitted to cloud |
+| G15 | Prioritise use cases at the always-on × sensitive-data intersection: email, infrastructure, documents, home automation |
 
 ---
 
@@ -71,8 +88,8 @@ The agent stops (or pauses) only when it:
   │  (agent is actively executing goals / working on tasks)             │
   └──────────┬──────────────────────┬─────────────────────┬────────────┘
              │                      │                      │
-     no approved     agent calls    agent calls      always_running
-     goals remain    request_user   set_loop_state   → false
+     no approved     agent calls    agent calls      agent_mode
+     goals remain    request_user   set_loop_state   → "manual"
              │       _input()       ("scheduled",N)       │
              ▼             ▼              ▼                ▼
       ┌──────────┐  ┌─────────────┐  ┌───────────┐  ┌─────────┐
@@ -82,8 +99,8 @@ The agent stops (or pauses) only when it:
       │ next     │  │  or timeout)│  │  target   │  │         │
       │ trigger) │  └──────┬──────┘  │  time)    │  └────┬────┘
       └────┬─────┘         │         └─────┬─────┘       │
-           │     reply OR  │               │        always_running
-     next  │     timeout + │         time  │         → true
+           │     reply OR  │               │        agent_mode
+     next  │     timeout + │         time  │      → non-manual
     trigger│     continue  │         reached         │
            │               │               │              │
            └───────────────┴───────────────┴──────────────┘
@@ -99,7 +116,7 @@ The agent stops (or pauses) only when it:
 | `RUNNING` | `set_loop_state("idle")` | `IDLE` → sleep until trigger → `RUNNING` |
 | `RUNNING` | `request_user_input()` called | `WAITING_INPUT` |
 | `RUNNING` | `set_loop_state("scheduled", N)` | `SCHEDULED` → sleep N secs → `RUNNING` |
-| `RUNNING` | `always_running` toggled off | `PAUSED` |
+| `RUNNING` | `agent_mode` set to `"manual"` | `PAUSED` |
 | `RUNNING` | step budget exhausted (see §7.3) | `IDLE` (forced, logged) |
 | `WAITING_INPUT` | user responds | `RUNNING` |
 | `WAITING_INPUT` | timeout + `continue_if_no_response=true` | `RUNNING` |
@@ -107,11 +124,11 @@ The agent stops (or pauses) only when it:
 | `IDLE` | user sends message | `RUNNING` |
 | `IDLE` | tick interval fires | `RUNNING` (only if approved goals exist) |
 | `SCHEDULED` | scheduled time reached | `RUNNING` |
-| `PAUSED` | `always_running` toggled on | `RUNNING` |
+| `PAUSED` | `agent_mode` set to `"goal_driven"` or `"autonomous"` | `RUNNING` |
 
 **Important:** `IDLE` does not loop unconditionally on every tick. The loop
-only fires a new run if there are approved, pending goals in memory
-(category `goal` or `task`, `status=pending`, `approved_for_auto=true`).
+only fires a new run if there are approved, pending goals in GoalStore
+(`status="queued"`, `approved_for_auto=True`).
 If none exist, the tick checks once and immediately sleeps again. This
 prevents idle LLM calls when the agent truly has nothing to do.
 
@@ -185,6 +202,26 @@ no autonomous ticks fire until onboarding completes.
 **suspended** — no background ticks fire. The user may re-enable via an
 explicit override (`GAIA_AUTONOMOUS_ALLOW_TUNNEL=1`). This prevents remote
 code injection through the tunnel API.
+
+### 5.1.1 Hybrid Model Routing
+
+The agent loop uses different model tiers for different operations to keep
+per-tick cost near zero on local hardware:
+
+| Operation | Model tier | Why |
+|-----------|-----------|-----|
+| Observation cycle (scan + classify) | `Qwen3-0.6B` or `Qwen3-4B` | Fast, cheap — most ticks find nothing |
+| Goal inference prompt | `Qwen3-4B` | Needs reasoning but not full capability |
+| Goal execution (actual work) | `Qwen3.5-35B` (full agent model) | Quality matters; destructive potential |
+| User input requests + confirmations | `Qwen3.5-35B` | User-facing; must be coherent |
+
+This mirrors the OpenClaw heartbeat economics: routing routine classification
+to local small models makes always-on operation sustainable. The 35B model
+only loads when there is real work to execute.
+
+Model selection is configured via `GAIA_AUTO_OBSERVE_MODEL` (default:
+`Qwen3-4B-GGUF`) and falls back to the agent's primary model if the
+lightweight model is unavailable.
 
 ### 5.2 `set_loop_state` Tool (replaces "respond with IDLE")
 
@@ -438,28 +475,46 @@ rules engine is needed.
 ### 6.7 Observation cycle (autonomous mode only)
 
 In `autonomous` mode, the agent's idle tick runs an **observation cycle**
-rather than only checking for existing approved goals:
+rather than only checking for existing approved goals.
+
+**Observation uses a lightweight model** (Qwen3-0.6B or Qwen3-4B) for the
+classification and inference step, reserving the full 35B model for actual
+goal execution. This makes observation ticks near-zero cost — the difference
+between $1–3/day (cloud heartbeat) and essentially free on local hardware.
 
 ```
-Sensors polled on each idle tick:
-  • File watcher     — files changed since last tick
-  • Git monitor      — new commits, failing tests, open PRs
-  • Error log scan   — recurring errors / new stack traces
-  • Conversation scan — implicit goals from recent messages
-  • Memory review    — patterns suggesting work worth doing
-  • System state     — disk usage, process health
+Sensors polled on each idle tick (extensible; shipped in priority order):
 
-Inference prompt:
-  "You have full context of this user's work and environment.
-   Here is what you observe: [observations]. What would a senior
-   engineer proactively do right now, without being asked? Generate
-   up to 3 goals ordered by impact. For each, state your confidence
-   and whether it's safe to execute without user confirmation."
+  Phase 1 — Core (always-on × sensitive-data intersection):
+  • Email monitor        — unread/flagged messages, action items, follow-ups
+  • Git monitor          — new commits, failing CI, open PRs, stale branches
+  • Error log scan       — recurring errors, new stack traces, warnings
+  • Conversation scan    — implicit goals from recent messages
+  • Memory review        — patterns suggesting work worth doing
+  • System state         — disk usage, process health, memory pressure
+
+  Phase 2 — Extended (plug-in architecture):
+  • Home Assistant events — automations triggered, devices in error state
+  • File watcher          — documents modified since last tick
+  • Calendar scan         — upcoming meetings needing prep, overdue tasks
+  • Messaging adapters    — Telegram, Discord, Slack action items
+
+Observation inference prompt (lightweight model):
+  "Observe the following signals from the user's environment: [observations].
+   Identify up to 3 high-value goals a thoughtful expert would pursue without
+   being asked. Prioritise: (1) always-on tasks — things that need monitoring
+   or continuous attention; (2) sensitive/private tasks — things the user
+   would not want processed by a cloud service.
+   For each goal: title, description, confidence (0–1), safe_to_auto_execute."
 ```
 
-Most inferences are obvious — failing tests, stale TODOs, outdated docs.
-The agent acts on these without asking. Ambiguous or high-risk actions
-surface for approval.
+Goals with `confidence >= 0.8` and `safe_to_auto_execute=true` are checked
+against permission grants and may be auto-approved. Everything else surfaces
+for user review.
+
+Most inferences are obvious — failing tests, unread email flagged for follow-up,
+stale TODOs, outdated docs. The agent acts on these without asking. Ambiguous
+or high-risk actions surface for approval.
 
 ### 6.8 Memory injection mitigation
 
@@ -682,7 +737,7 @@ When `app.state.tunnel.active` is `True`:
 
 ## 13. User-Message → Autonomous Continuation
 
-When a user sends a message and the agent responds, if `always_running=True`:
+When a user sends a message and the agent responds, if `agent_mode != "manual"`:
 
 1. Chat router calls `agent_loop.notify_user_message(session_id)` after response
 2. `AgentLoop` enqueues a `AgentTrigger("user_message_followup", session_id)`
@@ -865,8 +920,8 @@ async def _run_step(self, trigger: AgentTrigger, session: dict):
 ### Phase 1 — Foundation (branch: `feature/agent-always-running`)
 
 **Memory / Data Layer:**
-- [ ] Add `goal`, `task` to `VALID_CATEGORIES` in `memory_store.py`
-- [ ] Add `approved_for_auto`, `status`, `created_by` fields to knowledge store
+- [x] `GoalStore` (`goal_store.py`) — SQLite-backed, separate from `MemoryStore` *(done on `feature/agent-memory`)*
+- [x] `"permission"` category in `MemoryStore` for always-accept grants *(done on `feature/agent-memory`)*
 - [ ] Add `autonomous_activity` table to `ChatDatabase`
 - [ ] Add `autonomous` to the message `role` constraint
 - [ ] `_build_history_pairs()` rolling window cap for autonomous turns (max 5)
@@ -888,9 +943,16 @@ async def _run_step(self, trigger: AgentTrigger, session: dict):
 - [ ] `chat_router.py` calls `agent_loop.notify_user_message(sid)` after each response
 - [ ] `POST /api/chat/user-input` endpoint (resolves by `request_id` in queue)
 
+**Goals API:** *(done on `feature/agent-memory`)*
+- [x] `GoalStore` singleton started/stopped in `server.py` lifespan
+- [x] `GET /api/goals`, `POST /api/goals`, `GET /api/goals/stats`, `GET /api/goals/pending-approval`
+- [x] `PUT /api/goals/{id}/approve`, `/reject`, `/cancel`, `/status`
+- [x] `DELETE /api/goals/{id}`, `POST /api/goals/{id}/tasks`, `PUT /api/goals/{id}/tasks/{task_id}`
+
 **Settings:**
-- [ ] `always_running` in `SettingsResponse` + `SettingsUpdateRequest` (default True)
-- [ ] GET/PUT `/api/settings` handles `always_running`
+- [ ] `agent_mode` in `SettingsResponse` + `SettingsUpdateRequest` (default `"autonomous"`)
+- [ ] GET/PUT `/api/settings` validates `agent_mode` against `"manual"|"goal_driven"|"autonomous"`
+- [ ] `GAIA_AUTO_OBSERVE_MODEL` env var wired into AgentLoop (default `"Qwen3-0.6B-GGUF"`)
 
 **Audit Log:**
 - [ ] `GET /api/agent/activity` + `GET /api/agent/activity/{id}` endpoints
@@ -898,7 +960,7 @@ async def _run_step(self, trigger: AgentTrigger, session: dict):
 - [ ] Messages from autonomous ticks store `activity_id`
 
 **Frontend:**
-- [ ] `always_running` toggle in SettingsModal ("Agent Behavior" section)
+- [ ] `agent_mode` three-way toggle in SettingsModal ("Agent Behavior" section): Manual | Goal-driven | Autonomous
 - [ ] `user_input_request` StreamEventType + fields (`choices`, `default_if_no_response`)
 - [ ] `UserInputRequestCard` component (choices buttons, countdown, stacking)
 - [ ] Chat store `pendingUserInputRequests` + add/remove actions
@@ -911,11 +973,11 @@ async def _run_step(self, trigger: AgentTrigger, session: dict):
 
 ### Phase 2 — Polish
 
-- [ ] Per-session `always_running` override
+- [ ] Per-session `agent_mode` override (e.g., force manual for a sensitive session)
 - [ ] Adaptive tick interval (faster when goals pending, slower when idle)
 - [ ] Async `request_user_input` (non-blocking, inbox-based)
-- [ ] Goal approval UI (approve/reject agent-suggested goals inline)
-- [ ] "Agent paused" banner when `always_running=false`
+- [ ] Goal approval UI (approve/reject agent-suggested goals inline in chat)
+- [ ] "Agent paused" banner when `agent_mode="manual"`
 - [ ] Configurable budgets via Settings UI
 
 ### Phase 3 — Advanced Autonomy
@@ -941,7 +1003,7 @@ async def _run_step(self, trigger: AgentTrigger, session: dict):
 | SCHEDULE:1 infinite loop | `wake_in_seconds` clamped to [30, 86400] |
 | Tunnel → remote code injection | Loop suspended when tunnel active; tunnel goal API always creates with `approved_for_auto=False` |
 | Multi-slot user input race | `deque`-based queue, resolved by `request_id` |
-| No goal/task memory category | `"goal"`, `"task"` added to `VALID_CATEGORIES` |
+| Goal/task data in MemoryStore (LLM-rewritable) | Goals and tasks live in GoalStore (separate SQLite DB, structured API only) — LLM consolidation cannot touch work-queue state |
 | `allowed_paths` defaults to `~` | Background ticks enforce read-only unless explicit write scope |
 | Empty-string blind proceed | Returns `"__NO_RESPONSE__"` sentinel; callers must check |
 | Confirm overlay lacks context | `triggered_by` + `task_context` fields on `permission_request` event |
@@ -960,14 +1022,96 @@ async def _run_step(self, trigger: AgentTrigger, session: dict):
    "Pending Goals" panel, or a notification badge. Inline feels most natural
    but could be annoying if the agent suggests many goals.
 
-3. **`always_running` default for new installations**: Starting with `true`
-   on a clean install (no goals in memory) means the first few ticks fire,
+3. **`agent_mode` default for new installations**: Starting with `"autonomous"`
+   on a clean install (no goals in GoalStore) means the first few ticks fire,
    find nothing, go idle, and stop. That's low-cost and correct — but may
    surprise users who haven't opted in to autonomous mode. Consider:
-   `always_running` defaults to `false` until after first-boot onboarding
-   is complete, then auto-enables.
+   `agent_mode` defaults to `"manual"` until after first-boot onboarding
+   is complete, then auto-enables to `"autonomous"`.
 
 4. **Autonomous history in exports**: Should session exports include
    autonomous turns? They're part of the conversation context but were never
    visible in the UI. Proposal: include them in a separate appendix section
    of the export, clearly labelled.
+
+---
+
+## 21. Strategic Context — AMD OpenClaw
+
+This section records why certain design decisions were made, grounded in
+AMD's internal "OpenClaw Strategy" — AMD's answer to the AI agent era.
+
+### 21.1 The Three-Track Framework
+
+OpenClaw identifies three tracks for AMD in the AI agent era:
+
+| Track | Description | GAIA's Role |
+|-------|-------------|-------------|
+| **Integrate** | Embed AI into AMD's existing software ecosystem | AgentSDK as the integration surface |
+| **Build** | Build the agent infrastructure layer locally | Autonomous agent loop, GoalStore, local LLM |
+| **Cloud** | Offer AMD cloud-backed inference for bursty workloads | Hybrid routing; escalate to cloud when needed |
+
+GAIA's autonomous mode is the "Build" track in action: a complete local
+agent infrastructure that needs no cloud backend for core operation.
+
+### 21.2 The Heartbeat Cost Problem
+
+Cloud agent frameworks charge per LLM call. An always-on agent that
+checks in every 5 minutes burns roughly:
+
+- Light workload (GPT-4o-mini, 500 tokens/tick): ~$1/day
+- Medium workload (GPT-4o, 2000 tokens/tick): ~$8/day
+- Heavy workload (GPT-4 Turbo, 5000 tokens/tick): ~$45/day
+
+GAIA's hybrid routing model (§5.1.1) solves this directly:
+- Observation ticks use Qwen3-0.6B (≈0.6B params, runs on NPU, cost: $0)
+- Only execution ticks that require real intelligence escalate to 35B
+- The daily observation cost is **zero** for local-only users
+
+This is GAIA's primary competitive moat against OpenAI's Operator, Anthropic's
+Computer Use, and Google's Project Astra — all of which require cloud API calls
+for every tick.
+
+### 21.3 "Power of Presence" — The Always-On Differentiator
+
+OpenClaw's "Power of Presence" framework observes that the most valuable
+AI agents are the ones that are *already there* when a problem occurs —
+not the ones you have to invoke after the fact.
+
+This directly motivates the observation cycle (§6.7): the agent is not
+waiting for a user prompt. It is continuously scanning the environment and
+asking "what would a thoughtful expert do here without being asked?" The
+goal is an agent that notices a failing CI pipeline, a stale PR, or an
+anomalous log entry — and begins working on it before the user even wakes up.
+
+For GAIA, "Power of Presence" + local execution = a private always-on
+expert with zero data egress, zero API costs, and full auditability.
+
+### 21.4 Privacy-Sensitive Use Cases
+
+Cloud agents face a structural barrier in regulated industries: data
+cannot leave the device. GAIA's local-first architecture removes this
+barrier entirely. Target verticals:
+
+- **Legal**: contract review, deadline tracking, opposing counsel research
+- **Medical**: patient note summarization, referral drafting, protocol checks
+- **Financial**: portfolio monitoring, compliance flag detection, report drafting
+- **Security**: log triage, CVE monitoring, incident response drafting
+
+These use cases are architecturally impossible for cloud-only agents.
+They are GAIA's exclusive territory.
+
+### 21.5 CES 2027 Demo Target
+
+The CES 2027 demo objective (per OpenClaw): an agent that has autonomously
+managed a developer's email, code reviews, infrastructure monitoring, and
+daily briefs **for 6 months** — with:
+- Zero cloud costs
+- Zero security incidents
+- Complete auditable local history
+- Running on a single Ryzen AI PC
+
+This spec is the foundation for that demo. The implementation sequence
+(`feature/agent-memory` → `feature/agent-always-running`) is designed to
+reach a demoable autonomous loop by mid-2026 with 12 months of hardening
+before CES 2027.

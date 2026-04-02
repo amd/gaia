@@ -851,7 +851,7 @@ class MemoryStore:
                     WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
                           AND k.entity = ? AND k.superseded_by IS NULL
                     ORDER BY rank
-                    LIMIT 10
+                    LIMIT 25
                     """,
                     (safe_query, category, context, entity),
                 )
@@ -864,7 +864,7 @@ class MemoryStore:
                     WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
                           AND k.entity IS NULL AND k.superseded_by IS NULL
                     ORDER BY rank
-                    LIMIT 10
+                    LIMIT 25
                     """,
                     (safe_query, category, context),
                 )
@@ -1066,15 +1066,19 @@ class MemoryStore:
     # ==================================================================
 
     def get_by_category(
-        self, category: str, context: str = None, limit: int = 10
+        self, category: str, context: str = None, domain: str = None, limit: int = 10
     ) -> List[Dict]:
-        """Get active knowledge entries by category, optionally filtered by context."""
+        """Get active knowledge entries by category, optionally filtered by context and domain."""
         conditions = ["category = ?", "superseded_by IS NULL"]
         params: list = [category]
 
         if context is not None:
             conditions.append("context = ?")
             params.append(context)
+
+        if domain is not None:
+            conditions.append("domain = ?")
+            params.append(domain)
 
         where = "WHERE " + " AND ".join(conditions)
         params.append(limit)
@@ -1448,16 +1452,14 @@ class MemoryStore:
             {total_items, with_embedding, without_embedding, coverage_pct}
         """
         with self._lock:
-            row = self._conn.execute(
-                """
+            row = self._conn.execute("""
                 SELECT
                     COUNT(*) AS total_items,
                     SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) AS with_embedding,
                     SUM(CASE WHEN embedding IS NULL THEN 1 ELSE 0 END) AS without_embedding
                 FROM knowledge
                 WHERE superseded_by IS NULL
-                """
-            ).fetchone()
+                """).fetchone()
         total = row[0] or 0
         with_emb = row[1] or 0
         without_emb = row[2] or 0
@@ -2431,16 +2433,10 @@ class MemoryStore:
         """
         with self._lock:
             try:
-                knowledge_deleted = self._conn.execute(
-                    "DELETE FROM knowledge"
-                ).rowcount
+                knowledge_deleted = self._conn.execute("DELETE FROM knowledge").rowcount
                 self._rebuild_knowledge_fts_locked()
-                tool_deleted = self._conn.execute(
-                    "DELETE FROM tool_history"
-                ).rowcount
-                conv_deleted = self._conn.execute(
-                    "DELETE FROM conversations"
-                ).rowcount
+                tool_deleted = self._conn.execute("DELETE FROM tool_history").rowcount
+                conv_deleted = self._conn.execute("DELETE FROM conversations").rowcount
                 self._rebuild_conversations_fts_locked()
                 self._conn.commit()
             except Exception:

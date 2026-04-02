@@ -115,10 +115,13 @@ RRF_K = 60
 RECONCILE_SIMILARITY_THRESHOLD = 0.85
 
 #: Minimum user input length (words) to trigger LLM extraction.
-MIN_EXTRACTION_WORDS = 20
+#  Lowered from 20 → 5 so short but important facts ("I'm Alex", "My name is Sam",
+#  "Remember: use port 443") are captured by the extraction pipeline.
+MIN_EXTRACTION_WORDS = 5
 
-#: LLM extraction timeout in seconds.
-EXTRACTION_TIMEOUT_S = 3
+#: LLM extraction timeout in seconds.  Raised from 3 → 8 to reduce silent failures
+#  on machines under load or when the embedding model is also busy.
+EXTRACTION_TIMEOUT_S = 8
 
 #: Consolidation age threshold in days.
 CONSOLIDATION_AGE_DAYS = 14
@@ -1501,7 +1504,9 @@ class MemoryMixin:
 
         # 0a. System context (global only — always included first so the agent
         #     has self-awareness about the host system from day 0)
-        sys_items = self._memory_store.get_by_category("system", context="global", limit=20)
+        sys_items = self._memory_store.get_by_category(
+            "system", context="global", limit=20
+        )
         if sys_items:
             sys_lines = [f"  - {s['content']}" for s in sys_items]
             sections.append("System environment:\n" + "\n".join(sys_lines))
@@ -1549,15 +1554,17 @@ class MemoryMixin:
         instructions = (
             "=== MEMORY (Persistent Second Brain) ===\n"
             "You have persistent memory across sessions. USE IT PROACTIVELY:\n"
-            "- When the user states a fact, preference, or commitment → call `remember` immediately\n"
-            "- When the user asks what you know, what was discussed, or about a person/project → call `recall`\n"
-            "- When information changes or is corrected → call `recall` to find the old item, then `update_memory`\n"
-            "- When the user mentions a deadline or reminder → call `remember` with due_at (ISO 8601)\n"
-            "- When the user wants to forget something → call `recall` to find it, then `forget`\n"
-            "- BIAS TOWARD REMEMBERING: if in doubt, store it. It's better to remember too much than too little.\n"
-            "- Every fact, preference, name, project detail, deadline, or observation is worth storing.\n"
-            "- NEVER announce or narrate memory operations. Do not say things like 'Noted!', 'I'll remember that',\n"
-            "  'Logged!', or 'Stored.' — just call the tool silently and respond naturally to the conversation.\n"
+            "- IMPERATIVE: Any explicit storage request ('remember', 'store', 'keep track of', 'set a reminder',\n"
+            "  'remind me', 'add a journal entry', 'log this', 'note this') → call `remember` FIRST, before\n"
+            "  composing any reply. A verbal 'Got it' WITHOUT a tool call does NOT persist across sessions.\n"
+            "- Reminders/deadlines → remember(category='reminder', due_at='YYYY-MM-DD')\n"
+            "- Journal entries/notes → remember(category='note', domain='journal')\n"
+            "- Facts, preferences, commitments → remember() immediately\n"
+            "- 'Show my journal' / 'What's in my journal?' → recall(category='note', domain='journal')\n"
+            "- 'What do I have coming up?' / 'What reminders?' → recall(category='reminder') or recall(query='reminders deadlines')\n"
+            "- Info changed or corrected → recall() old item, then update_memory()\n"
+            "- User wants to forget → recall() then forget()\n"
+            "- NEVER say 'Noted', 'Logged', 'Stored' — call the tool silently and respond naturally.\n"
         )
 
         if sections:
@@ -1691,7 +1698,9 @@ class MemoryMixin:
 
             # Log to tool_history before re-raising
             try:
-                if hasattr(self, "_memory_store") and not getattr(self, "_incognito", False):
+                if hasattr(self, "_memory_store") and not getattr(
+                    self, "_incognito", False
+                ):
                     self._memory_store.log_tool_call(
                         session_id=self.memory_session_id,
                         tool_name=tool_name,
@@ -1712,7 +1721,9 @@ class MemoryMixin:
 
         # Log to tool_history
         try:
-            if hasattr(self, "_memory_store") and not getattr(self, "_incognito", False):
+            if hasattr(self, "_memory_store") and not getattr(
+                self, "_incognito", False
+            ):
                 self._memory_store.log_tool_call(
                     session_id=self.memory_session_id,
                     tool_name=tool_name,
@@ -1843,7 +1854,10 @@ class MemoryMixin:
         ) -> dict:
             """Store a fact, preference, or learning in persistent memory. Categories: fact, preference, error, skill, note, reminder. Use due_at for time-sensitive items (ISO 8601). Use context to scope (work, personal). Use sensitive=true for private data. Use entity for linking (person:name, app:name)."""
             if getattr(mixin, "_incognito", False):
-                return {"status": "skipped", "message": "Memory is paused — this is a private session."}
+                return {
+                    "status": "skipped",
+                    "message": "Memory is paused — this is a private session.",
+                }
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
 
@@ -1900,17 +1914,21 @@ class MemoryMixin:
         def recall(
             query: str = "",
             category: str = "",
+            domain: str = "",
             context: str = "",
             entity: str = "",
             limit: int = 0,
             time_from: str = "",
             time_to: str = "",
         ) -> dict:
-            """Search memory for relevant knowledge. With query: uses hybrid semantic+keyword search (vector + BM25, cross-encoder reranking). Without query: returns entries filtered by category/context/entity. At least one parameter required. time_from/time_to: ISO 8601 boundaries for temporal filtering."""
-            if not any([query, category, context, entity, time_from, time_to]):
+            """Search memory for relevant knowledge. With query: uses hybrid semantic+keyword search (vector + BM25, cross-encoder reranking). Without query: returns entries filtered by category/domain/context/entity. At least one parameter required. domain: sub-type filter (e.g. 'journal' for notes stored with domain=journal). time_from/time_to: ISO 8601 boundaries for temporal filtering. Example: recall(category='note', domain='journal') retrieves all journal entries."""
+            import time as _t
+
+            _recall_t0 = _t.perf_counter()
+            if not any([query, category, domain, context, entity, time_from, time_to]):
                 return {
                     "status": "error",
-                    "message": "Provide at least one of: query, category, context, entity, time_from, time_to",
+                    "message": "Provide at least one of: query, category, domain, context, entity, time_from, time_to",
                 }
 
             # Adaptive top_k based on query complexity
@@ -1918,13 +1936,14 @@ class MemoryMixin:
                 if query:
                     limit = mixin._classify_query_complexity(query)
                 else:
-                    limit = 5
+                    limit = 20  # list-style queries default to more results
 
             # Clamp limit to prevent huge result sets
-            limit = max(1, min(limit, 20))
+            limit = max(1, min(limit, 50))
 
             if query:
                 # Use hybrid search for query-based recall
+                _search_t0 = _t.perf_counter()
                 results = mixin._hybrid_search(
                     query=query,
                     category=category or None,
@@ -1935,17 +1954,40 @@ class MemoryMixin:
                     time_from=time_from or None,
                     time_to=time_to or None,
                 )
+                _search_ms = (_t.perf_counter() - _search_t0) * 1000
+                logger.debug("recall: hybrid_search took %.1fms → %d results", _search_ms, len(results))
+                # Apply domain post-filter if provided
+                if domain:
+                    results = [r for r in results if r.get("domain") == domain]
             elif entity:
+                _db_t0 = _t.perf_counter()
                 results = mixin._memory_store.get_by_entity(entity, limit=limit)
-            elif category:
+                logger.debug("recall: get_by_entity took %.1fms → %d results", (_t.perf_counter() - _db_t0) * 1000, len(results))
+                if domain:
+                    results = [r for r in results if r.get("domain") == domain]
+            elif category or domain:
+                _db_t0 = _t.perf_counter()
+                # If only domain provided (no category), use 'note' as default since
+                # domain is a sub-type of notes/facts (journal entries are category=note)
+                effective_category = category or "note"
                 results = mixin._memory_store.get_by_category(
-                    category, context=context or None, limit=limit
+                    effective_category,
+                    context=context or None,
+                    domain=domain or None,
+                    limit=limit,
+                )
+                logger.debug(
+                    "recall: get_by_category(cat=%s, domain=%s) took %.1fms → %d results",
+                    effective_category, domain or "any",
+                    (_t.perf_counter() - _db_t0) * 1000,
+                    len(results),
                 )
             elif time_from or time_to:
                 # Time-range only: fetch from store sorted by created_at and
                 # apply time filtering in Python.  Uses get_all_knowledge()
                 # which includes items without embeddings (unlike
                 # get_items_with_embeddings which filters embedding IS NOT NULL).
+                _db_t0 = _t.perf_counter()
                 page = mixin._memory_store.get_all_knowledge(
                     category=category or None,
                     context=context or None,
@@ -1954,6 +1996,7 @@ class MemoryMixin:
                     order="desc",
                     limit=limit * 3,  # over-fetch to account for filtering
                 )
+                logger.debug("recall: get_all_knowledge took %.1fms", (_t.perf_counter() - _db_t0) * 1000)
                 filtered = []
                 for item in page.get("items", []):
                     created = item.get("created_at", "")
@@ -1961,13 +2004,23 @@ class MemoryMixin:
                         continue
                     if time_to and created > time_to:
                         continue
+                    if domain and item.get("domain") != domain:
+                        continue
                     filtered.append(item)
                 results = filtered[:limit]
             else:
+                _db_t0 = _t.perf_counter()
                 page = mixin._memory_store.get_all_knowledge(
                     context=context, limit=limit
                 )
+                logger.debug("recall: get_all_knowledge took %.1fms", (_t.perf_counter() - _db_t0) * 1000)
                 results = page.get("items", [])
+
+            total_ms = (_t.perf_counter() - _recall_t0) * 1000
+            logger.info(
+                "recall: total=%.1fms results=%d (query=%r cat=%r domain=%r)",
+                total_ms, len(results), query[:50] if query else "", category, domain,
+            )
 
             # Sensitive items ARE accessible via explicit recall tool calls
             # (per spec). They are only excluded from the system prompt injection.
