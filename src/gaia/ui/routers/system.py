@@ -12,12 +12,19 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
-from ..models import ModelStatus, SettingsResponse, SettingsUpdateRequest, SystemStatus
+from ..models import (
+    ModelStatus,
+    SettingsResponse,
+    SettingsUpdateRequest,
+    SystemStatus,
+    TaskListResponse,
+    TaskResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +70,7 @@ async def _lemonade_post(
 
 
 @router.get("/api/system/status", response_model=SystemStatus)
-async def system_status(db: ChatDatabase = Depends(get_db)):
+async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
     status = SystemStatus()
 
@@ -290,7 +297,47 @@ async def system_status(db: ChatDatabase = Depends(get_db)):
     except Exception:
         pass  # Unknown device — don't block the UI
 
+    # Boot-time initialization tracking from the DispatchQueue.
+    queue = getattr(request.app.state, "dispatch_queue", None)
+    if queue:
+        from ..dispatch import JobStatus
+
+        visible = queue.get_visible_jobs()
+        any_pending = any(
+            j.status in (JobStatus.PENDING, JobStatus.RUNNING) for j in visible
+        )
+        any_failed = any(j.status == JobStatus.FAILED for j in visible)
+        if any_pending:
+            status.init_state = "initializing"
+        elif any_failed:
+            status.init_state = "degraded"
+        else:
+            status.init_state = "ready"
+        status.init_tasks = [
+            {"name": j.name, "status": j.status.value} for j in visible
+        ]
+
     return status
+
+
+@router.get("/api/system/tasks", response_model=TaskListResponse)
+async def list_tasks(request: Request):
+    """Return visible background tasks (startup initialization, etc.)."""
+    queue = getattr(request.app.state, "dispatch_queue", None)
+    if not queue:
+        return TaskListResponse(tasks=[])
+    visible = queue.get_visible_jobs()
+    return TaskListResponse(
+        tasks=[
+            TaskResponse(
+                id=j.id,
+                name=j.name,
+                status=j.status.value,
+                error=None,  # Sanitized: don't expose raw exception strings
+            )
+            for j in visible
+        ]
+    )
 
 
 async def _check_model_status(model_name: str) -> ModelStatus:

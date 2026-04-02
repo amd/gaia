@@ -45,6 +45,27 @@ class SystemStatus(BaseModel):
     default_model_name: str = "Qwen3.5-35B-A3B-GGUF"  # Required model for GAIA Chat
     lemonade_url: str = "http://localhost:8000"  # Lemonade web UI base URL
     expected_model_loaded: bool = True  # False if a different model is loaded
+    # Boot-time initialization tracking (populated from DispatchQueue)
+    init_state: str = "ready"  # "initializing" | "ready" | "degraded"
+    init_tasks: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+# ── Tasks ──────────────────────────────────────────────────────────────────
+
+
+class TaskResponse(BaseModel):
+    """A single background task visible to the frontend."""
+
+    id: str
+    name: str
+    status: str  # pending | running | done | failed
+    error: Optional[str] = None
+
+
+class TaskListResponse(BaseModel):
+    """List of background tasks."""
+
+    tasks: List[TaskResponse]
 
 
 # ── Settings ────────────────────────────────────────────────────────────────
@@ -183,6 +204,8 @@ class AgentStepResponse(BaseModel):
     timestamp: int = 0
     commandOutput: Optional[CommandOutputResponse] = None
     fileList: Optional[FileListResponse] = None
+    mcpServer: Optional[str] = None
+    latencyMs: Optional[float] = None
 
 
 class InferenceStatsResponse(BaseModel):

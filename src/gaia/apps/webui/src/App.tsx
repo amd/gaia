@@ -65,6 +65,7 @@ function App() {
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
+        systemStatus,
         setSystemStatus,
         setBackendConnected,
     } = useChatStore();
@@ -131,14 +132,29 @@ function App() {
         }
     }, [setSystemStatus, setBackendConnected]);
 
-    // Check status on mount, then poll every 15 seconds
+    // Check status on mount, then poll adaptively:
+    // 3s while init_state === 'initializing', 15s otherwise.
+    const currentPollIntervalRef = useRef(3_000);
+
     useEffect(() => {
         checkSystemStatus();
-        statusPollRef.current = setInterval(checkSystemStatus, 15_000);
+        currentPollIntervalRef.current = 3_000; // Start fast during potential init
+        statusPollRef.current = setInterval(checkSystemStatus, 3_000);
         return () => {
             if (statusPollRef.current) clearInterval(statusPollRef.current);
         };
     }, [checkSystemStatus]);
+
+    // Adjust poll interval when init completes
+    useEffect(() => {
+        const initState = systemStatus?.init_state;
+        const desiredInterval = initState === 'initializing' ? 3_000 : 15_000;
+        if (desiredInterval !== currentPollIntervalRef.current) {
+            currentPollIntervalRef.current = desiredInterval;
+            if (statusPollRef.current) clearInterval(statusPollRef.current);
+            statusPollRef.current = setInterval(checkSystemStatus, desiredInterval);
+        }
+    }, [systemStatus?.init_state, checkSystemStatus]);
 
     // Startup banner + load sessions on mount, then poll for changes
     const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
