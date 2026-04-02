@@ -114,6 +114,15 @@ def test_tasks_endpoint_sanitizes_errors(client):
         assert task.get("error") is None
 
 
+def test_status_init_tasks_has_no_error_field(client):
+    """init_tasks in /api/system/status should never contain error strings."""
+    resp = client.get("/api/system/status")
+    data = resp.json()
+    for task in data.get("init_tasks", []):
+        # InitTaskInfo has only name + status — no error field
+        assert "error" not in task
+
+
 # ── Startup Tasks ─────────────────────────────────────────────────────────
 
 

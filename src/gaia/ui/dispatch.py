@@ -112,7 +112,17 @@ class DispatchQueue:
             # Wait for dependency (if any) with a hard timeout.
             if job.depends_on:
                 dep = self._jobs.get(job.depends_on)
-                if dep is not None:
+                if dep is None:
+                    job.status = JobStatus.FAILED
+                    job.error = f"Dependency job '{job.depends_on}' not found"
+                    job.completed_at = time.monotonic()
+                    logger.warning(
+                        "Boot init: %s → %s (dependency not found)",
+                        job.name,
+                        job.status.value,
+                    )
+                    return
+                else:
                     deadline = time.monotonic() + _DEPENDENCY_TIMEOUT
                     while dep.status not in (JobStatus.DONE, JobStatus.FAILED):
                         if time.monotonic() >= deadline:
@@ -151,8 +161,8 @@ class DispatchQueue:
             job.error = str(exc)
             logger.warning("Boot init: %s failed: %s", job.name, exc)
         finally:
-            job.completed_at = time.monotonic()
-            elapsed = (job.completed_at - job.created_at) if job.completed_at else 0
+            job.completed_at = job.completed_at or time.monotonic()
+            elapsed = job.completed_at - job.created_at
             logger.info(
                 "Boot init: %s → %s (%.1fs)",
                 job.name,

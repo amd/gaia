@@ -145,10 +145,15 @@ function App() {
         };
     }, [checkSystemStatus]);
 
-    // Adjust poll interval when init completes
+    // Adjust poll interval when init completes.
+    // Keep 3s fast-poll while systemStatus is null (first response pending)
+    // or init_state is 'initializing'. Switch to 15s only after a definitive
+    // 'ready' or 'degraded' state arrives.
     useEffect(() => {
         const initState = systemStatus?.init_state;
-        const desiredInterval = initState === 'initializing' ? 3_000 : 15_000;
+        // Stay fast while waiting for first response or during init
+        if (!initState || initState === 'initializing') return;
+        const desiredInterval = 15_000;
         if (desiredInterval !== currentPollIntervalRef.current) {
             currentPollIntervalRef.current = desiredInterval;
             if (statusPollRef.current) clearInterval(statusPollRef.current);

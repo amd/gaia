@@ -34,6 +34,6 @@ def get_upload_locks(request: Request) -> dict:
     return request.app.state.upload_locks
 
 
-def get_dispatch_queue(request: Request) -> DispatchQueue:
-    """Return the DispatchQueue instance stored on ``app.state``."""
-    return request.app.state.dispatch_queue
+def get_dispatch_queue(request: Request):
+    """Return the DispatchQueue instance stored on ``app.state``, or None."""
+    return getattr(request.app.state, "dispatch_queue", None)
