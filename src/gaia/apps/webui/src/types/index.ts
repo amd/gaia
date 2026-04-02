@@ -105,6 +105,9 @@ export interface SystemStatus {
     default_model_name: string | null;
     lemonade_url: string | null;
     expected_model_loaded: boolean;
+    // Boot-time initialization tracking
+    init_state?: 'initializing' | 'ready' | 'degraded';
+    init_tasks?: Array<{ name: string; status: string }>;
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────
@@ -236,6 +239,10 @@ export interface AgentStep {
         files: Array<Record<string, unknown>>;
         total: number;
     };
+    /** MCP server name (for MCP tools). */
+    mcpServer?: string;
+    /** Tool call latency in milliseconds. */
+    latencyMs?: number;
 }
 
 /** Extended SSE event types for agent communication. */
@@ -295,6 +302,10 @@ export interface StreamEvent {
     confirm_id?: string;
     /** Timeout in seconds (for tool_confirm events). */
     timeout_seconds?: number;
+    /** MCP server name (for tool_start of MCP tools). */
+    mcp_server?: string;
+    /** Tool call latency in milliseconds (for tool_result). */
+    latency_ms?: number;
     /** Structured result data (for tool_result with search results, file lists, etc.). */
     result_data?: {
         type: string;

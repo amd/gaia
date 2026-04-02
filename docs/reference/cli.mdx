@@ -1075,6 +1075,16 @@ Evaluate results:
 gaia eval -f ./results/experiment.json
 ```
 
+Run agent eval benchmark:
+```bash
+gaia eval agent                                    # Run all scenarios
+gaia eval agent --category mcp_reliability         # Run MCP reliability scenarios only
+gaia eval agent --scenario mcp_simple_tool_call    # Run a single scenario
+gaia eval agent --iterations 5                     # Run each scenario 5 times for reliability measurement
+gaia eval agent --fix                              # Auto-fix failures with Claude Code
+gaia eval agent --compare run1/scorecard.json run2/scorecard.json  # Compare runs
+```
+
 Generate report:
 ```bash
 gaia report -d ./eval_results

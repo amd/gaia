@@ -62,9 +62,10 @@ _MAX_CACHED_AGENTS = 10
 _mcp_status_cache: list[dict] = []
 _mcp_status_lock = threading.Lock()
 
-# Lock preventing concurrent sessions from issuing simultaneous load_model()
-# calls when both arrive with Lemonade in a no-model or embedding-only state.
-_model_load_lock = threading.Lock()
+# Lock preventing concurrent load_model() calls.  Shared between the per-request
+# path (_maybe_load_expected_model) and the boot-time preload task in server.py.
+# Public (no underscore) because it is intentionally accessed cross-module.
+model_load_lock = threading.Lock()
 
 
 def get_cached_mcp_status() -> list[dict]:
@@ -341,7 +342,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
         from gaia.llm.lemonade_client import LemonadeClient
 
-        with _model_load_lock:
+        with model_load_lock:
             # Re-check after acquiring the lock: another thread may have
             # already loaded the model while we were waiting.
             resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
@@ -861,6 +862,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             "detail": event.get("detail"),
                             "active": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                            "mcpServer": event.get("mcp_server"),
                         }
                     )
                 elif event_type == "tool_args" and captured_steps:
@@ -882,6 +884,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             event.get("summary") or event.get("title") or "Done"
                         )
                         tool_step["success"] = event.get("success", True)
+                        # Persist MCP tool latency
+                        if event.get("latency_ms") is not None:
+                            tool_step["latencyMs"] = event["latency_ms"]
                         # Persist structured command output for terminal rendering
                         if event.get("command_output"):
                             tool_step["commandOutput"] = event["command_output"]

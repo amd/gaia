@@ -1,0 +1,45 @@
+id: mcp_conditional_tool
+name: "Conditional Tool Selection -- Context-Dependent Choice"
+category: mcp_reliability
+severity: high
+description: |
+  Agent is given two turns: one where a tool is needed, and one where it is not.
+  The agent must correctly decide when to use tools based on context.
+  Tests adaptive tool selection across turns.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+
+turns:
+  - turn: 1
+    objective: "Ask a question that requires searching the indexed document"
+    user_message: "How many PTO days do first-year employees get according to the handbook?"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: pto_days
+      expected_answer: "15 days"
+    success_criteria: |
+      Agent uses a search or query tool to look up the answer in the indexed
+      employee handbook and returns "15 days" (or equivalent).
+      FAIL if agent answers without using any tool.
+      FAIL if agent returns the wrong number.
+
+  - turn: 2
+    objective: "Ask a follow-up that does NOT require a tool"
+    user_message: "Is 15 days more or less than the industry average of 10 days?"
+    ground_truth:
+      expected_behavior: "Agent answers using simple reasoning from context, without making another tool call"
+    success_criteria: |
+      Agent correctly states that 15 days is more than 10 days using basic reasoning.
+      PASS if agent answers correctly WITHOUT calling any tools (the information
+      is already in the conversation context).
+      PARTIAL PASS if agent re-queries the document but still answers correctly.
+      FAIL if agent gives a wrong comparison.
+
+expected_outcome: |
+  Agent uses tools in turn 1 (needed) and avoids tools in turn 2 (not needed),
+  demonstrating context-aware tool selection.

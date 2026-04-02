@@ -52,6 +52,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
     // Determine if a setup hint should be shown to guide first-time users.
     // Only show hints when backend is reachable (systemStatus is not null).
     const notInitialized = systemStatus !== null && !systemStatus.initialized;
+    const isInitializing = systemStatus?.init_state === 'initializing';
     const noModel = systemStatus !== null && systemStatus.lemonade_running && !systemStatus.model_loaded;
 
     // Title typing effect
@@ -168,7 +169,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
                     </div>
                 )}
 
-                <button className="btn-primary start-btn" onClick={onNewTask}>
+                <button className="btn-primary start-btn" onClick={onNewTask} disabled={isInitializing}>
                     Start a New Task
                 </button>
 
@@ -176,7 +177,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
                     <span className="suggestions-label">Try asking:</span>
                     <div className="suggestion-chips">
                         {SUGGESTIONS.map((s) => (
-                            <button key={s} className="chip" onClick={() => onSendPrompt(s)}>
+                            <button key={s} className="chip" onClick={() => onSendPrompt(s)} disabled={isInitializing}>
                                 {s}
                             </button>
                         ))}

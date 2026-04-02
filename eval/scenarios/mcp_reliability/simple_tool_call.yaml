@@ -1,0 +1,27 @@
+id: mcp_simple_tool_call
+name: "Simple MCP Tool Call -- No Parameters"
+category: mcp_reliability
+severity: critical
+description: |
+  Agent is asked to check the system status, which requires calling an MCP tool
+  with no parameters. Tests basic tool invocation reliability.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to check the current system status"
+    user_message: "What is the current system status? Use the system tools to check."
+    ground_truth:
+      expected_behavior: "Agent calls a system status or health check MCP tool and returns the result"
+    success_criteria: |
+      Agent calls an MCP tool (e.g., system_status, get_status, or similar) and returns
+      a coherent response describing system state.
+      FAIL if agent says it cannot use tools or ignores the request.
+      FAIL if agent hallucinates a response without calling any tool.
+
+expected_outcome: |
+  Agent identifies and calls the appropriate system status MCP tool, returns result.

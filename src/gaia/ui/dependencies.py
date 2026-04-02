@@ -10,6 +10,7 @@ Provides ``Depends``-compatible callables to retrieve shared resources
 from fastapi import Request
 
 from .database import ChatDatabase
+from .dispatch import DispatchQueue
 from .tunnel import TunnelManager
 
 
@@ -31,3 +32,8 @@ def get_indexing_tasks(request: Request) -> dict:
 def get_upload_locks(request: Request) -> dict:
     """Return the dict of per-file upload locks."""
     return request.app.state.upload_locks
+
+
+def get_dispatch_queue(request: Request):
+    """Return the DispatchQueue instance stored on ``app.state``, or None."""
+    return getattr(request.app.state, "dispatch_queue", None)

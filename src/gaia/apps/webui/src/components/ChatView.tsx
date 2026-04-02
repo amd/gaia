@@ -87,6 +87,7 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 tool: event.tool,
                 detail: event.detail,
                 active: true, timestamp: ts,
+                mcpServer: event.mcp_server,
             };
         case 'plan':
             return {
@@ -513,9 +514,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // new message and streaming response are visible.
         isNearBottomRef.current = true;
 
-        if ((!text && !hasAttachments) || isStreaming) {
+        const isInitializing = systemStatus?.init_state === 'initializing';
+        if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
+            if (isInitializing) log.chat.debug('Send blocked: system initializing');
             return;
         }
 
@@ -697,6 +700,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         result: event.summary || event.title || 'Done',
                         active: false,
                         success: event.success !== false,
+                        latencyMs: event.latency_ms,
                     };
                     // Pass through structured command output if available
                     if (event.command_output) {
@@ -1400,7 +1404,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             onPaste={handlePaste}
                             placeholder="Type a message or paste an image... (Shift+Enter for new line)"
                             rows={1}
-                            disabled={isStreaming}
+                            disabled={isStreaming || systemStatus?.init_state === 'initializing'}
                             aria-label="Message input"
                         />
                     </div>
