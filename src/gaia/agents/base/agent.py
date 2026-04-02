@@ -2079,6 +2079,13 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 # Stop the progress indicator
                 self.console.stop_progress()
 
+            # Strip <think>...</think> blocks emitted by reasoning models
+            # (e.g. Qwen3.5).  Must happen before parsing so the JSON extractor
+            # finds clean input, and before the response is stored in
+            # conversation_history so the thinking text never bleeds into the
+            # next turn and confuses the model about the current user message.
+            response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+
             # Print the LLM response to the console
             logger.debug(f"LLM response: {response[:200]}...")
             if self.show_prompts:
@@ -2187,6 +2194,11 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     )
                     plan_response = chat_response.text
                     self.console.stop_progress()
+
+                # Strip <think> blocks before parsing (same reason as main path)
+                plan_response = re.sub(
+                    r"<think>.*?</think>", "", plan_response, flags=re.DOTALL
+                ).strip()
 
                 # Parse the plan response
                 parsed_plan = self._parse_llm_response(plan_response)
