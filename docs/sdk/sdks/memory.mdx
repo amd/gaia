@@ -105,16 +105,25 @@ def init_memory(
 
 ### get_memory_system_prompt()
 
-Returns the **stable frozen prefix** for the system prompt. Contains preferences, facts, and known errors -- nothing time-sensitive. This method is called automatically by `Agent._get_mixin_prompts()`.
+Returns the **stable frozen prefix** for the system prompt. Always includes proactive usage instructions for the LLM, plus any stored preferences, facts, skills, and error patterns. Nothing time-sensitive. This method is called automatically by `Agent._get_mixin_prompts()`.
 
 ```python
 def get_memory_system_prompt(self) -> str
 ```
 
-The output stays frozen for the entire session so the LLM inference engine can reuse its KV cache across turns. Example output:
+The output stays frozen for the entire session so the LLM inference engine can reuse its KV cache across turns. **Always returns a non-empty string** — even with zero stored memories, the instructions block is included so the LLM knows it has persistent memory tools. Example output (with stored memories):
 
 ```
-=== MEMORY ===
+=== MEMORY (Persistent Second Brain) ===
+You have persistent memory across sessions. USE IT PROACTIVELY:
+- When the user states a fact, preference, or commitment → call `remember` immediately
+- When the user asks what you know, what was discussed, or about a person/project → call `recall`
+- When information changes or is corrected → call `recall` to find the old item, then `update_memory`
+- When the user mentions a deadline or reminder → call `remember` with due_at (ISO 8601)
+- When the user wants to forget something → call `recall` to find it, then `forget`
+- BIAS TOWARD REMEMBERING: if in doubt, store it. It's better to remember too much than too little.
+- Every fact, preference, name, project detail, deadline, or observation is worth storing.
+
 Preferences:
   - tone: professional but friendly
   - code_style: black formatter, 88 char lines
@@ -133,12 +142,23 @@ Known errors to avoid:
   - pip install: always use --index-url for PyTorch packages
 ```
 
-**Filters applied:**
+Example output (zero memories stored):
+
+```
+=== MEMORY (Persistent Second Brain) ===
+You have persistent memory across sessions. USE IT PROACTIVELY:
+[... same instructions ...]
+
+No memories stored yet. Start building your knowledge base by remembering what the user tells you.
+```
+
+**Filters applied to the knowledge sections:**
 - Includes items from `global` context + active context
 - Excludes items where `sensitive=1`
 - Excludes items where `superseded_by IS NOT NULL` (only current/active items)
 - Sorted by confidence descending
 - Hard limits: max 10 preferences, 5 facts, 3 skills, 5 errors
+- Hard cap on total output: 4000 chars (truncated with `... (memory truncated)` if exceeded)
 
 ### get_memory_dynamic_context()
 
