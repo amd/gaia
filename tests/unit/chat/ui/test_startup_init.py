@@ -4,7 +4,6 @@
 """Integration tests for boot-time initialization and system status init_state."""
 
 import logging
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient

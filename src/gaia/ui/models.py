@@ -47,10 +47,17 @@ class SystemStatus(BaseModel):
     expected_model_loaded: bool = True  # False if a different model is loaded
     # Boot-time initialization tracking (populated from DispatchQueue)
     init_state: str = "ready"  # "initializing" | "ready" | "degraded"
-    init_tasks: List[Dict[str, Any]] = Field(default_factory=list)
+    init_tasks: List["InitTaskInfo"] = Field(default_factory=list)
 
 
 # ── Tasks ──────────────────────────────────────────────────────────────────
+
+
+class InitTaskInfo(BaseModel):
+    """Summary of a boot-time initialization task (embedded in SystemStatus)."""
+
+    name: str
+    status: str  # pending | running | done | failed
 
 
 class TaskResponse(BaseModel):

@@ -16,8 +16,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from ..database import ChatDatabase
-from ..dependencies import get_db
+from ..dependencies import get_db, get_dispatch_queue
 from ..models import (
+    InitTaskInfo,
     ModelStatus,
     SettingsResponse,
     SettingsUpdateRequest,
@@ -314,16 +315,15 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         else:
             status.init_state = "ready"
         status.init_tasks = [
-            {"name": j.name, "status": j.status.value} for j in visible
+            InitTaskInfo(name=j.name, status=j.status.value) for j in visible
         ]
 
     return status
 
 
 @router.get("/api/system/tasks", response_model=TaskListResponse)
-async def list_tasks(request: Request):
+async def list_tasks(queue=Depends(get_dispatch_queue)):
     """Return visible background tasks (startup initialization, etc.)."""
-    queue = getattr(request.app.state, "dispatch_queue", None)
     if not queue:
         return TaskListResponse(tasks=[])
     visible = queue.get_visible_jobs()

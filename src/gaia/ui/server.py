@@ -192,14 +192,13 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             base_url = LemonadeManager.get_base_url() or "http://localhost:8000/api/v1"
 
             # Check if a chat model is already loaded.
-            try:
-                resp = httpx.get(f"{base_url}/health", timeout=5.0)
-                if resp.status_code == 200:
-                    all_models = resp.json().get("all_models_loaded", [])
-                    if any(m.get("type") in ("llm", "vlm") for m in all_models):
-                        return  # Already loaded — nothing to do
-            except Exception:
-                return  # Lemonade unreachable — skip, will be handled on first prompt
+            # Let exceptions propagate so the DispatchQueue marks the job as
+            # FAILED (not DONE) — the frontend will show "degraded" state.
+            resp = httpx.get(f"{base_url}/health", timeout=5.0)
+            if resp.status_code == 200:
+                all_models = resp.json().get("all_models_loaded", [])
+                if any(m.get("type") in ("llm", "vlm") for m in all_models):
+                    return  # Already loaded — nothing to do
 
             from gaia.llm.lemonade_client import LemonadeClient
 
@@ -215,7 +214,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 except Exception:
                     pass  # proceed with load attempt
 
-                model_id = db.get_setting("custom_model") or "Qwen3.5-35B-A3B-GGUF"
+                from gaia.ui.routers.system import _DEFAULT_MODEL_NAME
+
+                model_id = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
                 LemonadeClient(verbose=False).load_model(
                     model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False
                 )
