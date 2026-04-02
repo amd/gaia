@@ -18,6 +18,7 @@ import './MemoryDashboard.css';
 interface MemoryStats {
     knowledge: {
         total: number;
+        total_retrievals: number;
         by_category: Record<string, number>;
         by_context: Record<string, number>;
         sensitive_count: number;
@@ -177,26 +178,29 @@ function formatRelativeDate(iso: string | null): string {
         const now = Date.now();
         const diff = d.getTime() - now;
         const absDiff = Math.abs(diff);
+        const secs = Math.floor(absDiff / 1000);
         const mins = Math.floor(absDiff / 60000);
         const hours = Math.floor(absDiff / 3600000);
         const days = Math.floor(absDiff / 86400000);
 
         if (diff < 0) {
             // Past
-            if (mins < 5) return 'just now';
+            if (secs < 5) return 'just now';
+            if (secs < 60) return `${secs}s ago`;
             if (hours === 0) return `${mins}m ago`;
             if (days === 0) return `${hours}h ago`;
             if (days === 1) return 'yesterday';
-            if (days < 30) return `${days} days ago`;
-            return formatDate(iso);
+            if (days < 30) return `${days}d ago`;
+            return formatDateFull(iso);
         } else {
             // Future
-            if (mins < 5) return 'now';
+            if (secs < 5) return 'now';
+            if (secs < 60) return `in ${secs}s`;
             if (hours === 0) return `in ${mins}m`;
             if (days === 0) return `in ${hours}h`;
             if (days === 1) return 'tomorrow';
-            if (days < 30) return `in ${days} days`;
-            return formatDate(iso);
+            if (days < 30) return `in ${days}d`;
+            return formatDateFull(iso);
         }
     } catch { return '\u2014'; }
 }
@@ -823,7 +827,7 @@ export function MemoryDashboard() {
                             <div className="mem-stat-cards">
                                 <div className="mem-stat-card" data-accent="purple">
                                     <div className="mem-stat-value">{stats?.knowledge?.total ?? 0}</div>
-                                    <div className="mem-stat-label">Memories</div>
+                                    <div className="mem-stat-label">Stored</div>
                                     <div className="mem-stat-sub">
                                         {(() => {
                                             const addedToday = todayCount(activity);
@@ -836,6 +840,15 @@ export function MemoryDashboard() {
                                                     : 'No entries'
                                             );
                                         })()}
+                                    </div>
+                                </div>
+                                <div className="mem-stat-card" data-accent="gold">
+                                    <div className="mem-stat-value">{stats?.knowledge?.total_retrievals ?? 0}</div>
+                                    <div className="mem-stat-label">Retrieved</div>
+                                    <div className="mem-stat-sub">
+                                        {stats?.knowledge?.total && stats?.knowledge?.total_retrievals
+                                            ? `avg ${(stats.knowledge.total_retrievals / stats.knowledge.total).toFixed(1)}x per memory`
+                                            : 'No recalls yet'}
                                     </div>
                                 </div>
                                 <div className="mem-stat-card" data-accent="blue">
@@ -1179,7 +1192,7 @@ export function MemoryDashboard() {
                                                             </td>
                                                             <td>
                                                                 <span className="mem-date-cell" title={formatDateFull(entry.updated_at)}>
-                                                                    {formatDate(entry.updated_at)}
+                                                                    {formatRelativeDate(entry.updated_at)}
                                                                 </span>
                                                             </td>
                                                             <td>
@@ -1421,7 +1434,7 @@ export function MemoryDashboard() {
                                                         <div className="mem-conv-preview">{turn.content}</div>
                                                     </div>
                                                     <div className="mem-conv-meta">
-                                                        <span>{formatDate(turn.timestamp)}</span>
+                                                        <span>{formatRelativeDate(turn.timestamp)}</span>
                                                     </div>
                                                 </div>
                                             ))}
@@ -1452,7 +1465,7 @@ export function MemoryDashboard() {
                                                 </div>
                                                 <div className="mem-conv-meta">
                                                     <span>{c.turn_count} turns</span>
-                                                    <span>{formatDate(c.last_activity)}</span>
+                                                    <span>{formatRelativeDate(c.last_activity)}</span>
                                                 </div>
                                             </div>
                                         ))}

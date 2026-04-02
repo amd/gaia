@@ -1693,6 +1693,10 @@ class MemoryStore:
             ).fetchone()
             k_newest = k_newest_row[0] if k_newest_row else None
 
+            k_total_retrievals = self._conn.execute(
+                "SELECT COALESCE(SUM(use_count), 0) FROM knowledge"
+            ).fetchone()[0]
+
             # Conversation stats
             c_total = self._conn.execute(
                 "SELECT COUNT(*) FROM conversations"
@@ -1762,6 +1766,7 @@ class MemoryStore:
         return {
             "knowledge": {
                 "total": k_total,
+                "total_retrievals": k_total_retrievals,
                 "by_category": k_by_cat,
                 "by_context": k_by_ctx,
                 "sensitive_count": k_sensitive,

@@ -123,6 +123,7 @@
 .mem-stat-card[data-accent="blue"] .mem-stat-value { color: var(--accent-blue); }
 .mem-stat-card[data-accent="green"] .mem-stat-value { color: var(--accent-green); }
 .mem-stat-card[data-accent="red"] .mem-stat-value { color: var(--amd-red-soft); }
+.mem-stat-card[data-accent="gold"] .mem-stat-value { color: var(--accent-gold); }
 
 /* ── 2. Activity Timeline (CSS bar chart) ────────────────────── */
 .mem-activity-chart {

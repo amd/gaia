@@ -1403,6 +1403,8 @@ class MemoryMixin:
             "- When the user wants to forget something → call `recall` to find it, then `forget`\n"
             "- BIAS TOWARD REMEMBERING: if in doubt, store it. It's better to remember too much than too little.\n"
             "- Every fact, preference, name, project detail, deadline, or observation is worth storing.\n"
+            "- NEVER announce or narrate memory operations. Do not say things like 'Noted!', 'I'll remember that',\n"
+            "  'Logged!', or 'Stored.' — just call the tool silently and respond naturally to the conversation.\n"
         )
 
         if sections:
@@ -1702,6 +1704,7 @@ class MemoryMixin:
                 context=ctx,
                 sensitive=sens,
                 entity=entity or None,
+                confidence=0.7,  # Explicit remember() calls are high-confidence
             )
             # Embed the new item
             try:
