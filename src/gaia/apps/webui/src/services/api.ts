@@ -105,12 +105,16 @@ export async function getSession(id: string): Promise<Session> {
     return apiFetch('GET', `/sessions/${id}`);
 }
 
-export async function updateSession(id: string, data: { title?: string; system_prompt?: string }): Promise<Session> {
+export async function updateSession(id: string, data: { title?: string; system_prompt?: string; private?: boolean }): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}`, data);
 }
 
 export async function deleteSession(id: string): Promise<void> {
     return apiFetch('DELETE', `/sessions/${id}`);
+}
+
+export async function toggleSessionPrivacy(id: string): Promise<Session> {
+    return apiFetch('PATCH', `/sessions/${id}/private`);
 }
 
 export async function getMessages(sessionId: string): Promise<{ messages: Message[]; total: number }> {

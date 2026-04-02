@@ -175,6 +175,21 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for file_mtime: %s", e)
 
+        # Add private column to sessions for per-session incognito mode
+        try:
+            sess_cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+            ]
+            if "private" not in sess_cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN private INTEGER NOT NULL DEFAULT 0"
+                )
+                self._conn.commit()
+                logger.info("Migrated sessions table: added private column")
+        except Exception as e:
+            logger.debug("Migration check for private: %s", e)
+
     def close(self):
         """Close database connection."""
         if self._conn:
@@ -206,6 +221,7 @@ class ChatDatabase:
         model: str = None,
         system_prompt: str = None,
         document_ids: List[str] = None,
+        private: bool = False,
     ) -> Dict[str, Any]:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
@@ -215,9 +231,9 @@ class ChatDatabase:
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (session_id, title, now, now, model, system_prompt),
+                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, title, now, now, model, system_prompt, 1 if private else 0),
             )
 
             # Attach documents if provided
@@ -292,6 +308,7 @@ class ChatDatabase:
         title: str = None,
         system_prompt: str = None,
         document_ids: list = None,
+        private: bool = None,
     ) -> Optional[Dict[str, Any]]:
         """Update session title, system prompt, and/or document_ids."""
         updates = []
@@ -303,6 +320,9 @@ class ChatDatabase:
         if system_prompt is not None:
             updates.append("system_prompt = ?")
             params.append(system_prompt)
+        if private is not None:
+            updates.append("private = ?")
+            params.append(1 if private else 0)
 
         updates.append("updated_at = ?")
         params.append(self._now())

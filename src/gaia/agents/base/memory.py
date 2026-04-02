@@ -278,6 +278,9 @@ class MemoryMixin:
 
         self._memory_context = context
         self._auto_extract_enabled = True
+        # Per-session incognito flag — when True all write operations are no-ops.
+        # Set externally by the UI layer; read on every turn.
+        self._incognito: bool = False
         self._original_user_input: Optional[str] = None
 
         # Embedding infrastructure (lazy-init via _get_embedder)
@@ -1688,7 +1691,7 @@ class MemoryMixin:
 
             # Log to tool_history before re-raising
             try:
-                if hasattr(self, "_memory_store"):
+                if hasattr(self, "_memory_store") and not getattr(self, "_incognito", False):
                     self._memory_store.log_tool_call(
                         session_id=self.memory_session_id,
                         tool_name=tool_name,
@@ -1709,7 +1712,7 @@ class MemoryMixin:
 
         # Log to tool_history
         try:
-            if hasattr(self, "_memory_store"):
+            if hasattr(self, "_memory_store") and not getattr(self, "_incognito", False):
                 self._memory_store.log_tool_call(
                     session_id=self.memory_session_id,
                     tool_name=tool_name,
@@ -1763,6 +1766,8 @@ class MemoryMixin:
         Uses _original_user_input so dynamic context prefix is never persisted.
         """
         if not hasattr(self, "_memory_store"):
+            return
+        if getattr(self, "_incognito", False):
             return
 
         # Use original (pre-augmentation) user text for storage.
@@ -1837,6 +1842,8 @@ class MemoryMixin:
             entity: str = "",
         ) -> dict:
             """Store a fact, preference, or learning in persistent memory. Categories: fact, preference, error, skill, note, reminder. Use due_at for time-sensitive items (ISO 8601). Use context to scope (work, personal). Use sensitive=true for private data. Use entity for linking (person:name, app:name)."""
+            if getattr(mixin, "_incognito", False):
+                return {"status": "skipped", "message": "Memory is paused — this is a private session."}
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
 

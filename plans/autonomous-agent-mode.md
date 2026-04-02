@@ -1,7 +1,7 @@
 # Autonomous Agent Mode — Design Specification
 
-**Branch:** `feature/agent-always-running` (branch off `feature/agent-memory`)  
-**Status:** Draft  
+**Branch:** `feature/agent-always-running` (branch off `feature/agent-memory`)
+**Status:** Draft v2 — security-reviewed
 **Date:** 2026-04-01
 
 ---
@@ -29,426 +29,845 @@ response) mode.
 | # | Goal |
 |---|------|
 | G1 | Agent loop is ON by default; no user action required to start it |
-| G2 | Agent proactively checks memory, goals, and task queue each tick |
-| G3 | Agent can ask the user questions without halting all work |
-| G4 | Agent can self-schedule future wake-ups (e.g., "remind me in 10 min") |
+| G2 | Agent proactively works on explicitly approved goals from memory |
+| G3 | Agent can ask the user questions without halting all other activity |
+| G4 | Agent can self-schedule future wake-ups ("remind me in 10 min") |
 | G5 | User can disable autonomous mode from the Settings UI |
-| G6 | All autonomous activity is visible in the active chat session |
-| G7 | System is safe: agent never runs destructive tools without confirmation |
+| G6 | All autonomous activity is visible, traceable, and auditable |
+| G7 | System is safe: no destructive action without live user approval |
+| G8 | Memory cannot be used as a prompt injection / command injection vector |
+| G9 | Private sessions are never touched by the autonomous loop |
 
 ---
 
 ## 3. Agent Loop State Machine
 
 ```
-                    ┌───────────────────────────────────────────┐
-                    │              RUNNING                       │
-                    │  (default — agent is actively working)    │
-                    └──────────┬─────────────┬──────────────────┘
-                               │             │
-               nothing to do   │             │ agent calls
-               this tick       │             │ request_user_input()
-                               ▼             ▼
-                    ┌──────────────┐   ┌──────────────────┐
-                    │    IDLE      │   │  WAITING_INPUT   │
-                    │ (tick again  │   │  (blocking on    │
-                    │  next cycle) │   │   user reply)    │
-                    └──────────────┘   └────────┬─────────┘
-                                                │
-                              user replies OR   │
-                              timeout + continue│
-                                                ▼
-                                       back to RUNNING
-
-                    ┌──────────────────────────────────────┐
-                    │           SCHEDULED                  │
-                    │  agent returns "SCHEDULE:<secs>"     │
-                    │  loop sleeps until that time         │
-                    └──────────────────────────────────────┘
-
-                    ┌──────────────────────────────────────┐
-                    │            PAUSED                    │
-                    │  always_running=false in settings    │
-                    │  or user explicitly paused           │
-                    └──────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                           RUNNING                                    │
+  │  (agent is actively executing goals / working on tasks)             │
+  └──────────┬──────────────────────┬─────────────────────┬────────────┘
+             │                      │                      │
+     no approved     agent calls    agent calls      always_running
+     goals remain    request_user   set_loop_state   → false
+             │       _input()       ("scheduled",N)       │
+             ▼             ▼              ▼                ▼
+      ┌──────────┐  ┌─────────────┐  ┌───────────┐  ┌─────────┐
+      │   IDLE   │  │WAITING_INPUT│  │ SCHEDULED │  │ PAUSED  │
+      │ (sleeps  │  │ (blocks on  │  │ (sleeps   │  │ (no     │
+      │ until    │  │  user reply │  │  until    │  │  ticks) │
+      │ next     │  │  or timeout)│  │  target   │  │         │
+      │ trigger) │  └──────┬──────┘  │  time)    │  └────┬────┘
+      └────┬─────┘         │         └─────┬─────┘       │
+           │     reply OR  │               │        always_running
+     next  │     timeout + │         time  │         → true
+    trigger│     continue  │         reached         │
+           │               │               │              │
+           └───────────────┴───────────────┴──────────────┘
+                                   │
+                                   ▼
+                               RUNNING
 ```
 
 ### State Transitions
 
 | From | Event | To |
 |------|-------|----|
-| `RUNNING` | agent answers "IDLE" on tick | `IDLE` → sleep → `RUNNING` |
-| `RUNNING` | agent calls `request_user_input()` | `WAITING_INPUT` |
-| `RUNNING` | agent returns `SCHEDULE:<N>` | `SCHEDULED` → sleep N secs → `RUNNING` |
-| `RUNNING` | `always_running` set to `false` | `PAUSED` |
+| `RUNNING` | `set_loop_state("idle")` | `IDLE` → sleep until trigger → `RUNNING` |
+| `RUNNING` | `request_user_input()` called | `WAITING_INPUT` |
+| `RUNNING` | `set_loop_state("scheduled", N)` | `SCHEDULED` → sleep N secs → `RUNNING` |
+| `RUNNING` | `always_running` toggled off | `PAUSED` |
+| `RUNNING` | step budget exhausted (see §7.3) | `IDLE` (forced, logged) |
 | `WAITING_INPUT` | user responds | `RUNNING` |
 | `WAITING_INPUT` | timeout + `continue_if_no_response=true` | `RUNNING` |
 | `WAITING_INPUT` | timeout + `continue_if_no_response=false` | `PAUSED` |
-| `IDLE` | next tick interval | `RUNNING` |
+| `IDLE` | user sends message | `RUNNING` |
+| `IDLE` | tick interval fires | `RUNNING` (only if approved goals exist) |
 | `SCHEDULED` | scheduled time reached | `RUNNING` |
-| `PAUSED` | `always_running` set to `true` | `RUNNING` |
+| `PAUSED` | `always_running` toggled on | `RUNNING` |
+
+**Important:** `IDLE` does not loop unconditionally on every tick. The loop
+only fires a new run if there are approved, pending goals in memory
+(category `goal` or `task`, `status=pending`, `approved_for_auto=true`).
+If none exist, the tick checks once and immediately sleeps again. This
+prevents idle LLM calls when the agent truly has nothing to do.
 
 ---
 
-## 4. Key Components
+## 4. Event-Driven Trigger Queue (Not a Polling Timer)
 
-### 4.1 `AgentLoop` (`src/gaia/ui/agent_loop.py`)
+The loop is **event-driven**, not tick-based. Triggers wake the agent:
 
-Background `asyncio.Task` launched on server startup.
+```
+Trigger sources:
+  ├── user_message       — user sends a chat message (always fires)
+  ├── scheduled          — agent called set_loop_state("scheduled", N)
+  ├── idle_tick          — periodic check (only if pending goals exist)
+  └── external_event     — Phase 2: file change, webhook, etc.
+```
+
+After each agent run completes:
+1. Check if the run produced more approved work (agent created new goals)
+2. If yes → immediately re-trigger (no sleep)
+3. If no → go IDLE, sleep until next trigger
+
+```python
+async def _process_trigger(self, trigger: AgentTrigger):
+    while True:
+        result = await self._run_step(trigger)
+        match result.directive:
+            case "idle":
+                break                         # nothing more to do
+            case "scheduled":
+                self.schedule_at(result.wake_at); break
+            case "waiting_input":
+                break                         # loop resumes via resolve_user_input
+            case "continue":
+                trigger = AgentTrigger("continuation", result)
+                # immediately loop — no sleep needed
+```
+
+**Tick interval** (for idle_tick): 60 seconds (configurable via
+`GAIA_AGENT_TICK_INTERVAL` env var). The tick only fires a run if
+`db.count_pending_autonomous_goals() > 0`.
+
+---
+
+## 5. Key Components
+
+### 5.1 `AgentLoop` (`src/gaia/ui/agent_loop.py`)
 
 ```
 AgentLoop
-├── start()                 — launch background task
-├── stop()                  — graceful shutdown
-├── schedule_tick(delay)    — accelerate next wake-up
-├── _loop()                 — main coroutine: sleep → check settings → tick
-└── _tick()                 — find active session, run background prompt
+├── start(db, app_state)     — launch background task
+├── stop()                   — graceful shutdown
+├── notify_user_message(sid) — called by chat router on every user msg
+├── schedule_tick(delay)     — accelerate next idle-tick
+├── submit_user_input(rid, r)— called by /api/chat/user-input endpoint
+├── _trigger_queue           — asyncio.Queue of AgentTrigger
+├── _loop()                  — main coroutine: drain queue → _process_trigger
+└── _run_step(trigger)       — find session, acquire locks, run agent tick
 ```
 
-**Tick interval:** 60 seconds (configurable via `GAIA_AGENT_TICK_INTERVAL` env var).
+**Active session selection:**
+- Select most recently updated non-private session
+- Skip sessions where `session.private = true` — **always, unconditionally**
+- Skip sessions with no approved pending goals (avoids pointless LLM calls)
 
-**Active session selection:** Most recently updated session in the DB.
-Future: allow per-session loop enable/disable.
+**Startup gate:** The loop does not process triggers until after the
+initialized marker exists (`~/.gaia/chat/initialized`). On first launch,
+no autonomous ticks fire until onboarding completes.
 
-**Background prompt** (injected as user message):
-```
-You are running autonomously. Review your memory, goals, and pending tasks.
-• If there is work to do: do it now using your tools.
-• If you need to ask the user something: use the request_user_input tool.
-• If there is a future task scheduled: respond with exactly SCHEDULE:<seconds>.
-• If there is nothing to do right now: respond with exactly IDLE.
-Do not explain — just act or signal.
-```
+**Tunnel gate:** If `app.state.tunnel.active` is True, the loop is
+**suspended** — no background ticks fire. The user may re-enable via an
+explicit override (`GAIA_AUTONOMOUS_ALLOW_TUNNEL=1`). This prevents remote
+code injection through the tunnel API.
 
-The agent's response is streamed through the normal SSE pipeline so all
-activity appears in the chat UI in real time.
+### 5.2 `set_loop_state` Tool (replaces "respond with IDLE")
 
-### 4.2 `request_user_input` Tool
-
-The most important new agent capability. Allows the agent to pause its
-current work, present a question to the user, and wait for a response —
-all without breaking the SSE stream.
-
-**Signature:**
-```python
-def request_user_input(
-    message: str,
-    timeout_seconds: int = 300,     # 5 min default
-    continue_if_no_response: bool = True,
-) -> Optional[str]
-```
-
-**Flow:**
-```
-Agent thread                    SSE stream                 Browser
-─────────────────────────────────────────────────────────────────
-call request_user_input()   →   emit user_input_request   →  show input UI
-    block (threading.Event)                                   user types...
-                                                              POST /api/chat/user-input
-                            ←   resolve_user_input(resp)
-    unblock, return resp    →   emit status "continuing"   →  hide input UI
-continue working...
-```
-
-**Timeout behavior:**
-- If `continue_if_no_response=True` (default): agent unblocks after timeout
-  and continues with `None` response. Agent should handle `None` gracefully
-  (e.g., use a default value or skip the action).
-- If `continue_if_no_response=False`: agent pauses loop after timeout;
-  user must re-engage to restart.
-
-**Async variant (future):** Agent fires off the request (without blocking)
-and continues other work. The response is delivered to the agent's inbox
-and processed at the next opportunity.
-
-### 4.3 `SSEOutputHandler` Extensions (`src/gaia/ui/sse_handler.py`)
-
-New methods mirroring the existing `confirm_tool_execution` pattern:
+The agent signals its intent explicitly via a registered tool rather than
+returning a magic string. This is reliable regardless of model size.
 
 ```python
-request_user_input(message, timeout, continue_if_no_response) -> Optional[str]
-resolve_user_input(response: str) -> bool
+@tool
+def set_loop_state(
+    self,
+    state: str,          # "idle" | "scheduled" | "paused"
+    reason: str = "",
+    wake_in_seconds: int = 0,   # required when state="scheduled"
+) -> str:
+    """Signal the autonomous loop what to do next.
+
+    Call this when you have finished all current work or need to pause.
+
+    Args:
+        state: "idle"      — nothing more to do right now; loop will check
+                             again at the next tick interval.
+               "scheduled" — wake me up in wake_in_seconds seconds.
+               "paused"    — stop the autonomous loop (requires user action
+                             to restart).
+        reason: Human-readable explanation (shown in activity log).
+        wake_in_seconds: Seconds until next wake-up (only for "scheduled").
+                         Minimum: 30. Maximum: 86400 (24 hours).
+    """
 ```
 
-New SSE event emitted:
-```json
-{
-  "type": "user_input_request",
-  "request_id": "uuid4",
-  "message": "Which directory should I save the report to?",
-  "timeout_seconds": 300,
-  "continue_if_no_response": true
-}
-```
+**Constraints enforced in the tool implementation:**
+- `wake_in_seconds` floor: 30 seconds (prevents infinite loops)
+- `wake_in_seconds` ceiling: 86400 seconds (prevents absurdly far scheduling)
+- If `wake_in_seconds` is below floor, clamp to 30 and log a warning
 
-### 4.4 HTTP Endpoint (`POST /api/chat/user-input`)
+### 5.3 `request_user_input` Tool
 
-Mirrors the existing `/api/chat/confirm-tool` pattern.
-
-```
-POST /api/chat/user-input
-{
-  "session_id": "sess_abc",
-  "request_id":  "uuid4-from-sse-event",
-  "response":    "~/Documents/Reports"
-}
-→ 200 { "status": "ok", "request_id": "..." }
-→ 404 if no active handler for session
-→ 409 if request_id mismatch
-```
-
-### 4.5 Settings (`always_running`)
-
-| Key | Type | Default | Storage |
-|-----|------|---------|---------|
-| `always_running` | bool | `true` | SQLite settings table |
-
-**API:**
-```
-GET  /api/settings  → { "always_running": true, "custom_model": null, ... }
-PUT  /api/settings  { "always_running": false }
-```
-
-**UI:** "Agent Behavior" section in SettingsModal with an ON/OFF toggle.
-Toggle defaults to ON. Toggling calls `PUT /api/settings` immediately.
-
----
-
-## 5. Frontend Changes
-
-### 5.1 Settings Modal — Agent Behavior Section
-
-```
-┌─────────────────────────────────────────────────────┐
-│  Agent Behavior                                     │
-│  ─────────────────────────────────────────────────  │
-│  Always Running                          [ ON ]     │
-│  Agent runs continuously and autonomously.          │
-│  Disable to respond only when you send a message.  │
-└─────────────────────────────────────────────────────┘
-```
-
-### 5.2 User Input Request UI
-
-When the agent emits `user_input_request`, the chat shows a special card:
-
-```
-┌─────────────────────────────────────────────────────┐
-│  🤖 Agent needs your input                          │
-│                                                     │
-│  "Which directory should I save the report to?"    │
-│                                                     │
-│  [___________________________]  [ Send ]            │
-│                                                     │
-│  ⏱ 4:32 remaining  (or continue without response) │
-└─────────────────────────────────────────────────────┘
-```
-
-- Shows countdown timer based on `timeout_seconds`
-- On submit: calls `POST /api/chat/user-input`
-- If timer expires and `continue_if_no_response=true`: card collapses with
-  note "Agent continued without response"
-- Keyboard: Enter submits, Escape dismisses (only if continue_if_no_response)
-
-### 5.3 New Types
-
-```typescript
-// StreamEventType additions
-| 'user_input_request'   // agent needs user input
-| 'agent_loop_status'    // loop state changed (running/idle/scheduled/paused)
-
-// StreamEvent additions
-request_id?: string;              // for user_input_request
-continue_if_no_response?: boolean;
-
-// New top-level interface
-interface UserInputRequest {
-    requestId: string;
-    message: string;
-    timeoutSeconds: number;
-    continueIfNoResponse: boolean;
-    expiresAt: number;  // Date.now() + timeoutSeconds * 1000
-}
-```
-
-### 5.4 Chat Store Updates
-
-```typescript
-// useChatStore additions
-pendingUserInputRequests: UserInputRequest[];
-addUserInputRequest: (req: UserInputRequest) => void;
-removeUserInputRequest: (requestId: string) => void;
-```
-
-When the stream delivers a `user_input_request` event, add it to the store.
-The `UserInputRequestCard` component subscribes and renders it.
-
----
-
-## 6. Agent Tool Registration
-
-The `request_user_input` tool is registered on the base `Agent` class and
-available to all agent types. It is listed in the system prompt tool
-description so the LLM knows it can use it.
+Allows the agent to pause and ask the user a question via the SSE stream.
 
 ```python
 @tool
 def request_user_input(
     self,
     message: str,
+    choices: Optional[List[str]] = None,      # show buttons instead of text field
+    default_if_no_response: Optional[str] = None,  # returned on timeout
     timeout_seconds: int = 300,
     continue_if_no_response: bool = True,
 ) -> str:
     """Ask the user a question and wait for their response.
 
-    Use this when you need information from the user to proceed.
-    The agent will pause and wait for the user's reply.
-
     Args:
-        message: The question to ask the user.
-        timeout_seconds: How long to wait for a response (default: 300 = 5 min).
-        continue_if_no_response: If True, continue working after timeout
-            even without a response. If False, pause the agent loop.
+        message: The question to present to the user.
+        choices: Optional list of choices (renders as buttons in the UI).
+        default_if_no_response: Value to use if no response received before
+            timeout. If not set and continue_if_no_response=True, returns
+            the sentinel string "__NO_RESPONSE__". Callers must check for
+            this value and handle it explicitly — never proceed blindly.
+        timeout_seconds: How long to wait (min 10, default 300).
+        continue_if_no_response: If True, continue working after timeout.
+            If False, the loop pauses until user re-engages.
 
     Returns:
-        The user's response text, or empty string if no response received.
+        User's response string, chosen option, or "__NO_RESPONSE__" if
+        timed out and no default was provided. ALWAYS check the return value.
     """
-    result = self._request_user_input(message, timeout_seconds, continue_if_no_response)
-    return result or ""
+```
+
+**Return value contract:**
+- User responded: returns their text or chosen option
+- Timeout + `default_if_no_response` set: returns the default
+- Timeout + no default + `continue_if_no_response=True`: returns `"__NO_RESPONSE__"`
+- Never returns empty string `""` — this prevents silent blind-proceed bugs
+
+**Callers must handle `"__NO_RESPONSE__"` explicitly:**
+```python
+response = self.request_user_input("Which folder?", default_if_no_response="~/Documents")
+# response is always a real value here — default used on timeout
+```
+```python
+response = self.request_user_input("Confirm deletion?", continue_if_no_response=True)
+if response == "__NO_RESPONSE__":
+    self.set_loop_state("idle", reason="Awaiting user confirmation before delete")
+    return  # do NOT proceed
+```
+
+**Input request queue:** Multiple concurrent requests are supported.
+`SSEOutputHandler` maintains an ordered `deque` of pending requests rather
+than a single slot. Each request has a unique `request_id`. The frontend
+renders all pending requests; each is resolved independently by `request_id`.
+
+### 5.4 Background Mode: Destructive Tool Handling
+
+When a tick runs in the background (no user actively watching), any tool
+in `TOOLS_REQUIRING_CONFIRMATION` behaves differently:
+
+| Context | Behavior |
+|---------|----------|
+| User-initiated (SSE open) | Show overlay, wait 60s, deny on timeout |
+| Background tick (no active SSE) | **Immediately deny** — no waiting |
+
+On immediate deny, the agent receives:
+```
+"Tool '[tool_name]' requires live user approval and cannot run unattended.
+ Use request_user_input() to notify the user and ask them to approve,
+ then retry in a subsequent turn."
+```
+
+This prevents the background loop from holding the semaphore for 60-second
+stretches and prevents silent retry storms.
+
+**How to detect background context:** `SSEOutputHandler` gains a
+`background_mode: bool` flag, set to `True` by `AgentLoop._run_step()`.
+`confirm_tool_execution()` checks this flag and short-circuits.
+
+### 5.5 `SSEOutputHandler` Changes (`src/gaia/ui/sse_handler.py`)
+
+```python
+class SSEOutputHandler(OutputHandler):
+    def __init__(self, background_mode: bool = False):
+        ...
+        self.background_mode = background_mode
+        # User input request queue (ordered, multi-slot)
+        self._user_input_queue: deque = deque()
+        # Per-request events: request_id -> threading.Event
+        self._user_input_events: dict = {}
+        self._user_input_results: dict = {}
+
+    def confirm_tool_execution(self, tool_name, tool_args, timeout=60) -> bool:
+        if self.background_mode:
+            # Immediate deny — no waiting, no semaphore hold
+            self._emit({
+                "type": "tool_confirm_denied",
+                "tool": tool_name,
+                "reason": "unattended",
+                "message": f"'{tool_name}' requires live user approval.",
+            })
+            return False
+        # ... existing blocking logic unchanged ...
+
+    def request_user_input(self, message, choices=None,
+                           default_if_no_response=None,
+                           timeout=300, continue_if_no_response=True) -> str:
+        ...  # uses _user_input_queue, not single-slot fields
+
+    def resolve_user_input(self, request_id: str, response: str) -> bool:
+        ...  # looks up by request_id in _user_input_events
+```
+
+### 5.6 Path Access in Background Mode
+
+`PathValidator.is_path_allowed()` accepts a `prompt_user: bool` parameter.
+`AgentLoop` **always calls with `prompt_user=False`**. This means:
+
+- Out-of-scope path access is **denied silently** in background mode
+- The agent receives `"Access denied: path outside allowed directories"`
+- The agent can use `request_user_input` to ask the user to expand permissions
+
+`PathValidator` also enforces: background mode (non-interactive) calls
+**never** invoke `_prompt_user_for_access()`, which calls `input()` and
+would deadlock the server thread (no stdin in background).
+
+Additionally: background ticks **do not expand `allowed_paths`** at runtime.
+The `[always]` option in the path prompt persists to disk —  this is too
+powerful for unattended use. Path expansion is only permitted in interactive
+(user-present) sessions.
+
+---
+
+## 6. Memory & Goals — Safe Autonomous Execution Model
+
+### 6.1 New Memory Categories
+
+```python
+VALID_CATEGORIES: frozenset = frozenset({
+    "fact", "preference", "error", "skill", "note",
+    "reminder", "system", "profile",
+    "goal",    # NEW — an objective the agent should work toward
+    "task",    # NEW — a discrete, completable action item
+})
+```
+
+### 6.2 Goal/Task Schema
+
+Goals and tasks stored in memory carry additional metadata:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `approved_for_auto` | bool | **Must be True** for autonomous execution. Default: False. |
+| `status` | str | `pending` \| `in_progress` \| `done` \| `blocked` \| `cancelled` |
+| `created_by` | str | `user` \| `agent` — who created this goal |
+| `due_at` | ISO str | Optional deadline |
+
+**The autonomous loop only executes goals where:**
+1. `category in ("goal", "task")`
+2. `approved_for_auto = True`
+3. `status = "pending"`
+
+Goals created by the agent itself (`created_by="agent"`) default to
+`approved_for_auto=False`. They appear in the UI as suggestions the user
+must approve before the agent will act on them. **An agent can never
+autonomously execute a goal it created itself on the same tick.**
+
+Goals created by the user via the memory API or chat (`created_by="user"`)
+can be created with `approved_for_auto=True` directly.
+
+### 6.3 Memory Injection Mitigation
+
+The background tick prompt **does not say "act on whatever is in memory."**
+It says:
+
+```
+You are running autonomously. Check for approved pending goals:
+  memory_search(category="goal", status="pending", approved_for_auto=True)
+  memory_search(category="task", status="pending", approved_for_auto=True)
+
+Work on whatever you find. If there are no approved goals, call
+set_loop_state("idle", reason="No approved pending goals").
+
+For any destructive operation (delete, overwrite, shell command), you MUST
+use request_user_input() to ask first — never proceed without confirmation.
+```
+
+This means:
+- Injected `reminder` / `note` / `fact` entries are **never** treated as
+  executable commands
+- Only entries explicitly categorized as `goal` or `task` with
+  `approved_for_auto=True` are acted upon
+- Any `goal`/`task` created via the tunnel API is created with
+  `approved_for_auto=False` by default and requires in-app approval
+
+---
+
+## 7. Session History — Background Ticks Are Not User Messages
+
+### 7.1 New Message Role: `autonomous`
+
+The database gains a fourth message role alongside `user`, `assistant`,
+`system`:
+
+```sql
+-- messages.role CHECK constraint updated to include 'autonomous'
+role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system', 'autonomous'))
+```
+
+Background tick prompts are stored with `role="autonomous"`:
+- Included in conversation history sent to the LLM (the agent needs context)
+- **Excluded** from the UI message list (user never sees raw tick prompts)
+- Excluded from session exports
+- Visible only in the Activity Log (§9)
+
+The assistant's response to an autonomous tick is stored as `role="assistant"`
+with an `activity_id` field linking it to the audit log entry. The UI can
+optionally show these with a visual tag ("Agent acted autonomously").
+
+### 7.2 Conversation History Injection
+
+When building history pairs for the LLM, `_build_history_pairs()` includes
+autonomous turns like this:
+
+```python
+# autonomous turns appear as [SYSTEM] prefixed user messages in context
+{"role": "user", "content": "[AUTONOMOUS TICK] " + tick_prompt}
+{"role": "assistant", "content": agent_response}
+```
+
+A rolling window cap applies: at most 5 recent autonomous turns are included
+in history, preventing context window saturation from repeated ticks.
+
+### 7.3 Step Budget and Rate Limiting
+
+| Limit | Default | Config key |
+|-------|---------|------------|
+| Max steps per autonomous tick | 20 | `GAIA_AUTO_MAX_STEPS` |
+| Max autonomous ticks per hour | 30 | `GAIA_AUTO_MAX_TICKS_PER_HOUR` |
+| Max agent-created goals per day | 10 | `GAIA_AUTO_MAX_GOALS_PER_DAY` |
+| Min schedule interval | 30s | hardcoded |
+| Max schedule lookahead | 86400s | hardcoded |
+
+When `max_steps` is reached mid-tick, the agent is forced to `IDLE` and a
+warning is added to the activity log: "Tick exceeded step budget — partially
+completed work may need review."
+
+When the hourly rate limit is hit, all further ticks are suppressed and a
+notification is shown in the UI: "Autonomous loop rate-limited — check
+activity log."
+
+---
+
+## 8. Audit Log & Traceability (Phase 1 Requirement)
+
+Every autonomous action must be traceable. This is **not** a Phase 3 nice-
+to-have — it is a Phase 1 requirement. Users must be able to see exactly
+what the agent did without asking, especially for anything affecting files
+or memory.
+
+### 8.1 Activity Log — SQLite Table
+
+```sql
+CREATE TABLE IF NOT EXISTS autonomous_activity (
+    id          TEXT PRIMARY KEY,       -- UUID
+    session_id  TEXT NOT NULL,
+    trigger     TEXT NOT NULL,          -- "user_message"|"scheduled"|"idle_tick"
+    trigger_goal_id TEXT,               -- memory entry ID that triggered this run
+    started_at  TEXT NOT NULL,          -- ISO 8601
+    ended_at    TEXT,
+    outcome     TEXT,                   -- "completed"|"idle"|"scheduled"|"error"|"rate_limited"
+    steps_taken INTEGER DEFAULT 0,
+    tools_called TEXT,                  -- JSON array of tool names used
+    files_read  TEXT,                   -- JSON array of file paths
+    files_written TEXT,                 -- JSON array of file paths
+    memory_read TEXT,                   -- JSON array of memory IDs queried
+    memory_written TEXT,                -- JSON array of memory IDs created/updated
+    user_input_requests TEXT,           -- JSON array of request_user_input calls
+    error_message TEXT,
+    message_id  INTEGER,                -- FK to messages table (agent's response)
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+CREATE INDEX idx_activity_session ON autonomous_activity(session_id);
+CREATE INDEX idx_activity_started ON autonomous_activity(started_at DESC);
+```
+
+### 8.2 Activity REST API
+
+```
+GET  /api/agent/activity?session_id=&limit=20&offset=0
+     → { activities: [...], total: N }
+
+GET  /api/agent/activity/{activity_id}
+     → full activity record
+
+DELETE /api/agent/activity/{activity_id}
+     → 204 (admin cleanup only)
+```
+
+### 8.3 Activity UI
+
+The chat sidebar gains an "Activity" tab (or footer link). It shows:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Agent Activity                                     │
+│  ─────────────────────────────────────────────────  │
+│  ✓ 14:32  Summarised Q1 report (3 tools, 8 steps)  │
+│  ✓ 14:01  Set reminder for weekly review            │
+│  ⏸ 13:55  Awaiting approval: delete ~/tmp/*.log    │
+│  ✗ 13:20  Rate limited (30 ticks/hr reached)        │
+│  ─────────────────────────────────────────────────  │
+│  [View full log]                                    │
+└─────────────────────────────────────────────────────┘
+```
+
+Expanding an entry shows: trigger, goal that was worked on, each tool call
+with args and result summary, files touched, memory entries created.
+
+---
+
+## 9. HTTP Endpoint: User Input Response
+
+```
+POST /api/chat/user-input
+{
+  "session_id": "sess_abc",
+  "request_id": "uuid4-from-sse-event",
+  "response":   "~/Documents/Reports"
+}
+→ 200 { "status": "ok", "request_id": "..." }
+→ 404 if no active SSE handler for session
+→ 409 if request_id not found in the pending queue
 ```
 
 ---
 
-## 7. AgentLoop + Chat Semaphore Integration
+## 10. Settings
 
-The `AgentLoop` background tick must respect the existing concurrency
-controls to avoid corrupting session state:
+| Key | Type | Default | Storage |
+|-----|------|---------|---------|
+| `always_running` | bool | `true` | SQLite settings table |
+
+```
+GET  /api/settings  → { "always_running": true, "custom_model": null, ... }
+PUT  /api/settings  { "always_running": false }
+```
+
+Toggling `always_running` to `false` immediately transitions the loop to
+`PAUSED` — any in-flight tick is allowed to complete its current step, then
+stops.
+
+---
+
+## 11. Private Sessions
+
+Sessions with `private=True` are **never touched by the autonomous loop**,
+unconditionally. This applies to:
+- Active session selection in `_get_active_session()` — skipped entirely
+- The `notify_user_message()` trigger — if the session is private, no
+  autonomous continuation fires after the agent responds
+- The activity log — no entries for private sessions
+
+This is enforced at the `AgentLoop` level, not just the settings level.
+Even with `always_running=True`, private sessions are never autonomously
+processed.
+
+---
+
+## 12. Tunnel Safety
+
+When `app.state.tunnel.active` is `True`:
+
+1. The `AgentLoop` suspends all idle-tick firing
+2. User-message triggers still fire (the user is actively interacting)
+3. Goals created via the tunnel API are created with `approved_for_auto=False`
+   regardless of the request payload
+4. To re-enable autonomous idle-ticks over the tunnel, the user must set
+   `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` in their environment
+
+---
+
+## 13. User-Message → Autonomous Continuation
+
+When a user sends a message and the agent responds, if `always_running=True`:
+
+1. Chat router calls `agent_loop.notify_user_message(session_id)` after response
+2. `AgentLoop` enqueues a `AgentTrigger("user_message_followup", session_id)`
+3. On the next loop iteration, agent checks for approved pending goals
+4. If goals exist → continues working autonomously
+5. If no goals → immediately goes `IDLE` (no LLM call)
+
+This means "always running" applies to the entire agent lifecycle, not just
+background ticks. A user saying "summarise all my Q1 docs" gets a response,
+then the agent immediately continues on the next goal without the user having
+to send another message.
+
+---
+
+## 14. Time Awareness
+
+The agent needs current time for scheduling. `system_context.py` (already
+on the `feature/agent-memory` branch) injects a `system_context` block into
+every autonomous tick's context:
 
 ```python
-async def _run_background_tick(self, session):
-    # Acquire the same semaphore as user-initiated messages
-    # (but with a shorter timeout — skip if busy, don't queue)
+# Prepended to the autonomous tick prompt:
+f"Current date/time: {datetime.now().isoformat()}\n"
+f"Timezone: {tzlocal.get_localzone_name()}\n"
+```
+
+This allows the agent to reason: "the user asked me to check back at 3pm —
+that's 2 hours 14 minutes from now → SCHEDULE:8040".
+
+---
+
+## 15. Visual Distinction: Autonomous vs User-Prompted Messages
+
+Messages produced by autonomous ticks have an `activity_id` field in the DB.
+The UI renders these with:
+- A small "⚡ Autonomous" badge beneath the assistant message
+- A link to the activity log entry ("3 tools · 8 steps")
+- Slightly different background shade (configurable via CSS variable)
+
+This ensures users always know whether the agent was responding to them or
+acting on its own initiative.
+
+---
+
+## 16. Frontend Changes
+
+### 16.1 Settings Modal — Agent Behavior Section
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Agent Behavior                                     │
+│  ─────────────────────────────────────────────────  │
+│  Always Running                          [ ON ]     │
+│  Agent works on approved goals automatically.       │
+│  Disable to respond only when you send a message.  │
+└─────────────────────────────────────────────────────┘
+```
+
+### 16.2 User Input Request Card
+
+```
+┌─────────────────────────────────────────────────────┐
+│  ⚡ Agent needs your input                          │
+│  (Working on: "Summarise Q1 reports")               │
+│                                                     │
+│  "Which directory should I save the output?"       │
+│                                                     │
+│  [~/Documents]  [~/Desktop]  [Other...]            │  ← choices buttons
+│   ── or ──                                         │
+│  [___________________________]  [ Send ]            │
+│                                                     │
+│  ⏱ 4:32 remaining · will use default if no reply  │
+└─────────────────────────────────────────────────────┘
+```
+
+- `choices` renders as buttons (fast selection, no typing needed)
+- Timer countdown from `timeout_seconds`
+- "will use default if no reply" only shown when `default_if_no_response` set
+- Multiple cards stack if agent asks several questions in sequence
+- Each resolves independently; resolved cards collapse with the user's answer
+
+### 16.3 Permission Request Overlay (Autonomous Context)
+
+When a destructive tool fires during autonomous execution, the overlay shows:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  ⚡ Agent Action — Autonomous                       │
+│                                                     │
+│  Working on: "Clean up ~/tmp directory"            │  ← goal context
+│  Wants to run: run_shell_command                    │
+│  Command: rm -rf ~/tmp/*.log                        │
+│                                                     │
+│  [ Allow ]    [ Deny ]    [ View Activity Log ]    │
+│                                                     │
+│  ⏱ 58s remaining                                   │
+└─────────────────────────────────────────────────────┘
+```
+
+The `permission_request` SSE event gains two new fields:
+- `triggered_by: str` — goal/task ID or "user_message"
+- `task_context: str` — human-readable description of what the agent was doing
+
+### 16.4 New Types
+
+```typescript
+// StreamEventType additions
+| 'user_input_request'   // agent needs user input
+| 'agent_loop_status'    // loop state changed (running/idle/scheduled/paused)
+| 'tool_confirm_denied'  // tool denied immediately (background mode)
+
+// StreamEvent additions
+request_id?: string;
+continue_if_no_response?: boolean;
+choices?: string[];
+default_if_no_response?: string;
+// permission_request additions:
+triggered_by?: string;
+task_context?: string;
+
+// UserInputRequest interface
+interface UserInputRequest {
+    requestId: string;
+    message: string;
+    choices?: string[];
+    defaultIfNoResponse?: string;
+    timeoutSeconds: number;
+    continueIfNoResponse: boolean;
+    expiresAt: number;   // Date.now() + timeoutSeconds * 1000
+}
+```
+
+### 16.5 Chat Store Updates
+
+```typescript
+pendingUserInputRequests: UserInputRequest[];
+addUserInputRequest:    (req: UserInputRequest) => void;
+removeUserInputRequest: (requestId: string)     => void;
+```
+
+---
+
+## 17. AgentLoop + Concurrency Controls
+
+```python
+async def _run_step(self, trigger: AgentTrigger, session: dict):
+    semaphore = self._app_state.chat_semaphore
+    session_locks = self._app_state.session_locks
+    sid = session["id"]
+
+    # Background ticks: skip if busy (don't queue)
+    # User-message followup: wait up to 10s (user is actively present)
+    timeout = 10.0 if trigger.source == "user_message_followup" else 3.0
     try:
-        await asyncio.wait_for(chat_semaphore.acquire(), timeout=5.0)
+        await asyncio.wait_for(semaphore.acquire(), timeout=timeout)
     except asyncio.TimeoutError:
-        logger.debug("AgentLoop: server busy, skipping tick")
+        logger.debug("AgentLoop: server busy, skipping trigger %s", trigger.source)
         return
+
     try:
-        # Also acquire per-session lock
         session_lock = session_locks.setdefault(sid, asyncio.Lock())
-        if not await asyncio.wait_for(session_lock.acquire(), timeout=2.0):
+        try:
+            await asyncio.wait_for(session_lock.acquire(), timeout=2.0)
+        except asyncio.TimeoutError:
+            semaphore.release()
             return
         try:
-            await self._stream_background_prompt(session)
+            sse_handler = SSEOutputHandler(background_mode=True)
+            await self._stream_autonomous_prompt(session, sse_handler)
         finally:
             session_lock.release()
     finally:
-        chat_semaphore.release()
-```
-
-This ensures:
-- Background ticks never interrupt user messages
-- User messages never interrupt a background tick
-- Skip (not queue) if system is busy — next tick will catch up
-
----
-
-## 8. Memory Integration
-
-The autonomous loop is most powerful when combined with the Memory system
-(`feature/agent-memory`). On each tick, the agent can:
-
-1. Query `memory_search("pending tasks")` to find open goals
-2. Check `memory_search("scheduled")` for time-based reminders
-3. Act on what it finds, storing results back in memory
-4. Use `request_user_input` if it needs clarification
-
-Example flow:
-```
-Tick fires →
-  Agent: memory_search("pending tasks") → "Summarize Q1 report"
-  Agent: read_file("q1_report.pdf") → [content]
-  Agent: write_file("q1_summary.md") → done
-  Agent: remember("Completed Q1 summary", category="completed_task")
-  Agent: answer("I finished summarizing the Q1 report → q1_summary.md")
+        semaphore.release()
 ```
 
 ---
 
-## 9. Implementation Checklist
+## 18. Implementation Checklist
 
-### Phase 1 — Foundation (this branch: `feature/agent-always-running`)
+### Phase 1 — Foundation (branch: `feature/agent-always-running`)
 
-- [x] `always_running` setting in backend (models.py, system.py router)
-- [x] `always_running` toggle in SettingsModal
-- [x] `loop_state` field on base `Agent` class
-- [x] `SSEOutputHandler.request_user_input()` + `resolve_user_input()`
-- [x] `POST /api/chat/user-input` endpoint
-- [x] `submitUserInput()` in api.ts
-- [x] `user_input_request` StreamEventType + fields in types/index.ts
-- [ ] `AgentLoop` background task (`agent_loop.py`) — wired into server lifespan
-- [ ] `request_user_input` registered as `@tool` on base Agent class
-- [ ] `UserInputRequestCard` frontend component (shows question + timer + input)
-- [ ] Chat store: `pendingUserInputRequests` state
-- [ ] Stream handler: dispatch `user_input_request` events to store
-- [ ] `agent_loop_status` SSE event + frontend indicator
+**Memory / Data Layer:**
+- [ ] Add `goal`, `task` to `VALID_CATEGORIES` in `memory_store.py`
+- [ ] Add `approved_for_auto`, `status`, `created_by` fields to knowledge store
+- [ ] Add `autonomous_activity` table to `ChatDatabase`
+- [ ] Add `autonomous` to the message `role` constraint
+- [ ] `_build_history_pairs()` rolling window cap for autonomous turns (max 5)
+
+**Agent Loop:**
+- [ ] `AgentLoop` class (`agent_loop.py`) — trigger queue, startup gate, tunnel gate
+- [ ] `set_loop_state` tool registered on base `Agent`
+- [ ] `request_user_input` tool registered on base `Agent` (with `choices`, `default_if_no_response`, `"__NO_RESPONSE__"` sentinel)
+- [ ] `SSEOutputHandler.background_mode` flag + immediate deny for destructive tools
+- [ ] `SSEOutputHandler` user input request queue (replace single slot with `deque`)
+- [ ] `PathValidator`: enforce `prompt_user=False` in background mode (no `input()` calls)
+- [ ] `AgentLoop._get_active_session()` skips private sessions unconditionally
+- [ ] `set_loop_state` enforces `wake_in_seconds` floor (30s) and ceiling (86400s)
+- [ ] Per-tick step budget (default 20), hourly rate limit (default 30)
+- [ ] Daily agent-created goal limit (default 10)
+
+**Server Integration:**
+- [ ] `AgentLoop` started in `server.py` lifespan (after init gate check)
+- [ ] `chat_router.py` calls `agent_loop.notify_user_message(sid)` after each response
+- [ ] `POST /api/chat/user-input` endpoint (resolves by `request_id` in queue)
+
+**Settings:**
+- [ ] `always_running` in `SettingsResponse` + `SettingsUpdateRequest` (default True)
+- [ ] GET/PUT `/api/settings` handles `always_running`
+
+**Audit Log:**
+- [ ] `GET /api/agent/activity` + `GET /api/agent/activity/{id}` endpoints
+- [ ] Activity log written on every autonomous tick (start, tools, files, outcome)
+- [ ] Messages from autonomous ticks store `activity_id`
+
+**Frontend:**
+- [ ] `always_running` toggle in SettingsModal ("Agent Behavior" section)
+- [ ] `user_input_request` StreamEventType + fields (`choices`, `default_if_no_response`)
+- [ ] `UserInputRequestCard` component (choices buttons, countdown, stacking)
+- [ ] Chat store `pendingUserInputRequests` + add/remove actions
+- [ ] Stream handler dispatches `user_input_request` to store
+- [ ] `permission_request` overlay: show `triggered_by` + `task_context`
+- [ ] Activity feed UI (sidebar tab or footer)
+- [ ] "⚡ Autonomous" badge on assistant messages with `activity_id`
+- [ ] `submitUserInput(sessionId, requestId, response)` in `api.ts`
+- [ ] `agent_loop_status` event updates a loop-state indicator in the header
 
 ### Phase 2 — Polish
 
-- [ ] Per-session always_running override (session settings)
-- [ ] `SCHEDULE:<seconds>` response parsing in AgentLoop
-- [ ] Async `request_user_input` (non-blocking variant)
-- [ ] Agent inbox for async responses
-- [ ] Loop activity indicator in the sidebar/header
+- [ ] Per-session `always_running` override
+- [ ] Adaptive tick interval (faster when goals pending, slower when idle)
+- [ ] Async `request_user_input` (non-blocking, inbox-based)
+- [ ] Goal approval UI (approve/reject agent-suggested goals inline)
 - [ ] "Agent paused" banner when `always_running=false`
-- [ ] Configurable tick interval via env var / settings
+- [ ] Configurable budgets via Settings UI
 
 ### Phase 3 — Advanced Autonomy
 
-- [ ] Goal/task queue in memory: agent adds tasks, loop processes them
-- [ ] Multi-session loop (run across all active sessions in priority order)
-- [ ] Agent-to-agent delegation (spawn sub-agents for parallel work)
-- [ ] Scheduled tasks with cron-like syntax in memory
-- [ ] Push notifications when agent completes something significant
-- [ ] Loop history / audit trail in the UI
+- [ ] External event triggers (file change, webhook)
+- [ ] Multi-session loop (priority ordering)
+- [ ] Push notifications for significant completions
+- [ ] Cron-like scheduled tasks in memory
 
 ---
 
-## 10. Security Considerations
+## 19. Security Summary
 
-- All tools that modify files/system still require `TOOLS_REQUIRING_CONFIRMATION`
-  confirmation even in autonomous mode
-- Background tick prompt is injected as a user message — it goes through
-  the same safety pipeline as real user messages
-- `request_user_input` timeout prevents the agent from holding up the
-  server thread indefinitely
-- `always_running=false` is a complete kill switch; all autonomous activity
-  stops immediately
-- The AgentLoop only operates on the most recently active session by default
-  — it does not create new sessions or touch sessions the user hasn't opened
+| Risk | Mitigation |
+|------|-----------|
+| `input()` deadlock in background | `prompt_user=False` enforced in all AgentLoop path checks |
+| Tool confirm timeout (60s semaphore hold) | `background_mode=True` → immediate deny, no wait |
+| Memory injection / command injection | Goals require `approved_for_auto=True`; injected reminders/notes never executed |
+| Session history pollution | Tick prompts stored as `role="autonomous"`, hidden from UI |
+| Unbounded LLM calls | Per-tick step budget + hourly rate limit + daily goal limit |
+| No audit trail | `autonomous_activity` table is a Phase 1 requirement |
+| PathValidator `[always]` expansion | Background mode never calls `_prompt_user_for_access()` |
+| SCHEDULE:1 infinite loop | `wake_in_seconds` clamped to [30, 86400] |
+| Tunnel → remote code injection | Loop suspended when tunnel active; tunnel goal API always creates with `approved_for_auto=False` |
+| Multi-slot user input race | `deque`-based queue, resolved by `request_id` |
+| No goal/task memory category | `"goal"`, `"task"` added to `VALID_CATEGORIES` |
+| `allowed_paths` defaults to `~` | Background ticks enforce read-only unless explicit write scope |
+| Empty-string blind proceed | Returns `"__NO_RESPONSE__"` sentinel; callers must check |
+| Confirm overlay lacks context | `triggered_by` + `task_context` fields on `permission_request` event |
+| Private session exposure | Private sessions unconditionally excluded from all loop operations |
 
 ---
 
-## 11. Open Questions
+## 20. Open Questions
 
-1. **Tick interval**: 60s default — is this too frequent? Too slow?
-   Consider making it adaptive (faster when there's pending work, slower when idle).
+1. **Autonomous turn history cap**: 5 recent turns seems right but needs
+   empirical testing. Too few → agent loses context of what it just did.
+   Too many → context window saturation for long-running autonomous sessions.
 
-2. **Background prompt injection**: Should the background tick show in the
-   chat history as a "system" message, or be hidden from the user? Currently
-   it would appear as a user message, which is confusing.
-   Proposal: tag it with `role="system"` and hide it in the UI, but log it.
+2. **Goal approval UX**: Where should unapproved agent-created goals appear?
+   Options: inline in chat ("I'd like to also do X — approve?"), a dedicated
+   "Pending Goals" panel, or a notification badge. Inline feels most natural
+   but could be annoying if the agent suggests many goals.
 
-3. **Session selection**: What if the user has 5 sessions? Should the loop
-   run on ALL of them, or just the most recently active one?
-   Proposal: run on all sessions that have `autorun=true` (per-session flag,
-   phase 2 feature).
+3. **`always_running` default for new installations**: Starting with `true`
+   on a clean install (no goals in memory) means the first few ticks fire,
+   find nothing, go idle, and stop. That's low-cost and correct — but may
+   surprise users who haven't opted in to autonomous mode. Consider:
+   `always_running` defaults to `false` until after first-boot onboarding
+   is complete, then auto-enables.
 
-4. **Async user input**: The blocking `request_user_input` is simple but
-   prevents the agent from doing other work while waiting. A non-blocking
-   "fire and forget" variant that delivers the response to the agent's inbox
-   is more powerful but requires a task queue mechanism.
-
-5. **Model compatibility**: The background tick prompt assumes the LLM
-   understands "respond with exactly IDLE". Smaller models may not follow
-   this reliably. We may need a structured output approach (JSON) instead.
+4. **Autonomous history in exports**: Should session exports include
+   autonomous turns? They're part of the conversation context but were never
+   visible in the UI. Proposal: include them in a separate appendix section
+   of the export, clearly labelled.

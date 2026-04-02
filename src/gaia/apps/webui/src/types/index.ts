@@ -12,6 +12,7 @@ export interface Session {
     system_prompt: string | null;
     message_count: number;
     document_ids: string[];
+    private?: boolean;
 }
 
 export interface InferenceStats {

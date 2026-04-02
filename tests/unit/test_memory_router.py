@@ -28,6 +28,9 @@ Endpoints covered:
   GET  /api/memory/embedding-coverage (v2)
   POST /api/memory/rebuild-fts
   POST /api/memory/prune
+  GET  /api/memory/settings
+  PUT  /api/memory/settings
+  DELETE /api/memory/all
 """
 
 import sqlite3
@@ -56,17 +59,25 @@ def test_store(tmp_path):
 @pytest.fixture
 def client(test_store):
     """FastAPI TestClient with the memory router and injected test store."""
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.dependencies import get_db
+
     app = FastAPI()
     app.include_router(memory_router_mod.router)
 
     # Inject test store into the module-level singleton
     memory_router_mod._store = test_store
 
+    # Override the DB dependency so settings endpoints work without a real server
+    db = ChatDatabase(":memory:")
+    app.dependency_overrides[get_db] = lambda: db
+
     with TestClient(app) as c:
         yield c
 
     # Reset singleton so other tests get a fresh one
     memory_router_mod._store = None
+    db.close()
 
 
 # ---------------------------------------------------------------------------
@@ -758,14 +769,22 @@ class TestConsolidateEndpoint:
 class TestRebuildEmbeddingsEndpoint:
     """Test POST /api/memory/rebuild-embeddings endpoint."""
 
-    def test_rebuild_embeddings_returns_501_when_not_implemented(
+    def test_rebuild_embeddings_returns_500_when_backfill_not_implemented(
         self, client, test_store
     ):
-        """POST /api/memory/rebuild-embeddings returns 501 without store method."""
+        """POST /api/memory/rebuild-embeddings returns 500 when store lacks backfill_embeddings.
+
+        Unlike consolidate/reconcile which return 503 (no agent) or 501 (not
+        implemented), rebuild-embeddings always tries the LemonadeProvider path
+        and returns 500 for any error — including a missing store method.
+        """
         if hasattr(test_store, "backfill_embeddings"):
             pytest.skip("MemoryStore now implements backfill_embeddings")
-        resp = client.post("/api/memory/rebuild-embeddings")
-        assert resp.status_code == 501
+        mock_provider = MagicMock()
+        mock_provider.embed.return_value = [[0.1] * 768]
+        with patch("gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider):
+            resp = client.post("/api/memory/rebuild-embeddings")
+        assert resp.status_code == 500
 
     def test_rebuild_embeddings_returns_200_when_implemented(self, client, test_store):
         """POST /api/memory/rebuild-embeddings returns 200 with mock method."""
@@ -1178,3 +1197,152 @@ class TestConversationsV2:
             "/api/memory/conversations/search?query=Searchable+v2+conversation"
         )
         assert resp.status_code == 200
+
+
+# ===========================================================================
+# Settings Endpoints
+# ===========================================================================
+
+
+class TestMemorySettings:
+    """Test GET/PUT /api/memory/settings endpoints."""
+
+    def test_get_settings_returns_200(self, client):
+        """GET /api/memory/settings returns 200."""
+        resp = client.get("/api/memory/settings")
+        assert resp.status_code == 200
+
+    def test_get_settings_default_mcp_disabled(self, client):
+        """GET /api/memory/settings returns mcp_memory_enabled=false by default."""
+        resp = client.get("/api/memory/settings")
+        data = resp.json()
+        assert "mcp_memory_enabled" in data
+        assert data["mcp_memory_enabled"] is False
+
+    def test_put_settings_enables_mcp(self, client):
+        """PUT /api/memory/settings with mcp_memory_enabled=true returns true."""
+        resp = client.put("/api/memory/settings", json={"mcp_memory_enabled": True})
+        assert resp.status_code == 200
+        assert resp.json()["mcp_memory_enabled"] is True
+
+    def test_put_settings_disables_mcp(self, client):
+        """PUT /api/memory/settings with mcp_memory_enabled=false returns false."""
+        # Enable first
+        client.put("/api/memory/settings", json={"mcp_memory_enabled": True})
+        # Then disable
+        resp = client.put("/api/memory/settings", json={"mcp_memory_enabled": False})
+        assert resp.status_code == 200
+        assert resp.json()["mcp_memory_enabled"] is False
+
+    def test_put_settings_persists_across_get(self, client):
+        """Setting persists: GET after PUT reflects the written value."""
+        client.put("/api/memory/settings", json={"mcp_memory_enabled": True})
+        resp = client.get("/api/memory/settings")
+        assert resp.json()["mcp_memory_enabled"] is True
+
+    def test_put_settings_ignores_unknown_keys(self, client):
+        """PUT /api/memory/settings with unknown keys does not error."""
+        resp = client.put("/api/memory/settings", json={"unknown_key": "value"})
+        assert resp.status_code == 200
+        # Unknown key doesn't affect mcp_memory_enabled default
+        assert resp.json()["mcp_memory_enabled"] is False
+
+    def test_put_settings_returns_200(self, client):
+        """PUT /api/memory/settings returns 200."""
+        resp = client.put("/api/memory/settings", json={})
+        assert resp.status_code == 200
+
+    # -- memory_enabled global toggle --
+
+    def test_get_settings_includes_memory_enabled(self, client):
+        """GET /api/memory/settings response includes memory_enabled key."""
+        resp = client.get("/api/memory/settings")
+        assert "memory_enabled" in resp.json()
+
+    def test_memory_enabled_default_true(self, client):
+        """memory_enabled defaults to true."""
+        resp = client.get("/api/memory/settings")
+        assert resp.json()["memory_enabled"] is True
+
+    def test_put_settings_disables_memory(self, client):
+        """PUT with memory_enabled=false persists and is returned."""
+        resp = client.put("/api/memory/settings", json={"memory_enabled": False})
+        assert resp.status_code == 200
+        assert resp.json()["memory_enabled"] is False
+
+    def test_put_settings_reenables_memory(self, client):
+        """memory_enabled can be toggled back to true."""
+        client.put("/api/memory/settings", json={"memory_enabled": False})
+        resp = client.put("/api/memory/settings", json={"memory_enabled": True})
+        assert resp.json()["memory_enabled"] is True
+
+    def test_memory_enabled_persists_across_get(self, client):
+        """Disabling memory persists: GET after PUT reflects false."""
+        client.put("/api/memory/settings", json={"memory_enabled": False})
+        resp = client.get("/api/memory/settings")
+        assert resp.json()["memory_enabled"] is False
+
+    def test_both_settings_can_be_updated_together(self, client):
+        """Both mcp_memory_enabled and memory_enabled can be set in one PUT."""
+        resp = client.put(
+            "/api/memory/settings",
+            json={"memory_enabled": False, "mcp_memory_enabled": True},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["memory_enabled"] is False
+        assert data["mcp_memory_enabled"] is True
+
+
+# ===========================================================================
+# Clear All Memory Endpoint
+# ===========================================================================
+
+
+class TestClearAllMemory:
+    """Test DELETE /api/memory/all endpoint."""
+
+    def test_clear_all_returns_200(self, client, test_store):
+        """DELETE /api/memory/all returns 200."""
+        resp = client.delete("/api/memory/all")
+        assert resp.status_code == 200
+
+    def test_clear_all_returns_counts(self, client, test_store):
+        """DELETE /api/memory/all response includes deleted row counts."""
+        resp = client.delete("/api/memory/all")
+        data = resp.json()
+        assert "knowledge" in data
+        assert "tool_history" in data
+        assert "conversations" in data
+
+    def test_clear_all_wipes_knowledge(self, client, test_store):
+        """After DELETE /api/memory/all, knowledge list is empty."""
+        test_store.store(category="fact", content="A fact that should be wiped")
+        test_store.store(category="skill", content="A skill that should be wiped")
+
+        resp = client.delete("/api/memory/all")
+        assert resp.json()["knowledge"] == 2
+
+        # Knowledge browser should now be empty
+        resp = client.get("/api/memory/knowledge?include_sensitive=true")
+        assert resp.json()["total"] == 0
+
+    def test_clear_all_wipes_conversations(self, client, test_store):
+        """After DELETE /api/memory/all, conversation history is empty."""
+        test_store.store_turn("sess-clear", "user", "Hello")
+        test_store.store_turn("sess-clear", "assistant", "Hi there")
+
+        client.delete("/api/memory/all")
+
+        resp = client.get("/api/memory/conversations")
+        assert resp.json() == []
+
+    def test_clear_all_is_idempotent(self, client, test_store):
+        """DELETE /api/memory/all on an already-empty store returns 200 with zeros."""
+        client.delete("/api/memory/all")
+        resp = client.delete("/api/memory/all")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["knowledge"] == 0
+        assert data["tool_history"] == 0
+        assert data["conversations"] == 0

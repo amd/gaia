@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, Brain } from 'lucide-react';
+import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, Brain, EyeOff } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -61,7 +61,10 @@ function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSele
             aria-label={`Open task: ${s.title}`}
             aria-current={isActive ? 'true' : undefined}
         >
-            <span className="session-title">{s.title}</span>
+            <span className="session-title">
+                {s.private && <EyeOff size={10} className="session-private-icon" aria-label="Private session" />}
+                {s.title}
+            </span>
             <a
                 className={`session-hash ${copied ? 'copied' : ''}`}
                 href={`#${getSessionHash(s.id)}`}

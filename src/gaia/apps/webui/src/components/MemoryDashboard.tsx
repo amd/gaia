@@ -308,6 +308,7 @@ export function MemoryDashboard() {
     const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
 
     // Settings
+    const [memoryEnabled, setMemoryEnabled] = useState(true);
     const [mcpMemoryEnabled, setMcpMemoryEnabled] = useState(false);
     const [settingsLoading, setSettingsLoading] = useState(false);
 
@@ -316,6 +317,7 @@ export function MemoryDashboard() {
     const [rebuildingEmbeddings, setRebuildingEmbeddings] = useState(false);
     const [reconciling, setReconciling] = useState(false);
     const [rebuildingFts, setRebuildingFts] = useState(false);
+    const [refreshingSystem, setRefreshingSystem] = useState(false);
     const [searchPending, setSearchPending] = useState(false);
 
     const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -454,6 +456,7 @@ export function MemoryDashboard() {
         try {
             const s = await memoryApi.getMemorySettings();
             setMcpMemoryEnabled(s.mcp_memory_enabled);
+            setMemoryEnabled(s.memory_enabled);
         } catch (err) {
             log.system.warn('Failed to load memory settings', err);
         }
@@ -711,7 +714,26 @@ export function MemoryDashboard() {
         }
     }, [loadAll, showToast]);
 
-    const isMaintenanceRunning = consolidating || rebuildingEmbeddings || reconciling || rebuildingFts;
+    const handleRefreshSystemContext = useCallback(async () => {
+        setRefreshingSystem(true);
+        setShowMaintenanceMenu(false);
+        try {
+            const result = await memoryApi.refreshSystemContext();
+            await loadAll();
+            if (result.skipped) {
+                showToast('System context collection is disabled — enable it in settings', 'error');
+            } else {
+                showToast(`System context refreshed: ${result.stored} facts updated`, 'success');
+            }
+        } catch (err) {
+            log.system.error('Failed to refresh system context', err);
+            showToast('Failed to refresh system context', 'error');
+        } finally {
+            setRefreshingSystem(false);
+        }
+    }, [loadAll, showToast]);
+
+    const isMaintenanceRunning = consolidating || rebuildingEmbeddings || reconciling || rebuildingFts || refreshingSystem;
 
     // ── Render helpers ──────────────────────────────────────────────────
 
@@ -797,6 +819,16 @@ export function MemoryDashboard() {
                                     >
                                         <CheckCircle size={14} />
                                         {reconciling ? 'Reconciling...' : 'Reconcile Memory'}
+                                    </button>
+                                    <div className="mem-maintenance-divider" />
+                                    <button
+                                        className="mem-maintenance-item"
+                                        onClick={handleRefreshSystemContext}
+                                        disabled={refreshingSystem}
+                                        role="menuitem"
+                                    >
+                                        <RefreshCw size={14} />
+                                        {refreshingSystem ? 'Refreshing...' : 'Refresh System Context'}
                                     </button>
                                     <div className="mem-maintenance-divider" />
                                     <button
@@ -1524,6 +1556,35 @@ export function MemoryDashboard() {
                                 <div className="mem-section-title">
                                     <Shield size={14} /> Settings
                                 </div>
+                                <div className="mem-setting-row">
+                                    <div className="mem-setting-info">
+                                        <span className="mem-setting-label">Memory enabled</span>
+                                        <span className="mem-setting-desc">
+                                            When disabled, no knowledge or conversation data is stored during any session (global incognito).
+                                        </span>
+                                    </div>
+                                    <button
+                                        className={`mem-toggle${memoryEnabled ? ' mem-toggle-on' : ''}`}
+                                        disabled={settingsLoading}
+                                        onClick={async () => {
+                                            setSettingsLoading(true);
+                                            try {
+                                                const updated = await memoryApi.updateMemorySettings({
+                                                    memory_enabled: !memoryEnabled,
+                                                });
+                                                setMemoryEnabled(updated.memory_enabled);
+                                            } catch (err) {
+                                                log.system.warn('Failed to update memory settings', err);
+                                            } finally {
+                                                setSettingsLoading(false);
+                                            }
+                                        }}
+                                        aria-pressed={memoryEnabled}
+                                        aria-label={`Memory is ${memoryEnabled ? 'enabled' : 'disabled'}`}
+                                    >
+                                        {memoryEnabled ? 'On' : 'Off'}
+                                    </button>
+                                </div>
                                 <div className="mem-settings-row">
                                     <div className="mem-settings-label">
                                         <span>MCP Memory Access</span>
@@ -1551,6 +1612,34 @@ export function MemoryDashboard() {
                                         aria-label="Toggle MCP memory access"
                                     >
                                         <span className="mem-toggle-knob" />
+                                    </button>
+                                </div>
+                                <div className="mem-setting-row mem-setting-row-danger">
+                                    <div className="mem-setting-info">
+                                        <span className="mem-setting-label">Delete all memories</span>
+                                        <span className="mem-setting-desc">
+                                            Permanently wipe all knowledge entries, conversation history, and tool logs. This cannot be undone.
+                                        </span>
+                                    </div>
+                                    <button
+                                        className="mem-btn-danger"
+                                        disabled={settingsLoading}
+                                        onClick={async () => {
+                                            if (!confirm('Delete ALL memory data? This cannot be undone.')) return;
+                                            setSettingsLoading(true);
+                                            try {
+                                                const result = await memoryApi.clearAllMemory();
+                                                showToast(`Deleted ${result.knowledge} knowledge entries, ${result.conversations} conversations`, 'info');
+                                                loadAll();
+                                            } catch (err) {
+                                                log.system.warn('Failed to clear memory', err);
+                                                showToast('Failed to clear memory', 'error');
+                                            } finally {
+                                                setSettingsLoading(false);
+                                            }
+                                        }}
+                                    >
+                                        Delete All
                                     </button>
                                 </div>
                             </div>

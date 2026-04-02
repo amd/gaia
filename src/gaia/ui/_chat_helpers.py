@@ -480,6 +480,11 @@ async def _get_chat_response(
             _store_agent(session_id, model_id, document_ids, agent)
             _register_agent_memory_ops(agent)
 
+        # Suppress memory writes when private session OR global memory is disabled.
+        if hasattr(agent, "_incognito"):
+            memory_globally_off = db.get_setting("memory_enabled", "true") == "false"
+            agent._incognito = memory_globally_off or bool(session.get("private", 0))
+
         # Restore conversation history (limited to prevent context overflow).
         # Always re-inject from DB so the history is consistent with what was
         # persisted — regardless of whether the agent was cached or fresh.
@@ -750,6 +755,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         _mcp_status_cache[:] = mcp_report
                     if mcp_report:
                         sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
+
+                # Suppress memory writes when private session OR global memory is disabled.
+                if hasattr(agent, "_incognito"):
+                    memory_globally_off = db.get_setting("memory_enabled", "true") == "false"
+                    agent._incognito = memory_globally_off or bool(session.get("private", 0))
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():

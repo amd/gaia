@@ -598,20 +598,95 @@ def prune_memory(days: int = Query(90, ge=7, le=365)) -> Dict:
         raise HTTPException(500, f"Prune failed: {type(exc).__name__}")
 
 
+@router.delete("/api/memory/all")
+def clear_all_memory() -> Dict:
+    """Permanently delete all knowledge, tool history, and conversation data.
+
+    This is irreversible.  Returns counts of deleted rows per table:
+    ``{knowledge: int, tool_history: int, conversations: int}``.
+    """
+    try:
+        return _get_store().clear_all()
+    except Exception as exc:
+        logger.error("[memory router] clear_all failed: %s", exc)
+        raise HTTPException(500, f"Clear failed: {type(exc).__name__}")
+
+
+# ---------------------------------------------------------------------------
+# System Context Refresh
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/memory/refresh-system-context")
+def refresh_system_context() -> Dict:
+    """Re-collect OS, hardware, installed apps, and version facts.
+
+    Deletes stale source='system' entries and stores fresh ones.
+    No LLM required — runs in a few seconds.
+
+    Returns ``{stored: int, skipped: bool}``.
+    """
+    try:
+        from gaia.agents.base.memory import _system_context_is_enabled
+        from gaia.agents.base.system_context import collect_system_info
+
+        if not _system_context_is_enabled():
+            return {"stored": 0, "skipped": True, "reason": "system_context_disabled"}
+
+        store = _get_store()
+
+        # Replace stale facts atomically
+        store.delete_by_source("system")
+
+        facts = collect_system_info()
+        stored = 0
+        for fact in facts:
+            try:
+                store.store(
+                    category="system",
+                    content=fact["content"],
+                    domain=fact.get("domain"),
+                    context="global",
+                    confidence=1.0,
+                    source="system",
+                )
+                stored += 1
+            except Exception:
+                pass
+
+        logger.info("[memory router] refresh-system-context: stored %d facts", stored)
+        return {"stored": stored, "skipped": False}
+
+    except Exception as exc:
+        logger.error("[memory router] refresh-system-context failed: %s", exc)
+        raise HTTPException(500, f"System context refresh failed: {type(exc).__name__}: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
 _MCP_MEMORY_ENABLED_KEY = "mcp_memory_enabled"
+_MEMORY_ENABLED_KEY = "memory_enabled"
+
+
+def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
+    """Read all memory settings from the DB and return as a dict."""
+    return {
+        "memory_enabled": db.get_setting(_MEMORY_ENABLED_KEY, "true") == "true",
+        "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false") == "true",
+    }
 
 
 @router.get("/api/memory/settings")
 def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
-    """Return memory-related feature settings."""
-    return {
-        "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false")
-        == "true",
-    }
+    """Return memory-related feature settings.
+
+    Keys:
+    - ``memory_enabled`` (bool): global memory on/off. Default true.
+    - ``mcp_memory_enabled`` (bool): expose read tools to MCP clients. Default false.
+    """
+    return _get_memory_settings_dict(db)
 
 
 @router.put("/api/memory/settings")
@@ -621,15 +696,19 @@ def update_memory_settings(
 ) -> Dict:
     """Update memory-related feature settings.
 
-    Currently supported keys:
+    Supported keys:
+    - ``memory_enabled`` (bool): globally enable/disable all memory storage.
+      When false, no knowledge or conversation data is written during any
+      chat session (equivalent to every session being private). Default true.
     - ``mcp_memory_enabled`` (bool): expose memory read tools to MCP clients
       for debug/troubleshooting. Default false.
     """
+    if "memory_enabled" in body:
+        db.set_setting(
+            _MEMORY_ENABLED_KEY, "true" if body["memory_enabled"] else "false"
+        )
     if "mcp_memory_enabled" in body:
         db.set_setting(
             _MCP_MEMORY_ENABLED_KEY, "true" if body["mcp_memory_enabled"] else "false"
         )
-    return {
-        "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false")
-        == "true",
-    }
+    return _get_memory_settings_dict(db)

@@ -58,6 +58,7 @@ async def create_session(
             model=request.model,
             system_prompt=request.system_prompt,
             document_ids=request.document_ids,
+            private=request.private,
         )
         return session_to_response(session)
     except Exception as e:
@@ -89,6 +90,7 @@ async def update_session(
         title=request.title,
         system_prompt=request.system_prompt,
         document_ids=request.document_ids,
+        private=request.private,
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -110,6 +112,20 @@ async def delete_session(
     # if the session is ever recreated with the same ID.
     evict_session_agent(session_id)
     return {"deleted": True}
+
+
+@router.patch("/api/sessions/{session_id}/private", response_model=SessionResponse)
+async def toggle_session_privacy(
+    session_id: str,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Toggle a session's private (incognito) mode on or off."""
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    current = bool(session.get("private", 0))
+    updated = db.update_session(session_id, private=not current)
+    return session_to_response(updated)
 
 
 # ── Messages ─────────────────────────────────────────────────────────────────

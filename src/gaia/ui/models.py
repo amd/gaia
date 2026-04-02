@@ -88,6 +88,7 @@ class CreateSessionRequest(BaseModel):
     model: Optional[str] = None
     system_prompt: Optional[str] = None
     document_ids: List[str] = Field(default_factory=list)
+    private: bool = False
 
 
 class UpdateSessionRequest(BaseModel):
@@ -96,6 +97,7 @@ class UpdateSessionRequest(BaseModel):
     title: Optional[str] = None
     system_prompt: Optional[str] = None
     document_ids: Optional[List[str]] = None
+    private: Optional[bool] = None
 
 
 class SessionResponse(BaseModel):
@@ -109,6 +111,7 @@ class SessionResponse(BaseModel):
     system_prompt: Optional[str] = None
     message_count: int = 0
     document_ids: List[str] = Field(default_factory=list)
+    private: bool = False
 
 
 class SessionListResponse(BaseModel):

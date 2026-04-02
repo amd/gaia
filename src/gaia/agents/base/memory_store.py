@@ -87,7 +87,21 @@ def _sanitize_fts5_query(query: str, use_and: bool = True) -> Optional[str]:
 #: Valid knowledge categories.  The single source of truth — import this
 #: rather than redefining the set in tool closures or REST validators.
 VALID_CATEGORIES: frozenset = frozenset(
-    {"fact", "preference", "error", "skill", "note", "reminder", "system", "profile"}
+    {
+        "fact",
+        "preference",
+        "error",
+        "skill",
+        "note",
+        "reminder",
+        "system",
+        "profile",
+        # Autonomous-agent categories — used by the always-running loop.
+        # Goals and tasks require approved_for_auto=True before the loop acts
+        # on them (stored in the metadata JSON blob).
+        "goal",  # an objective the agent should work toward
+        "task",  # a discrete, completable action item
+    }
 )
 
 #: Maximum stored content length (chars).  Longer content is truncated by
@@ -2390,6 +2404,46 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
         logger.info("[MemoryStore] FTS5 indexes rebuilt")
+
+    def clear_all(self) -> Dict:
+        """Permanently delete all knowledge, tool history, and conversation data.
+
+        Wipes every knowledge entry, tool call log, and conversation turn
+        from the database.  FTS5 indexes are reset to empty in the same
+        transaction so search stays consistent.
+
+        Returns:
+            Dict with counts of deleted rows per table:
+            ``{knowledge: int, tool_history: int, conversations: int}``
+        """
+        with self._lock:
+            try:
+                knowledge_deleted = self._conn.execute(
+                    "DELETE FROM knowledge"
+                ).rowcount
+                self._rebuild_knowledge_fts_locked()
+                tool_deleted = self._conn.execute(
+                    "DELETE FROM tool_history"
+                ).rowcount
+                conv_deleted = self._conn.execute(
+                    "DELETE FROM conversations"
+                ).rowcount
+                self._rebuild_conversations_fts_locked()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info(
+            "[MemoryStore] cleared all: knowledge=%d tool_history=%d conversations=%d",
+            knowledge_deleted,
+            tool_deleted,
+            conv_deleted,
+        )
+        return {
+            "knowledge": knowledge_deleted,
+            "tool_history": tool_deleted,
+            "conversations": conv_deleted,
+        }
 
     def _rebuild_knowledge_fts_locked(self):
         """Rebuild knowledge FTS5 index. Must hold self._lock."""

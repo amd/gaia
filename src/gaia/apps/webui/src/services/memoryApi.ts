@@ -181,9 +181,16 @@ export function pruneMemory(days = 90) {
     );
 }
 
+export function refreshSystemContext() {
+    return memFetch<{ stored: number; skipped: boolean; reason?: string }>(
+        'POST', '/memory/refresh-system-context'
+    );
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────────
 
 export interface MemorySettings {
+    memory_enabled: boolean;
     mcp_memory_enabled: boolean;
 }
 
@@ -193,4 +200,10 @@ export function getMemorySettings() {
 
 export function updateMemorySettings(settings: Partial<MemorySettings>) {
     return memFetch<MemorySettings>('PUT', '/memory/settings', settings);
+}
+
+export function clearAllMemory() {
+    return memFetch<{ knowledge: number; tool_history: number; conversations: number }>(
+        'DELETE', '/memory/all'
+    );
 }
