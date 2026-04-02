@@ -108,3 +108,13 @@ def get_tool_display_name(tool_name: str) -> str:
     if not tool:
         return tool_name
     return tool.get("display_name", tool_name)
+
+
+def get_tool_metadata(tool_name: str):
+    """Return the full registry entry for a tool, or ``None`` if not found.
+
+    This is the public accessor for ``_TOOL_REGISTRY``.  Consumers outside
+    the agent base layer (e.g. the SSE handler) should use this instead of
+    importing ``_TOOL_REGISTRY`` directly.
+    """
+    return _TOOL_REGISTRY.get(tool_name)

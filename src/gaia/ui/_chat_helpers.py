@@ -861,6 +861,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             "detail": event.get("detail"),
                             "active": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                            "mcpServer": event.get("mcp_server"),
                         }
                     )
                 elif event_type == "tool_args" and captured_steps:
@@ -882,6 +883,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             event.get("summary") or event.get("title") or "Done"
                         )
                         tool_step["success"] = event.get("success", True)
+                        # Persist MCP tool latency
+                        if event.get("latency_ms") is not None:
+                            tool_step["latencyMs"] = event["latency_ms"]
                         # Persist structured command output for terminal rendering
                         if event.get("command_output"):
                             tool_step["commandOutput"] = event["command_output"]

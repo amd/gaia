@@ -183,6 +183,8 @@ class AgentStepResponse(BaseModel):
     timestamp: int = 0
     commandOutput: Optional[CommandOutputResponse] = None
     fileList: Optional[FileListResponse] = None
+    mcpServer: Optional[str] = None
+    latencyMs: Optional[float] = None
 
 
 class InferenceStatsResponse(BaseModel):

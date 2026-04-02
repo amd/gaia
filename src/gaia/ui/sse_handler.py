@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
+from gaia.agents.base.tools import get_tool_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_event: Optional[threading.Event] = None
         self._confirm_result: bool = False
         self._confirm_id: Optional[str] = None
+        self._tool_start_time: Optional[float] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -199,15 +201,24 @@ class SSEOutputHandler(OutputHandler):
     def print_tool_usage(self, tool_name: str):
         self._tool_count += 1
         self._last_tool_name = tool_name
-        self._emit(
-            {
-                "type": "tool_start",
-                "tool": tool_name,
-                "detail": _tool_description(tool_name),
-            }
-        )
+        self._tool_start_time = time.monotonic()
+        event = {
+            "type": "tool_start",
+            "tool": tool_name,
+            "detail": _tool_description(tool_name),
+        }
+        # Attach MCP server name if this is an MCP tool.
+        # _mcp_server is set by MCPTool.to_gaia_format() during registration
+        # in MCPClientMixin._register_mcp_tools() (see mcp/client/mcp_client.py).
+        meta = get_tool_metadata(tool_name)
+        if meta:
+            mcp_server = meta.get("_mcp_server")
+            if mcp_server:
+                event["mcp_server"] = mcp_server
+        self._emit(event)
 
     def print_tool_complete(self):
+        self._tool_start_time = None  # Reset in case tool_result was skipped
         self._emit(
             {
                 "type": "tool_end",
@@ -240,6 +251,14 @@ class SSEOutputHandler(OutputHandler):
                 data.get("status") != "error" if isinstance(data, dict) else True
             ),
         }
+
+        # Attach latency for tool calls (measured from print_tool_usage)
+        if self._tool_start_time is not None:
+            latency_ms = round(
+                (time.monotonic() - self._tool_start_time) * 1000, 1
+            )
+            event["latency_ms"] = latency_ms
+            self._tool_start_time = None
 
         # For command execution results, include structured output data
         # so the frontend can render a proper terminal view

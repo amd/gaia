@@ -87,6 +87,7 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 tool: event.tool,
                 detail: event.detail,
                 active: true, timestamp: ts,
+                mcpServer: event.mcp_server,
             };
         case 'plan':
             return {
@@ -697,6 +698,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         result: event.summary || event.title || 'Done',
                         active: false,
                         success: event.success !== false,
+                        latencyMs: event.latency_ms,
                     };
                     // Pass through structured command output if available
                     if (event.command_output) {
