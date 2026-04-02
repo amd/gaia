@@ -328,6 +328,107 @@ class TestInitMemory:
 
 
 # ===========================================================================
+# 1b. System Context Initialization
+# ===========================================================================
+
+
+class TestSystemContext:
+    """Tests for init_system_context() and day-0 system fact collection."""
+
+    def test_system_category_in_valid_categories(self):
+        """'system' is a valid MemoryStore category."""
+        from gaia.agents.base.memory_store import VALID_CATEGORIES
+
+        assert "system" in VALID_CATEGORIES
+
+    def test_collect_system_info_returns_list(self):
+        """collect_system_info() returns a non-empty list of dicts."""
+        from gaia.agents.base.system_context import collect_system_info
+
+        facts = collect_system_info()
+        assert isinstance(facts, list)
+        assert len(facts) > 0
+        for fact in facts:
+            assert "content" in fact
+            assert "domain" in fact
+            assert isinstance(fact["content"], str)
+            assert len(fact["content"]) > 0
+
+    def test_collect_system_info_domains_are_valid(self):
+        """All domains returned by collect_system_info() start with 'system:'."""
+        from gaia.agents.base.system_context import collect_system_info
+
+        facts = collect_system_info()
+        for fact in facts:
+            assert fact["domain"].startswith("system:"), (
+                f"Unexpected domain: {fact['domain']}"
+            )
+
+    def test_collect_system_info_has_os_fact(self):
+        """collect_system_info() always includes an OS fact."""
+        from gaia.agents.base.system_context import collect_system_info
+
+        facts = collect_system_info()
+        os_facts = [f for f in facts if f["domain"] == "system:os"]
+        assert len(os_facts) >= 1
+        assert "operating system" in os_facts[0]["content"].lower()
+
+    def test_collect_system_info_has_gaia_version(self):
+        """collect_system_info() includes GAIA version."""
+        from gaia.agents.base.system_context import collect_system_info
+
+        facts = collect_system_info()
+        sw_facts = [f for f in facts if "GAIA version" in f["content"]]
+        assert len(sw_facts) >= 1
+
+    def test_init_system_context_stores_facts_on_first_run(self, mixin_host):
+        """init_system_context() populates 'system' entries on first call."""
+        store = mixin_host.memory_store
+        # mixin_host.init_memory() already ran init_system_context() once.
+        items = store.get_by_category("system", context="global", limit=50)
+        assert len(items) > 0
+        for item in items:
+            assert item["category"] == "system"
+            assert item["context"] == "global"
+            assert float(item["confidence"]) == 1.0
+
+    def test_init_system_context_idempotent(self, mixin_host):
+        """Calling init_system_context() a second time returns stored=0."""
+        result = mixin_host.init_system_context()
+        assert result == {"stored": 0}
+
+    def test_init_system_context_force_recollects(self, mixin_host):
+        """force=True re-stores system facts even when they already exist."""
+        result = mixin_host.init_system_context(force=True)
+        assert result["stored"] > 0
+
+    def test_stable_prompt_includes_system_environment(self, mixin_host):
+        """System environment section appears in the stable memory prompt."""
+        prompt = mixin_host.get_memory_system_prompt()
+        assert "System environment:" in prompt
+        # At least one hardware/software fact should appear
+        assert any(
+            kw in prompt.lower()
+            for kw in ("operating system", "cpu", "gaia", "python", "installed")
+        )
+
+    def test_stable_prompt_nudge_when_no_personal_memories(self, mixin_host):
+        """Prompt has a nudge to build personal memories when none exist yet."""
+        prompt = mixin_host.get_memory_system_prompt()
+        assert "No personal memories stored yet" in prompt
+
+    def test_stable_prompt_no_nudge_when_personal_memories_exist(self, mixin_host):
+        """The 'no personal memories' nudge disappears once user data is stored."""
+        mixin_host.memory_store.store(
+            category="preference",
+            content="User prefers dark mode",
+            context="global",
+        )
+        prompt = mixin_host.get_memory_system_prompt()
+        assert "No personal memories stored yet" not in prompt
+
+
+# ===========================================================================
 # 2. Context Management
 # ===========================================================================
 
@@ -524,12 +625,18 @@ class TestSystemPrompt:
         assert "dark mode" in prompt.lower()
 
     def test_system_prompt_has_instructions_when_no_memory(self, mixin_host):
-        """System prompt includes memory instructions even with 0 entries."""
+        """System prompt includes memory instructions even with no user memories.
+
+        After init_system_context() runs the prompt always has system environment
+        facts, so we check for the 'No personal memories' nudge instead of the
+        absolute 'No memories stored yet' message.
+        """
         prompt = mixin_host.get_memory_system_prompt()
         assert isinstance(prompt, str)
         assert "MEMORY" in prompt
         assert "remember" in prompt.lower()
-        assert "No memories stored yet" in prompt
+        # System context is auto-populated at init; personal memories are absent.
+        assert "No personal memories stored yet" in prompt
 
 
 # ===========================================================================
@@ -1184,6 +1291,47 @@ class TestProcessQueryCacheInvalidation:
         assert result is not None
         assert "result" in result
 
+    def test_post_init_flag_set_after_init_memory(self, mixin_host):
+        """init_memory() sets _memory_post_init_pending=True (deferred LLM steps)."""
+        assert mixin_host._memory_post_init_pending is True
+
+    def test_post_init_runs_on_first_process_query(self, mixin_host):
+        """_run_memory_post_init() is called once on first process_query()."""
+        assert mixin_host._memory_post_init_pending is True
+
+        with patch.object(mixin_host, "_run_memory_post_init") as mock_post:
+            mixin_host.process_query("first query")
+            mock_post.assert_called_once()
+
+        assert mixin_host._memory_post_init_pending is False
+
+    def test_post_init_not_called_on_second_query(self, mixin_host):
+        """_run_memory_post_init() is NOT called again on subsequent queries."""
+        with patch.object(mixin_host, "_run_memory_post_init"):
+            mixin_host.process_query("first query")
+
+        with patch.object(mixin_host, "_run_memory_post_init") as mock_post2:
+            mixin_host.process_query("second query")
+            mock_post2.assert_not_called()
+
+    def test_post_init_calls_reconcile_and_consolidate(self, mixin_host):
+        """_run_memory_post_init() calls reconcile_memory and consolidate_old_sessions."""
+        mixin_host._memory_post_init_pending = False  # reset; test directly
+
+        with (
+            patch.object(
+                mixin_host, "reconcile_memory", return_value={"pairs_checked": 0}
+            ) as mock_recon,
+            patch.object(
+                mixin_host,
+                "consolidate_old_sessions",
+                return_value={"consolidated": 0, "extracted_items": 0},
+            ) as mock_consol,
+        ):
+            mixin_host._run_memory_post_init()
+            mock_recon.assert_called_once_with(max_pairs=20)
+            mock_consol.assert_called_once_with(max_sessions=5)
+
 
 # ===========================================================================
 # 13. Session Management
@@ -1412,10 +1560,11 @@ class TestSystemPromptSizeCap:
         assert len(prompt) <= 4000 + len(_MARKER)
 
     def test_system_prompt_has_instructions_when_no_memory(self, mixin_host):
-        """System prompt includes memory instructions even with 0 entries."""
+        """System prompt includes memory instructions even with no user memories."""
         prompt = mixin_host.get_memory_system_prompt()
         assert "MEMORY" in prompt
-        assert "No memories stored yet" in prompt
+        # System context is always present after init; personal memories absent.
+        assert "No personal memories stored yet" in prompt
 
 
 # ===========================================================================
@@ -1944,12 +2093,14 @@ class TestEmbeddingPipeline:
 
         # Verify items lack embeddings
         without = embed_host._memory_store.get_items_without_embeddings()
-        assert len(without) >= 2, f"Expected >=2 items without embeddings, got {len(without)}"
+        assert (
+            len(without) >= 2
+        ), f"Expected >=2 items without embeddings, got {len(without)}"
 
         count = embed_host._backfill_embeddings()
-        assert count == len(without), (
-            f"Expected {len(without)} items backfilled, got {count}"
-        )
+        assert count == len(
+            without
+        ), f"Expected {len(without)} items backfilled, got {count}"
 
         # Verify items now have embeddings
         still_without = embed_host._memory_store.get_items_without_embeddings()
@@ -2146,8 +2297,7 @@ class TestConversationConsolidation:
         mock_chat = MagicMock()
         mock_response = MagicMock()
         mock_response.text = (
-            '{"summary": "Weekly review of API migration progress", '
-            '"knowledge": []}'
+            '{"summary": "Weekly review of API migration progress", ' '"knowledge": []}'
         )
         mock_chat.send_messages.return_value = mock_response
         consol_host.chat = mock_chat

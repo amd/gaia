@@ -2557,6 +2557,16 @@ Examples:
         action="store_true",
         help="Clear source='discovery' items (with confirmation)",
     )
+    memory_bootstrap_parser.add_argument(
+        "--system",
+        action="store_true",
+        help="Re-scan and refresh system context (OS, hardware, apps, versions)",
+    )
+    memory_bootstrap_parser.add_argument(
+        "--reset-system",
+        action="store_true",
+        help="Clear system context entries and optionally disable auto-collection",
+    )
 
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
@@ -6097,13 +6107,19 @@ def _handle_memory_bootstrap(args):
     """Handle the memory bootstrap subcommand.
 
     Flags:
-        --chat-only  Conversational onboarding only
-        --discover   System discovery only
-        --reset      Clear source='discovery' items
-        (default)    Run chat-only then discover
+        --chat-only     Conversational onboarding only
+        --discover      System discovery only (interactive, with approval)
+        --system        Re-scan and refresh silent system context
+        --reset         Clear source='discovery' items
+        --reset-system  Clear system context entries (optionally disable)
+        (default)       Run chat-only then discover
     """
     try:
-        if args.reset:
+        if getattr(args, "reset_system", False):
+            _bootstrap_reset_system()
+        elif getattr(args, "system", False):
+            _bootstrap_system(force=True)
+        elif args.reset:
             _bootstrap_reset()
         elif args.chat_only:
             _bootstrap_chat()
@@ -6329,6 +6345,162 @@ def _bootstrap_reset():
         raise RuntimeError(f"Error during reset: {e}") from e
     finally:
         store.close()
+
+
+# ---- Bootstrap: system context (silent, non-interactive) ----
+
+
+def _bootstrap_system(force: bool = True):
+    """Re-scan system context and store facts in memory (no LLM required)."""
+    from gaia.agents.base.memory import _system_context_is_enabled, _save_memory_settings
+    from gaia.agents.base.memory_store import MemoryStore
+    from gaia.agents.base.system_context import collect_system_info
+
+    print("\n=== GAIA Memory — System Context Refresh ===")
+
+    if not _system_context_is_enabled():
+        print("⚠  System context collection is disabled.")
+        try:
+            choice = input("Re-enable and collect now? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return
+        if choice != "y":
+            print("Skipped. Run 'gaia memory bootstrap --reset-system' to manage this setting.")
+            return
+        _save_memory_settings({"system_context_enabled": True})
+        print("✅ System context collection re-enabled.\n")
+
+    print("Collecting system information...\n")
+    try:
+        facts = collect_system_info()
+    except Exception as e:
+        print(f"❌ Error collecting system info: {e}")
+        return
+
+    for f in facts:
+        print(f"  [{f['domain']}] {f['content']}")
+
+    if not facts:
+        print("No facts collected.")
+        return
+
+    try:
+        store = MemoryStore()
+    except Exception as e:
+        print(f"❌ Error opening memory database: {e}")
+        return
+
+    import logging as _logging
+    _store_logger = _logging.getLogger("gaia.agents.base.memory_store")
+    _orig_level = _store_logger.level
+
+    try:
+        # Silence INFO-level store logs — end users don't need per-row output
+        _store_logger.setLevel(_logging.WARNING)
+
+        if force:
+            # Clear existing system entries before re-storing
+            cleared = store.delete_by_category("system")
+            if cleared:
+                print(f"\n  (replaced {cleared} existing system entries)")
+
+        stored = 0
+        for fact in facts:
+            try:
+                store.store(
+                    category="system",
+                    content=fact["content"],
+                    domain=fact.get("domain"),
+                    context="global",
+                    confidence=1.0,
+                    source="system",
+                )
+                stored += 1
+            except Exception as e:
+                print(f"  ⚠ Failed to store: {e}")
+
+        print(f"\n✅ Stored {stored} system context item(s).")
+    finally:
+        _store_logger.setLevel(_orig_level)
+        store.close()
+
+
+# ---- Bootstrap: reset system context ----
+
+
+def _bootstrap_reset_system():
+    """Clear all system context entries and optionally disable auto-collection."""
+    from gaia.agents.base.memory import (
+        _load_memory_settings,
+        _save_memory_settings,
+        _system_context_is_enabled,
+    )
+    from gaia.agents.base.memory_store import MemoryStore
+
+    print("\n=== GAIA Memory — Reset System Context ===")
+
+    try:
+        store = MemoryStore()
+    except Exception as e:
+        print(f"❌ Error opening memory database: {e}")
+        return
+
+    try:
+        items = store.get_by_category("system", context="global", limit=200)
+        count = len(items)
+
+        if count == 0:
+            print("No system context entries found in memory.")
+        else:
+            print(f"Found {count} system context entries:\n")
+            for item in items[:10]:
+                print(f"  - {item['content']}")
+            if count > 10:
+                print(f"  ... and {count - 10} more.")
+
+            try:
+                choice = input(f"\nDelete all {count} system context entries? [y/N]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\nCancelled.")
+                return
+
+            if choice == "y":
+                deleted = store.delete_by_category("system")
+                print(f"✅ Deleted {deleted} system context entry(ies).")
+            else:
+                print("Deletion cancelled.")
+                return
+    finally:
+        store.close()
+
+    # Ask whether to disable auto-collection going forward
+    currently_enabled = _system_context_is_enabled()
+    if currently_enabled:
+        try:
+            choice = input(
+                "\nDisable automatic system context collection on startup? [y/N]: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+
+        if choice == "y":
+            _save_memory_settings({"system_context_enabled": False})
+            print("✅ System context collection disabled.")
+            print("   Run 'gaia memory bootstrap --system' to re-enable and refresh.")
+        else:
+            print("Auto-collection remains enabled — system context will be re-collected on next startup.")
+    else:
+        print("\nAuto-collection is already disabled.")
+        try:
+            choice = input("Re-enable it? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if choice == "y":
+            _save_memory_settings({"system_context_enabled": True})
+            print("✅ System context collection re-enabled.")
 
 
 def handle_mcp_command(args):

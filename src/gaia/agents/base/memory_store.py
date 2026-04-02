@@ -30,7 +30,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ def _sanitize_fts5_query(query: str, use_and: bool = True) -> Optional[str]:
 #: Valid knowledge categories.  The single source of truth — import this
 #: rather than redefining the set in tool closures or REST validators.
 VALID_CATEGORIES: frozenset = frozenset(
-    {"fact", "preference", "error", "skill", "note", "reminder"}
+    {"fact", "preference", "error", "skill", "note", "reminder", "system"}
 )
 
 #: Maximum stored content length (chars).  Longer content is truncated by
@@ -1424,6 +1424,63 @@ class MemoryStore:
             cursor = self._conn.execute(sql, (limit,))
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
+    def get_embedding_coverage(self) -> Dict:
+        """Return embedding coverage stats for all active knowledge items.
+
+        Returns:
+            {total_items, with_embedding, without_embedding, coverage_pct}
+        """
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_items,
+                    SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) AS with_embedding,
+                    SUM(CASE WHEN embedding IS NULL THEN 1 ELSE 0 END) AS without_embedding
+                FROM knowledge
+                WHERE superseded_by IS NULL
+                """
+            ).fetchone()
+        total = row[0] or 0
+        with_emb = row[1] or 0
+        without_emb = row[2] or 0
+        coverage_pct = round(with_emb / total * 100, 1) if total > 0 else 0.0
+        return {
+            "total_items": total,
+            "with_embedding": with_emb,
+            "without_embedding": without_emb,
+            "coverage_pct": coverage_pct,
+        }
+
+    def backfill_embeddings(
+        self, embed_fn: Callable[[str], bytes], limit: int = 500
+    ) -> Dict:
+        """Embed items that are missing embeddings using the provided function.
+
+        Args:
+            embed_fn: Callable that takes a text string and returns embedding
+                bytes (float32 vector as raw bytes).
+            limit: Maximum number of items to process in one call.
+
+        Returns:
+            {backfilled: int, total_without: int}
+        """
+        items = self.get_items_without_embeddings(limit=limit)
+        total_without = len(items)
+        backfilled = 0
+        for item in items:
+            try:
+                embedding_bytes = embed_fn(item["content"])
+                self.store_embedding(item["id"], embedding_bytes)
+                backfilled += 1
+            except Exception as exc:
+                logger.warning(
+                    "[MemoryStore] backfill embedding failed for %s: %s",
+                    item["id"],
+                    exc,
+                )
+        return {"backfilled": backfilled, "total_without": total_without}
+
     def get_items_for_reconciliation(
         self, context: str = None, limit: int = 100
     ) -> List[Dict]:
@@ -2078,6 +2135,29 @@ class MemoryStore:
                 )
                 deleted = self._conn.execute(
                     "DELETE FROM knowledge WHERE source = ?", (source,)
+                ).rowcount
+                self._conn.commit()
+                return deleted
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def delete_by_category(self, category: str) -> int:
+        """Delete all knowledge entries with the given category. Returns deleted count.
+
+        Atomically cleans FTS5 index and knowledge table in one transaction.
+        """
+        with self._lock:
+            try:
+                self._conn.execute(
+                    """
+                    DELETE FROM knowledge_fts
+                    WHERE rowid IN (SELECT rowid FROM knowledge WHERE category = ?)
+                    """,
+                    (category,),
+                )
+                deleted = self._conn.execute(
+                    "DELETE FROM knowledge WHERE category = ?", (category,)
                 ).rowcount
                 self._conn.commit()
                 return deleted

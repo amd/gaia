@@ -485,7 +485,11 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
                 search: Full-text search query.
                 limit: Max results to return (default 20).
             Enable this tool in the Memory Dashboard → Settings."""
-            params: Dict[str, Any] = {"limit": limit, "order": "desc", "sort_by": "updated_at"}
+            params: Dict[str, Any] = {
+                "limit": limit,
+                "order": "desc",
+                "sort_by": "updated_at",
+            }
             if category:
                 params["category"] = category
             if context:
@@ -504,6 +508,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
                 limit: Max results (default 10).
             Enable this tool in the Memory Dashboard → Settings."""
             import urllib.parse
+
             qs = f"search={urllib.parse.quote(query)}&limit={limit}&order=desc"
             return _api(backend_url, "get", f"/memory/knowledge?{qs}")
 

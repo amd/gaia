@@ -3776,7 +3776,9 @@ class TestStoreEmbedding:
         """update(content=...) sets embedding to NULL so item gets re-embedded."""
         import numpy as np
 
-        kid = store.store(category="fact", content="Original content for embedding clear test")
+        kid = store.store(
+            category="fact", content="Original content for embedding clear test"
+        )
         vec = np.random.rand(768).astype(np.float32)
         store.store_embedding(kid, vec.tobytes())
 
@@ -4549,3 +4551,156 @@ class TestGetItemsWithoutEmbeddings:
             )
         items = store.get_items_without_embeddings(limit=3)
         assert len(items) <= 3
+
+
+# ===========================================================================
+# v2 Tests — Embedding Coverage
+# ===========================================================================
+
+
+class TestGetEmbeddingCoverage:
+    """Test get_embedding_coverage() aggregate stats."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(db_path=tmp_path / "coverage.db")
+        yield s
+        s.close()
+
+    def test_empty_store_returns_zeros(self, store):
+        """get_embedding_coverage() returns all-zero stats on empty DB."""
+        cov = store.get_embedding_coverage()
+        assert cov == {
+            "total_items": 0,
+            "with_embedding": 0,
+            "without_embedding": 0,
+            "coverage_pct": 0.0,
+        }
+
+    def test_counts_items_with_and_without_embeddings(self, store):
+        """Coverage counts split correctly across embedded and bare items."""
+        import numpy as np
+
+        kid_with = store.store(category="fact", content="Coverage item with embedding")
+        store.store(category="fact", content="Coverage item without embedding unique")
+        vec = np.random.rand(768).astype(np.float32)
+        store.store_embedding(kid_with, vec.tobytes())
+
+        cov = store.get_embedding_coverage()
+        assert cov["total_items"] == 2
+        assert cov["with_embedding"] == 1
+        assert cov["without_embedding"] == 1
+        assert cov["coverage_pct"] == 50.0
+
+    def test_full_coverage(self, store):
+        """100% coverage when all items have embeddings."""
+        import numpy as np
+
+        contents = [
+            "The server runs on port eight thousand and uses TLS",
+            "Database backups happen nightly at midnight UTC timezone",
+            "Frontend deployment pipeline triggers on main branch push",
+        ]
+        for content in contents:
+            kid = store.store(category="fact", content=content)
+            vec = np.random.rand(768).astype(np.float32)
+            store.store_embedding(kid, vec.tobytes())
+
+        cov = store.get_embedding_coverage()
+        assert cov["total_items"] == 3
+        assert cov["with_embedding"] == 3
+        assert cov["without_embedding"] == 0
+        assert cov["coverage_pct"] == 100.0
+
+    def test_excludes_superseded_items(self, store):
+        """Superseded items are not counted in coverage."""
+        import numpy as np
+
+        kid = store.store(category="fact", content="Superseded coverage test item")
+        vec = np.random.rand(768).astype(np.float32)
+        store.store_embedding(kid, vec.tobytes())
+        # Supersede it
+        with store._lock:
+            store._conn.execute(
+                "UPDATE knowledge SET superseded_by = 'fake-id' WHERE id = ?", (kid,)
+            )
+            store._conn.commit()
+
+        cov = store.get_embedding_coverage()
+        assert cov["total_items"] == 0
+
+
+# ===========================================================================
+# v2 Tests — Backfill Embeddings
+# ===========================================================================
+
+
+class TestBackfillEmbeddings:
+    """Test backfill_embeddings() — embeds items missing embeddings."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = MemoryStore(db_path=tmp_path / "backfill.db")
+        yield s
+        s.close()
+
+    def test_backfills_items_without_embeddings(self, store):
+        """backfill_embeddings() embeds all items missing embeddings."""
+        import numpy as np
+
+        store.store(category="fact", content="The authentication service uses OAuth tokens")
+        store.store(category="fact", content="Database schema migrations run on startup automatically")
+
+        def embed_fn(text: str) -> bytes:
+            return np.ones(768, dtype=np.float32).tobytes()
+
+        result = store.backfill_embeddings(embed_fn)
+        assert result["backfilled"] == 2
+        assert result["total_without"] == 2
+        assert store.get_embedding_coverage()["with_embedding"] == 2
+
+    def test_skips_already_embedded_items(self, store):
+        """backfill_embeddings() only processes items with embedding IS NULL."""
+        import numpy as np
+
+        kid = store.store(category="fact", content="Monitoring alerts trigger via PagerDuty on-call")
+        vec = np.random.rand(768).astype(np.float32)
+        store.store_embedding(kid, vec.tobytes())
+        store.store(category="fact", content="CI pipeline runs unit tests before deployment staging")
+
+        call_count = 0
+
+        def embed_fn(text: str) -> bytes:
+            nonlocal call_count
+            call_count += 1
+            return np.ones(768, dtype=np.float32).tobytes()
+
+        result = store.backfill_embeddings(embed_fn)
+        assert call_count == 1
+        assert result["backfilled"] == 1
+        assert result["total_without"] == 1
+
+    def test_continues_on_embed_failure(self, store):
+        """backfill_embeddings() skips items whose embed_fn raises, returns partial count."""
+        store.store(category="fact", content="Redis cache stores session tokens with TTL expiry")
+        store.store(category="fact", content="Load balancer distributes traffic across availability zones")
+
+        import numpy as np
+
+        call_count = 0
+
+        def embed_fn(text: str) -> bytes:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("embed failed")
+            return np.ones(768, dtype=np.float32).tobytes()
+
+        result = store.backfill_embeddings(embed_fn)
+        assert result["total_without"] == 2
+        assert result["backfilled"] == 1  # one succeeded, one skipped
+
+    def test_empty_store_returns_zero(self, store):
+        """backfill_embeddings() on empty store returns zero counts."""
+        result = store.backfill_embeddings(lambda text: b"")
+        assert result == {"backfilled": 0, "total_without": 0}

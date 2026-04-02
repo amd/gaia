@@ -106,16 +106,19 @@ def mixin_host(tmp_path):
 
     with (
         patch.object(MemoryMixin, "_get_embedder", return_value=mock_emb),
-        patch.object(
-            MemoryMixin, "_embed_text", side_effect=lambda t: _fake_vec(t)
-        ),
+        patch.object(MemoryMixin, "_embed_text", side_effect=lambda t: _fake_vec(t)),
         patch.object(MemoryMixin, "_backfill_embeddings", return_value=0),
         patch.object(MemoryMixin, "_rebuild_faiss_index", return_value=None),
         patch.object(
             MemoryMixin,
             "reconcile_memory",
-            return_value={"pairs_checked": 0, "reinforced": 0,
-                          "contradicted": 0, "weakened": 0, "neutral": 0},
+            return_value={
+                "pairs_checked": 0,
+                "reinforced": 0,
+                "contradicted": 0,
+                "weakened": 0,
+                "neutral": 0,
+            },
         ),
         patch.object(
             MemoryMixin,
@@ -143,7 +146,9 @@ def api_client(tmp_path):
     # Mock ChatDatabase for settings
     mock_db = MagicMock()
     _settings: dict = {}
-    mock_db.get_setting.side_effect = lambda key, default=None: _settings.get(key, default)
+    mock_db.get_setting.side_effect = lambda key, default=None: _settings.get(
+        key, default
+    )
     mock_db.set_setting.side_effect = lambda key, value: _settings.update({key: value})
 
     app = FastAPI()
@@ -154,6 +159,7 @@ def api_client(tmp_path):
 
     # Override get_db dependency
     from gaia.ui.dependencies import get_db
+
     app.dependency_overrides[get_db] = lambda: mock_db
 
     client = TestClient(app)
@@ -211,12 +217,16 @@ class TestMemoryRememberRecall:
         )
         store.search("Python runtime")
         item = _get_item(store, kid)
-        assert item["confidence"] == pytest.approx(0.5 + CONFIDENCE_BUMP_PER_RECALL, abs=1e-4)
+        assert item["confidence"] == pytest.approx(
+            0.5 + CONFIDENCE_BUMP_PER_RECALL, abs=1e-4
+        )
 
     def test_multiple_recalls_cumulate_confidence(self, store):
         """Repeated recalls keep increasing confidence (up to 1.0 cap)."""
         kid = store.store(
-            category="skill", content="pytest fixtures use yield for teardown", confidence=0.6
+            category="skill",
+            content="pytest fixtures use yield for teardown",
+            confidence=0.6,
         )
         for _ in range(3):
             store.search("pytest fixtures")
@@ -238,9 +248,7 @@ class TestMemoryRememberRecall:
         """A query for an unrelated term returns no results."""
         store.store(category="fact", content="GAIA runs on AMD Ryzen AI hardware")
         results = store.search("medieval castle architecture")
-        assert len(results) == 0 or all(
-            "AMD" not in r["content"] for r in results
-        )
+        assert len(results) == 0 or all("AMD" not in r["content"] for r in results)
 
 
 # ===========================================================================
@@ -341,7 +349,9 @@ class TestMemoryJournaling:
     def test_conversation_search_finds_past_message(self, store):
         """Full-text search over conversations finds stored turns."""
         session_id = str(uuid.uuid4())
-        store.store_turn(session_id, "user", "We discussed the FAISS integration approach")
+        store.store_turn(
+            session_id, "user", "We discussed the FAISS integration approach"
+        )
         results = store.search_conversations("FAISS integration")
         assert len(results) > 0
         assert any("FAISS" in r["content"] for r in results)

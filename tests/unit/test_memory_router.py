@@ -31,6 +31,7 @@ Endpoints covered:
 """
 
 import sqlite3
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -762,11 +763,14 @@ class TestRebuildEmbeddingsEndpoint:
 
     def test_rebuild_embeddings_returns_200_when_implemented(self, client, test_store):
         """POST /api/memory/rebuild-embeddings returns 200 with mock method."""
-        test_store.backfill_embeddings = lambda: {
+        test_store.backfill_embeddings = lambda *args, **kwargs: {
             "backfilled": 5,
             "total_without": 10,
         }
-        resp = client.post("/api/memory/rebuild-embeddings")
+        mock_provider = MagicMock()
+        mock_provider.embed.return_value = [[0.1] * 768]
+        with patch("gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider):
+            resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 200
         data = resp.json()
         assert data["backfilled"] == 5
@@ -775,11 +779,14 @@ class TestRebuildEmbeddingsEndpoint:
     def test_rebuild_embeddings_runtime_error_returns_500(self, client, test_store):
         """POST /api/memory/rebuild-embeddings returns 500 on internal errors."""
 
-        def boom():
+        def boom(*args, **kwargs):
             raise RuntimeError("Lemonade server unreachable")
 
         test_store.backfill_embeddings = boom
-        resp = client.post("/api/memory/rebuild-embeddings")
+        mock_provider = MagicMock()
+        mock_provider.embed.return_value = [[0.1] * 768]
+        with patch("gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider):
+            resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 500
 
 

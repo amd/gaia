@@ -9,7 +9,7 @@ Hooks into the Agent lifecycle at 3 points:
 3. Post-query storage (_after_process_query) — stores conversations + LLM extraction
 
 Provides 5 LLM-facing tools: remember, recall, update_memory, forget, search_past_conversations.
-Valid categories: fact, preference, error, skill, note, reminder.
+Valid categories: fact, preference, error, skill, note, reminder, system.
 
 v2 additions:
 - Embedding pipeline (Lemonade nomic-embed-text-v2-moe-GGUF, 768-dim)
@@ -51,6 +51,37 @@ from gaia.agents.base.memory_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Path to the user-level memory settings file.
+_MEMORY_SETTINGS_PATH = Path.home() / ".gaia" / "memory_settings.json"
+
+
+def _load_memory_settings() -> Dict:
+    """Read ~/.gaia/memory_settings.json.  Returns {} if missing or unreadable."""
+    try:
+        if _MEMORY_SETTINGS_PATH.exists():
+            return json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_memory_settings(settings: Dict) -> None:
+    """Merge *settings* into ~/.gaia/memory_settings.json (creates file if absent)."""
+    try:
+        current = _load_memory_settings()
+        current.update(settings)
+        _MEMORY_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _MEMORY_SETTINGS_PATH.write_text(
+            json.dumps(current, indent=2), encoding="utf-8"
+        )
+    except Exception as e:
+        logger.warning("[MemoryMixin] failed to save memory settings: %s", e)
+
+
+def _system_context_is_enabled() -> bool:
+    """Return True unless the user has explicitly disabled system context collection."""
+    return bool(_load_memory_settings().get("system_context_enabled", True))
 
 
 # ============================================================================
@@ -281,21 +312,9 @@ class MemoryMixin:
         # Step 5: apply_confidence_decay()
         self._memory_store.apply_confidence_decay()
 
-        # Step 6: reconcile_memory() (max 20 pairs)
-        try:
-            recon = self.reconcile_memory(max_pairs=20)
-            if recon.get("pairs_checked", 0) > 0:
-                logger.info("[MemoryMixin] reconciliation: %s", recon)
-        except Exception as e:
-            logger.warning("[MemoryMixin] reconciliation failed: %s", e)
-
-        # Step 7: consolidate_old_sessions() (max 5 sessions)
-        try:
-            consol = self.consolidate_old_sessions(max_sessions=5)
-            if consol.get("consolidated", 0) > 0:
-                logger.info("[MemoryMixin] consolidation: %s", consol)
-        except Exception as e:
-            logger.warning("[MemoryMixin] consolidation failed: %s", e)
+        # Steps 6-7 (reconcile + consolidate) require self.chat (AgentSDK) which
+        # isn't available until Agent.__init__() completes — defer to first query.
+        self._memory_post_init_pending = True
 
         # Step 8: prune() (90-day hard delete)
         self._memory_store.prune()
@@ -303,11 +322,78 @@ class MemoryMixin:
         # Step 9: Generate session UUID
         self._memory_session_id = str(uuid4())
 
+        # Step 10: Initialize system context on first run (non-blocking)
+        try:
+            self.init_system_context()
+        except Exception as e:
+            logger.warning("[MemoryMixin] system context initialization failed: %s", e)
+
         logger.info(
             "[MemoryMixin] v2 initialized, session_id=%s context=%s",
             self._memory_session_id,
             context,
         )
+
+    def init_system_context(self, force: bool = False) -> Dict[str, int]:
+        """Store system context facts on first run (silent, non-blocking).
+
+        Auto-collects OS/hardware/software info and stores it as 'system'
+        category memories in the 'global' context.  Idempotent — skips if
+        already initialized unless *force* is ``True``.
+
+        Respects ``~/.gaia/memory_settings.json`` → ``system_context_enabled``.
+        When that key is ``false`` this method is a no-op.
+
+        Args:
+            force: Re-collect even if system context already exists.
+
+        Returns:
+            Dict with 'stored' (int) count of items stored, and
+            'disabled' (bool) when skipped due to opt-out setting.
+        """
+        # Honour opt-out setting stored in ~/.gaia/memory_settings.json
+        if not _system_context_is_enabled():
+            logger.debug("[MemoryMixin] system context disabled by user setting")
+            return {"stored": 0, "disabled": True}
+
+        # Check if already initialized
+        existing = self._memory_store.get_by_category(
+            "system", context="global", limit=1
+        )
+        if existing and not force:
+            return {"stored": 0}
+
+        # Collect system information
+        try:
+            from gaia.agents.base.system_context import collect_system_info
+
+            facts = collect_system_info()
+        except Exception as e:
+            logger.warning("[MemoryMixin] failed to collect system info: %s", e)
+            return {"stored": 0}
+
+        stored = 0
+        for fact in facts:
+            try:
+                self._memory_store.store(
+                    category="system",
+                    content=fact["content"],
+                    domain=fact.get("domain"),
+                    context="global",
+                    confidence=1.0,
+                    source="system",
+                )
+                stored += 1
+            except Exception as e:
+                logger.debug("[MemoryMixin] failed to store system fact: %s", e)
+
+        if stored > 0:
+            logger.info(
+                "[MemoryMixin] stored %d system context items (first run)",
+                stored,
+            )
+
+        return {"stored": stored}
 
     # ------------------------------------------------------------------
     # Properties
@@ -963,6 +1049,33 @@ class MemoryMixin:
                 )
 
     # ==================================================================
+    # Deferred Post-Init (requires self.chat / AgentSDK)
+    # ==================================================================
+
+    def _run_memory_post_init(self) -> None:
+        """Run LLM-dependent startup steps deferred from init_memory().
+
+        Called automatically on the first process_query() invocation, by which
+        time Agent.__init__() has completed and self.chat is available.
+        Steps: reconcile_memory (max 20 pairs) + consolidate_old_sessions (max 5).
+        """
+        # Step 6: reconcile_memory() (max 20 pairs)
+        try:
+            recon = self.reconcile_memory(max_pairs=20)
+            if recon.get("pairs_checked", 0) > 0:
+                logger.info("[MemoryMixin] post-init reconciliation: %s", recon)
+        except Exception as e:
+            logger.warning("[MemoryMixin] post-init reconciliation failed: %s", e)
+
+        # Step 7: consolidate_old_sessions() (max 5 sessions)
+        try:
+            consol = self.consolidate_old_sessions(max_sessions=5)
+            if consol.get("consolidated", 0) > 0:
+                logger.info("[MemoryMixin] post-init consolidation: %s", consol)
+        except Exception as e:
+            logger.warning("[MemoryMixin] post-init consolidation failed: %s", e)
+
+    # ==================================================================
     # Conversation Consolidation
     # ==================================================================
 
@@ -1021,10 +1134,6 @@ class MemoryMixin:
                     last_ts=last_ts,
                     turns_text=turns_text,
                 )
-
-                # LLM call
-                if not hasattr(self, "chat"):
-                    break
 
                 response = self.chat.send_messages(
                     messages=[{"role": "user", "content": prompt}],
@@ -1200,7 +1309,7 @@ class MemoryMixin:
         pairs.sort(key=lambda x: x[2], reverse=True)
         pairs = pairs[:max_pairs]
 
-        if not pairs or not hasattr(self, "chat"):
+        if not pairs:
             return result
 
         for id_a, id_b, sim in pairs:
@@ -1358,38 +1467,46 @@ class MemoryMixin:
             return ""
 
     def _build_stable_memory_prompt(self) -> str:
-        """Stable memory: preferences + facts + known errors. No timestamps."""
+        """Stable memory: system context + preferences + facts + known errors. No timestamps."""
         ctx = self._memory_context
         sections = []
 
-        # 1. Preferences (active context + global, exclude sensitive)
+        # 0. System context (global only — always included first so the agent
+        #    has self-awareness about the host system from day 0)
+        sys_items = self._memory_store.get_by_category("system", context="global", limit=20)
+        if sys_items:
+            sys_lines = [f"  - {s['content']}" for s in sys_items]
+            sections.append("System environment:\n" + "\n".join(sys_lines))
+
+        # 1-4. User-created sections (preference, fact, skill, error)
+        user_sections: list = []
+
         prefs = self._get_context_items("preference", ctx, limit=10)
         if prefs:
             pref_lines = [f"  - {p['content']}" for p in prefs]
-            sections.append("Preferences:\n" + "\n".join(pref_lines))
+            user_sections.append("Preferences:\n" + "\n".join(pref_lines))
 
-        # 2. Top facts (active context + global, by confidence)
         facts = self._get_context_items("fact", ctx, limit=5)
         if facts:
             fact_lines = [
                 f"  - {f['content']} (confidence: {f['confidence']:.2f})" for f in facts
             ]
-            sections.append("Known facts:\n" + "\n".join(fact_lines))
+            user_sections.append("Known facts:\n" + "\n".join(fact_lines))
 
-        # 3. Top skills
         skills = self._get_context_items("skill", ctx, limit=3)
         if skills:
             skill_lines = [
                 f"  - {s['content']} (confidence: {s['confidence']:.2f})"
                 for s in skills
             ]
-            sections.append("Skills:\n" + "\n".join(skill_lines))
+            user_sections.append("Skills:\n" + "\n".join(skill_lines))
 
-        # 4. Known error patterns
         errors = self._get_context_items("error", ctx, limit=5)
         if errors:
             error_lines = [f"  - {e['content']}" for e in errors]
-            sections.append("Known errors to avoid:\n" + "\n".join(error_lines))
+            user_sections.append("Known errors to avoid:\n" + "\n".join(error_lines))
+
+        sections.extend(user_sections)
 
         # Always include memory instructions — even when 0 memories exist.
         # Without these, the LLM doesn't know it has persistent memory tools.
@@ -1409,8 +1526,17 @@ class MemoryMixin:
 
         if sections:
             result = instructions + "\n" + "\n\n".join(sections)
+            # If system context exists but no personal memories yet, nudge the LLM.
+            if not user_sections:
+                result += (
+                    "\nNo personal memories stored yet."
+                    " Start building your knowledge base by remembering what the user tells you.\n"
+                )
         else:
-            result = instructions + "\nNo memories stored yet. Start building your knowledge base by remembering what the user tells you.\n"
+            result = (
+                instructions
+                + "\nNo memories stored yet. Start building your knowledge base by remembering what the user tells you.\n"
+            )
 
         # Hard cap: prevent context overflow if many large items exist.
         # 4000 chars ≈ 1000 tokens — sufficient for preferences/facts without
@@ -1476,6 +1602,11 @@ class MemoryMixin:
         upcoming/overdue items) is injected per-turn by prepending it to the
         user message.
         """
+        # Run deferred LLM startup tasks on first real query (after self.chat exists)
+        if getattr(self, "_memory_post_init_pending", False):
+            self._memory_post_init_pending = False
+            self._run_memory_post_init()
+
         # Save original so _after_process_query stores the clean user text
         self._original_user_input = user_input
 

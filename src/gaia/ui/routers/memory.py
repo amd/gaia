@@ -489,13 +489,26 @@ def rebuild_embeddings() -> Dict:
     Returns ``{backfilled: int, total_without: int}``.
     """
     try:
-        result = _get_store().backfill_embeddings()
+        import numpy as np
+
+        from gaia.agents.base.memory import EMBEDDING_MODEL
+        from gaia.llm.providers.lemonade import LemonadeProvider
+
+        provider = LemonadeProvider(model=EMBEDDING_MODEL)
+
+        def _embed_fn(text: str) -> bytes:
+            results = provider.embed([text], model=EMBEDDING_MODEL)
+            vec = np.array(results[0], dtype=np.float32)
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            return vec.astype(np.float32).tobytes()
+
+        result = _get_store().backfill_embeddings(_embed_fn)
         return result
-    except AttributeError:
-        raise HTTPException(501, "Embedding backfill not yet implemented in data layer")
     except Exception as exc:
         logger.error("[memory router] rebuild-embeddings failed: %s", exc)
-        raise HTTPException(500, f"Embedding rebuild failed: {type(exc).__name__}")
+        raise HTTPException(500, f"Embedding rebuild failed: {type(exc).__name__}: {exc}")
 
 
 @router.post("/api/memory/reconcile")
@@ -570,7 +583,8 @@ _MCP_MEMORY_ENABLED_KEY = "mcp_memory_enabled"
 def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
     """Return memory-related feature settings."""
     return {
-        "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false") == "true",
+        "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false")
+        == "true",
     }
 
 
@@ -586,7 +600,10 @@ def update_memory_settings(
       for debug/troubleshooting. Default false.
     """
     if "mcp_memory_enabled" in body:
-        db.set_setting(_MCP_MEMORY_ENABLED_KEY, "true" if body["mcp_memory_enabled"] else "false")
+        db.set_setting(
+            _MCP_MEMORY_ENABLED_KEY, "true" if body["mcp_memory_enabled"] else "false"
+        )
     return {
-        "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false") == "true",
+        "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false")
+        == "true",
     }
