@@ -37,7 +37,17 @@ REAL_WORLD_MANIFEST = REAL_WORLD_CORPUS_DIR / "manifest.json"
 
 # Personas defined in eval/prompts/simulator.md.  validate_scenario enforces this list.
 _KNOWN_PERSONAS = frozenset(
-    {"casual_user", "power_user", "confused_user", "adversarial_user", "data_analyst"}
+    {
+        "casual_user",
+        "power_user",
+        "confused_user",
+        "adversarial_user",
+        "data_analyst",
+        "home_user",
+        "small_business_owner",
+        "student",
+        "creative_professional",
+    }
 )
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -183,7 +193,9 @@ def find_scenarios(scenario_id=None, category=None):
     return scenarios
 
 
-def build_scenario_prompt(scenario_data, manifest_data, backend_url):
+def build_scenario_prompt(
+    scenario_data, manifest_data, backend_url, keep_sessions=False
+):
     """Build the prompt passed to `claude -p` for one scenario."""
     scenario_yaml = yaml.dump(scenario_data, default_flow_style=False)
     manifest_json = json.dumps(manifest_data, indent=2)
@@ -261,7 +273,7 @@ After all turns, call get_messages(session_id) for the persisted full trace.
 Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
 
 ### Phase 5: Cleanup
-Call delete_session(session_id)
+{"Skip this step — leave the session in the Agent UI for manual inspection." if keep_sessions else "Call delete_session(session_id)"}
 
 ### Phase 6: Return result
 Return a single JSON object to stdout with this structure:
@@ -461,7 +473,14 @@ def preflight_check(backend_url):
 
 
 def run_scenario_subprocess(
-    _scenario_path, scenario_data, run_dir, backend_url, model, budget, timeout
+    _scenario_path,
+    scenario_data,
+    run_dir,
+    backend_url,
+    model,
+    budget,
+    timeout,
+    keep_sessions=False,
 ):
     """Invoke claude -p for one scenario. Returns parsed result dict."""
     scenario_id = scenario_data["id"]
@@ -486,7 +505,9 @@ def run_scenario_subprocess(
             "total_documents": len(merged_docs),
         }
 
-    prompt = build_scenario_prompt(scenario_data, manifest_data, backend_url)
+    prompt = build_scenario_prompt(
+        scenario_data, manifest_data, backend_url, keep_sessions=keep_sessions
+    )
 
     result_schema = json.dumps(
         {
@@ -626,11 +647,6 @@ def run_scenario_subprocess(
                 if isinstance(result, dict):
                     result["scenario_id"] = scenario_id
                 result["elapsed_s"] = elapsed
-                score = result.get("overall_score")
-                score_str = f"{score:.1f}" if isinstance(score, (int, float)) else "n/a"
-                print(
-                    f"[DONE] {scenario_id} — {result.get('status')} {score_str}/10 ({elapsed:.0f}s)"
-                )
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"[ERROR] {scenario_id} — JSON parse error: {e}", file=sys.stderr)
                 result = {
@@ -797,6 +813,18 @@ def run_scenario_subprocess(
     trace_path = traces_dir / f"{scenario_id}.json"
     trace_path.write_text(
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    # Print final [DONE] line here — AFTER all score/status overrides — so the
+    # displayed status always reflects the fully-corrected result, not the raw
+    # LLM output which may still show the pre-override status.
+    elapsed_final = result.get("elapsed_s", 0)
+    score_final = result.get("overall_score")
+    score_str_final = (
+        f"{score_final:.1f}" if isinstance(score_final, (int, float)) else "n/a"
+    )
+    print(
+        f"[DONE] {scenario_id} — {result.get('status')} {score_str_final}/10 ({elapsed_final:.0f}s)"
     )
 
     return result
@@ -1210,6 +1238,7 @@ class AgentEvalRunner:
         fix_mode=False,
         max_fix_iterations=3,
         target_pass_rate=0.90,
+        keep_sessions=False,
     ):
         """Run eval scenarios. Returns scorecard dict.
 
@@ -1320,6 +1349,7 @@ class AgentEvalRunner:
                 self.model,
                 self.budget,
                 effective_timeout,
+                keep_sessions=keep_sessions,
             )
             results.append(result)
 
@@ -1401,6 +1431,7 @@ class AgentEvalRunner:
                     self.model,
                     self.budget,
                     effective_timeout,
+                    keep_sessions=keep_sessions,
                 )
                 rerun_results.append(result)
 

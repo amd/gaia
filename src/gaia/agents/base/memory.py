@@ -1918,10 +1918,37 @@ class MemoryMixin:
             context: str = "",
             entity: str = "",
             limit: int = 0,
+            offset: int = 0,
             time_from: str = "",
             time_to: str = "",
         ) -> dict:
-            """Search memory for relevant knowledge. With query: uses hybrid semantic+keyword search (vector + BM25, cross-encoder reranking). Without query: returns entries filtered by category/domain/context/entity. At least one parameter required. domain: sub-type filter (e.g. 'journal' for notes stored with domain=journal). time_from/time_to: ISO 8601 boundaries for temporal filtering. Example: recall(category='note', domain='journal') retrieves all journal entries."""
+            """Search or browse memory — works as both a search engine AND a database query tool.
+
+            SEARCH MODE (with query=): semantic + keyword hybrid search across all memories.
+              Example: recall(query='python project settings')
+
+            BROWSE/LIST MODE (without query=): returns ALL entries matching your filters.
+              Use this when you want to list, browse, or count memories — not find a specific one.
+              Examples:
+                recall(category='note')                        → all notes
+                recall(category='note', domain='journal')      → all journal entries
+                recall(category='reminder')                    → all reminders / todos
+                recall(category='preference')                  → all stored preferences
+                recall(time_from='2026-01-01', time_to='2026-03-31')  → entries from Q1
+                recall(category='note', limit=50, offset=50)  → second page of notes
+
+            PARAMETERS:
+              query     : free-text search (enables hybrid search mode)
+              category  : filter by category (note, reminder, fact, preference, error, skill)
+              domain    : sub-type filter — e.g. 'journal', 'todo', 'work', 'personal'
+              context   : scope filter ('work', 'personal', 'global')
+              entity    : filter by linked entity (e.g. 'person:Linda')
+              limit     : max results (default 20 for browse, adaptive for search; max 100)
+              offset    : skip first N results for pagination (default 0)
+              time_from : ISO 8601 date lower bound (e.g. '2026-01-01')
+              time_to   : ISO 8601 date upper bound (e.g. '2026-03-31')
+
+            At least one parameter required."""
             import time as _t
 
             _recall_t0 = _t.perf_counter()
@@ -1938,8 +1965,8 @@ class MemoryMixin:
                 else:
                     limit = 20  # list-style queries default to more results
 
-            # Clamp limit to prevent huge result sets
-            limit = max(1, min(limit, 50))
+            # Clamp limit — allow up to 100 for browse/list queries
+            limit = max(1, min(limit, 100))
 
             if query:
                 # Use hybrid search for query-based recall
@@ -1970,23 +1997,39 @@ class MemoryMixin:
                 # If only domain provided (no category), use 'note' as default since
                 # domain is a sub-type of notes/facts (journal entries are category=note)
                 effective_category = category or "note"
-                results = mixin._memory_store.get_by_category(
-                    effective_category,
-                    context=context or None,
-                    domain=domain or None,
-                    limit=limit,
-                )
+                # Use get_all_knowledge for offset/pagination support; get_by_category
+                # doesn't support offset but get_all_knowledge does.
+                if offset > 0:
+                    page = mixin._memory_store.get_all_knowledge(
+                        category=effective_category,
+                        context=context or None,
+                        entity=entity or None,
+                        sort_by="updated_at",
+                        order="desc",
+                        offset=offset,
+                        limit=limit,
+                    )
+                    raw = page.get("items", [])
+                    results = (
+                        [r for r in raw if r.get("domain") == domain]
+                        if domain
+                        else raw
+                    )
+                else:
+                    results = mixin._memory_store.get_by_category(
+                        effective_category,
+                        context=context or None,
+                        domain=domain or None,
+                        limit=limit,
+                    )
                 logger.debug(
-                    "recall: get_by_category(cat=%s, domain=%s) took %.1fms → %d results",
-                    effective_category, domain or "any",
+                    "recall: get_by_category(cat=%s, domain=%s, offset=%d) took %.1fms → %d results",
+                    effective_category, domain or "any", offset,
                     (_t.perf_counter() - _db_t0) * 1000,
                     len(results),
                 )
             elif time_from or time_to:
-                # Time-range only: fetch from store sorted by created_at and
-                # apply time filtering in Python.  Uses get_all_knowledge()
-                # which includes items without embeddings (unlike
-                # get_items_with_embeddings which filters embedding IS NOT NULL).
+                # Time-range only: use get_all_knowledge with SQL-level pagination.
                 _db_t0 = _t.perf_counter()
                 page = mixin._memory_store.get_all_knowledge(
                     category=category or None,
@@ -1994,7 +2037,8 @@ class MemoryMixin:
                     entity=entity or None,
                     sort_by="created_at",
                     order="desc",
-                    limit=limit * 3,  # over-fetch to account for filtering
+                    offset=0,
+                    limit=limit * 4,  # over-fetch to account for filtering
                 )
                 logger.debug("recall: get_all_knowledge took %.1fms", (_t.perf_counter() - _db_t0) * 1000)
                 filtered = []
@@ -2007,11 +2051,11 @@ class MemoryMixin:
                     if domain and item.get("domain") != domain:
                         continue
                     filtered.append(item)
-                results = filtered[:limit]
+                results = filtered[offset : offset + limit]
             else:
                 _db_t0 = _t.perf_counter()
                 page = mixin._memory_store.get_all_knowledge(
-                    context=context, limit=limit
+                    context=context, limit=limit, offset=offset
                 )
                 logger.debug("recall: get_all_knowledge took %.1fms", (_t.perf_counter() - _db_t0) * 1000)
                 results = page.get("items", [])
@@ -2028,6 +2072,8 @@ class MemoryMixin:
             return {
                 "status": "found" if results else "empty",
                 "count": len(results),
+                "offset": offset,
+                "has_more": len(results) == limit,  # hint: call again with offset+limit
                 "results": results,
             }
 
