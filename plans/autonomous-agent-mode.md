@@ -1,42 +1,65 @@
 # Autonomous Agent Mode — Design Specification
 
 **Branch:** `feature/agent-always-running` (branch off `feature/agent-memory`)
-**Status:** Draft v2 — security-reviewed
+**Status:** Draft v3 — design finalized
 **Date:** 2026-04-01
 
 ---
 
 ## 1. Overview
 
-GAIA agents are fully autonomous agentic systems. By default they run
-continuously, proactively working on goals, processing memory, and taking
-initiative — not merely waiting for the user to send a message.
+GAIA agents are self-directed autonomous systems. Rather than waiting for the
+user to send a message, the agent observes its environment, infers goals from
+context, and works on them continuously — stopping only when it has nothing
+left to do, is waiting for input, or has been paused.
+
+The agent's behavior is controlled by a single `agent_mode` setting:
+
+| Mode | Behaviour |
+|------|-----------|
+| `manual` | Classic request/response — no background activity |
+| `goal_driven` | Executes user-approved goals in the background |
+| `autonomous` | Observes environment, infers and executes its own goals |
+
+Default: `autonomous`. Users can downgrade at any time from Settings.
+
+**What makes this genuinely autonomous (not just reactive):**
+- In `autonomous` mode the agent runs an *observation cycle* on idle ticks
+- It scans the environment (file system, git state, logs, conversation history,
+  memory) and asks: *"What would a thoughtful expert do here without being
+  asked?"*
+- It creates goals from those observations with `source="agent_inferred"`
+- If a matching permission grant exists in memory, the goal is auto-approved
+- Otherwise the goal surfaces in the Goals dashboard as `pending_approval`
+- The user can Approve / Reject / Always Accept each suggestion
+
+This means the agent has genuine initiative. An empty goal queue on a fresh
+install is not a no-op — the first idle tick reviews context and suggests goals.
 
 The agent stops (or pauses) only when it:
-- Has nothing left to do right now (`IDLE`)
+- Has nothing to do and no observations yield new goals (`IDLE`)
 - Is waiting for user input (`WAITING_INPUT`)
 - Has self-scheduled a future wake-up (`SCHEDULED`)
-- Has been explicitly paused by the user or a setting (`PAUSED`)
-
-A single setting `always_running` (default `true`) controls whether this
-behavior is active. Disabling it switches the agent to manual (request/
-response) mode.
+- Has been explicitly paused by the user (`PAUSED`)
 
 ---
 
-## 2. Goals
+## 2. Design Goals
 
 | # | Goal |
 |---|------|
-| G1 | Agent loop is ON by default; no user action required to start it |
-| G2 | Agent proactively works on explicitly approved goals from memory |
-| G3 | Agent can ask the user questions without halting all other activity |
-| G4 | Agent can self-schedule future wake-ups ("remind me in 10 min") |
-| G5 | User can disable autonomous mode from the Settings UI |
-| G6 | All autonomous activity is visible, traceable, and auditable |
-| G7 | System is safe: no destructive action without live user approval |
-| G8 | Memory cannot be used as a prompt injection / command injection vector |
-| G9 | Private sessions are never touched by the autonomous loop |
+| G1 | Agent is self-directed: infers goals from observation, not just user instruction |
+| G2 | Three modes (manual / goal_driven / autonomous) form a clear trust gradient |
+| G3 | Agent-inferred goals always require user approval before execution |
+| G4 | Permission grants (stored in MemoryStore) allow "always accept" approvals |
+| G5 | Agent can ask the user questions without halting all other activity |
+| G6 | Agent can self-schedule future wake-ups ("remind me in 10 min") |
+| G7 | User can change mode from Settings UI at any time |
+| G8 | All autonomous activity is visible, traceable, and auditable |
+| G9 | System is safe: no destructive action without live user approval regardless of mode |
+| G10 | GoalStore is separate from MemoryStore — work queue must not be LLM-rewritten |
+| G11 | Private sessions are never touched by the autonomous loop |
+| G12 | Memory/MemoryStore cannot be used as a prompt injection vector |
 
 ---
 
@@ -331,67 +354,135 @@ powerful for unattended use. Path expansion is only permitted in interactive
 
 ---
 
-## 6. Memory & Goals — Safe Autonomous Execution Model
+## 6. GoalStore — Structured Work Queue (separate from MemoryStore)
 
-### 6.1 New Memory Categories
+### 6.1 Architecture
+
+Goals and tasks live in **GoalStore** (`src/gaia/agents/base/goal_store.py`),
+not in MemoryStore. This separation is intentional:
+
+| Store | Purpose | LLM can rewrite? |
+|-------|---------|-----------------|
+| `MemoryStore` | Knowledge base — facts, preferences, skills, profile | Yes (consolidate/reconcile) |
+| `GoalStore` | Work queue — goals and tasks with state machines | No — structured tools only |
+
+LLM consolidation must never merge two goals or rewrite task status.
+Keeping them separate makes this impossible by design.
+
+When a goal completes, GoalStore writes a summary back to MemoryStore as a
+`fact` entry so the agent builds long-term knowledge from its work history.
+
+### 6.2 Goal hierarchy
+
+```
+Goal  (high-level objective)
+└── Task[]  (discrete, completable steps in order)
+    └── result: str  (what was done / outcome)
+```
+
+Two levels is the right depth. Goals are objectives ("Refactor auth module");
+tasks are work items ("Extract JWT validation", "Write tests", "Update docs").
+
+### 6.3 Goal state machine
+
+```
+[agent_inferred] ──► pending_approval ──► queued ──► in_progress ──► completed
+                                      └──► rejected               └──► failed
+[user / scheduled] ─────────────────► queued                     └──► cancelled
+                                           └──► cancelled
+```
+
+### 6.4 Task state machine
+
+```
+queued ──► in_progress ──► completed
+     └──► blocked ──────► in_progress (unblocked)
+                       └──► failed / cancelled
+```
+
+### 6.5 Goal sources and approval
+
+| `source` | Default status | `approved_for_auto` | Who approves |
+|----------|---------------|--------------------|-|
+| `user` | `queued` | `True` | Implicit — user created it |
+| `agent_inferred` | `pending_approval` | `False` | User must explicitly approve |
+| `agent_scheduled` | `queued` | `True` | Inherited from parent goal |
+
+Agent-inferred goals surface in the Goals dashboard as a **pending approval
+banner** with three actions:
+- **Reject** → status = `rejected`, never executed
+- **Accept** → `approved_for_auto = True`, status = `queued`
+- **Always Accept** → Accept + store a permission grant in MemoryStore
+
+### 6.6 Permission grants (MemoryStore `"permission"` category)
+
+"Always Accept" stores a natural-language permission grant:
 
 ```python
-VALID_CATEGORIES: frozenset = frozenset({
-    "fact", "preference", "error", "skill", "note",
-    "reminder", "system", "profile",
-    "goal",    # NEW — an objective the agent should work toward
-    "task",    # NEW — a discrete, completable action item
-})
+memory_store.store(
+    content="User always accepts goals related to code review and refactoring",
+    category="permission",
+    source="user",
+)
 ```
 
-### 6.2 Goal/Task Schema
+Before surfacing an agent-inferred goal for approval, the agent checks:
+```
+Does this goal's description semantically match any stored permission grant?
+```
+If yes → auto-approve. If no → show approval banner.
 
-Goals and tasks stored in memory carry additional metadata:
+The permission check uses the existing FAISS vector search — no separate
+rules engine is needed.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `approved_for_auto` | bool | **Must be True** for autonomous execution. Default: False. |
-| `status` | str | `pending` \| `in_progress` \| `done` \| `blocked` \| `cancelled` |
-| `created_by` | str | `user` \| `agent` — who created this goal |
-| `due_at` | ISO str | Optional deadline |
+### 6.7 Observation cycle (autonomous mode only)
 
-**The autonomous loop only executes goals where:**
-1. `category in ("goal", "task")`
-2. `approved_for_auto = True`
-3. `status = "pending"`
-
-Goals created by the agent itself (`created_by="agent"`) default to
-`approved_for_auto=False`. They appear in the UI as suggestions the user
-must approve before the agent will act on them. **An agent can never
-autonomously execute a goal it created itself on the same tick.**
-
-Goals created by the user via the memory API or chat (`created_by="user"`)
-can be created with `approved_for_auto=True` directly.
-
-### 6.3 Memory Injection Mitigation
-
-The background tick prompt **does not say "act on whatever is in memory."**
-It says:
+In `autonomous` mode, the agent's idle tick runs an **observation cycle**
+rather than only checking for existing approved goals:
 
 ```
-You are running autonomously. Check for approved pending goals:
-  memory_search(category="goal", status="pending", approved_for_auto=True)
-  memory_search(category="task", status="pending", approved_for_auto=True)
+Sensors polled on each idle tick:
+  • File watcher     — files changed since last tick
+  • Git monitor      — new commits, failing tests, open PRs
+  • Error log scan   — recurring errors / new stack traces
+  • Conversation scan — implicit goals from recent messages
+  • Memory review    — patterns suggesting work worth doing
+  • System state     — disk usage, process health
 
-Work on whatever you find. If there are no approved goals, call
-set_loop_state("idle", reason="No approved pending goals").
-
-For any destructive operation (delete, overwrite, shell command), you MUST
-use request_user_input() to ask first — never proceed without confirmation.
+Inference prompt:
+  "You have full context of this user's work and environment.
+   Here is what you observe: [observations]. What would a senior
+   engineer proactively do right now, without being asked? Generate
+   up to 3 goals ordered by impact. For each, state your confidence
+   and whether it's safe to execute without user confirmation."
 ```
 
-This means:
-- Injected `reminder` / `note` / `fact` entries are **never** treated as
-  executable commands
-- Only entries explicitly categorized as `goal` or `task` with
-  `approved_for_auto=True` are acted upon
-- Any `goal`/`task` created via the tunnel API is created with
-  `approved_for_auto=False` by default and requires in-app approval
+Most inferences are obvious — failing tests, stale TODOs, outdated docs.
+The agent acts on these without asking. Ambiguous or high-risk actions
+surface for approval.
+
+### 6.8 Memory injection mitigation
+
+The autonomous loop prompt is goal-driven, not memory-driven:
+
+```
+You are running autonomously. Retrieve your approved pending goals:
+  goal_store.get_actionable_goals()
+
+Work on the highest-priority goal. Break it into tasks if not already done.
+Execute each task in order using your tools.
+
+For any destructive operation (delete, overwrite, shell command, external
+API call), you MUST use request_user_input() — never proceed without
+confirmation, regardless of agent mode.
+
+When all goals are complete (or no goals remain), call set_loop_state("idle").
+```
+
+Injected `reminder` / `note` / `fact` entries are **never** treated as
+executable commands. Only `GoalStore` entries with `approved_for_auto=True`
+drive execution. Memory categories cannot be goal-hijacked because goals no
+longer live in MemoryStore.
 
 ---
 
@@ -539,16 +630,25 @@ POST /api/chat/user-input
 
 | Key | Type | Default | Storage |
 |-----|------|---------|---------|
-| `always_running` | bool | `true` | SQLite settings table |
+| `agent_mode` | `"manual"` \| `"goal_driven"` \| `"autonomous"` | `"autonomous"` | SQLite settings table |
 
 ```
-GET  /api/settings  → { "always_running": true, "custom_model": null, ... }
-PUT  /api/settings  { "always_running": false }
+GET  /api/settings  → { "agent_mode": "autonomous", ... }
+PUT  /api/settings  { "agent_mode": "goal_driven" }
 ```
 
-Toggling `always_running` to `false` immediately transitions the loop to
-`PAUSED` — any in-flight tick is allowed to complete its current step, then
-stops.
+**Mode transitions:**
+- Downgrading (`autonomous` → `goal_driven` → `manual`) immediately
+  transitions the loop to `PAUSED` after the current step completes.
+- Upgrading (`manual` → `goal_driven` → `autonomous`) fires the trigger
+  queue immediately.
+- In `manual` mode the AgentLoop is fully dormant — zero LLM calls.
+- In `goal_driven` mode the observation cycle is skipped; only existing
+  approved GoalStore entries are executed.
+- In `autonomous` mode the observation cycle runs on every idle tick.
+
+The old `always_running: bool` setting is removed. The UI Settings panel
+shows a three-way toggle: **Manual | Goal-driven | Autonomous**.
 
 ---
 
@@ -562,7 +662,7 @@ unconditionally. This applies to:
 - The activity log — no entries for private sessions
 
 This is enforced at the `AgentLoop` level, not just the settings level.
-Even with `always_running=True`, private sessions are never autonomously
+Even with `agent_mode="autonomous"`, private sessions are never autonomously
 processed.
 
 ---

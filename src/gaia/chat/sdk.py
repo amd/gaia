@@ -147,22 +147,17 @@ class AgentSDK:
         self, messages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        Ensure messages are safe to send to the LLM by appending a continuation
-        prompt when the last entry is a tool_result, which some models ignore.
+        Ensure messages are safe to send to the LLM.
+
+        Tool messages are converted to user-role messages in send_messages /
+        send_messages_stream, so no extra "continue" sentinel is needed here —
+        the tool result itself already forms a valid user turn for the LLM to
+        respond to.
         """
         if not messages:
             return []
 
-        prepared = list(messages)
-        try:
-            last_role = prepared[-1].get("role")
-        except Exception:
-            return prepared
-
-        if last_role == "tool":
-            prepared.append({"role": "user", "content": "continue"})
-
-        return prepared
+        return list(messages)
 
     def send_messages(
         self,
@@ -202,10 +197,15 @@ class AgentSDK:
                     continue
                 content = self._normalize_message_content(msg.get("content", ""))
                 if role == "tool":
+                    # Tool results are surfaced as user messages so that the LLM
+                    # receives a proper user turn to reply to.  Converting them to
+                    # "assistant" caused the previously-injected "continue" sentinel
+                    # to become the visible user message, making the model think it
+                    # was asked to "continue" rather than respond to the real query.
                     tool_name = msg.get("name", "tool")
                     structured.append(
                         {
-                            "role": "assistant",
+                            "role": "user",
                             "content": f"[Tool result: {tool_name}] {content}",
                         }
                     )
@@ -289,10 +289,12 @@ class AgentSDK:
                     continue
                 content = self._normalize_message_content(msg.get("content", ""))
                 if role == "tool":
+                    # Tool results are surfaced as user messages — same reasoning
+                    # as in send_messages above.
                     tool_name = msg.get("name", "tool")
                     structured.append(
                         {
-                            "role": "assistant",
+                            "role": "user",
                             "content": f"[Tool result: {tool_name}] {content}",
                         }
                     )

@@ -25,11 +25,18 @@ async function memFetch<T>(method: string, path: string, body?: unknown): Promis
 }
 
 function toQuery(params: Record<string, unknown>): string {
-    const q = Object.entries(params)
-        .filter(([, v]) => v !== undefined && v !== null && v !== '')
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-        .join('&');
-    return q ? `?${q}` : '';
+    const parts: string[] = [];
+    for (const [k, v] of Object.entries(params)) {
+        if (v === undefined || v === null || v === '') continue;
+        if (Array.isArray(v)) {
+            for (const item of v) {
+                parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(item))}`);
+            }
+        } else {
+            parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+        }
+    }
+    return parts.length ? `?${parts.join('&')}` : '';
 }
 
 // ── Stats & Activity ────────────────────────────────────────────────────────
@@ -45,7 +52,7 @@ export function getMemoryActivity(days = 30) {
 // ── Knowledge ───────────────────────────────────────────────────────────────
 
 export interface KnowledgeListParams {
-    category?: string;
+    category?: string | string[];
     context?: string;
     entity?: string;
     sensitive?: boolean;
@@ -187,6 +194,43 @@ export function refreshSystemContext() {
     );
 }
 
+// ── Profile Setup ─────────────────────────────────────────────────────────────
+
+export interface DiscoveryFinding {
+    content: string;
+    category: string;
+    context: string;
+    sensitive?: boolean;
+    confidence: number;
+    domain?: string;
+    entity?: string;
+    _source_name?: string;
+}
+
+export interface InferenceInsight {
+    content: string;
+    confidence: number;
+    domain: string;
+}
+
+/** Open an EventSource SSE stream for system discovery. */
+export function openDiscoveryStream(): EventSource {
+    return new EventSource(`${API_BASE}/memory/stream-discovery`);
+}
+
+/** Open an EventSource SSE stream for LLM profile inference. */
+export function openInferenceStream(includeBrowser: boolean): EventSource {
+    return new EventSource(`${API_BASE}/memory/stream-inference?include_browser=${includeBrowser}`);
+}
+
+export function commitDiscovery(items: DiscoveryFinding[]) {
+    return memFetch<{ stored: number }>('POST', '/memory/commit-discovery', { items });
+}
+
+export function commitInference(insights: InferenceInsight[]) {
+    return memFetch<{ stored: number }>('POST', '/memory/commit-inference', { insights });
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────────
 
 export interface MemorySettings {
@@ -205,5 +249,118 @@ export function updateMemorySettings(settings: Partial<MemorySettings>) {
 export function clearAllMemory() {
     return memFetch<{ knowledge: number; tool_history: number; conversations: number }>(
         'DELETE', '/memory/all'
+    );
+}
+
+// ── Goals & Tasks ────────────────────────────────────────────────────────────
+
+export type GoalStatus =
+    | 'pending_approval'
+    | 'queued'
+    | 'in_progress'
+    | 'completed'
+    | 'failed'
+    | 'rejected'
+    | 'cancelled';
+
+export type TaskStatus =
+    | 'queued'
+    | 'in_progress'
+    | 'completed'
+    | 'failed'
+    | 'blocked'
+    | 'cancelled';
+
+export type GoalSource = 'user' | 'agent_inferred' | 'agent_scheduled';
+export type AgentMode = 'manual' | 'goal_driven' | 'autonomous';
+export type Priority = 'low' | 'medium' | 'high';
+
+export interface GoalTask {
+    id: string;
+    goal_id: string;
+    description: string;
+    status: TaskStatus;
+    order_index: number;
+    result: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface Goal {
+    id: string;
+    title: string;
+    description: string;
+    status: GoalStatus;
+    source: GoalSource;
+    mode_required: AgentMode;
+    approved_for_auto: boolean;
+    priority: Priority;
+    progress_notes: string;
+    created_at: string;
+    updated_at: string;
+    tasks: GoalTask[];
+}
+
+export interface GoalStats {
+    goals: Partial<Record<GoalStatus, number>>;
+    tasks: Partial<Record<TaskStatus, number>>;
+}
+
+export function getGoalStats() {
+    return memFetch<GoalStats>('GET', '/goals/stats');
+}
+
+export function listGoals(params: {
+    status?: GoalStatus;
+    source?: GoalSource;
+    approved_only?: boolean;
+} = {}) {
+    return memFetch<{ goals: Goal[]; total: number }>(
+        'GET', `/goals${toQuery(params as Record<string, unknown>)}`
+    );
+}
+
+export function getGoal(goalId: string) {
+    return memFetch<Goal>('GET', `/goals/${encodeURIComponent(goalId)}`);
+}
+
+export function createGoal(body: {
+    title: string;
+    description: string;
+    priority?: Priority;
+    mode_required?: AgentMode;
+}) {
+    return memFetch<Goal>('POST', '/goals', body);
+}
+
+export function approveGoal(goalId: string) {
+    return memFetch<Goal>('PUT', `/goals/${encodeURIComponent(goalId)}/approve`);
+}
+
+export function rejectGoal(goalId: string) {
+    return memFetch<Goal>('PUT', `/goals/${encodeURIComponent(goalId)}/reject`);
+}
+
+export function cancelGoal(goalId: string) {
+    return memFetch<Goal>('PUT', `/goals/${encodeURIComponent(goalId)}/cancel`);
+}
+
+export function deleteGoal(goalId: string) {
+    return memFetch<void>('DELETE', `/goals/${encodeURIComponent(goalId)}`);
+}
+
+export function addTask(goalId: string, body: { description: string; order_index?: number }) {
+    return memFetch<GoalTask>('POST', `/goals/${encodeURIComponent(goalId)}/tasks`, body);
+}
+
+export function updateTaskStatus(
+    goalId: string,
+    taskId: string,
+    body: { status: TaskStatus; result?: string },
+) {
+    return memFetch<GoalTask>(
+        'PUT',
+        `/goals/${encodeURIComponent(goalId)}/tasks/${encodeURIComponent(taskId)}`,
+        body,
     );
 }

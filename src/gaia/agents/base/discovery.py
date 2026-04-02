@@ -336,6 +336,7 @@ def _make_profile_fact(
     entity: str = "",
     sensitive: bool = False,
     confidence: float = 0.7,
+    domain: Optional[str] = None,
 ) -> Dict:
     """Create a discovered profile fact about the user."""
     return {
@@ -347,7 +348,82 @@ def _make_profile_fact(
         "confidence": confidence,
         "source": "discovery",
         "approved": None,
+        "domain": domain,
     }
+
+
+# ============================================================================
+# File type categories — shared by recent-file scanners across all platforms
+# ============================================================================
+
+_FILE_TYPE_CATEGORIES = {
+    # Office/productivity
+    ".xlsx": ("office", "spreadsheets (Excel)"),
+    ".xls": ("office", "spreadsheets (Excel)"),
+    ".csv": ("office", "spreadsheets/data files"),
+    ".docx": ("office", "Word documents"),
+    ".doc": ("office", "Word documents"),
+    ".pptx": ("office", "PowerPoint presentations"),
+    ".ppt": ("office", "PowerPoint presentations"),
+    ".odt": ("office", "OpenDocument text files"),
+    ".ods": ("office", "OpenDocument spreadsheets"),
+    ".pdf": ("reading", "PDF documents"),
+    ".msg": ("office", "Outlook emails"),
+    # Creative/design
+    ".psd": ("design", "Photoshop files"),
+    ".psb": ("design", "Photoshop files"),
+    ".ai": ("design", "Illustrator files"),
+    ".indd": ("design", "InDesign files"),
+    ".xd": ("design", "Adobe XD files"),
+    ".afphoto": ("design", "Affinity Photo files"),
+    ".afdesign": ("design", "Affinity Designer files"),
+    ".sketch": ("design", "Sketch files"),
+    ".fig": ("design", "Figma files"),
+    # Media — audio
+    ".mp3": ("music", "music files"),
+    ".flac": ("music", "lossless audio files"),
+    ".aac": ("music", "audio files"),
+    ".wav": ("music", "audio files"),
+    ".ogg": ("music", "audio files"),
+    ".m4a": ("music", "audio files"),
+    # Media — video
+    ".mp4": ("video", "video files"),
+    ".mkv": ("video", "video files"),
+    ".avi": ("video", "video files"),
+    ".mov": ("video", "video files"),
+    ".wmv": ("video", "video files"),
+    ".prproj": ("video_edit", "Premiere Pro projects"),
+    ".aep": ("video_edit", "After Effects projects"),
+    ".drp": ("video_edit", "DaVinci Resolve projects"),
+    # Photography
+    ".raw": ("photo", "RAW photo files"),
+    ".cr2": ("photo", "Canon RAW photos"),
+    ".cr3": ("photo", "Canon RAW photos"),
+    ".nef": ("photo", "Nikon RAW photos"),
+    ".arw": ("photo", "Sony RAW photos"),
+    ".dng": ("photo", "DNG raw photos"),
+    ".jpg": ("photo", "JPEG images"),
+    ".jpeg": ("photo", "JPEG images"),
+    # Development
+    ".py": ("dev", "Python files"),
+    ".js": ("dev", "JavaScript files"),
+    ".ts": ("dev", "TypeScript files"),
+    ".go": ("dev", "Go files"),
+    ".rs": ("dev", "Rust files"),
+    ".java": ("dev", "Java files"),
+    ".cpp": ("dev", "C++ files"),
+    ".cs": ("dev", "C# files"),
+    ".ipynb": ("dev", "Jupyter notebooks"),
+    # Data/research
+    ".json": ("data", "JSON data files"),
+    ".xml": ("data", "XML files"),
+    ".sql": ("data", "SQL files"),
+    # 3D / game
+    ".blend": ("3d", "Blender files"),
+    ".fbx": ("3d", "3D model files"),
+    ".obj": ("3d", "3D model files"),
+    ".unitypackage": ("game_dev", "Unity packages"),
+}
 
 
 def _is_hidden(name: str) -> bool:
@@ -1749,6 +1825,642 @@ class SystemDiscovery:
         return facts
 
     # ------------------------------------------------------------------
+    # Windows UserAssist (actually-launched app frequency)
+    # ------------------------------------------------------------------
+
+    def scan_windows_userassist(self) -> List[Dict]:
+        """Read Windows UserAssist registry to get actually-launched app frequency.
+
+        The UserAssist key stores ROT13-encoded app paths with binary run-count
+        data.  We decode the paths, extract the exe filename, and map to
+        friendly app names.
+
+        Returns:
+            List of profile fact dicts for frequently launched applications.
+        """
+        if os.name != "nt" or winreg is None:
+            return []
+
+        import codecs
+
+        # Known exe -> friendly name mapping
+        _USERASSIST_APP_NAMES = {
+            "spotify.exe": "Spotify",
+            "chrome.exe": "Google Chrome",
+            "firefox.exe": "Mozilla Firefox",
+            "msedge.exe": "Microsoft Edge",
+            "code.exe": "VS Code",
+            "outlook.exe": "Microsoft Outlook",
+            "winword.exe": "Microsoft Word",
+            "excel.exe": "Microsoft Excel",
+            "powerpnt.exe": "Microsoft PowerPoint",
+            "teams.exe": "Microsoft Teams",
+            "slack.exe": "Slack",
+            "discord.exe": "Discord",
+            "zoom.exe": "Zoom",
+            "steam.exe": "Steam",
+            "epicgameslauncher.exe": "Epic Games Launcher",
+            "obs64.exe": "OBS Studio",
+            "obs32.exe": "OBS Studio",
+            "vlc.exe": "VLC Media Player",
+            "wmplayer.exe": "Windows Media Player",
+            "mpc-hc64.exe": "MPC-HC",
+            "mpc-hc.exe": "MPC-HC",
+            "photoshop.exe": "Adobe Photoshop",
+            "illustrator.exe": "Adobe Illustrator",
+            "premiere.exe": "Adobe Premiere Pro",
+            "afterfx.exe": "Adobe After Effects",
+            "lightroom.exe": "Adobe Lightroom",
+            "davinci resolve.exe": "DaVinci Resolve",
+            "resolve.exe": "DaVinci Resolve",
+            "figma.exe": "Figma",
+            "notion.exe": "Notion",
+            "obsidian.exe": "Obsidian",
+            "1password.exe": "1Password",
+            "bitwarden.exe": "Bitwarden",
+            "pycharm64.exe": "PyCharm",
+            "idea64.exe": "IntelliJ IDEA",
+            "rider64.exe": "JetBrains Rider",
+            "clion64.exe": "CLion",
+            "webstorm64.exe": "WebStorm",
+            "datagrip64.exe": "DataGrip",
+            "powershell.exe": "PowerShell",
+            "windowsterminal.exe": "Windows Terminal",
+            "wt.exe": "Windows Terminal",
+            "notepad++.exe": "Notepad++",
+            "gimp-2.10.exe": "GIMP",
+            "gimp.exe": "GIMP",
+            "inkscape.exe": "Inkscape",
+            "blender.exe": "Blender",
+            "unity.exe": "Unity",
+            "unrealengine.exe": "Unreal Engine",
+            "cursor.exe": "Cursor",
+        }
+
+        # System executables to skip entirely
+        _USERASSIST_SKIP = {
+            "explorer.exe",
+            "searchapp.exe",
+            "searchui.exe",
+            "startmenuexperiencehost.exe",
+            "lockapp.exe",
+            "shellexperiencehost.exe",
+            "applicationframehost.exe",
+            "systemsettings.exe",
+            "settingsapp.exe",
+            "winstore.app.exe",
+            "runtimebroker.exe",
+            "svchost.exe",
+            "conhost.exe",
+            "cmd.exe",
+            "taskmgr.exe",
+            "msiexec.exe",
+            "rundll32.exe",
+            "regsvr32.exe",
+        }
+
+        facts: List[Dict] = []
+        app_counts: Dict[str, int] = {}
+
+        try:
+            ua_key_path = (
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+            )
+            ua_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, ua_key_path)
+        except (OSError, PermissionError):
+            return facts
+
+        try:
+            guid_idx = 0
+            while True:
+                try:
+                    guid_name = winreg.EnumKey(ua_key, guid_idx)
+                except OSError:
+                    break
+                guid_idx += 1
+
+                try:
+                    count_key = winreg.OpenKey(
+                        ua_key, rf"{guid_name}\Count"
+                    )
+                except (OSError, PermissionError):
+                    continue
+
+                try:
+                    val_idx = 0
+                    while True:
+                        try:
+                            name, data, _ = winreg.EnumValue(
+                                count_key, val_idx
+                            )
+                        except OSError:
+                            break
+                        val_idx += 1
+
+                        # Decode ROT13-encoded path
+                        try:
+                            decoded = codecs.decode(name, "rot_13")
+                        except Exception:
+                            continue
+
+                        # Extract exe filename from the decoded path
+                        basename = decoded.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+                        exe_lower = basename.lower().strip()
+
+                        if not exe_lower.endswith(".exe"):
+                            continue
+
+                        # Parse run count from binary data (DWORD at offset 4)
+                        if isinstance(data, bytes) and len(data) >= 8:
+                            try:
+                                run_count = int.from_bytes(
+                                    data[4:8], byteorder="little"
+                                )
+                            except Exception:
+                                continue
+                        else:
+                            continue
+
+                        if run_count <= 2:
+                            continue
+
+                        # Skip system executables
+                        if exe_lower in _USERASSIST_SKIP:
+                            continue
+
+                        # Use friendly name if known, otherwise derive from exe name
+                        friendly = _USERASSIST_APP_NAMES.get(exe_lower)
+                        if friendly:
+                            key = friendly
+                        else:
+                            # Unknown app — only include if launched frequently enough
+                            if run_count <= 5:
+                                continue
+                            key = exe_lower.replace(".exe", "").title()
+
+                        # Keep highest count per app
+                        if key not in app_counts or run_count > app_counts[key]:
+                            app_counts[key] = run_count
+                finally:
+                    winreg.CloseKey(count_key)
+        except Exception as e:
+            logger.debug("scan_windows_userassist failed: %s", e)
+        finally:
+            winreg.CloseKey(ua_key)
+
+        # Sort by count descending, take top 20
+        sorted_apps = sorted(
+            app_counts.items(), key=lambda x: x[1], reverse=True
+        )[:20]
+
+        for app_name, count in sorted_apps:
+            facts.append(
+                _make_profile_fact(
+                    f"Frequently uses {app_name} ({count} launches)",
+                    confidence=0.8,
+                )
+            )
+
+        return facts
+
+    # ------------------------------------------------------------------
+    # Recent File Types
+    # ------------------------------------------------------------------
+
+    def scan_recent_file_types(self) -> List[Dict]:
+        """Detect recently opened file type patterns across platforms.
+
+        - **Windows**: reads the Recent folder (.lnk shortcuts).
+        - **macOS**: scans ~/Downloads, ~/Documents, ~/Desktop for files
+          modified in the last 30 days.
+        - **Linux**: parses ``~/.local/share/recently-used.xbel``.
+
+        Returns:
+            List of profile fact dicts for file-type usage patterns.
+        """
+        import sys
+
+        if sys.platform == "win32":
+            return self._scan_windows_recent_files()
+        elif sys.platform == "darwin":
+            return self._scan_macos_recent_files()
+        elif sys.platform.startswith("linux"):
+            return self._scan_linux_recent_files()
+        return []
+
+    def _scan_windows_recent_files(self) -> List[Dict]:
+        """Read Windows Recent folder to detect recently opened file type patterns.
+
+        Windows stores .lnk shortcut files named like ``Document.docx.lnk``.
+        We strip the .lnk suffix, extract the real extension, and group by
+        category to infer work patterns.
+
+        Returns:
+            List of profile fact dicts for file-type usage patterns.
+        """
+        facts: List[Dict] = []
+        appdata = os.environ.get("APPDATA", "")
+        if not appdata:
+            return facts
+
+        recent_dir = Path(appdata) / "Microsoft" / "Windows" / "Recent"
+        if not recent_dir.exists():
+            return facts
+
+        category_counts: Dict[str, tuple] = {}  # category -> (count, description)
+
+        try:
+            for entry in os.scandir(str(recent_dir)):
+                if not entry.is_file():
+                    continue
+                fname = entry.name
+                if not fname.lower().endswith(".lnk"):
+                    continue
+
+                # Strip the .lnk suffix to get the original filename
+                real_name = fname[:-4]  # remove ".lnk"
+                # Extract the real extension
+                ext = os.path.splitext(real_name)[1].lower()
+                if not ext:
+                    continue
+
+                cat_info = _FILE_TYPE_CATEGORIES.get(ext)
+                if cat_info is None:
+                    continue
+
+                category, description = cat_info
+                if category in category_counts:
+                    prev_count, prev_desc = category_counts[category]
+                    category_counts[category] = (prev_count + 1, prev_desc)
+                else:
+                    category_counts[category] = (1, description)
+        except (PermissionError, OSError) as e:
+            logger.debug("_scan_windows_recent_files error: %s", e)
+            return facts
+
+        # Emit facts for categories with >= 2 occurrences
+        for category, (count, description) in sorted(
+            category_counts.items(), key=lambda x: x[1][0], reverse=True
+        ):
+            if count >= 2:
+                facts.append(
+                    _make_profile_fact(
+                        f"Regularly works with {description} (found in recent files)",
+                        confidence=0.7,
+                    )
+                )
+
+        return facts
+
+    def _scan_macos_recent_files(self) -> List[Dict]:
+        """Scan recently modified files in standard macOS user directories.
+
+        Checks ~/Downloads, ~/Documents, and ~/Desktop for files modified
+        within the last 30 days and groups them by file-type category.
+
+        Returns:
+            List of profile fact dicts for file-type usage patterns.
+        """
+        import time as _time
+
+        facts: List[Dict] = []
+        cutoff = _time.time() - (30 * 86400)
+        category_counts: Dict[str, tuple] = {}
+
+        for scan_dir in [
+            self._home / "Downloads",
+            self._home / "Documents",
+            self._home / "Desktop",
+        ]:
+            if not scan_dir.exists():
+                continue
+            try:
+                for entry in os.scandir(str(scan_dir)):
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    try:
+                        if entry.stat().st_mtime < cutoff:
+                            continue
+                    except OSError:
+                        continue
+                    ext = os.path.splitext(entry.name)[1].lower()
+                    cat_info = _FILE_TYPE_CATEGORIES.get(ext)
+                    if cat_info is None:
+                        continue
+                    category, description = cat_info
+                    if category in category_counts:
+                        count, desc = category_counts[category]
+                        category_counts[category] = (count + 1, desc)
+                    else:
+                        category_counts[category] = (1, description)
+            except (PermissionError, OSError):
+                pass
+
+        for category, (count, description) in sorted(
+            category_counts.items(), key=lambda x: x[1][0], reverse=True
+        ):
+            if count >= 2:
+                facts.append(
+                    _make_profile_fact(
+                        f"Regularly works with {description} (found in recent files)",
+                        confidence=0.65,
+                    )
+                )
+
+        return facts
+
+    def _scan_linux_recent_files(self) -> List[Dict]:
+        """Parse ~/.local/share/recently-used.xbel for Linux recent file patterns.
+
+        The XBEL file contains ``<bookmark href="file:///...">`` entries.
+        We extract extensions from the file URIs and group by category.
+
+        Returns:
+            List of profile fact dicts for file-type usage patterns.
+        """
+        import xml.etree.ElementTree as ET
+        from urllib.parse import unquote
+
+        xbel_path = self._home / ".local" / "share" / "recently-used.xbel"
+        if not xbel_path.exists():
+            return []
+
+        facts: List[Dict] = []
+        category_counts: Dict[str, tuple] = {}
+
+        try:
+            tree = ET.parse(str(xbel_path))
+            root = tree.getroot()
+            for bookmark in root.findall("bookmark"):
+                href = bookmark.get("href", "")
+                if not href.startswith("file://"):
+                    continue
+                path = unquote(href[7:])  # strip "file://"
+                ext = os.path.splitext(path)[1].lower()
+                cat_info = _FILE_TYPE_CATEGORIES.get(ext)
+                if cat_info is None:
+                    continue
+                category, description = cat_info
+                if category in category_counts:
+                    count, desc = category_counts[category]
+                    category_counts[category] = (count + 1, desc)
+                else:
+                    category_counts[category] = (1, description)
+        except Exception as e:
+            logger.debug("_scan_linux_recent_files failed: %s", e)
+            return facts
+
+        for category, (count, description) in sorted(
+            category_counts.items(), key=lambda x: x[1][0], reverse=True
+        ):
+            if count >= 2:
+                facts.append(
+                    _make_profile_fact(
+                        f"Regularly works with {description} (found in recent files)",
+                        confidence=0.65,
+                    )
+                )
+
+        return facts
+
+    # ------------------------------------------------------------------
+    # Gaming and Media
+    # ------------------------------------------------------------------
+
+    def scan_gaming_and_media(self) -> List[Dict]:
+        """Detect gaming platforms and local media collections.
+
+        Checks for Steam, Epic Games, Xbox Game Pass libraries, local music
+        collections, photography (RAW files), and video production tools.
+
+        Returns:
+            List of profile fact dicts for gaming and media usage.
+        """
+        facts: List[Dict] = []
+
+        # --- Steam ---
+        try:
+            steam_paths = [
+                # Windows (default install location)
+                Path("C:/Program Files (x86)/Steam/steamapps/common"),
+                Path("C:/Program Files/Steam/steamapps/common"),
+                # macOS
+                self._home / "Library" / "Application Support" / "Steam" / "steamapps" / "common",
+                # Linux
+                self._home / ".local" / "share" / "Steam" / "steamapps" / "common",
+                self._home / ".steam" / "steam" / "steamapps" / "common",
+            ]
+            for steam_path in steam_paths:
+                if steam_path.exists() and steam_path.is_dir():
+                    try:
+                        game_count = sum(
+                            1
+                            for e in os.scandir(str(steam_path))
+                            if e.is_dir()
+                        )
+                    except (PermissionError, OSError):
+                        game_count = 0
+                    if game_count > 0:
+                        facts.append(
+                            _make_profile_fact(
+                                f"Has Steam gaming library with ~{game_count} installed games",
+                                context="personal",
+                                confidence=0.9,
+                            )
+                        )
+                        break  # Don't double-count
+        except (PermissionError, OSError) as e:
+            logger.debug("scan_gaming_and_media Steam error: %s", e)
+
+        # --- Epic Games ---
+        try:
+            epic_path = Path("C:/Program Files/Epic Games")
+            if epic_path.exists() and epic_path.is_dir():
+                try:
+                    game_names = [
+                        e.name
+                        for e in os.scandir(str(epic_path))
+                        if e.is_dir()
+                        and e.name.lower() not in ("launcher", "directxredist")
+                    ]
+                except (PermissionError, OSError):
+                    game_names = []
+                if game_names:
+                    facts.append(
+                        _make_profile_fact(
+                            "Has Epic Games library",
+                            context="personal",
+                            confidence=0.8,
+                        )
+                    )
+        except (PermissionError, OSError) as e:
+            logger.debug("scan_gaming_and_media Epic error: %s", e)
+
+        # --- Xbox Game Pass ---
+        try:
+            xbox_path = Path("C:/XboxGames")
+            if xbox_path.exists() and xbox_path.is_dir():
+                facts.append(
+                    _make_profile_fact(
+                        "Has Xbox Game Pass library",
+                        context="personal",
+                        confidence=0.8,
+                    )
+                )
+        except (PermissionError, OSError) as e:
+            logger.debug("scan_gaming_and_media Xbox error: %s", e)
+
+        # --- Local music collection ---
+        try:
+            music_dir = self._home / "Music"
+            if music_dir.exists() and music_dir.is_dir():
+                music_exts = {".mp3", ".flac", ".aac", ".wav", ".m4a"}
+                track_count = 0
+                for depth, (dirpath, dirnames, filenames) in enumerate(
+                    os.walk(str(music_dir))
+                ):
+                    if depth >= 2:
+                        dirnames.clear()
+                        continue
+                    for fname in filenames:
+                        if os.path.splitext(fname)[1].lower() in music_exts:
+                            track_count += 1
+                if track_count > 20:
+                    facts.append(
+                        _make_profile_fact(
+                            f"Has local music collection (~{track_count} tracks)",
+                            context="personal",
+                            confidence=0.85,
+                        )
+                    )
+        except (PermissionError, OSError) as e:
+            logger.debug("scan_gaming_and_media music error: %s", e)
+
+        # --- Photography (RAW files) ---
+        try:
+            pictures_dir = self._home / "Pictures"
+            if pictures_dir.exists() and pictures_dir.is_dir():
+                raw_exts = {".raw", ".cr2", ".cr3", ".nef", ".arw", ".dng"}
+                raw_count = 0
+                for depth, (dirpath, dirnames, filenames) in enumerate(
+                    os.walk(str(pictures_dir))
+                ):
+                    if depth >= 2:
+                        dirnames.clear()
+                        continue
+                    for fname in filenames:
+                        if os.path.splitext(fname)[1].lower() in raw_exts:
+                            raw_count += 1
+                if raw_count > 5:
+                    facts.append(
+                        _make_profile_fact(
+                            "Photographer with local RAW image collection",
+                            context="personal",
+                            confidence=0.85,
+                        )
+                    )
+        except (PermissionError, OSError) as e:
+            logger.debug("scan_gaming_and_media photo error: %s", e)
+
+        # --- Video production ---
+        try:
+            davinci_paths = [
+                Path("C:/Program Files/Blackmagic Design/DaVinci Resolve"),
+                Path(
+                    "C:/Program Files/Blackmagic Design"
+                    "/DaVinci Resolve/Resolve.exe"
+                ),
+            ]
+            for dv_path in davinci_paths:
+                if dv_path.exists():
+                    facts.append(
+                        _make_profile_fact(
+                            "Has DaVinci Resolve installed (video production)",
+                            context="personal",
+                            confidence=0.85,
+                        )
+                    )
+                    break
+        except (PermissionError, OSError) as e:
+            logger.debug("scan_gaming_and_media video error: %s", e)
+
+        return facts
+
+    # ------------------------------------------------------------------
+    # macOS App Usage
+    # ------------------------------------------------------------------
+
+    def scan_macos_app_usage(self) -> List[Dict]:
+        """Detect frequently used apps on macOS via Application Support directories.
+
+        Checks known app data directory names inside
+        ``~/Library/Application Support/`` to identify which consumer
+        applications are installed and actively used.
+
+        Returns:
+            List of profile fact dicts for detected macOS applications.
+        """
+        import sys
+
+        if sys.platform != "darwin":
+            return []
+
+        # Known app data dir names -> friendly app names
+        APP_SUPPORT_MAP = {
+            "Spotify": "Spotify",
+            "Slack": "Slack",
+            "discord": "Discord",
+            "zoom.us": "Zoom",
+            "Microsoft Teams": "Microsoft Teams",
+            "Microsoft Outlook": "Microsoft Outlook",
+            "Microsoft Word": "Microsoft Word",
+            "Microsoft Excel": "Microsoft Excel",
+            "Microsoft PowerPoint": "Microsoft PowerPoint",
+            "Notion": "Notion",
+            "Obsidian": "Obsidian",
+            "1Password 7 - Password Manager": "1Password",
+            "1Password": "1Password",
+            "Figma": "Figma",
+            "com.adobe.Photoshop": "Adobe Photoshop",
+            "Adobe Illustrator": "Adobe Illustrator",
+            "Adobe Premiere Pro": "Adobe Premiere Pro",
+            "Final Cut Pro": "Final Cut Pro",
+            "Logic Pro": "Logic Pro X",
+            "Blender": "Blender",
+            "Steam": "Steam",
+            "OBS": "OBS Studio",
+            "VLC": "VLC Media Player",
+            "Plex Media Server": "Plex Media Server",
+            "JetBrains": "JetBrains IDE",
+        }
+
+        app_support = self._home / "Library" / "Application Support"
+        if not app_support.exists():
+            return []
+
+        found_apps: List[str] = []
+        try:
+            for entry in os.scandir(str(app_support)):
+                if not entry.is_dir():
+                    continue
+                for key, friendly in APP_SUPPORT_MAP.items():
+                    if key.lower() in entry.name.lower() and friendly not in found_apps:
+                        found_apps.append(friendly)
+                        break
+        except (PermissionError, OSError):
+            pass
+
+        facts: List[Dict] = []
+        for app_name in found_apps[:20]:
+            facts.append(
+                _make_profile_fact(
+                    f"Uses {app_name}",
+                    confidence=0.75,
+                )
+            )
+        return facts
+
+    # ------------------------------------------------------------------
     # scan_all — Run selected sources
     # ------------------------------------------------------------------
 
@@ -1765,7 +2477,9 @@ class SystemDiscovery:
                 Valid names: "file_system", "git_repos", "installed_apps",
                 "browser_bookmarks", "browser_history", "email_accounts",
                 "git_identity", "shell_config", "project_manifests",
-                "ssh_config", "home_structure"
+                "ssh_config", "home_structure", "windows_userassist",
+                "recent_file_types", "gaming_and_media",
+                "macos_app_usage"
             paths: Override scan paths for file_system and git_repos.
             history_days: Days of browser history to scan.
 
@@ -1785,6 +2499,10 @@ class SystemDiscovery:
             "browser_bookmarks",
             "browser_history",
             "email_accounts",
+            "windows_userassist",
+            "recent_file_types",
+            "gaming_and_media",
+            "macos_app_usage",
         ]
 
         if sources is None:
@@ -1805,6 +2523,10 @@ class SystemDiscovery:
             "browser_bookmarks": lambda: self.scan_browser_bookmarks(),
             "browser_history": lambda: self.scan_browser_history(days=history_days),
             "email_accounts": lambda: self.scan_email_accounts(),
+            "windows_userassist": lambda: self.scan_windows_userassist(),
+            "recent_file_types": lambda: self.scan_recent_file_types(),
+            "gaming_and_media": lambda: self.scan_gaming_and_media(),
+            "macos_app_usage": lambda: self.scan_macos_app_usage(),
         }
 
         results: Dict[str, List[Dict]] = {}

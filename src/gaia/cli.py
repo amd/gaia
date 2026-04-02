@@ -6414,6 +6414,33 @@ def _bootstrap_infer():
     except Exception:
         pass
 
+    # 5. App launch frequency (UserAssist — covers consumer apps like Spotify, Outlook)
+    try:
+        userassist_results = discovery.scan_windows_userassist()
+        if userassist_results:
+            lines = [f"  {item['content']}" for item in userassist_results[:20]]
+            sections.append("FREQUENTLY LAUNCHED APPS (actual usage frequency):\n" + "\n".join(lines))
+    except Exception:
+        pass
+
+    # 6. Recent file type patterns
+    try:
+        filetype_results = discovery.scan_recent_file_types()
+        if filetype_results:
+            lines = [f"  {item['content']}" for item in filetype_results]
+            sections.append("RECENT FILE TYPES (work patterns):\n" + "\n".join(lines))
+    except Exception:
+        pass
+
+    # 7. Gaming and media
+    try:
+        gaming_results = discovery.scan_gaming_and_media()
+        if gaming_results:
+            lines = [f"  {item['content']}" for item in gaming_results]
+            sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
+    except Exception:
+        pass
+
     print(" done.")
 
     if not sections:

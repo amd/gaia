@@ -830,11 +830,11 @@ class TestReconcileEndpoint:
         yield
         memory_router_mod._reconcile_fn = None
 
-    def test_reconcile_returns_503_when_no_agent(self, client):
-        """POST /api/memory/reconcile returns 503 when no agent is registered."""
+    def test_reconcile_returns_503_when_no_agent_and_faiss_missing(self, client):
+        """POST /api/memory/reconcile returns 503 when no agent and faiss unavailable."""
         resp = client.post("/api/memory/reconcile")
         assert resp.status_code == 503
-        assert "agent session" in resp.json()["detail"].lower()
+        assert "faiss" in resp.json()["detail"].lower()
 
     def test_reconcile_returns_200_when_agent_registered(self, client):
         """POST /api/memory/reconcile returns 200 when _reconcile_fn is set."""
@@ -851,13 +851,22 @@ class TestReconcileEndpoint:
         assert data["pairs_checked"] == 10
         assert data["contradicted"] == 1
 
-    def test_reconcile_runtime_error_returns_500(self, client):
-        """POST /api/memory/reconcile returns 500 on internal errors."""
+    def test_reconcile_runtime_error_returns_500(self, client, mocker):
+        """POST /api/memory/reconcile returns 500 when standalone path raises a runtime error."""
+        import sys
+        import types
 
-        def boom():
-            raise ValueError("Invalid embedding dimension")
+        # Provide a minimal faiss stub so the ImportError guard passes
+        fake_faiss = types.ModuleType("faiss")
+        fake_faiss.IndexFlatIP = lambda dim: None  # not called — store raises first
+        mocker.patch.dict(sys.modules, {"faiss": fake_faiss})
 
-        memory_router_mod._reconcile_fn = boom
+        # Make _get_store raise a RuntimeError after faiss is "imported"
+        mocker.patch(
+            "gaia.ui.routers.memory._get_store",
+            side_effect=RuntimeError("DB connection exploded"),
+        )
+
         resp = client.post("/api/memory/reconcile")
         assert resp.status_code == 500
 

@@ -3,10 +3,11 @@
 
 """Memory Dashboard REST API for GAIA Agent UI."""
 
+import json
 import logging
 import threading
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
@@ -234,7 +235,7 @@ def memory_activity(days: int = Query(30, ge=1, le=365)) -> List[Dict]:
 
 @router.get("/api/memory/knowledge")
 def list_knowledge(
-    category: Optional[str] = None,
+    category: Optional[List[str]] = Query(None),
     context: Optional[str] = None,
     entity: Optional[str] = None,
     sensitive: Optional[bool] = None,
@@ -529,29 +530,195 @@ def rebuild_embeddings() -> Dict:
         raise HTTPException(500, f"Embedding rebuild failed: {type(exc).__name__}: {exc}")
 
 
+_RECONCILIATION_PROMPT = """\
+Given these two memory items from the same user, classify their relationship.
+Return JSON: {{"relationship": "reinforce|contradict|weaken|neutral", "action": "description"}}
+
+Item A (stored {date_a}): {content_a}
+Item B (stored {date_b}): {content_b}"""
+
+_RECONCILE_SIMILARITY_THRESHOLD = 0.85
+
+
 @router.post("/api/memory/reconcile")
-def trigger_reconciliation() -> Dict:
+def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
     """Manually trigger background memory reconciliation.
 
-    Compares knowledge entries for contradictions and reinforcements.
-    Returns ``{pairs_checked, reinforced, contradicted, weakened, neutral}``.
+    Compares knowledge entries for contradictions and reinforcements using
+    FAISS similarity search + LLM classification.  Works standalone — no
+    active ChatAgent session required.
 
-    Requires an active ChatAgent session (start a chat first).
+    Returns ``{pairs_checked, reinforced, contradicted, weakened, neutral}``.
     """
-    if _reconcile_fn is None:
-        raise HTTPException(
-            503,
-            "Reconciliation requires an active agent session. "
-            "Send a chat message first to initialize the agent.",
-        )
+    result = {
+        "pairs_checked": 0,
+        "reinforced": 0,
+        "contradicted": 0,
+        "weakened": 0,
+        "neutral": 0,
+    }
+
+    # If an active agent session is available, prefer it (uses cached FAISS index)
+    if _reconcile_fn is not None:
+        try:
+            return _reconcile_fn()
+        except Exception as exc:
+            logger.warning(
+                "[memory router] agent reconcile failed, falling back to standalone: %s", exc
+            )
+
+    # Standalone path — build a temporary FAISS index from stored embeddings
     try:
-        result = _reconcile_fn()
+        import numpy as np
+
+        try:
+            import faiss
+        except ImportError:
+            raise HTTPException(503, "faiss not installed — run: pip install faiss-cpu")
+
+        from gaia.agents.base.memory import EMBEDDING_DIM, _blob_to_embedding
+        from gaia.llm import create_client
+
+        store = _get_store()
+        items = store.get_items_for_reconciliation(limit=200)
+
+        if len(items) < 2:
+            return result  # Not enough items with embeddings
+
+        # Build id list and vector matrix
+        ids: List[str] = []
+        vectors: List[np.ndarray] = []
+        item_map: Dict[str, Any] = {}
+
+        for item in items:
+            try:
+                vec = _blob_to_embedding(item["embedding"])
+                if vec.shape[0] != EMBEDDING_DIM:
+                    continue
+                norm = np.linalg.norm(vec)
+                if norm > 0:
+                    vec = vec / norm
+                ids.append(item["id"])
+                vectors.append(vec)
+                item_map[item["id"]] = item
+            except Exception:
+                continue
+
+        if len(vectors) < 2:
+            return result
+
+        mat = np.stack(vectors).astype(np.float32)
+        index = faiss.IndexFlatIP(EMBEDDING_DIM)
+        index.add(mat)
+
+        n_neighbors = min(5, len(vectors))
+        scores_all, indices_all = index.search(mat, n_neighbors)
+
+        # Collect high-similarity pairs
+        pairs: List[tuple] = []
+        seen: set = set()
+        for i in range(len(vectors)):
+            for j_pos in range(n_neighbors):
+                j = int(indices_all[i][j_pos])
+                if j == i:
+                    continue
+                sim = float(scores_all[i][j_pos])
+                if sim >= _RECONCILE_SIMILARITY_THRESHOLD:
+                    key = tuple(sorted((ids[i], ids[j])))
+                    if key not in seen:
+                        seen.add(key)
+                        pairs.append((ids[i], ids[j], sim))
+
+        pairs.sort(key=lambda x: x[2], reverse=True)
+        pairs = pairs[:max_pairs]
+
+        if not pairs:
+            return result
+
+        llm = create_client()
+
+        for id_a, id_b, _sim in pairs:
+            item_a = item_map.get(id_a)
+            item_b = item_map.get(id_b)
+            if not item_a or not item_b:
+                continue
+
+            # Skip already-reconciled pairs
+            meta_a = item_a.get("metadata") or {}
+            meta_b = item_b.get("metadata") or {}
+            if isinstance(meta_a, str):
+                try:
+                    meta_a = json.loads(meta_a) if meta_a else {}
+                except Exception:
+                    meta_a = {}
+            if isinstance(meta_b, str):
+                try:
+                    meta_b = json.loads(meta_b) if meta_b else {}
+                except Exception:
+                    meta_b = {}
+            if id_b in meta_a.get("reconciled_with", []) or id_a in meta_b.get("reconciled_with", []):
+                continue
+
+            try:
+                prompt = _RECONCILIATION_PROMPT.format(
+                    date_a=str(item_a.get("created_at", "unknown"))[:10],
+                    content_a=str(item_a.get("content", ""))[:500],
+                    date_b=str(item_b.get("created_at", "unknown"))[:10],
+                    content_b=str(item_b.get("content", ""))[:500],
+                )
+                raw = llm.chat(
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_new_tokens=128,
+                )
+                if hasattr(raw, "__iter__") and not isinstance(raw, str):
+                    raw = "".join(raw)
+                raw = raw.strip()
+                # Strip <think> blocks from reasoning models
+                import re as _re
+                raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+                if raw.startswith("```"):
+                    raw = _re.sub(r"^```(?:json)?\s*", "", raw)
+                    raw = _re.sub(r"\s*```$", "", raw).strip()
+                classification = json.loads(raw)
+                relationship = classification.get("relationship", "neutral")
+            except Exception as exc:
+                logger.debug("[memory router] reconcile pair classify failed: %s", exc)
+                continue
+
+            result["pairs_checked"] += 1
+
+            if relationship == "reinforce":
+                store.update_confidence(id_a, 0.05)
+                store.update_confidence(id_b, 0.05)
+                result["reinforced"] += 1
+            elif relationship == "contradict":
+                # Weaken both slightly; log in metadata
+                store.update_confidence(id_a, -0.1)
+                store.update_confidence(id_b, -0.1)
+                result["contradicted"] += 1
+            elif relationship == "weaken":
+                store.update_confidence(id_b, -0.05)
+                result["weakened"] += 1
+            else:
+                result["neutral"] += 1
+
+            # Mark pair as reconciled in metadata to avoid re-checking
+            try:
+                new_meta_a = dict(meta_a)
+                new_meta_a.setdefault("reconciled_with", []).append(id_b)
+                store.update(id_a, metadata=new_meta_a)
+            except Exception:
+                pass
+
+        logger.info("[memory router] standalone reconcile: %s", result)
         return result
-    except AttributeError:
-        raise HTTPException(501, "Reconciliation not yet implemented in data layer")
+
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("[memory router] reconciliation failed: %s", exc)
-        raise HTTPException(500, f"Reconciliation failed: {type(exc).__name__}")
+        raise HTTPException(500, f"Reconciliation failed: {type(exc).__name__}: {exc}")
 
 
 @router.get("/api/memory/embedding-coverage")
@@ -660,6 +827,375 @@ def refresh_system_context() -> Dict:
     except Exception as exc:
         logger.error("[memory router] refresh-system-context failed: %s", exc)
         raise HTTPException(500, f"System context refresh failed: {type(exc).__name__}: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Profile Setup — Discovery stream, Inference stream, Commit endpoints
+# ---------------------------------------------------------------------------
+
+# Sources included in the default discovery scan (fast, no browser history)
+_DISCOVERY_SOURCES = [
+    "git_identity",
+    "installed_apps",
+    "windows_userassist",
+    "macos_app_usage",
+    "recent_file_types",
+    "gaming_and_media",
+    "home_structure",
+    "project_manifests",
+    "shell_config",
+]
+
+_DISCOVERY_SOURCE_LABELS = {
+    "git_identity": "Git identity",
+    "installed_apps": "Installed applications",
+    "windows_userassist": "App usage frequency (Windows)",
+    "macos_app_usage": "App usage frequency (macOS)",
+    "recent_file_types": "Recent file types",
+    "gaming_and_media": "Gaming & media",
+    "home_structure": "Home folder structure",
+    "project_manifests": "Project manifests",
+    "shell_config": "Shell configuration",
+}
+
+# LLM inference prompt (mirrors _INFER_PROMPT in cli.py)
+_INFER_PROMPT = """\
+You are analyzing a user's computing environment to generate personalized profile insights.
+
+Based on the data below, generate 5-10 concise profile facts about this user. Focus on:
+- Professional role or domain (e.g. software developer, data scientist, designer)
+- Key technologies, languages, and tools they regularly use
+- Technical interests and areas of focus
+- Non-technical interests or hobbies (if clearly evident)
+
+Raw data:
+{sections}
+
+Respond with a JSON array of insight objects. Each object must have:
+  "content"    - A clear, specific fact about the user (1 sentence, ≤120 chars)
+  "confidence" - Float 0.0-1.0 (how confident you are, given the evidence)
+  "domain"     - One of: "work", "technical", "personal", "general"
+
+Rules:
+- Only state what the data clearly supports - do not guess.
+- Skip generic facts that apply to almost everyone.
+- Return ONLY the JSON array, no other text, no markdown fences.
+
+Example output:
+[
+  {{"content": "Primarily a Python developer with strong AI/ML focus", "confidence": 0.9, "domain": "work"}},
+  {{"content": "Regularly contributes to open-source projects on GitHub", "confidence": 0.8, "domain": "technical"}}
+]"""
+
+
+def _sse(event: dict) -> str:
+    """Format a dict as an SSE data line."""
+    return f"data: {json.dumps(event)}\n\n"
+
+
+@router.get("/api/memory/stream-discovery")
+def stream_discovery():
+    """Stream system discovery findings as SSE.
+
+    Events:
+      {"type": "log", "message": str}
+      {"type": "finding", "source": str, "item": dict}
+      {"type": "done", "total": int}
+      {"type": "error", "source": str, "message": str}
+    """
+    from fastapi.responses import StreamingResponse
+
+    def _generate():
+        try:
+            from gaia.agents.base.discovery import SystemDiscovery
+
+            discovery = SystemDiscovery()
+
+            scan_map = {
+                "git_identity": discovery.scan_git_identity,
+                "installed_apps": discovery.scan_installed_apps,
+                "windows_userassist": discovery.scan_windows_userassist,
+                "macos_app_usage": discovery.scan_macos_app_usage,
+                "recent_file_types": discovery.scan_recent_file_types,
+                "gaming_and_media": discovery.scan_gaming_and_media,
+                "home_structure": discovery.scan_home_structure,
+                "project_manifests": discovery.scan_project_manifests,
+                "shell_config": discovery.scan_shell_config,
+            }
+
+            total = 0
+            for source_key in _DISCOVERY_SOURCES:
+                label = _DISCOVERY_SOURCE_LABELS.get(source_key, source_key)
+                yield _sse({"type": "log", "message": f"Scanning {label}..."})
+                scanner = scan_map.get(source_key)
+                if scanner is None:
+                    yield _sse({"type": "log", "message": f"  {label}: not available on this platform"})
+                    continue
+                try:
+                    items = scanner()
+                    for item in items:
+                        item["_source_name"] = source_key
+                        yield _sse({"type": "finding", "source": source_key, "item": item})
+                        total += 1
+                    if items:
+                        yield _sse({"type": "log", "message": f"  Found {len(items)} item(s)"})
+                    else:
+                        yield _sse({"type": "log", "message": "  Nothing found"})
+                except Exception as e:
+                    yield _sse({"type": "error", "source": source_key, "message": str(e)})
+
+            yield _sse({"type": "done", "total": total})
+
+        except Exception as exc:
+            yield _sse({"type": "error", "source": "discovery", "message": str(exc)})
+            yield _sse({"type": "done", "total": 0})
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/api/memory/stream-inference")
+def stream_inference(include_browser: bool = Query(False)):
+    """Stream LLM-assisted profile inference as SSE.
+
+    Events:
+      {"type": "log", "message": str}
+      {"type": "insight", "item": dict}   -- each LLM-generated insight
+      {"type": "done", "total": int}
+      {"type": "error", "message": str}
+    """
+    from fastapi.responses import StreamingResponse
+
+    def _generate():
+        try:
+            from gaia.agents.base.discovery import SystemDiscovery
+            from gaia.llm import create_client
+
+            discovery = SystemDiscovery()
+            sections: list = []
+
+            if include_browser:
+                yield _sse({"type": "log", "message": "Reading browser history..."})
+                try:
+                    browser_results = discovery.scan_browser_history(days=30)
+                    if browser_results:
+                        lines = [f"  {r['content']}" for r in browser_results[:40]]
+                        sections.append("BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines))
+                        yield _sse({"type": "log", "message": f"  Collected {len(browser_results)} domains"})
+                except Exception as e:
+                    yield _sse({"type": "log", "message": f"  Browser history unavailable: {e}"})
+
+            yield _sse({"type": "log", "message": "Collecting installed apps..."})
+            try:
+                app_results = discovery.scan_installed_apps()
+                apps = [
+                    r["content"][len("Installed app: "):].strip()
+                    for r in app_results
+                    if r.get("content", "").startswith("Installed app: ")
+                ]
+                if apps:
+                    sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
+                    yield _sse({"type": "log", "message": f"  Found {len(apps)} apps"})
+            except Exception:
+                pass
+
+            yield _sse({"type": "log", "message": "Collecting app usage frequency..."})
+            try:
+                ua_scanner = getattr(discovery, "scan_windows_userassist", None)
+                if ua_scanner:
+                    ua_results = ua_scanner()
+                    if ua_results:
+                        lines = [f"  {r['content']}" for r in ua_results[:20]]
+                        sections.append("FREQUENTLY LAUNCHED APPS:\n" + "\n".join(lines))
+                        yield _sse({"type": "log", "message": f"  Found {len(ua_results)} usage signals"})
+            except Exception:
+                pass
+
+            yield _sse({"type": "log", "message": "Scanning recent file types..."})
+            try:
+                ft_scanner = getattr(discovery, "scan_recent_file_types", None)
+                if ft_scanner:
+                    ft_results = ft_scanner()
+                    if ft_results:
+                        lines = [f"  {r['content']}" for r in ft_results]
+                        sections.append("RECENT FILE TYPES:\n" + "\n".join(lines))
+            except Exception:
+                pass
+
+            yield _sse({"type": "log", "message": "Scanning gaming & media..."})
+            try:
+                gm_results = discovery.scan_gaming_and_media()
+                if gm_results:
+                    lines = [f"  {r['content']}" for r in gm_results]
+                    sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
+            except Exception:
+                pass
+
+            yield _sse({"type": "log", "message": "Scanning app usage..."})
+            try:
+                ua_results = discovery.scan_windows_userassist()
+                ma_results = discovery.scan_macos_app_usage()
+                combined = ua_results + ma_results
+                if combined:
+                    lines = [f"  {r['content']}" for r in combined[:20]]
+                    sections.append("FREQUENTLY USED APPS:\n" + "\n".join(lines))
+            except Exception:
+                pass
+
+            yield _sse({"type": "log", "message": "Collecting git identity & projects..."})
+            try:
+                git_results = discovery.scan_git_identity()
+                non_sensitive = [r for r in git_results if not r.get("sensitive")]
+                if non_sensitive:
+                    lines = [f"  {r['content']}" for r in non_sensitive]
+                    sections.append("GIT IDENTITY:\n" + "\n".join(lines))
+            except Exception:
+                pass
+            try:
+                manifest_results = discovery.scan_project_manifests()
+                non_sensitive = [r for r in manifest_results if not r.get("sensitive")][:10]
+                if non_sensitive:
+                    lines = [f"  {r['content']}" for r in non_sensitive]
+                    sections.append("PROJECT MANIFESTS (sample):\n" + "\n".join(lines))
+            except Exception:
+                pass
+
+            if not sections:
+                yield _sse({"type": "error", "message": "No data collected — nothing to infer from."})
+                yield _sse({"type": "done", "total": 0})
+                return
+
+            prompt_sections = "\n\n".join(sections)
+            prompt = _INFER_PROMPT.format(sections=prompt_sections)
+
+            yield _sse({"type": "log", "message": "Calling local LLM for insights (this may take ~30s)..."})
+            try:
+                llm = create_client()
+                raw_response = llm.chat(
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.2,
+                    max_new_tokens=1024,
+                )
+                if hasattr(raw_response, "__iter__") and not isinstance(raw_response, str):
+                    raw_response = "".join(raw_response)
+            except Exception as e:
+                yield _sse({"type": "error", "message": f"LLM call failed: {e}. Is Lemonade Server running?"})
+                yield _sse({"type": "done", "total": 0})
+                return
+
+            yield _sse({"type": "log", "message": "Parsing insights..."})
+            try:
+                cleaned = raw_response.strip()
+                if cleaned.startswith("```"):
+                    cleaned = "\n".join(cleaned.split("\n")[1:])
+                    if "```" in cleaned:
+                        cleaned = cleaned[: cleaned.rfind("```")]
+                insights = json.loads(cleaned.strip())
+                if not isinstance(insights, list):
+                    raise ValueError("Expected JSON array")
+                insights = [
+                    i for i in insights
+                    if isinstance(i, dict) and isinstance(i.get("content"), str) and i["content"].strip()
+                ]
+            except Exception as e:
+                yield _sse({"type": "error", "message": f"Failed to parse LLM response: {e}"})
+                yield _sse({"type": "done", "total": 0})
+                return
+
+            for insight in insights:
+                insight["content"] = insight["content"].strip()[:200]
+                try:
+                    insight["confidence"] = max(0.0, min(1.0, float(insight.get("confidence", 0.7))))
+                except (ValueError, TypeError):
+                    insight["confidence"] = 0.7
+                insight["domain"] = insight.get("domain", "general")
+                yield _sse({"type": "insight", "item": insight})
+
+            yield _sse({"type": "done", "total": len(insights)})
+
+        except Exception as exc:
+            logger.error("[memory router] stream-inference failed: %s", exc)
+            yield _sse({"type": "error", "message": str(exc)})
+            yield _sse({"type": "done", "total": 0})
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
+
+
+class DiscoveryCommit(BaseModel):
+    items: List[Dict[str, Any]]
+
+
+class InferenceCommit(BaseModel):
+    insights: List[Dict[str, Any]]
+
+
+@router.post("/api/memory/commit-discovery")
+def commit_discovery(body: DiscoveryCommit) -> Dict:
+    """Store approved discovery findings. Returns ``{stored: int}``."""
+    store = _get_store()
+    stored = 0
+    for item in body.items:
+        try:
+            content = str(item.get("content", "")).strip()
+            if not content:
+                continue
+            store.store(
+                category=item.get("category", "profile"),
+                content=content,
+                source="discovery",
+                context=item.get("context", "global"),
+                sensitive=bool(item.get("sensitive", False)),
+                confidence=float(item.get("confidence", 0.6)),
+                domain=item.get("domain") or None,
+                entity=item.get("entity") or None,
+            )
+            stored += 1
+        except Exception as e:
+            logger.debug("[memory router] commit-discovery item failed: %s", e)
+    logger.info("[memory router] commit-discovery: stored %d items", stored)
+    return {"stored": stored}
+
+
+@router.post("/api/memory/commit-inference")
+def commit_inference(body: InferenceCommit) -> Dict:
+    """Store approved inference insights, replacing old inferred entries.
+
+    Returns ``{stored: int}``.
+    """
+    store = _get_store()
+    # Delete old inferred facts before storing new batch
+    try:
+        store.delete_by_source("inferred")
+    except Exception as exc:
+        logger.warning("[memory router] commit-inference: failed to delete old inferred facts: %s", exc)
+        raise HTTPException(500, f"Failed to clear old inferred profile: {exc}")
+    stored = 0
+    for insight in body.insights:
+        try:
+            content = str(insight.get("content", "")).strip()
+            if not content:
+                continue
+            store.store(
+                category="profile",
+                content=content,
+                source="inferred",
+                context="global",
+                sensitive=False,
+                confidence=float(insight.get("confidence", 0.7)),
+                domain=insight.get("domain", "general"),
+            )
+            stored += 1
+        except Exception as e:
+            logger.debug("[memory router] commit-inference item failed: %s", e)
+    logger.info("[memory router] commit-inference: stored %d insights", stored)
+    return {"stored": stored}
 
 
 # ---------------------------------------------------------------------------

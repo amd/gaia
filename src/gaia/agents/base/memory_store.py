@@ -30,7 +30,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,9 @@ def _sanitize_fts5_query(query: str, use_and: bool = True) -> Optional[str]:
 
 #: Valid knowledge categories.  The single source of truth — import this
 #: rather than redefining the set in tool closures or REST validators.
+#: Goals and tasks are NOT stored here — they live in GoalStore
+#: (src/gaia/agents/base/goal_store.py) which provides proper hierarchy,
+#: state machines, and relational integrity.
 VALID_CATEGORIES: frozenset = frozenset(
     {
         "fact",
@@ -96,11 +99,11 @@ VALID_CATEGORIES: frozenset = frozenset(
         "reminder",
         "system",
         "profile",
-        # Autonomous-agent categories — used by the always-running loop.
-        # Goals and tasks require approved_for_auto=True before the loop acts
-        # on them (stored in the metadata JSON blob).
-        "goal",  # an objective the agent should work toward
-        "task",  # a discrete, completable action item
+        # Permission grants for agent-inferred goals (autonomous mode).
+        # Stored as natural-language descriptions and matched via semantic
+        # search so users can express broad approvals ("always accept
+        # maintenance tasks") without explicit rule lists.
+        "permission",
     }
 )
 
@@ -1869,7 +1872,7 @@ class MemoryStore:
 
     def get_all_knowledge(
         self,
-        category: str = None,
+        category: Optional[Union[str, List[str]]] = None,
         context: str = None,
         entity: str = None,
         sensitive: bool = None,
@@ -1909,8 +1912,18 @@ class MemoryStore:
             conditions.append("k.superseded_by IS NULL")
 
         if category is not None:
-            conditions.append("k.category = ?")
-            params.append(category)
+            if isinstance(category, list):
+                if len(category) == 1:
+                    conditions.append("k.category = ?")
+                    params.append(category[0])
+                elif len(category) > 1:
+                    placeholders = ",".join("?" * len(category))
+                    conditions.append(f"k.category IN ({placeholders})")
+                    params.extend(category)
+                # empty list → no category filter
+            else:
+                conditions.append("k.category = ?")
+                params.append(category)
         if context is not None:
             conditions.append("k.context = ?")
             params.append(context)
