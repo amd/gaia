@@ -614,6 +614,30 @@ async def async_main(action, **kwargs):
 
                 return 0 if result["status"] == "success" else 1
 
+            # First-boot: if no profile entries exist, offer onboarding intro
+            from gaia.agents.base.memory_store import MemoryStore as _BootMS
+
+            _boot_store = _BootMS()
+            try:
+                _has_profile = bool(
+                    _boot_store.get_by_category("profile", context="global", limit=1)
+                )
+            finally:
+                _boot_store.close()
+            if not _has_profile:
+                print("\n" + "=" * 60)
+                print("  First time with GAIA? Let's set up your profile.")
+                print("=" * 60)
+                try:
+                    run_first_boot = (
+                        input("  Quick intro? Takes ~1 minute. [Y/n]: ").strip().lower()
+                    )
+                except (EOFError, KeyboardInterrupt):
+                    run_first_boot = "n"
+                if run_first_boot != "n":
+                    _bootstrap_chat()
+                    print()
+
             # Interactive mode
             interactive_mode(agent)
             return
@@ -2566,6 +2590,11 @@ Examples:
         "--reset-system",
         action="store_true",
         help="Clear system context entries and optionally disable auto-collection",
+    )
+    memory_bootstrap_parser.add_argument(
+        "--infer",
+        action="store_true",
+        help="LLM-assisted profile inference from browser history and installed apps",
     )
 
     # Init command (one-stop GAIA setup)
@@ -6125,6 +6154,8 @@ def _handle_memory_bootstrap(args):
             _bootstrap_chat()
         elif args.discover:
             _bootstrap_discover()
+        elif getattr(args, "infer", False):
+            _bootstrap_infer()
         else:
             # Default: run both phases
             _bootstrap_chat()
@@ -6140,33 +6171,38 @@ def _handle_memory_bootstrap(args):
 _BOOTSTRAP_QUESTIONS = [
     {
         "prompt": "What's your name?",
-        "category": "fact",
+        "category": "profile",
         "template": "User's name is {answer}",
     },
     {
-        "prompt": "What do you do? (role/profession)",
-        "category": "fact",
-        "template": "User's role: {answer}",
+        "prompt": "What do you do? (role, profession, or student)",
+        "category": "profile",
+        "template": "User's role/profession: {answer}",
     },
     {
         "prompt": "What will you mainly use GAIA for?",
-        "category": "fact",
-        "template": "Primary use cases: {answer}",
+        "category": "profile",
+        "template": "User's primary use cases for GAIA: {answer}",
     },
     {
-        "prompt": "How should I communicate? (concise/detailed, formal/casual)",
+        "prompt": "What programming languages or tools do you use most?",
+        "category": "profile",
+        "template": "User's primary tools and languages: {answer}",
+    },
+    {
+        "prompt": "What are your interests or hobbies outside of work?",
+        "category": "profile",
+        "template": "User's interests and hobbies: {answer}",
+    },
+    {
+        "prompt": "How should I communicate with you? (concise/detailed, casual/formal)",
         "category": "preference",
-        "template": "Communication style: {answer}",
+        "template": "Preferred communication style: {answer}",
     },
     {
-        "prompt": "What's your timezone?",
-        "category": "fact",
-        "template": "Timezone: {answer}",
-    },
-    {
-        "prompt": "What tools/languages do you use most?",
-        "category": "fact",
-        "template": "Primary tools/languages: {answer}",
+        "prompt": "Anything else you'd like me to know about you?",
+        "category": "profile",
+        "template": "Additional user context: {answer}",
     },
 ]
 
@@ -6175,9 +6211,10 @@ def _bootstrap_chat():
     """Phase 1: Conversational onboarding — ask questions, store answers."""
     from gaia.agents.base.memory_store import MemoryStore
 
-    print("\n=== GAIA Memory Bootstrap — Conversational Onboarding ===")
-    print("Answer a few questions so GAIA can be helpful from the start.")
-    print("Press Enter to skip any question.\n")
+    print("\n=== Welcome to GAIA — Your Personal AI Assistant ===")
+    print("I run locally on your AMD hardware, so everything stays private.")
+    print("Let me get to know you so I can be more helpful from the start.")
+    print("(Press Enter to skip any question)\n")
 
     try:
         store = MemoryStore()
@@ -6211,6 +6248,296 @@ def _bootstrap_chat():
 
         print(f"\n✅ Stored {stored_count} memory entries from onboarding.")
     finally:
+        store.close()
+
+
+# ---- Bootstrap: LLM-assisted profile inference ----
+
+_INFER_PROMPT = """\
+You are analyzing a user's computing environment to generate personalized profile insights.
+
+Based on the data below, generate 5-10 concise profile facts about this user. Focus on:
+- Professional role or domain (e.g. software developer, data scientist, designer)
+- Key technologies, languages, and tools they regularly use
+- Technical interests and areas of focus
+- Non-technical interests or hobbies (if clearly evident)
+
+Raw data:
+{sections}
+
+Respond with a JSON array of insight objects. Each object must have:
+  "content"    - A clear, specific fact about the user (1 sentence, ≤120 chars)
+  "confidence" - Float 0.0–1.0 (how confident you are, given the evidence)
+  "domain"     - One of: "work", "technical", "personal", "general"
+
+Rules:
+- Only state what the data clearly supports — do not guess.
+- Skip generic facts that apply to almost everyone.
+- Return ONLY the JSON array, no other text, no markdown fences.
+
+Example output:
+[
+  {{"content": "Primarily a Python developer with strong AI/ML focus", "confidence": 0.9, "domain": "work"}},
+  {{"content": "Regularly contributes to open-source projects on GitHub", "confidence": 0.8, "domain": "technical"}}
+]"""
+
+_INFER_REFRESH_DAYS = 30  # Re-run LLM inference after this many days
+
+
+def _bootstrap_infer():
+    """Phase 3 (optional): LLM-assisted profile inference from browser history + system data.
+
+    Collects raw signals (browser domains, installed apps, git identity), sends
+    them to the local LLM, and stores the generated profile insights after user
+    review.  All browser data is sensitive — explicit consent is requested before
+    reading it.
+    """
+    import json as _json
+    import logging as _logging
+
+    from gaia.agents.base.discovery import SystemDiscovery
+    from gaia.agents.base.memory_store import MemoryStore
+    from gaia.llm import create_client
+
+    print("\n=== GAIA Memory — AI Profile Inference ===")
+    print(
+        "GAIA will read your browser history and installed apps, then use the local\n"
+        "LLM to generate personalised profile facts.  Raw data is NEVER stored or\n"
+        "sent anywhere — only the LLM-generated insights are proposed for storage.\n"
+    )
+
+    # Check for stale inferred facts — offer refresh
+    try:
+        store_check = MemoryStore()
+        try:
+            inferred = store_check.get_by_category("profile", context="global", limit=1)
+            # Filter to source="inferred"
+            inferred = [r for r in inferred if r.get("source") == "inferred"]
+            if inferred:
+                newest_updated = inferred[0].get("updated_at", "")
+                if newest_updated:
+                    from datetime import datetime as _dt
+
+                    age_days = (
+                        _dt.now()
+                        - _dt.fromisoformat(newest_updated).replace(tzinfo=None)
+                    ).days
+                    if age_days < _INFER_REFRESH_DAYS:
+                        print(
+                            f"  LLM-inferred profile facts are {age_days} day(s) old "
+                            f"(refresh threshold: {_INFER_REFRESH_DAYS} days)."
+                        )
+                        try:
+                            resp = input("  Re-run inference anyway? [y/N]: ").strip().lower()
+                        except (EOFError, KeyboardInterrupt):
+                            print("\nInference cancelled.")
+                            return
+                        if resp != "y":
+                            print("  Skipping — your profile is up to date.")
+                            return
+        finally:
+            store_check.close()
+    except Exception:
+        pass  # Non-critical — proceed anyway
+
+    # Explicit consent for browser history access
+    try:
+        consent = input(
+            "  Read browser history for inference? [Y/n]: "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\nInference cancelled.")
+        return
+    use_browser = consent != "n"
+
+    print("\n  Collecting data...", end="", flush=True)
+    try:
+        discovery = SystemDiscovery()
+    except Exception as e:
+        raise RuntimeError(f"Error initializing system discovery: {e}") from e
+
+    # --- Collect raw signals ---
+    sections: list[str] = []
+
+    # 1. Browser history (top domains, visit counts)
+    if use_browser:
+        try:
+            browser_results = discovery.scan_browser_history(days=30)
+            if browser_results:
+                lines = []
+                for item in browser_results[:40]:
+                    # content is "Frequently visited: domain.com (N visits)"
+                    lines.append(f"  {item['content']}")
+                sections.append("BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines))
+        except Exception:
+            pass
+
+    # 2. Installed applications
+    try:
+        app_results = discovery.scan_installed_apps()
+        if app_results:
+            # Extract just the app names from content strings like "Installed app: VS Code"
+            apps = []
+            for item in app_results:
+                content = item.get("content", "")
+                if content.startswith("Installed app: "):
+                    apps.append(content[len("Installed app: "):].strip())
+            if apps:
+                sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
+    except Exception:
+        pass
+
+    # 3. Git identity (name / employer domain — not raw email)
+    try:
+        git_results = discovery.scan_git_identity()
+        if git_results:
+            git_lines = []
+            for item in git_results:
+                # Skip sensitive (raw email) items
+                if not item.get("sensitive") and item.get("content"):
+                    git_lines.append(f"  {item['content']}")
+            if git_lines:
+                sections.append("GIT IDENTITY:\n" + "\n".join(git_lines))
+    except Exception:
+        pass
+
+    # 4. Project languages / manifests (non-sensitive)
+    try:
+        manifest_results = discovery.scan_project_manifests()
+        if manifest_results:
+            manifest_lines = []
+            for item in manifest_results[:10]:
+                if not item.get("sensitive") and item.get("content"):
+                    manifest_lines.append(f"  {item['content']}")
+            if manifest_lines:
+                sections.append("PROJECT MANIFESTS (sample):\n" + "\n".join(manifest_lines))
+    except Exception:
+        pass
+
+    print(" done.")
+
+    if not sections:
+        print("\n  No data collected for inference.  Nothing to process.")
+        return
+
+    # --- Build and send LLM prompt ---
+    prompt_sections = "\n\n".join(sections)
+    prompt = _INFER_PROMPT.format(sections=prompt_sections)
+
+    print("  Calling local LLM for insights (this may take ~30s)...", end="", flush=True)
+    try:
+        llm = create_client()
+        raw_response = llm.chat(
+            [{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_new_tokens=1024,
+        )
+        # Collect streamed response if needed
+        if hasattr(raw_response, "__iter__") and not isinstance(raw_response, str):
+            raw_response = "".join(raw_response)
+    except Exception as e:
+        print(f"\n\n  ❌ LLM call failed: {e}")
+        print("  Make sure Lemonade Server is running: lemonade-server serve")
+        return
+
+    print(" done.")
+
+    # --- Parse JSON array from response ---
+    insights: list[dict] = []
+    try:
+        # Strip markdown fences if LLM wrapped output
+        cleaned = raw_response.strip()
+        if cleaned.startswith("```"):
+            cleaned = "\n".join(cleaned.split("\n")[1:])
+            if cleaned.endswith("```"):
+                cleaned = cleaned[: cleaned.rfind("```")]
+
+        insights = _json.loads(cleaned.strip())
+        if not isinstance(insights, list):
+            raise ValueError("Expected a JSON array")
+        # Validate each item
+        insights = [
+            i
+            for i in insights
+            if isinstance(i, dict)
+            and isinstance(i.get("content"), str)
+            and i["content"].strip()
+        ]
+    except Exception as e:
+        print(f"\n  ❌ Failed to parse LLM response: {e}")
+        print(f"  Raw response:\n{raw_response[:500]}")
+        return
+
+    if not insights:
+        print("\n  No insights generated.")
+        return
+
+    print(f"\n  Generated {len(insights)} insights. Review each one:\n")
+    print("  [Y] = approve (default)   [n] = skip   [q] = quit\n")
+
+    # --- Review and store ---
+    try:
+        store = MemoryStore()
+    except Exception as e:
+        raise RuntimeError(f"Error opening memory database: {e}") from e
+
+    # Silence noisy store INFO logs
+    _store_logger = _logging.getLogger("gaia.agents.base.memory_store")
+    _orig_level = _store_logger.level
+    _store_logger.setLevel(_logging.WARNING)
+
+    approved = 0
+    skipped = 0
+
+    # Delete stale inferred facts before storing new ones (only if user approves at least one)
+    inferred_deleted = False
+
+    try:
+        for i, insight in enumerate(insights, 1):
+            content = insight["content"].strip()[:200]
+            confidence = float(insight.get("confidence", 0.7))
+            domain = insight.get("domain", "general")
+            confidence = max(0.0, min(1.0, confidence))
+
+            print(f"  ({i}/{len(insights)}) [{confidence:.0%}] {content}")
+            try:
+                choice = input("    Approve? [Y/n/q]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n\nReview cancelled.")
+                break
+
+            if choice == "q":
+                print("  Review stopped.")
+                break
+            elif choice == "n":
+                skipped += 1
+                continue
+            else:
+                # Clear old inferred facts on first approval
+                if not inferred_deleted:
+                    try:
+                        store.delete_by_source("inferred")
+                    except Exception:
+                        pass
+                    inferred_deleted = True
+
+                try:
+                    store.store(
+                        category="profile",
+                        content=content,
+                        source="inferred",
+                        context="global",
+                        sensitive=False,
+                        confidence=confidence,
+                        domain=domain,
+                    )
+                    approved += 1
+                except Exception as e:
+                    print(f"    ⚠ Failed to store: {e}")
+
+        print(f"\n✅ Inference complete: {approved} approved, {skipped} skipped.")
+    finally:
+        _store_logger.setLevel(_orig_level)
         store.close()
 
 

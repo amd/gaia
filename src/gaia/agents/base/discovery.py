@@ -330,6 +330,26 @@ def _make_fact(
     }
 
 
+def _make_profile_fact(
+    content: str,
+    context: str = "global",
+    entity: str = "",
+    sensitive: bool = False,
+    confidence: float = 0.7,
+) -> Dict:
+    """Create a discovered profile fact about the user."""
+    return {
+        "content": content,
+        "category": "profile",
+        "context": context,
+        "entity": entity,
+        "sensitive": sensitive,
+        "confidence": confidence,
+        "source": "discovery",
+        "approved": None,
+    }
+
+
 def _is_hidden(name: str) -> bool:
     """Check if a file/folder name is hidden (starts with dot)."""
     return name.startswith(".")
@@ -1387,6 +1407,348 @@ class SystemDiscovery:
             winreg.CloseKey(key)
 
     # ------------------------------------------------------------------
+    # User profile scanners — infer facts about the user from local files
+    # ------------------------------------------------------------------
+
+    def scan_git_identity(self) -> List[Dict]:
+        """Read ~/.gitconfig to learn the user's name, email, and employer."""
+        facts: List[Dict] = []
+        gitconfig = self._home / ".gitconfig"
+        if not gitconfig.exists():
+            return facts
+        try:
+            config = configparser.ConfigParser(strict=False)
+            config.read(str(gitconfig), encoding="utf-8")
+            name = config.get("user", "name", fallback="").strip()
+            email = config.get("user", "email", fallback="").strip()
+            editor = config.get("core", "editor", fallback="").strip()
+
+            if name:
+                facts.append(
+                    _make_profile_fact(f"User's name is {name}", confidence=0.9)
+                )
+            if email:
+                facts.append(
+                    _make_profile_fact(
+                        f"User's email is {email}",
+                        confidence=0.9,
+                        sensitive=True,
+                    )
+                )
+                # Infer employer from email domain
+                domain = email.split("@")[-1].lower() if "@" in email else ""
+                free_providers = {
+                    "gmail.com",
+                    "outlook.com",
+                    "hotmail.com",
+                    "yahoo.com",
+                    "icloud.com",
+                    "protonmail.com",
+                }
+                if domain and domain not in free_providers:
+                    company = domain.split(".")[0].title()
+                    facts.append(
+                        _make_profile_fact(
+                            f"User likely works at {company} "
+                            f"(inferred from email domain {domain})",
+                            confidence=0.6,
+                        )
+                    )
+            if editor:
+                facts.append(
+                    _make_profile_fact(
+                        f"User's preferred editor is {editor}", confidence=0.8
+                    )
+                )
+        except Exception as e:
+            logger.debug("scan_git_identity failed: %s", e)
+        return facts
+
+    def scan_shell_config(self) -> List[Dict]:
+        """Read shell config files to infer tools, aliases, and habits."""
+        facts: List[Dict] = []
+        home = self._home
+        shell_files = [
+            home / ".zshrc",
+            home / ".bashrc",
+            home / ".bash_profile",
+            home / ".profile",
+            home / ".zprofile",
+        ]
+
+        # Keywords that reveal tool usage
+        tool_patterns = {
+            "kubectl": "Kubernetes (kubectl)",
+            "terraform": "Terraform",
+            "aws": "AWS CLI",
+            "gcloud": "Google Cloud CLI",
+            "az ": "Azure CLI",
+            "docker": "Docker",
+            "nvm": "Node Version Manager (nvm)",
+            "pyenv": "pyenv",
+            "conda": "Conda/Anaconda",
+            "cargo": "Rust/Cargo",
+            "go ": "Go",
+            "poetry": "Poetry (Python)",
+            "pipenv": "Pipenv",
+            "rbenv": "rbenv (Ruby)",
+            "volta": "Volta (Node.js)",
+        }
+
+        found_tools: set = set()
+        alias_count = 0
+
+        for shell_file in shell_files:
+            if not shell_file.exists():
+                continue
+            try:
+                content = shell_file.read_text(encoding="utf-8", errors="replace")
+                lines = content.splitlines()
+
+                # Count aliases
+                alias_count += sum(
+                    1 for line in lines if line.strip().startswith("alias ")
+                )
+
+                # Detect tools from PATH exports and usage
+                content_lower = content.lower()
+                for pattern, tool_name in tool_patterns.items():
+                    if pattern in content_lower and tool_name not in found_tools:
+                        found_tools.add(tool_name)
+            except Exception:
+                continue
+
+        if found_tools:
+            tools_str = ", ".join(sorted(found_tools))
+            facts.append(
+                _make_profile_fact(
+                    f"User uses these tools (detected in shell config): {tools_str}",
+                    confidence=0.65,
+                )
+            )
+        if alias_count > 5:
+            facts.append(
+                _make_profile_fact(
+                    f"User has {alias_count} shell aliases, "
+                    "suggesting a power-user workflow",
+                    confidence=0.5,
+                )
+            )
+
+        return facts
+
+    def scan_project_manifests(self) -> List[Dict]:
+        """Find project manifest files to understand what the user builds."""
+        facts: List[Dict] = []
+        home = self._home
+
+        # Search candidate root directories
+        search_roots: List[Path] = []
+        for candidate in [
+            "Projects",
+            "projects",
+            "Work",
+            "work",
+            "code",
+            "Code",
+            "dev",
+            "Dev",
+            "src",
+            "repos",
+            "github",
+        ]:
+            p = home / candidate
+            if p.is_dir():
+                search_roots.append(p)
+        # Also check Documents
+        docs = home / "Documents"
+        if docs.is_dir():
+            search_roots.append(docs)
+
+        if not search_roots:
+            search_roots = [home]
+
+        manifests_found: List[Path] = []
+        languages_seen: set = set()
+        project_names: List[str] = []
+
+        manifest_files = {
+            "package.json": "Node.js/JavaScript",
+            "pyproject.toml": "Python",
+            "Cargo.toml": "Rust",
+            "go.mod": "Go",
+            "pom.xml": "Java (Maven)",
+            "build.gradle": "Java/Kotlin (Gradle)",
+            "Gemfile": "Ruby",
+            "composer.json": "PHP",
+            "mix.exs": "Elixir",
+        }
+
+        for root in search_roots:
+            try:
+                for dirpath, dirnames, filenames in os.walk(root):
+                    depth = len(Path(dirpath).relative_to(root).parts)
+                    if depth > 3:
+                        dirnames.clear()
+                        continue
+                    dirnames[:] = [
+                        d
+                        for d in dirnames
+                        if d not in _SKIP_DIRS and not d.startswith(".")
+                    ]
+
+                    for fname in filenames:
+                        if fname in manifest_files:
+                            lang = manifest_files[fname]
+                            languages_seen.add(lang)
+                            fpath = Path(dirpath) / fname
+                            manifests_found.append(fpath)
+
+                            # Try to read project name/description
+                            if fname == "package.json":
+                                data = _safe_read_json(fpath)
+                                if data and isinstance(data, dict):
+                                    pname = data.get("name", "")
+                                    if pname and pname not in project_names:
+                                        project_names.append(pname)
+                            elif fname == "pyproject.toml":
+                                try:
+                                    content = fpath.read_text(
+                                        encoding="utf-8", errors="replace"
+                                    )
+                                    for line in content.splitlines():
+                                        if line.strip().startswith("name"):
+                                            pname = (
+                                                line.split("=")[-1]
+                                                .strip()
+                                                .strip('"')
+                                                .strip("'")
+                                            )
+                                            if pname and pname not in project_names:
+                                                project_names.append(pname)
+                                            break
+                                except Exception:
+                                    pass
+                            elif fname == "Cargo.toml":
+                                try:
+                                    content = fpath.read_text(
+                                        encoding="utf-8", errors="replace"
+                                    )
+                                    for line in content.splitlines():
+                                        if line.strip().startswith("name"):
+                                            pname = (
+                                                line.split("=")[-1]
+                                                .strip()
+                                                .strip('"')
+                                            )
+                                            if pname and pname not in project_names:
+                                                project_names.append(pname)
+                                            break
+                                except Exception:
+                                    pass
+                    if len(manifests_found) >= 30:  # cap to avoid huge scans
+                        break
+            except (PermissionError, OSError):
+                continue
+
+        if languages_seen:
+            langs = ", ".join(sorted(languages_seen))
+            facts.append(
+                _make_profile_fact(
+                    f"User actively develops in: {langs}", confidence=0.75
+                )
+            )
+        if project_names:
+            shown = project_names[:8]
+            facts.append(
+                _make_profile_fact(
+                    f"User has projects named: {', '.join(shown)}",
+                    confidence=0.6,
+                    context="work",
+                )
+            )
+
+        return facts
+
+    def scan_ssh_config(self) -> List[Dict]:
+        """Read ~/.ssh/config to infer servers and work context."""
+        facts: List[Dict] = []
+        ssh_config = self._home / ".ssh" / "config"
+        if not ssh_config.exists():
+            return facts
+        try:
+            content = ssh_config.read_text(encoding="utf-8", errors="replace")
+            hosts: List[str] = []
+            for line in content.splitlines():
+                line = line.strip()
+                if line.lower().startswith("host ") and not line.startswith("Host *"):
+                    host = line[5:].strip()
+                    if host and host != "*":
+                        hosts.append(host)
+            if hosts:
+                shown = hosts[:6]
+                facts.append(
+                    _make_profile_fact(
+                        f"User has SSH config for: {', '.join(shown)}"
+                        + (" and more" if len(hosts) > 6 else ""),
+                        confidence=0.5,
+                        context="work",
+                        sensitive=True,
+                    )
+                )
+        except Exception as e:
+            logger.debug("scan_ssh_config failed: %s", e)
+        return facts
+
+    def scan_home_structure(self) -> List[Dict]:
+        """Infer context from top-level home directory structure."""
+        facts: List[Dict] = []
+        home = self._home
+        interest_hints = {
+            "music": "music production or DJ-ing",
+            "photos": "photography",
+            "photography": "photography",
+            "videos": "video editing/production",
+            "games": "game development",
+            "gamedev": "game development",
+            "art": "digital art",
+            "design": "design work",
+            "writing": "writing",
+            "blog": "blogging",
+            "research": "research work",
+            "papers": "academic research",
+            "finance": "personal finance tracking",
+            "investing": "investing",
+        }
+
+        try:
+            top_dirs = [
+                d.name.lower()
+                for d in home.iterdir()
+                if d.is_dir() and not d.name.startswith(".")
+            ]
+        except (PermissionError, OSError):
+            return facts
+
+        found_interests: List[str] = []
+        for dirname in top_dirs:
+            for keyword, interest in interest_hints.items():
+                if keyword in dirname and interest not in found_interests:
+                    found_interests.append(interest)
+
+        if found_interests:
+            facts.append(
+                _make_profile_fact(
+                    "User may have interests in: "
+                    f"{', '.join(found_interests)} "
+                    "(inferred from home folder names)",
+                    confidence=0.4,
+                )
+            )
+
+        return facts
+
+    # ------------------------------------------------------------------
     # scan_all — Run selected sources
     # ------------------------------------------------------------------
 
@@ -1401,7 +1763,9 @@ class SystemDiscovery:
         Args:
             sources: List of source names to scan. Default: all sources.
                 Valid names: "file_system", "git_repos", "installed_apps",
-                "browser_bookmarks", "browser_history", "email_accounts"
+                "browser_bookmarks", "browser_history", "email_accounts",
+                "git_identity", "shell_config", "project_manifests",
+                "ssh_config", "home_structure"
             paths: Override scan paths for file_system and git_repos.
             history_days: Days of browser history to scan.
 
@@ -1412,6 +1776,11 @@ class SystemDiscovery:
         all_sources = [
             "file_system",
             "git_repos",
+            "git_identity",
+            "shell_config",
+            "project_manifests",
+            "ssh_config",
+            "home_structure",
             "installed_apps",
             "browser_bookmarks",
             "browser_history",
@@ -1427,6 +1796,11 @@ class SystemDiscovery:
         scan_map = {
             "file_system": lambda: self.scan_file_system(paths=paths),
             "git_repos": lambda: self.scan_git_repos(paths=paths),
+            "git_identity": lambda: self.scan_git_identity(),
+            "shell_config": lambda: self.scan_shell_config(),
+            "project_manifests": lambda: self.scan_project_manifests(),
+            "ssh_config": lambda: self.scan_ssh_config(),
+            "home_structure": lambda: self.scan_home_structure(),
             "installed_apps": lambda: self.scan_installed_apps(),
             "browser_bookmarks": lambda: self.scan_browser_bookmarks(),
             "browser_history": lambda: self.scan_browser_history(days=history_days),

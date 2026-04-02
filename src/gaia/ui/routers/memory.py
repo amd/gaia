@@ -139,6 +139,18 @@ class KnowledgeUpdate(BaseModel):
 _store = None
 _store_lock = threading.Lock()
 
+# ---------------------------------------------------------------------------
+# Agent-provided operation callbacks
+# ---------------------------------------------------------------------------
+# Operations that require a live LLM + FAISS (consolidation, reconciliation)
+# cannot run from the standalone MemoryStore.  When a ChatAgent with
+# MemoryMixin is active it registers its methods here so the dashboard can
+# trigger them.  Set to None when no agent is running (→ 503).
+#
+# Set from gaia.ui._chat_helpers when a ChatAgent is created.
+_consolidate_fn = None  # (max_sessions: int) -> Dict
+_reconcile_fn = None  # (max_pairs: int) -> Dict
+
 
 def _get_store():
     """Lazy-init a MemoryStore instance for dashboard queries (thread-safe)."""
@@ -471,12 +483,18 @@ def trigger_consolidation(
 
     Distils old conversation sessions into semantic knowledge entries.
     Returns ``{consolidated: int, extracted_items: int}``.
+
+    Requires an active ChatAgent session (start a chat first).
     """
+    if _consolidate_fn is None:
+        raise HTTPException(
+            503,
+            "Consolidation requires an active agent session. "
+            "Send a chat message first to initialize the agent.",
+        )
     try:
-        result = _get_store().consolidate_old_sessions(max_sessions=max_sessions)
+        result = _consolidate_fn(max_sessions=max_sessions)
         return result
-    except AttributeError:
-        raise HTTPException(501, "Consolidation not yet implemented in data layer")
     except Exception as exc:
         logger.error("[memory router] consolidation failed: %s", exc)
         raise HTTPException(500, f"Consolidation failed: {type(exc).__name__}")
@@ -517,9 +535,17 @@ def trigger_reconciliation() -> Dict:
 
     Compares knowledge entries for contradictions and reinforcements.
     Returns ``{pairs_checked, reinforced, contradicted, weakened, neutral}``.
+
+    Requires an active ChatAgent session (start a chat first).
     """
+    if _reconcile_fn is None:
+        raise HTTPException(
+            503,
+            "Reconciliation requires an active agent session. "
+            "Send a chat message first to initialize the agent.",
+        )
     try:
-        result = _get_store().reconcile()
+        result = _reconcile_fn()
         return result
     except AttributeError:
         raise HTTPException(501, "Reconciliation not yet implemented in data layer")

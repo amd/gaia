@@ -87,7 +87,7 @@ def _sanitize_fts5_query(query: str, use_and: bool = True) -> Optional[str]:
 #: Valid knowledge categories.  The single source of truth — import this
 #: rather than redefining the set in tool closures or REST validators.
 VALID_CATEGORIES: frozenset = frozenset(
-    {"fact", "preference", "error", "skill", "note", "reminder", "system"}
+    {"fact", "preference", "error", "skill", "note", "reminder", "system", "profile"}
 )
 
 #: Maximum stored content length (chars).  Longer content is truncated by

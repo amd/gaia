@@ -84,6 +84,13 @@ def _system_context_is_enabled() -> bool:
     return bool(_load_memory_settings().get("system_context_enabled", True))
 
 
+#: Auto-refresh system context after this many days (hardware/software changes over time).
+_SYSTEM_CONTEXT_REFRESH_DAYS: int = 7
+
+#: Auto-refresh LLM-inferred profile facts after this many days.
+_INFERRED_PROFILE_REFRESH_DAYS: int = 30
+
+
 # ============================================================================
 # Constants
 # ============================================================================
@@ -356,12 +363,30 @@ class MemoryMixin:
             logger.debug("[MemoryMixin] system context disabled by user setting")
             return {"stored": 0, "disabled": True}
 
-        # Check if already initialized
+        # Check if already initialized — auto-refresh when stale
         existing = self._memory_store.get_by_category(
             "system", context="global", limit=1
         )
         if existing and not force:
-            return {"stored": 0}
+            newest_updated = existing[0].get("updated_at", "")
+            if newest_updated:
+                try:
+                    last_update = datetime.fromisoformat(newest_updated).replace(
+                        tzinfo=None
+                    )
+                    age_days = (datetime.now() - last_update).days
+                    if age_days < _SYSTEM_CONTEXT_REFRESH_DAYS:
+                        return {"stored": 0}
+                    # Stale — delete old facts and fall through to re-collect
+                    logger.info(
+                        "[MemoryMixin] system context is %d days old, refreshing...",
+                        age_days,
+                    )
+                    self._memory_store.delete_by_source("system")
+                except Exception:
+                    return {"stored": 0}
+            else:
+                return {"stored": 0}
 
         # Collect system information
         try:
@@ -1471,12 +1496,20 @@ class MemoryMixin:
         ctx = self._memory_context
         sections = []
 
-        # 0. System context (global only — always included first so the agent
-        #    has self-awareness about the host system from day 0)
+        # 0a. System context (global only — always included first so the agent
+        #     has self-awareness about the host system from day 0)
         sys_items = self._memory_store.get_by_category("system", context="global", limit=20)
         if sys_items:
             sys_lines = [f"  - {s['content']}" for s in sys_items]
             sections.append("System environment:\n" + "\n".join(sys_lines))
+
+        # 0b. User profile (global) — who the user is
+        profile_items = self._memory_store.get_by_category(
+            "profile", context="global", limit=15
+        )
+        if profile_items:
+            profile_lines = [f"  - {p['content']}" for p in profile_items]
+            sections.append("User profile:\n" + "\n".join(profile_lines))
 
         # 1-4. User-created sections (preference, fact, skill, error)
         user_sections: list = []
@@ -1530,7 +1563,7 @@ class MemoryMixin:
             if not user_sections:
                 result += (
                     "\nNo personal memories stored yet."
-                    " Start building your knowledge base by remembering what the user tells you.\n"
+                    " Run `gaia memory bootstrap` to introduce yourself to GAIA.\n"
                 )
         else:
             result = (

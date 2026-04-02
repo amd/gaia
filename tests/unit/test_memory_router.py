@@ -695,16 +695,22 @@ class TestListKnowledgeSensitiveDefault:
 class TestConsolidateEndpoint:
     """Test POST /api/memory/consolidate endpoint."""
 
-    def test_consolidate_returns_501_when_not_implemented(self, client, test_store):
-        """POST /api/memory/consolidate returns 501 when store lacks method."""
-        if hasattr(test_store, "consolidate_old_sessions"):
-            pytest.skip("MemoryStore now implements consolidate_old_sessions")
-        resp = client.post("/api/memory/consolidate")
-        assert resp.status_code == 501
+    @pytest.fixture(autouse=True)
+    def reset_consolidate_fn(self):
+        """Ensure _consolidate_fn is None before and after each test."""
+        memory_router_mod._consolidate_fn = None
+        yield
+        memory_router_mod._consolidate_fn = None
 
-    def test_consolidate_returns_200_when_implemented(self, client, test_store):
-        """POST /api/memory/consolidate returns 200 with store method present."""
-        test_store.consolidate_old_sessions = lambda max_sessions=5: {
+    def test_consolidate_returns_503_when_no_agent(self, client):
+        """POST /api/memory/consolidate returns 503 when no agent is registered."""
+        resp = client.post("/api/memory/consolidate")
+        assert resp.status_code == 503
+        assert "agent session" in resp.json()["detail"].lower()
+
+    def test_consolidate_returns_200_when_agent_registered(self, client):
+        """POST /api/memory/consolidate returns 200 when _consolidate_fn is set."""
+        memory_router_mod._consolidate_fn = lambda max_sessions=5: {
             "consolidated": 2,
             "extracted_items": 8,
         }
@@ -714,31 +720,31 @@ class TestConsolidateEndpoint:
         assert data["consolidated"] == 2
         assert data["extracted_items"] == 8
 
-    def test_consolidate_max_sessions_param(self, client, test_store):
-        """POST /api/memory/consolidate accepts max_sessions query param."""
+    def test_consolidate_max_sessions_param(self, client):
+        """POST /api/memory/consolidate passes max_sessions to the callback."""
         captured = {}
 
         def mock_consolidate(max_sessions=5):
             captured["max_sessions"] = max_sessions
             return {"consolidated": 0, "extracted_items": 0}
 
-        test_store.consolidate_old_sessions = mock_consolidate
+        memory_router_mod._consolidate_fn = mock_consolidate
         resp = client.post("/api/memory/consolidate?max_sessions=10")
         assert resp.status_code == 200
         assert captured["max_sessions"] == 10
 
-    def test_consolidate_max_sessions_validation(self, client, test_store):
+    def test_consolidate_max_sessions_validation(self, client):
         """POST /api/memory/consolidate rejects invalid max_sessions."""
         assert client.post("/api/memory/consolidate?max_sessions=0").status_code == 422
         assert client.post("/api/memory/consolidate?max_sessions=51").status_code == 422
 
-    def test_consolidate_runtime_error_returns_500(self, client, test_store):
+    def test_consolidate_runtime_error_returns_500(self, client):
         """POST /api/memory/consolidate returns 500 on internal errors."""
 
         def boom(max_sessions=5):
             raise RuntimeError("LLM connection failed")
 
-        test_store.consolidate_old_sessions = boom
+        memory_router_mod._consolidate_fn = boom
         resp = client.post("/api/memory/consolidate")
         assert resp.status_code == 500
         assert "RuntimeError" in resp.json()["detail"]
@@ -798,16 +804,22 @@ class TestRebuildEmbeddingsEndpoint:
 class TestReconcileEndpoint:
     """Test POST /api/memory/reconcile endpoint."""
 
-    def test_reconcile_returns_501_when_not_implemented(self, client, test_store):
-        """POST /api/memory/reconcile returns 501 without store method."""
-        if hasattr(test_store, "reconcile"):
-            pytest.skip("MemoryStore now implements reconcile")
-        resp = client.post("/api/memory/reconcile")
-        assert resp.status_code == 501
+    @pytest.fixture(autouse=True)
+    def reset_reconcile_fn(self):
+        """Ensure _reconcile_fn is None before and after each test."""
+        memory_router_mod._reconcile_fn = None
+        yield
+        memory_router_mod._reconcile_fn = None
 
-    def test_reconcile_returns_200_when_implemented(self, client, test_store):
-        """POST /api/memory/reconcile returns 200 with mock method."""
-        test_store.reconcile = lambda: {
+    def test_reconcile_returns_503_when_no_agent(self, client):
+        """POST /api/memory/reconcile returns 503 when no agent is registered."""
+        resp = client.post("/api/memory/reconcile")
+        assert resp.status_code == 503
+        assert "agent session" in resp.json()["detail"].lower()
+
+    def test_reconcile_returns_200_when_agent_registered(self, client):
+        """POST /api/memory/reconcile returns 200 when _reconcile_fn is set."""
+        memory_router_mod._reconcile_fn = lambda: {
             "pairs_checked": 10,
             "reinforced": 3,
             "contradicted": 1,
@@ -820,13 +832,13 @@ class TestReconcileEndpoint:
         assert data["pairs_checked"] == 10
         assert data["contradicted"] == 1
 
-    def test_reconcile_runtime_error_returns_500(self, client, test_store):
+    def test_reconcile_runtime_error_returns_500(self, client):
         """POST /api/memory/reconcile returns 500 on internal errors."""
 
         def boom():
             raise ValueError("Invalid embedding dimension")
 
-        test_store.reconcile = boom
+        memory_router_mod._reconcile_fn = boom
         resp = client.post("/api/memory/reconcile")
         assert resp.status_code == 500
 
