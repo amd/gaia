@@ -31,7 +31,8 @@ Five minutes. No setup beyond `gaia chat`. Here's what a second brain feels like
     ```
     You: "Remember that I'm working on the GAIA memory system
           and I prefer detailed code examples"
-    Agent: Stored as a fact and a preference.
+    Agent: "Got it! I've noted that you're working on the GAIA memory
+            system and that you prefer detailed code examples."
     ```
   </Step>
 
@@ -47,7 +48,8 @@ Five minutes. No setup beyond `gaia chat`. Here's what a second brain feels like
     ```
     You: "Remember: standup tomorrow at 10am, Sarah is presenting
           the API migration results"
-    Agent: Stored as a reminder with a due date, linked to person:sarah.
+    Agent: "Done -- I'll remind you about the standup tomorrow and
+            I've linked Sarah to this note."
     ```
   </Step>
 
@@ -153,13 +155,13 @@ Stores a new fact, preference, error pattern, or skill in persistent memory.
 
 ```
 You: "Remember that Sarah's email is sarah@company.com"
-Agent: Stored as a fact, linked to entity person:sarah_chen
+Agent: "Saved -- I've linked that to Sarah's contact profile."
 
 You: "I have a course starting on March 25th"
-Agent: Stored with due_at=2026-03-25, will remind you when it's coming up
+Agent: "Noted. I'll remind you as it gets closer."
 
 You: "I always want dark mode in code examples"
-Agent: Stored as a preference, applied to future sessions
+Agent: "Got it, I'll apply that preference going forward."
 ```
 
 ### recall
@@ -174,17 +176,21 @@ You: "What do you know about Sarah?"
 Agent: [recalls all entries linked to entity person:sarah_chen]
 ```
 
-Recall also supports **temporal filtering** with `time_from` and `time_to`. The agent converts natural language dates to time ranges automatically:
+Recall also supports **temporal filtering** with `time_from` and `time_to`. The agent converts natural language dates to concrete time ranges using the current date it always knows:
 
 ```
 You: "What did we discuss about deployment last week?"
-Agent: [computes last week's date range, searches within that window]
+Agent: "Last week you pushed the staging deploy and hit a kubectl
+        permissions error. You resolved it by adding the service
+        account role."
 
-You: "What errors have I seen today?"
-Agent: [filters to today's date, category=error]
+You: "What errors have I seen this week?"
+Agent: "Two errors this week: a missing pytest conftest.py on Monday,
+        and a Docker build failure yesterday due to a stale cache."
 
 You: "What meetings did I have in March?"
-Agent: [recalls notes with domain=meeting from March 1-31]
+Agent: "Four standups in March: API migration (Sarah), two design
+        reviews, and the Q2 planning kickoff on the 28th."
 ```
 
 ### update_memory
@@ -193,10 +199,13 @@ Modifies an existing memory entry. The agent uses `recall` first to find the ID,
 
 ```
 You: "Actually, we switched from React to Vue"
-Agent: [recalls the React fact, updates content to "Project uses Vue 3"]
+Agent: "Updated -- I've changed your project's framework from React to Vue 3."
+       [agent recalls the React fact, updates it in place, marks old as superseded]
 
-Agent: "By the way, your course starts in 3 days."
-Agent: [internally calls update_memory to set reminded_at so it won't repeat]
+You: "What's today looking like?"
+Agent: "You have a busy afternoon. By the way, your online course
+        starts in 3 days -- just a heads-up."
+       [agent internally marks reminded_at so it won't surface this again]
 ```
 
 ### forget
@@ -214,10 +223,17 @@ Searches across all past conversation sessions by keyword, time range, or both.
 
 ```
 You: "What did we discuss about database migration?"
-Agent: [searches conversation history for "database migration"]
+Agent: "Found 3 conversations mentioning database migration:
+        two sessions last month about the Postgres schema, and
+        one this week where you decided to add a new index."
 
-You: "Show me what we talked about in the last 7 days"
-Agent: [retrieves recent conversations from the past week]
+You: "What did we talk about in the last 7 days?"
+Agent: "This week's conversations covered: code review for the
+        auth module, debugging the CI pipeline, and planning
+        the Q2 dashboard."
+
+You: "What were we working on in March?"
+Agent: [searches conversation turns from March 1-31 and summarizes]
 ```
 
 ---
@@ -234,7 +250,7 @@ Log your work at the end of the day. Recall it weeks later without digging throu
 You: "Log today's work: finished the memory spec, reviewed analysis docs,
       pushed the feature branch. Still blocked on the CI lint step."
 
-Agent: Stored as a note with domain=journal, dated 2026-04-01.
+Agent: "Logged. I'll remember this when you ask about your work history."
 
 — Two weeks later —
 
@@ -279,7 +295,7 @@ You: "Save this: the Hindsight paper shows that cross-encoder reranking
       after RRF fusion gives 91.4% accuracy on LongMemEval. Key insight:
       independent encoders miss fine-grained relevance signals."
 
-Agent: Stored as a fact with domain=research.
+Agent: "Saved. I'll surface that when you ask about retrieval or search accuracy."
 
 — Later —
 
@@ -297,21 +313,21 @@ Set reminders with due dates. The agent surfaces them proactively -- even if you
 
 ```
 You: "Remind me to submit the expense report by Friday"
-Agent: Stored as a reminder with due_at=Friday.
+Agent: "Done -- I'll make sure to mention it before Friday."
 
 — Thursday afternoon, talking about code —
 
 You: "Can you refactor this function?"
 Agent: "Sure, here's the refactored version. By the way,
-        your expense report is due tomorrow."
+        your expense report is due tomorrow -- don't forget to submit it."
 ```
 
-Recurring reminders work too -- the agent advances the date each time:
+Recurring reminders work too -- the agent advances the date automatically each time it fires:
 
 ```
 You: "Remind me to do a weekly review every Friday at 5pm"
-Agent: Stored with due_at=next Friday 5pm.
-       After each reminder, the agent advances due_at to the following Friday.
+Agent: "Set. I'll remind you every Friday at 5pm and roll it
+        forward automatically after each reminder."
 ```
 
 ### Contact Profiles
@@ -320,12 +336,12 @@ Build knowledge about people across conversations. The agent links everything to
 
 ```
 You: "Sarah Chen is the VP of Engineering, her email is sarah@company.com"
-Agent: Stored as a fact linked to person:sarah_chen, email marked sensitive.
+Agent: "Got it -- I've saved Sarah's info. Her email is stored privately."
 
 — Another conversation —
 
 You: "Sarah prefers morning meetings and likes detailed agendas"
-Agent: Added to person:sarah_chen profile.
+Agent: "Added to Sarah's profile."
 
 — Later —
 
@@ -342,7 +358,7 @@ When a tool fails, the agent remembers the error pattern and avoids it next time
 Session 1:
 Agent runs: import torch
 Error: ModuleNotFoundError: No module named 'torch'
-Agent: [auto-stores error pattern]
+[agent silently stores this as an error pattern to avoid in future]
 
 Session 2:
 You: "Can you test this PyTorch model?"
@@ -392,10 +408,10 @@ The agent's system prompt always includes `global` items plus items from the act
 
 ```
 You: "Switch to my personal context"
-Agent: Context switched from work to personal
+Agent: "Switched to your personal context."
 
 You: "Remember that my dentist appointment is Thursday at 2pm"
-Agent: Stored in personal context with due_at
+Agent: "Done -- dentist appointment Thursday at 2pm, stored in your personal context."
 ```
 
 <Tip>
@@ -419,7 +435,7 @@ The agent can still access sensitive data when you explicitly ask for it via `re
 
 ```
 You: "Remember Sarah's email is sarah@company.com, mark it as sensitive"
-Agent: Stored as sensitive fact, linked to person:sarah_chen
+Agent: "Saved -- I've marked Sarah's email as private and linked it to her profile."
 ```
 
 <Warning>
@@ -458,7 +474,7 @@ The agent always knows the current date and time. It can track commitments and d
 ```
 Day 1:
 You: "I have a course starting next Tuesday"
-Agent: Stored with due_at=2026-03-25
+Agent: "Noted -- I'll remind you as it gets closer."
 
 Day 5 (3 days before):
 You: "What's the weather like?"
@@ -475,7 +491,7 @@ The agent can hold you accountable to your own commitments:
 
 ```
 You: "I committed to exercising 3 times this week"
-Agent: Stored with due_at set to end of week
+Agent: "Holding you to it! I'll check in at the end of the week."
 
 Friday evening:
 You: "Let's plan the weekend"
@@ -571,11 +587,14 @@ The dashboard also provides maintenance tools for keeping your memory healthy:
 
 Every memory entry has a confidence score from 0.0 to 1.0:
 
-- **0.4** -- LLM-extracted (automatically captured from conversation)
-- **0.4** -- system discovery (found during bootstrap scan)
-- **0.5** -- tool-stored (agent explicitly remembered it)
-- **0.5** -- consolidation (distilled from old conversation sessions)
-- **0.8** -- user-created (you manually added it via dashboard)
+| Source | Confidence | How created |
+|--------|-----------|-------------|
+| LLM-extracted | **0.4** | Automatically captured from conversation |
+| Discovery | **0.4** | Found during bootstrap system scan |
+| Tool-stored | **0.5** | Agent explicitly called `remember()` |
+| Error auto | **0.5** | Automatically stored from tool failure |
+| Consolidation | **0.5** | Distilled from old conversation sessions |
+| User-created | **0.8** | Manually added via the dashboard |
 
 Each time a memory is recalled, its confidence increases by +0.02. Frequently-used memories become more prominent in the system prompt.
 
@@ -589,8 +608,8 @@ When facts change, the old version is preserved with a `superseded_by` link. You
 
 ```
 March: "Project uses React 18"
-  → superseded by: "Project uses React 19" (April)
-    → superseded by: "Project uses Vue 3" (May)
+  -> superseded by: "Project uses React 19" (April)
+    -> superseded by: "Project uses Vue 3" (May)
 ```
 
 Each version keeps its original timestamp, so you can answer "what framework were we using in March?"
