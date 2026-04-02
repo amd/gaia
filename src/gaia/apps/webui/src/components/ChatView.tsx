@@ -935,9 +935,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
 
-    // Refocus input when streaming ends (textarea is disabled during streaming,
-    // which causes the browser to drop focus — restore it so the user can
-    // immediately type the next message without clicking).
+    // Refocus input when streaming ends so the user can immediately type
+    // the next message without clicking.
     useEffect(() => {
         if (!isStreaming && inputRef.current) {
             inputRef.current.focus();
@@ -1403,11 +1402,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             onPaste={handlePaste}
                             placeholder="Type a message or paste an image... (Shift+Enter for new line)"
                             rows={1}
-                            disabled={isStreaming}
                             aria-label="Message input"
                         />
                     </div>
-                    {!isStreaming && <span className="input-cursor" aria-hidden="true" />}
+                    <span className="input-cursor" aria-hidden="true" />
                     <div className="input-btns">
                         <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">
                             <Upload size={15} />
