@@ -405,10 +405,16 @@ No documents are currently indexed.
 - You have opinions and you share them. You're not afraid to be playful, sarcastic (lightly), or funny.
 - You keep it short. One good sentence beats three mediocre ones. Don't ramble.
 - Match your response length to the complexity of the question. For short questions, greetings, or simple factual lookups, reply in 1-2 sentences. Only expand to multiple paragraphs for complex analysis requests.
-- **GREETING RULE (ABSOLUTE):** When user sends a short greeting ("Hi!", "Hello", "Hey", "Hi there", etc.) as their first message: respond with 1-2 sentences MAXIMUM. NEVER list features, tools, or capabilities. NEVER mention Stable Diffusion, image generation, or any specific feature unprompted. Just greet back and ask what they need.
-  WRONG: "Hey! What are you working on? I'm here to assist with document analysis, code editing, data work, and general research. If you're looking to generate images using Stable Diffusion, here are examples: - A futuristic robot kitten..." ← BANNED, verbose feature pitch on a greeting
+- **GREETING RULE:** When user sends a short greeting ("Hi!", "Hello", "Hey") as their first message: respond with 1-2 sentences MAXIMUM. NEVER list features or capabilities.
+  If you have memories about the user (name, project, recent activity), USE THEM to personalize:
+  RIGHT: "Hey Jordan! How's that K8s migration going?" (references stored name + project)
+  RIGHT: "Hi Sam — still on the object detection pipeline?" (warm, contextual, shows you remember)
+  If no memories exist yet, keep it simple:
   RIGHT: "Hey! What are you working on?"
-  RIGHT: "Hey — what do you need?"
+- **FACT-SHARING RULE:** When the user shares personal information ("I'm Sam", "I work at X", "I use Python"), this is NOT a greeting. You MUST respond to the specific content they shared. NEVER reply with a generic "What are you working on?" — acknowledge what they told you.
+  WRONG: "Got it, Sam! What are you working on?" ← ignores what they actually said
+  RIGHT: "Nice — NeuralStack, cool. What are you building there?" (acknowledges company name)
+  RIGHT: "Python and PyTorch — solid stack. What kind of models?" (references the tech they mentioned)
 - HARD LIMIT: For capability questions ("what can you help with?", "what can you help me with?", "what do you do?", "what can you do?", "what do you help with?"): EXACTLY 1-2 sentences. STOP after 2 sentences. No exceptions, no follow-up questions, no paragraph breaks, no bullet lists.
   WRONG (too long): "I can help with a ton of stuff — from answering questions to analyzing files.\\n\\nIf you've got documents, I can look at them.\\n\\nNeed help writing? Want to explore ideas? Just tell me." ← 5 sentences, FAIL
   RIGHT: "I help with document Q&A, file analysis, writing, data work, and general research — what are you working on?"
@@ -1130,6 +1136,7 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
         for _name in _chat_only_fileio:
             _TOOL_REGISTRY.pop(_name, None)
         self._register_external_tools_conditional()  # Web/doc search (if backends available)
+        self._register_loop_control_tools()  # set_loop_state, request_user_input
 
         # Inline list_files — only the safe subset of ProjectManagementMixin
         @tool
@@ -1633,6 +1640,100 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
                         )
             except Exception as _mcp_err:
                 logger.warning("MCP server load failed: %s", _mcp_err)
+
+    def _register_loop_control_tools(self) -> None:
+        """Register set_loop_state and request_user_input tools for autonomous mode.
+
+        These tools are only meaningful when the agent runs inside AgentLoop, but
+        they are always registered so the LLM sees them in the system prompt and
+        can call them safely even in manual/interactive sessions (they no-op in
+        that context because the console has no loop_state_directive attribute).
+        """
+        from gaia.agents.base.tools import tool
+
+        _agent = self
+
+        @tool
+        def set_loop_state(
+            state: str,
+            reason: str = "",
+            wake_in_seconds: int = 0,
+        ) -> str:
+            """Signal the autonomous loop what to do next.
+
+            Call this when you have finished all current work or need to pause.
+            Only effective when running inside the AgentLoop (autonomous mode).
+
+            Args:
+                state: "idle"      — nothing more to do right now.
+                       "scheduled" — wake me up in wake_in_seconds seconds.
+                       "paused"    — stop the autonomous loop (user must restart).
+                reason: Human-readable explanation (shown in activity log).
+                wake_in_seconds: Seconds until next wakeup (only for "scheduled").
+                    Minimum: 30. Maximum: 86400 (24 hours).
+            """
+            valid_states = {"idle", "scheduled", "paused"}
+            if state not in valid_states:
+                return f"Invalid state '{state}'. Must be one of: {sorted(valid_states)}"
+
+            # Clamp wake_in_seconds for "scheduled" state
+            if state == "scheduled":
+                wake_in_seconds = max(30, min(86400, wake_in_seconds))
+                if wake_in_seconds != wake_in_seconds:  # unreachable — kept for clarity
+                    pass
+
+            if hasattr(_agent.console, "loop_state_directive"):
+                _agent.console.loop_state_directive = {
+                    "directive": state,
+                    "reason": reason,
+                    "wake_in_seconds": wake_in_seconds,
+                }
+
+            msg = f"Loop state set to '{state}'."
+            if reason:
+                msg += f" Reason: {reason}"
+            if state == "scheduled":
+                msg += f" Next wakeup in {wake_in_seconds}s."
+            return msg
+
+        @tool
+        def request_user_input(
+            message: str,
+            choices: list = None,
+            default_if_no_response: str = None,
+            timeout_seconds: int = 300,
+            continue_if_no_response: bool = True,
+        ) -> str:
+            """Ask the user a question and wait for their response.
+
+            Args:
+                message: The question to present to the user.
+                choices: Optional list of choices (renders as buttons in the UI).
+                default_if_no_response: Value to use if no response received before
+                    timeout. If not set and continue_if_no_response=True, returns
+                    "__NO_RESPONSE__". Always check the return value.
+                timeout_seconds: How long to wait (min 10, default 300).
+                continue_if_no_response: If True, continue after timeout.
+                    If False, the loop pauses until user re-engages.
+
+            Returns:
+                User's response, chosen option, or "__NO_RESPONSE__" on timeout.
+                ALWAYS check for "__NO_RESPONSE__" before proceeding.
+            """
+            console = _agent.console
+            if hasattr(console, "request_user_input_blocking"):
+                return console.request_user_input_blocking(
+                    message=message,
+                    choices=choices,
+                    default_if_no_response=default_if_no_response,
+                    timeout_seconds=timeout_seconds,
+                    continue_if_no_response=continue_if_no_response,
+                )
+            # Fallback for non-SSE consoles (interactive sessions)
+            try:
+                return input(f"\n[Agent asking]: {message}\n> ").strip() or "__NO_RESPONSE__"
+            except (EOFError, OSError):
+                return default_if_no_response if default_if_no_response is not None else "__NO_RESPONSE__"
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools
