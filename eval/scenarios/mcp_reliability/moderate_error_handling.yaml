@@ -1,0 +1,33 @@
+id: mcp_error_handling
+name: "Error Handling -- Tool Call Failure Recovery"
+category: mcp_reliability
+severity: high
+description: |
+  Agent is asked to perform an action that will trigger a tool error
+  (e.g., accessing a nonexistent resource). Tests whether the agent handles
+  the error gracefully and reports it to the user.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask agent to access a resource that does not exist"
+    user_message: "Can you read the file at /nonexistent/path/fake_report.pdf?"
+    ground_truth:
+      expected_behavior: "Agent attempts the tool call, receives an error, and reports it gracefully without crashing"
+    success_criteria: |
+      Agent attempts to call a file-reading tool with the given path.
+      When the tool returns an error (file not found), the agent reports the
+      error gracefully to the user.
+      PASS if agent attempts the tool call AND gracefully reports the failure.
+      PARTIAL PASS (score 7-8) if agent correctly states the file does not exist
+      without attempting the tool call.
+      FAIL if agent crashes, hangs, or fabricates content from the nonexistent file.
+      FAIL if agent enters an infinite retry loop.
+
+expected_outcome: |
+  Agent handles the tool error gracefully, informs the user the file was not
+  found, and remains responsive for further requests.

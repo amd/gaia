@@ -851,6 +851,100 @@ def _show_interactive_menu(log=None):
         print("  Run 'gaia --help' for all commands.")
 
 
+def _print_reliability_summary(scorecards, pass_threshold=0.90):
+    """Print a reliability summary table from multiple eval iteration scorecards.
+
+    Groups scenario results across iterations and computes per-scenario pass rates.
+    Prints a colorized table and a GO/NO_GO readiness signal.
+    """
+    import json
+    from collections import defaultdict
+
+    # Collect per-scenario results across all iterations
+    by_scenario = defaultdict(list)
+    for sc in scorecards:
+        if not sc:
+            continue
+        for result in sc.get("scenarios", []):
+            sid = result.get("scenario_id", "unknown")
+            by_scenario[sid].append(result.get("status", "ERRORED"))
+
+    if not by_scenario:
+        print("\n[RELIABILITY] No scenario results to aggregate.")
+        return
+
+    n_iterations = sum(1 for sc in scorecards if sc)
+
+    # Compute pass rates
+    rows = []
+    all_pass = True
+    for sid in sorted(by_scenario.keys()):
+        statuses = by_scenario[sid]
+        pass_count = sum(1 for s in statuses if s == "PASS")
+        total = len(statuses)
+        rate = pass_count / total if total > 0 else 0.0
+        passed = rate >= pass_threshold
+        if not passed:
+            all_pass = False
+        rows.append((sid, pass_count, total, rate, passed))
+
+    # Print table
+    print(f"\n{'=' * 72}")
+    print(f"  MCP RELIABILITY SUMMARY  ({n_iterations} iterations)")
+    print(f"{'=' * 72}")
+    print(f"  {'Scenario':<40} {'Pass Rate':>12} {'Result':>8}")
+    print(f"  {'-' * 40} {'-' * 12} {'-' * 8}")
+
+    for sid, pass_count, total, rate, passed in rows:
+        rate_str = f"{pass_count}/{total} ({rate:.0%})"
+        if passed:
+            result_str = f"\033[32m{'PASS':>8}\033[0m"
+        else:
+            result_str = f"\033[31m{'FAIL':>8}\033[0m"
+        print(f"  {sid:<40} {rate_str:>12} {result_str}")
+
+    print(f"  {'-' * 40} {'-' * 12} {'-' * 8}")
+
+    # Readiness signal
+    if all_pass:
+        print(
+            f"\n  Readiness: \033[32mGO\033[0m (all scenarios >= {pass_threshold:.0%})"
+        )
+    else:
+        failing = sum(1 for _, _, _, _, p in rows if not p)
+        print(
+            f"\n  Readiness: \033[31mNO_GO\033[0m ({failing} scenario(s) below {pass_threshold:.0%})"
+        )
+    print(f"{'=' * 72}\n")
+
+    # Write reliability_report.json alongside the last run's results
+    last_sc = next((sc for sc in reversed(scorecards) if sc), None)
+    if last_sc:
+        from gaia.eval.runner import RESULTS_DIR
+
+        report = {
+            "iterations": n_iterations,
+            "pass_threshold": pass_threshold,
+            "readiness": "GO" if all_pass else "NO_GO",
+            "scenarios": [
+                {
+                    "scenario_id": sid,
+                    "pass_count": pc,
+                    "total": t,
+                    "iteration_pass_rate": r,
+                    "status": "PASS" if p else "FAIL",
+                }
+                for sid, pc, t, r, p in rows
+            ],
+        }
+        report_path = RESULTS_DIR / "reliability_report.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(f"[RELIABILITY] Report saved → {report_path}")
+
+
 def main():
     import argparse
 
@@ -2011,6 +2105,13 @@ Examples:
         "--capture-session",
         metavar="SESSION_ID",
         help="Convert an Agent UI session from the database into a YAML scenario file",
+    )
+    agent_eval_parser.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Run each scenario N times for reliability measurement (default: 1)",
     )
 
     # Add new subparser for generating summary reports from evaluation directories
@@ -3916,31 +4017,63 @@ Let me know your answer!
                     print(f"[ERROR] {e}")
                 return
 
+            iterations = getattr(args, "iterations", 1)
+            fix_mode = getattr(args, "fix", False)
+
+            if iterations < 1:
+                print("Error: --iterations must be >= 1", file=sys.stderr)
+                return
+
+            if iterations > 1 and fix_mode:
+                print(
+                    "Error: --fix is incompatible with --iterations > 1. "
+                    "Fix mode operates on a single run's failures.",
+                    file=sys.stderr,
+                )
+                return
+
             from gaia.eval.runner import AgentEvalRunner
 
-            runner = AgentEvalRunner(
-                backend_url=args.backend,
-                model=args.model,
-                budget_per_scenario=args.budget,
-                timeout_per_scenario=args.timeout,
-            )
-            scorecard = runner.run(
-                scenario_id=getattr(args, "scenario", None),
-                category=getattr(args, "category", None),
-                audit_only=getattr(args, "audit_only", False),
-                fix_mode=getattr(args, "fix", False),
-                max_fix_iterations=getattr(args, "max_fix_iterations", 3),
-                target_pass_rate=getattr(args, "target_pass_rate", 0.90),
-            )
+            all_scorecards = []
+            for iter_idx in range(iterations):
+                if iterations > 1:
+                    print(f"\n{'=' * 60}")
+                    print(f"[ITER] Iteration {iter_idx + 1}/{iterations}")
+                    print(f"{'=' * 60}")
+
+                runner = AgentEvalRunner(
+                    backend_url=args.backend,
+                    model=args.model,
+                    budget_per_scenario=args.budget,
+                    timeout_per_scenario=args.timeout,
+                )
+                scorecard = runner.run(
+                    scenario_id=getattr(args, "scenario", None),
+                    category=getattr(args, "category", None),
+                    audit_only=getattr(args, "audit_only", False),
+                    fix_mode=fix_mode,
+                    max_fix_iterations=getattr(args, "max_fix_iterations", 3),
+                    target_pass_rate=getattr(args, "target_pass_rate", 0.90),
+                )
+                all_scorecards.append(scorecard)
+
+            if iterations > 1 and all_scorecards:
+                _print_reliability_summary(
+                    all_scorecards,
+                    pass_threshold=getattr(args, "target_pass_rate", 0.90),
+                )
+
             # --save-baseline: copy scorecard to eval/results/baseline.json
-            if getattr(args, "save_baseline", False) and scorecard:
+            # (saves the last iteration's scorecard)
+            last_scorecard = all_scorecards[-1] if all_scorecards else None
+            if getattr(args, "save_baseline", False) and last_scorecard:
                 import json
 
                 from gaia.eval.runner import RESULTS_DIR
 
                 baseline_path = RESULTS_DIR / "baseline.json"
                 baseline_path.write_text(
-                    json.dumps(scorecard, indent=2, ensure_ascii=False),
+                    json.dumps(last_scorecard, indent=2, ensure_ascii=False),
                     encoding="utf-8",
                 )
                 print(f"[BASELINE] Saved baseline → {baseline_path}")
