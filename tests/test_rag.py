@@ -893,6 +893,283 @@ class TestMemoryLimits:
                 assert file_path in rag2.file_index_times
 
 
+class TestCacheSecurity:
+    """Test cache security: JSON format, HMAC integrity, and legacy pickle cleanup."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Mock external dependencies."""
+        with (
+            patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
+            patch("gaia.rag.sdk.PdfReader") as mock_pdf,
+            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
+            patch("gaia.rag.sdk.faiss") as mock_faiss,
+            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
+        ):
+            mock_vlm_instance = Mock()
+            mock_vlm_instance.check_availability.return_value = False
+            mock_vlm_class.return_value = mock_vlm_instance
+
+            mock_lemonade_instance = Mock()
+            mock_lemonade_instance.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+            mock_lemonade.return_value = mock_lemonade_instance
+
+            mock_pdf_instance = Mock()
+            mock_pdf_instance.pages = [Mock()]
+            mock_pdf_instance.pages[0].extract_text.return_value = (
+                "Sample PDF content for testing."
+            )
+            mock_pdf.return_value = mock_pdf_instance
+
+            mock_embedder = Mock()
+            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
+            mock_st.return_value = mock_embedder
+
+            mock_index = Mock()
+            mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
+            mock_faiss.IndexFlatL2.return_value = mock_index
+
+            mock_chat_response = Mock()
+            mock_chat_response.text = "Mocked LLM response"
+            mock_chat_response.stats = {"tokens": 50}
+            mock_chat_instance = Mock()
+            mock_chat_instance.send.return_value = mock_chat_response
+            mock_chat.return_value = mock_chat_instance
+
+            yield {
+                "pdf": mock_pdf,
+                "embedder": mock_embedder,
+                "index": mock_index,
+                "chat": mock_chat_instance,
+                "vlm": mock_vlm_instance,
+                "lemonade": mock_lemonade_instance,
+            }
+
+    def test_cache_uses_json_not_pickle(self, mock_dependencies):
+        """Test that cache files are saved as JSON, not pickle."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                result = rag.index_document(str(fake_pdf))
+                assert result["success"] is True
+
+                # Verify .json cache exists (not .pkl)
+                cache_files = list(Path(temp_dir).glob("*.json"))
+                pkl_files = list(Path(temp_dir).glob("*.pkl"))
+                assert len(cache_files) > 0, "Expected .json cache file"
+                assert len(pkl_files) == 0, "Should not create .pkl files"
+
+                # Verify .json.sig signature file exists
+                sig_files = list(Path(temp_dir).glob("*.json.sig"))
+                assert len(sig_files) > 0, "Expected .json.sig signature file"
+
+    def test_cache_roundtrip_json(self, mock_dependencies):
+        """Test that data survives JSON serialize/deserialize cycle correctly."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Test data with various types
+                test_data = {
+                    "chunks": ["chunk 1", "chunk 2 with unicode: \u00e9\u00e0\u00fc"],
+                    "full_text": "Full document text here.",
+                    "metadata": {"num_pages": 5, "vlm_pages": 0, "vlm_checked": True},
+                }
+
+                cache_path = os.path.join(temp_dir, "test_cache.json")
+                rag._save_cache(cache_path, test_data)
+
+                loaded = rag._verify_and_load_cache(cache_path)
+                assert loaded["chunks"] == test_data["chunks"]
+                assert loaded["full_text"] == test_data["full_text"]
+                assert loaded["metadata"] == test_data["metadata"]
+
+    def test_tampered_cache_rejected(self, mock_dependencies):
+        """Test that a tampered cache file is rejected on load."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Save valid cache
+                cache_path = os.path.join(temp_dir, "test_cache.json")
+                rag._save_cache(
+                    cache_path,
+                    {"chunks": ["original"], "full_text": "", "metadata": {}},
+                )
+
+                # Tamper with the cache file
+                with open(cache_path, "w") as f:
+                    f.write('{"chunks": ["TAMPERED"], "full_text": "", "metadata": {}}')
+
+                # Load should fail with integrity error
+                with pytest.raises(ValueError, match="integrity check failed"):
+                    rag._verify_and_load_cache(cache_path)
+
+    def test_missing_signature_rejected(self, mock_dependencies):
+        """Test that cache without signature file is rejected."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Save valid cache
+                cache_path = os.path.join(temp_dir, "test_cache.json")
+                rag._save_cache(
+                    cache_path,
+                    {"chunks": ["data"], "full_text": "", "metadata": {}},
+                )
+
+                # Delete the signature file
+                os.remove(cache_path + ".sig")
+
+                # Load should fail
+                with pytest.raises(ValueError, match="signature file missing"):
+                    rag._verify_and_load_cache(cache_path)
+
+    def test_legacy_pickle_cache_deleted(self, mock_dependencies):
+        """Test that legacy .pkl cache files are deleted during indexing."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        import pickle
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                # Get the cache path and create a legacy .pkl file
+                cache_path = rag._get_cache_path(str(fake_pdf))
+                pkl_path = cache_path.replace(".json", ".pkl")
+
+                # Create a legacy pickle cache file
+                with open(pkl_path, "wb") as f:
+                    pickle.dump(
+                        {"chunks": ["old"], "full_text": "", "metadata": {}}, f
+                    )
+
+                assert os.path.exists(pkl_path), "Legacy .pkl file should exist"
+
+                # Index the document — should delete the legacy .pkl file
+                result = rag.index_document(str(fake_pdf))
+                assert result["success"] is True
+
+                # Legacy .pkl should be gone
+                assert not os.path.exists(pkl_path), "Legacy .pkl file should be deleted"
+
+                # New .json cache should exist
+                assert os.path.exists(cache_path), "New .json cache should be created"
+
+    def test_malicious_pickle_not_loaded(self, mock_dependencies):
+        """Test that even if a malicious .pkl file exists, it's deleted not loaded."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        import pickle
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                # Create a malicious pickle that would create a marker file
+                cache_path = rag._get_cache_path(str(fake_pdf))
+                pkl_path = cache_path.replace(".json", ".pkl")
+                marker_path = os.path.join(temp_dir, "EXPLOIT_MARKER")
+
+                class MaliciousPayload:
+                    def __reduce__(self):
+                        return (open, (marker_path, "w"))
+
+                with open(pkl_path, "wb") as f:
+                    pickle.dump(
+                        {
+                            "chunks": [],
+                            "full_text": "",
+                            "metadata": {},
+                            "trigger": MaliciousPayload(),
+                        },
+                        f,
+                    )
+
+                # Index the document — should delete .pkl, NOT execute it
+                result = rag.index_document(str(fake_pdf))
+                assert result["success"] is True
+
+                # Verify the exploit did NOT run
+                assert not os.path.exists(
+                    marker_path
+                ), "Malicious pickle payload should NOT have been executed"
+
+                # Verify .pkl was cleaned up
+                assert not os.path.exists(pkl_path), "Legacy .pkl should be deleted"
+
+    def test_index_document_reindexes_on_tampered_cache(self, mock_dependencies):
+        """Test that index_document falls back to re-indexing when cache is tampered."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                # First: index normally to create valid cache
+                result1 = rag.index_document(str(fake_pdf))
+                assert result1["success"] is True
+
+                # Tamper with the cache
+                cache_path = rag._get_cache_path(str(fake_pdf))
+                with open(cache_path, "w") as f:
+                    f.write("TAMPERED DATA")
+
+                # Reset state to force cache re-load
+                rag2 = RAGSDK(config)
+                result2 = rag2.index_document(str(fake_pdf))
+
+                # Should succeed by re-indexing (not loading tampered cache)
+                assert result2["success"] is True
+                assert len(rag2.chunks) > 0
+
+
 if __name__ == "__main__":
     # Run tests
     pytest.main([__file__, "-v"])
