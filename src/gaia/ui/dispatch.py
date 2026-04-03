@@ -20,7 +20,7 @@ from uuid import uuid4
 logger = logging.getLogger(__name__)
 
 # Maximum time (seconds) to wait for a dependency job to reach a terminal state.
-_DEPENDENCY_TIMEOUT = 60.0
+_DEPENDENCY_TIMEOUT = 600.0
 
 # Polling interval (seconds) when waiting for a dependency.
 _DEPENDENCY_POLL_INTERVAL = 0.2

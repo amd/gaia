@@ -221,17 +221,70 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                     model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False
                 )
 
+        def _warmup_prompt_cache():
+            """Send a warmup inference to populate Lemonade's prompt cache.
+
+            Constructs a ChatAgent to generate the full system prompt
+            (including tool descriptions), sends a single-token completion,
+            then discards the agent.  Lemonade's LCP-based prompt cache
+            stores the KV state so the first real user message only
+            processes the delta (~30 new tokens instead of ~7,400).
+
+            Safe to import ChatAgent here because _load_model has already
+            completed (dependency chain enforced by DispatchQueue).  The
+            model is loaded, so LemonadeManager.ensure_ready() is a no-op
+            — see the exclusion comment in _import_modules above.
+            """
+            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+            from gaia.llm.lemonade_client import LemonadeClient
+            from gaia.ui.routers.system import _DEFAULT_MODEL_NAME
+
+            model_id = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
+
+            config = ChatAgentConfig(
+                model_id=model_id,
+                streaming=False,
+                silent_mode=True,
+                debug=False,
+                rag_documents=[],
+            )
+            agent = ChatAgent(config)
+            system_prompt = agent.system_prompt
+
+            try:
+                LemonadeClient(verbose=False).chat_completions(
+                    model=model_id,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": "Hi"},
+                    ],
+                    max_completion_tokens=1,
+                    stream=False,
+                )
+            finally:
+                # Explicitly clean up MCP connections — ChatAgent.__del__
+                # only stops file watchers, not MCP subprocesses.
+                if hasattr(agent, "_mcp_manager") and agent._mcp_manager:
+                    agent._mcp_manager.disconnect_all()
+
         # Dispatch startup tasks.  Jobs A and B run in parallel; Job C
-        # waits for A (needs Lemonade reachable) before loading the model.
+        # waits for A (needs Lemonade reachable) before loading the model;
+        # Job D waits for C before warming the prompt cache.
         lemonade_id = queue.dispatch(
             "Checking LLM server", _check_lemonade, visible=True
         )
         queue.dispatch("Loading ML libraries", _import_modules, visible=True)
-        queue.dispatch(
+        load_model_id = queue.dispatch(
             "Loading AI model",
             _load_model,
             visible=True,
             depends_on=lemonade_id,
+        )
+        queue.dispatch(
+            "Preparing AI assistant",
+            _warmup_prompt_cache,
+            visible=True,
+            depends_on=load_model_id,
         )
 
         # Start document file monitor for auto re-indexing
