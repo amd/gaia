@@ -126,6 +126,32 @@ async def system_status(db: ChatDatabase = Depends(get_db)):
                     if legacy_ctx is not None:
                         status.model_context_size = legacy_ctx
 
+                # Fallback: if /health didn't report model_loaded, check
+                # /v1/models for llama.cpp-style backends that list loaded models
+                # under a "models" key (not "data").
+                if not status.model_loaded:
+                    try:
+                        v1_resp = await client.get(f"{base_url}/models", timeout=5.0)
+                        if v1_resp.status_code == 200:
+                            v1_data = v1_resp.json()
+                            # llama.cpp uses {"models": [...]} with "model" field
+                            for m in v1_data.get("models", []):
+                                m_name = m.get("model") or m.get("id") or ""
+                                if m_name and "embed" not in m_name.lower():
+                                    status.model_loaded = m_name
+                                    status.model_downloaded = True
+                                    break
+                            # Also check OpenAI-style {"data": [...]}
+                            if not status.model_loaded:
+                                for m in v1_data.get("data", []):
+                                    m_id = m.get("id", "")
+                                    if m_id and "embed" not in m_id.lower():
+                                        status.model_loaded = m_id
+                                        status.model_downloaded = True
+                                        break
+                    except Exception:
+                        pass
+
                 # Fetch model catalog for size, labels, and fallback context size
                 models_resp = await client.get(f"{base_url}/models")
                 if models_resp.status_code == 200:
