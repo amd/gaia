@@ -510,8 +510,24 @@ NEVER write JSON blocks in your response text. NEVER simulate or fake tool outpu
 If you are unsure which document a user refers to and documents are already indexed, call query_specific_file or query_documents — do NOT generate fake JSON to simulate a search.
 """
 
-        # ── Tier 1: Discovery rules (always present — LLM needs these for registered RAG tools) ──
-        discovery_rules = """
+        # ── Tier 1: Discovery / file rules — only when file context exists ──
+        # Without indexed docs or a library, the full 3000-token discovery ruleset
+        # is wasted tokens (pure-chat / memory-only sessions).  Show a compact hint
+        # instead, and keep the full rules for when files are actually relevant.
+        has_file_context = has_indexed or has_library or bool(
+            getattr(self, "watch_directories", [])
+        )
+
+        if not has_file_context:
+            discovery_rules = """
+**FILE & DOCUMENT SEARCH (no files loaded):**
+If user asks about files or domain-specific documents: search_file (find) → index_document → query_specific_file/query_documents.
+- After index_document, IMMEDIATELY call query_specific_file — never answer from filename alone.
+- For CSV/Excel: use analyze_data_file (not RAG query tools).
+- deep_search=true only if quick search finds nothing.
+"""
+        else:
+            discovery_rules = """
 **SMART DISCOVERY WORKFLOW:**
 When user asks a domain-specific question (e.g., "what is the PTO policy?"):
 1. Check if relevant documents are indexed
@@ -618,7 +634,7 @@ You: {"tool": "index_document", "tool_args": {"file_path": "C:/Docs/User-Guide.p
 You: {"answer": "Indexed User-Guide.pdf. You can now ask questions about it!"}
 
 **DIRECTORY INDEXING:** When user asks to index a folder: search_directory → show matches → index_directory → report results.
-"""
+"""  # end else (has_file_context)
 
         # ── Tier 2: RAG query rules (only when documents are indexed) ──
         rag_query_rules = ""
@@ -819,8 +835,11 @@ When user uses a reference to a file already found/indexed in a PRIOR turn ("the
 - RIGHT: query_specific_file("api_reference.py", "authentication method")
 """
 
-        # ── Data analysis and file rules (always present) ──
-        data_file_rules = """
+        # ── Data analysis and file rules (only when file context exists) ──
+        if not has_file_context:
+            data_file_rules = ""
+        else:
+            data_file_rules = """
 **FILE ANALYSIS AND DATA PROCESSING:**
 When user asks to analyze data files (bank statements, spreadsheets, expense reports, CSV sales data):
 1. First find the files using search_file or list_recent_files
@@ -879,7 +898,7 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
   BANNED RESPONSE (NEVER SAY): "I can generate images when the --sd flag is active" / "image generation requires --sd" / "I can create images for you" — ANY claim about availability before attempting.
   MANDATORY: When user asks "can you generate an image?" or asks you to create any image, you MUST call generate_image FIRST. If it returns an error, THEN report it is unavailable. NEVER claim you can or cannot generate images without first attempting the call. Your first response to any image request must be the tool call, not a text explanation.
   AFTER FAILURE: If generate_image returns an error, respond in 1-2 sentences: state it is unavailable and optionally mention enabling --sd. DO NOT apologize, DO NOT explain what you "would have done". Example: "Image generation is not available in this session — start GAIA with the --sd flag to enable it."
-"""
+"""  # end else (has_file_context)
 
         prompt = (
             base_prompt

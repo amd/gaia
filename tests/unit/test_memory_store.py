@@ -4648,8 +4648,13 @@ class TestBackfillEmbeddings:
         """backfill_embeddings() embeds all items missing embeddings."""
         import numpy as np
 
-        store.store(category="fact", content="The authentication service uses OAuth tokens")
-        store.store(category="fact", content="Database schema migrations run on startup automatically")
+        store.store(
+            category="fact", content="The authentication service uses OAuth tokens"
+        )
+        store.store(
+            category="fact",
+            content="Database schema migrations run on startup automatically",
+        )
 
         def embed_fn(text: str) -> bytes:
             return np.ones(768, dtype=np.float32).tobytes()
@@ -4663,10 +4668,15 @@ class TestBackfillEmbeddings:
         """backfill_embeddings() only processes items with embedding IS NULL."""
         import numpy as np
 
-        kid = store.store(category="fact", content="Monitoring alerts trigger via PagerDuty on-call")
+        kid = store.store(
+            category="fact", content="Monitoring alerts trigger via PagerDuty on-call"
+        )
         vec = np.random.rand(768).astype(np.float32)
         store.store_embedding(kid, vec.tobytes())
-        store.store(category="fact", content="CI pipeline runs unit tests before deployment staging")
+        store.store(
+            category="fact",
+            content="CI pipeline runs unit tests before deployment staging",
+        )
 
         call_count = 0
 
@@ -4682,8 +4692,13 @@ class TestBackfillEmbeddings:
 
     def test_continues_on_embed_failure(self, store):
         """backfill_embeddings() skips items whose embed_fn raises, returns partial count."""
-        store.store(category="fact", content="Redis cache stores session tokens with TTL expiry")
-        store.store(category="fact", content="Load balancer distributes traffic across availability zones")
+        store.store(
+            category="fact", content="Redis cache stores session tokens with TTL expiry"
+        )
+        store.store(
+            category="fact",
+            content="Load balancer distributes traffic across availability zones",
+        )
 
         import numpy as np
 

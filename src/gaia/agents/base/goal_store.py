@@ -46,33 +46,33 @@ logger = logging.getLogger(__name__)
 
 GoalStatus = Literal[
     "pending_approval",  # agent-inferred; awaiting user approve/reject
-    "queued",            # approved and waiting to start
-    "in_progress",       # agent is actively working on this goal
-    "completed",         # all tasks done successfully
-    "failed",            # attempted but could not complete
-    "rejected",          # user declined the agent-inferred goal
-    "cancelled",         # abandoned after being queued or in-progress
+    "queued",  # approved and waiting to start
+    "in_progress",  # agent is actively working on this goal
+    "completed",  # all tasks done successfully
+    "failed",  # attempted but could not complete
+    "rejected",  # user declined the agent-inferred goal
+    "cancelled",  # abandoned after being queued or in-progress
 ]
 
 TaskStatus = Literal[
-    "queued",       # waiting to start
+    "queued",  # waiting to start
     "in_progress",  # currently executing
-    "completed",    # done successfully
-    "failed",       # could not complete
-    "blocked",      # waiting on a dependency or external resource
-    "cancelled",    # abandoned before completion
+    "completed",  # done successfully
+    "failed",  # could not complete
+    "blocked",  # waiting on a dependency or external resource
+    "cancelled",  # abandoned before completion
 ]
 
 GoalSource = Literal[
-    "user",              # set explicitly by the user
-    "agent_inferred",    # agent observed context and inferred this goal
-    "agent_scheduled",   # follow-up created by the agent from a completed goal
+    "user",  # set explicitly by the user
+    "agent_inferred",  # agent observed context and inferred this goal
+    "agent_scheduled",  # follow-up created by the agent from a completed goal
 ]
 
 AgentMode = Literal[
-    "manual",       # no autonomous activity — chat only
+    "manual",  # no autonomous activity — chat only
     "goal_driven",  # execute user-approved goals in background
-    "autonomous",   # agent creates and executes its own goals
+    "autonomous",  # agent creates and executes its own goals
 ]
 
 Priority = Literal["low", "medium", "high"]
@@ -316,15 +316,26 @@ class GoalStore:
                     approved_for_auto, priority, progress_notes, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)""",
                 (
-                    goal_id, title, description, status, source, mode_required,
-                    int(approved_for_auto), priority, now, now,
+                    goal_id,
+                    title,
+                    description,
+                    status,
+                    source,
+                    mode_required,
+                    int(approved_for_auto),
+                    priority,
+                    now,
+                    now,
                 ),
             )
             conn.commit()
 
         logger.debug(
             "[GoalStore] created goal %s (%r) source=%s status=%s",
-            goal_id, title, source, status,
+            goal_id,
+            title,
+            source,
+            status,
         )
         return self.get_goal(goal_id)
 
@@ -379,16 +390,10 @@ class GoalStore:
         now = _now_iso()
         with self._lock:
             conn = self._get_conn()
-            if progress_notes is not None:
-                conn.execute(
-                    "UPDATE goals SET status=?, progress_notes=?, updated_at=? WHERE id=?",
-                    (status, progress_notes, now, goal_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE goals SET status=?, updated_at=? WHERE id=?",
-                    (status, now, goal_id),
-                )
+            conn.execute(
+                "UPDATE goals SET status=?, progress_notes=COALESCE(?, progress_notes), updated_at=? WHERE id=?",
+                (status, progress_notes, now, goal_id),
+            )
             conn.commit()
         return self.get_goal(goal_id)
 
@@ -413,12 +418,13 @@ class GoalStore:
         """Cancel a queued or in-progress goal."""
         return self.update_goal_status(goal_id, "cancelled")
 
-    def delete_goal(self, goal_id: str) -> None:
-        """Hard-delete a goal and all its tasks (CASCADE)."""
+    def delete_goal(self, goal_id: str) -> bool:
+        """Hard-delete a goal and all its tasks (CASCADE). Returns True if deleted."""
         with self._lock:
             conn = self._get_conn()
-            conn.execute("DELETE FROM goals WHERE id=?", (goal_id,))
+            cursor = conn.execute("DELETE FROM goals WHERE id=?", (goal_id,))
             conn.commit()
+        return cursor.rowcount > 0
 
     # ------------------------------------------------------------------
     # Task CRUD
@@ -441,9 +447,7 @@ class GoalStore:
                    VALUES (?, ?, ?, 'queued', ?, NULL, ?, ?)""",
                 (task_id, goal_id, description, order_index, now, now),
             )
-            conn.execute(
-                "UPDATE goals SET updated_at=? WHERE id=?", (now, goal_id)
-            )
+            conn.execute("UPDATE goals SET updated_at=? WHERE id=?", (now, goal_id))
             conn.commit()
         return self.get_task(task_id)
 
@@ -451,9 +455,7 @@ class GoalStore:
         """Return a task by ID or None."""
         with self._lock:
             conn = self._get_conn()
-            row = conn.execute(
-                "SELECT * FROM tasks WHERE id=?", (task_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             return self._row_to_task(row) if row else None
 
     def update_task_status(
@@ -466,17 +468,10 @@ class GoalStore:
         now = _now_iso()
         with self._lock:
             conn = self._get_conn()
-            if result is not None:
-                conn.execute(
-                    "UPDATE tasks SET status=?, result=?, updated_at=? WHERE id=?",
-                    (status, result, now, task_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE tasks SET status=?, updated_at=? WHERE id=?",
-                    (status, now, task_id),
-                )
-            # Touch the parent goal's updated_at
+            conn.execute(
+                "UPDATE tasks SET status=?, result=COALESCE(?, result), updated_at=? WHERE id=?",
+                (status, result, now, task_id),
+            )
             conn.execute(
                 "UPDATE goals SET updated_at=? "
                 "WHERE id=(SELECT goal_id FROM tasks WHERE id=?)",
@@ -505,14 +500,12 @@ class GoalStore:
         """
         with self._lock:
             conn = self._get_conn()
-            rows = conn.execute(
-                """SELECT * FROM goals
+            rows = conn.execute("""SELECT * FROM goals
                    WHERE approved_for_auto = 1
                      AND status IN ('queued', 'in_progress')
                    ORDER BY
                      CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
-                     created_at ASC"""
-            ).fetchall()
+                     created_at ASC""").fetchall()
             return [self._row_to_goal(r) for r in rows]
 
     def get_next_task(self, goal_id: str) -> Optional[Task]:
@@ -558,7 +551,7 @@ class GoalStore:
             ).fetchall()
         return {
             "goals": {r["status"]: r["n"] for r in goal_rows},
-            "tasks":  {r["status"]: r["n"] for r in task_rows},
+            "tasks": {r["status"]: r["n"] for r in task_rows},
         }
 
     def close(self) -> None:

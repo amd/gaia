@@ -2084,7 +2084,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
             # finds clean input, and before the response is stored in
             # conversation_history so the thinking text never bleeds into the
             # next turn and confuses the model about the current user message.
-            response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+            response = re.sub(
+                r"<think>.*?</think>", "", response, flags=re.DOTALL
+            ).strip()
 
             # Print the LLM response to the console
             logger.debug(f"LLM response: {response[:200]}...")

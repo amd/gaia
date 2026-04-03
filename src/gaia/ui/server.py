@@ -50,6 +50,7 @@ from .document_monitor import DocumentMonitor
 from .routers import chat as chat_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
+from .agent_loop import agent_loop
 from .routers import goals as goals_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
@@ -192,6 +193,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         asyncio.create_task(_preload_modules())
 
+        # Start autonomous agent loop
+        await agent_loop.start(db=db, app_state=app.state)
+        logger.info("AgentLoop started")
+
         # Start document file monitor for auto re-indexing
         monitor = DocumentMonitor(
             db=db,
@@ -206,6 +211,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         yield
 
         # Shutdown
+        await agent_loop.stop()
+        logger.info("AgentLoop stopped")
         await monitor.stop()
         logger.info("Document file monitor stopped")
         db.close()

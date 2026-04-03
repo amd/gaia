@@ -2036,6 +2036,11 @@ Examples:
         metavar="SESSION_ID",
         help="Convert an Agent UI session from the database into a YAML scenario file",
     )
+    agent_eval_parser.add_argument(
+        "--keep-sessions",
+        action="store_true",
+        help="Do not delete Agent UI sessions after eval — leave them for manual inspection",
+    )
 
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
@@ -2487,6 +2492,27 @@ Examples:
     )
     mcp_docker_parser.add_argument(
         "--verbose", action="store_true", help="Enable verbose logging"
+    )
+
+    # MCP serve command (Agent UI MCP server)
+    mcp_serve_parser = mcp_subparsers.add_parser(
+        "serve", help="Start Agent UI MCP server (wraps the Agent UI backend)"
+    )
+    mcp_serve_parser.add_argument(
+        "--host", default="localhost", help="Host to bind to (default: localhost)"
+    )
+    mcp_serve_parser.add_argument(
+        "--port", type=int, default=8766, help="Port to listen on (default: 8766)"
+    )
+    mcp_serve_parser.add_argument(
+        "--backend",
+        default="http://localhost:4200",
+        help="GAIA Agent UI backend URL (default: http://localhost:4200)",
+    )
+    mcp_serve_parser.add_argument(
+        "--stdio",
+        action="store_true",
+        help="Use stdio transport instead of HTTP (for Claude Code / eval runner integration)",
     )
 
     # MCP Client commands (connect to external MCP servers)
@@ -4003,6 +4029,7 @@ Let me know your answer!
                 fix_mode=getattr(args, "fix", False),
                 max_fix_iterations=getattr(args, "max_fix_iterations", 3),
                 target_pass_rate=getattr(args, "target_pass_rate", 0.90),
+                keep_sessions=getattr(args, "keep_sessions", False),
             )
             # --save-baseline: copy scorecard to eval/results/baseline.json
             if getattr(args, "save_baseline", False) and scorecard:
@@ -6328,7 +6355,11 @@ def _bootstrap_infer():
                             f"(refresh threshold: {_INFER_REFRESH_DAYS} days)."
                         )
                         try:
-                            resp = input("  Re-run inference anyway? [y/N]: ").strip().lower()
+                            resp = (
+                                input("  Re-run inference anyway? [y/N]: ")
+                                .strip()
+                                .lower()
+                            )
                         except (EOFError, KeyboardInterrupt):
                             print("\nInference cancelled.")
                             return
@@ -6342,9 +6373,7 @@ def _bootstrap_infer():
 
     # Explicit consent for browser history access
     try:
-        consent = input(
-            "  Read browser history for inference? [Y/n]: "
-        ).strip().lower()
+        consent = input("  Read browser history for inference? [Y/n]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print("\nInference cancelled.")
         return
@@ -6368,7 +6397,9 @@ def _bootstrap_infer():
                 for item in browser_results[:40]:
                     # content is "Frequently visited: domain.com (N visits)"
                     lines.append(f"  {item['content']}")
-                sections.append("BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines))
+                sections.append(
+                    "BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines)
+                )
         except Exception:
             pass
 
@@ -6381,7 +6412,7 @@ def _bootstrap_infer():
             for item in app_results:
                 content = item.get("content", "")
                 if content.startswith("Installed app: "):
-                    apps.append(content[len("Installed app: "):].strip())
+                    apps.append(content[len("Installed app: ") :].strip())
             if apps:
                 sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
     except Exception:
@@ -6410,7 +6441,9 @@ def _bootstrap_infer():
                 if not item.get("sensitive") and item.get("content"):
                     manifest_lines.append(f"  {item['content']}")
             if manifest_lines:
-                sections.append("PROJECT MANIFESTS (sample):\n" + "\n".join(manifest_lines))
+                sections.append(
+                    "PROJECT MANIFESTS (sample):\n" + "\n".join(manifest_lines)
+                )
     except Exception:
         pass
 
@@ -6419,7 +6452,10 @@ def _bootstrap_infer():
         userassist_results = discovery.scan_windows_userassist()
         if userassist_results:
             lines = [f"  {item['content']}" for item in userassist_results[:20]]
-            sections.append("FREQUENTLY LAUNCHED APPS (actual usage frequency):\n" + "\n".join(lines))
+            sections.append(
+                "FREQUENTLY LAUNCHED APPS (actual usage frequency):\n"
+                + "\n".join(lines)
+            )
     except Exception:
         pass
 
@@ -6451,7 +6487,9 @@ def _bootstrap_infer():
     prompt_sections = "\n\n".join(sections)
     prompt = _INFER_PROMPT.format(sections=prompt_sections)
 
-    print("  Calling local LLM for insights (this may take ~30s)...", end="", flush=True)
+    print(
+        "  Calling local LLM for insights (this may take ~30s)...", end="", flush=True
+    )
     try:
         llm = create_client()
         raw_response = llm.chat(
@@ -6706,7 +6744,10 @@ def _bootstrap_reset():
 
 def _bootstrap_system(force: bool = True):
     """Re-scan system context and store facts in memory (no LLM required)."""
-    from gaia.agents.base.memory import _system_context_is_enabled, _save_memory_settings
+    from gaia.agents.base.memory import (
+        _save_memory_settings,
+        _system_context_is_enabled,
+    )
     from gaia.agents.base.memory_store import MemoryStore
     from gaia.agents.base.system_context import collect_system_info
 
@@ -6720,7 +6761,9 @@ def _bootstrap_system(force: bool = True):
             print("\nCancelled.")
             return
         if choice != "y":
-            print("Skipped. Run 'gaia memory bootstrap --reset-system' to manage this setting.")
+            print(
+                "Skipped. Run 'gaia memory bootstrap --reset-system' to manage this setting."
+            )
             return
         _save_memory_settings({"system_context_enabled": True})
         print("✅ System context collection re-enabled.\n")
@@ -6746,6 +6789,7 @@ def _bootstrap_system(force: bool = True):
         return
 
     import logging as _logging
+
     _store_logger = _logging.getLogger("gaia.agents.base.memory_store")
     _orig_level = _store_logger.level
 
@@ -6814,7 +6858,11 @@ def _bootstrap_reset_system():
                 print(f"  ... and {count - 10} more.")
 
             try:
-                choice = input(f"\nDelete all {count} system context entries? [y/N]: ").strip().lower()
+                choice = (
+                    input(f"\nDelete all {count} system context entries? [y/N]: ")
+                    .strip()
+                    .lower()
+                )
             except (EOFError, KeyboardInterrupt):
                 print("\nCancelled.")
                 return
@@ -6832,9 +6880,13 @@ def _bootstrap_reset_system():
     currently_enabled = _system_context_is_enabled()
     if currently_enabled:
         try:
-            choice = input(
-                "\nDisable automatic system context collection on startup? [y/N]: "
-            ).strip().lower()
+            choice = (
+                input(
+                    "\nDisable automatic system context collection on startup? [y/N]: "
+                )
+                .strip()
+                .lower()
+            )
         except (EOFError, KeyboardInterrupt):
             print()
             return
@@ -6844,7 +6896,9 @@ def _bootstrap_reset_system():
             print("✅ System context collection disabled.")
             print("   Run 'gaia memory bootstrap --system' to re-enable and refresh.")
         else:
-            print("Auto-collection remains enabled — system context will be re-collected on next startup.")
+            print(
+                "Auto-collection remains enabled — system context will be re-collected on next startup."
+            )
     else:
         print("\nAuto-collection is already disabled.")
         try:
@@ -6884,6 +6938,8 @@ def handle_mcp_command(args):
         handle_mcp_agent(args)
     elif args.mcp_action == "docker":
         handle_mcp_docker(args)
+    elif args.mcp_action == "serve":
+        handle_mcp_serve(args)
     elif args.mcp_action == "add":
         handle_mcp_add(args)
     elif args.mcp_action == "list":
@@ -7471,6 +7527,53 @@ def handle_mcp_docker(args):
     except Exception as e:
         log.error(f"Error starting Docker MCP server: {e}")
         print(f"❌ Error starting Docker MCP server: {e}")
+
+
+def handle_mcp_serve(args):
+    """Start the Agent UI MCP server (wraps the GAIA Agent UI REST API)."""
+    log = get_logger(__name__)
+
+    try:
+        from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
+
+        mcp = create_agent_ui_mcp(backend_url=args.backend)
+
+        if args.stdio:
+            print(
+                "Starting GAIA Agent UI MCP Server (stdio mode)...",
+                file=__import__("sys").stderr,
+            )
+            mcp.run(transport="stdio")
+        else:
+            mcp.settings.host = args.host
+            mcp.settings.port = args.port
+
+            print("=" * 60)
+            print("🤖 GAIA Agent UI MCP Server")
+            print("=" * 60)
+            print(f"   Backend : {args.backend}")
+            print(f"   MCP     : http://{args.host}:{args.port}/mcp")
+            try:
+                tool_count = len(
+                    mcp._tool_manager._tools
+                )  # pylint: disable=protected-access
+                print(f"   Tools   : {tool_count} registered")
+            except Exception:
+                pass
+            print("\nPress Ctrl+C to stop")
+            print("=" * 60)
+            mcp.run(transport="streamable-http")
+
+    except KeyboardInterrupt:
+        print("\n✅ Agent UI MCP server stopped")
+    except ImportError as e:
+        log.error(f"Failed to import Agent UI MCP server: {e}")
+        print("❌ Error: Could not load Agent UI MCP server")
+        print(f"   {e}")
+        print("   Make sure the Agent UI backend is running: gaia chat --ui")
+    except Exception as e:
+        log.error(f"Error starting Agent UI MCP server: {e}")
+        print(f"❌ Error starting Agent UI MCP server: {e}")
 
 
 def handle_mcp_add(args):

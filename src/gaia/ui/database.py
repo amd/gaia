@@ -233,7 +233,15 @@ class ChatDatabase:
             self._conn.execute(
                 """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (session_id, title, now, now, model, system_prompt, 1 if private else 0),
+                (
+                    session_id,
+                    title,
+                    now,
+                    now,
+                    model,
+                    system_prompt,
+                    1 if private else 0,
+                ),
             )
 
             # Attach documents if provided

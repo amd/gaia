@@ -77,6 +77,16 @@ export interface ModelStatus {
 export interface Settings {
     custom_model: string | null;
     model_status: ModelStatus | null;
+    /** Persisted context window size override (tokens). null = use default 32768. */
+    context_size: number | null;
+}
+
+/** Status of the GAIA Agent UI MCP server (exposes UI tools to Claude Code etc.). */
+export interface AgentMCPServerStatus {
+    running: boolean;
+    port: number;
+    pid: number | null;
+    url: string | null;
 }
 
 export interface SystemStatus {

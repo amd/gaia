@@ -782,7 +782,9 @@ class TestRebuildEmbeddingsEndpoint:
             pytest.skip("MemoryStore now implements backfill_embeddings")
         mock_provider = MagicMock()
         mock_provider.embed.return_value = [[0.1] * 768]
-        with patch("gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider):
+        with patch(
+            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
+        ):
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 500
 
@@ -794,7 +796,9 @@ class TestRebuildEmbeddingsEndpoint:
         }
         mock_provider = MagicMock()
         mock_provider.embed.return_value = [[0.1] * 768]
-        with patch("gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider):
+        with patch(
+            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
+        ):
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 200
         data = resp.json()
@@ -810,7 +814,9 @@ class TestRebuildEmbeddingsEndpoint:
         test_store.backfill_embeddings = boom
         mock_provider = MagicMock()
         mock_provider.embed.return_value = [[0.1] * 768]
-        with patch("gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider):
+        with patch(
+            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
+        ):
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 500
 

@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, AgentMCPServerStatus } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -462,4 +462,21 @@ export async function getMCPCatalog(): Promise<{ catalog: MCPCatalogEntry[] }> {
 
 export async function getMCPRuntimeStatus(): Promise<{ servers: MCPServerStatus[] }> {
     return apiFetch('GET', '/mcp/status');
+}
+
+// -- Agent UI MCP Server (exposes Agent UI as MCP tools for Claude Code etc.) -----------
+
+export async function getAgentMCPServerStatus(): Promise<AgentMCPServerStatus> {
+    return apiFetch('GET', '/mcp/agent-server/status');
+}
+
+export async function startAgentMCPServer(port?: number, backendUrl?: string): Promise<AgentMCPServerStatus & { status: string }> {
+    const body: Record<string, unknown> = {};
+    if (port !== undefined) body.port = port;
+    if (backendUrl !== undefined) body.backend_url = backendUrl;
+    return apiFetch('POST', '/mcp/agent-server/start', Object.keys(body).length ? body : undefined);
+}
+
+export async function stopAgentMCPServer(): Promise<{ status: string; pid?: number }> {
+    return apiFetch('POST', '/mcp/agent-server/stop');
 }

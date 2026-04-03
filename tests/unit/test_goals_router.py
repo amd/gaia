@@ -25,7 +25,6 @@ from fastapi.testclient import TestClient
 import gaia.ui.routers.goals as goals_router_mod
 from gaia.agents.base.goal_store import GoalStore
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -56,9 +55,14 @@ def client(goal_store):
 
 
 def _create_goal(client, title="Test goal", source="user", priority="medium"):
-    resp = client.post("/api/goals", json={
-        "title": title, "description": "desc", "priority": priority,
-    })
+    resp = client.post(
+        "/api/goals",
+        json={
+            "title": title,
+            "description": "desc",
+            "priority": priority,
+        },
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()
 
@@ -137,14 +141,20 @@ class TestListGoals:
 class TestCreateGoal:
 
     def test_create_returns_201(self, client):
-        resp = client.post("/api/goals", json={"title": "New goal", "description": "desc"})
+        resp = client.post(
+            "/api/goals", json={"title": "New goal", "description": "desc"}
+        )
         assert resp.status_code == 201
 
     def test_create_goal_fields(self, client):
-        resp = client.post("/api/goals", json={
-            "title": "Refactor auth", "description": "Split JWT logic",
-            "priority": "high",
-        })
+        resp = client.post(
+            "/api/goals",
+            json={
+                "title": "Refactor auth",
+                "description": "Split JWT logic",
+                "priority": "high",
+            },
+        )
         data = resp.json()
         assert data["title"] == "Refactor auth"
         assert data["status"] == "queued"
@@ -157,9 +167,14 @@ class TestCreateGoal:
         assert resp.status_code == 422
 
     def test_create_invalid_priority_rejected(self, client):
-        resp = client.post("/api/goals", json={
-            "title": "X", "description": "Y", "priority": "critical",
-        })
+        resp = client.post(
+            "/api/goals",
+            json={
+                "title": "X",
+                "description": "Y",
+                "priority": "critical",
+            },
+        )
         assert resp.status_code == 422
 
 
@@ -248,8 +263,9 @@ class TestTasks:
 
     def test_add_task_returns_201(self, client):
         goal = _create_goal(client)
-        resp = client.post(f"/api/goals/{goal['id']}/tasks",
-                           json={"description": "First step"})
+        resp = client.post(
+            f"/api/goals/{goal['id']}/tasks", json={"description": "First step"}
+        )
         assert resp.status_code == 201
         task = resp.json()
         assert task["description"] == "First step"
@@ -257,28 +273,30 @@ class TestTasks:
 
     def test_add_task_empty_description_rejected(self, client):
         goal = _create_goal(client)
-        resp = client.post(f"/api/goals/{goal['id']}/tasks",
-                           json={"description": "  "})
+        resp = client.post(f"/api/goals/{goal['id']}/tasks", json={"description": "  "})
         assert resp.status_code == 422
 
     def test_add_task_to_missing_goal_returns_404(self, client):
-        resp = client.post("/api/goals/no-such/tasks",
-                           json={"description": "A task"})
+        resp = client.post("/api/goals/no-such/tasks", json={"description": "A task"})
         assert resp.status_code == 404
 
     def test_update_task_status(self, client):
         goal = _create_goal(client)
         task = _add_task(client, goal["id"])
-        resp = client.put(f"/api/goals/{goal['id']}/tasks/{task['id']}",
-                          json={"status": "in_progress"})
+        resp = client.put(
+            f"/api/goals/{goal['id']}/tasks/{task['id']}",
+            json={"status": "in_progress"},
+        )
         assert resp.status_code == 200
         assert resp.json()["status"] == "in_progress"
 
     def test_update_task_with_result(self, client):
         goal = _create_goal(client)
         task = _add_task(client, goal["id"])
-        resp = client.put(f"/api/goals/{goal['id']}/tasks/{task['id']}",
-                          json={"status": "completed", "result": "Done in 3s."})
+        resp = client.put(
+            f"/api/goals/{goal['id']}/tasks/{task['id']}",
+            json={"status": "completed", "result": "Done in 3s."},
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "completed"
@@ -288,22 +306,25 @@ class TestTasks:
         """When the last task completes, the goal should be auto-completed."""
         goal = _create_goal(client)
         task = _add_task(client, goal["id"])
-        client.put(f"/api/goals/{goal['id']}/tasks/{task['id']}",
-                   json={"status": "completed"})
+        client.put(
+            f"/api/goals/{goal['id']}/tasks/{task['id']}", json={"status": "completed"}
+        )
         resp = client.get(f"/api/goals/{goal['id']}")
         assert resp.json()["status"] == "completed"
 
     def test_update_task_invalid_status_rejected(self, client):
         goal = _create_goal(client)
         task = _add_task(client, goal["id"])
-        resp = client.put(f"/api/goals/{goal['id']}/tasks/{task['id']}",
-                          json={"status": "flying"})
+        resp = client.put(
+            f"/api/goals/{goal['id']}/tasks/{task['id']}", json={"status": "flying"}
+        )
         assert resp.status_code == 422
 
     def test_update_missing_task_returns_404(self, client):
         goal = _create_goal(client)
-        resp = client.put(f"/api/goals/{goal['id']}/tasks/no-task",
-                          json={"status": "completed"})
+        resp = client.put(
+            f"/api/goals/{goal['id']}/tasks/no-task", json={"status": "completed"}
+        )
         assert resp.status_code == 404
 
 

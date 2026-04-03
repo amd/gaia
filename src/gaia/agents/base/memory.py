@@ -1857,7 +1857,10 @@ class MemoryMixin:
             sensitive: str = "false",
             entity: str = "",
         ) -> dict:
-            """Store a fact, preference, or learning in persistent memory. Categories: fact, preference, error, skill, note, reminder. Use due_at for time-sensitive items (ISO 8601). Use context to scope (work, personal). Use sensitive=true for private data. Use entity for linking (person:name, app:name)."""
+            """Store a fact, preference, or learning in persistent memory.
+            Categories: fact, preference, error, skill, note, reminder.
+            due_at: ISO 8601 for reminders. context: work/personal scope.
+            sensitive=true for private data. entity: person:name, app:name."""
             if getattr(mixin, "_incognito", False):
                 return {
                     "status": "skipped",

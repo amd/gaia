@@ -527,7 +527,9 @@ def rebuild_embeddings() -> Dict:
         return result
     except Exception as exc:
         logger.error("[memory router] rebuild-embeddings failed: %s", exc)
-        raise HTTPException(500, f"Embedding rebuild failed: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            500, f"Embedding rebuild failed: {type(exc).__name__}: {exc}"
+        )
 
 
 _RECONCILIATION_PROMPT = """\
@@ -564,7 +566,8 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
             return _reconcile_fn()
         except Exception as exc:
             logger.warning(
-                "[memory router] agent reconcile failed, falling back to standalone: %s", exc
+                "[memory router] agent reconcile failed, falling back to standalone: %s",
+                exc,
             )
 
     # Standalone path — build a temporary FAISS index from stored embeddings
@@ -656,7 +659,9 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
                     meta_b = json.loads(meta_b) if meta_b else {}
                 except Exception:
                     meta_b = {}
-            if id_b in meta_a.get("reconciled_with", []) or id_a in meta_b.get("reconciled_with", []):
+            if id_b in meta_a.get("reconciled_with", []) or id_a in meta_b.get(
+                "reconciled_with", []
+            ):
                 continue
 
             try:
@@ -676,6 +681,7 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
                 raw = raw.strip()
                 # Strip <think> blocks from reasoning models
                 import re as _re
+
                 raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
                 if raw.startswith("```"):
                     raw = _re.sub(r"^```(?:json)?\s*", "", raw)
@@ -826,7 +832,9 @@ def refresh_system_context() -> Dict:
 
     except Exception as exc:
         logger.error("[memory router] refresh-system-context failed: %s", exc)
-        raise HTTPException(500, f"System context refresh failed: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            500, f"System context refresh failed: {type(exc).__name__}: {exc}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -929,20 +937,31 @@ def stream_discovery():
                 yield _sse({"type": "log", "message": f"Scanning {label}..."})
                 scanner = scan_map.get(source_key)
                 if scanner is None:
-                    yield _sse({"type": "log", "message": f"  {label}: not available on this platform"})
+                    yield _sse(
+                        {
+                            "type": "log",
+                            "message": f"  {label}: not available on this platform",
+                        }
+                    )
                     continue
                 try:
                     items = scanner()
                     for item in items:
                         item["_source_name"] = source_key
-                        yield _sse({"type": "finding", "source": source_key, "item": item})
+                        yield _sse(
+                            {"type": "finding", "source": source_key, "item": item}
+                        )
                         total += 1
                     if items:
-                        yield _sse({"type": "log", "message": f"  Found {len(items)} item(s)"})
+                        yield _sse(
+                            {"type": "log", "message": f"  Found {len(items)} item(s)"}
+                        )
                     else:
                         yield _sse({"type": "log", "message": "  Nothing found"})
                 except Exception as e:
-                    yield _sse({"type": "error", "source": source_key, "message": str(e)})
+                    yield _sse(
+                        {"type": "error", "source": source_key, "message": str(e)}
+                    )
 
             yield _sse({"type": "done", "total": total})
 
@@ -953,7 +972,11 @@ def stream_discovery():
     return StreamingResponse(
         _generate(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -983,16 +1006,29 @@ def stream_inference(include_browser: bool = Query(False)):
                     browser_results = discovery.scan_browser_history(days=30)
                     if browser_results:
                         lines = [f"  {r['content']}" for r in browser_results[:40]]
-                        sections.append("BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines))
-                        yield _sse({"type": "log", "message": f"  Collected {len(browser_results)} domains"})
+                        sections.append(
+                            "BROWSER HISTORY (top domains, last 30 days):\n"
+                            + "\n".join(lines)
+                        )
+                        yield _sse(
+                            {
+                                "type": "log",
+                                "message": f"  Collected {len(browser_results)} domains",
+                            }
+                        )
                 except Exception as e:
-                    yield _sse({"type": "log", "message": f"  Browser history unavailable: {e}"})
+                    yield _sse(
+                        {
+                            "type": "log",
+                            "message": f"  Browser history unavailable: {e}",
+                        }
+                    )
 
             yield _sse({"type": "log", "message": "Collecting installed apps..."})
             try:
                 app_results = discovery.scan_installed_apps()
                 apps = [
-                    r["content"][len("Installed app: "):].strip()
+                    r["content"][len("Installed app: ") :].strip()
                     for r in app_results
                     if r.get("content", "").startswith("Installed app: ")
                 ]
@@ -1009,8 +1045,15 @@ def stream_inference(include_browser: bool = Query(False)):
                     ua_results = ua_scanner()
                     if ua_results:
                         lines = [f"  {r['content']}" for r in ua_results[:20]]
-                        sections.append("FREQUENTLY LAUNCHED APPS:\n" + "\n".join(lines))
-                        yield _sse({"type": "log", "message": f"  Found {len(ua_results)} usage signals"})
+                        sections.append(
+                            "FREQUENTLY LAUNCHED APPS:\n" + "\n".join(lines)
+                        )
+                        yield _sse(
+                            {
+                                "type": "log",
+                                "message": f"  Found {len(ua_results)} usage signals",
+                            }
+                        )
             except Exception:
                 pass
 
@@ -1045,7 +1088,9 @@ def stream_inference(include_browser: bool = Query(False)):
             except Exception:
                 pass
 
-            yield _sse({"type": "log", "message": "Collecting git identity & projects..."})
+            yield _sse(
+                {"type": "log", "message": "Collecting git identity & projects..."}
+            )
             try:
                 git_results = discovery.scan_git_identity()
                 non_sensitive = [r for r in git_results if not r.get("sensitive")]
@@ -1056,7 +1101,9 @@ def stream_inference(include_browser: bool = Query(False)):
                 pass
             try:
                 manifest_results = discovery.scan_project_manifests()
-                non_sensitive = [r for r in manifest_results if not r.get("sensitive")][:10]
+                non_sensitive = [r for r in manifest_results if not r.get("sensitive")][
+                    :10
+                ]
                 if non_sensitive:
                     lines = [f"  {r['content']}" for r in non_sensitive]
                     sections.append("PROJECT MANIFESTS (sample):\n" + "\n".join(lines))
@@ -1064,14 +1111,24 @@ def stream_inference(include_browser: bool = Query(False)):
                 pass
 
             if not sections:
-                yield _sse({"type": "error", "message": "No data collected — nothing to infer from."})
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": "No data collected — nothing to infer from.",
+                    }
+                )
                 yield _sse({"type": "done", "total": 0})
                 return
 
             prompt_sections = "\n\n".join(sections)
             prompt = _INFER_PROMPT.format(sections=prompt_sections)
 
-            yield _sse({"type": "log", "message": "Calling local LLM for insights (this may take ~30s)..."})
+            yield _sse(
+                {
+                    "type": "log",
+                    "message": "Calling local LLM for insights (this may take ~30s)...",
+                }
+            )
             try:
                 llm = create_client()
                 raw_response = llm.chat(
@@ -1079,10 +1136,17 @@ def stream_inference(include_browser: bool = Query(False)):
                     temperature=0.2,
                     max_new_tokens=1024,
                 )
-                if hasattr(raw_response, "__iter__") and not isinstance(raw_response, str):
+                if hasattr(raw_response, "__iter__") and not isinstance(
+                    raw_response, str
+                ):
                     raw_response = "".join(raw_response)
             except Exception as e:
-                yield _sse({"type": "error", "message": f"LLM call failed: {e}. Is Lemonade Server running?"})
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": f"LLM call failed: {e}. Is Lemonade Server running?",
+                    }
+                )
                 yield _sse({"type": "done", "total": 0})
                 return
 
@@ -1097,18 +1161,25 @@ def stream_inference(include_browser: bool = Query(False)):
                 if not isinstance(insights, list):
                     raise ValueError("Expected JSON array")
                 insights = [
-                    i for i in insights
-                    if isinstance(i, dict) and isinstance(i.get("content"), str) and i["content"].strip()
+                    i
+                    for i in insights
+                    if isinstance(i, dict)
+                    and isinstance(i.get("content"), str)
+                    and i["content"].strip()
                 ]
             except Exception as e:
-                yield _sse({"type": "error", "message": f"Failed to parse LLM response: {e}"})
+                yield _sse(
+                    {"type": "error", "message": f"Failed to parse LLM response: {e}"}
+                )
                 yield _sse({"type": "done", "total": 0})
                 return
 
             for insight in insights:
                 insight["content"] = insight["content"].strip()[:200]
                 try:
-                    insight["confidence"] = max(0.0, min(1.0, float(insight.get("confidence", 0.7))))
+                    insight["confidence"] = max(
+                        0.0, min(1.0, float(insight.get("confidence", 0.7)))
+                    )
                 except (ValueError, TypeError):
                     insight["confidence"] = 0.7
                 insight["domain"] = insight.get("domain", "general")
@@ -1124,7 +1195,11 @@ def stream_inference(include_browser: bool = Query(False)):
     return StreamingResponse(
         _generate(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -1174,7 +1249,10 @@ def commit_inference(body: InferenceCommit) -> Dict:
     try:
         store.delete_by_source("inferred")
     except Exception as exc:
-        logger.warning("[memory router] commit-inference: failed to delete old inferred facts: %s", exc)
+        logger.warning(
+            "[memory router] commit-inference: failed to delete old inferred facts: %s",
+            exc,
+        )
         raise HTTPException(500, f"Failed to clear old inferred profile: {exc}")
     stored = 0
     for insight in body.insights:
@@ -1210,7 +1288,8 @@ def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
     """Read all memory settings from the DB and return as a dict."""
     return {
         "memory_enabled": db.get_setting(_MEMORY_ENABLED_KEY, "true") == "true",
-        "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false") == "true",
+        "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false")
+        == "true",
     }
 
 

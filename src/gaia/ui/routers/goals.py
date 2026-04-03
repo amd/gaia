@@ -5,10 +5,12 @@
 
 import logging
 import threading
-from typing import List, Optional
+from typing import List, Optional, get_args
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
+
+from gaia.agents.base.goal_store import AgentMode, GoalStatus, Priority, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,12 @@ def close_store() -> None:
 # ---------------------------------------------------------------------------
 
 
+_VALID_PRIORITIES = set(get_args(Priority))
+_VALID_MODES = set(get_args(AgentMode))
+_VALID_TASK_STATUSES = set(get_args(TaskStatus))
+_VALID_GOAL_STATUSES = set(get_args(GoalStatus))
+
+
 class GoalCreate(BaseModel):
     title: str
     description: str
@@ -67,15 +75,15 @@ class GoalCreate(BaseModel):
     @field_validator("priority")
     @classmethod
     def validate_priority(cls, v: str) -> str:
-        if v not in ("low", "medium", "high"):
-            raise ValueError("priority must be low, medium, or high")
+        if v not in _VALID_PRIORITIES:
+            raise ValueError(f"priority must be one of {sorted(_VALID_PRIORITIES)}")
         return v
 
     @field_validator("mode_required")
     @classmethod
     def validate_mode(cls, v: str) -> str:
-        if v not in ("manual", "goal_driven", "autonomous"):
-            raise ValueError("mode_required must be manual, goal_driven, or autonomous")
+        if v not in _VALID_MODES:
+            raise ValueError(f"mode_required must be one of {sorted(_VALID_MODES)}")
         return v
 
 
@@ -98,9 +106,8 @@ class TaskStatusUpdate(BaseModel):
     @field_validator("status")
     @classmethod
     def validate_status(cls, v: str) -> str:
-        valid = {"queued", "in_progress", "completed", "failed", "blocked", "cancelled"}
-        if v not in valid:
-            raise ValueError(f"status must be one of {sorted(valid)}")
+        if v not in _VALID_TASK_STATUSES:
+            raise ValueError(f"status must be one of {sorted(_VALID_TASK_STATUSES)}")
         return v
 
 
@@ -111,12 +118,8 @@ class GoalStatusUpdate(BaseModel):
     @field_validator("status")
     @classmethod
     def validate_status(cls, v: str) -> str:
-        valid = {
-            "pending_approval", "queued", "in_progress",
-            "completed", "failed", "rejected", "cancelled",
-        }
-        if v not in valid:
-            raise ValueError(f"status must be one of {sorted(valid)}")
+        if v not in _VALID_GOAL_STATUSES:
+            raise ValueError(f"status must be one of {sorted(_VALID_GOAL_STATUSES)}")
         return v
 
 
@@ -254,30 +257,27 @@ def update_goal_status(goal_id: str, body: GoalStatusUpdate):
 @router.delete("/api/goals/{goal_id}", status_code=204)
 def delete_goal(goal_id: str):
     """Hard-delete a goal and all its tasks."""
-    goal = _get_store().get_goal(goal_id)
-    if goal is None:
+    if not _get_store().delete_goal(goal_id):
         raise HTTPException(status_code=404, detail="Goal not found")
-    _get_store().delete_goal(goal_id)
 
 
 @router.post("/api/goals/{goal_id}/tasks", status_code=201)
 def add_task(goal_id: str, body: TaskCreate):
     """Add a task to an existing goal."""
-    goal = _get_store().get_goal(goal_id)
-    if goal is None:
+    store = _get_store()
+    if store.get_goal(goal_id) is None:
         raise HTTPException(status_code=404, detail="Goal not found")
-    task = _get_store().add_task(goal_id, body.description, body.order_index)
+    task = store.add_task(goal_id, body.description, body.order_index)
     return _task_to_dict(task)
 
 
 @router.put("/api/goals/{goal_id}/tasks/{task_id}")
 def update_task(goal_id: str, task_id: str, body: TaskStatusUpdate):
     """Update a task's status and optionally record the result."""
-    task = _get_store().update_task_status(task_id, body.status, result=body.result)
+    store = _get_store()
+    task = store.update_task_status(task_id, body.status, result=body.result)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    # Auto-complete the goal when all tasks are done
-    store = _get_store()
     if body.status in ("completed", "cancelled") and store.is_goal_complete(goal_id):
         store.update_goal_status(goal_id, "completed")
     return _task_to_dict(task)

@@ -360,9 +360,9 @@ class TestSystemContext:
 
         facts = collect_system_info()
         for fact in facts:
-            assert fact["domain"].startswith("system:"), (
-                f"Unexpected domain: {fact['domain']}"
-            )
+            assert fact["domain"].startswith(
+                "system:"
+            ), f"Unexpected domain: {fact['domain']}"
 
     def test_collect_system_info_has_os_fact(self):
         """collect_system_info() always includes an OS fact."""

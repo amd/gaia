@@ -758,8 +758,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
                 # Suppress memory writes when private session OR global memory is disabled.
                 if hasattr(agent, "_incognito"):
-                    memory_globally_off = db.get_setting("memory_enabled", "true") == "false"
-                    agent._incognito = memory_globally_off or bool(session.get("private", 0))
+                    memory_globally_off = (
+                        db.get_setting("memory_enabled", "true") == "false"
+                    )
+                    agent._incognito = memory_globally_off or bool(
+                        session.get("private", 0)
+                    )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():

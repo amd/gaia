@@ -14,12 +14,13 @@ Fix: remove the sentinel; convert tool messages to "user" role so the LLM
      receives the tool result as a proper user turn.
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 
@@ -124,8 +125,7 @@ class TestToolMessageConversion:
         sdk.send_messages(msgs)
 
         assert not any(
-            m.get("role") == "user" and m.get("content") == "continue"
-            for m in captured
+            m.get("role") == "user" and m.get("content") == "continue" for m in captured
         ), "Bare 'continue' sentinel must not be sent to the LLM"
 
     def test_original_user_message_preserved(self, sdk):

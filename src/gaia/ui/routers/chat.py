@@ -35,6 +35,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 
+def _notify_loop(session_id: str) -> None:
+    """Notify the AgentLoop that a user message was processed.
+
+    Imported lazily to avoid a circular import at module level.
+    Non-fatal: if the loop is not running, this is a no-op.
+    """
+    try:
+        from gaia.ui.agent_loop import agent_loop
+
+        agent_loop.notify_user_message(session_id)
+    except Exception:
+        pass
+
+
 def _server_mod():
     """Lazily resolve the ``gaia.ui.server`` module.
 
@@ -130,6 +144,8 @@ async def send_message(
                 db.add_message(request.session_id, "user", request.message)
                 async for chunk in srv._stream_chat_response(db, session, request):
                     yield chunk
+                # Notify AgentLoop after the streaming response completes
+                _notify_loop(request.session_id)
 
             sem_released = True
             return StreamingResponse(
@@ -155,6 +171,8 @@ async def send_message(
                     response_text = _fix_double_escaped(response_text)
                     response_text = response_text.strip()
                 msg_id = db.add_message(request.session_id, "assistant", response_text)
+                # Notify AgentLoop after the non-streaming response completes
+                _notify_loop(request.session_id)
                 return ChatResponse(
                     message_id=msg_id,
                     content=response_text,

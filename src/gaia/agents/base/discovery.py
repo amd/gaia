@@ -1713,9 +1713,7 @@ class SystemDiscovery:
                                     for line in content.splitlines():
                                         if line.strip().startswith("name"):
                                             pname = (
-                                                line.split("=")[-1]
-                                                .strip()
-                                                .strip('"')
+                                                line.split("=")[-1].strip().strip('"')
                                             )
                                             if pname and pname not in project_names:
                                                 project_names.append(pname)
@@ -1940,9 +1938,7 @@ class SystemDiscovery:
                 guid_idx += 1
 
                 try:
-                    count_key = winreg.OpenKey(
-                        ua_key, rf"{guid_name}\Count"
-                    )
+                    count_key = winreg.OpenKey(ua_key, rf"{guid_name}\Count")
                 except (OSError, PermissionError):
                     continue
 
@@ -1950,9 +1946,7 @@ class SystemDiscovery:
                     val_idx = 0
                     while True:
                         try:
-                            name, data, _ = winreg.EnumValue(
-                                count_key, val_idx
-                            )
+                            name, data, _ = winreg.EnumValue(count_key, val_idx)
                         except OSError:
                             break
                         val_idx += 1
@@ -2009,9 +2003,7 @@ class SystemDiscovery:
             winreg.CloseKey(ua_key)
 
         # Sort by count descending, take top 20
-        sorted_apps = sorted(
-            app_counts.items(), key=lambda x: x[1], reverse=True
-        )[:20]
+        sorted_apps = sorted(app_counts.items(), key=lambda x: x[1], reverse=True)[:20]
 
         for app_name, count in sorted_apps:
             facts.append(
@@ -2245,7 +2237,12 @@ class SystemDiscovery:
                 Path("C:/Program Files (x86)/Steam/steamapps/common"),
                 Path("C:/Program Files/Steam/steamapps/common"),
                 # macOS
-                self._home / "Library" / "Application Support" / "Steam" / "steamapps" / "common",
+                self._home
+                / "Library"
+                / "Application Support"
+                / "Steam"
+                / "steamapps"
+                / "common",
                 # Linux
                 self._home / ".local" / "share" / "Steam" / "steamapps" / "common",
                 self._home / ".steam" / "steam" / "steamapps" / "common",
@@ -2254,9 +2251,7 @@ class SystemDiscovery:
                 if steam_path.exists() and steam_path.is_dir():
                     try:
                         game_count = sum(
-                            1
-                            for e in os.scandir(str(steam_path))
-                            if e.is_dir()
+                            1 for e in os.scandir(str(steam_path)) if e.is_dir()
                         )
                     except (PermissionError, OSError):
                         game_count = 0
@@ -2367,8 +2362,7 @@ class SystemDiscovery:
             davinci_paths = [
                 Path("C:/Program Files/Blackmagic Design/DaVinci Resolve"),
                 Path(
-                    "C:/Program Files/Blackmagic Design"
-                    "/DaVinci Resolve/Resolve.exe"
+                    "C:/Program Files/Blackmagic Design" "/DaVinci Resolve/Resolve.exe"
                 ),
             ]
             for dv_path in davinci_paths:

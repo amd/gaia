@@ -24,7 +24,6 @@ import pytest
 
 from gaia.agents.base.goal_store import Goal, GoalStore, Task
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -100,7 +99,7 @@ class TestGoalCRUD:
 
     def test_list_goals_filter_approved_only(self, store):
         _make_goal(store, source="agent_inferred")  # not approved
-        _make_goal(store, source="user")             # approved
+        _make_goal(store, source="user")  # approved
         result = store.list_goals(approved_only=True)
         assert len(result) == 1
         assert result[0].approved_for_auto is True
@@ -144,7 +143,9 @@ class TestGoalStateMachine:
 
     def test_update_goal_status_with_notes(self, store):
         goal = _make_goal(store)
-        updated = store.update_goal_status(goal.id, "in_progress", progress_notes="Started.")
+        updated = store.update_goal_status(
+            goal.id, "in_progress", progress_notes="Started."
+        )
         assert updated.status == "in_progress"
         assert updated.progress_notes == "Started."
 
@@ -188,14 +189,16 @@ class TestTaskCRUD:
     def test_update_task_with_result(self, store):
         goal = _make_goal(store)
         task = store.add_task(goal.id, "Write file")
-        updated = store.update_task_status(task.id, "completed", result="Written 42 lines.")
+        updated = store.update_task_status(
+            task.id, "completed", result="Written 42 lines."
+        )
         assert updated.status == "completed"
         assert updated.result == "Written 42 lines."
 
     def test_get_goal_tasks_ordered_by_index(self, store):
         goal = _make_goal(store)
-        store.add_task(goal.id, "Third",  order_index=2)
-        store.add_task(goal.id, "First",  order_index=0)
+        store.add_task(goal.id, "Third", order_index=2)
+        store.add_task(goal.id, "First", order_index=0)
         store.add_task(goal.id, "Second", order_index=1)
         tasks = store.get_goal_tasks(goal.id)
         assert [t.order_index for t in tasks] == [0, 1, 2]
@@ -210,15 +213,15 @@ class TestTaskCRUD:
 class TestAgentLoopHelpers:
 
     def test_get_pending_approval_returns_inferred(self, store):
-        _make_goal(store, source="user")             # queued — not pending
+        _make_goal(store, source="user")  # queued — not pending
         g2 = _make_goal(store, source="agent_inferred")  # pending_approval
         pending = store.get_pending_approval()
         assert len(pending) == 1
         assert pending[0].id == g2.id
 
     def test_get_actionable_goals_returns_approved_queued(self, store):
-        _make_goal(store, source="agent_inferred")   # not approved
-        g2 = _make_goal(store, source="user")        # approved, queued
+        _make_goal(store, source="agent_inferred")  # not approved
+        g2 = _make_goal(store, source="user")  # approved, queued
         actionable = store.get_actionable_goals()
         assert len(actionable) == 1
         assert actionable[0].id == g2.id
@@ -236,7 +239,7 @@ class TestAgentLoopHelpers:
 
     def test_get_next_task_returns_first_queued(self, store):
         goal = _make_goal(store)
-        t1 = store.add_task(goal.id, "First",  order_index=0)
+        t1 = store.add_task(goal.id, "First", order_index=0)
         store.add_task(goal.id, "Second", order_index=1)
         next_task = store.get_next_task(goal.id)
         assert next_task is not None
@@ -283,8 +286,8 @@ class TestAgentLoopHelpers:
 class TestPriorityOrdering:
 
     def test_high_priority_returned_first(self, store):
-        _make_goal(store, title="Low",    source="user", priority="low")
-        _make_goal(store, title="High",   source="user", priority="high")
+        _make_goal(store, title="Low", source="user", priority="low")
+        _make_goal(store, title="High", source="user", priority="high")
         _make_goal(store, title="Medium", source="user", priority="medium")
         goals = store.get_actionable_goals()
         assert goals[0].priority == "high"
@@ -292,7 +295,7 @@ class TestPriorityOrdering:
         assert goals[2].priority == "low"
 
     def test_same_priority_ordered_oldest_first(self, store):
-        g1 = _make_goal(store, title="First",  source="user", priority="medium")
+        g1 = _make_goal(store, title="First", source="user", priority="medium")
         time.sleep(0.01)
         g2 = _make_goal(store, title="Second", source="user", priority="medium")
         goals = store.get_actionable_goals()
@@ -313,9 +316,9 @@ class TestStats:
         assert stats["tasks"] == {}
 
     def test_stats_counts_by_status(self, store):
-        _make_goal(store, source="user")             # queued
-        _make_goal(store, source="user")             # queued
-        _make_goal(store, source="agent_inferred")   # pending_approval
+        _make_goal(store, source="user")  # queued
+        _make_goal(store, source="user")  # queued
+        _make_goal(store, source="agent_inferred")  # pending_approval
         stats = store.get_stats()
         assert stats["goals"].get("queued", 0) == 2
         assert stats["goals"].get("pending_approval", 0) == 1
@@ -341,7 +344,9 @@ class TestThreadSafety:
         def create_goals():
             try:
                 for i in range(10):
-                    store.create_goal(f"Goal {i} {threading.current_thread().name}", "desc")
+                    store.create_goal(
+                        f"Goal {i} {threading.current_thread().name}", "desc"
+                    )
             except Exception as exc:
                 errors.append(exc)
 
