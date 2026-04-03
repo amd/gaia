@@ -29,10 +29,11 @@ from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentR
 
 The Agent UI SDK is the Python backend that powers the GAIA Agent UI. It provides:
 
-- **FastAPI REST server** with session, chat, and document endpoints
+- **FastAPI REST server** with session, chat, document, and memory endpoints
 - **SQLite database** for persistent sessions, messages, and document metadata
 - **SSE streaming** for real-time chat responses
 - **RAG integration** for document Q&A
+- **Memory dashboard** with knowledge browser, tool stats, and observability ([Memory SDK](/sdk/sdks/memory))
 - **Pydantic models** for request/response validation
 
 The backend runs on port `4200` by default and serves both the Electron desktop app and browser-based clients.
@@ -775,6 +776,272 @@ class AttachDocumentRequest(BaseModel):
     | `400` | Invalid path (empty or contains null bytes), or path is a symbolic link |
     | `404` | Path does not exist |
     | `500` | Failed to launch the system file explorer |
+  </Accordion>
+</AccordionGroup>
+
+### Memory
+
+The Memory endpoints expose the agent's persistent knowledge system. See the [Memory SDK Reference](/sdk/sdks/memory) for the underlying `MemoryStore` and `MemoryMixin` APIs.
+
+<AccordionGroup>
+  <Accordion title="GET /api/memory/stats">
+    Aggregate statistics across all memory tables.
+
+    **Response:**
+    ```json
+    {
+      "knowledge": {
+        "total": 142,
+        "by_category": {"fact": 68, "preference": 12, "error": 35, "skill": 17, "note": 7, "reminder": 3},
+        "by_context": {"global": 15, "work": 95, "personal": 32},
+        "sensitive_count": 8,
+        "avg_confidence": 0.64
+      },
+      "conversations": {
+        "total_turns": 1847,
+        "total_sessions": 93
+      },
+      "tools": {
+        "total_calls": 523,
+        "unique_tools": 18,
+        "overall_success_rate": 0.91
+      },
+      "temporal": {
+        "upcoming_count": 3,
+        "overdue_count": 1
+      },
+      "embedding": {
+        "total": 142,
+        "with_embedding": 135,
+        "without_embedding": 7,
+        "coverage_pct": 95.1
+      },
+      "db_size_bytes": 2457600
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="GET /api/memory/knowledge">
+    Paginated, filterable knowledge browser.
+
+    **Query params:**
+
+    | Param | Type | Default | Description |
+    |-------|------|---------|-------------|
+    | `category` | string | null | Filter by category (fact, preference, error, skill, note, reminder) |
+    | `context` | string | null | Filter by context (global, work, personal, etc.) |
+    | `entity` | string | null | Filter by entity (e.g., `person:sarah_chen`) |
+    | `sensitive` | boolean | null | Filter by sensitivity flag |
+    | `search` | string | null | FTS5 full-text search query |
+    | `sort_by` | string | `updated_at` | Sort field (updated_at, confidence, created_at, category) |
+    | `order` | string | `desc` | Sort order (asc, desc) |
+    | `offset` | integer | 0 | Pagination offset |
+    | `limit` | integer | 50 | Page size |
+    | `include_superseded` | boolean | false | Include items superseded by newer facts |
+    | `time_from` | string | null | ISO 8601 lower bound for created_at |
+    | `time_to` | string | null | ISO 8601 upper bound for created_at |
+
+    **Response:**
+    ```json
+    {
+      "items": [
+        {
+          "id": "abc-123",
+          "category": "fact",
+          "content": "Project uses React 19 with app router",
+          "domain": null,
+          "source": "tool",
+          "confidence": 0.82,
+          "context": "work",
+          "entity": null,
+          "sensitive": false,
+          "created_at": "2026-03-15T10:00:00-07:00",
+          "updated_at": "2026-03-18T14:30:00-07:00",
+          "due_at": null,
+          "superseded_by": null
+        }
+      ],
+      "total": 142,
+      "offset": 0,
+      "limit": 50
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="POST /api/memory/knowledge">
+    Create a knowledge entry from the dashboard. Items created via the UI use `source='user'` and `confidence=0.8`.
+
+    **Request:**
+    ```json
+    {
+      "category": "fact",
+      "content": "Project deadline is April 15",
+      "domain": "project",
+      "context": "work",
+      "entity": "project:q2-report",
+      "due_at": "2026-04-15T09:00:00-07:00",
+      "sensitive": false
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="PUT /api/memory/knowledge/{knowledge_id}">
+    Edit a knowledge entry. Only provided fields are updated.
+
+    **Request:**
+    ```json
+    {
+      "content": "Project deadline moved to April 20",
+      "due_at": "2026-04-20T09:00:00-07:00"
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="DELETE /api/memory/knowledge/{knowledge_id}">
+    Delete a knowledge entry.
+  </Accordion>
+
+  <Accordion title="GET /api/memory/upcoming">
+    Time-sensitive items due within N days, including overdue.
+
+    **Query params:** `days` (default 7)
+
+    **Response:**
+    ```json
+    [
+      {
+        "id": "abc-123",
+        "category": "reminder",
+        "content": "Submit quarterly report",
+        "due_at": "2026-04-15T09:00:00-07:00",
+        "context": "work"
+      }
+    ]
+    ```
+  </Accordion>
+
+  <Accordion title="GET /api/memory/entities">
+    List all unique entities with knowledge counts.
+
+    **Response:**
+    ```json
+    [
+      {"entity": "person:sarah_chen", "count": 5, "last_updated": "2026-04-01T14:00:00-07:00"},
+      {"entity": "project:gaia", "count": 12, "last_updated": "2026-04-01T10:00:00-07:00"}
+    ]
+    ```
+  </Accordion>
+
+  <Accordion title="GET /api/memory/tools">
+    Per-tool performance statistics.
+
+    **Response:**
+    ```json
+    [
+      {
+        "tool_name": "execute_code",
+        "total_calls": 87,
+        "success_count": 79,
+        "failure_count": 8,
+        "success_rate": 0.91,
+        "avg_duration_ms": 1230,
+        "last_error": "SyntaxError: unexpected indent"
+      }
+    ]
+    ```
+  </Accordion>
+
+  <Accordion title="GET /api/memory/conversations">
+    List conversation sessions with turn counts and first message preview.
+
+    **Query params:** `limit` (default 20)
+  </Accordion>
+
+  <Accordion title="GET /api/memory/conversations/{session_id}">
+    Get all turns for a specific conversation session.
+  </Accordion>
+
+  <Accordion title="GET /api/memory/activity">
+    Daily activity counts for the activity timeline chart.
+
+    **Query params:** `days` (default 30)
+
+    **Response:**
+    ```json
+    [
+      {
+        "date": "2026-04-01",
+        "conversations": 12,
+        "tool_calls": 8,
+        "knowledge_added": 3,
+        "errors": 1
+      }
+    ]
+    ```
+  </Accordion>
+
+  <Accordion title="GET /api/memory/embedding-coverage">
+    Embedding status for the knowledge base.
+
+    **Response:**
+    ```json
+    {
+      "total_items": 142,
+      "with_embedding": 135,
+      "without_embedding": 7,
+      "coverage_pct": 95.1
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="POST /api/memory/consolidate">
+    Manually trigger conversation consolidation. Distills old sessions (>14 days, >=5 turns) into durable knowledge items.
+
+    **Response:**
+    ```json
+    {
+      "consolidated": 3,
+      "extracted_items": 8
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="POST /api/memory/reconcile">
+    Manually trigger background memory reconciliation. Checks for contradictory facts across sessions.
+
+    **Response:**
+    ```json
+    {
+      "pairs_checked": 15,
+      "reinforced": 3,
+      "contradicted": 1,
+      "weakened": 2,
+      "neutral": 9
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="POST /api/memory/rebuild-embeddings">
+    Trigger embedding backfill for items missing embeddings.
+
+    **Response:**
+    ```json
+    {
+      "backfilled": 7,
+      "total_without": 0
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="POST /api/memory/rebuild-fts">
+    Rebuild FTS5 indexes if search results seem wrong.
+
+    **Response:**
+    ```json
+    {
+      "status": "rebuilt"
+    }
+    ```
   </Accordion>
 </AccordionGroup>
 

@@ -292,6 +292,15 @@
     font-weight: 400;
 }
 
+/* Private-session lock icon shown inline before the title */
+.session-private-icon {
+    flex-shrink: 0;
+    margin-right: 4px;
+    color: var(--text-muted);
+    opacity: 0.7;
+    vertical-align: middle;
+}
+
 /* Session hash link -- short permalink for troubleshooting */
 .session-hash {
     font-size: 9px;

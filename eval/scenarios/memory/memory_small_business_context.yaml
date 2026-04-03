@@ -1,0 +1,51 @@
+id: memory_small_business_context
+name: "Memory Small Business Context Retention"
+category: memory
+severity: high
+description: |
+  Tests memory for a small business owner use case. The agent learns
+  key business context (business type, key customers, preferences) and
+  then applies that context proactively when asked for help.
+
+  This is a high-value scenario: the agent remembers who you are and
+  what you do, so it gives you business-relevant answers without having
+  to re-explain every time.
+
+persona: small_business_owner
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Introduce business context"
+    user_message: "hey, remember this about my business: i run a pet grooming salon called Pawfect, we're in Austin TX, and our busiest days are Saturdays. most customers are regulars who book monthly."
+    ground_truth:
+      expected_answer: "Pawfect, pet grooming salon, Austin TX, Saturdays busiest, monthly regulars"
+    success_criteria: "Agent stores all business details using remember tool: business name (Pawfect), type (pet grooming), location (Austin TX), busiest day (Saturday), customer pattern (monthly regulars)."
+
+  - turn: 2
+    objective: "Store a key customer preference"
+    user_message: "also remember: my top customer Linda always books a bath + trim for her golden retriever Buddy, and she likes a reminder call the day before"
+    ground_truth:
+      expected_answer: "Linda: bath+trim, golden retriever Buddy, reminder call day before"
+    success_criteria: "Agent stores Linda's preferences including service type (bath+trim), pet (golden retriever Buddy), and communication preference (reminder call day before)."
+
+  - turn: 3
+    objective: "Ask a business question that should use stored context"
+    user_message: "what's the best day to offer a discount promotion?"
+    ground_truth:
+      expected_answer: "Not Saturday (busiest) — slower days like Monday-Wednesday would work better for promotions"
+    success_criteria: "Agent applies the stored business context: mentions that Saturday is the busiest day so promotions would better fit quieter weekdays. FAIL if agent gives generic advice without referencing the stored Saturday info."
+
+  - turn: 4
+    objective: "Customer-specific recall"
+    user_message: "Linda is coming in next week. what do i need to know for her appointment?"
+    ground_truth:
+      expected_answer: "Bath + trim for Buddy (golden retriever), reminder call day before"
+    success_criteria: "Agent recalls Linda's stored preferences: bath+trim service, golden retriever named Buddy, and to call her the day before. FAIL if agent says it doesn't have this information."
+
+expected_outcome: |
+  Agent acts as a business context assistant — storing and proactively applying
+  knowledge about the business and key customers to give relevant, personalized
+  advice without requiring re-explanation each time.

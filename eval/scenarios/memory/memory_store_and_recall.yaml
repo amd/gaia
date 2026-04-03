@@ -1,0 +1,40 @@
+id: memory_store_and_recall
+name: "Memory Store and Recall"
+category: memory
+severity: high
+description: |
+  Tests the agent's ability to explicitly store a user-provided fact using the
+  `remember` tool and then recall it accurately in the same session.
+  The agent must call `remember` when asked to store something and use
+  `recall` or `search_past_conversations` to retrieve it on demand.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Tell the agent your name and role, ask it to remember"
+    user_message: "My name is Jordan and I'm a principal ML engineer at AMD. Please remember this."
+    ground_truth:
+      expected_answer: "Jordan, principal ML engineer at AMD"
+    success_criteria: "Agent acknowledges storing the fact (calls remember tool or confirms it will remember) and confirms the name Jordan and role ML engineer"
+
+  - turn: 2
+    objective: "Ask the agent to recall your name without re-stating it"
+    user_message: "What's my name and what do I do?"
+    ground_truth:
+      expected_answer: "Jordan, principal ML engineer at AMD"
+    success_criteria: "Agent correctly states the name Jordan and role principal ML engineer. FAIL if agent says it doesn't know or asks the user to repeat themselves."
+
+  - turn: 3
+    objective: "Ask the agent what it knows about you"
+    user_message: "What do you know about me so far?"
+    ground_truth:
+      expected_answer: "Name: Jordan. Role: principal ML engineer at AMD."
+    success_criteria: "Agent recalls at least the name Jordan and the ML engineer role at AMD. FAIL if the agent returns an empty or generic response."
+
+expected_outcome: |
+  Agent stores user identity via the remember tool and accurately recalls it
+  across subsequent turns within the same session.

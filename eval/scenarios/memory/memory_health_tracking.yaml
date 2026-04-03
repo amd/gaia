@@ -1,0 +1,50 @@
+id: memory_health_tracking
+name: "Memory Health and Wellness Tracking"
+category: memory
+severity: high
+description: |
+  Tests memory for personal health and wellness tracking — a high-value
+  real-world use case. The user logs sleep, exercise, and nutrition data
+  across turns, then asks the agent to find patterns and correlations.
+
+  This validates the agent as a personal health journal where data is
+  accumulated over time and then analyzed on demand.
+
+persona: home_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Log a sleep entry with quality note"
+    user_message: "log this for today: slept 5 hours, woke up at 3am and couldn't fall back asleep. had coffee at 8pm last night which was probably a mistake"
+    ground_truth:
+      expected_answer: "Logged: 5hr sleep, 3am wakeup, 8pm coffee"
+    success_criteria: "Agent stores the sleep data using remember tool with relevant details: 5 hours, 3am wake, 8pm coffee. Should link the coffee timing to sleep quality."
+
+  - turn: 2
+    objective: "Log exercise data"
+    user_message: "also: did a 30 minute walk this morning and felt way better after. energy was low before but good after"
+    ground_truth:
+      expected_answer: "Logged: 30min walk, energy improvement"
+    success_criteria: "Agent stores the exercise entry and the energy observation."
+
+  - turn: 3
+    objective: "Ask for pattern analysis from stored data"
+    user_message: "based on what you know about my sleep and habits, what do you think is going on?"
+    ground_truth:
+      expected_answer: "Late coffee (8pm) likely disrupted sleep; 30min walk improved energy despite poor sleep"
+    success_criteria: "Agent recalls both stored entries and connects the dots: (1) 8pm coffee → poor sleep / 3am wakeup, (2) walking helped energy despite bad sleep. FAIL if agent gives generic sleep advice without referencing the specific stored data (8pm coffee, 3am wake, 30min walk)."
+
+  - turn: 4
+    objective: "Ask for a recommendation based on stored context"
+    user_message: "what should i change?"
+    ground_truth:
+      expected_answer: "Cut caffeine by early afternoon (no coffee after ~2pm), keep the walking habit"
+    success_criteria: "Agent gives a recommendation that directly references the stored data: avoid late coffee specifically, continue walking. FAIL if agent gives generic advice without connecting to the user's actual data."
+
+expected_outcome: |
+  Agent functions as a personal health journal — logging data points,
+  finding correlations between habits and outcomes, and giving
+  personalized recommendations based on accumulated data.

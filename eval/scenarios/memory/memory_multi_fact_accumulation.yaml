@@ -1,0 +1,46 @@
+id: memory_multi_fact_accumulation
+name: "Memory Multi-Fact Accumulation"
+category: memory
+severity: high
+description: |
+  Tests the agent's ability to accumulate multiple distinct facts about the user
+  across separate turns and then produce an accurate summary. Each turn introduces
+  a new fact; the final turn asks the agent to recall all stored facts.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Share first personal fact: name and employer"
+    user_message: "I'm Sam and I work at a company called NeuralStack."
+    ground_truth:
+      expected_answer: "Sam, NeuralStack"
+    success_criteria: "Agent acknowledges the name Sam and employer NeuralStack. Agent should store this information."
+
+  - turn: 2
+    objective: "Share second fact: tech stack preference"
+    user_message: "For context, I mainly use Python and PyTorch for my work."
+    ground_truth:
+      expected_answer: "Python, PyTorch"
+    success_criteria: "Agent acknowledges Python and PyTorch. Should store or note this preference."
+
+  - turn: 3
+    objective: "Share third fact: current project"
+    user_message: "I'm currently building a real-time object detection pipeline that needs to run on edge devices."
+    ground_truth:
+      expected_answer: "real-time object detection, edge devices"
+    success_criteria: "Agent acknowledges the project details and stores them."
+
+  - turn: 4
+    objective: "Ask agent to summarise everything it knows about the user"
+    user_message: "Can you give me a quick summary of everything you know about me and my project?"
+    ground_truth:
+      expected_answer: "Sam, NeuralStack, Python, PyTorch, real-time object detection pipeline, edge devices"
+    success_criteria: "Agent summary includes all three facts: (1) name Sam at NeuralStack, (2) Python/PyTorch stack, (3) real-time object detection on edge devices. FAIL if any of the three fact groups is missing."
+
+expected_outcome: |
+  Agent accumulates three distinct user-provided facts across turns and produces
+  a complete summary covering all stored information.

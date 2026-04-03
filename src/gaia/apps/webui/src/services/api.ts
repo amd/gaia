@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, AgentMCPServerStatus } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -105,12 +105,16 @@ export async function getSession(id: string): Promise<Session> {
     return apiFetch('GET', `/sessions/${id}`);
 }
 
-export async function updateSession(id: string, data: { title?: string; system_prompt?: string }): Promise<Session> {
+export async function updateSession(id: string, data: { title?: string; system_prompt?: string; private?: boolean }): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}`, data);
 }
 
 export async function deleteSession(id: string): Promise<void> {
     return apiFetch('DELETE', `/sessions/${id}`);
+}
+
+export async function toggleSessionPrivacy(id: string): Promise<Session> {
+    return apiFetch('PATCH', `/sessions/${id}/private`);
 }
 
 export async function getMessages(sessionId: string): Promise<{ messages: Message[]; total: number }> {
@@ -458,4 +462,21 @@ export async function getMCPCatalog(): Promise<{ catalog: MCPCatalogEntry[] }> {
 
 export async function getMCPRuntimeStatus(): Promise<{ servers: MCPServerStatus[] }> {
     return apiFetch('GET', '/mcp/status');
+}
+
+// -- Agent UI MCP Server (exposes Agent UI as MCP tools for Claude Code etc.) -----------
+
+export async function getAgentMCPServerStatus(): Promise<AgentMCPServerStatus> {
+    return apiFetch('GET', '/mcp/agent-server/status');
+}
+
+export async function startAgentMCPServer(port?: number, backendUrl?: string): Promise<AgentMCPServerStatus & { status: string }> {
+    const body: Record<string, unknown> = {};
+    if (port !== undefined) body.port = port;
+    if (backendUrl !== undefined) body.backend_url = backendUrl;
+    return apiFetch('POST', '/mcp/agent-server/start', Object.keys(body).length ? body : undefined);
+}
+
+export async function stopAgentMCPServer(): Promise<{ status: string; pid?: number }> {
+    return apiFetch('POST', '/mcp/agent-server/stop');
 }

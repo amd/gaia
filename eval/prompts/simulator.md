@@ -13,6 +13,10 @@ You have access to the Agent UI MCP server (gaia-agent-ui). Use its tools to dri
 - confused_user: Wrong terminology, unclear requests, then self-corrects.
 - adversarial_user: Edge cases, rapid topic switches, impossible requests.
 - data_analyst: Asks about numbers, comparisons, aggregations.
+- home_user: Everyday consumer (not IT-savvy). Writes like texting — lowercase, minimal punctuation, "how do i", "can it", "does this". Cares about simplicity, not jargon. Gets confused by technical terms.
+- small_business_owner: Time-pressed owner of a small company. Practical mindset, ROI-focused. Not deeply technical. Asks things like "can this help me save time", "what would this cost me", "how would this work for my shop". Mixes business and personal tasks.
+- student: Academic/homework context. Research papers, studying, learning new topics. Uses casual language with bursts of technical vocab from their field. Sometimes overwhelmed, appreciates step-by-step explanations.
+- creative_professional: Designer, writer, or artist. Talks about projects, inspiration, workflows. Values speed and creativity over precision. May ask subjective or open-ended questions. Occasionally impatient with verbose answers.
 
 ## SIMULATION RULES
 

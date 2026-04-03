@@ -1,0 +1,50 @@
+id: memory_notes_capture
+name: "Memory Notes Capture and Retrieval"
+category: memory
+severity: high
+description: |
+  Tests the agent as a personal notes/second-brain assistant. The user
+  captures quick ideas and important notes across turns, then retrieves
+  them on demand.
+
+  This covers the "capture anything" use case — a core value proposition
+  for memory-enabled agents. Notes could be ideas, meeting outcomes,
+  research snippets, or anything the user wants to save.
+
+persona: creative_professional
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Capture a product idea as a note"
+    user_message: "quick note — had an idea for an app: a mood tracker that also logs what music you were listening to. call it MoodTune. jot that down"
+    ground_truth:
+      expected_answer: "Note stored: MoodTune app idea — mood tracker + music logging"
+    success_criteria: "Agent stores the MoodTune app idea using remember tool with category=note. Must capture the key details: mood tracker, music, name MoodTune."
+
+  - turn: 2
+    objective: "Capture a second note about a meeting outcome"
+    user_message: "also log this: met with the design team today, they want the homepage hero to be dark with a gradient — no white backgrounds"
+    ground_truth:
+      expected_answer: "Note stored: design team meeting — dark hero with gradient, no white backgrounds"
+    success_criteria: "Agent stores the design decision note. Must capture: dark hero, gradient, no white backgrounds."
+
+  - turn: 3
+    objective: "Retrieve a specific note by topic"
+    user_message: "what was that app idea i had again?"
+    ground_truth:
+      expected_answer: "MoodTune — mood tracker that logs music"
+    success_criteria: "Agent recalls the MoodTune app idea accurately using recall tool. Must name MoodTune and the core concept (mood + music). FAIL if agent says it doesn't remember or gives a generic response."
+
+  - turn: 4
+    objective: "Show all recent notes"
+    user_message: "show me all my notes"
+    ground_truth:
+      expected_answer: "MoodTune app idea, design team meeting notes (dark hero, gradient, no white)"
+    success_criteria: "Agent retrieves both notes: the MoodTune idea AND the design team meeting note. Both must be present. Should use recall(category='note') or recall(domain='journal') to find them."
+
+expected_outcome: |
+  Agent captures multiple notes across turns and retrieves them accurately,
+  functioning as a reliable second-brain for quick idea capture.

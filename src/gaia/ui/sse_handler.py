@@ -15,6 +15,7 @@ import re
 import threading
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -94,7 +95,7 @@ class SSEOutputHandler(OutputHandler):
     The streaming endpoint reads from this queue and yields SSE events.
     """
 
-    def __init__(self):
+    def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
         self._start_time: Optional[float] = None
@@ -108,6 +109,15 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_event: Optional[threading.Event] = None
         self._confirm_result: bool = False
         self._confirm_id: Optional[str] = None
+        # Autonomous loop support
+        # background_mode=True: skip blocking user confirmation; immediately deny.
+        self.background_mode: bool = background_mode
+        # Directive written by set_loop_state tool; read by AgentLoop after the run.
+        self.loop_state_directive: Optional[Dict[str, Any]] = None
+        # User input request queue (ordered, multi-slot keyed by request_id).
+        self._user_input_queue: deque = deque()
+        self._user_input_events: Dict[str, threading.Event] = {}
+        self._user_input_results: Dict[str, str] = {}
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -655,6 +665,25 @@ class SSEOutputHandler(OutputHandler):
         to be called by the HTTP endpoint.  Returns ``True`` if the user allows,
         ``False`` otherwise.
         """
+        # Background mode: immediately deny — no semaphore hold, no waiting.
+        if self.background_mode:
+            self._emit(
+                {
+                    "type": "tool_confirm_denied",
+                    "tool": tool_name,
+                    "reason": "unattended",
+                    "message": (
+                        f"'{tool_name}' requires live user approval and cannot run "
+                        "unattended. Use request_user_input() to notify the user, "
+                        "then retry in a subsequent turn."
+                    ),
+                }
+            )
+            logger.info(
+                "Background mode: immediately denied confirmation for '%s'", tool_name
+            )
+            return False
+
         confirm_id = str(uuid.uuid4())
         self._confirm_event = threading.Event()
         self._confirm_result = False
@@ -710,6 +739,91 @@ class SSEOutputHandler(OutputHandler):
             self._confirm_event = threading.Event()
         self._confirm_result = approved
         self._confirm_event.set()
+        return True
+
+    def request_user_input_blocking(
+        self,
+        message: str,
+        choices: Optional[List[str]] = None,
+        default_if_no_response: Optional[str] = None,
+        timeout_seconds: int = 300,
+        continue_if_no_response: bool = True,
+    ) -> str:
+        """Ask the user a question and block until a response arrives or timeout.
+
+        Emits a ``user_input_request`` SSE event.  In background mode the request
+        is still emitted (so it appears in the Goals dashboard), but returns
+        ``"__NO_RESPONSE__"`` immediately instead of blocking.
+
+        Returns:
+            User's response string, the chosen option, the default value on
+            timeout, or ``"__NO_RESPONSE__"`` when no default is provided and
+            the timeout expires.  Never returns empty string.
+        """
+        request_id = str(uuid.uuid4())
+        timeout_seconds = max(10, timeout_seconds)  # floor: 10 seconds
+
+        self._emit(
+            {
+                "type": "user_input_request",
+                "request_id": request_id,
+                "message": message,
+                "choices": choices or [],
+                "timeout_seconds": timeout_seconds,
+                "continue_if_no_response": continue_if_no_response,
+            }
+        )
+
+        if self.background_mode:
+            # Can't block — no active SSE consumer.  Return the sentinel so the
+            # caller can decide whether to proceed or schedule a retry.
+            return default_if_no_response if default_if_no_response is not None else "__NO_RESPONSE__"
+
+        # Register the pending request
+        evt = threading.Event()
+        self._user_input_events[request_id] = evt
+        self._user_input_queue.append(request_id)
+
+        # Block until resolved or timeout
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if self.cancelled.is_set():
+                break
+            if evt.wait(timeout=0.5):
+                break
+
+        # Clean up
+        self._user_input_queue = deque(
+            rid for rid in self._user_input_queue if rid != request_id
+        )
+        self._user_input_events.pop(request_id, None)
+        response = self._user_input_results.pop(request_id, None)
+
+        if response is not None:
+            return response
+        if default_if_no_response is not None:
+            return default_if_no_response
+        if not continue_if_no_response:
+            # Signal loop to pause
+            if self.loop_state_directive is None:
+                self.loop_state_directive = {
+                    "directive": "paused",
+                    "reason": "User input timed out and continue_if_no_response=False",
+                    "wake_in_seconds": 0,
+                }
+        return "__NO_RESPONSE__"
+
+    def resolve_user_input(self, request_id: str, response: str) -> bool:
+        """Unblock a pending ``request_user_input_blocking()`` call.
+
+        Called by ``POST /api/chat/user-input``.  Returns ``False`` if no
+        request with that ID is pending.
+        """
+        evt = self._user_input_events.get(request_id)
+        if evt is None:
+            return False
+        self._user_input_results[request_id] = response
+        evt.set()
         return True
 
     def signal_done(self):

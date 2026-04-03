@@ -1,0 +1,39 @@
+id: memory_home_user_basics
+name: "Memory Home User — Basic Facts"
+category: memory
+severity: medium
+description: |
+  Tests memory with a non-technical home/consumer user. The user shares
+  simple personal facts in casual language. The agent must store them and
+  recall them naturally without technical jargon.
+
+persona: home_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Share name and a simple preference"
+    user_message: "hey can you remember my name is pat and i prefer dark mode on everything"
+    ground_truth:
+      expected_answer: "Pat, dark mode preference"
+    success_criteria: "Agent stores the name Pat and the dark mode preference. Should use remember tool. Response must be friendly, non-technical, and confirm both facts."
+
+  - turn: 2
+    objective: "Add a second preference"
+    user_message: "also i have a cat named biscuit. just fyi"
+    ground_truth:
+      expected_answer: "cat named Biscuit"
+    success_criteria: "Agent acknowledges and stores the cat's name (Biscuit). Casual, warm response expected."
+
+  - turn: 3
+    objective: "Ask agent what it knows about the user"
+    user_message: "wait what do you know about me again?"
+    ground_truth:
+      expected_answer: "Pat, dark mode preference, cat named Biscuit"
+    success_criteria: "Agent recalls all three stored facts: name Pat, dark mode preference, and cat Biscuit. FAIL if any fact is missing or agent says it doesn't remember. Response should be friendly and non-technical."
+
+expected_outcome: |
+  Agent stores simple personal facts from a home/consumer user and recalls
+  them accurately and naturally on request.

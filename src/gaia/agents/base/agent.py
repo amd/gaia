@@ -243,8 +243,13 @@ You must respond ONLY in valid JSON. No text before { or after }.
         """
         Auto-collect system prompt fragments from inherited mixins.
 
-        Checks for mixin methods following the pattern: get_*_system_prompt()
+        Discovers all methods matching the pattern get_*_system_prompt() on
+        the instance and calls each one. This means any mixin that defines
+        a method like get_foo_system_prompt() will automatically have its
+        prompt fragment included — no manual registration needed.
+
         Override this method to modify, reorder, or filter mixin prompts.
+        Always call super()._get_mixin_prompts() to preserve auto-discovery.
 
         Returns:
             List of prompt fragments from mixins (empty list if no mixins provide prompts)
@@ -252,26 +257,26 @@ You must respond ONLY in valid JSON. No text before { or after }.
         Example:
             def _get_mixin_prompts(self) -> list[str]:
                 prompts = super()._get_mixin_prompts()
-                # Modify SD prompt
-                if prompts:
-                    prompts[0] = prompts[0].replace("whimsical", "serious")
-                return prompts
+                # Filter out SD prompt if not needed
+                return [p for p in prompts if "Stable Diffusion" not in p]
         """
         prompts = []
 
-        # Check for SD mixin prompts
-        if hasattr(self, "get_sd_system_prompt"):
-            fragment = self.get_sd_system_prompt()
-            if fragment:
-                prompts.append(fragment)
-
-        # Check for VLM mixin prompts
-        if hasattr(self, "get_vlm_system_prompt"):
-            fragment = self.get_vlm_system_prompt()
-            if fragment:
-                prompts.append(fragment)
-
-        # Add more mixin checks here as new prompt-providing mixins are created
+        # Auto-discover all get_*_system_prompt() methods on this instance.
+        # This eliminates the need to hardcode each mixin's prompt method.
+        for attr_name in dir(self):
+            if (
+                attr_name.startswith("get_")
+                and attr_name.endswith("_system_prompt")
+                and attr_name != "_get_system_prompt"
+                and callable(getattr(self, attr_name, None))
+            ):
+                try:
+                    fragment = getattr(self, attr_name)()
+                    if fragment:
+                        prompts.append(fragment)
+                except Exception:
+                    pass
 
         return prompts
 
@@ -2074,6 +2079,15 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 # Stop the progress indicator
                 self.console.stop_progress()
 
+            # Strip <think>...</think> blocks emitted by reasoning models
+            # (e.g. Qwen3.5).  Must happen before parsing so the JSON extractor
+            # finds clean input, and before the response is stored in
+            # conversation_history so the thinking text never bleeds into the
+            # next turn and confuses the model about the current user message.
+            response = re.sub(
+                r"<think>.*?</think>", "", response, flags=re.DOTALL
+            ).strip()
+
             # Print the LLM response to the console
             logger.debug(f"LLM response: {response[:200]}...")
             if self.show_prompts:
@@ -2182,6 +2196,11 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     )
                     plan_response = chat_response.text
                     self.console.stop_progress()
+
+                # Strip <think> blocks before parsing (same reason as main path)
+                plan_response = re.sub(
+                    r"<think>.*?</think>", "", plan_response, flags=re.DOTALL
+                ).strip()
 
                 # Parse the plan response
                 parsed_plan = self._parse_llm_response(plan_response)
@@ -2939,6 +2958,13 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
         # Store the result internally
         self.last_result = result
+
+        # Post-query hook for mixins (e.g., MemoryMixin conversation storage)
+        if hasattr(self, "_after_process_query"):
+            try:
+                self._after_process_query(user_input, result.get("result", ""))
+            except Exception as e:
+                logger.warning(f"Post-query hook failed: {e}")
 
         return result
 

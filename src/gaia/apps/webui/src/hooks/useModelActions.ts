@@ -15,8 +15,12 @@ import {
 /**
  * Shared hook for model load/download operations with spinner state,
  * timer-guarded reset, and status polling for early completion detection.
+ *
+ * @param defaultModelName - Model name to use when none is provided to loadModel().
+ * @param contextSize      - Context window size (tokens) to pass to load-model.
+ *                           Defaults to MIN_CONTEXT_SIZE (32768) when not set.
  */
-export function useModelActions(defaultModelName?: string) {
+export function useModelActions(defaultModelName?: string, contextSize?: number) {
     const [isLoadingModel, setIsLoadingModel] = useState(false);
     const [isDownloadingModel, setIsDownloadingModel] = useState(false);
 
@@ -64,10 +68,11 @@ export function useModelActions(defaultModelName?: string) {
 
     const loadModel = useCallback(async (name?: string) => {
         const target = name ?? modelName;
+        const ctxSize = contextSize ?? MIN_CONTEXT_SIZE;
         setIsLoadingModel(true);
         try {
-            await api.loadModel(target, MIN_CONTEXT_SIZE);
-            log.system.info(`Load model triggered: ${target}`);
+            await api.loadModel(target, ctxSize);
+            log.system.info(`Load model triggered: ${target} (ctx=${ctxSize})`);
             if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
             loadTimerRef.current = setTimeout(() => setIsLoadingModel(false), LOAD_SPINNER_TIMEOUT_MS);
             startPolling(target, 'load');
@@ -75,7 +80,7 @@ export function useModelActions(defaultModelName?: string) {
             log.system.error('Failed to trigger model load', err);
             setIsLoadingModel(false);
         }
-    }, [modelName, startPolling]);
+    }, [modelName, contextSize, startPolling]);
 
     const downloadModel = useCallback(async (force = false, name?: string) => {
         const target = name ?? modelName;

@@ -1,0 +1,39 @@
+id: memory_preference_application
+name: "Memory Preference Application"
+category: memory
+severity: medium
+description: |
+  Tests the agent's ability to store a user preference via the `remember` tool
+  and then apply that preference in subsequent responses without being explicitly
+  reminded. The user states a formatting preference and the agent should honour it.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Tell the agent a clear formatting preference"
+    user_message: "I always want answers in bullet points, never in long paragraphs. Please remember this preference."
+    ground_truth:
+      expected_answer: "Preference stored: bullet point answers"
+    success_criteria: "Agent confirms it will remember and use bullet points. Agent should call the remember tool to store this as a preference."
+
+  - turn: 2
+    objective: "Ask a general knowledge question and verify bullet-point formatting is applied"
+    user_message: "What are the main benefits of running AI models locally on a device?"
+    ground_truth:
+      expected_answer: "Privacy, low latency, offline capability, cost savings"
+    success_criteria: "Agent answers with bullet points (uses - or * or numbered list format). FAIL if agent responds in long unbroken paragraphs without list formatting."
+
+  - turn: 3
+    objective: "Ask a follow-up to confirm the preference was retained, not just applied once"
+    user_message: "Now tell me about the AMD Ryzen AI processor family."
+    ground_truth:
+      expected_answer: "Ryzen AI processors with NPU, local AI acceleration"
+    success_criteria: "Agent again uses bullet point or list format. FAIL if agent reverts to paragraph format, indicating the preference was not retained."
+
+expected_outcome: |
+  Agent stores user formatting preference and consistently applies it across
+  multiple turns without needing to be reminded.

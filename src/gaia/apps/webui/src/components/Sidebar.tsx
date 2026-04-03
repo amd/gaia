@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone } from 'lucide-react';
+import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, Brain, EyeOff } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -61,7 +61,10 @@ function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSele
             aria-label={`Open task: ${s.title}`}
             aria-current={isActive ? 'true' : undefined}
         >
-            <span className="session-title">{s.title}</span>
+            <span className="session-title">
+                {s.private && <EyeOff size={10} className="session-private-icon" aria-label="Private session" />}
+                {s.title}
+            </span>
             <a
                 className={`session-hash ${copied ? 'copied' : ''}`}
                 href={`#${getSessionHash(s.id)}`}
@@ -101,7 +104,7 @@ function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSele
 export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
     const {
         sessions, currentSessionId, setCurrentSession, removeSession, addSession,
-        setMessages, theme, toggleTheme, setShowSettings,
+        setMessages, theme, toggleTheme, setShowSettings, setShowMemoryDashboard,
         sidebarOpen, setSidebarOpen, setLoadingMessages,
         sidebarCollapsed, toggleSidebarCollapsed,
         sidebarWidth, setSidebarWidth,
@@ -446,6 +449,9 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                             <Smartphone size={17} />
                         </button>
                     )}
+                    <button className="btn-icon" onClick={() => setShowMemoryDashboard(true)} title="Memory Dashboard" aria-label="Memory Dashboard">
+                        <Brain size={17} />
+                    </button>
                     <button className="btn-icon" onClick={() => setShowSettings(true)} title="Settings" aria-label="Settings">
                         <Settings size={17} />
                     </button>

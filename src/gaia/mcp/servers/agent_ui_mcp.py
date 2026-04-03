@@ -458,6 +458,60 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
         except Exception as e:
             return {"error": f"Screenshot failed: {e}"}
 
+    # ── Memory (optional — enabled via memory dashboard settings) ────
+
+    _mem_settings = _api(backend_url, "get", "/memory/settings")
+    if isinstance(_mem_settings, dict) and _mem_settings.get("mcp_memory_enabled"):
+
+        @mcp.tool()
+        def memory_stats() -> Dict[str, Any]:
+            """Return aggregate statistics for the agent's persistent memory store.
+            Shows total stored memories, retrieval count, session count, and more.
+            Enable this tool in the Memory Dashboard → Settings."""
+            return _api(backend_url, "get", "/memory/stats")
+
+        @mcp.tool()
+        def memory_list(
+            category: str = "",
+            context: str = "",
+            search: str = "",
+            limit: int = 20,
+        ) -> Dict[str, Any]:
+            """Browse stored memories. All parameters are optional filters.
+
+            Args:
+                category: Filter by category (fact, preference, skill, error, note, reminder).
+                context: Filter by context scope (global, work, personal, or custom).
+                search: Full-text search query.
+                limit: Max results to return (default 20).
+            Enable this tool in the Memory Dashboard → Settings."""
+            params: Dict[str, Any] = {
+                "limit": limit,
+                "order": "desc",
+                "sort_by": "updated_at",
+            }
+            if category:
+                params["category"] = category
+            if context:
+                params["context"] = context
+            if search:
+                params["search"] = search
+            qs = "&".join(f"{k}={v}" for k, v in params.items())
+            return _api(backend_url, "get", f"/memory/knowledge?{qs}")
+
+        @mcp.tool()
+        def memory_recall(query: str, limit: int = 10) -> Dict[str, Any]:
+            """Search the agent's memory by keyword or concept.
+
+            Args:
+                query: Search query (supports natural language).
+                limit: Max results (default 10).
+            Enable this tool in the Memory Dashboard → Settings."""
+            import urllib.parse
+
+            qs = f"search={urllib.parse.quote(query)}&limit={limit}&order=desc"
+            return _api(backend_url, "get", f"/memory/knowledge?{qs}")
+
     # ── Browser Navigation ────────────────────────────────────────
 
     # Track last opened URL to avoid duplicate tabs

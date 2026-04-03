@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link, Brain, EyeOff } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
@@ -127,7 +127,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
-        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
+        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, setShowMemoryDashboard, isLoadingMessages, setLoadingMessages,
         systemStatus,
     } = useChatStore();
 
@@ -935,9 +935,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
 
-    // Refocus input when streaming ends (textarea is disabled during streaming,
-    // which causes the browser to drop focus — restore it so the user can
-    // immediately type the next message without clicking).
+    // Refocus input when streaming ends so the user can immediately type
+    // the next message without clicking.
     useEffect(() => {
         if (!isStreaming && inputRef.current) {
             inputRef.current.focus();
@@ -1030,6 +1029,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
         setEditingTitle(false);
     };
+
+    // Toggle private (incognito) mode
+    const handleTogglePrivate = useCallback(async () => {
+        if (!sessionId) return;
+        try {
+            const updated = await api.toggleSessionPrivacy(sessionId);
+            updateSessionInList(sessionId, { private: updated.private });
+        } catch (err) {
+            log.ui.warn('Failed to toggle private mode', err);
+        }
+    }, [sessionId, updateSessionInList]);
 
     // Export
     const handleExport = async () => {
@@ -1128,14 +1138,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     return (
         <main
-            className={`chat-view ${isDragOver ? 'drag-active' : ''}`}
+            className={`task-view ${isDragOver ? 'drag-active' : ''}`}
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
         >
             {/* Header */}
-            <header className="chat-header">
-                <div className="chat-header-left">
+            <header className="task-header">
+                <div className="task-header-left">
                     {editingTitle ? (
                         <input
                             className="title-edit"
@@ -1144,18 +1154,18 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             onBlur={saveTitle}
                             onKeyDown={(e) => e.key === 'Enter' && saveTitle()}
                             autoFocus
-                            aria-label="Edit chat title"
+                            aria-label="Edit task title"
                         />
                     ) : (
                         <>
-                            <h3 className="chat-title">{session?.title || 'Chat'}</h3>
-                            <button className="btn-icon-sm" onClick={startEditTitle} title="Rename" aria-label="Rename chat">
+                            <h3 className="task-title">{session?.title || 'New Task'}</h3>
+                            <button className="btn-icon-sm" onClick={startEditTitle} title="Rename" aria-label="Rename task">
                                 <Edit3 size={13} />
                             </button>
                         </>
                     )}
                 </div>
-                <div className="chat-header-right">
+                <div className="task-header-right">
                     <a
                         className={`session-hash-badge ${hashCopied ? 'copied' : ''}`}
                         href={`#${getSessionHash(sessionId)}`}
@@ -1173,7 +1183,19 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files" aria-label="Browse files">
                         <FolderSearch size={15} />
                     </button>
-                    <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export chat">
+                    <button
+                        className={`btn-icon-sm${session?.private ? ' active' : ''}`}
+                        onClick={handleTogglePrivate}
+                        title={session?.private ? 'Private mode on — click to disable' : 'Enable private mode (nothing saved to memory)'}
+                        aria-label={session?.private ? 'Disable private mode' : 'Enable private mode'}
+                        aria-pressed={!!session?.private}
+                    >
+                        <EyeOff size={15} />
+                    </button>
+                    <button className="btn-icon-sm" onClick={() => setShowMemoryDashboard(true)} title="Memory" aria-label="Open memory dashboard">
+                        <Brain size={15} />
+                    </button>
+                    <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export task">
                         <Download size={15} />
                     </button>
                 </div>
@@ -1265,19 +1287,19 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 )}
 
                 {showEmptyState && (
-                    <div className="empty-chat">
-                        <div className="empty-chat-icon">
+                    <div className="empty-task">
+                        <div className="empty-task-icon">
                             <MessageSquare size={36} strokeWidth={1.2} />
                         </div>
-                        <h4 className="empty-chat-title">What can I help you with?</h4>
-                        <p className="empty-chat-desc">
+                        <h4 className="empty-task-title">What can I help you with?</h4>
+                        <p className="empty-task-desc">
                             Ask about your documents, search files, or analyze data &mdash; powered by local AI.
                         </p>
-                        <div className="empty-chat-suggestions">
+                        <div className="empty-task-suggestions">
                             {EMPTY_SUGGESTIONS.map((s) => (
                                 <button
                                     key={s}
-                                    className="empty-chat-chip"
+                                    className="empty-task-chip"
                                     onClick={() => handleSuggestionClick(s)}
                                 >
                                     {s}
@@ -1400,11 +1422,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             onPaste={handlePaste}
                             placeholder="Type a message or paste an image... (Shift+Enter for new line)"
                             rows={1}
-                            disabled={isStreaming}
                             aria-label="Message input"
                         />
                     </div>
-                    {!isStreaming && <span className="input-cursor" aria-hidden="true" />}
+                    <span className="input-cursor" aria-hidden="true" />
                     <div className="input-btns">
                         <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">
                             <Upload size={15} />

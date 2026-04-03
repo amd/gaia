@@ -2,7 +2,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Chat View - Refined conversation interface */
 
-.chat-view {
+.task-view {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -14,14 +14,14 @@
 }
 
 /* Drag active indicator */
-.chat-view.drag-active {
+.task-view.drag-active {
     outline: 2px dashed var(--amd-red);
     outline-offset: -4px;
 }
 
 /* ── Header -- glassmorphism status bar ─────────────────────────── */
 
-.chat-header {
+.task-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -33,16 +33,16 @@
     font-family: var(--font-sans);
 }
 
-[data-theme="dark"] .chat-header {
+[data-theme="dark"] .task-header {
     background: rgba(10, 10, 18, 0.88);
     backdrop-filter: blur(20px) saturate(1.2);
     -webkit-backdrop-filter: blur(20px) saturate(1.2);
 }
 
-.chat-header-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.chat-header-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.task-header-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.task-header-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
-.chat-title {
+.task-title {
     font-size: 13px;
     font-weight: 600;
     font-family: var(--font-sans);
@@ -262,7 +262,7 @@
 
 /* ── Empty chat state ────────────────────────────────────────────── */
 
-.empty-chat {
+.empty-task {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -279,13 +279,13 @@
     to { opacity: 1; transform: translateY(0); }
 }
 
-.empty-chat-icon {
+.empty-task-icon {
     color: var(--text-muted);
     margin-bottom: 18px;
     opacity: 0.3;
 }
 
-.empty-chat-title {
+.empty-task-title {
     font-size: 20px;
     font-weight: 700;
     font-family: var(--font-sans);
@@ -294,7 +294,7 @@
     letter-spacing: -0.3px;
 }
 
-.empty-chat-desc {
+.empty-task-desc {
     font-size: 14px;
     font-family: var(--font-sans);
     color: var(--text-muted);
@@ -303,7 +303,7 @@
     max-width: 440px;
 }
 
-.empty-chat-suggestions {
+.empty-task-suggestions {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
@@ -311,7 +311,7 @@
     max-width: 560px;
 }
 
-.empty-chat-chip {
+.empty-task-chip {
     padding: 9px 18px;
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
@@ -322,17 +322,17 @@
     transition: all var(--duration) var(--ease);
     animation: chipCascade 300ms var(--ease) both;
 }
-.empty-chat-chip:nth-child(1) { animation-delay: 450ms; }
-.empty-chat-chip:nth-child(2) { animation-delay: 530ms; }
-.empty-chat-chip:nth-child(3) { animation-delay: 610ms; }
-.empty-chat-chip:nth-child(4) { animation-delay: 690ms; }
+.empty-task-chip:nth-child(1) { animation-delay: 450ms; }
+.empty-task-chip:nth-child(2) { animation-delay: 530ms; }
+.empty-task-chip:nth-child(3) { animation-delay: 610ms; }
+.empty-task-chip:nth-child(4) { animation-delay: 690ms; }
 
 @keyframes chipCascade {
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
-.empty-chat-chip:hover {
+.empty-task-chip:hover {
     border-color: var(--amd-red);
     color: var(--amd-red);
     background: var(--amd-red-dim2);
@@ -875,7 +875,7 @@
 /* ── Responsive ──────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
-    .chat-header {
+    .task-header {
         padding: 10px 16px;
     }
 
@@ -886,7 +886,7 @@
         padding: 10px 12px max(10px, env(safe-area-inset-bottom));
     }
 
-    .empty-chat {
+    .empty-task {
         padding: 40px 16px;
     }
 

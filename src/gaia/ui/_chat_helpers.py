@@ -36,6 +36,28 @@ from .sse_handler import (
 
 logger = logging.getLogger(__name__)
 
+
+def _register_agent_memory_ops(agent) -> None:
+    """Register LLM-powered memory operations from a ChatAgent with the memory router.
+
+    Consolidation and reconciliation require a live LLM + FAISS index, so they
+    cannot run from the router's standalone MemoryStore.  This function wires
+    the agent's methods into module-level callables that the router can invoke.
+
+    Safe to call on every agent construction — the router just overwrites the
+    previous reference (all agents share the same DB, so any active agent works).
+    """
+    try:
+        from gaia.ui.routers import memory as _mem_router
+
+        if hasattr(agent, "consolidate_old_sessions"):
+            _mem_router._consolidate_fn = agent.consolidate_old_sessions
+        if hasattr(agent, "reconcile_memory"):
+            _mem_router._reconcile_fn = agent.reconcile_memory
+    except Exception:
+        pass  # Non-fatal: dashboard ops degrade gracefully when not registered
+
+
 # Active SSE handlers keyed by session_id.  The /api/chat/confirm-tool
 # endpoint looks up the handler here to resolve a pending confirmation.
 _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
@@ -456,6 +478,12 @@ async def _get_chat_response(
             )
             agent = ChatAgent(config)
             _store_agent(session_id, model_id, document_ids, agent)
+            _register_agent_memory_ops(agent)
+
+        # Suppress memory writes when private session OR global memory is disabled.
+        if hasattr(agent, "_incognito"):
+            memory_globally_off = db.get_setting("memory_enabled", "true") == "false"
+            agent._incognito = memory_globally_off or bool(session.get("private", 0))
 
         # Restore conversation history (limited to prevent context overflow).
         # Always re-inject from DB so the history is consistent with what was
@@ -656,6 +684,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         session_id[:8],
                         _time.monotonic() - t_construct,
                     )
+                    _register_agent_memory_ops(agent)
                     agent.console = sse_handler  # Assign early so tool events flow
 
                     # Early-exit if consumer disconnected
@@ -726,6 +755,15 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         _mcp_status_cache[:] = mcp_report
                     if mcp_report:
                         sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
+
+                # Suppress memory writes when private session OR global memory is disabled.
+                if hasattr(agent, "_incognito"):
+                    memory_globally_off = (
+                        db.get_setting("memory_enabled", "true") == "false"
+                    )
+                    agent._incognito = memory_globally_off or bool(
+                        session.get("private", 0)
+                    )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():

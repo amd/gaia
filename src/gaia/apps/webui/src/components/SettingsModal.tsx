@@ -2,14 +2,22 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { X, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { X, Loader2, CheckCircle2, AlertCircle, Copy, Check, Play, Square } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
-import type { SystemStatus, MCPServerStatus } from '../types';
+import type { SystemStatus, MCPServerStatus, Settings, AgentMCPServerStatus } from '../types';
 import './SettingsModal.css';
+
+// Context-size preset options (tokens).  All must be >= MIN_CONTEXT_SIZE.
+const CTX_PRESETS = [
+    { label: '32K (minimum)', value: 32768 },
+    { label: '64K', value: 65536 },
+    { label: '128K', value: 131072 },
+    { label: '256K', value: 262144 },
+];
 
 export function SettingsModal() {
     const { setShowSettings, sessions, removeSession } = useChatStore();
@@ -17,38 +25,98 @@ export function SettingsModal() {
     const [loading, setLoading] = useState(true);
     const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
 
+    // ── Settings (context size + future overrides) ────────────────────────────
+    const [settings, setSettings] = useState<Settings | null>(null);
+    const [ctxSize, setCtxSize] = useState<number>(MIN_CONTEXT_SIZE);
+    const [ctxSaving, setCtxSaving] = useState(false);
+    const [ctxSaved, setCtxSaved] = useState(false);
+
+    // ── Agent UI MCP server ───────────────────────────────────────────────────
+    const [agentMCP, setAgentMCP] = useState<AgentMCPServerStatus | null>(null);
+    const [mcpPort, setMcpPort] = useState<number>(8765);
+    const [mcpBusy, setMcpBusy] = useState(false);
+    const [urlCopied, setUrlCopied] = useState(false);
+
     useEffect(() => {
         log.system.info('Checking system status...');
         const t = log.system.time();
-        api.getSystemStatus()
-            .then((s) => {
-                setStatus(s);
-                log.system.timed('System status received', t, {
-                    lemonade: s.lemonade_running ? 'running' : 'stopped',
-                    model: s.model_loaded || 'none',
-                    embedding: s.embedding_model_loaded ? 'yes' : 'no',
-                    disk: `${s.disk_space_gb}GB free`,
-                    memory: `${s.memory_available_gb}GB available`,
-                });
-                if (!s.lemonade_running) {
-                    log.system.warn('Lemonade Server is NOT running.');
-                }
-            })
-            .catch((err) => {
-                log.system.error('Failed to get system status', err);
-                setStatus(null);
-            })
-            .finally(() => setLoading(false));
 
-        api.getMCPRuntimeStatus()
-            .then((r) => setMcpServers(r.servers))
-            .catch(() => { /* MCP status is non-critical */ });
+        Promise.all([
+            api.getSystemStatus(),
+            api.getMCPRuntimeStatus(),
+            api.getSettings(),
+            api.getAgentMCPServerStatus(),
+        ]).then(([sys, mcp, sett, agentSrv]) => {
+            setStatus(sys);
+            setMcpServers(mcp.servers);
+            setSettings(sett);
+            setCtxSize(sett.context_size ?? MIN_CONTEXT_SIZE);
+            setAgentMCP(agentSrv);
+            if (agentSrv.port) setMcpPort(agentSrv.port);
+            log.system.timed('Settings modal data loaded', t, {
+                lemonade: sys.lemonade_running ? 'running' : 'stopped',
+                model: sys.model_loaded || 'none',
+                ctx: sett.context_size ?? 'default',
+                agentMCP: agentSrv.running ? `running:${agentSrv.port}` : 'stopped',
+            });
+        }).catch((err) => {
+            log.system.error('Failed to load settings modal data', err);
+            setStatus(null);
+        }).finally(() => setLoading(false));
     }, []);
 
     const modelName = status?.default_model_name ?? DEFAULT_MODEL_NAME;
-    const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName);
+    const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(
+        modelName,
+        settings?.context_size ?? undefined,
+    );
 
-    // Two-click confirmation for clear-all
+    // ── Context-size save ─────────────────────────────────────────────────────
+    const saveCtxSize = useCallback(async () => {
+        setCtxSaving(true);
+        try {
+            const updated = await api.updateSettings({ context_size: ctxSize });
+            setSettings(updated);
+            setCtxSaved(true);
+            log.system.info(`Context size saved: ${ctxSize}`);
+            setTimeout(() => setCtxSaved(false), 2000);
+        } catch (err) {
+            log.system.error('Failed to save context size', err);
+        } finally {
+            setCtxSaving(false);
+        }
+    }, [ctxSize]);
+
+    // ── Agent UI MCP server start/stop ────────────────────────────────────────
+    const toggleAgentMCP = useCallback(async () => {
+        setMcpBusy(true);
+        try {
+            if (agentMCP?.running) {
+                const result = await api.stopAgentMCPServer();
+                log.system.info('Agent MCP server stopped', result);
+                setAgentMCP((prev) => prev ? { ...prev, running: false, pid: null, url: null } : null);
+            } else {
+                const result = await api.startAgentMCPServer(mcpPort);
+                log.system.info('Agent MCP server started', result);
+                setAgentMCP({ running: result.running ?? true, port: result.port, pid: result.pid, url: result.url });
+            }
+        } catch (err) {
+            log.system.error('Failed to toggle Agent MCP server', err);
+        } finally {
+            setMcpBusy(false);
+        }
+    }, [agentMCP, mcpPort]);
+
+    const copyMCPUrl = useCallback(() => {
+        if (agentMCP?.url) {
+            navigator.clipboard.writeText(agentMCP.url).then(() => {
+                setUrlCopied(true);
+                setTimeout(() => setUrlCopied(false), 2000);
+            }).catch(() => {});
+        }
+    }, [agentMCP]);
+
+    // ── Two-click confirmation for clear-all ──────────────────────────────────
     const [confirmClear, setConfirmClear] = useState(false);
     const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -88,6 +156,9 @@ export function SettingsModal() {
     const smallContext = !!(status?.lemonade_running && status.model_loaded && status.context_size_sufficient === false);
     const notDownloaded = !!(status?.lemonade_running && !status.model_loaded && status.model_downloaded === false);
     const needsLoad    = wrongModel || smallContext;
+
+    // Did the user change the ctx preset from what is currently saved?
+    const ctxChanged = ctxSize !== (settings?.context_size ?? MIN_CONTEXT_SIZE);
 
     return (
         <div className="modal-overlay" onClick={() => setShowSettings(false)} role="dialog" aria-modal="true" aria-label="Settings">
@@ -189,7 +260,7 @@ export function SettingsModal() {
                                                 {wrongModel ? 'Wrong model loaded.' : 'Context window too small.'}
                                             </span>
                                             <span className="model-action-desc">
-                                                Load <strong>{modelName}</strong> with {(MIN_CONTEXT_SIZE / 1024).toFixed(0)}K token context.
+                                                Load <strong>{modelName}</strong> with {(ctxSize / 1024).toFixed(0)}K token context.
                                             </span>
                                         </div>
                                         <button
@@ -231,6 +302,124 @@ export function SettingsModal() {
                                 <p>Could not connect to server</p>
                                 <code>gaia chat --ui</code>
                             </div>
+                        )}
+                    </section>
+
+                    {/* Context Window Size */}
+                    <section className="settings-section">
+                        <h4>Context Window</h4>
+                        <p className="settings-desc">
+                            Set how many tokens the model holds in memory per conversation.
+                            Larger contexts let the agent reason over longer history but
+                            require more RAM. Minimum is 32K (required by GAIA Chat).
+                        </p>
+                        <div className="ctx-row">
+                            <select
+                                className="ctx-select"
+                                value={ctxSize}
+                                onChange={(e) => setCtxSize(Number(e.target.value))}
+                            >
+                                {CTX_PRESETS.map((p) => (
+                                    <option key={p.value} value={p.value}>{p.label}</option>
+                                ))}
+                                {/* Show custom entry if stored value doesn't match any preset */}
+                                {!CTX_PRESETS.find((p) => p.value === ctxSize) && (
+                                    <option value={ctxSize}>{(ctxSize / 1024).toFixed(0)}K (custom)</option>
+                                )}
+                            </select>
+                            <button
+                                className={`btn-ctx-save${ctxSaved ? ' saved' : ''}`}
+                                onClick={saveCtxSize}
+                                disabled={ctxSaving || (!ctxChanged && !ctxSaved)}
+                                title="Save context size preference"
+                            >
+                                {ctxSaving ? (
+                                    <><Loader2 size={12} className="btn-spinner" /> Saving…</>
+                                ) : ctxSaved ? (
+                                    <><Check size={12} /> Saved</>
+                                ) : (
+                                    'Save'
+                                )}
+                            </button>
+                        </div>
+                        {status?.model_loaded && ctxChanged && (
+                            <p className="ctx-hint">
+                                Save then reload the model to apply the new context size.
+                            </p>
+                        )}
+                    </section>
+
+                    {/* Agent UI MCP Server */}
+                    <section className="settings-section">
+                        <h4>Agent UI MCP Server</h4>
+                        <p className="settings-desc">
+                            Expose GAIA Chat as MCP tools so external clients (e.g.,{' '}
+                            <strong>Claude Code</strong>) can create sessions, send messages,
+                            and browse files directly from their tool call interface.
+                        </p>
+
+                        {agentMCP === null ? (
+                            <p className="loading-text">Checking MCP server…</p>
+                        ) : (
+                            <>
+                                <div className="mcp-server-row">
+                                    <div className="mcp-server-status">
+                                        <span className={`mcp-dot${agentMCP.running ? ' mcp-dot--running' : ''}`} />
+                                        <span className="mcp-status-text">
+                                            {agentMCP.running ? `Running on port ${agentMCP.port}` : 'Stopped'}
+                                        </span>
+                                    </div>
+
+                                    {!agentMCP.running && (
+                                        <div className="mcp-port-wrap">
+                                            <label className="mcp-port-label" htmlFor="mcp-port-input">Port</label>
+                                            <input
+                                                id="mcp-port-input"
+                                                className="mcp-port-input"
+                                                type="number"
+                                                min={1024}
+                                                max={65535}
+                                                value={mcpPort}
+                                                onChange={(e) => setMcpPort(Number(e.target.value))}
+                                            />
+                                        </div>
+                                    )}
+
+                                    <button
+                                        className={`btn-mcp-toggle${agentMCP.running ? ' btn-mcp-toggle--stop' : ' btn-mcp-toggle--start'}`}
+                                        onClick={toggleAgentMCP}
+                                        disabled={mcpBusy}
+                                        title={agentMCP.running ? 'Stop MCP server' : 'Start MCP server'}
+                                    >
+                                        {mcpBusy ? (
+                                            <Loader2 size={13} className="btn-spinner" />
+                                        ) : agentMCP.running ? (
+                                            <><Square size={12} /> Stop</>
+                                        ) : (
+                                            <><Play size={12} /> Start</>
+                                        )}
+                                    </button>
+                                </div>
+
+                                {agentMCP.running && agentMCP.url && (
+                                    <div className="mcp-url-row">
+                                        <code className="mcp-url">{agentMCP.url}</code>
+                                        <button
+                                            className="btn-mcp-copy"
+                                            onClick={copyMCPUrl}
+                                            title="Copy MCP server URL"
+                                        >
+                                            {urlCopied ? <Check size={13} /> : <Copy size={13} />}
+                                        </button>
+                                    </div>
+                                )}
+
+                                {agentMCP.running && (
+                                    <p className="mcp-connect-hint">
+                                        Add to Claude Code: <code>gaia mcp add-to-claude</code>
+                                    </p>
+                                )}
+                            </>
                         )}
                     </section>
 

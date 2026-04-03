@@ -1,0 +1,48 @@
+id: memory_student_study_assistant
+name: "Memory Student Study Assistant"
+category: memory
+severity: medium
+description: |
+  Tests memory in a student context: tracking assignments, deadlines,
+  and study preferences. This covers a very common real-world use case
+  where students use an AI as a study planner that remembers their
+  courses, deadlines, and learning preferences.
+
+persona: student
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Register courses and a deadline"
+    user_message: "hey can you keep track of my stuff this semester? i have 3 classes: Data Structures (prof Kim), Web Dev (online), and Stats 201. i have a Data Structures project due May 3rd"
+    ground_truth:
+      expected_answer: "Three courses stored: Data Structures (Prof Kim), Web Dev (online), Stats 201; DS project due May 3"
+    success_criteria: "Agent stores all three courses and the May 3rd deadline for Data Structures project. Should use remember tool for the course info and reminder for the deadline."
+
+  - turn: 2
+    objective: "Add a study preference"
+    user_message: "btw when you help me with stats stuff, i prefer visual explanations over formulas if possible. i'm more of a visual learner"
+    ground_truth:
+      expected_answer: "Preference stored: visual explanations for stats"
+    success_criteria: "Agent stores the learning preference: visual over formulas for stats. Should use remember with category=preference."
+
+  - turn: 3
+    objective: "Ask for upcoming deadlines"
+    user_message: "what deadlines do i have coming up?"
+    ground_truth:
+      expected_answer: "Data Structures project due May 3rd"
+    success_criteria: "Agent surfaces the Data Structures deadline (May 3rd). Should use recall to find stored reminders. FAIL if agent says it has no deadline information."
+
+  - turn: 4
+    objective: "Test preference application"
+    user_message: "can you explain what a normal distribution is?"
+    ground_truth:
+      expected_answer: "Visual explanation of normal distribution (bell curve, not formula-first)"
+    success_criteria: "Agent applies the stored visual learner preference and explains the normal distribution visually (bell curve description, real-world examples) rather than starting with the formula. FAIL if agent leads with formulas without referencing the user's visual preference."
+
+expected_outcome: |
+  Agent acts as a personalized study assistant — tracking courses, deadlines,
+  and learning preferences, then applying those preferences when helping
+  with coursework.

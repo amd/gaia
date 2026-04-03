@@ -1,0 +1,54 @@
+id: memory_cross_session_persistence
+name: "Memory Cross-Session Persistence"
+category: memory
+severity: critical
+description: |
+  Advanced test: verifies that knowledge explicitly stored in one conversation
+  is retrieved in a brand-new session without the user repeating themselves.
+
+  Turn 1-2: store two distinct facts (user identity + project detail).
+  Turn 3:   explicitly close the current "chapter" by saying "starting fresh".
+  Turn 4:   ask a question that requires both stored facts — testing that memory
+            persisted across the implicit session boundary.
+
+  This is the hardest memory scenario: it requires the agent to proactively
+  recall from the knowledge store rather than just scan conversation history.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Store user identity and project fact"
+    user_message: "Please remember two things: (1) My name is Riley and I'm a DevOps lead at a fintech startup. (2) Our production cluster runs Kubernetes 1.29 on bare-metal AMD EPYC servers."
+    ground_truth:
+      expected_answer: "Riley, DevOps lead, fintech startup, Kubernetes 1.29, AMD EPYC"
+    success_criteria: "Agent confirms both facts are stored. Should call remember tool twice or once with both facts. Must acknowledge Riley's role AND the cluster details."
+
+  - turn: 2
+    objective: "Add a third fact about a past incident"
+    user_message: "Also remember this: last month we had a critical outage caused by a misconfigured PodDisruptionBudget that blocked all node drains. It cost us 4 hours of downtime."
+    ground_truth:
+      expected_answer: "PodDisruptionBudget misconfiguration caused 4-hour outage"
+    success_criteria: "Agent stores the incident detail including PodDisruptionBudget and 4-hour outage. Should use category=error or category=note."
+
+  - turn: 3
+    objective: "Signal a fresh start to test cross-session recall"
+    user_message: "New topic — forget everything we just talked about in this message thread. Who am I and what happened to our cluster last month?"
+    ground_truth:
+      expected_answer: "Riley, DevOps lead, fintech, Kubernetes 1.29 AMD EPYC, PodDisruptionBudget outage 4 hours"
+    success_criteria: "Despite being asked to 'forget', agent retrieves from persistent memory: Riley's identity (name + role + company type), cluster details (K8s 1.29, AMD EPYC), and the PodDisruptionBudget incident. FAIL if agent says it doesn't know or returns fewer than all three stored facts."
+
+  - turn: 4
+    objective: "Apply stored knowledge to a new task without being reminded"
+    user_message: "I need to do a rolling upgrade of all 12 nodes. What should I watch out for?"
+    ground_truth:
+      expected_answer: "PodDisruptionBudget configuration, Kubernetes 1.29 rolling upgrade risks"
+    success_criteria: "Agent proactively mentions the PodDisruptionBudget risk from the stored incident, and references the Kubernetes 1.29 / AMD EPYC cluster context. FAIL if agent gives generic upgrade advice without referencing the specific stored incident or cluster details."
+
+expected_outcome: |
+  Agent demonstrates true persistent memory: stored facts survive a 'forget'
+  instruction (which only affects the current conversation, not the knowledge
+  store) and are proactively applied to new tasks.

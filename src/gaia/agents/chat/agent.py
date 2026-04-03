@@ -17,6 +17,7 @@ except ImportError:
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
@@ -77,6 +78,7 @@ class ChatAgentConfig:
 
 
 class ChatAgent(
+    MemoryMixin,
     Agent,
     RAGToolsMixin,
     FileToolsMixin,
@@ -188,6 +190,9 @@ class ChatAgent(
         self.conversation_history: List[Dict[str, str]] = (
             []
         )  # Track conversation for persistence
+
+        # Initialize memory subsystem (before super().__init__ which calls _register_tools)
+        self.init_memory()
 
         # Store base URL for use in _register_tools() (VLM, etc.)
         self._base_url = effective_base_url
@@ -301,16 +306,11 @@ class ChatAgent(
             )
 
     def _get_mixin_prompts(self) -> list[str]:
-        """Only include SD prompt when SD is actually initialized (saves ~1000 tokens)."""
-        prompts = []
-        if hasattr(self, "get_sd_system_prompt") and hasattr(self, "sd_default_model"):
-            fragment = self.get_sd_system_prompt()
-            if fragment:
-                prompts.append(fragment)
-        if hasattr(self, "get_vlm_system_prompt"):
-            fragment = self.get_vlm_system_prompt()
-            if fragment:
-                prompts.append(fragment)
+        """Auto-discover mixin prompts, but exclude SD unless actually initialized."""
+        prompts = super()._get_mixin_prompts()
+        # Remove SD prompt if SD was not explicitly initialized (saves ~1000 tokens)
+        if not hasattr(self, "sd_default_model"):
+            prompts = [p for p in prompts if "Stable Diffusion" not in p]
         return prompts
 
     def _get_system_prompt(self) -> str:
@@ -405,10 +405,16 @@ No documents are currently indexed.
 - You have opinions and you share them. You're not afraid to be playful, sarcastic (lightly), or funny.
 - You keep it short. One good sentence beats three mediocre ones. Don't ramble.
 - Match your response length to the complexity of the question. For short questions, greetings, or simple factual lookups, reply in 1-2 sentences. Only expand to multiple paragraphs for complex analysis requests.
-- **GREETING RULE (ABSOLUTE):** When user sends a short greeting ("Hi!", "Hello", "Hey", "Hi there", etc.) as their first message: respond with 1-2 sentences MAXIMUM. NEVER list features, tools, or capabilities. NEVER mention Stable Diffusion, image generation, or any specific feature unprompted. Just greet back and ask what they need.
-  WRONG: "Hey! What are you working on? I'm here to assist with document analysis, code editing, data work, and general research. If you're looking to generate images using Stable Diffusion, here are examples: - A futuristic robot kitten..." ← BANNED, verbose feature pitch on a greeting
+- **GREETING RULE:** When user sends a short greeting ("Hi!", "Hello", "Hey") as their first message: respond with 1-2 sentences MAXIMUM. NEVER list features or capabilities.
+  If you have memories about the user (name, project, recent activity), USE THEM to personalize:
+  RIGHT: "Hey Jordan! How's that K8s migration going?" (references stored name + project)
+  RIGHT: "Hi Sam — still on the object detection pipeline?" (warm, contextual, shows you remember)
+  If no memories exist yet, keep it simple:
   RIGHT: "Hey! What are you working on?"
-  RIGHT: "Hey — what do you need?"
+- **FACT-SHARING RULE:** When the user shares personal information ("I'm Sam", "I work at X", "I use Python"), this is NOT a greeting. You MUST respond to the specific content they shared. NEVER reply with a generic "What are you working on?" — acknowledge what they told you.
+  WRONG: "Got it, Sam! What are you working on?" ← ignores what they actually said
+  RIGHT: "Nice — NeuralStack, cool. What are you building there?" (acknowledges company name)
+  RIGHT: "Python and PyTorch — solid stack. What kind of models?" (references the tech they mentioned)
 - HARD LIMIT: For capability questions ("what can you help with?", "what can you help me with?", "what do you do?", "what can you do?", "what do you help with?"): EXACTLY 1-2 sentences. STOP after 2 sentences. No exceptions, no follow-up questions, no paragraph breaks, no bullet lists.
   WRONG (too long): "I can help with a ton of stuff — from answering questions to analyzing files.\\n\\nIf you've got documents, I can look at them.\\n\\nNeed help writing? Want to explore ideas? Just tell me." ← 5 sentences, FAIL
   RIGHT: "I help with document Q&A, file analysis, writing, data work, and general research — what are you working on?"
@@ -504,8 +510,24 @@ NEVER write JSON blocks in your response text. NEVER simulate or fake tool outpu
 If you are unsure which document a user refers to and documents are already indexed, call query_specific_file or query_documents — do NOT generate fake JSON to simulate a search.
 """
 
-        # ── Tier 1: Discovery rules (always present — LLM needs these for registered RAG tools) ──
-        discovery_rules = """
+        # ── Tier 1: Discovery / file rules — only when file context exists ──
+        # Without indexed docs or a library, the full 3000-token discovery ruleset
+        # is wasted tokens (pure-chat / memory-only sessions).  Show a compact hint
+        # instead, and keep the full rules for when files are actually relevant.
+        has_file_context = has_indexed or has_library or bool(
+            getattr(self, "watch_directories", [])
+        )
+
+        if not has_file_context:
+            discovery_rules = """
+**FILE & DOCUMENT SEARCH (no files loaded):**
+If user asks about files or domain-specific documents: search_file (find) → index_document → query_specific_file/query_documents.
+- After index_document, IMMEDIATELY call query_specific_file — never answer from filename alone.
+- For CSV/Excel: use analyze_data_file (not RAG query tools).
+- deep_search=true only if quick search finds nothing.
+"""
+        else:
+            discovery_rules = """
 **SMART DISCOVERY WORKFLOW:**
 When user asks a domain-specific question (e.g., "what is the PTO policy?"):
 1. Check if relevant documents are indexed
@@ -612,7 +634,7 @@ You: {"tool": "index_document", "tool_args": {"file_path": "C:/Docs/User-Guide.p
 You: {"answer": "Indexed User-Guide.pdf. You can now ask questions about it!"}
 
 **DIRECTORY INDEXING:** When user asks to index a folder: search_directory → show matches → index_directory → report results.
-"""
+"""  # end else (has_file_context)
 
         # ── Tier 2: RAG query rules (only when documents are indexed) ──
         rag_query_rules = ""
@@ -813,8 +835,11 @@ When user uses a reference to a file already found/indexed in a PRIOR turn ("the
 - RIGHT: query_specific_file("api_reference.py", "authentication method")
 """
 
-        # ── Data analysis and file rules (always present) ──
-        data_file_rules = """
+        # ── Data analysis and file rules (only when file context exists) ──
+        if not has_file_context:
+            data_file_rules = ""
+        else:
+            data_file_rules = """
 **FILE ANALYSIS AND DATA PROCESSING:**
 When user asks to analyze data files (bank statements, spreadsheets, expense reports, CSV sales data):
 1. First find the files using search_file or list_recent_files
@@ -873,7 +898,7 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
   BANNED RESPONSE (NEVER SAY): "I can generate images when the --sd flag is active" / "image generation requires --sd" / "I can create images for you" — ANY claim about availability before attempting.
   MANDATORY: When user asks "can you generate an image?" or asks you to create any image, you MUST call generate_image FIRST. If it returns an error, THEN report it is unavailable. NEVER claim you can or cannot generate images without first attempting the call. Your first response to any image request must be the tool call, not a text explanation.
   AFTER FAILURE: If generate_image returns an error, respond in 1-2 sentences: state it is unavailable and optionally mention enabling --sd. DO NOT apologize, DO NOT explain what you "would have done". Example: "Image generation is not available in this session — start GAIA with the --sd flag to enable it."
-"""
+"""  # end else (has_file_context)
 
         prompt = (
             base_prompt
@@ -1109,6 +1134,7 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
         self.register_file_tools()
         self.register_shell_tools()
         self.register_file_search_tools()  # Shared file search tools
+        self.register_memory_tools()  # Persistent memory tools
         self.register_file_io_tools()  # File read/write/edit (FileIOToolsMixin)
         self.register_screenshot_tools()  # Screenshot capture (ScreenshotToolsMixin)
         # Remove CodeAgent-specific FileIO tools — ChatAgent only needs the 3 generic ones.
@@ -1129,6 +1155,7 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
         for _name in _chat_only_fileio:
             _TOOL_REGISTRY.pop(_name, None)
         self._register_external_tools_conditional()  # Web/doc search (if backends available)
+        self._register_loop_control_tools()  # set_loop_state, request_user_input
 
         # Inline list_files — only the safe subset of ProjectManagementMixin
         @tool
@@ -1632,6 +1659,100 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
                         )
             except Exception as _mcp_err:
                 logger.warning("MCP server load failed: %s", _mcp_err)
+
+    def _register_loop_control_tools(self) -> None:
+        """Register set_loop_state and request_user_input tools for autonomous mode.
+
+        These tools are only meaningful when the agent runs inside AgentLoop, but
+        they are always registered so the LLM sees them in the system prompt and
+        can call them safely even in manual/interactive sessions (they no-op in
+        that context because the console has no loop_state_directive attribute).
+        """
+        from gaia.agents.base.tools import tool
+
+        _agent = self
+
+        @tool
+        def set_loop_state(
+            state: str,
+            reason: str = "",
+            wake_in_seconds: int = 0,
+        ) -> str:
+            """Signal the autonomous loop what to do next.
+
+            Call this when you have finished all current work or need to pause.
+            Only effective when running inside the AgentLoop (autonomous mode).
+
+            Args:
+                state: "idle"      — nothing more to do right now.
+                       "scheduled" — wake me up in wake_in_seconds seconds.
+                       "paused"    — stop the autonomous loop (user must restart).
+                reason: Human-readable explanation (shown in activity log).
+                wake_in_seconds: Seconds until next wakeup (only for "scheduled").
+                    Minimum: 30. Maximum: 86400 (24 hours).
+            """
+            valid_states = {"idle", "scheduled", "paused"}
+            if state not in valid_states:
+                return f"Invalid state '{state}'. Must be one of: {sorted(valid_states)}"
+
+            # Clamp wake_in_seconds for "scheduled" state
+            if state == "scheduled":
+                wake_in_seconds = max(30, min(86400, wake_in_seconds))
+                if wake_in_seconds != wake_in_seconds:  # unreachable — kept for clarity
+                    pass
+
+            if hasattr(_agent.console, "loop_state_directive"):
+                _agent.console.loop_state_directive = {
+                    "directive": state,
+                    "reason": reason,
+                    "wake_in_seconds": wake_in_seconds,
+                }
+
+            msg = f"Loop state set to '{state}'."
+            if reason:
+                msg += f" Reason: {reason}"
+            if state == "scheduled":
+                msg += f" Next wakeup in {wake_in_seconds}s."
+            return msg
+
+        @tool
+        def request_user_input(
+            message: str,
+            choices: list = None,
+            default_if_no_response: str = None,
+            timeout_seconds: int = 300,
+            continue_if_no_response: bool = True,
+        ) -> str:
+            """Ask the user a question and wait for their response.
+
+            Args:
+                message: The question to present to the user.
+                choices: Optional list of choices (renders as buttons in the UI).
+                default_if_no_response: Value to use if no response received before
+                    timeout. If not set and continue_if_no_response=True, returns
+                    "__NO_RESPONSE__". Always check the return value.
+                timeout_seconds: How long to wait (min 10, default 300).
+                continue_if_no_response: If True, continue after timeout.
+                    If False, the loop pauses until user re-engages.
+
+            Returns:
+                User's response, chosen option, or "__NO_RESPONSE__" on timeout.
+                ALWAYS check for "__NO_RESPONSE__" before proceeding.
+            """
+            console = _agent.console
+            if hasattr(console, "request_user_input_blocking"):
+                return console.request_user_input_blocking(
+                    message=message,
+                    choices=choices,
+                    default_if_no_response=default_if_no_response,
+                    timeout_seconds=timeout_seconds,
+                    continue_if_no_response=continue_if_no_response,
+                )
+            # Fallback for non-SSE consoles (interactive sessions)
+            try:
+                return input(f"\n[Agent asking]: {message}\n> ").strip() or "__NO_RESPONSE__"
+            except (EOFError, OSError):
+                return default_if_no_response if default_if_no_response is not None else "__NO_RESPONSE__"
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools

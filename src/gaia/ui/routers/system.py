@@ -19,6 +19,8 @@ from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import ModelStatus, SettingsResponse, SettingsUpdateRequest, SystemStatus
 
+_VALID_AGENT_MODES = {"manual", "goal_driven", "autonomous"}
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["system"])
@@ -350,10 +352,21 @@ async def _check_model_status(model_name: str) -> ModelStatus:
 async def get_settings(db: ChatDatabase = Depends(get_db)):
     """Get current user settings with model status."""
     custom_model = db.get_setting("custom_model")
-    logger.debug("Settings loaded: custom_model=%s", custom_model)
+    context_size_str = db.get_setting("context_size")
+    context_size = int(context_size_str) if context_size_str else None
+    agent_mode = db.get_setting("agent_mode") or "autonomous"
+    logger.debug(
+        "Settings loaded: custom_model=%s, context_size=%s, agent_mode=%s",
+        custom_model,
+        context_size,
+        agent_mode,
+    )
     model_status = await _check_model_status(custom_model) if custom_model else None
     return SettingsResponse(
-        custom_model=custom_model or None, model_status=model_status
+        custom_model=custom_model or None,
+        model_status=model_status,
+        context_size=context_size,
+        agent_mode=agent_mode,
     )
 
 
@@ -365,6 +378,12 @@ async def update_settings(
 
     Setting custom_model to an empty string or null clears the override
     and reverts to the default model.
+
+    Setting context_size to null resets to the default (32768 tokens).
+    Non-null values must be >= 32768.
+
+    Setting agent_mode controls autonomous behaviour:
+    'manual' | 'goal_driven' | 'autonomous' (default).
     """
     if request.custom_model is not None:
         value = request.custom_model.strip() if request.custom_model else None
@@ -375,10 +394,42 @@ async def update_settings(
             value = None
         db.set_setting("custom_model", value)
 
+    # Only touch context_size when the field was explicitly included in the request.
+    if "context_size" in request.model_fields_set:
+        if request.context_size is None:
+            db.set_setting("context_size", None)
+            logger.info("Context size reset to default (%d)", _MIN_CONTEXT_SIZE)
+        else:
+            # Pydantic ge=32768 already rejects values below minimum at validation time,
+            # but guard here too in case the model is bypassed.
+            if request.context_size < _MIN_CONTEXT_SIZE:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"context_size must be >= {_MIN_CONTEXT_SIZE}",
+                )
+            db.set_setting("context_size", str(request.context_size))
+            logger.info("Context size set: %d tokens", request.context_size)
+
+    if "agent_mode" in request.model_fields_set and request.agent_mode is not None:
+        mode = request.agent_mode.strip()
+        if mode not in _VALID_AGENT_MODES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"agent_mode must be one of: {sorted(_VALID_AGENT_MODES)}",
+            )
+        db.set_setting("agent_mode", mode)
+        logger.info("Agent mode set: %s", mode)
+
     custom_model = db.get_setting("custom_model")
+    context_size_str = db.get_setting("context_size")
+    context_size = int(context_size_str) if context_size_str else None
+    agent_mode = db.get_setting("agent_mode") or "autonomous"
     model_status = await _check_model_status(custom_model) if custom_model else None
     return SettingsResponse(
-        custom_model=custom_model or None, model_status=model_status
+        custom_model=custom_model or None,
+        model_status=model_status,
+        context_size=context_size,
+        agent_mode=agent_mode,
     )
 
 
