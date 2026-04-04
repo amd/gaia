@@ -20,6 +20,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from gaia.pipeline.artifact_extractor import write_code_files
 from gaia.pipeline.engine import PipelineEngine
 from gaia.pipeline.recursive_template import RECURSIVE_TEMPLATES, get_recursive_template
 from gaia.pipeline.state import PipelineContext
@@ -206,6 +207,25 @@ async def run_demo(
         with open(filename, "w", encoding="utf-8") as fh:
             json.dump(full_output, fh, indent=2, default=str)
         print(f"\nFull pipeline output saved to: {filename}")
+
+        # Extract code files from work-product artifacts
+        work_artifacts = {
+            k: v for k, v in (snapshot.artifacts or {}).items()
+            if k.startswith("plan_") or k.startswith("code_")
+        }
+        written_files = write_code_files(work_artifacts, str(out_path))
+        if written_files:
+            print(f"\nFILES CREATED ({len(written_files)}):")
+            for fpath in written_files:
+                file_path = Path(fpath)
+                try:
+                    size = file_path.stat().st_size
+                    rel = file_path.relative_to(out_path)
+                    print(f"  {rel} ({size} bytes)")
+                except (OSError, ValueError):
+                    print(f"  {fpath}")
+        else:
+            print("\nNo code files extracted — raw artifacts saved to workspace/")
 
     return {
         "state": snapshot.state.name,
