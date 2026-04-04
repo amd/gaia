@@ -226,8 +226,13 @@ diffusers_*.png
 sdxl_base_*.png
 docs/playbooks/sd-agent/index-backup.mdx
 
-# Claude custom settings
-.claude/settings.local.json
+# Claude Code local configuration (machine-specific, not project files)
+.claude/
+
+# Pipeline runtime outputs (not source code)
+my_outputs/
+test_verify_outputs/
+pipeline_outputs/
 
 # Custom util scripts
 util/custom/*
