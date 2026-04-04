@@ -58,7 +58,13 @@ class ConfigurableAgent(Agent):
         self._execution_context: Dict[str, Any] = {}
 
         # Store original system prompt path from YAML
-        self._prompt_path = definition.metadata.get("system_prompt")
+        # RC#6 fix: prefer definition.system_prompt (top-level attribute)
+        # and fall back to metadata dict for backward compatibility
+        self._prompt_path = getattr(definition, "system_prompt", None) or (
+            definition.metadata.get("system_prompt")
+            if definition.metadata
+            else None
+        )
 
         # Initialize base agent with minimal settings
         # Tools will be registered in _register_tools()
@@ -163,6 +169,12 @@ class ConfigurableAgent(Agent):
 
         self._registered_tools = tools_to_register.copy()
 
+        # After the for loop, check for unregistered tools
+        tool_names = tools_to_register
+        missing = [t for t in tool_names if t not in _TOOL_REGISTRY]
+        if missing:
+            logger.warning(f"Tools declared in YAML but not registered: {missing}")
+
     def _load_tool_module(self, tool_name: str) -> Optional[Any]:
         """
         Load a tool module by name.
@@ -174,6 +186,19 @@ class ConfigurableAgent(Agent):
             Loaded module or None if not found
         """
         import importlib
+
+        # Try TOOL_MODULE_MAP first (pipeline tools package)
+        try:
+            from gaia.tools import TOOL_MODULE_MAP
+
+            if tool_name in TOOL_MODULE_MAP:
+                module = importlib.import_module(TOOL_MODULE_MAP[tool_name])
+                logger.debug(
+                    f"Loaded tool '{tool_name}' from {TOOL_MODULE_MAP[tool_name]}"
+                )
+                return module
+        except ImportError:
+            pass
 
         # Try common tool module locations
         module_paths = [
@@ -232,7 +257,21 @@ Follow these constraints:
             if self.definition.constraints.max_file_changes:
                 default_prompt += f"- Maximum file changes: {self.definition.constraints.max_file_changes}\n"
 
-        return default_prompt
+        # Add code generation instructions so LLM output contains
+        # extractable fenced code blocks (MVP: works with small models
+        # like Qwen3-0.6B that cannot do structured JSON tool-calling)
+        prompt_parts = [default_prompt]
+        prompt_parts.append("\n## Output Format")
+        prompt_parts.append(
+            "When writing code, ALWAYS use fenced code blocks with the filename:\n"
+            "```python filename=app.py\n"
+            "# your code here\n"
+            "```\n\n"
+            "Produce complete, runnable code files. Include all imports, "
+            "error handling, and a main entry point where appropriate."
+        )
+
+        return "\n".join(prompt_parts)
 
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -298,6 +337,7 @@ Follow these constraints:
         goal: str,
         phase: str,
         artifacts: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Compose user prompt from context.
@@ -306,14 +346,26 @@ Follow these constraints:
             goal: Task goal
             phase: Current phase
             artifacts: Previous artifacts
+            context: Full execution context (for iteration/defects)
 
         Returns:
             Formatted user prompt
         """
+        if context is None:
+            context = self._execution_context
+
         prompt_parts = [f"Goal: {goal}"]
 
         if phase:
             prompt_parts.append(f"Current phase: {phase}")
+
+        if context.get("iteration", 0) > 1:
+            prompt_parts.append(f"Iteration: {context['iteration']} (previous iteration did not meet quality threshold)")
+
+        if context.get("defects"):
+            prompt_parts.append("Defects from previous iteration:")
+            for defect in context["defects"]:
+                prompt_parts.append(f"  - {defect.get('error', defect.get('description', str(defect)))}")
 
         if artifacts:
             prompt_parts.append("\nPrevious artifacts:")

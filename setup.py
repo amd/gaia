@@ -35,6 +35,7 @@ setup(
         "gaia.database",
         "gaia.talk",
         "gaia.testing",
+        "gaia.tools",
         "gaia.utils",
         "gaia.apps",
         "gaia.apps.docker",
