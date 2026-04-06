@@ -1159,6 +1159,9 @@ You must respond ONLY in valid JSON. No text before { or after }.
         """
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
+        if not tool_name:
+            return {"status": "error", "error": "No tool name provided"}
+
         if tool_name not in _TOOL_REGISTRY:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
             # when registry has "mcp_time_get_current_time"). Local LLMs often
@@ -1682,10 +1685,10 @@ You must respond ONLY in valid JSON. No text before { or after }.
                         tool_name, tool_result, conversation, tool_args
                     )
 
-                    # Display the tool result in real-time (show full result to user)
-                    self.console.print_tool_complete()
-
+                    # Display the tool result in real-time (show full result to user).
+                    # Emit result BEFORE complete so SSE latency is captured.
                     self.console.pretty_print_json(tool_result, "Tool Result")
+                    self.console.print_tool_complete()
 
                     # Store the truncated output for future context
                     previous_outputs.append(
@@ -2397,10 +2400,10 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     tool_name, tool_result, conversation, tool_args
                 )
 
-                # Display the tool result in real-time (show full result to user)
-                self.console.print_tool_complete()
-
+                # Display the tool result in real-time (show full result to user).
+                # Emit result BEFORE complete so SSE latency is captured.
                 self.console.pretty_print_json(tool_result, "Result")
+                self.console.print_tool_complete()
 
                 # Store the truncated output for future context
                 previous_outputs.append(
