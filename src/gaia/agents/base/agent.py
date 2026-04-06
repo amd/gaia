@@ -176,13 +176,9 @@ class Agent(abc.ABC):
         # Note: System prompt will be composed after _register_tools()
         # This allows mixins to be initialized first (in subclass __init__)
 
-        # Register tools for this agent
-        self._register_tools()
-
-        # Note: system_prompt is now a lazy @property that composes on first access
-        # Tool descriptions and response format are added in _compose_system_prompt()
-
-        # Store response format template for use in composition
+        # Store response format template BEFORE _register_tools() so that when
+        # _register_tools calls load_mcp_servers_from_config → rebuild_system_prompt,
+        # the template is already available and gets included in the cached prompt.
         self._response_format_template = """
 ==== RESPONSE FORMAT ====
 You must respond ONLY in valid JSON. No text before { or after }.
@@ -210,6 +206,13 @@ You must respond ONLY in valid JSON. No text before { or after }.
 2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
 3. After tool results, provide an "answer" summarizing them
 """
+
+        # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
+        # _response_format_template must be set above before this call).
+        self._register_tools()
+
+        # Note: system_prompt is now a lazy @property that composes on first access.
+        # Tool descriptions and response format are added in _compose_system_prompt().
 
         # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request

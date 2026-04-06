@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link, Bot, ChevronDown } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
@@ -130,6 +130,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
         documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
         systemStatus,
+        agents, activeAgentId, setActiveAgentId,
     } = useChatStore();
 
     const { addNotification } = useNotificationStore();
@@ -147,6 +148,22 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
+    // Agent picker dropdown state
+    const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+    const agentPickerRef = useRef<HTMLDivElement>(null);
+
+    // Close agent picker on outside click
+    useEffect(() => {
+        if (!agentPickerOpen) return;
+        const handler = (e: MouseEvent) => {
+            if (agentPickerRef.current && !agentPickerRef.current.contains(e.target as Node)) {
+                setAgentPickerOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, [agentPickerOpen]);
+
     // Smooth streaming exit — snapshot last content so fade-out shows real text
     const [streamEnding, setStreamEnding] = useState(false);
     const lastStreamContentRef = useRef('');
@@ -1439,6 +1456,40 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     </div>
                 </div>
                 <div className="input-footer">
+                    {agents.length > 1 && (
+                        <>
+                            <div className="agent-picker" ref={agentPickerRef}>
+                                <button
+                                    className="agent-picker-btn"
+                                    onClick={() => setAgentPickerOpen((v) => !v)}
+                                    title="Switch agent"
+                                    aria-label="Switch agent"
+                                >
+                                    <Bot size={10} />
+                                    <span>{agents.find((a) => a.id === activeAgentId)?.name || 'Agent'}</span>
+                                    <ChevronDown size={10} />
+                                </button>
+                                {agentPickerOpen && (
+                                    <div className="agent-picker-dropdown">
+                                        {agents.map((agent) => (
+                                            <button
+                                                key={agent.id}
+                                                className={`agent-picker-option${agent.id === activeAgentId ? ' active' : ''}`}
+                                                onClick={() => {
+                                                    setActiveAgentId(agent.id);
+                                                    setAgentPickerOpen(false);
+                                                }}
+                                            >
+                                                <Bot size={12} />
+                                                <span>{agent.name}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <span className="input-footer-sep" />
+                        </>
+                    )}
                     <span className="input-footer-item">
                         <Lock size={10} />
                         <span>100% local &amp; private</span>

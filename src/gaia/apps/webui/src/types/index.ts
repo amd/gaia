@@ -12,6 +12,16 @@ export interface Session {
     system_prompt: string | null;
     message_count: number;
     document_ids: string[];
+    agent_type?: string;
+}
+
+export interface AgentInfo {
+    id: string;
+    name: string;
+    description: string;
+    source: string;
+    conversation_starters: string[];
+    models: string[];
 }
 
 export interface InferenceStats {

@@ -106,6 +106,27 @@ class SettingsUpdateRequest(BaseModel):
     )
 
 
+# ── Agents ──────────────────────────────────────────────────────────────────
+
+
+class AgentInfo(BaseModel):
+    """Information about a registered agent."""
+
+    id: str
+    name: str
+    description: str
+    source: str  # "builtin" | "custom_python" | "custom_manifest"
+    conversation_starters: List[str] = Field(default_factory=list)
+    models: List[str] = Field(default_factory=list)
+
+
+class AgentListResponse(BaseModel):
+    """List of registered agents."""
+
+    agents: List[AgentInfo]
+    total: int
+
+
 # ── Sessions ────────────────────────────────────────────────────────────────
 
 
@@ -116,6 +137,7 @@ class CreateSessionRequest(BaseModel):
     model: Optional[str] = None
     system_prompt: Optional[str] = None
     document_ids: List[str] = Field(default_factory=list)
+    agent_type: Optional[str] = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -137,6 +159,7 @@ class SessionResponse(BaseModel):
     system_prompt: Optional[str] = None
     message_count: int = 0
     document_ids: List[str] = Field(default_factory=list)
+    agent_type: str = "chat"
 
 
 class SessionListResponse(BaseModel):

@@ -68,7 +68,15 @@ function App() {
         systemStatus,
         setSystemStatus,
         setBackendConnected,
+        setAgents,
     } = useChatStore();
+
+    // Fetch agents once on mount
+    useEffect(() => {
+        api.listAgents()
+            .then((data) => setAgents(data.agents || []))
+            .catch(() => { /* ignore -- agents list is non-critical */ });
+    }, [setAgents]);
 
     // Mobile gateway state
     const [showMobileAccess, setShowMobileAccess] = useState(false);
@@ -298,7 +306,8 @@ function App() {
         log.chat.info('Creating new task session...');
         setCreateError(null);
         try {
-            const session = await api.createSession({ title: 'New Task' });
+            const { activeAgentId } = useChatStore.getState();
+            const session = await api.createSession({ title: 'New Task', agent_type: activeAgentId });
             log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
             addSession(session);
             setCurrentSession(session.id);

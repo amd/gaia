@@ -58,6 +58,7 @@ async def create_session(
             model=request.model,
             system_prompt=request.system_prompt,
             document_ids=request.document_ids,
+            agent_type=request.agent_type,
         )
         return session_to_response(session)
     except Exception as e:

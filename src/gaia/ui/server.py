@@ -47,6 +47,7 @@ from ._chat_helpers import _stream_chat_response  # noqa: F401
 # pylint: enable=unused-import
 from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
+from .routers import agents as agents_router_mod
 from .routers import chat as chat_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
@@ -157,6 +158,21 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         queue = DispatchQueue(max_workers=4)
         app.state.dispatch_queue = queue
 
+        # ── Agent Registry ──────────────────────────────────────────────
+        from gaia.agents.registry import AgentRegistry
+        from gaia.ui._chat_helpers import set_agent_registry
+
+        registry = AgentRegistry()
+        registry.discover()
+        app.state.agent_registry = registry
+        set_agent_registry(registry)
+        agent_ids = [r.id for r in registry.list()]
+        logger.info(
+            "server: Agent registry initialized with %d agents: %s",
+            len(agent_ids),
+            agent_ids,
+        )
+
         def _check_lemonade():
             """Pre-warm LemonadeManager — check reachability only."""
             from gaia.llm.lemonade_manager import LemonadeManager
@@ -224,32 +240,47 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         def _warmup_prompt_cache():
             """Send a warmup inference to populate Lemonade's prompt cache.
 
-            Constructs a ChatAgent to generate the full system prompt
-            (including tool descriptions), sends a single-token completion,
-            then discards the agent.  Lemonade's LCP-based prompt cache
-            stores the KV state so the first real user message only
-            processes the delta (~30 new tokens instead of ~7,400).
+            Constructs a GaiaAgent (lean ~1,500-token prompt) to warm the
+            cache instead of ChatAgent (~7,400 tokens), dramatically reducing
+            boot warmup time on AMD iGPU hardware.
 
-            Safe to import ChatAgent here because _load_model has already
-            completed (dependency chain enforced by DispatchQueue).  The
-            model is loaded, so LemonadeManager.ensure_ready() is a no-op
-            — see the exclusion comment in _import_modules above.
+            Safe to import here because _load_model has already completed
+            (dependency chain enforced by DispatchQueue).
             """
-            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
             from gaia.llm.lemonade_client import LemonadeClient
             from gaia.ui.routers.system import _DEFAULT_MODEL_NAME
 
             model_id = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
 
-            config = ChatAgentConfig(
-                model_id=model_id,
-                streaming=False,
-                silent_mode=True,
-                debug=False,
-                rag_documents=[],
-            )
-            agent = ChatAgent(config)
-            system_prompt = agent.system_prompt
+            agent = None
+            system_prompt = None
+            try:
+                from gaia.agents.gaia.agent import GaiaAgent, GaiaAgentConfig
+
+                agent = GaiaAgent(GaiaAgentConfig(
+                    model_id=model_id,
+                    streaming=False,
+                    silent_mode=True,
+                    debug=False,
+                ))
+                system_prompt = agent.system_prompt
+                logger.info("server: Warmup using GaiaAgent (~1,500-token prompt)")
+            except Exception as _warmup_err:
+                logger.warning(
+                    "server: GaiaAgent warmup failed (%s), falling back to ChatAgent",
+                    _warmup_err,
+                )
+                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+                agent = ChatAgent(ChatAgentConfig(
+                    model_id=model_id,
+                    streaming=False,
+                    silent_mode=True,
+                    debug=False,
+                    rag_documents=[],
+                ))
+                system_prompt = agent.system_prompt
+                logger.info("server: Warmup using ChatAgent (fallback)")
 
             try:
                 LemonadeClient(verbose=False).chat_completions(
@@ -262,8 +293,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                     stream=False,
                 )
             finally:
-                # Explicitly clean up MCP connections — ChatAgent.__del__
-                # only stops file watchers, not MCP subprocesses.
                 if hasattr(agent, "_mcp_manager") and agent._mcp_manager:
                     agent._mcp_manager.disconnect_all()
 
@@ -376,6 +405,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # ── Include Routers ──────────────────────────────────────────────────
     app.include_router(system_router_mod.router)
+    app.include_router(agents_router_mod.router)
     app.include_router(sessions_router_mod.router)
     app.include_router(chat_router_mod.router)
     app.include_router(documents_router_mod.router)

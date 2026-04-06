@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, AgentInfo } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -89,6 +89,12 @@ export async function loadModel(modelName: string, ctxSize?: number): Promise<{ 
 
 export async function downloadModel(modelName: string, force = false): Promise<{ status: string; model: string }> {
     return apiFetch('POST', '/system/download-model', { model_name: modelName, force });
+}
+
+// -- Agents --------------------------------------------------------------------
+
+export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number }> {
+    return apiFetch('GET', '/agents');
 }
 
 // -- Sessions ------------------------------------------------------------------

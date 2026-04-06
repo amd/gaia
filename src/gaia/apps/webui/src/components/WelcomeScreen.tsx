@@ -1,8 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useState, useEffect, useRef } from 'react';
-import { Lock, Zap, FileText, DollarSign, Terminal } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { Lock, Zap, FileText, DollarSign, Terminal, Bot } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import './WelcomeScreen.css';
 
@@ -33,7 +33,7 @@ function hackerDelay(char: string, prevChar: string): number {
     return 18 + Math.random() * 22;
 }
 
-const SUGGESTIONS = [
+const DEFAULT_SUGGESTIONS = [
     'Scan my Downloads and tell me what I should clean up',
     'Index a folder of documents so I can chat about them',
     'What have I been working on lately? Show my recent files',
@@ -41,7 +41,13 @@ const SUGGESTIONS = [
 ];
 
 export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
-    const { systemStatus } = useChatStore();
+    const { systemStatus, agents, activeAgentId, setActiveAgentId } = useChatStore();
+
+    const suggestions = useMemo(() => {
+        const active = agents.find((a) => a.id === activeAgentId);
+        if (active?.conversation_starters?.length) return active.conversation_starters;
+        return DEFAULT_SUGGESTIONS;
+    }, [agents, activeAgentId]);
     const [displayedText, setDisplayedText] = useState('');
     const [typingComplete, setTypingComplete] = useState(false);
     const [subtitleText, setSubtitleText] = useState('');
@@ -150,6 +156,22 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
                         expandedDesc="No API keys, no subscriptions, no hidden costs. Fully open-source." />
                 </div>
 
+                {agents.length > 1 && (
+                    <div className="agent-pills">
+                        {agents.map((agent) => (
+                            <button
+                                key={agent.id}
+                                className={`agent-pill${agent.id === activeAgentId ? ' active' : ''}`}
+                                onClick={() => setActiveAgentId(agent.id)}
+                                title={agent.description || agent.name}
+                            >
+                                <Bot size={14} />
+                                <span>{agent.name}</span>
+                            </button>
+                        ))}
+                    </div>
+                )}
+
                 {/* First-run setup hints */}
                 {notInitialized && (
                     <div className="welcome-setup-hint">
@@ -176,7 +198,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
                 <div className="suggestions">
                     <span className="suggestions-label">Try asking:</span>
                     <div className="suggestion-chips">
-                        {SUGGESTIONS.map((s) => (
+                        {suggestions.map((s) => (
                             <button key={s} className="chip" onClick={() => onSendPrompt(s)} disabled={isInitializing}>
                                 {s}
                             </button>
