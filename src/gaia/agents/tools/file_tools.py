@@ -933,7 +933,7 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
             name="write_file",
-            description="Write content to any file. Creates parent directories if needed.",
+            description="Write content to any file with security guardrails. Creates parent directories if needed. Validates path access, blocks writes to system directories and sensitive files.",
             parameters={
                 "file_path": {
                     "type": "str",
@@ -956,27 +956,83 @@ class FileSearchToolsMixin:
             file_path: str, content: str, create_dirs: bool = True
         ) -> Dict[str, Any]:
             """
-            Write content to a file.
+            Write content to a file with full security guardrails.
 
-            Generic file writer for any file type.
+            Security checks performed:
+            1. Path allowlist validation (PathValidator)
+            2. Blocked directory enforcement (system dirs, .ssh, etc.)
+            3. Sensitive file protection (.env, credentials, keys)
+            4. Content size limit (10 MB max)
+            5. Overwrite confirmation for existing files
+            6. Backup creation before overwrite
+            7. Audit logging of all write operations
             """
             try:
-                file_path = Path(file_path)
+                resolved_path = Path(file_path).resolve()
+                content_size = len(content.encode("utf-8"))
+
+                # Get the PathValidator from the agent (if available)
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is None:
+                    path_validator = getattr(self, "_path_validator", None)
+
+                backup_path = None
+
+                if path_validator is not None:
+                    # Full write validation: allowlist + blocklist + size + overwrite
+                    is_allowed, reason = path_validator.validate_write(
+                        str(resolved_path), content_size=content_size
+                    )
+                    if not is_allowed:
+                        path_validator.audit_write(
+                            "write", str(resolved_path), content_size, "denied", reason
+                        )
+                        logger.warning(f"Write denied: {reason}")
+                        return {
+                            "status": "error",
+                            "error": reason,
+                            "operation": "write_file",
+                        }
+
+                    # Create backup of existing file before overwriting
+                    if resolved_path.exists():
+                        backup_path = path_validator.create_backup(str(resolved_path))
+                else:
+                    logger.warning(
+                        "No PathValidator available — write_file proceeding without "
+                        "security checks for: %s",
+                        resolved_path,
+                    )
 
                 # Create parent directories if needed
-                if create_dirs and file_path.parent:
-                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                if create_dirs and resolved_path.parent:
+                    resolved_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Write the file
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(resolved_path, "w", encoding="utf-8") as f:
                     f.write(content)
 
-                return {
+                # Audit the successful write
+                if path_validator is not None:
+                    detail = ""
+                    if backup_path:
+                        detail = f"backup={backup_path}"
+                    path_validator.audit_write(
+                        "write", str(resolved_path), content_size, "success", detail
+                    )
+
+                logger.info(f"File written: {resolved_path} ({content_size} bytes)")
+
+                result = {
                     "status": "success",
-                    "file_path": str(file_path),
-                    "bytes_written": len(content.encode("utf-8")),
+                    "file_path": str(resolved_path),
+                    "bytes_written": content_size,
                     "line_count": len(content.splitlines()),
                 }
+                if backup_path:
+                    result["backup_path"] = backup_path
+                return result
+
             except PermissionError:
                 logger.error(f"Permission denied writing to: {file_path}")
                 return {
@@ -1008,6 +1064,12 @@ class FileSearchToolsMixin:
                 }
             except Exception as e:
                 logger.error(f"Error writing file: {e}")
+                # Audit the failed write
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is None:
+                    path_validator = getattr(self, "_path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {
                     "status": "error",
                     "error": str(e),
@@ -1195,6 +1257,161 @@ class FileSearchToolsMixin:
                 return 0.0
 
         # --- New tool definitions ---
+
+        @tool(
+            atomic=True,
+            name="edit_file",
+            description="Edit a file by replacing specific content. Finds old_content in the file and replaces it with new_content. Creates a backup before editing.",
+            parameters={
+                "file_path": {
+                    "type": "str",
+                    "description": "Path to the file to edit",
+                    "required": True,
+                },
+                "old_content": {
+                    "type": "str",
+                    "description": "Exact content to find and replace in the file",
+                    "required": True,
+                },
+                "new_content": {
+                    "type": "str",
+                    "description": "New content to replace the old content with",
+                    "required": True,
+                },
+            },
+        )
+        def edit_file(
+            file_path: str, old_content: str, new_content: str
+        ) -> Dict[str, Any]:
+            """
+            Edit a file by replacing old content with new content.
+
+            Similar to Claude Code's Edit tool — performs a partial string replacement
+            rather than overwriting the entire file. Includes all security guardrails.
+
+            Security checks performed:
+            1. Path allowlist validation (PathValidator)
+            2. Blocked directory enforcement
+            3. Sensitive file protection
+            4. Backup creation before edit
+            5. Audit logging
+            """
+            try:
+                import difflib
+
+                resolved_path = Path(file_path).resolve()
+
+                # Get the PathValidator
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is None:
+                    path_validator = getattr(self, "_path_validator", None)
+
+                if path_validator is not None:
+                    # Validate write access (skip overwrite prompt since we're editing)
+                    is_allowed, reason = path_validator.validate_write(
+                        str(resolved_path), content_size=0, prompt_user=False
+                    )
+                    # Re-check allowlist with prompting if it failed on allowlist
+                    if not is_allowed and "not in allowed paths" in reason:
+                        if not path_validator.is_path_allowed(
+                            str(resolved_path), prompt_user=True
+                        ):
+                            path_validator.audit_write(
+                                "edit", str(resolved_path), 0, "denied", reason
+                            )
+                            return {
+                                "status": "error",
+                                "error": reason,
+                                "operation": "edit_file",
+                            }
+                    elif not is_allowed:
+                        path_validator.audit_write(
+                            "edit", str(resolved_path), 0, "denied", reason
+                        )
+                        return {
+                            "status": "error",
+                            "error": reason,
+                            "operation": "edit_file",
+                        }
+
+                # File must exist for editing
+                if not resolved_path.exists():
+                    return {
+                        "status": "error",
+                        "error": f"File not found: {resolved_path}",
+                        "operation": "edit_file",
+                    }
+
+                # Read current content
+                current_content = resolved_path.read_text(encoding="utf-8")
+
+                # Check if old_content exists in file
+                if old_content not in current_content:
+                    return {
+                        "status": "error",
+                        "error": f"Content to replace not found in {resolved_path}",
+                        "operation": "edit_file",
+                    }
+
+                # Create backup before editing
+                backup_path = None
+                if path_validator is not None:
+                    backup_path = path_validator.create_backup(str(resolved_path))
+
+                # Replace content (first occurrence only)
+                updated_content = current_content.replace(old_content, new_content, 1)
+
+                # Generate diff for logging/display
+                diff = "\n".join(
+                    difflib.unified_diff(
+                        current_content.splitlines(keepends=True),
+                        updated_content.splitlines(keepends=True),
+                        fromfile=str(resolved_path),
+                        tofile=str(resolved_path),
+                    )
+                )
+
+                # Write updated content
+                resolved_path.write_text(updated_content, encoding="utf-8")
+
+                # Audit the edit
+                edit_size = len(updated_content.encode("utf-8"))
+                if path_validator is not None:
+                    detail = f"replaced {len(old_content)} chars with {len(new_content)} chars"
+                    if backup_path:
+                        detail += f", backup={backup_path}"
+                    path_validator.audit_write(
+                        "edit", str(resolved_path), edit_size, "success", detail
+                    )
+
+                logger.info(
+                    f"File edited: {resolved_path} "
+                    f"(replaced {len(old_content)} -> {len(new_content)} chars)"
+                )
+
+                result = {
+                    "status": "success",
+                    "file_path": str(resolved_path),
+                    "old_size": len(current_content),
+                    "new_size": len(updated_content),
+                    "diff": diff,
+                }
+                if backup_path:
+                    result["backup_path"] = backup_path
+                return result
+
+            except Exception as e:
+                logger.error(f"Error editing file: {e}")
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is None:
+                    path_validator = getattr(self, "_path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "error", str(e))
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    "operation": "edit_file",
+                }
 
         @tool(
             atomic=True,

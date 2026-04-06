@@ -22,6 +22,7 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -649,7 +650,8 @@ RULES:
             else:
                 params["fields"] = "key,summary,status,priority,issuetype,assignee"
 
-            logger.debug(f"Making API request to: {url}")
+            # Log only the path component to avoid exposing sensitive URL data
+            logger.debug(f"Making API request to: {urlparse(url).path}")
 
             async with session.get(url, headers=headers, params=params) as response:
                 response.raise_for_status()

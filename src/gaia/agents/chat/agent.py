@@ -20,7 +20,10 @@ from gaia.agents.base.console import AgentConsole
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
+from gaia.agents.tools import BrowserToolsMixin  # Web browsing and search
 from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
+from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
+from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
@@ -69,6 +72,19 @@ class ChatAgentConfig:
     # Security
     allowed_paths: Optional[List[str]] = None
 
+    # File System settings
+    enable_filesystem: bool = True  # Enable enhanced file system tools
+    enable_scratchpad: bool = True  # Enable data scratchpad for analysis
+    filesystem_index_path: str = "~/.gaia/file_index.db"
+    filesystem_scan_depth: int = 3  # Default scan depth (conservative)
+    filesystem_exclude_patterns: List[str] = field(default_factory=list)
+
+    # Browser settings
+    enable_browser: bool = True  # Enable web browsing tools
+    browser_timeout: int = 30  # HTTP request timeout in seconds
+    browser_max_download_size: int = 100 * 1024 * 1024  # 100 MB max download
+    browser_rate_limit: float = 1.0  # Seconds between requests per domain
+
     # Session persistence (UI session ID for cross-turn document retention)
     ui_session_id: Optional[str] = None
 
@@ -81,6 +97,9 @@ class ChatAgent(
     RAGToolsMixin,
     FileToolsMixin,
     ShellToolsMixin,
+    FileSystemToolsMixin,
+    ScratchpadToolsMixin,
+    BrowserToolsMixin,
     FileSearchToolsMixin,
     FileIOToolsMixin,
     VLMToolsMixin,
@@ -89,11 +108,14 @@ class ChatAgent(
     MCPClientMixin,
 ):
     """
-    Chat Agent with RAG, file operations, and shell command capabilities.
+    Chat Agent with RAG, file system navigation, data analysis, web browsing,
+    and shell capabilities.
 
     This agent provides:
     - Document Q&A using RAG
-    - File search and operations
+    - File system browsing, search, and navigation
+    - Structured data analysis via SQLite scratchpad
+    - Web browsing, search, and file download
     - Shell command execution
     - Auto-indexing when files change
     - Interactive chat interface
@@ -181,6 +203,48 @@ class ChatAgent(
         self.observers = []
         self.file_handlers = []  # Track FileChangeHandler instances for telemetry
         self.indexed_files = set()
+
+        # Initialize file system index service (optional)
+        self._fs_index = None
+        self._path_validator = self.path_validator
+        if config.enable_filesystem:
+            try:
+                from gaia.filesystem.index import FileSystemIndexService
+
+                self._fs_index = FileSystemIndexService(
+                    db_path=config.filesystem_index_path
+                )
+                logger.info("File system index service initialized")
+            except Exception as e:
+                logger.debug(f"File system index not available: {e}")
+
+        # Initialize scratchpad service (optional)
+        self._scratchpad = None
+        if config.enable_scratchpad:
+            try:
+                from gaia.scratchpad.service import ScratchpadService
+
+                self._scratchpad = ScratchpadService(
+                    db_path=config.filesystem_index_path
+                )
+                logger.info("Scratchpad service initialized")
+            except Exception as e:
+                logger.debug(f"Scratchpad service not available: {e}")
+
+        # Initialize web client for browser tools (optional)
+        self._web_client = None
+        if config.enable_browser:
+            try:
+                from gaia.web.client import WebClient
+
+                self._web_client = WebClient(
+                    timeout=config.browser_timeout,
+                    max_download_size=config.browser_max_download_size,
+                    rate_limit=config.browser_rate_limit,
+                )
+                logger.info("Web client initialized for browser tools")
+            except Exception as e:
+                logger.debug(f"Web client not available: {e}")
 
         # Session management
         self.session_manager = SessionManager()
@@ -476,8 +540,12 @@ Use tools when:
 - "what files are indexed?" → {"tool": "list_indexed_documents", "tool_args": {}}
 - "search for X" → {"tool": "query_documents", "tool_args": {"query": "X"}}
 - "what does doc say?" → {"tool": "query_specific_file", "tool_args": {...}}
-- "find the project manual" → {"tool": "search_file", "tool_args": {"file_pattern": "project manual"}}
+- "find the oil and gas manual" → {"tool": "find_files", "tool_args": {"query": "oil and gas manual", "file_types": "pdf,docx"}}
+- "what's in my Documents folder?" → {"tool": "browse_directory", "tool_args": {"path": "~/Documents"}}
+- "show me the project structure" → {"tool": "tree", "tool_args": {"path": "."}}
+- "find the project manual" → {"tool": "find_files", "tool_args": {"query": "project manual", "file_types": "pdf,docx"}}
 - "index files in /path/to/dir" → {"tool": "index_directory", "tool_args": {"directory_path": "/path/to/dir"}}
+- "analyze my spending" → Use find_files + read_file + create_table + insert_data + query_data workflow
 
 **DATA ANALYSIS:** Use analyze_data_file for CSV/Excel with analysis_type: "summary", "spending", "trends", or "full".
 
@@ -515,8 +583,8 @@ When user asks a domain-specific question (e.g., "what is the PTO policy?"):
       - Finance/budget/revenue → search "budget", "financial", "report", "revenue"
       - Project/plan/roadmap → search "project", "plan", "roadmap"
       - If unsure → search "handbook OR report OR guide OR manual"
-   b. Search for files using search_file with those document-type keywords (1-2 words MAX)
-   c. If nothing found after 2 tries → call browse_files to see all available files
+   b. Search for files using find_files with those document-type keywords (1-2 words MAX)
+   c. If nothing found after 2 tries → call browse_directory to see all available files
    d. If files found, index them automatically
    e. Provide status update: "Found and indexed X file(s)"
    f. IMMEDIATELY query the indexed file before answering
@@ -526,7 +594,7 @@ Example Smart Discovery:
 User: "How many PTO days do first-year employees get?"
 You: {"tool": "list_indexed_documents", "tool_args": {}}
 Result: {"documents": [], "count": 0}
-You: {"tool": "search_file", "tool_args": {"file_pattern": "handbook"}}
+You: {"tool": "find_files", "tool_args": {"query": "handbook", "file_types": "md,pdf,docx"}}
 Result: {"files": ["/docs/employee_handbook.md"], "count": 1}
 You: {"tool": "index_document", "tool_args": {"file_path": "/docs/employee_handbook.md"}}
 Result: {"status": "success", "chunks": 45}
@@ -535,7 +603,7 @@ Result: {"chunks": ["First-year employees receive 15 days of PTO..."], "scores":
 You: {"answer": "According to the employee handbook, first-year employees receive 15 days of PTO."}
 
 **SEARCH LOOP PREVENTION:**
-If you call search_file or browse_files twice with similar terms and get the same results, STOP. After 2 failed attempts, acknowledge the limitation.
+If you call find_files or browse_directory twice with similar terms and get the same results, STOP. After 2 failed attempts, acknowledge the limitation.
 
 **PROACTIVE FOLLOW-THROUGH:**
 When the user follows up after a failed action (e.g., nonexistent file) with a new document reference, IMMEDIATELY proceed with the FULL workflow — find + index + query + answer — in ONE response. Never stop mid-workflow to ask permission.
@@ -543,7 +611,7 @@ When the user follows up after a failed action (e.g., nonexistent file) with a n
 BANNED RESPONSE PATTERN (AUTOMATIC FAIL): "Would you like me to index this document?" / "Shall I index X?" / "Do you want me to proceed?" / "Once indexed, I'll be able to..." ← THESE ARE ALL WRONG. If you can see a document, INDEX IT IMMEDIATELY without asking.
 
 MANDATORY WORKFLOW for "what about X?" / "try X" / "what about the Y document?":
-1. search_file("X") to locate the file
+1. find_files("X") to locate the file
 2. index_document(path) — NO CONFIRMATION NEEDED, just do it
 3. query_specific_file(filename, question) — use any question from context or ask about key topics
 4. Return the answer
@@ -553,41 +621,97 @@ MANDATORY WORKFLOW for "what about X?" / "try X" / "what about the Y document?":
 
 IMPORTANT: If no specific question was asked, query the document for "key policies" or "main content" and summarize — NEVER just say "it's indexed, what do you want to know?"
 
+**FILE SYSTEM TOOLS:**
+You have powerful file system tools. Use them when the user asks about files, folders, or their PC:
+- **browse_directory**: List folder contents with sizes and dates
+- **tree**: Show visual tree of a directory structure
+- **file_info**: Get detailed info about a file (size, type, pages, lines)
+- **find_files**: Search for files by name, content, or metadata (size, date, type)
+- **read_file**: Read file contents with smart formatting (text, CSV, JSON, PDF)
+- **bookmark**: Save/list/remove bookmarks for quick access to important locations
+
 **FILE SEARCH AND AUTO-INDEX WORKFLOW:**
 When user asks "find the X manual" or "find X document on my drive":
-1. Use SHORT keyword file_pattern (1-2 words MAX), NOT full phrases:
-   - WRONG: search_file("Acme Corp API reference") — too many words, won't match filenames
-   - RIGHT: search_file("api_reference") or search_file("api") — short, will match api_reference.py
-   - Extract the most distinctive 1-2 words from the request as the file_pattern.
-2. ALWAYS start with a QUICK search (do NOT set deep_search):
-   {"tool": "search_file", "tool_args": {"file_pattern": "api"}}
+1. Use SHORT keyword queries (1-2 words MAX), NOT full phrases:
+   - WRONG: find_files("Acme Corp API reference") -- too many words, won't match filenames
+   - RIGHT: find_files("api_reference") or find_files("api") -- short, will match api_reference.py
+   - Extract the most distinctive 1-2 words from the request as the query.
+2. ALWAYS start with a QUICK search (no deep_search flag):
+   {"tool": "find_files", "tool_args": {"query": "api"}}
    This searches CWD (recursively), Documents, Downloads, Desktop - FAST
 3. Handle quick search results:
    - **If exactly 1 file found AND the user asked a content question**: **INDEX IT IMMEDIATELY and answer**
-   - **CLEAR INTENT RULE**: If the user's message contains a question word (what, how, who, when, where) OR asks about content/information → that is a CONTENT QUESTION. Index immediately, no confirmation needed.
+   - **CLEAR INTENT RULE**: If the user's message contains a question word (what, how, who, when, where) OR asks about content/information -> that is a CONTENT QUESTION. Index immediately, no confirmation needed.
    - **If exactly 1 file found AND user literally only said "find X" with no follow-up intent**: Show result and ask to confirm.
    - NEVER ask "Would you like me to index this?" when the user clearly wants information from the file.
    - **If multiple files found**: Display numbered list, ask user to select.
-   - **If none found**: Try a DIFFERENT short keyword (synonym or partial name), then if still nothing, use browse_files to explore the directory structure.
-4. browse_files FALLBACK — use when search returns 0 results after 2 attempts
+   - **If none found**: Try a DIFFERENT short keyword (synonym or partial name), then if still nothing, use browse_directory to explore the directory structure.
+4. browse_directory FALLBACK -- use when search returns 0 results after 2 attempts
 5. After indexing, answer the user's question immediately.
 
 **CRITICAL: NEVER use deep_search=true on the first search call!**
 Always do quick search first, show results, and wait for user response.
 
 **IMPORTANT: Always show tool results with display_message!**
-Tools like search_file return a 'display_message' field - ALWAYS show this to the user:
+Tools like find_files return a 'display_message' field - ALWAYS show this to the user:
 
 Example:
-Tool result: {"display_message": "Found 2 file(s) in current directory", "file_list": [...]}
-You must say: {"answer": "Found 2 file(s):\n1. README.md\n2. setup.py"}
+User: "Can you find the oil and gas manual on my drive?"
+You: {"tool": "find_files", "tool_args": {"query": "oil gas manual", "file_types": "pdf,docx"}}
+Result: "Found 1 result(s):\n  1. C:/Users/user/Documents/Oil-Gas-Manual.pdf (2.1 MB)"
+You: {"tool": "index_document", "tool_args": {"file_path": "C:/Users/user/Documents/Oil-Gas-Manual.pdf"}}
+You: {"answer": "Found and indexed Oil-Gas-Manual.pdf (150 chunks). You can now ask me questions about it!"}
+
+**DATA ANALYSIS WORKFLOW (Scratchpad):**
+For multi-document analysis (spending, tax, research), use the scratchpad tools:
+1. **find_files** to locate documents (e.g., credit card statements)
+2. **create_table** to set up a structured workspace
+3. **read_file** + **insert_data** for each document (extract data, store in table)
+4. **query_data** to analyze with SQL (SUM, AVG, GROUP BY, etc.)
+5. **drop_table** to clean up when done
+
+Example:
+User: "Analyze my credit card spending"
+You: {"tool": "find_files", "tool_args": {"query": "statement", "file_types": "pdf", "scope": "home"}}
+You: {"tool": "create_table", "tool_args": {"table_name": "transactions", "columns": "date TEXT, description TEXT, amount REAL, category TEXT, source TEXT"}}
+Then for each PDF: read_file → extract transactions → insert_data
+Then: {"tool": "query_data", "tool_args": {"sql": "SELECT category, SUM(amount) as total FROM scratch_transactions GROUP BY category ORDER BY total DESC"}}
+
+**DIRECTORY BROWSING WORKFLOW:**
+When user asks "what's in my Documents?" or "show me the project structure":
+1. Use browse_directory to list contents, or tree for visual hierarchy
+2. Use file_info for details about specific files
+3. Use bookmark to save frequently accessed locations
+
+**BROWSER TOOLS:**
+You can browse the web, search for information, and download files:
+- **fetch_page**: Fetch a web page and extract readable text, links, or tables
+- **search_web**: Search the web using DuckDuckGo (no API key needed)
+- **download_file**: Download files from the web to local disk
+
+**WEB RESEARCH WORKFLOW:**
+When user needs online information (prices, statistics, documentation, etc.):
+1. **search_web** to find relevant pages
+2. **fetch_page** to read the full content of a result
+3. Combine with local data analysis if needed
+
+Example:
+User: "Compare my grocery spending to the national average"
+You: query_data to get user's spending → search_web for national averages → fetch_page to read the data → provide comparison
+
+**DOWNLOAD + ANALYZE WORKFLOW:**
+When user wants to get and analyze a web resource:
+1. **search_web** or use direct URL
+2. **download_file** to save locally
+3. **index_document** or **read_file** to process the downloaded file
+4. Use scratchpad tools for structured analysis
 
 NOTE: Progress indicators (spinners) are shown automatically by the tool while searching.
 You don't need to say "searching..." - the tool displays it live!
 
 Example (Single file found):
 User: "Can you find the project report on my drive?"
-You: {"tool": "search_file", "tool_args": {"file_pattern": "project report"}}
+You: {"tool": "find_files", "tool_args": {"query": "project report"}}
 Result: {"files": [...], "count": 1, "display_message": "Found 1 matching file(s)", "file_list": [{"number": 1, "name": "Project-Report.pdf", "directory": "C:/Users/user/Documents"}]}
 You: {"answer": "Found 1 file:\n- Project-Report.pdf (Documents folder)\n\nIs this the one you're looking for?"}
 User: "yes"
@@ -596,15 +720,15 @@ You: {"answer": "Indexed Project-Report.pdf (150 chunks). You can now ask me que
 
 Example (Nothing found — offer deep search):
 User: "Find my tax return"
-You: {"tool": "search_file", "tool_args": {"file_pattern": "tax return"}}
+You: {"tool": "find_files", "tool_args": {"query": "tax return"}}
 Result: {"count": 0, "deep_search_available": true, "suggestion": "I can do a deep search across all drives..."}
 You: {"answer": "I didn't find any files matching 'tax return' in your common folders (Documents, Downloads, Desktop).\n\nWould you like me to do a deep search across all your drives? This may take a minute."}
 User: "yes please"
-You: {"tool": "search_file", "tool_args": {"file_pattern": "tax return", "deep_search": true}}
+You: {"tool": "find_files", "tool_args": {"query": "tax return", "deep_search": true}}
 
 Example (Multiple files):
 User: "Find the manual on my drive"
-You: {"tool": "search_file", "tool_args": {"file_pattern": "manual"}}
+You: {"tool": "find_files", "tool_args": {"query": "manual"}}
 Result: {"count": 3, "file_list": [{"number": 1, "name": "User-Guide.pdf", "directory": "C:/Docs"}, {"number": 2, "name": "Safety-Manual.pdf", "directory": "C:/Downloads"}]}
 You: {"answer": "Found 3 matching files:\n\n1. User-Guide.pdf (C:/Docs/)\n2. Safety-Manual.pdf (C:/Downloads/)\n3. Training-Manual.pdf (C:/Work/)\n\nWhich one would you like me to index? (enter the number)"}
 User: "1"
@@ -618,7 +742,7 @@ You: {"answer": "Indexed User-Guide.pdf. You can now ask questions about it!"}
         rag_query_rules = ""
         if has_indexed:
             rag_query_rules = """
-**CONTEXT-CHECK RULE:** Before running search_file or browse_files on a follow-up turn, check your indexed documents list. If any indexed file matches the user's request, query it FIRST. Only search for new files if nothing indexed matches.
+**CONTEXT-CHECK RULE:** Before running find_files or browse_directory on a follow-up turn, check your indexed documents list. If any indexed file matches the user's request, query it FIRST. Only search for new files if nothing indexed matches.
 Examples:
 - "api_reference.py" is indexed + user asks about "the Python file" → query api_reference.py, do NOT search
 - "employee_handbook.md" is indexed + user asks "what does the handbook say?" → query directly, do NOT search
@@ -634,13 +758,13 @@ Even if you "know" about supply chain audits, compliance reports, PTO policies, 
 **SECTION/PAGE LOOKUP RULE:**
 When the user asks about a specific section (e.g., "Section 52", "Chapter 3", "Appendix B"):
 1. Try query_specific_file with section name + likely topic: query="Section 52 findings"
-2. If RAG returns low-score or irrelevant results, use search_file_content to grep the file directly:
+2. If RAG returns low-score or irrelevant results, use find_files_content to grep the file directly:
    - ALWAYS restrict search to the document's directory (avoid searching the whole repo):
-     search_file_content("Section 52", directory="eval/corpus/documents", context_lines=5)
+     find_files_content("Section 52", directory="eval/corpus/documents", context_lines=5)
    - context_lines=5 returns the 5 lines BEFORE and AFTER the match — shows section content
 3. If section header found but content unclear, search for CONTENT keywords (not just the heading):
-   - search_file_content("non-conformities", directory="eval/corpus/documents") → finds finding text
-   - search_file_content("finding", directory="eval/corpus/documents") → finds finding bullets
+   - find_files_content("non-conformities", directory="eval/corpus/documents") → finds finding text
+   - find_files_content("finding", directory="eval/corpus/documents") → finds finding bullets
 4. NEVER answer from memory when asked about a specific named section — always retrieve first.
 5. If all queries fail, give the best answer based on what WAS found — never just say "I cannot find it."
 6. CRITICAL — If RAG returned RELEVANT content (even if you're unsure it belongs to "Section 52" specifically):
@@ -809,7 +933,7 @@ When user uses a reference to a file already found/indexed in a PRIOR turn ("the
 - CHECK CONVERSATION HISTORY first — if you indexed/found a file in a prior turn, that IS the file.
 - DO NOT re-search from scratch. Query the already-indexed document directly.
 - "What about the Python source file?" after indexing api_reference.py → query api_reference.py
-- WRONG: search_file("Python source authentication") when you already indexed api_reference.py
+- WRONG: find_files("Python source authentication") when you already indexed api_reference.py
 - RIGHT: query_specific_file("api_reference.py", "authentication method")
 """
 
@@ -817,7 +941,7 @@ When user uses a reference to a file already found/indexed in a PRIOR turn ("the
         data_file_rules = """
 **FILE ANALYSIS AND DATA PROCESSING:**
 When user asks to analyze data files (bank statements, spreadsheets, expense reports, CSV sales data):
-1. First find the files using search_file or list_recent_files
+1. First find the files using find_files or list_recent_files
 2. Use get_file_info to understand the file structure (column names, row count)
 3. Use analyze_data_file with appropriate parameters:
    - analysis_type: "summary" for general overview, "spending" for expenses, "trends" for time-based, "full" for comprehensive
@@ -1108,6 +1232,9 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
         self.register_rag_tools()
         self.register_file_tools()
         self.register_shell_tools()
+        self.register_filesystem_tools()  # File system navigation & search
+        self.register_scratchpad_tools()  # Structured data analysis
+        self.register_browser_tools()  # Web browsing, search, download
         self.register_file_search_tools()  # Shared file search tools
         self.register_file_io_tools()  # File read/write/edit (FileIOToolsMixin)
         self.register_screenshot_tools()  # Screenshot capture (ScreenshotToolsMixin)
@@ -1637,6 +1764,9 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools
     # - FileToolsMixin (file_tools.py): Directory monitoring
     # - ShellToolsMixin (shell_tools.py): Shell command execution
+    # - FileSystemToolsMixin (shared): File system browsing, search, tree, bookmarks
+    # - ScratchpadToolsMixin (shared): SQLite working memory for data analysis
+    # - BrowserToolsMixin (shared): Web browsing, content extraction, download
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (code/tools/file_io.py): read_file, write_file, edit_file (3 generic tools only)
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from ~/.gaia/mcp_servers.json)
@@ -1906,3 +2036,8 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
             self.stop_watching()
         except Exception as e:
             logger.error(f"Error stopping file watchers during cleanup: {e}")
+        try:
+            if self._web_client:
+                self._web_client.close()
+        except Exception as e:
+            logger.error(f"Error closing web client during cleanup: {e}")
