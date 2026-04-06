@@ -144,9 +144,11 @@ def cmd_run(args):
         # Use RoutingAgent to determine language and project type
         if query:
             # Prepare agent configuration from CLI args
+            verbose_mode = getattr(args, "verbose", False) or args.debug
             agent_config = {
                 "silent_mode": args.silent,
                 "debug": args.debug,
+                "verbose": verbose_mode,
                 "show_prompts": args.show_prompts,
                 "max_steps": args.max_steps,
                 "use_claude": args.use_claude,
@@ -162,9 +164,11 @@ def cmd_run(args):
         else:
             # Interactive mode - start with default Python agent
             # User can still benefit from routing per query
+            verbose_mode = getattr(args, "verbose", False) or args.debug
             agent = CodeAgent(
                 silent_mode=args.silent,
                 debug=args.debug,
+                verbose=verbose_mode,
                 show_prompts=args.show_prompts,
                 max_steps=args.max_steps,
                 use_claude=args.use_claude,
@@ -287,6 +291,11 @@ Examples:
         "--debug",
         action="store_true",
         help="Enable debug logging",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show detailed agent output (thoughts, goals, plans, tool results). Default is minimal output.",
     )
     parser.add_argument(
         "--silent",

@@ -1286,8 +1286,13 @@ All commands support these global options:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
+| `--verbose` | flag | off | Show detailed agent output (thoughts, goals, plans, tool results). Default is minimal, clean output. |
 | `--logging-level` | string | INFO | Logging verbosity [DEBUG, INFO, WARNING, ERROR, CRITICAL] |
 | `-v, --version` | flag | - | Show program's version and exit |
+
+<Note>
+By default, GAIA uses a **minimal console** that shows only LLM answers, brief tool status with spinners, and errors. Use `--verbose` to see the full step-by-step agent output including thoughts, goals, plans, and detailed tool results.
+</Note>
 
 ---
 

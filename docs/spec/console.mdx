@@ -7,9 +7,9 @@ title: "Console Output Handlers"
 </Info>
 
 <Note>
-**Component:** OutputHandler, AgentConsole, SilentConsole, SSEOutputHandler
+**Component:** OutputHandler, MinimalConsole, AgentConsole, SilentConsole, SSEOutputHandler
 **Module:** `gaia.agents.base.console`, `gaia.api.sse_handler`
-**Import:** `from gaia.agents.base.console import OutputHandler, AgentConsole, SilentConsole`
+**Import:** `from gaia.agents.base.console import OutputHandler, MinimalConsole, AgentConsole, SilentConsole`
 </Note>
 ---
 
@@ -32,22 +32,25 @@ The console output system provides a unified interface for handling agent output
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
-    A(["OUTPUT HANDLER"]) --> B(["AGENT CONSOLE"])
+    A(["OUTPUT HANDLER"]) --> B(["MINIMAL CONSOLE (default)"])
+    A --> E(["AGENT CONSOLE (--verbose)"])
     A --> C(["SILENT CONSOLE"])
     A --> D(["SSE HANDLER"])
 
     style A fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style B fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style E fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
     style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
     style D fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
 
-    linkStyle 0,1,2 stroke:#ED1C24,stroke-width:2px
+    linkStyle 0,1,2,3 stroke:#ED1C24,stroke-width:2px
 ```
 
 | Component | Type | Purpose |
 |-----------|------|---------|
 | **OUTPUT HANDLER** | Abstract Base Class | Defines interface for all output handlers |
-| **AGENT CONSOLE** | Implementation | Rich CLI output with colors, spinners, syntax highlighting |
+| **MINIMAL CONSOLE** | Implementation (default) | Clean, minimal output — answers, brief tool status, errors |
+| **AGENT CONSOLE** | Implementation (`--verbose`) | Rich CLI output with colors, spinners, syntax highlighting, full step-by-step detail |
 | **SILENT CONSOLE** | Implementation | Suppressed output for testing and API mode |
 | **SSE HANDLER** | Implementation | Server-Sent Events streaming for API clients |
 
