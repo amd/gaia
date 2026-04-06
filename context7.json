@@ -1,0 +1,25 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "GAIA",
+  "description": "AMD's open-source framework for running generative AI applications locally on AMD hardware, with specialized optimizations for Ryzen AI processors with NPU support.",
+  "folders": ["docs"],
+  "excludeFolders": ["tests", "scripts", "workshop", "docs/spec"],
+  "excludeFiles": ["CHANGELOG.md"],
+  "rules": [
+    "GAIA agents inherit from the base Agent class in src/gaia/agents/base/agent.py",
+    "Tools are registered using the @tool decorator from gaia.agents.base.tools",
+    "LLM inference runs locally via Lemonade Server on AMD NPU/GPU hardware",
+    "The default model is Qwen3.5-35B-A3B-GGUF for agent tasks",
+    "All new features require tests in tests/ and documentation in docs/ (.mdx format)",
+    "Use 'uv pip install -e .[dev]' for development setup",
+    "The code index (gaia.code_index) provides semantic search over repositories using local FAISS + Lemonade embeddings",
+    "Use 'gaia index' CLI to build a semantic code index; 'gaia index search <query>' to query it",
+    "CodeIndexSDK accepts CodeIndexConfig with repo_path, index_git_history, index_prs, and max_files options"
+  ],
+  "previousVersions": [
+    {"tag": "v0.17.1"},
+    {"tag": "v0.17.0"},
+    {"tag": "v0.16.0"},
+    {"tag": "v0.15.0"}
+  ]
+}

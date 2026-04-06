@@ -67,12 +67,14 @@ setup(
         "gaia.agents.code.prompts",
         "gaia.agents.code.tools",
         "gaia.agents.code.validators",
+        "gaia.agents.code_index",
         "gaia.agents.routing",
         "gaia.agents.sd",
         "gaia.agents.summarize",
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
+        "gaia.code_index",
     ],
     package_data={
         "gaia.eval": [
@@ -168,6 +170,10 @@ setup(
             "pymupdf>=1.24.0",
             "sentence-transformers",
             "faiss-cpu>=1.7.0",
+        ],
+        "code-index": [
+            "faiss-cpu>=1.7.0",
+            "numpy>=1.24.0",
         ],
         "lint": [
             "black",

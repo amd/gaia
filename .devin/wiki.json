@@ -1,0 +1,32 @@
+{
+  "title": "GAIA - Generative AI Is Awesome",
+  "description": "AMD's open-source framework for running generative AI applications locally on AMD hardware with NPU optimization",
+  "content": [
+    {"title": "Overview", "path": "README.md"},
+    {"title": "Architecture", "path": "docs/reference/dev.mdx"},
+    {"title": "Getting Started", "path": "docs/quickstart.mdx"},
+    {"title": "Agent System", "path": "docs/sdk/core/agent-system.mdx"},
+    {"title": "Tool System", "path": "docs/sdk/core/tools.mdx"},
+    {"title": "Agent SDK", "path": "docs/sdk/sdks/chat.mdx"},
+    {"title": "LLM Clients", "path": "docs/sdk/sdks/llm.mdx"},
+    {"title": "RAG System", "path": "docs/sdk/sdks/rag.mdx"},
+    {"title": "Code Index", "path": "docs/sdk/sdks/code-index.mdx"},
+    {"title": "MCP Integration", "path": "docs/sdk/infrastructure/mcp.mdx"},
+    {"title": "CLI Reference", "path": "docs/reference/cli.mdx"},
+    {"title": "Agent UI", "path": "docs/guides/agent-ui.mdx"},
+    {"title": "Contributing", "path": "CONTRIBUTING.md"}
+  ],
+  "exclude": [
+    "tests/**",
+    "docs/spec/**",
+    "workshop/**",
+    "scripts/**",
+    "*.egg-info/**",
+    "dist/**",
+    "build/**",
+    "node_modules/**",
+    ".github/**",
+    "__pycache__/**",
+    ".venv/**"
+  ]
+}
