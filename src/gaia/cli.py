@@ -38,6 +38,14 @@ except ImportError:
     MCPClient = None
     BLENDER_AVAILABLE = False
 
+try:
+    from gaia.agents.code_index.agent import CodeIndexAgent
+
+    CODE_INDEX_AGENT_AVAILABLE = True
+except ImportError:
+    CodeIndexAgent = None
+    CODE_INDEX_AGENT_AVAILABLE = False
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -148,6 +156,7 @@ def initialize_lemonade_for_agent(
     agent_context_sizes = {
         "code": 32768,
         "chat": 32768,
+        "code_index": 32768,
         "jira": 32768,
         "blender": 32768,
         "docker": 32768,
@@ -2525,6 +2534,83 @@ Examples:
         "--all", action="store_true", help="Clear all caches"
     )
 
+    # Code index command — semantic search over repositories
+    index_parser = subparsers.add_parser(
+        "index",
+        help="Index a code repository for semantic search",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Index current directory
+  gaia index
+
+  # Index a specific repository
+  gaia index --repo /path/to/repo
+
+  # Index with git history
+  gaia index --git-history
+
+  # Search the index
+  gaia index search "how does the agent handle errors"
+
+  # Show index status
+  gaia index status
+
+  # Clear the index
+  gaia index clear
+        """,
+    )
+    index_parser.add_argument(
+        "--repo",
+        default=".",
+        help="Path to repository root (default: current directory)",
+    )
+    index_parser.add_argument(
+        "--git-history",
+        action="store_true",
+        default=False,
+        help="Include git commit history in the index",
+    )
+    index_parser.add_argument(
+        "--prs",
+        action="store_true",
+        default=False,
+        help="Include GitHub pull requests in the index (requires gh CLI)",
+    )
+    index_parser.add_argument(
+        "--max-files",
+        type=int,
+        default=5000,
+        help="Maximum number of files to index (default: 5000)",
+    )
+    index_parser.add_argument(
+        "--model",
+        default="nomic-embed-text-v2-moe-GGUF",
+        help="Embedding model to use (default: nomic-embed-text-v2-moe-GGUF)",
+    )
+    index_subparsers = index_parser.add_subparsers(
+        dest="index_action", help="Index action"
+    )
+    index_search_parser = index_subparsers.add_parser("search", help="Search the index")
+    index_search_parser.add_argument("query", help="Search query")
+    index_search_parser.add_argument(
+        "--scope",
+        choices=["all", "code", "commit", "pr"],
+        default="all",
+        help="Scope of search (default: all)",
+    )
+    index_search_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=10,
+        help="Number of results to return (default: 10)",
+    )
+    _ = index_subparsers.add_parser("status", help="Show index status")
+    _ = index_subparsers.add_parser("clear", help="Clear the index")
+    _ = index_subparsers.add_parser(
+        "chat", help="Interactive code Q&A with the CodeIndexAgent"
+    )
+
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
     init_parser = subparsers.add_parser(
@@ -4718,6 +4804,10 @@ Let me know your answer!
         handle_api_command(args)
         return
 
+    if args.action == "index":
+        handle_index_command(args)
+        return
+
     if args.action == "perf-vis":
         handle_perf_vis_command(args)
         return
@@ -5858,6 +5948,131 @@ def handle_blender_command(args):
         blender_log = get_logger(__name__)
         blender_log.error(f"Error running Blender agent: {e}")
         print(f"❌ Error: {e}")
+        sys.exit(1)
+
+
+def handle_index_command(args):
+    """Handle the gaia index command (semantic code search)."""
+    try:
+        from gaia.code_index.sdk import CodeIndexConfig, CodeIndexSDK
+    except ImportError:
+        print(
+            "❌ code_index is not available. Install faiss-cpu: pip install faiss-cpu"
+        )
+        return
+
+    repo_path = os.path.abspath(getattr(args, "repo", "."))
+    config = CodeIndexConfig(
+        repo_path=repo_path,
+        index_git_history=getattr(args, "git_history", False),
+        index_prs=getattr(args, "prs", False),
+        max_files=getattr(args, "max_files", 5000),
+        embedding_model=getattr(args, "model", "nomic-embed-text-v2-moe-GGUF"),
+    )
+    sdk = CodeIndexSDK(config)
+
+    index_action = getattr(args, "index_action", None)
+
+    if index_action == "chat":
+        if not CODE_INDEX_AGENT_AVAILABLE:
+            print(
+                "❌ CodeIndexAgent is not available. Install faiss-cpu: pip install faiss-cpu"
+            )
+            return
+        if not getattr(args, "no_lemonade_check", False):
+            success, _ = initialize_lemonade_for_agent(
+                agent="code_index",
+                skip_if_external=True,
+                use_claude=getattr(args, "use_claude", False),
+                use_chatgpt=getattr(args, "use_chatgpt", False),
+                base_url=getattr(args, "base_url", None),
+            )
+            if not success:
+                sys.exit(1)
+        agent = CodeIndexAgent(
+            repo_path=repo_path,
+            code_index_config=config,
+        )
+        print("=== Code Index Chat ===")
+        print(f"Repository: {repo_path}")
+        print("Ask questions about the codebase. Type 'exit' or 'quit' to stop.\n")
+        while True:
+            try:
+                query = input("You: ")
+                if query.lower() in ["exit", "quit", "q"]:
+                    break
+                if query.strip():
+                    agent.process_query(query)
+            except KeyboardInterrupt:
+                print("\nExiting.")
+                break
+            except Exception as e:
+                print(f"Error: {e}")
+        return
+
+    if index_action == "status":
+        status = sdk.get_status()
+        if not status.get("indexed"):
+            print(f"No index found for {repo_path}")
+            print("Run 'gaia index' to build the index.")
+        else:
+            print(f"Repository: {status['repo_path']}")
+            print(f"Embedding model: {status.get('embedding_model', 'unknown')}")
+            print(f"Total chunks: {status.get('total_chunks', 0)}")
+            print(f"  Code chunks: {status.get('code_chunks', 0)}")
+            print(f"  Commit chunks: {status.get('commit_chunks', 0)}")
+            print(f"  PR chunks: {status.get('pr_chunks', 0)}")
+            print(f"Files tracked: {status.get('files_tracked', 0)}")
+        return
+
+    if index_action == "clear":
+        sdk.clear_index()
+        print(f"Index cleared for {repo_path}")
+        return
+
+    if index_action == "search":
+        query = args.query
+        scope = getattr(args, "scope", "all")
+        top_k = getattr(args, "top_k", 10)
+        results = sdk.search(query, scope=scope, top_k=top_k)
+        if not results:
+            print("No results found. Run 'gaia index' first.")
+            return
+        for i, r in enumerate(results, 1):
+            chunk = r.chunk
+            print(f"\n{'=' * 60}")
+            print(f"Result {i} (score: {r.score:.4f}, type: {r.result_type})")
+            if hasattr(chunk, "file_path"):
+                line = f":{chunk.start_line}" if hasattr(chunk, "start_line") else ""
+                print(f"File: {chunk.file_path}{line}")
+            if hasattr(chunk, "symbol_name") and chunk.symbol_name:
+                print(
+                    f"Symbol: {chunk.symbol_name} ({getattr(chunk, 'symbol_type', '')})"
+                )
+            if hasattr(chunk, "commit_hash"):
+                print(f"Commit: {chunk.commit_hash[:8]} by {chunk.author}")
+            if hasattr(chunk, "pr_number"):
+                print(f"PR #{chunk.pr_number}: {chunk.title}")
+            print(f"\n{chunk.content[:400]}")
+        return
+
+    # Default action: index the repository
+    print(f"Indexing repository: {repo_path}")
+    if config.index_git_history:
+        print("  Including git history")
+    if config.index_prs:
+        print("  Including pull requests")
+    try:
+        result = sdk.index_repository()
+        print("\nIndexing complete:")
+        print(f"  Files indexed: {result.files_indexed}")
+        print(f"  Chunks created: {result.chunks_created}")
+        if result.commits_indexed:
+            print(f"  Commits indexed: {result.commits_indexed}")
+        if result.prs_indexed:
+            print(f"  PRs indexed: {result.prs_indexed}")
+    except Exception as e:
+        print(f"❌ Indexing failed: {e}")
         sys.exit(1)
 
 

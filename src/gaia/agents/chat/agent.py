@@ -76,7 +76,7 @@ class ChatAgentConfig:
     enable_sd_tools: bool = False  # Stable Diffusion image generation
 
 
-class ChatAgent(
+_chat_agent_bases = [
     Agent,
     RAGToolsMixin,
     FileToolsMixin,
@@ -87,7 +87,10 @@ class ChatAgent(
     ScreenshotToolsMixin,
     SDToolsMixin,
     MCPClientMixin,
-):
+]
+
+
+class ChatAgent(*_chat_agent_bases):
     """
     Chat Agent with RAG, file operations, and shell command capabilities.
 
