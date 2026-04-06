@@ -254,9 +254,7 @@ class SSEOutputHandler(OutputHandler):
 
         # Attach latency for tool calls (measured from print_tool_usage)
         if self._tool_start_time is not None:
-            latency_ms = round(
-                (time.monotonic() - self._tool_start_time) * 1000, 1
-            )
+            latency_ms = round((time.monotonic() - self._tool_start_time) * 1000, 1)
             event["latency_ms"] = latency_ms
             self._tool_start_time = None
 

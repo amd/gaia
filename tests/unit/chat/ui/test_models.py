@@ -371,16 +371,24 @@ class TestAgentStepResponse:
 
     def test_mcp_fields_set(self):
         step = AgentStepResponse(
-            id=1, type="tool", label="MCP tool",
-            timestamp=0, mcpServer="github", latencyMs=47.2,
+            id=1,
+            type="tool",
+            label="MCP tool",
+            timestamp=0,
+            mcpServer="github",
+            latencyMs=47.2,
         )
         assert step.mcpServer == "github"
         assert step.latencyMs == 47.2
 
     def test_mcp_fields_serialization(self):
         step = AgentStepResponse(
-            id=1, type="tool", label="MCP tool",
-            timestamp=0, mcpServer="filesystem", latencyMs=123.0,
+            id=1,
+            type="tool",
+            label="MCP tool",
+            timestamp=0,
+            mcpServer="filesystem",
+            latencyMs=123.0,
         )
         data = step.model_dump()
         assert data["mcpServer"] == "filesystem"
