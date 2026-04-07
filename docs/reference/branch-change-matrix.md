@@ -109,7 +109,7 @@ The change matrix in Section 3 uses the following column schema. All reviewers s
 
 The `feature/pipeline-orchestration-v1` branch was initiated to deliver a self-contained pipeline orchestration capability on top of the GAIA agent framework. The primary objective was to build a quality-gated, state-machine-driven execution engine that could take a natural-language goal, decompose it into phases, assign those phases to specialized agents, and iterate until a configurable quality threshold was met or a maximum iteration count was exhausted.
 
-The scope expanded substantially over the development period to encompass six distinct programs of work: the core pipeline engine, the quality gate system, a parallel conversation-compaction framework (BAIBEL), a four-sprint enterprise infrastructure modernization program (Phase 3), a four-week production hardening program (Phase 4), and ongoing Agent UI feature delivery. These programs ran concurrently on the same branch. The result is a branch that delivers both a new top-level capability and a significant restructuring of GAIA's internal infrastructure.
+The scope expanded substantially over the development period to encompass six distinct programs of work: the core pipeline engine, the quality gate system, a parallel conversation-compaction framework (BAIBEL, Phases 0–3 complete), an Enterprise Infrastructure Program (Phase 3: four sprints of modular architecture, DI+performance, caching+config, and observability+API), a Production Hardening Program (Phase 4: three weeks of health monitoring, resilience patterns, and data protection+performance profiling), and ongoing Agent UI feature delivery. These programs ran concurrently on the same branch. The result is a branch that delivers both a new top-level capability and a significant restructuring of GAIA's internal infrastructure.
 
 The branch spans 890 changed files, 266,715 inserted lines, 13,447 deleted lines, and 58 commits across a 22-day window from 2026-03-16 to 2026-04-07.
 
@@ -184,7 +184,7 @@ The following items were identified as incomplete or deferred at the time of the
 
 1. **AgentOrchestrator not built — RoutingAgent retains hardcoded CodeAgent default.** The `RoutingAgent` (`src/gaia/agents/routing/agent.py`) was modified to accept capability-based routing requests, but the `AgentOrchestrator` that was intended to provide dynamic agent selection has not been implemented. The routing agent currently falls back to `CodeAgent` when no explicit agent is matched. Any caller that relies on capability-based dispatch at runtime will receive incorrect behavior until this is resolved. Status: open, no mitigation in place.
 
-2. **BAIBEL Phase 3 (production integration) and Phase 4 (adaptive learning) not started.** The BAIBEL-GAIA Integration Master Specification (`docs/spec/baibel-gaia-integration-master.md`) defines a four-phase roadmap. Phases 0 through the BAIBEL internal Phase 3 (Modular Architecture) are complete on this branch. BAIBEL Phase 3 (production pipeline integration) and Phase 4 (adaptive learning) have not been started. The BAIBEL workstream on this branch therefore represents a partially integrated framework, not a production-ready capability. Status: deferred to future branch.
+2. **BAIBEL Phase 4 (adaptive learning) not started.** The BAIBEL-GAIA Integration Master Specification (`docs/spec/baibel-gaia-integration-master.md`) defines a five-phase roadmap (Phases 0–4). Phases 0, 1, 2, and 3 (Architectural Modernization — 4 sprints: Modular Architecture, DI+Performance, Caching+Config, Observability+API) are all complete on this branch, each passing their respective Quality Gates (QG4, QG4, QG4, QG5). BAIBEL Phase 4 (Adaptive Learning) has not been started. The BAIBEL workstream on this branch therefore represents a substantially integrated framework, with only the adaptive learning layer deferred. Status: Phase 4 deferred to future branch.
 
 3. **Security Boundary incomplete — resilience primitives not wired into pipeline engine call sites.** The resilience primitives (`CircuitBreaker`, `Bulkhead`, `Retry` in `src/gaia/resilience/`) and the data protection components (`DataProtection`, `WorkspacePolicy` in `src/gaia/security/`) were delivered as standalone modules with full test coverage. However, integration wiring from these primitives into the pipeline engine's agent call paths (`engine.py`, `loop_manager.py`, `routing_engine.py`) has not been completed. A pipeline run that encounters a failing agent will not automatically benefit from circuit breaker protection unless the caller explicitly wraps the call. Status: open, medium risk.
 
@@ -193,6 +193,8 @@ The following items were identified as incomplete or deferred at the time of the
 5. **Quality reviewer final coherence check (Task 6) interrupted — needs completion.** A structured quality review task was in progress on the branch documentation when work was interrupted. The specific task (referenced internally as Task 6) was a final coherence check across the specification documents, checking that code examples match implementation and that cross-document references are consistent. This check was not completed. Some specification documents may contain inconsistencies with the implemented code. Status: open, documentation risk.
 
 6. **Additional items identified in `future-where-to-resume-left-off.md`.** The root-level document `/c/Users/amikinka/gaia/future-where-to-resume-left-off.md` serves as the program handoff document and contains the authoritative list of remaining work. As of version 19.0 of that document (dated 2026-04-06), the program is declared 100% complete for the BAIBEL-internal phase tracking. However, the five items above were identified independently from repository inspection and are not reflected as open in that document. Reviewers should treat the document as a historical record of what was completed, not as a guarantee that all integration work is merge-ready.
+
+7. **YAML frontmatter missing from six `docs/spec/*.md` files.** Six specification files were committed to `docs/spec/` without YAML frontmatter: `agent-ui-eval-kpi-reference.md`, `agent-ui-eval-kpis.md`, `gaia-loom-architecture.md`, `nexus-gaia-native-integration-spec.md`, `pipeline-metrics-competitive-analysis.md`, and `pipeline-metrics-kpi-reference.md`. The Mintlify documentation framework requires YAML frontmatter (at minimum a `title` field) for `.md` files to render correctly in the documentation site. Without frontmatter, these files will either fail to render or be rendered with incorrect titles. Status: open, documentation build risk.
 
 ---
 
@@ -436,7 +438,7 @@ BAIBEL is implemented primarily as extensions to existing state and quality modu
 | `quality/scorer.py` (BAIBEL Phase 2: output quality scoring for compacted context) | EXTENDED | 1 | ~40 | BAIBEL | `32f4cf4` | `quality/validators/`, `quality/models.py` | `pipeline/decision_engine.py` | BOTH | PARTIAL | LOW |
 | `src/gaia/agents/` (BAIBEL Phase 0 tool scoping — tool isolation contracts added to `configurable.py`) | EXTENDED | 1 | ~30 | BAIBEL | `32f4cf4` | `agents/configurable.py` | `agents/registry.py` | UNIT | PARTIAL | LOW |
 | `docs/spec/baibel-gaia-integration-master.md` | NEW | 1 | ~1,800 | BAIBEL | `dc4ddda` | — | Engineering reference | NONE | YES | LOW |
-| Phase 0–2 completion reports and BAIBEL spec appendices | NEW | 3 | ~900 | BAIBEL | `32f4cf4` | — | Engineering reference | NONE | YES | LOW |
+| Phase 0–3 completion reports and BAIBEL spec appendices | NEW | 3 | ~900 | BAIBEL | `32f4cf4` + `85b1f55` | — | Engineering reference | NONE | YES | LOW |
 
 ---
 
@@ -449,8 +451,8 @@ BAIBEL is implemented primarily as extensions to existing state and quality modu
 | Pipeline orchestration specs (`docs/spec/pipeline-engine.mdx`, `pipeline-demo.mdx`, related) | NEW | ~6 | ~3,200 | P1 | `4345b92` + `efb1ca7` | — | Engineers and reviewers | NONE | YES | LOW |
 | GAIA Loom architecture spec (`docs/spec/gaia-loom-architecture.md`) | NEW | 1 | ~800 | P2 | `daf21f9` | — | Engineers and reviewers | NONE | YES | LOW |
 | KPI references and eval metrics specs (`docs/spec/kpi-*.md`, `eval-metrics-spec.md`) | NEW | ~4 | ~1,200 | P2 | `daf21f9` | — | Engineers and reviewers | NONE | YES | LOW |
-| Phase 3 closeout report (`docs/spec/phase3-closeout-report.md`) | NEW | 1 | ~600 | P3-S4 | `85b1f55` | — | Program management | NONE | YES | LOW |
-| Phase 4 closeout report (`docs/spec/phase4-closeout-report.md`) | NEW | 1 | ~500 | P4-W3 | `82a6d42` | — | Program management | NONE | YES | LOW |
+| Phase 3 closeout report (`docs/reference/phase3-closeout-report.md`) | NEW | 1 | ~600 | P3-S4 | `85b1f55` | — | Program management | NONE | YES | LOW |
+| Phase 4 closeout report (`docs/reference/phase4-closeout-report.md`) | NEW | 1 | ~500 | P4-W3 | `82a6d42` | — | Program management | NONE | YES | LOW |
 | BAIBEL master specification (`docs/spec/baibel-gaia-integration-master.md`) | NEW | 1 | ~1,800 | BAIBEL | `dc4ddda` | — | Engineers and reviewers | NONE | YES | LOW |
 | Phase 3 and Phase 4 technical specs (40+ `.mdx` and `.md` files in `docs/spec/`) | NEW | ~40 | ~12,000 | P3/P4 | Multiple | — | Engineers and reviewers | NONE | YES | LOW |
 | Agent UI guides and API docs (`docs/guides/agent-ui.mdx`, `docs/sdk/sdks/agent-ui.mdx`) | NEW/EXTENDED | ~5 | ~1,500 | UI | Multiple | — | End users and developers | NONE | YES | LOW |
@@ -882,7 +884,7 @@ A runtime module (`src/gaia/agents/registry.py`) that maintains a catalog of ava
 ---
 
 **BAIBEL**
-BAIBEL-GAIA Integration Framework. A parallel workstream on this branch that implements conversation compaction for long-running agent sessions. The name is an internal project identifier. BAIBEL introduces the `NexusService` (pipeline state singleton), `ChronicleDigest` (token-efficient audit summarization), `ContextLens` (relevance-filtered context views), and workspace sandboxing. The program progressed through Phases 0, 1, 2, and the BAIBEL-internal Phase 3 on this branch. Production integration (BAIBEL Phase 3) and adaptive learning (BAIBEL Phase 4) are deferred.
+BAIBEL-GAIA Integration Framework. A parallel workstream on this branch that implements conversation compaction for long-running agent sessions. The name is an internal project identifier. BAIBEL introduces the `NexusService` (pipeline state singleton), `ChronicleDigest` (token-efficient audit summarization), `ContextLens` (relevance-filtered context views), and workspace sandboxing. The program progressed through Phases 0, 1, 2, and 3 (all four sprints: Modular Architecture, DI+Performance, Caching+Config, and Observability+API) on this branch. Adaptive learning (BAIBEL Phase 4) is deferred to a future branch.
 
 ---
 
