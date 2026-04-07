@@ -1,10 +1,10 @@
 # BAIBEL-GAIA Master Integration Specification
 
-**Version:** 2.4
-**Status:** Phase 0 COMPLETE - Phase 1 COMPLETE - Phase 2 COMPLETE - Phase 3 Sprint 1 COMPLETE - Phase 3 Sprint 2 COMPLETE - Phase 3 Sprint 3 COMPLETE
+**Version:** 2.5
+**Status:** Phase 0 COMPLETE - Phase 1 COMPLETE - Phase 2 COMPLETE - Phase 3 Sprint 1 COMPLETE - Phase 3 Sprint 2 COMPLETE - Phase 3 Sprint 3 COMPLETE - Phase 3 Sprint 4 COMPLETE
 **Classification:** Strategic Architecture Document
 **Date:** 2026-04-06
-**Last Updated:** 2026-04-06 (Phase 3 Sprint 3 COMPLETE - Caching + Enterprise Config)
+**Last Updated:** 2026-04-06 (Phase 3 Sprint 4 COMPLETE - Observability + API)
 
 ---
 
@@ -26,8 +26,10 @@
 | **Phase 3 Sprint 1: Modular Architecture Core** | **COMPLETE** | **100%** | **QG4 PASS** | senior-developer |
 | **Phase 3 Sprint 2: DI + Performance** | **COMPLETE** | **100%** | **QG4 PASS** | senior-developer |
 | **Phase 3 Sprint 3: Caching + Enterprise Config** | **COMPLETE** | **100%** | **QG4 PASS** | senior-developer |
+| **Phase 3 Sprint 4: Observability + API** | **COMPLETE** | **100%** | **QG5 PASS** | senior-developer |
+| **Phase 3 (Overall)** | **COMPLETE** | **100%** | **4x QG PASS** | senior-developer |
 
-**Overall Program:** ~90% Complete (Phase 0 + Phase 1 + Phase 2 + Phase 3 S1 + S2 + S3 done), Phase 3 S4 Pending
+**Overall Program:** ~95% Complete (Phase 0 + Phase 1 + Phase 2 + Phase 3 done), Phase 4 Proposed
 
 ### Implementation Roadmap: Actual vs. Planned Progress
 
@@ -135,13 +137,28 @@ COMPLETED:
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Phase 3 Sprint 4: Observability + API (COMPLETED)               │
+│ - ObservabilityCore: ~500 LOC, unified observability            │
+│ - MetricsCollector: ~300 LOC, metrics collection                │
+│ - Tracing (TraceContext, Span, Propagator): ~420 LOC            │
+│ - JSONFormatter: ~100 LOC, structured logging                   │
+│ - PrometheusExporter: ~100 LOC, metrics export                  │
+│ - OpenAPIGenerator: ~400 LOC, API documentation                 │
+│ - APIVersioning: ~200 LOC, version negotiation                  │
+│ - DeprecationManager: ~150 LOC, API evolution                   │
+│ - 180+ tests (100% pass), Quality Gate 5: PASS                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
 PENDING:
 ┌─────────────────────────────────────────────────────────────────┐
-│ Phase 3 Sprint 4: Observability + API (Weeks 10-12)             │
-│ - ObservabilityCore: Metrics, logging, tracing                  │
-│ - OpenAPISpec: API documentation generation                     │
-│ - APIVersioning: Version management                             │
-│ - DeprecationLayer: Migration helpers                           │
+│ Phase 4: Production Hardening (Weeks 13-16)                     │
+│ - HealthChecks: Health check coverage                           │
+│ - AlertingManager: Alert management                             │
+│ - RateLimiter: Rate limiting                                    │
+│ - CircuitBreaker: Fault tolerance                               │
+│ - BackupManager: Backup/recovery                                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1316,14 +1333,14 @@ class LLMAgentBridge:
 
 ---
 
-### Phase 3: Architectural Modernization (12 weeks)
+### Phase 3: Architectural Modernization (12 weeks) - ALL SPRINTS COMPLETE
 
 | Sprint | Weeks | Tasks | Deliverables | Status |
 |--------|-------|-------|--------------|--------|
 | **Sprint 1** | **1-3** | **Modular Architecture Core** | **AgentCapabilities, AgentProfile, AgentExecutor, PluginRegistry** | **COMPLETE** |
 | **Sprint 2** | **4-6** | **DI + Performance** | **DIContainer, AgentAdapter, AsyncUtils, ConnectionPool** | **COMPLETE** |
 | **Sprint 3** | **7-9** | **Caching + Enterprise Config** | **CacheLayer, ConfigSchema, ConfigManager, SecretsManager** | **COMPLETE** |
-| Sprint 4 | 10-12 | Observability + API | ObservabilityCore, OpenAPISpec, APIVersioning | PENDING |
+| **Sprint 4** | **10-12** | **Observability + API** | **ObservabilityCore, MetricsCollector, OpenAPIGenerator, APIVersioning, DeprecationManager** | **COMPLETE** |
 
 **Detailed Tasks:**
 
@@ -1361,11 +1378,20 @@ class LLMAgentBridge:
 - [x] Quality Gate 4 -- PASS (4/5 criteria complete, 1 partial)
 - [x] Issues Fixed: M-001 (SecretsManager async/sync), M-002 (ConfigManager async/sync)
 
-**Sprint 4 (Weeks 10-12) - PENDING:**
-- [ ] Create `src/gaia/observability/observability_core.py` -- ObservabilityCore (~500 LOC)
-- [ ] Create `src/gaia/api/openapi_spec.py` -- OpenAPISpec for API documentation (~400 LOC)
-- [ ] Create `src/gaia/api/api_versioning.py` -- APIVersioning for version management (~200 LOC)
-- [ ] Create `src/gaia/api/deprecation_layer.py` -- DeprecationLayer for migration (~150 LOC)
+**Sprint 4 (Weeks 10-12) - COMPLETE:**
+- [x] Create `src/gaia/observability/core.py` -- ObservabilityCore (~500 LOC, 50 tests)
+- [x] Create `src/gaia/observability/metrics.py` -- MetricsCollector (~300 LOC, 30 tests)
+- [x] Create `src/gaia/observability/tracing/` -- TraceContext, Span, Propagator (~420 LOC)
+- [x] Create `src/gaia/observability/logging/formatter.py` -- JSONFormatter (~100 LOC)
+- [x] Create `src/gaia/observability/exporters/prometheus.py` -- PrometheusExporter (~100 LOC)
+- [x] Create `src/gaia/observability/__init__.py` -- Clean public API (~50 LOC)
+- [x] Create `src/gaia/api/openapi.py` -- OpenAPIGenerator (~400 LOC, 40 tests)
+- [x] Create `src/gaia/api/versioning.py` -- APIVersioning (~200 LOC, 20 tests)
+- [x] Create `src/gaia/api/deprecation.py` -- DeprecationManager (~150 LOC, 15 tests)
+- [x] Create `src/gaia/api/__init__.py` -- Updated public API (~50 LOC)
+- [x] Unit test suite -- ~180+ tests (100% pass rate)
+- [x] Quality Gate 5 -- PASS (6/6 criteria complete)
+- [x] Issues Documented: OPENAPI-001 (FastAPI compatibility), OBS-003 (TODO low priority)
 
 **Exit Criteria (Sprint 1 - COMPLETE):**
 - [x] AgentCapabilities with validation (77 tests, 100% pass)
@@ -1391,6 +1417,16 @@ class LLMAgentBridge:
 - [x] SecretsManager with AES-256 encryption (~180 LOC, 20+ tests)
 - [x] ~170+ tests passing (100% pass rate)
 - [x] Quality Gate 4: PASS (CACHE-001, ENT-001, ENT-002, THREAD-002 passed; PERF-003 partial)
+
+**Exit Criteria (Sprint 4 - COMPLETE):**
+- [x] ObservabilityCore with trace context propagation (~500 LOC, 50 tests)
+- [x] MetricsCollector with Prometheus export (~300 LOC, 30 tests)
+- [x] Tracing components (TraceContext, Span, Propagator) (~420 LOC)
+- [x] OpenAPIGenerator with complete spec generation (~400 LOC, 40 tests)
+- [x] APIVersioning with all negotiation strategies (~200 LOC, 20 tests)
+- [x] DeprecationManager with migration support (~150 LOC, 15 tests)
+- [x] ~180+ tests passing (100% pass rate)
+- [x] Quality Gate 5: PASS (6/6 criteria: OBS-001, OBS-002, API-001, API-002, BC-002, THREAD-003)
 
 ---
 
@@ -1573,16 +1609,16 @@ RESOLVED (4): R7 -- Threading Safety, R9 -- TOCTOU, R10 -- Token Estimation, R11
 | **Phase 3 Sprint 1: Modular Architecture** | **3 weeks** | **6 person-weeks** | **3** | **COMPLETE** (195 tests, QG4 PASS) |
 | **Phase 3 Sprint 2: DI + Performance** | **3 weeks** | **6 person-weeks** | **3** | **COMPLETE** (157 tests, QG4 PASS) |
 | **Phase 3 Sprint 3: Caching + Config** | **3 weeks** | **6 person-weeks** | **3** | **COMPLETE** (~170+ tests, QG4 PASS) |
-| Phase 3 Sprint 4: Observability + API | 3 weeks | 6 person-weeks | 3 | PENDING |
-| **Phase 3 (Total)** | **12 weeks** | **24 person-weeks** | **12** | **Sprint 1, 2, 3 COMPLETE, Sprint 4 PENDING** |
-| **Total (Planned)** | **38 weeks** | **100 person-weeks** | **38 (~9 months)** | **~90% Complete, Phase 3 S4 PENDING** |
+| **Phase 3 Sprint 4: Observability + API** | **3 weeks** | **6 person-weeks** | **3** | **COMPLETE** (~180+ tests, QG5 PASS) |
+| **Phase 3 (Total)** | **12 weeks** | **24 person-weeks** | **12** | **COMPLETE** (4 sprints, ~702+ tests, 4x QG PASS) |
+| **Total (Planned)** | **38 weeks** | **100 person-weeks** | **38 (~9 months)** | **~95% Complete, Phase 0, 1, 2, 3 COMPLETE** |
 
 ---
 
 **END OF SPECIFICATION**
 
 **Distribution:** GAIA Development Team, AMD AI Framework Team
-**Next Action:** Phase 3 Implementation - Sprint 4 (Observability + API)
+**Next Action:** Phase 4 Planning - Production Hardening phase scoping
 **Review Cadence:** Bi-weekly program status reviews
 **Version History:**
 - v1.0: Initial specification
@@ -1598,4 +1634,5 @@ RESOLVED (4): R7 -- Threading Safety, R9 -- TOCTOU, R10 -- Token Estimation, R11
 - v2.1: Phase 3 KICKED OFF - Architectural Modernization (docs/reference/phase3-implementation-plan.md, phase3-technical-spec.md created)
 - v2.2: Phase 3 Sprint 1 COMPLETE - Modular Architecture Core (capabilities.py 340 LOC, profile.py 360 LOC, executor.py 650 LOC, plugin.py 680 LOC, 195 tests), Quality Gate 4 PASS, ~80% program complete
 - v2.3: Phase 3 Sprint 2 COMPLETE - DI + Performance (di_container.py 770 LOC, adapter.py 545 LOC, async_utils.py 703 LOC, connection_pool.py 787 LOC, 157 tests), Quality Gate 4 PASS, ~85% program complete
-- **v2.4: Phase 3 Sprint 3 COMPLETE - Caching + Enterprise Config (CacheLayer ~400 LOC, ConfigSchema ~150 LOC, ConfigManager ~200 LOC, SecretsManager ~180 LOC, ~170+ tests), Quality Gate 4 PASS, ~90% program complete**
+- v2.4: Phase 3 Sprint 3 COMPLETE - Caching + Enterprise Config (CacheLayer ~400 LOC, ConfigSchema ~150 LOC, ConfigManager ~200 LOC, SecretsManager ~180 LOC, ~170+ tests), Quality Gate 4 PASS, ~90% program complete
+- **v2.5: Phase 3 Sprint 4 COMPLETE - Observability + API (ObservabilityCore ~500 LOC, MetricsCollector ~300 LOC, OpenAPIGenerator ~400 LOC, APIVersioning ~200 LOC, DeprecationManager ~150 LOC, ~180+ tests), Quality Gate 5 PASS, ~95% program complete, Phase 3 COMPLETE**
