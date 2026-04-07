@@ -316,7 +316,7 @@ def _chunk_by_blocks(
     def _flush(start: int, end: int) -> None:
         block_lines = lines[start:end]
         text = "\n".join(block_lines).strip()
-        if len(text) >= min_lines:
+        if text.count("\n") + 1 >= min_lines:
             chunks.append(
                 CodeChunk(
                     file_path=file_path,

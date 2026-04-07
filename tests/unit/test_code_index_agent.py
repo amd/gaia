@@ -154,8 +154,9 @@ class TestToolsWhenCodeIndexUnavailable:
 class TestLoadEmbedder:
     """Verify the updated _load_embedder logic in CodeIndexSDK:
     - Does NOT call unload_model()
-    - Calls load_model() only when embedding model is not already loaded
-    - Preserves llamacpp_args="--ubatch-size 2048"
+    - Calls load_model() only when embedding model is not already running
+    - Uses health_check() to detect running models (not get_status)
+    - Preserves llamacpp_args with --ubatch-size and --split-mode none
     """
 
     def _make_sdk(self, tmp_path, already_loaded=False):
@@ -169,12 +170,14 @@ class TestLoadEmbedder:
         sdk = CodeIndexSDK(config)
 
         mock_client = MagicMock()
-        mock_status = MagicMock()
         if already_loaded:
-            mock_status.loaded_models = [{"id": config.embedding_model}]
+            mock_client.health_check.return_value = {
+                "all_models_loaded": [{"id": config.embedding_model}],
+            }
         else:
-            mock_status.loaded_models = []
-        mock_client.get_status.return_value = mock_status
+            mock_client.health_check.return_value = {
+                "all_models_loaded": [],
+            }
         sdk._llm_client = mock_client
 
         return sdk, mock_client, config
@@ -189,7 +192,7 @@ class TestLoadEmbedder:
 
         mock_client.load_model.assert_called_once_with(
             config.embedding_model,
-            llamacpp_args="--ubatch-size 2048",
+            llamacpp_args="--ubatch-size 2048 --split-mode none",
         )
 
     def test_load_model_skipped_when_already_loaded(self, tmp_path):
