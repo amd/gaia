@@ -364,12 +364,22 @@ class CodeIndexSDK:
 
         query_vec = query_emb[0:1].astype(np.float32)
 
-        # FAISS search
-        k = min(top_k, self._faiss_index.ntotal)
-        if k == 0:
+        # FAISS search — over-fetch when scope filtering is active so we
+        # don't silently return fewer results than top_k.
+        ntotal = self._faiss_index.ntotal
+        if ntotal == 0:
             return []
 
-        distances, indices = self._faiss_index.search(query_vec, k)
+        if scope == "all":
+            fetch_k = min(top_k, ntotal)
+        elif scope in ("commit", "pr"):
+            # Commit/PR chunks are typically a tiny fraction of the index,
+            # so we need to fetch aggressively to find enough matches.
+            fetch_k = min(top_k * 50, ntotal)
+        else:
+            fetch_k = min(top_k * 3, ntotal)
+
+        distances, indices = self._faiss_index.search(query_vec, fetch_k)
 
         chunks = [self._dict_to_chunk(c) for c in meta.get("chunks", [])]
         results = []
@@ -389,6 +399,8 @@ class CodeIndexSDK:
             results.append(
                 SearchResult(chunk=chunk, score=score, result_type=result_type)
             )
+            if len(results) >= top_k:
+                break
 
         return results
 
@@ -459,7 +471,6 @@ class CodeIndexSDK:
             "build",
             ".tox",
             ".eggs",
-            "*.egg-info",
             ".pytest_cache",
             ".mypy_cache",
             ".ruff_cache",
@@ -511,13 +522,15 @@ class CodeIndexSDK:
                 d
                 for d in dirs
                 if d not in always_skip
+                and not d.endswith(".egg-info")
                 and not d.startswith(".")
                 and not any(fnmatch.fnmatch(d, p) for p in ignore_patterns)
             ]
 
+            if len(result) >= self.config.max_files:
+                break
+
             for fname in files:
-                if len(result) >= self.config.max_files:
-                    break
 
                 abs_path = os.path.join(root, fname)
                 rel_path = str(rel_root / fname)
@@ -603,8 +616,12 @@ class CodeIndexSDK:
         """Load the Lemonade embedding model if not already loaded.
 
         Uses an additive load (no unload) since Lemonade Server supports multiple
-        models simultaneously. Skips load_model() if the embedding model is already
-        present in loaded_models to avoid unnecessary reloads.
+        models simultaneously. Checks the health endpoint's ``all_models_loaded``
+        list (actually running models) rather than ``/v1/models`` (which only lists
+        downloaded models) to decide whether a ``load_model`` call is needed.
+
+        The ``--split-mode none`` flag is required for multi-GPU ROCm systems where
+        the embedding model's MoE kernels may crash on secondary GPU devices.
         """
         if self._embedder is not None:
             return
@@ -618,12 +635,16 @@ class CodeIndexSDK:
             self._llm_client = LemonadeClient(**kwargs)
 
         try:
-            status = self._llm_client.get_status()
-            loaded = [m.get("id", "") for m in status.loaded_models]
-            if self.config.embedding_model not in loaded:
+            # Use health endpoint to check actually running models, not just
+            # downloaded ones (list_models/get_status returns all downloaded).
+            health = self._llm_client.health_check()
+            running = [
+                m.get("id", "") for m in health.get("all_models_loaded", [])
+            ]
+            if self.config.embedding_model not in running:
                 self._llm_client.load_model(
                     self.config.embedding_model,
-                    llamacpp_args="--ubatch-size 2048",
+                    llamacpp_args="--ubatch-size 2048 --split-mode none",
                 )
         except Exception as e:
             self.log.warning(f"Could not pre-load embedding model: {e}")
@@ -784,10 +805,12 @@ class CodeIndexSDK:
         tmp_index = self._index_path.with_suffix(".tmp.faiss")
 
         try:
-            tmp_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
             faiss.write_index(faiss_index, str(tmp_index))
-            tmp_meta.rename(self._meta_path)
+            tmp_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            # Rename index first — if crash happens between renames,
+            # _load_metadata will detect stale metadata via ntotal check.
             tmp_index.rename(self._index_path)
+            tmp_meta.rename(self._meta_path)
             self.log.debug(f"Index saved to {self._cache_dir}")
         except Exception as e:
             self.log.error(f"Failed to save index: {e}")
@@ -831,7 +854,15 @@ class CodeIndexSDK:
         try:
             import faiss
 
-            self._faiss_index = faiss.read_index(str(self._index_path))
+            index = faiss.read_index(str(self._index_path))
+            expected = len(meta.get("chunks", []))
+            if index.ntotal != expected:
+                self.log.warning(
+                    f"Index/metadata mismatch: FAISS has {index.ntotal} vectors "
+                    f"but metadata has {expected} chunks — cache corrupt, ignoring"
+                )
+                return False
+            self._faiss_index = index
             self._metadata = meta
             return True
         except Exception as e:
@@ -853,6 +884,7 @@ class CodeIndexSDK:
                 "end_line": chunk.end_line,
                 "symbol_name": chunk.symbol_name,
                 "symbol_type": chunk.symbol_type,
+                "docstring": chunk.docstring,
                 "imports": chunk.imports,
             }
         elif isinstance(chunk, CommitChunk):
@@ -890,6 +922,7 @@ class CodeIndexSDK:
                 end_line=d["end_line"],
                 symbol_name=d.get("symbol_name"),
                 symbol_type=d.get("symbol_type"),
+                docstring=d.get("docstring"),
                 imports=d.get("imports", []),
             )
         elif t == "commit":

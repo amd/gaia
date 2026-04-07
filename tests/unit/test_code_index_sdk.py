@@ -18,6 +18,7 @@ import pytest
 
 try:
     from gaia.code_index.sdk import (
+        CodeChunk,
         CodeIndexConfig,
         CodeIndexSDK,
         IndexResult,
@@ -85,7 +86,7 @@ class TestIndexRepository:
 
             mock_encode.return_value = (
                 np.zeros((1, 768), dtype="float32"),
-                [MagicMock()],
+                [CodeChunk(content="def foo(): pass", file_path="a.py", language="python", start_line=1, end_line=1)],
             )
             mock_save.return_value = None
 
@@ -162,7 +163,9 @@ class TestSearch:
 
         with patch.object(sdk, "_load_embedder") as mock_embedder:
             mock_enc = MagicMock()
-            mock_enc.embed.return_value = np.zeros((1, 768), dtype="float32")
+            mock_enc.embeddings.return_value = {
+                "data": [{"embedding": np.zeros(768, dtype="float32").tolist()}]
+            }
             mock_embedder.return_value = mock_enc
             sdk._embedder = mock_enc
 
