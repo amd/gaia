@@ -5,6 +5,7 @@ Main pipeline orchestrator that coordinates all components.
 """
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -49,6 +50,10 @@ from gaia.pipeline.state import (
 from gaia.quality.scorer import QualityScorer
 from gaia.utils.id_generator import generate_loop_id
 from gaia.utils.logging import get_logger, setup_logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from gaia.state.nexus import NexusService
 
 logger = get_logger(__name__)
 
@@ -177,6 +182,10 @@ class PipelineEngine:
         # Metrics collector (initialized in initialize())
         self._metrics_collector: Optional[PipelineMetricsCollector] = None
 
+        # NexusService integration for unified state management (Phase 1 Sprint 3)
+        self._nexus: Optional["NexusService"] = None
+        self._enable_chronicle = True
+
         logger.info("PipelineEngine created")
 
     async def initialize(
@@ -272,6 +281,29 @@ class PipelineEngine:
             PipelineState.READY,
             "Initialization complete",
         )
+
+        # NEW: Connect to NexusService singleton (Phase 1 Sprint 3)
+        from gaia.state.nexus import NexusService
+
+        self._nexus = NexusService.get_instance()
+
+        # Commit pipeline initialization event to Chronicle
+        if self._enable_chronicle and self._nexus:
+            self._nexus.commit(
+                agent_id="PipelineEngine",
+                event_type="pipeline_init",
+                payload={
+                    "pipeline_id": context.pipeline_id,
+                    "user_goal": context.user_goal,
+                    "template": self._config.get("template", "generic"),
+                },
+                phase=None,  # Not in a phase yet
+                loop_id=None,
+            )
+            logger.debug(
+                f"Committed pipeline_init event for {context.pipeline_id}",
+                extra={"pipeline_id": context.pipeline_id},
+            )
 
         self._initialized = True
         self._completion_event = asyncio.Event()
@@ -401,6 +433,18 @@ class PipelineEngine:
 
         self._state_machine.set_phase(phase_name)
 
+        # NEW: Commit PHASE_ENTER event (Phase 1 Sprint 3)
+        if self._enable_chronicle and self._nexus:
+            self._nexus.commit(
+                agent_id="PipelineEngine",
+                event_type="phase_enter",
+                payload={
+                    "pipeline_id": self._context.pipeline_id,
+                },
+                phase=phase_name,
+                loop_id=None,  # Phase-level, not loop-specific
+            )
+
         # Execute phase enter hooks
         if self._hook_executor:
             context = HookContext(
@@ -411,6 +455,18 @@ class PipelineEngine:
             )
             result = await self._hook_executor.execute_hooks("PHASE_ENTER", context)
             if result.halt_pipeline:
+                # NEW: Commit PHASE_EXIT with failure (Phase 1 Sprint 3)
+                if self._enable_chronicle and self._nexus:
+                    self._nexus.commit(
+                        agent_id="PipelineEngine",
+                        event_type="phase_exit",
+                        payload={
+                            "success": False,
+                            "reason": "Hook halted pipeline",
+                        },
+                        phase=phase_name,
+                        loop_id=None,
+                    )
                 return False
 
         # Execute phase based on type
@@ -437,6 +493,19 @@ class PipelineEngine:
             if result.halt_pipeline:
                 return False
 
+        # NEW: Commit PHASE_EXIT event (Phase 1 Sprint 3)
+        if self._enable_chronicle and self._nexus:
+            self._nexus.commit(
+                agent_id="PipelineEngine",
+                event_type="phase_exit",
+                payload={
+                    "success": success,
+                    "pipeline_id": self._context.pipeline_id,
+                },
+                phase=phase_name,
+                loop_id=None,
+            )
+
         return success
 
     async def _execute_planning(self) -> bool:
@@ -456,6 +525,19 @@ class PipelineEngine:
             if agent_id:
                 logger.info(f"Selected planning agent: {agent_id}")
                 self._state_machine.add_artifact("planning_agent", agent_id)
+
+                # NEW: Commit AGENT_SELECTED event (Phase 1 Sprint 3)
+                if self._enable_chronicle and self._nexus:
+                    self._nexus.commit(
+                        agent_id="PipelineEngine",
+                        event_type="agent_selected",
+                        payload={
+                            "selected_agent": agent_id,
+                            "selection_method": "template" if template_agents else "registry",
+                        },
+                        phase=PipelinePhase.PLANNING,
+                        loop_id=None,
+                    )
             agent_sequence = [agent_id] if agent_id else []
 
         # Create planning loop
@@ -489,6 +571,21 @@ class PipelineEngine:
             for agent_id, artifact_text in loop_state.artifacts.items():
                 if artifact_text is not None:
                     self._state_machine.add_artifact(f"plan_{agent_id}", artifact_text)
+
+            # NEW: Commit AGENT_EXECUTED event (Phase 1 Sprint 3)
+            if self._enable_chronicle and self._nexus:
+                for agent_id in agent_sequence:
+                    self._nexus.commit(
+                        agent_id="PipelineEngine",
+                        event_type="agent_executed",
+                        payload={
+                            "executed_agent": agent_id,
+                            "status": loop_state.status.name,
+                        },
+                        phase=PipelinePhase.PLANNING,
+                        loop_id=loop_config.loop_id,
+                    )
+
             self._state_machine.add_chronicle_entry(
                 "PLANNING_ARTIFACTS_PROPAGATED",
                 {
@@ -518,6 +615,19 @@ class PipelineEngine:
             )
             if agent_id:
                 logger.info(f"Selected development agent: {agent_id}")
+
+                # NEW: Commit AGENT_SELECTED event (Phase 1 Sprint 3)
+                if self._enable_chronicle and self._nexus:
+                    self._nexus.commit(
+                        agent_id="PipelineEngine",
+                        event_type="agent_selected",
+                        payload={
+                            "selected_agent": agent_id,
+                            "selection_method": "template" if template_agents else "registry",
+                        },
+                        phase=PipelinePhase.DEVELOPMENT,
+                        loop_id=None,
+                    )
             agent_sequence = [agent_id] if agent_id else []
 
         # Create development loop
@@ -551,6 +661,21 @@ class PipelineEngine:
             for agent_id, artifact_text in loop_state.artifacts.items():
                 if artifact_text is not None:
                     self._state_machine.add_artifact(f"code_{agent_id}", artifact_text)
+
+            # NEW: Commit AGENT_EXECUTED event (Phase 1 Sprint 3)
+            if self._enable_chronicle and self._nexus:
+                for agent_id in agent_sequence:
+                    self._nexus.commit(
+                        agent_id="PipelineEngine",
+                        event_type="agent_executed",
+                        payload={
+                            "executed_agent": agent_id,
+                            "status": loop_state.status.name,
+                        },
+                        phase=PipelinePhase.DEVELOPMENT,
+                        loop_id=loop_config.loop_id,
+                    )
+
             self._state_machine.add_chronicle_entry(
                 "DEVELOPMENT_ARTIFACTS_PROPAGATED",
                 {
@@ -584,6 +709,24 @@ class PipelineEngine:
         self._state_machine.set_quality_score(quality_score)
         self._state_machine.add_artifact("quality_report", quality_report.to_dict())
 
+        # NEW: Commit QUALITY_EVALUATED event (Phase 1 Sprint 3)
+        if self._enable_chronicle and self._nexus:
+            self._nexus.commit(
+                agent_id="PipelineEngine",
+                event_type="quality_evaluated",
+                payload={
+                    "quality_score": quality_score,
+                    "threshold": self._context.quality_threshold,
+                    "passed": quality_score >= self._context.quality_threshold,
+                    "report_summary": {
+                        "overall_score": quality_report.overall_score,
+                        "criteria_count": len(quality_report.category_scores),
+                    },
+                },
+                phase=PipelinePhase.QUALITY,
+                loop_id=None,  # Quality is phase-level
+            )
+
         logger.info(
             f"Quality evaluation complete: {quality_score:.2f}",
             extra={"quality_score": quality_score},
@@ -604,6 +747,25 @@ class PipelineEngine:
             if defects:
                 routing_decisions = []
                 for defect in defects:
+                    # NEW: Commit DEFECT_DISCOVERED event (Phase 1 Sprint 3)
+                    if self._enable_chronicle and self._nexus:
+                        defect_dict = (
+                            defect
+                            if isinstance(defect, dict)
+                            else {"description": str(defect)}
+                        )
+                        self._nexus.commit(
+                            agent_id="PipelineEngine",
+                            event_type="defect_discovered",
+                            payload={
+                                "defect_type": defect_dict.get("type", "unknown"),
+                                "severity": defect_dict.get("severity", "medium"),
+                                "description": defect_dict.get("description", ""),
+                            },
+                            phase=PipelinePhase.DECISION,
+                            loop_id=None,
+                        )
+
                     # Normalize defect to dict if needed
                     defect_dict = (
                         defect
@@ -618,18 +780,45 @@ class PipelineEngine:
                     extra={"defect_count": len(routing_decisions)},
                 )
 
-        # Make decision
-        decision = self._decision_engine.evaluate(
-            phase_name=PipelinePhase.DECISION,
-            quality_score=quality_score,
-            quality_threshold=self._context.quality_threshold,
-            defects=self._state_machine.snapshot.defects,
-            iteration=iteration,
-            max_iterations=self._context.max_iterations,
-            is_final_phase=True,
-        )
+        # PHASE 2 SPRINT 1: Supervisor Agent Integration
+        # Use SupervisorAgent for quality-aware decision making if enabled
+        use_supervisor = self._config.get("use_supervisor", False)
+
+        if use_supervisor:
+            logger.info("Using SupervisorAgent for quality decision")
+            decision = await self._execute_supervisor_decision(
+                quality_score=quality_score,
+                iteration=iteration,
+            )
+        else:
+            # Use standard DecisionEngine
+            decision = self._decision_engine.evaluate(
+                phase_name=PipelinePhase.DECISION,
+                quality_score=quality_score,
+                quality_threshold=self._context.quality_threshold,
+                defects=self._state_machine.snapshot.defects,
+                iteration=iteration,
+                max_iterations=self._context.max_iterations,
+                is_final_phase=True,
+            )
 
         self._state_machine.add_artifact("decision", decision.to_dict())
+
+        # NEW: Commit DECISION_MADE event (Phase 1 Sprint 3)
+        if self._enable_chronicle and self._nexus:
+            self._nexus.commit(
+                agent_id="PipelineEngine",
+                event_type="decision_made",
+                payload={
+                    "decision_type": decision.decision_type.name,
+                    "reason": decision.reason,
+                    "quality_score": quality_score,
+                    "iteration": iteration,
+                    "defects": decision.defects,
+                },
+                phase=PipelinePhase.DECISION,
+                loop_id=None,
+            )
 
         logger.info(
             f"Decision: {decision.decision_type.name}",
@@ -642,6 +831,102 @@ class PipelineEngine:
             return False
 
         return True
+
+    async def _execute_supervisor_decision(
+        self,
+        quality_score: float,
+        iteration: int,
+    ) -> Any:
+        """
+        Execute decision through SupervisorAgent (Phase 2 Sprint 1).
+
+        This method integrates the Quality Supervisor Agent for intelligent
+        quality-based decision making with consensus aggregation and
+        Chronicle context awareness.
+
+        Args:
+            quality_score: Current quality score (0-100)
+            iteration: Current iteration count
+
+        Returns:
+            Decision object compatible with PipelineEngine
+        """
+        from gaia.quality.supervisor import SupervisorAgent
+
+        # Initialize supervisor agent
+        supervisor = SupervisorAgent(
+            skip_lemonade=True,
+            silent_mode=not logger.isEnabledFor(logging.INFO),
+        )
+
+        # Get defects from state machine
+        defects = self._state_machine.snapshot.defects or []
+
+        # Make quality decision through supervisor
+        supervisor_decision = await supervisor.make_quality_decision(
+            quality_score=quality_score,
+            quality_threshold=self._context.quality_threshold,
+            defects=defects,
+            iteration=iteration,
+            max_iterations=self._context.max_iterations,
+            include_chronicle=self._enable_chronicle,
+        )
+
+        # Convert supervisor decision to DecisionEngine format
+        from gaia.pipeline.decision_engine import Decision, DecisionType
+
+        # Map supervisor decision type to pipeline decision type
+        type_mapping = {
+            "LOOP_FORWARD": DecisionType.CONTINUE,
+            "LOOP_BACK": DecisionType.LOOP_BACK,
+            "PAUSE": DecisionType.PAUSE,
+            "FAIL": DecisionType.FAIL,
+        }
+
+        pipeline_type = type_mapping.get(
+            supervisor_decision.decision_type.name,
+            DecisionType.LOOP_BACK,
+        )
+
+        # Create Decision object
+        if pipeline_type == DecisionType.CONTINUE:
+            decision = Decision.continue_decision(
+                reason=supervisor_decision.reason,
+                metadata={
+                    "supervisor_decision": True,
+                    "consensus_data": supervisor_decision.consensus_data,
+                },
+            )
+        elif pipeline_type == DecisionType.LOOP_BACK:
+            decision = Decision.loop_back_decision(
+                reason=supervisor_decision.reason,
+                target_phase="PLANNING",
+                defects=supervisor_decision.defects,
+                metadata={
+                    "supervisor_decision": True,
+                    "consensus_data": supervisor_decision.consensus_data,
+                },
+            )
+        elif pipeline_type == DecisionType.PAUSE:
+            decision = Decision.pause_decision(
+                reason=supervisor_decision.reason,
+                defects=supervisor_decision.defects,
+                metadata={
+                    "supervisor_decision": True,
+                    "consensus_data": supervisor_decision.consensus_data,
+                },
+            )
+        else:  # FAIL
+            decision = Decision.fail_decision(
+                reason=supervisor_decision.reason,
+                defects=supervisor_decision.defects,
+                metadata={
+                    "supervisor_decision": True,
+                    "consensus_data": supervisor_decision.consensus_data,
+                },
+            )
+
+        return decision
 
     async def execute(self, workload: Any) -> Any:
         """

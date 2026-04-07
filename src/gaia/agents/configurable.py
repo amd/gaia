@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia.agents.base import _TOOL_REGISTRY, Agent
 from gaia.agents.base.context import AgentDefinition
+from gaia.agents.base.tools import ToolRegistry, ToolAccessDeniedError
 from gaia.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -132,7 +133,8 @@ class ConfigurableAgent(Agent):
         Register tools specified in YAML definition.
 
         This method loads tool implementations from the tools directory
-        and registers them in the global _TOOL_REGISTRY.
+        and registers them in the global _TOOL_REGISTRY. After registration,
+        creates a tool scope using the YAML tools list as an allowlist.
 
         Raises:
             ImportError: If a required tool module cannot be imported
@@ -169,11 +171,18 @@ class ConfigurableAgent(Agent):
 
         self._registered_tools = tools_to_register.copy()
 
-        # After the for loop, check for unregistered tools
-        tool_names = tools_to_register
-        missing = [t for t in tool_names if t not in _TOOL_REGISTRY]
+        # Check for unregistered tools using ToolRegistry
+        registry = ToolRegistry.get_instance()
+        missing = [t for t in tools_to_register if not registry.has_tool(t)]
         if missing:
             logger.warning(f"Tools declared in YAML but not registered: {missing}")
+
+        # Create scoped view with YAML-defined allowlist
+        # This enforces tool isolation based on YAML configuration
+        self._tool_scope = registry.create_scope(
+            agent_id=self.definition.id,
+            allowed_tools=self.definition.tools,
+        )
 
     def _load_tool_module(self, tool_name: str) -> Optional[Any]:
         """
@@ -460,6 +469,9 @@ Follow these constraints:
         """
         Format allowed tools into string for prompt.
 
+        Uses the agent's tool scope to filter tools based on the YAML allowlist.
+        Falls back to manual filtering if scope is not available.
+
         PRODUCTION SECURITY: Only formats tools that are in the YAML allowlist.
         This prevents agents from seeing tools they shouldn't use.
 
@@ -467,13 +479,19 @@ Follow these constraints:
             Formatted tool descriptions for allowed tools only
         """
         tool_descriptions = []
-        allowed_tools = set(self.definition.tools or [])
 
-        for name, tool_info in _TOOL_REGISTRY.items():
-            # CRITICAL: Only include tools that are in the YAML allowlist
-            if name not in allowed_tools:
-                continue
+        # Use scoped tools if available (enforces YAML allowlist)
+        if hasattr(self, '_tool_scope') and self._tool_scope:
+            available_tools = self._tool_scope.get_available_tools()
+        else:
+            # Fallback to manual filtering for backward compatibility
+            allowed_tools = set(self.definition.tools or [])
+            available_tools = {
+                name: desc for name, desc in _TOOL_REGISTRY.items()
+                if name in allowed_tools
+            }
 
+        for name, tool_info in available_tools.items():
             params_str = ", ".join(
                 [
                     f"{param_name}{'' if param_info['required'] else '?'}: {param_info['type']}"
@@ -490,6 +508,10 @@ Follow these constraints:
         """
         Execute a tool with allowlist validation.
 
+        Uses the agent's tool scope for scoped execution, which enforces
+        the YAML-defined allowlist. Falls back to manual validation if
+        scope is not available.
+
         PRODUCTION SECURITY: Validates that the requested tool is in the
         YAML-defined allowlist before execution. This prevents unauthorized
         tool access even if the LLM tries to call tools outside its configuration.
@@ -501,6 +523,19 @@ Follow these constraints:
         Returns:
             Result of the tool execution or error dict
         """
+        # Use scoped execution (enforces YAML allowlist)
+        if hasattr(self, '_tool_scope') and self._tool_scope:
+            try:
+                return self._tool_scope.execute_tool(tool_name, **tool_args)
+            except ToolAccessDeniedError as e:
+                logger.error(f"SECURITY VIOLATION: {e}")
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    "security_violation": True,
+                }
+
+        # Fallback to manual validation for backward compatibility
         allowed_tools = set(self.definition.tools or [])
 
         # Check if tool is in allowlist

@@ -882,6 +882,198 @@ class AuditLogger:
 
             return report
 
+    def get_digest(
+        self,
+        max_events: int = 15,
+        max_tokens: int = 3500,
+        include_phases: Optional[List[str]] = None,
+        include_agents: Optional[List[str]] = None,
+        event_types: Optional[List[AuditEventType]] = None,
+    ) -> str:
+        """
+        Generate token-efficient summary of events for LLM context.
+
+        Creates a hierarchical, token-constrained digest optimized for
+        local models with 4K-32K context windows. Uses ~4 chars/token
+        estimation for English text.
+
+        Digest Structure:
+            1. Header - timestamp, event count, token estimate
+            2. Recent Events - last N events in reversed chronological order (70% budget)
+            3. Phase Summaries - aggregated stats per phase (20% budget)
+            4. Workspace Summary - file tracking overview (10% budget)
+
+        Args:
+            max_events: Maximum number of recent events to include (default: 15)
+            max_tokens: Target maximum token count (default: 3500, ~14000 chars)
+            include_phases: Filter to specific phases if specified (default: all)
+            include_agents: Filter to specific agents if specified (default: all)
+            event_types: Filter to specific event types if specified (default: all)
+
+        Returns:
+            Formatted string digest for LLM context
+
+        Example:
+            >>> logger = AuditLogger()
+            >>> logger.log(AuditEventType.PHASE_ENTER, phase="PLANNING", agent_id="CodeAgent")
+            >>> logger.log(AuditEventType.TOOL_CALL, agent_id="CodeAgent", tool_name="read_file")
+            >>> digest = logger.get_digest(max_events=10, max_tokens=2000)
+            >>> print(digest[:500])
+            '## Chronicle Digest...'
+        """
+        with self._lock:
+            # Step 1: Filter events
+            filtered = self._events.copy()
+
+            if include_phases:
+                filtered = [e for e in filtered if e.phase in include_phases]
+            if include_agents:
+                filtered = [e for e in filtered if e.agent_id in include_agents]
+            if event_types:
+                filtered = [e for e in filtered if e.event_type in event_types]
+
+            # Step 2: Build digest incrementally with token budget
+            digest_parts = []
+            token_budget = max_tokens
+            tokens_used = 0
+
+            # Phase 1: Header
+            header = self._format_digest_header(filtered)
+            digest_parts.append(header)
+            tokens_used += self._estimate_tokens(header)
+
+            # Phase 2: Recent events (reversed chronological, 70% budget)
+            recent_budget = int(token_budget * 0.7)
+            recent_events = list(reversed(filtered[-max_events:]))
+            event_section = self._format_recent_events(recent_events, recent_budget - tokens_used)
+            digest_parts.append(event_section)
+            tokens_used += self._estimate_tokens(event_section)
+
+            # Phase 3: Phase summaries (20% budget) - only if we have events
+            if filtered and token_budget - tokens_used > 100:
+                phase_budget = int(token_budget * 0.2)
+                phase_section = self._format_phase_summaries(filtered, phase_budget)
+                digest_parts.append(phase_section)
+                tokens_used += self._estimate_tokens(phase_section)
+
+            # Phase 4: Loop summary (10% budget) - if loops exist
+            if self._loop_buckets and token_budget - tokens_used > 50:
+                loop_section = self._format_loop_summary()
+                digest_parts.append(loop_section)
+
+            return "\n".join(digest_parts)
+
+    def _format_digest_header(self, events: List[AuditEvent]) -> str:
+        """Format digest header with metadata."""
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        return f"## Chronicle Digest (Generated: {timestamp} | Events: {len(events)})"
+
+    def _format_recent_events(self, events: List[AuditEvent], token_budget: int) -> str:
+        """Format recent events section with token budget enforcement."""
+        parts = ["\n## Recent Events\n"]
+        tokens = self._estimate_tokens(parts[0])
+
+        for event in events:
+            if tokens >= token_budget:
+                remaining = len(events) - len(parts) + 1
+                parts.append(f"\n... and {remaining} more events")
+                break
+
+            event_str = self._format_event_compact(event)
+            parts.append(event_str)
+            tokens += self._estimate_tokens(event_str)
+
+        return "".join(parts)
+
+    def _format_event_compact(self, event: AuditEvent) -> str:
+        """Format single event in compact form."""
+        # Format: [{phase}] {agent_id}: {event_type} ({key_payload})
+        phase_str = event.phase or "N/A"
+        agent_str = event.agent_id or "system"
+        event_type = event.event_type.name
+
+        # Extract key payload info (first 2-3 fields, truncated)
+        payload_summary = self._summarize_payload(event.payload, max_chars=80)
+
+        if payload_summary:
+            return f"- [{phase_str}] {agent_str}: {event_type} - {payload_summary}\n"
+        else:
+            return f"- [{phase_str}] {agent_str}: {event_type}\n"
+
+    def _summarize_payload(self, payload: Dict[str, Any], max_chars: int = 80) -> str:
+        """Summarize payload dict into compact string."""
+        if not payload:
+            return ""
+
+        parts = []
+        chars = 0
+
+        for key, value in list(payload.items())[:3]:  # First 3 fields
+            value_str = str(value)[:30]  # Truncate each value
+            part = f"{key}={value_str}"
+            if chars + len(part) + 2 > max_chars:
+                break
+            parts.append(part)
+            chars += len(part) + 2
+
+        result = ", ".join(parts)
+        if len(payload) > 3:
+            result += f", ... ({len(payload)} total)"
+        return result
+
+    def _format_phase_summaries(self, events: List[AuditEvent], token_budget: int) -> str:
+        """Format phase summaries section."""
+        # Group events by phase
+        phase_groups: Dict[str, List[AuditEvent]] = {}
+        for event in events:
+            phase = event.phase or "N/A"
+            if phase not in phase_groups:
+                phase_groups[phase] = []
+            phase_groups[phase].append(event)
+
+        parts = ["\n## Phase Summaries\n"]
+        tokens = self._estimate_tokens(parts[0])
+
+        for phase, phase_events in phase_groups.items():
+            if tokens >= token_budget:
+                break
+
+            # Phase summary
+            agents = list(set(e.agent_id for e in phase_events if e.agent_id))
+            first_ts = phase_events[0].timestamp.strftime("%H:%M:%S")
+            last_ts = phase_events[-1].timestamp.strftime("%H:%M:%S")
+
+            phase_summary = f"- **{phase}**: {len(phase_events)} events | Agents: {', '.join(agents[:3])} | {first_ts} - {last_ts}\n"
+            parts.append(phase_summary)
+            tokens += self._estimate_tokens(phase_summary)
+
+        return "".join(parts)
+
+    def _format_loop_summary(self) -> str:
+        """Format loop iteration summary."""
+        if not self._loop_buckets:
+            return ""
+
+        parts = ["\n## Loop Iterations\n"]
+        for loop_id, event_ids in self._loop_buckets.items():
+            parts.append(f"- {loop_id}: {len(event_ids)} events")
+
+        return "".join(parts)
+
+    def _estimate_tokens(self, text: str) -> int:
+        """
+        Estimate token count (~4 chars/token for English).
+
+        For more accurate estimation, install tiktoken:
+            pip install tiktoken
+
+        Then override this method to use:
+            import tiktoken
+            encoding = tiktoken.get_encoding("cl100k_base")
+            return len(encoding.encode(text))
+        """
+        return len(text) // 4
+
     def clear(self) -> None:
         """
         Clear all events and reset logger.
