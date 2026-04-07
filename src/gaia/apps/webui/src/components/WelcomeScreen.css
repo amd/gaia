@@ -431,17 +431,25 @@
     background: rgba(255, 255, 255, 0.08);
 }
 
-/* ── Start button: scale-in via content-revealed ──────────────── */
-.start-btn {
-    margin-bottom: 12px;
-    padding: 14px 40px;
-    font-size: 14px;
-    border-radius: var(--radius-lg);
+/* ── Action buttons: flex row so both buttons share the same height ── */
+.welcome-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-bottom: 28px;
     opacity: 0;
 }
 
-.content-revealed .start-btn {
+.content-revealed .welcome-actions {
     animation: fadeInScale 500ms var(--ease) 500ms forwards;
+}
+
+/* ── Start button ──────────────────────────────────────────────── */
+.start-btn {
+    padding: 14px 40px;
+    font-size: 14px;
+    border-radius: var(--radius-lg);
 }
 
 /* ── Build a Custom Agent button ───────────────────────────────── */
@@ -449,9 +457,8 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    margin-bottom: 28px;
-    padding: 9px 24px;
-    font-size: 13px;
+    padding: 13px 28px;
+    font-size: 14px;
     font-family: var(--font-sans);
     font-weight: 500;
     color: var(--text-secondary);
@@ -460,11 +467,6 @@
     border-radius: var(--radius-lg);
     cursor: pointer;
     transition: all 0.15s var(--ease);
-    opacity: 0;
-}
-
-.content-revealed .build-agent-btn {
-    animation: fadeInScale 500ms var(--ease) 650ms forwards;
 }
 
 .build-agent-btn:hover:not(:disabled) {
@@ -560,7 +562,7 @@
     }
 
     .feature-card { padding: 16px 12px 14px; height: 145px; }
-    .start-btn { margin-bottom: 28px; }
+    .welcome-actions { flex-direction: column; gap: 12px; }
 }
 
 @media (max-width: 480px) {

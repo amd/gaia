@@ -12,7 +12,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import yaml
 
@@ -109,6 +109,145 @@ class BuilderAgent(Agent):
                 Confirmation message with the path to the created agent.yaml.
             """
             return _create_agent_impl(name, description)
+
+    def _compose_system_prompt(self) -> str:
+        """Compose system prompt without the base class JSON response format.
+
+        The builder uses a conversational flow with simple tool-calling
+        instructions embedded directly in its system prompt.  The base class
+        ``_response_format_template`` (JSON-only + planning) conflicts with
+        conversational greetings, so it is deliberately excluded here.
+        """
+        parts = []
+        custom = self._get_system_prompt()
+        if custom:
+            parts.append(custom)
+        if hasattr(self, "_format_tools_for_prompt"):
+            tools_desc = self._format_tools_for_prompt()
+            if tools_desc:
+                parts.append(f"==== AVAILABLE TOOLS ====\n{tools_desc}")
+        return "\n\n".join(p for p in parts if p)
+
+    def process_query(  # type: ignore[override]
+        self,
+        user_input: str,
+        max_steps: int = None,
+        trace: bool = False,
+        filename: str = None,
+    ) -> Dict[str, Any]:
+        """Simplified chat loop for the builder agent.
+
+        Unlike the base class loop, this implementation:
+        - Does NOT inject "ALWAYS BEGIN WITH A PLAN" instructions
+        - Does NOT apply RAG workflow guards or planning-text detectors
+        - Uses a simple 2-path parse: tool call → execute and continue;
+          plain text / "answer" → return immediately
+        - Always calls ``console.print_final_answer()`` so the SSE handler
+          in ``_chat_helpers.py`` captures the final answer event.
+        """
+        import json
+        import time
+
+        start_time = time.time()
+        self._current_query = user_input
+
+        logger.debug("BuilderAgent processing: %s", user_input[:120])
+
+        messages: list = []
+        if hasattr(self, "conversation_history") and self.conversation_history:
+            messages.extend(self.conversation_history)
+
+        messages.append({"role": "user", "content": user_input})
+
+        steps_limit = max_steps if max_steps is not None else self.max_steps
+        self.console.print_processing_start(user_input, steps_limit, self.model_id)
+
+        final_answer: Optional[str] = None
+        steps_taken = 0
+
+        while steps_taken < steps_limit and final_answer is None:
+            steps_taken += 1
+            self.console.print_step_header(steps_taken, steps_limit)
+
+            try:
+                if self.streaming:
+                    response_stream = self.chat.send_messages_stream(
+                        messages=messages, system_prompt=self.system_prompt
+                    )
+                    raw = ""
+                    for chunk in response_stream:
+                        if not chunk.is_complete:
+                            self.console.print_streaming_text(chunk.text)
+                            raw += chunk.text
+                    self.console.print_streaming_text("", end_of_stream=True)
+                    response = raw
+                else:
+                    chat_resp = self.chat.send_messages(
+                        messages=messages, system_prompt=self.system_prompt
+                    )
+                    response = chat_resp.text
+            except ConnectionError as exc:
+                logger.error("BuilderAgent LLM connection error: %s", exc)
+                final_answer = (
+                    "I'm having trouble reaching the language model. "
+                    "Please make sure Lemonade Server is running and try again."
+                )
+                break
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.error("BuilderAgent unexpected LLM error: %s", exc)
+                final_answer = (
+                    "Sorry, I ran into an unexpected problem. "
+                    "Please try again in a moment."
+                )
+                break
+
+            logger.debug("BuilderAgent response: %s", response[:300])
+            messages.append({"role": "assistant", "content": response})
+
+            # Reuse base-class parser: handles both plain text and JSON
+            parsed = self._parse_llm_response(response)
+
+            if "tool" in parsed and parsed["tool"]:
+                tool_name = parsed["tool"]
+                tool_args = parsed.get("tool_args", {})
+                self.console.print_tool_usage(tool_name)
+                self.console.start_progress(f"Executing {tool_name}")
+                tool_result = self._execute_tool(tool_name, tool_args)
+                self.console.stop_progress()
+                self.console.print_tool_complete()
+                result_str = (
+                    json.dumps(tool_result)
+                    if isinstance(tool_result, dict)
+                    else str(tool_result)
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": f"Tool '{tool_name}' returned:\n{result_str}",
+                    }
+                )
+                # Continue loop so the LLM can summarize the result
+            else:
+                final_answer = (
+                    parsed.get("answer")
+                    or response.strip()
+                    or ("I wasn't able to generate a response. Please try again.")
+                )
+
+        if final_answer is None:
+            final_answer = (
+                "I've used the maximum number of steps. "
+                "Check ~/.gaia/agents/ for any agents that were created."
+            )
+
+        self.console.print_final_answer(final_answer, streaming=self.streaming)
+        self.console.print_completion(steps_taken, steps_limit)
+
+        return {
+            "answer": final_answer,
+            "steps_taken": steps_taken,
+            "duration": time.time() - start_time,
+        }
 
 
 def _normalize_agent_id(name: str) -> str:

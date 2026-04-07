@@ -192,15 +192,17 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                     </div>
                 )}
 
-                <button className="btn-primary start-btn" onClick={onNewTask} disabled={isInitializing}>
-                    Start a New Task
-                </button>
-                {onCreateAgent && (
-                    <button className="build-agent-btn" onClick={onCreateAgent} disabled={isInitializing}>
-                        <Plus size={13} />
-                        Build a Custom Agent
+                <div className="welcome-actions">
+                    <button className="btn-primary start-btn" onClick={onNewTask} disabled={isInitializing}>
+                        Start a New Task
                     </button>
-                )}
+                    {onCreateAgent && (
+                        <button className="build-agent-btn" onClick={onCreateAgent} disabled={isInitializing}>
+                            <Plus size={14} />
+                            Build a Custom Agent
+                        </button>
+                    )}
+                </div>
 
                 <div className="suggestions">
                     <span className="suggestions-label">Try asking:</span>
