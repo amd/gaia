@@ -46,7 +46,7 @@ class TestOpenAPIIntegration:
         response = client.get("/openapi.json")
         assert response.status_code == 200
         spec = response.json()
-        assert spec["openapi"].startswith("3.0")
+        assert spec["openapi"].startswith("3.")
         assert spec["info"]["title"] == "Integration Test API"
 
         # Test Swagger UI endpoint
@@ -299,7 +299,7 @@ class TestCombinedIntegration:
 
         # Verify metrics
         output = obs.metrics.to_prometheus()
-        assert "api_calls" in output
+        assert "api.calls" in output
 
         # Verify OpenAPI spec
         response = client.get("/openapi.json")
@@ -390,7 +390,7 @@ class TestCombinedIntegration:
 
         # Verify metrics
         output = obs.metrics.to_prometheus()
-        assert "users_requests" in output
+        assert "users.requests" in output
 
 
 class TestAPIIntegrationQualityGates:

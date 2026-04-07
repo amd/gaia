@@ -467,8 +467,12 @@ class OpenAPIGenerator:
                         schemas.update(self._extract_model_schema(param_type))
 
             # Extract from response models
-            if route.response_model and issubclass(route.response_model, BaseModel):
-                schemas.update(self._extract_model_schema(route.response_model))
+            if route.response_model:
+                try:
+                    if inspect.isclass(route.response_model) and issubclass(route.response_model, BaseModel):
+                        schemas.update(self._extract_model_schema(route.response_model))
+                except (TypeError, AttributeError):
+                    pass  # Skip non-class types
 
             # Extract from type hints
             try:

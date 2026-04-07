@@ -200,19 +200,27 @@ class CacheLayer:
 
                 if disk_data is not None:
                     try:
-                        value = pickle.loads(disk_data)
+                        # Disk stores (value, expires_at) tuple
+                        disk_value, disk_expires_at = pickle.loads(disk_data)
+
+                        # Check if expired
+                        if self._ttl_manager.is_expired(disk_expires_at):
+                            await self._disk_cache.delete(key)
+                            if self._stats:
+                                self._stats.record_miss()
+                            logger.debug(f"Cache miss (expired on disk): {key}")
+                            return default
 
                         # Promote to memory cache
-                        expires_at = self._ttl_manager.compute_expiry()
-                        await self._memory_cache.set(key, value, expires_at)
+                        await self._memory_cache.set(key, disk_value, disk_expires_at)
 
                         if self._stats:
                             latency_ms = (time.perf_counter() - start_time) * 1000
                             self._stats.record_hit(latency_ms)
                         logger.debug(f"Cache hit (disk): {key}")
-                        return value
+                        return disk_value
 
-                    except pickle.PickleError as e:
+                    except (pickle.PickleError, TypeError, ValueError) as e:
                         logger.warning(f"Failed to deserialize disk cache value: {e}")
                         await self._disk_cache.delete(key)
 
@@ -260,10 +268,13 @@ class CacheLayer:
 
             # Handle eviction - spill to disk
             if evicted and self._disk_cache and self.enable_disk_spill:
-                evicted_key, evicted_value = evicted
+                evicted_key, evicted_data = evicted
+                # evicted_data is (value, expires_at) tuple from LRUCache
+                evicted_value, evicted_expires_at = evicted_data
                 try:
-                    serialized = pickle.dumps(evicted_value) if serialize else evicted_value
-                    await self._disk_cache.set(evicted_key, serialized, expires_at)
+                    # Store (value, expires_at) tuple for disk retrieval
+                    serialized = pickle.dumps((evicted_value, evicted_expires_at)) if serialize else evicted_value
+                    await self._disk_cache.set(evicted_key, serialized, evicted_expires_at)
                     logger.debug(f"Spilled to disk: {evicted_key}")
 
                     if self._stats:

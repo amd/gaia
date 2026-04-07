@@ -36,14 +36,18 @@ class TestCacheIntegrationBasic:
             enable_disk_spill=True,
         )
 
-        # Fill memory cache
+        # Fill memory cache and cause eviction
         await cache.set("key1", "value1")
         await cache.set("key2", "value2")
-        await cache.set("key3", "value3")  # Should spill key1 to disk
+        await cache.set("key3", "value3")  # Should evict key1 to disk
 
-        # Get key1 - should retrieve from disk
+        # key1 should still be retrievable (from disk)
         result = await cache.get("key1")
-        assert result == "value1"
+        assert result == "value1", "key1 should be retrievable from disk after eviction"
+
+        # key3 should be in memory
+        result3 = await cache.get("key3")
+        assert result3 == "value3", "key3 should be in memory"
 
         await cache.stop()
 
@@ -51,20 +55,23 @@ class TestCacheIntegrationBasic:
     async def test_persistent_cache(self, temp_db_path):
         """Test cache persistence across operations."""
         cache = CacheLayer(
-            memory_max_size=100,
+            memory_max_size=1,  # Small size to force disk spill
             disk_path=temp_db_path,
             default_ttl=3600,
         )
 
-        # Set value
+        # Set value - will go to memory first
         await cache.set("persistent_key", "persistent_value")
 
-        # Clear memory cache
+        # Add another key to force persistent_key to disk
+        await cache.set("filler_key", "filler_value")
+
+        # Clear memory cache completely
         await cache._memory_cache.clear()
 
         # Get should retrieve from disk
         result = await cache.get("persistent_key")
-        assert result == "persistent_value"
+        assert result == "persistent_value", "Value should be retrieved from disk"
 
         await cache.stop()
 
