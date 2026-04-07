@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -58,6 +59,11 @@ class AgentManifest(BaseModel):
     def validate_id(cls, v):
         if not v or not v.strip():
             raise ValueError("Agent ID cannot be empty")
+        if not re.match(r"^[a-z0-9][a-z0-9-]{0,50}[a-z0-9]$", v):
+            raise ValueError(
+                f"Agent ID '{v}' is invalid. "
+                "Use lowercase letters, digits, and hyphens (e.g. 'my-agent')."
+            )
         return v
 
 
@@ -86,6 +92,7 @@ class AgentRegistry:
     def __init__(self):
         self._agents: Dict[str, AgentRegistration] = {}
         self._lemonade_models: Optional[List[str]] = None  # cache
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Discovery
@@ -533,12 +540,13 @@ class AgentRegistry:
     # ------------------------------------------------------------------
 
     def _register(self, registration: AgentRegistration) -> None:
-        if registration.id in self._agents:
-            logger.warning(
-                "registry: Agent ID '%s' already registered, overwriting",
-                registration.id,
-            )
-        self._agents[registration.id] = registration
+        with self._lock:
+            if registration.id in self._agents:
+                logger.warning(
+                    "registry: Agent ID '%s' already registered, overwriting",
+                    registration.id,
+                )
+            self._agents[registration.id] = registration
 
     def get(self, agent_id: str) -> Optional[AgentRegistration]:
         """Return the registration for *agent_id*, or ``None``."""
