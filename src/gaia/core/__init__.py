@@ -38,9 +38,17 @@ Example Usage:
 """
 
 from gaia.core.capabilities import AgentCapabilities
+from gaia.core.di_container import (
+    DIContainer,
+    ServiceLifetime,
+    ServiceDescriptor,
+    ServiceResolutionError,
+    CircularDependencyError,
+)
 from gaia.core.executor import AgentExecutor, ExecutionContext, ExecutionResult
 from gaia.core.plugin import PluginMetadata, PluginRegistry
 from gaia.core.profile import AgentProfile
+from gaia.core.adapter import AgentAdapter, LegacyAgentWrapper, extract_profile
 
 __all__ = [
     # Profile
@@ -53,6 +61,16 @@ __all__ = [
     # Plugin
     "PluginRegistry",
     "PluginMetadata",
+    # DI Container
+    "DIContainer",
+    "ServiceLifetime",
+    "ServiceDescriptor",
+    "ServiceResolutionError",
+    "CircularDependencyError",
+    # Adapter
+    "AgentAdapter",
+    "LegacyAgentWrapper",
+    "extract_profile",
 ]
 
 # Module version
@@ -72,11 +90,21 @@ def get_core_components() -> dict:
         Dictionary mapping component names to classes.
     """
     return {
+        # Profile
         "AgentProfile": AgentProfile,
         "AgentCapabilities": AgentCapabilities,
+        # Executor
         "AgentExecutor": AgentExecutor,
         "ExecutionContext": ExecutionContext,
         "ExecutionResult": ExecutionResult,
+        # Plugin
         "PluginRegistry": PluginRegistry,
         "PluginMetadata": PluginMetadata,
+        # DI Container
+        "DIContainer": DIContainer,
+        "ServiceLifetime": ServiceLifetime,
+        "ServiceDescriptor": ServiceDescriptor,
+        # Adapter
+        "AgentAdapter": AgentAdapter,
+        "LegacyAgentWrapper": LegacyAgentWrapper,
     }

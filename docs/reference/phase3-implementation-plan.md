@@ -1,8 +1,8 @@
 # Phase 3 Implementation Plan: Architectural Modernization
 
-**Document Version:** 1.0
+**Document Version:** 2.0
 **Date:** 2026-04-06
-**Status:** READY FOR KICKOFF
+**Status:** SPRINT 1 COMPLETE - SPRINT 2 READY
 **Duration:** 12 weeks (4 Sprints)
 **Owner:** senior-developer
 **Classification:** Strategic Architecture Document
@@ -151,28 +151,38 @@ Phase 2 established quality enhancement and security hardening:
 
 **Objective:** Complete dependency injection and begin performance optimization layer.
 
+**Status:** READY FOR IMPLEMENTATION
+**Technical Specification:** `docs/reference/phase3-sprint2-technical-spec.md`
+
 #### Week 4: Dependency Injection
 
 | Day | Task | Owner | Deliverable |
 |-----|------|-------|-------------|
-| 1-3 | Create `src/gaia/core/di.py` | senior-developer | DI container, service registration |
-| 4 | Integration with AgentExecutor | senior-developer | DI-wired executor |
-| 5 | Unit tests for DI | testing-quality-specialist | 25 test functions |
+| 1-2 | Create `src/gaia/core/di_container.py` | senior-developer | DI container, service registration (~250 LOC) |
+| 3 | Unit tests for DIContainer | testing-quality-specialist | 40 test functions |
+| 4-5 | Create `src/gaia/core/adapter.py` | senior-developer | AgentAdapter for backward compatibility (~200 LOC) |
 
 #### Week 5: Async Utils & Connection Pool
 
 | Day | Task | Owner | Deliverable |
 |-----|------|-------|-------------|
-| 1-2 | Create `src/gaia/perf/async_utils.py` | senior-developer | Async utilities, decorators |
-| 3-5 | Create `src/gaia/perf/pool.py` | senior-developer | ConnectionPool for LLM clients |
+| 1-2 | Create `src/gaia/perf/async_utils.py` | senior-developer | Async utilities, decorators (~150 LOC) |
+| 3-5 | Create `src/gaia/perf/connection_pool.py` | senior-developer | ConnectionPool for LLM clients (~300 LOC) |
 
 #### Week 6: Performance Tests
 
 | Day | Task | Owner | Deliverable |
 |-----|------|-------|-------------|
-| 1-2 | Unit tests for async/pool | testing-quality-specialist | 45 test functions |
+| 1-2 | Unit tests for async/pool | testing-quality-specialist | 50 test functions |
 | 3-4 | Performance benchmarks | testing-quality-specialist | Baseline metrics |
-| 5 | Sprint 2 closeout | software-program-manager | Sprint 2 summary |
+| 5 | Sprint 2 closeout | software-program-manager | Sprint 2 summary
+
+**Sprint 2 Deliverables:**
+- DIContainer: `src/gaia/core/di_container.py` (250 LOC, 40 tests)
+- AgentAdapter: `src/gaia/core/adapter.py` (200 LOC, 30 tests)
+- AsyncUtils: `src/gaia/perf/async_utils.py` (150 LOC, 20 tests)
+- ConnectionPool: `src/gaia/perf/connection_pool.py` (300 LOC, 30 tests)
+- Total: 900 LOC, 120 tests |
 
 ### Sprint 3: Caching & Enterprise Config (Weeks 7-9)
 

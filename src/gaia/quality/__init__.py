@@ -2,6 +2,7 @@
 GAIA Quality Module
 
 Quality scoring system with 27 validation categories across 6 dimensions.
+Phase 2 additions include SupervisorAgent for quality review orchestration.
 """
 
 from gaia.quality.models import (
@@ -12,6 +13,11 @@ from gaia.quality.models import (
     QualityWeightConfig,
 )
 from gaia.quality.scorer import QualityScorer
+from gaia.quality.supervisor import (
+    SupervisorAgent,
+    SupervisorDecision,
+    SupervisorDecisionType,
+)
 from gaia.quality.templates import (
     QUALITY_TEMPLATES,
     QualityTemplate,
@@ -31,4 +37,8 @@ __all__ = [
     # P4 additions - weight configuration
     "QualityWeightConfig",
     "QualityWeightConfigManager",
+    # Phase 2 additions - Supervisor Agent
+    "SupervisorAgent",
+    "SupervisorDecision",
+    "SupervisorDecisionType",
 ]
