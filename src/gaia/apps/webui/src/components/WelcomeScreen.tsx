@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Lock, Zap, FileText, DollarSign, Terminal, Bot } from 'lucide-react';
+import { Lock, Zap, FileText, DollarSign, Terminal, Bot, Plus } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import './WelcomeScreen.css';
 
 interface WelcomeScreenProps {
     onNewTask: () => void;
     onSendPrompt: (prompt: string) => void;
+    onCreateAgent?: () => void;
 }
 
 const TITLE_TEXT = 'GAIA Agent UI';
@@ -40,7 +41,7 @@ const DEFAULT_SUGGESTIONS = [
     'What hardware is in my PC? Tell me about my CPU and GPU',
 ];
 
-export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
+export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: WelcomeScreenProps) {
     const { systemStatus, agents, activeAgentId, setActiveAgentId } = useChatStore();
 
     const suggestions = useMemo(() => {
@@ -194,6 +195,12 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
                 <button className="btn-primary start-btn" onClick={onNewTask} disabled={isInitializing}>
                     Start a New Task
                 </button>
+                {onCreateAgent && (
+                    <button className="build-agent-btn" onClick={onCreateAgent} disabled={isInitializing}>
+                        <Plus size={13} />
+                        Build a Custom Agent
+                    </button>
+                )}
 
                 <div className="suggestions">
                     <span className="suggestions-label">Try asking:</span>

@@ -51,6 +51,11 @@ def set_agent_registry(registry) -> None:
     _agent_registry = registry
 
 
+def get_agent_registry():
+    """Return the current AgentRegistry instance, or None if not yet initialized."""
+    return _agent_registry
+
+
 # ── Per-session agent cache ───────────────────────────────────────────────────
 # Constructing a fresh ChatAgent on every message is expensive: it initialises
 # RAGSDK, MCPClientManager, runs LemonadeManager.ensure_ready() (HTTP calls),
@@ -651,7 +656,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
         agent_type = session.get("agent_type") or "chat"
         logger.info(
-            "chat: Session %s using agent type: %s (streaming)", session_id[:8], agent_type
+            "chat: Session %s using agent type: %s (streaming)",
+            session_id[:8],
+            agent_type,
         )
 
         # Move ALL slow work into the background thread so the SSE generator
@@ -679,8 +686,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
                     # Index any session docs newly attached since last turn.
                     new_rag_paths = [
-                        p for p in rag_file_paths
-                        if p not in agent.indexed_files
+                        p for p in rag_file_paths if p not in agent.indexed_files
                     ]
                     if new_rag_paths and hasattr(agent, "rag") and agent.rag:
                         _index_rag_with_progress(
@@ -831,7 +837,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         agent.console = sse_handler
                         if rag_file_paths and agent.rag:
                             _index_rag_with_progress(agent, rag_file_paths, sse_handler)
-                        _store_agent(session_id, model_id, document_ids, agent, _fallback_type)
+                        _store_agent(
+                            session_id, model_id, document_ids, agent, _fallback_type
+                        )
                     else:
                         logger.info(
                             "chat: Creating new %s agent for session %s",
@@ -862,7 +870,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                             _index_rag_with_progress(agent, rag_file_paths, sse_handler)
 
-                        _store_agent(session_id, model_id, document_ids, agent, agent_type)
+                        _store_agent(
+                            session_id, model_id, document_ids, agent, agent_type
+                        )
 
                     sse_handler._emit(
                         {

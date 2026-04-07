@@ -58,7 +58,9 @@ class GaiaAgent(Agent, RAGToolsMixin, FileSearchToolsMixin, MCPClientMixin):
 
     AGENT_ID = "gaia"
     AGENT_NAME = "GAIA"
-    AGENT_DESCRIPTION = "Fast, lightweight AI assistant with document Q&A and file tools"
+    AGENT_DESCRIPTION = (
+        "Fast, lightweight AI assistant with document Q&A and file tools"
+    )
     CONVERSATION_STARTERS = [
         "What can you help me with?",
         "Search my documents",
@@ -115,9 +117,7 @@ class GaiaAgent(Agent, RAGToolsMixin, FileSearchToolsMixin, MCPClientMixin):
             from gaia.mcp.client.config import MCPConfig
             from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
-            self._mcp_manager = MCPClientManager(
-                config=MCPConfig(), debug=config.debug
-            )
+            self._mcp_manager = MCPClientManager(config=MCPConfig(), debug=config.debug)
         except Exception as e:
             logger.debug("MCP not available: %s", e)
             self._mcp_manager = None

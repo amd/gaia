@@ -333,6 +333,30 @@ function App() {
         await handleNewTask();
     }, [handleNewTask, setPendingPrompt]);
 
+    // Launch the Gaia Builder Agent in a new session.
+    // Uses a dedicated agent_type so the session always gets the builder,
+    // regardless of the user's currently selected agent.
+    const handleNewBuilderTask = useCallback(async () => {
+        log.chat.info('Creating builder agent session...');
+        setCreateError(null);
+        try {
+            setPendingPrompt("Hi, I'd like to create a new custom agent.");
+            const session = await api.createSession({ title: 'New Agent', agent_type: 'builder' });
+            log.chat.info(`Builder session created: id=${session.id}`);
+            addSession(session);
+            setCurrentSession(session.id);
+            setMessages([]);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
+        } catch (err) {
+            // Clear the pending prompt so it doesn't leak into the next session
+            setPendingPrompt(null);
+            log.chat.error('Failed to create builder session', err);
+            checkSystemStatus();
+            setCreateError('Failed to create task. Is the server running?');
+            setTimeout(() => setCreateError(null), 6000);
+        }
+    }, [addSession, setCurrentSession, setMessages, setSidebarOpen, checkSystemStatus, setPendingPrompt]);
+
     // Mobile gateway toggle
     const handleMobileToggle = useCallback(async () => {
         if (tunnelActive) {
@@ -450,11 +474,12 @@ function App() {
 
                 <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
                     {displayedSessionId ? (
-                        <ChatView key={displayedSessionId} sessionId={displayedSessionId} />
+                        <ChatView key={displayedSessionId} sessionId={displayedSessionId} onCreateAgent={handleNewBuilderTask} />
                     ) : (
                         <WelcomeScreen
                             onNewTask={handleNewTask}
                             onSendPrompt={handleNewTaskWithPrompt}
+                            onCreateAgent={handleNewBuilderTask}
                         />
                     )}
                 </div>

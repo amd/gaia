@@ -115,9 +115,7 @@ class AgentRegistry:
                         "registry: Failed to load agent from %s: %s", agent_dir, e
                     )
         else:
-            logger.info(
-                "registry: No custom agent directory found at %s", agents_dir
-            )
+            logger.info("registry: No custom agent directory found at %s", agents_dir)
 
         agent_ids = list(self._agents.keys())
         logger.info(
@@ -195,6 +193,47 @@ class AgentRegistry:
         except ImportError:
             logger.debug(
                 "registry: GaiaAgent not available, skipping built-in registration"
+            )
+
+        # --- BuilderAgent ---
+        try:
+            from gaia.agents.builder.agent import (  # noqa: F401
+                BuilderAgent,
+                BuilderAgentConfig,
+            )
+
+            def builder_factory(**kwargs):
+                from gaia.agents.builder.agent import (  # noqa: F811
+                    BuilderAgent,
+                    BuilderAgentConfig,
+                )
+
+                valid_fields = {f.name for f in dataclasses.fields(BuilderAgentConfig)}
+                config = BuilderAgentConfig(
+                    **{k: v for k, v in kwargs.items() if k in valid_fields}
+                )
+                return BuilderAgent(config=config)
+
+            self._register(
+                AgentRegistration(
+                    id="builder",
+                    name="Gaia Builder",
+                    description="Create a new custom GAIA agent through conversation",
+                    source="builtin",
+                    conversation_starters=[
+                        "Help me create a custom agent",
+                        "I want to build a new agent",
+                    ],
+                    factory=builder_factory,
+                    agent_dir=None,
+                    models=[],
+                    hidden=True,
+                )
+            )
+            logger.info("registry: Registered built-in agent: builder (BuilderAgent)")
+        except ImportError:
+            logger.debug(
+                "registry: BuilderAgent not available, skipping built-in registration"
             )
 
     # ------------------------------------------------------------------
@@ -345,9 +384,7 @@ class AgentRegistry:
             manifest.tools,
         )
 
-    def _create_manifest_agent_class(
-        self, manifest: AgentManifest, agent_dir: Path
-    ):
+    def _create_manifest_agent_class(self, manifest: AgentManifest, agent_dir: Path):
         """Build a dynamic Agent subclass from a YAML manifest."""
         from gaia.agents.base.agent import Agent as BaseAgent
         from gaia.mcp.mixin import MCPClientMixin
@@ -373,9 +410,7 @@ class AgentRegistry:
 
         # Capture manifest data for closures
         instructions = manifest.instructions
-        merged_config_path_str = (
-            str(merged_config_path) if merged_config_path else None
-        )
+        merged_config_path_str = str(merged_config_path) if merged_config_path else None
         tool_names = list(manifest.tools)
 
         dyn_class_name = (
@@ -470,10 +505,28 @@ class AgentRegistry:
                 json.dump({"mcpServers": merged}, f, indent=2)
             return config_path
         except Exception as e:
-            logger.warning(
-                "registry: Could not write merged MCP config: %s", e
-            )
+            logger.warning("registry: Could not write merged MCP config: %s", e)
             return None
+
+    def register_from_dir(self, agent_dir: Path) -> None:
+        """Load a single agent directory and register it at runtime.
+
+        Used by BuilderAgent's ``create_agent`` tool so a newly written
+        manifest is immediately available without a server restart.
+
+        Args:
+            agent_dir: Path to the agent directory (must contain agent.py or
+                agent.yaml).
+        """
+        agent_dir = Path(agent_dir)
+        try:
+            self._load_from_dir(agent_dir)
+            logger.info("registry: Hot-loaded agent from %s", agent_dir)
+        except Exception as exc:
+            logger.warning(
+                "registry: Failed to hot-load agent from %s: %s", agent_dir, exc
+            )
+            raise
 
     # ------------------------------------------------------------------
     # Registration & lookup
@@ -561,15 +614,11 @@ class AgentRegistry:
         try:
             import requests
 
-            base_url = os.getenv(
-                "LEMONADE_BASE_URL", "http://localhost:8000/api/v1"
-            )
+            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
             resp = requests.get(f"{base_url}/models", timeout=2)
             if resp.ok:
                 data = resp.json()
-                self._lemonade_models = [
-                    m["id"] for m in data.get("data", [])
-                ]
+                self._lemonade_models = [m["id"] for m in data.get("data", [])]
                 return self._lemonade_models
         except Exception:
             pass

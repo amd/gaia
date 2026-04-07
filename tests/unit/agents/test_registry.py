@@ -11,12 +11,11 @@ import pytest
 import yaml
 
 from gaia.agents.registry import (
+    KNOWN_TOOLS,
     AgentManifest,
     AgentRegistration,
     AgentRegistry,
-    KNOWN_TOOLS,
 )
-
 
 # ---------------------------------------------------------------------------
 # AgentManifest validation
@@ -53,8 +52,7 @@ class TestAgentManifest:
 
     def test_conversation_starters(self):
         m = AgentManifest(
-            id="test", name="Test",
-            conversation_starters=["Hello!", "Help me"]
+            id="test", name="Test", conversation_starters=["Hello!", "Help me"]
         )
         assert m.conversation_starters == ["Hello!", "Help me"]
 
@@ -111,6 +109,20 @@ class TestBuiltinRegistration:
         registry.discover()
         with pytest.raises(ValueError, match="Unknown agent ID"):
             registry.create_agent("nonexistent-agent-xyz")
+
+    def test_builder_registered_as_hidden_builtin(self):
+        registry = AgentRegistry()
+        registry.discover()
+        reg = registry.get("builder")
+        assert reg is not None, "BuilderAgent should be registered"
+        assert reg.hidden is True
+        assert reg.source == "builtin"
+
+    def test_builder_not_in_visible_list(self):
+        registry = AgentRegistry()
+        registry.discover()
+        visible_ids = [r.id for r in registry.list() if not r.hidden]
+        assert "builder" not in visible_ids
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +190,9 @@ class TestManifestAgentLoading:
         # Call the unbound _get_system_prompt with a dummy self
         instance = object.__new__(klass)
         prompt = klass._get_system_prompt(instance)
-        assert prompt == "You are a specialized test assistant with unique instructions."
+        assert (
+            prompt == "You are a specialized test assistant with unique instructions."
+        )
 
     def test_manifest_invalid_yaml_raises(self, tmp_path):
         agent_dir = tmp_path / "bad-bot"
@@ -349,7 +363,9 @@ class TestModelResolution:
                 models=["ModelA", "ModelB", "ModelC"],
             )
         )
-        result = registry.resolve_model("test-agent", available_models=["ModelB", "ModelC"])
+        result = registry.resolve_model(
+            "test-agent", available_models=["ModelB", "ModelC"]
+        )
         assert result == "ModelB"
 
     def test_none_returned_when_no_models_match(self):
@@ -366,7 +382,9 @@ class TestModelResolution:
                 models=["ModelX"],
             )
         )
-        result = registry.resolve_model("test-agent", available_models=["ModelA", "ModelB"])
+        result = registry.resolve_model(
+            "test-agent", available_models=["ModelA", "ModelB"]
+        )
         assert result is None
 
     def test_none_returned_when_no_preferred_models(self):

@@ -433,7 +433,7 @@
 
 /* ── Start button: scale-in via content-revealed ──────────────── */
 .start-btn {
-    margin-bottom: 36px;
+    margin-bottom: 12px;
     padding: 14px 40px;
     font-size: 14px;
     border-radius: var(--radius-lg);
@@ -442,6 +442,40 @@
 
 .content-revealed .start-btn {
     animation: fadeInScale 500ms var(--ease) 500ms forwards;
+}
+
+/* ── Build a Custom Agent button ───────────────────────────────── */
+.build-agent-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 28px;
+    padding: 9px 24px;
+    font-size: 13px;
+    font-family: var(--font-sans);
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    transition: all 0.15s var(--ease);
+    opacity: 0;
+}
+
+.content-revealed .build-agent-btn {
+    animation: fadeInScale 500ms var(--ease) 650ms forwards;
+}
+
+.build-agent-btn:hover:not(:disabled) {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+}
+
+.build-agent-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 /* ── Suggestions: cascading chip reveal via content-revealed ──── */

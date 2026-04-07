@@ -76,7 +76,14 @@ class TestListAgents:
     def test_agent_has_required_fields(self, client):
         data = client.get("/api/agents").json()
         agent = data["agents"][0]
-        for field in ("id", "name", "description", "source", "conversation_starters", "models"):
+        for field in (
+            "id",
+            "name",
+            "description",
+            "source",
+            "conversation_starters",
+            "models",
+        ):
             assert field in agent
 
 

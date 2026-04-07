@@ -56,6 +56,7 @@ setup(
         "gaia.agents.chat",
         "gaia.agents.chat.tools",
         "gaia.agents.gaia",
+        "gaia.agents.builder",
         "gaia.agents.docker",
         "gaia.agents.emr",
         "gaia.agents.emr.dashboard",

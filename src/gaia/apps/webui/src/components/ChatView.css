@@ -735,6 +735,28 @@
     color: var(--text-muted);
 }
 
+/* ── Create agent button (input footer) ──────────────────────────── */
+.create-agent-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: all 0.15s var(--ease);
+    flex-shrink: 0;
+}
+
+.create-agent-btn:hover {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+}
+
 /* ── Agent picker (input footer) ─────────────────────────────────── */
 .agent-picker {
     position: relative;

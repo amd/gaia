@@ -257,12 +257,14 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             try:
                 from gaia.agents.gaia.agent import GaiaAgent, GaiaAgentConfig
 
-                agent = GaiaAgent(GaiaAgentConfig(
-                    model_id=model_id,
-                    streaming=False,
-                    silent_mode=True,
-                    debug=False,
-                ))
+                agent = GaiaAgent(
+                    GaiaAgentConfig(
+                        model_id=model_id,
+                        streaming=False,
+                        silent_mode=True,
+                        debug=False,
+                    )
+                )
                 system_prompt = agent.system_prompt
                 logger.info("server: Warmup using GaiaAgent (~1,500-token prompt)")
             except Exception as _warmup_err:
@@ -272,13 +274,15 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 )
                 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
-                agent = ChatAgent(ChatAgentConfig(
-                    model_id=model_id,
-                    streaming=False,
-                    silent_mode=True,
-                    debug=False,
-                    rag_documents=[],
-                ))
+                agent = ChatAgent(
+                    ChatAgentConfig(
+                        model_id=model_id,
+                        streaming=False,
+                        silent_mode=True,
+                        debug=False,
+                        rag_documents=[],
+                    )
+                )
                 system_prompt = agent.system_prompt
                 logger.info("server: Warmup using ChatAgent (fallback)")
 

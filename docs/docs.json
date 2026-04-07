@@ -70,6 +70,7 @@
                   "guides/jira",
                   "guides/docker",
                   "guides/routing",
+                  "guides/custom-agent",
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"

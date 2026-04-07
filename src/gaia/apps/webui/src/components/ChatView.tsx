@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link, Bot, ChevronDown } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
@@ -121,9 +121,10 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
 
 interface ChatViewProps {
     sessionId: string;
+    onCreateAgent?: () => void;
 }
 
-export function ChatView({ sessionId }: ChatViewProps) {
+export function ChatView({ sessionId, onCreateAgent }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
@@ -1456,6 +1457,19 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     </div>
                 </div>
                 <div className="input-footer">
+                    {onCreateAgent && (
+                        <>
+                            <button
+                                className="create-agent-btn"
+                                onClick={onCreateAgent}
+                                title="Build a custom agent"
+                                aria-label="Build a custom agent"
+                            >
+                                <Plus size={10} />
+                            </button>
+                            {agents.length > 1 && <span className="input-footer-sep" />}
+                        </>
+                    )}
                     {agents.length > 1 && (
                         <>
                             <div className="agent-picker" ref={agentPickerRef}>

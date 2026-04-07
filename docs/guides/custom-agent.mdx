@@ -1,0 +1,306 @@
+---
+title: "Custom Agents"
+description: "Create your own AI agents and add them to the GAIA Agent UI"
+icon: "wand-magic-sparkles"
+---
+
+<Info>
+  **Prerequisites:** Complete the [Setup](/setup) guide and have the [Agent UI](/guides/agent-ui) running before you start.
+</Info>
+
+## Overview
+
+GAIA's agent registry lets you extend the Agent UI with your own custom agents. Each agent lives in its own directory under `~/.gaia/agents/` and is described by either a YAML manifest or a Python module. Once placed there, the agent appears automatically in the **agent selector** dropdown of the GAIA UI.
+
+Custom agents can have their own:
+- **Personality and instructions** (system prompt)
+- **Tools** (RAG, file search, shell, image generation, vision)
+- **Preferred models** (override the server default)
+- **Conversation starters** (suggestion chips in the UI)
+- **MCP servers** (any Model Context Protocol server)
+
+---
+
+## Quick Start: Gaia Builder Agent
+
+The fastest way to create an agent is to use the built-in **Gaia Builder Agent**.
+
+<Steps>
+  <Step title="Open the Agent UI">
+    Start the GAIA Agent UI: `gaia chat --ui`
+  </Step>
+  <Step title="Click the + button">
+    In the chat input footer, click the **+** icon (to the left of the agent picker).
+    On the welcome screen, click **Build a Custom Agent**.
+  </Step>
+  <Step title="Follow the prompts">
+    The Builder Agent will greet you, ask for a name, and create your agent automatically.
+  </Step>
+  <Step title="Use your new agent">
+    Your agent is immediately available in the agent selector dropdown — no restart needed.
+  </Step>
+</Steps>
+
+The builder creates a fully working agent scaffold in `~/.gaia/agents/<your-agent-name>/agent.yaml`.
+Open that file to customize the instructions and add tools.
+
+---
+
+## Manual Creation: YAML Manifest
+
+For full control, write the manifest yourself.
+
+### Directory structure
+
+```
+~/.gaia/agents/
+└── my-agent/
+    └── agent.yaml        # required
+```
+
+### Minimal manifest
+
+The smallest valid manifest needs only `id`, `name`, and `instructions`:
+
+```yaml
+manifest_version: 1
+id: my-agent
+name: My Agent
+instructions: You are a helpful assistant.
+```
+
+### Full manifest reference
+
+```yaml
+manifest_version: 1
+
+# Unique ID used internally (lowercase letters, numbers, hyphens only)
+id: weather-agent
+
+# Display name shown in the UI agent selector
+name: Weather Agent
+
+# One-line description shown as a tooltip
+description: An agent that provides weather updates
+
+# System prompt — defines your agent's personality and behavior
+instructions: |
+  You are a cheerful weather forecaster who always relates topics back
+  to the current weather. When you don't know the actual weather, make
+  a playful estimate based on the season.
+
+  Be concise, friendly, and always sign off with a weather pun.
+
+# Tools that give your agent extra capabilities.
+# Available: rag, file_search, file_io, shell, screenshot, sd, vlm
+# Omit this field to get the defaults: [rag, file_search]
+tools: []
+
+# Preferred models — first available model is used at runtime.
+# Omit to use the server's current default model.
+models:
+  - Qwen3.5-35B-A3B-GGUF
+  - Qwen3-0.6B-GGUF
+
+# Suggestion chips shown on the welcome screen for this agent.
+conversation_starters:
+  - "What's the weather like today?"
+  - "Tell me a weather fun fact"
+  - "What should I wear tomorrow?"
+
+# MCP (Model Context Protocol) servers — each entry is a subprocess
+# that provides additional tools to your agent.
+# mcp_servers:
+#   time:
+#     command: npx
+#     args: ["-y", "@anthropic/mcp-time-server"]
+#
+#   weather:
+#     command: npx
+#     args: ["-y", "@anthropic/mcp-weather-server"]
+#     env:
+#       WEATHER_API_KEY: "your-api-key-here"
+```
+
+### Available tools
+
+| Tool | What it does |
+|------|-------------|
+| `rag` | Document Q&A with RAG — index and query files |
+| `file_search` | Find files on disk by name or content |
+| `file_io` | Read and write files |
+| `shell` | Execute shell commands |
+| `screenshot` | Capture screenshots |
+| `sd` | Generate images with Stable Diffusion |
+| `vlm` | Analyze images with a Vision Language Model |
+
+---
+
+## Advanced: Python Agent
+
+For agents that need custom tools or complex logic, write a Python module instead of (or alongside) a YAML manifest.
+
+### Directory structure
+
+```
+~/.gaia/agents/
+└── my-python-agent/
+    ├── agent.py          # required — Python takes precedence over YAML
+    └── agent.yaml        # optional — used only for the `models` field
+```
+
+### Minimal Python agent
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+
+
+class MyPythonAgent(Agent):
+    AGENT_ID = "my-python-agent"
+    AGENT_NAME = "My Python Agent"
+    AGENT_DESCRIPTION = "An agent with a custom tool"
+
+    def _get_system_prompt(self) -> str:
+        return "You are a helpful assistant with a custom greet tool."
+
+    def _create_console(self) -> AgentConsole:
+        return AgentConsole()
+
+    def _register_tools(self) -> None:
+        _TOOL_REGISTRY.clear()
+        self._register_custom_tools()
+
+    def _register_custom_tools(self) -> None:
+        @tool
+        def greet(name: str) -> str:
+            """Greet a person by name."""
+            return f"Hello, {name}! Welcome to GAIA."
+```
+
+The three required methods are:
+
+| Method | Purpose |
+|--------|---------|
+| `_get_system_prompt()` | Returns the system prompt string |
+| `_create_console()` | Returns an `AgentConsole` instance |
+| `_register_tools()` | Registers tools into `_TOOL_REGISTRY` |
+
+---
+
+## Examples
+
+<AccordionGroup>
+  <Accordion title="Zoo Agent — simple YAML personality">
+    ```yaml
+    manifest_version: 1
+    id: zoo-agent
+    name: Zoo Agent
+    description: A zookeeper who loves animals
+    instructions: |
+      You are a funny and enthusiastic zookeeper! You work at the world's
+      best zoo and every response you give includes a fun fact or a playful
+      reference to one of your beloved zoo animals.
+    tools: []
+    conversation_starters:
+      - "Hello! What's happening at the zoo today?"
+      - "Tell me a fun fact about one of your animals."
+    ```
+  </Accordion>
+
+  <Accordion title="Research Agent — RAG + file search">
+    ```yaml
+    manifest_version: 1
+    id: research-agent
+    name: Research Agent
+    description: Searches documents and files to answer questions
+    instructions: |
+      You are a thorough research assistant. When asked a question,
+      first search available documents and files before answering.
+      Always cite your sources.
+    tools:
+      - rag
+      - file_search
+    conversation_starters:
+      - "Summarize my project notes"
+      - "Find files related to..."
+      - "What does the documentation say about...?"
+    ```
+  </Accordion>
+
+  <Accordion title="Code Review Agent — shell + file I/O">
+    ```yaml
+    manifest_version: 1
+    id: code-review-agent
+    name: Code Review Agent
+    description: Reviews code and runs linters
+    instructions: |
+      You are an expert code reviewer. You read files, run linters,
+      and provide actionable feedback. Be specific about file names
+      and line numbers. Prioritize correctness and security.
+    tools:
+      - file_io
+      - shell
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="My agent doesn't appear in the selector">
+    - Ensure the directory is under `~/.gaia/agents/<id>/` and contains `agent.yaml` or `agent.py`.
+    - The directory name does not need to match the `id` in the manifest, but it helps.
+    - Check the server logs for warnings like `Failed to load agent from ...`.
+    - If you created the agent manually (not via the Builder), **restart the GAIA server** — discovery runs at boot. Agents created via the Builder Agent are loaded immediately without a restart.
+  </Accordion>
+
+  <Accordion title="Manifest validation errors">
+    Run `python -c "import yaml; from gaia.agents.registry import AgentManifest; AgentManifest(**yaml.safe_load(open('~/.gaia/agents/<id>/agent.yaml').read()))"` to validate your manifest.
+
+    Common issues:
+    - `id` must be non-empty and contain only lowercase letters, numbers, and hyphens.
+    - `tools` must only reference known tool names (see table above).
+    - `manifest_version` must be `1`.
+  </Accordion>
+
+  <Accordion title="MCP server not connecting">
+    - Ensure `npx` or the MCP server command is installed and accessible in `$PATH`.
+    - Check the server logs for `MCP` connection errors.
+    - Test the MCP server standalone before adding it to your agent.
+  </Accordion>
+
+  <Accordion title="Agent uses wrong model">
+    If your preferred model isn't loaded on the Lemonade server, GAIA falls back to the server default. Run `gaia init` to download additional models.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Agent System SDK" icon="code" href="/sdk/core/agent-system">
+    Deep dive into the base Agent class, tool registry, and state machine
+  </Card>
+  <Card title="MCP Integration" icon="plug" href="/sdk/infrastructure/mcp">
+    Connect any MCP server to extend your agent with external tools
+  </Card>
+  <Card title="RAG SDK" icon="magnifying-glass" href="/sdk/sdks/rag">
+    Add document Q&A to your agent with the RAG SDK
+  </Card>
+  <Card title="Agent UI Guide" icon="browser" href="/guides/agent-ui">
+    Learn about the GAIA Agent UI and how agents are surfaced there
+  </Card>
+</CardGroup>
+
+---
+
+<small style={{ color: '#666' }}>
+**License**
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT
+</small>
