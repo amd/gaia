@@ -535,6 +535,21 @@ class TestCreateAgentImplMCP:
         # The verbose 40-line comment block should NOT be present
         assert "Add MCP server support" not in source
 
+    def test_register_tools_clears_global_registry(self, tmp_path, monkeypatch):
+        """_register_tools() clears _TOOL_REGISTRY to prevent tool pollution from other agents."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        for enable_mcp in (False, True):
+            _create_agent_impl("Widget Agent", enable_mcp=enable_mcp)
+            source = (tmp_path / ".gaia" / "agents" / "widget" / "agent.py").read_text(
+                encoding="utf-8"
+            )
+            assert (
+                "_TOOL_REGISTRY.clear()" in source
+            ), f"_TOOL_REGISTRY.clear() missing for enable_mcp={enable_mcp}"
+            import shutil
+
+            shutil.rmtree(tmp_path / ".gaia" / "agents" / "widget")
+
     def test_mcp_json_write_failure_cleans_up_and_returns_error(
         self, tmp_path, monkeypatch
     ):
