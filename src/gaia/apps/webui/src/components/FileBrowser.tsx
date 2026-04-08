@@ -287,24 +287,33 @@ export function FileBrowser() {
         setIndexingFiles(new Set(files));
         setIndexStatus(`Indexing ${files.length} file(s)...`);
 
-        const result = await indexAndAttachFiles(files, entries, currentSessionId, updateSessionInList);
+        try {
+            const result = await indexAndAttachFiles(files, entries, currentSessionId, updateSessionInList);
 
-        setIndexingFiles(new Set());
-        if (result.failed > 0) {
-            setIndexStatus(`Done: ${result.docIds.length} indexed, ${result.failed} failed`);
+            if (result.failed > 0) {
+                setIndexStatus(`Done: ${result.docIds.length} indexed, ${result.failed} failed`);
+                setIndexError({
+                    filename: `${result.failed} file(s)`,
+                    error: result.lastError || 'Indexing failed for some files',
+                });
+            } else {
+                const skippedNote = result.unsupported.length > 0
+                    ? ` (${result.unsupported.length} skipped — unsupported type)`
+                    : '';
+                setIndexStatus(`Successfully indexed ${result.docIds.length} file(s)${skippedNote}`);
+            }
+            if (indexStatusTimerRef.current) clearTimeout(indexStatusTimerRef.current);
+            indexStatusTimerRef.current = setTimeout(() => setIndexStatus(null), 5000);
+            setSelectedFiles(new Set());
+        } catch (err) {
+            log.doc.error('Index selected failed', err);
             setIndexError({
-                filename: `${result.failed} file(s)`,
-                error: result.lastError || 'Indexing failed for some files',
+                filename: files.length === 1 ? files[0].split(/[\\/]/).pop() || files[0] : `${files.length} files`,
+                error: err instanceof Error ? err.message : 'An unexpected error occurred.',
             });
-        } else {
-            const skippedNote = result.unsupported.length > 0
-                ? ` (${result.unsupported.length} skipped — unsupported type)`
-                : '';
-            setIndexStatus(`Successfully indexed ${result.docIds.length} file(s)${skippedNote}`);
+        } finally {
+            setIndexingFiles(new Set());
         }
-        if (indexStatusTimerRef.current) clearTimeout(indexStatusTimerRef.current);
-        indexStatusTimerRef.current = setTimeout(() => setIndexStatus(null), 5000);
-        setSelectedFiles(new Set());
     }, [selectedFiles, currentSessionId, updateSessionInList, entries]);
 
     const handleAskAgent = useCallback(async () => {
@@ -337,8 +346,15 @@ export function FileBrowser() {
                 return;
             }
 
-            // Build prompt with file names (not paths) and send to chat
-            const fileNames = result.supported.map(f => f.split(/[\\/]/).pop() || f);
+            // Surface partial-failure before closing modal so user knows some files were dropped
+            if (result.failed > 0) {
+                setIndexStatus(`Warning: ${result.failed} file(s) failed to index and will be excluded.`);
+            }
+
+            // Build prompt with successfully indexed file names (not paths)
+            const fileNames = result.docIds.length > 0
+                ? result.supported.filter((_, i) => i < result.docIds.length).map(f => f.split(/[\\/]/).pop() || f)
+                : result.supported.map(f => f.split(/[\\/]/).pop() || f);
             const prompt = fileNames.length === 1
                 ? `Please analyze this document for me: ${fileNames[0]}`
                 : `Please analyze these documents for me:\n${fileNames.map(n => `- ${n}`).join('\n')}`;

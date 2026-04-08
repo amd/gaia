@@ -272,8 +272,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
         log.chat.info(`Consuming pending prompt: "${pending.slice(0, 60)}"`);
         useChatStore.getState().setPendingPrompt(null);
         setInput(pending);
-        // Defer send to next tick so React finishes mount
-        requestAnimationFrame(() => sendMessageRef.current(pending));
+        // Defer send to next tick so React finishes mount.
+        // Guard against component unmounting before the frame fires.
+        let cancelled = false;
+        requestAnimationFrame(() => {
+            if (!cancelled) sendMessageRef.current(pending);
+        });
+        return () => { cancelled = true; };
     }, [pendingPrompt]);
 
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
