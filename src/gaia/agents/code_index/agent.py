@@ -113,7 +113,15 @@ class CodeIndexAgent(Agent):
                 )
 
             if repo_path:
-                self._repo_path = os.path.abspath(repo_path)
+                resolved = os.path.abspath(repo_path)
+                if not os.path.isdir(resolved):
+                    return json.dumps({"error": f"Not a directory: {resolved}"})
+                # Restrict to the agent's original repo_path to prevent
+                # LLM-directed path traversal to arbitrary directories.
+                original = os.path.abspath(self._repo_path)
+                if not resolved.startswith(original + os.sep) and resolved != original:
+                    return json.dumps({"error": f"repo_path must be within {original}"})
+                self._repo_path = resolved
                 self._code_index_config = None
                 self._code_index_sdk = None
 
@@ -254,6 +262,9 @@ class CodeIndexAgent(Agent):
 
             import subprocess
 
+            # Cap max_results to prevent excessive output
+            max_results = min(max_results, 100)
+
             try:
                 result = subprocess.run(
                     [
@@ -261,6 +272,7 @@ class CodeIndexAgent(Agent):
                         "-C",
                         self._repo_path,
                         "log",
+                        "--fixed-strings",
                         f"--grep={query}",
                         "-i",
                         f"--max-count={max_results}",
