@@ -10,7 +10,6 @@ Provides ``Depends``-compatible callables to retrieve shared resources
 from fastapi import Request
 
 from .database import ChatDatabase
-from .dispatch import DispatchQueue
 from .tunnel import TunnelManager
 
 

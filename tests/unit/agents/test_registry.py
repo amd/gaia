@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-import yaml
 
 from gaia.agents.registry import (
     KNOWN_TOOLS,

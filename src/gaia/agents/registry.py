@@ -168,11 +168,9 @@ class AgentRegistry:
 
         # --- GaiaAgent (may not be available yet) ---
         try:
-            from gaia.agents.gaia.agent import GaiaAgent, GaiaAgentConfig  # noqa: F401
+            from gaia.agents.gaia.agent import GaiaAgent, GaiaAgentConfig
 
             def gaia_factory(**kwargs):
-                from gaia.agents.gaia.agent import GaiaAgent, GaiaAgentConfig
-
                 valid_fields = {f.name for f in dataclasses.fields(GaiaAgentConfig)}
                 config = GaiaAgentConfig(
                     **{k: v for k, v in kwargs.items() if k in valid_fields}
@@ -204,17 +202,9 @@ class AgentRegistry:
 
         # --- BuilderAgent ---
         try:
-            from gaia.agents.builder.agent import (  # noqa: F401
-                BuilderAgent,
-                BuilderAgentConfig,
-            )
+            from gaia.agents.builder.agent import BuilderAgent, BuilderAgentConfig
 
             def builder_factory(**kwargs):
-                from gaia.agents.builder.agent import (  # noqa: F811
-                    BuilderAgent,
-                    BuilderAgentConfig,
-                )
-
                 valid_fields = {f.name for f in dataclasses.fields(BuilderAgentConfig)}
                 config = BuilderAgentConfig(
                     **{k: v for k, v in kwargs.items() if k in valid_fields}
@@ -314,7 +304,7 @@ class AgentRegistry:
         models: List[str] = []
         if yaml_file:
             try:
-                with open(yaml_file) as f:
+                with open(yaml_file, encoding="utf-8") as f:
                     yaml_data = yaml.safe_load(f)
                 if yaml_data:
                     models = yaml_data.get("models", [])
@@ -360,7 +350,7 @@ class AgentRegistry:
                 f"Agent manifest too large ({yaml_file.stat().st_size} bytes > {max_size}): {yaml_file}"
             )
 
-        with open(yaml_file) as f:
+        with open(yaml_file, encoding="utf-8") as f:
             raw = yaml.safe_load(f)
 
         manifest = AgentManifest(**raw)
@@ -370,7 +360,7 @@ class AgentRegistry:
         klass = agent_class
 
         def manifest_factory(klass=klass, **kwargs):
-            return klass(**kwargs)
+            return klass(**kwargs)  # pylint: disable=abstract-class-instantiated
 
         self._register(
             AgentRegistration(
@@ -424,7 +414,7 @@ class AgentRegistry:
             "".join(w.capitalize() for w in manifest.name.split()) + "Agent"
         )
 
-        def _get_system_prompt(self_inner):
+        def _get_system_prompt(_):
             return instructions
 
         def _register_tools(self_inner):
@@ -441,7 +431,7 @@ class AgentRegistry:
             if getattr(self_inner, "_mcp_manager", None) is not None:
                 self_inner.load_mcp_servers_from_config()
 
-        def _create_console(self_inner):
+        def _create_console(_):
             from gaia.agents.base.console import AgentConsole
 
             return AgentConsole()
@@ -508,7 +498,7 @@ class AgentRegistry:
             # Manifest wins on conflicts (additive merge)
             merged = {**global_servers, **manifest.mcp_servers}
             config_path = agent_dir / "mcp_servers.json"
-            with open(config_path, "w") as f:
+            with open(config_path, "w", encoding="utf-8") as f:
                 json.dump({"mcpServers": merged}, f, indent=2)
             return config_path
         except Exception as e:
