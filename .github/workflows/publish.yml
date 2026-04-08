@@ -429,3 +429,22 @@ EOF
             release-assets/*
             dist/**
           body_path: RELEASE_BODY.md
+
+  refresh-context7:
+    runs-on: ubuntu-latest
+    needs: [github-release]
+    steps:
+      - name: Refresh Context7
+        run: |
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST https://context7.com/api/v1/refresh \
+            -H "Authorization: Bearer ${{ secrets.CONTEXT7_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{"libraryName": "/amd/gaia"}')
+          if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "202" ]; then
+            echo "Context7 refresh triggered (HTTP $HTTP_STATUS)"
+          elif [ "$HTTP_STATUS" = "429" ]; then
+            echo "::warning::Context7 rate limited — refresh skipped"
+          else
+            echo "::warning::Context7 refresh returned HTTP $HTTP_STATUS"
+          fi

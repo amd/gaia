@@ -1,0 +1,230 @@
+---
+title: Code Index SDK
+description: API reference for the CodeIndexSDK — semantic search over repositories, git history, and pull requests.
+---
+
+## Installation
+
+```bash
+pip install faiss-cpu   # or faiss-gpu for GPU support
+# Included in:
+pip install "gaia[code-index]"
+```
+
+## CodeIndexConfig
+
+Configuration dataclass for `CodeIndexSDK`.
+
+```python
+from gaia.code_index.sdk import CodeIndexConfig
+
+config = CodeIndexConfig(
+    repo_path=".",
+    max_files=5000,
+    max_file_size_mb=1.0,
+    chunk_overlap=50,
+    embedding_model="nomic-embed-text-v2-moe-GGUF",
+    cache_dir="~/.gaia/code_index",
+    index_git_history=True,
+    index_prs=False,
+    max_commits=1000,
+    embedding_base_url=None,
+)
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `repo_path` | `str` | — | Repository root (required) |
+| `max_files` | `int` | `5000` | Max files to scan |
+| `max_file_size_mb` | `float` | `1.0` | Skip files larger than this |
+| `chunk_overlap` | `int` | `50` | Token overlap between chunks |
+| `embedding_model` | `str` | `"nomic-embed-text-v2-moe-GGUF"` | Lemonade embedding model |
+| `cache_dir` | `str` | `"~/.gaia/code_index"` | Cache directory |
+| `index_git_history` | `bool` | `True` | Include git commits |
+| `index_prs` | `bool` | `False` | Include GitHub PRs |
+| `max_commits` | `int` | `1000` | Max commits to index |
+| `embedding_base_url` | `Optional[str]` | `None` | Custom Lemonade base URL |
+
+## CodeIndexSDK
+
+Main SDK class for indexing and searching.
+
+```python
+from gaia.code_index.sdk import CodeIndexSDK
+
+sdk = CodeIndexSDK(config)
+```
+
+### Methods
+
+#### `index_repository() -> IndexResult`
+
+Scan the repository, parse source files, generate embeddings, and save a FAISS index.
+
+```python
+result = sdk.index_repository()
+print(f"Files: {result.files_indexed}, Chunks: {result.chunks_created}")
+if result.commits_indexed:
+    print(f"Commits: {result.commits_indexed}")
+```
+
+#### `search(query, scope="all", top_k=10) -> List[SearchResult]`
+
+Embed the query and return the most similar chunks.
+
+```python
+results = sdk.search("error handling in agent tools", top_k=5)
+for r in results:
+    print(f"[{r.score:.3f}] {r.chunk.file_path}:{r.chunk.start_line}")
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | `str` | — | Natural language or code query |
+| `scope` | `str` | `"all"` | Filter: `"all"`, `"code"`, `"commit"`, `"pr"` |
+| `top_k` | `int` | `10` | Number of results |
+
+#### `get_status() -> Dict`
+
+Return index statistics.
+
+```python
+status = sdk.get_status()
+# {"indexed": True, "total_chunks": 1234, "embedding_model": "...", ...}
+```
+
+#### `clear_index()`
+
+Remove the FAISS index and metadata from the cache.
+
+```python
+sdk.clear_index()
+```
+
+## Data Types
+
+### CodeChunk
+
+A semantic chunk of source code.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | `str` | Source code text |
+| `file_path` | `str` | Relative path to file |
+| `language` | `str` | Detected language |
+| `start_line` | `int` | First line (1-indexed) |
+| `end_line` | `int` | Last line |
+| `symbol_name` | `Optional[str]` | Function/class name |
+| `symbol_type` | `Optional[str]` | `"function"`, `"class"`, etc. |
+| `docstring` | `Optional[str]` | Extracted docstring |
+
+### CommitChunk
+
+A git commit as a searchable chunk.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | `str` | Formatted commit text |
+| `commit_hash` | `str` | Full SHA |
+| `author` | `str` | Author name |
+| `date` | `str` | ISO 8601 date |
+| `files_changed` | `List[str]` | Files in the commit |
+| `diff_summary` | `str` | Commit message |
+
+### PRChunk
+
+A GitHub pull request as a searchable chunk.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | `str` | Formatted PR text |
+| `pr_number` | `int` | PR number |
+| `title` | `str` | PR title |
+| `state` | `str` | `"open"`, `"closed"`, `"merged"` |
+| `author` | `str` | Author login |
+| `url` | `str` | GitHub URL |
+| `labels` | `List[str]` | Label names |
+| `body` | `str` | PR description |
+
+### SearchResult
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `chunk` | `CodeChunk \| CommitChunk \| PRChunk` | The matched chunk |
+| `score` | `float` | Similarity score in [0, 1] |
+| `result_type` | `str` | `"code"`, `"commit"`, or `"pr"` |
+
+### IndexResult
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `files_indexed` | `int` | Files successfully parsed |
+| `chunks_created` | `int` | Total chunks embedded |
+| `commits_indexed` | `int` | Git commits indexed (0 if disabled) |
+| `prs_indexed` | `int` | Pull requests indexed (0 if disabled) |
+
+## Parsers
+
+The `gaia.code_index.parsers` module provides low-level parsing utilities.
+
+```python
+from gaia.code_index.parsers import (
+    detect_language,
+    is_binary_file,
+    parse_python_file,
+    parse_generic_file,
+    chunk_code_file,
+)
+
+# Detect language from filename
+lang = detect_language("agent.py")  # "python"
+
+# Check if a file is binary
+is_binary_file("/path/to/file")  # True/False
+
+# Parse a Python file using AST
+chunks = parse_python_file("agent.py", source_code)
+
+# Parse other languages using regex
+chunks = parse_generic_file("agent.ts", source_code, "typescript")
+
+# High-level dispatcher
+chunks = chunk_code_file("agent.go", source_code, max_size_mb=1.0)
+```
+
+## GitIndexer
+
+Extracts commit history and pull requests.
+
+```python
+from gaia.code_index.git import GitIndexer
+
+indexer = GitIndexer(config)
+
+# Get commits (requires git)
+commits = indexer.get_commits()  # List[CommitChunk]
+
+# Get PRs (requires gh CLI)
+prs = indexer.get_pull_requests()  # List[PRChunk]
+```
+
+## CodeIndexAgent
+
+The `CodeIndexAgent` provides semantic code search tools as a dedicated agent.
+
+```python
+from gaia.agents.code_index.agent import CodeIndexAgent
+
+agent = CodeIndexAgent(repo_path="/path/to/repo")
+agent.process_query("How does authentication work?")
+```
+
+Available tools (registered via `@tool` decorator):
+
+| Tool name | Description |
+|-----------|-------------|
+| `index_codebase` | Index a repository |
+| `search_code_index` | Semantic search |
+| `code_index_status` | Index statistics |
+| `clear_code_index` | Remove cached index |
+| `search_git_history` | Git log text search |

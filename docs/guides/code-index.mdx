@@ -1,0 +1,180 @@
+---
+title: Code Index
+description: Semantic search over your codebase, git history, and pull requests using local AMD-accelerated embeddings.
+---
+
+The GAIA Code Index enables fast semantic search over large codebases without sending your code to the cloud. It parses source files, generates embeddings via Lemonade Server on AMD NPU/GPU hardware, and stores them in a local FAISS index for sub-second queries.
+
+## Overview
+
+| Feature | Description |
+|---------|-------------|
+| **Languages** | Python (AST), JavaScript, TypeScript, Go, Rust, Java, C, C++ |
+| **Git history** | Optional — index commit messages and file changes |
+| **PR search** | Optional — index closed/merged GitHub PRs via `gh` CLI |
+| **Embeddings** | Local AMD NPU/GPU via Lemonade Server |
+| **Storage** | `~/.gaia/code_index/<repo-hash>/` |
+
+## Setup
+
+Install the required dependency:
+
+```bash
+pip install faiss-cpu
+# or, for GPU acceleration:
+pip install faiss-gpu
+```
+
+Lemonade Server must be running to generate embeddings:
+
+```bash
+lemonade-server serve
+```
+
+## CLI Usage
+
+### Index a repository
+
+```bash
+# Index the current directory
+gaia index
+
+# Index a specific repository
+gaia index --repo /path/to/repo
+
+# Include git history (commit messages and changed files)
+gaia index --repo /path/to/repo --git-history
+
+# Include GitHub pull requests (requires gh CLI and authentication)
+gaia index --repo /path/to/repo --prs
+```
+
+### Search the index
+
+```bash
+# Semantic search across code, commits, and PRs
+gaia index search "how does the agent handle errors"
+
+# Search only source code
+gaia index search "authentication flow" --scope code
+
+# Search commit history
+gaia index search "fix memory leak" --scope commit
+
+# Return more results
+gaia index search "embedding model" --top-k 20
+```
+
+### Manage the index
+
+```bash
+# Show index status
+gaia index status
+
+# Clear and rebuild
+gaia index clear
+gaia index
+```
+
+## Agent Tools
+
+When the code index is wired into an agent (ChatAgent or CodeAgent), five tools become available:
+
+| Tool | Description |
+|------|-------------|
+| `index_codebase` | Index a repository (path optional) |
+| `search_code_index` | Semantic search over indexed chunks |
+| `code_index_status` | Show index statistics |
+| `clear_code_index` | Remove the cached index |
+| `search_git_history` | Text search over commit messages via git |
+
+### Example agent interaction
+
+```
+User: Find all places in the codebase where we handle authentication errors
+
+Agent: [calls search_code_index with query="authentication error handling"]
+
+Results:
+- src/gaia/agents/base/agent.py:145 — handle_error() function
+- src/gaia/llm/lemonade_client.py:89 — auth retry logic
+- tests/unit/test_auth.py:23 — test_auth_error_recovery
+```
+
+## Python SDK
+
+```python
+from gaia.code_index.sdk import CodeIndexConfig, CodeIndexSDK
+
+config = CodeIndexConfig(
+    repo_path="/path/to/repo",
+    index_git_history=True,
+    index_prs=False,
+    max_files=5000,
+    embedding_model="nomic-embed-text-v2-moe-GGUF",
+)
+
+sdk = CodeIndexSDK(config)
+
+# Index the repository
+result = sdk.index_repository()
+print(f"Indexed {result.files_indexed} files, {result.chunks_created} chunks")
+
+# Search
+results = sdk.search("how does agent tool registration work", top_k=5)
+for r in results:
+    chunk = r.chunk
+    print(f"{chunk.file_path}:{chunk.start_line} — {chunk.symbol_name} (score: {r.score:.3f})")
+
+# Check status
+status = sdk.get_status()
+print(f"Total chunks: {status['total_chunks']}")
+```
+
+## Configuration
+
+```python
+from gaia.code_index.sdk import CodeIndexConfig
+
+config = CodeIndexConfig(
+    repo_path=".",              # Repository root path (required)
+    max_files=5000,             # Max files to index
+    max_file_size_mb=1.0,       # Skip files larger than this
+    chunk_overlap=50,           # Token overlap between chunks
+    embedding_model="nomic-embed-text-v2-moe-GGUF",  # Lemonade model
+    cache_dir="~/.gaia/code_index",  # Cache location
+    index_git_history=True,     # Include git commits
+    index_prs=False,            # Include GitHub PRs
+    max_commits=1000,           # Max commits to index
+    embedding_base_url=None,    # Custom Lemonade URL (default: localhost)
+)
+```
+
+## Supported Languages
+
+| Language | Parser | Symbols extracted |
+|----------|--------|-------------------|
+| Python | AST | Functions, classes, methods |
+| JavaScript/TypeScript | Regex | Functions, classes, interfaces, arrow functions |
+| Go | Regex | Functions, structs, interfaces |
+| Rust | Regex | Functions (`fn`), structs, enums, impl blocks |
+| Java | Regex | Classes, methods |
+| C/C++ | Regex | Functions |
+| Other | Block splitter | Paragraph blocks |
+
+## Cache Layout
+
+```
+~/.gaia/code_index/
+└── <repo-hash>/
+    ├── metadata.json    # Chunk metadata, file hashes, model name
+    └── index.faiss      # FAISS IndexFlatL2 embeddings
+```
+
+The cache is keyed by the repository root path hash. The embedding model name is stored in metadata — a warning is shown if the model changes between runs (requiring a re-index).
+
+## Privacy
+
+All processing is local. No source code, commit messages, or PR data is sent to external services. Embeddings are generated by your local Lemonade Server instance using AMD NPU/GPU hardware.
+
+Sensitive files are automatically excluded from indexing: `.env`, `.pem`, `.key`, credential files, and files matching common secret patterns.
