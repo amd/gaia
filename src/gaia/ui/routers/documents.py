@@ -129,7 +129,15 @@ async def upload_by_path(
                 try:
                     chunk_count = await _index_document(temp_path)
                 except Exception as e:
-                    logger.error("Indexing failed for %s: %s", safe_filepath.name, e)
+                    logger.error(
+                        "Indexing failed for %s: %s",
+                        safe_filepath.name,
+                        e,
+                        exc_info=True,
+                    )
+                    chunk_count = 0
+
+                if chunk_count == 0:
                     doc = db.add_document(
                         filename=safe_filepath.name,
                         filepath=str(safe_filepath),

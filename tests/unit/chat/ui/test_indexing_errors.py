@@ -120,7 +120,11 @@ class TestIndexDocumentErrorPropagation:
 
 @pytest.fixture
 def home_tmp_dir():
-    """Create a temporary directory under $HOME for tests."""
+    """Create a temporary directory under $HOME for tests.
+
+    Must be under $HOME because safe_open_document rejects paths
+    outside the user's home directory.
+    """
     d = Path.home() / ".gaia_test_indexing"
     d.mkdir(exist_ok=True)
     yield d
@@ -202,12 +206,16 @@ class TestUploadIndexingFailure:
         data = resp.json()
         doc_id = data["id"]
 
-        # Wait briefly for background task
+        # Poll DB until background task updates the status
         import time
 
-        time.sleep(0.5)
+        for _ in range(20):
+            doc = db.get_document(doc_id)
+            if doc and doc["indexing_status"] != "indexing":
+                break
+            time.sleep(0.1)
 
-        # Check DB state — background task should have set status to "failed"
+        # Background task should have set status to "failed"
         doc = db.get_document(doc_id)
         assert doc is not None
         assert doc["indexing_status"] == "failed"

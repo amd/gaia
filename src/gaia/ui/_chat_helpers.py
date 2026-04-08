@@ -1102,6 +1102,9 @@ async def _index_document(filepath: Path) -> int:
     Runs the synchronous RAG indexing in a thread pool executor
     to avoid blocking the async event loop.
 
+    Note: A return value of 0 means RAG reported success but produced
+    no chunks. Callers must treat 0 chunks as a failure condition.
+
     Raises:
         RuntimeError: If indexing fails for any reason.
     """
