@@ -8,6 +8,7 @@ and a fallback block-based splitter for unknown file types.
 """
 
 import ast
+import os
 import re
 from typing import List
 
@@ -39,8 +40,6 @@ _EXT_TO_LANG = {
 
 def detect_language(filename: str) -> str:
     """Return the language identifier for *filename* based on its extension."""
-    import os
-
     ext = os.path.splitext(filename)[1].lower()
     return _EXT_TO_LANG.get(ext, "text")
 

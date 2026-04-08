@@ -60,7 +60,7 @@ from .validators import (
 logger = logging.getLogger(__name__)
 
 
-_code_agent_bases = [
+class CodeAgent(
     ApiAgent,  # API support for VSCode integration
     Agent,
     CodeToolsMixin,  # Code generation, analysis, helpers
@@ -76,10 +76,7 @@ _code_agent_bases = [
     CLIToolsMixin,  # Universal CLI execution with process management
     ExternalToolsMixin,  # Context7 and Perplexity integration for documentation and web search
     ValidationToolsMixin,  # Validation and testing tools
-]
-
-
-class CodeAgent(*_code_agent_bases):
+):
     """
     Intelligent autonomous code agent for comprehensive Python development workflows.
 

@@ -208,16 +208,15 @@ commits = indexer.get_commits()  # List[CommitChunk]
 prs = indexer.get_pull_requests()  # List[PRChunk]
 ```
 
-## CodeIndexToolsMixin
+## CodeIndexAgent
 
-Add semantic code search tools to any GAIA agent.
+The `CodeIndexAgent` provides semantic code search tools as a dedicated agent.
 
 ```python
-from gaia.code_index.mixin import CodeIndexToolsMixin
-from gaia.agents.base.agent import Agent
+from gaia.agents.code_index.agent import CodeIndexAgent
 
-class MyAgent(Agent, CodeIndexToolsMixin):
-    pass
+agent = CodeIndexAgent(repo_path="/path/to/repo")
+agent.process_query("How does authentication work?")
 ```
 
 Available tools (registered via `@tool` decorator):

@@ -23,18 +23,32 @@ log = logging.getLogger(__name__)
 # Configuration and response dataclasses
 # ---------------------------------------------------------------------------
 
-_SENSITIVE_PATTERNS = {
+# Exact filenames (matched against the full filename, case-insensitive)
+_SENSITIVE_EXACT = {
     ".env",
-    ".pem",
-    ".key",
-    ".pfx",
-    ".p12",
+    ".htpasswd",
     "id_rsa",
     "id_ed25519",
-    "credentials",
-    "secret",
-    ".htpasswd",
+    "id_ecdsa",
+    "id_dsa",
 }
+
+# Prefixes that mark a file as sensitive (e.g. .env.local, .env.production)
+_SENSITIVE_PREFIXES = (".env.",)
+
+# Extensions that are always sensitive
+_SENSITIVE_EXTENSIONS = {".pem", ".key", ".pfx", ".p12", ".jks", ".keystore"}
+
+
+def _is_sensitive_file(filename: str) -> bool:
+    """Return True if *filename* matches a sensitive file pattern."""
+    name = filename.lower()
+    if name in _SENSITIVE_EXACT:
+        return True
+    if any(name.startswith(p) for p in _SENSITIVE_PREFIXES):
+        return True
+    ext = os.path.splitext(name)[1]
+    return ext in _SENSITIVE_EXTENSIONS
 
 
 @dataclass
@@ -204,7 +218,8 @@ class CodeIndexSDK:
         from gaia.code_index.parsers import chunk_code_file
 
         # Parse files — incremental: skip unchanged
-        all_chunks: List[Union[CodeChunk, CommitChunk, PRChunk]] = []
+        reused_chunks: List[Union[CodeChunk, CommitChunk, PRChunk]] = []
+        new_chunks: List[Union[CodeChunk, CommitChunk, PRChunk]] = []
         new_file_hashes: Dict[str, str] = {}
         files_indexed = 0
 
@@ -220,50 +235,46 @@ class CodeIndexSDK:
             new_file_hashes[rel_path] = file_hash
 
             if existing_file_hashes.get(rel_path) == file_hash:
-                # File unchanged — reuse existing chunks
+                # File unchanged — reuse existing chunks (and their embeddings)
                 reused = [
                     c
                     for c in existing_chunks
                     if isinstance(c, CodeChunk) and c.file_path == rel_path
                 ]
-                all_chunks.extend(reused)
+                reused_chunks.extend(reused)
                 continue
 
             # Parse changed/new file
             parsed = chunk_code_file(rel_path, content)
-            all_chunks.extend(parsed)
+            new_chunks.extend(parsed)
             files_indexed += 1
 
-        # Git history
+        # Git history and PR data
         commits_indexed = 0
-        if self.config.index_git_history:
-            try:
-                from gaia.code_index.git import GitIndexer
-
-                git_indexer = GitIndexer(self.config)
-                commits = git_indexer.get_commits()
-                all_chunks.extend(commits)
-                commits_indexed = len(commits)
-                if commits_indexed:
-                    self.log.info(f"Indexed {commits_indexed} commits")
-            except Exception as e:
-                self.log.warning(f"Git history indexing failed (skipping): {e}")
-
-        # PR data
         prs_indexed = 0
-        if self.config.index_prs:
+        if self.config.index_git_history or self.config.index_prs:
             try:
                 from gaia.code_index.git import GitIndexer
 
                 git_indexer = GitIndexer(self.config)
-                prs = git_indexer.get_pull_requests()
-                all_chunks.extend(prs)
-                prs_indexed = len(prs)
-                if prs_indexed:
-                    self.log.info(f"Indexed {prs_indexed} PRs")
-            except Exception as e:
-                self.log.warning(f"PR indexing failed (skipping): {e}")
 
+                if self.config.index_git_history:
+                    commits = git_indexer.get_commits()
+                    all_chunks.extend(commits)
+                    commits_indexed = len(commits)
+                    if commits_indexed:
+                        self.log.info(f"Indexed {commits_indexed} commits")
+
+                if self.config.index_prs:
+                    prs = git_indexer.get_pull_requests()
+                    all_chunks.extend(prs)
+                    prs_indexed = len(prs)
+                    if prs_indexed:
+                        self.log.info(f"Indexed {prs_indexed} PRs")
+            except Exception as e:
+                self.log.warning(f"Git indexing failed (skipping): {e}")
+
+        all_chunks = reused_chunks + new_chunks
         if not all_chunks:
             self.log.warning("No chunks to index")
             return IndexResult(
@@ -274,12 +285,78 @@ class CodeIndexSDK:
                 duration_seconds=time.time() - start,
             )
 
-        # Embed and build FAISS index
-        self.log.info(f"Embedding {len(all_chunks)} chunks...")
-        texts = [self._chunk_to_embed_text(c) for c in all_chunks]
-        embeddings, valid_chunks = self._encode_texts_with_sync(texts, all_chunks)
+        import numpy as np
 
-        if len(valid_chunks) == 0:
+        # Reuse existing embeddings for unchanged chunks
+        reused_embeddings = None
+        if reused_chunks and existing_meta:
+            existing_chunk_dicts = existing_meta.get("chunks", [])
+            # Build index map: find positions of reused chunks in existing index
+            reused_indices = []
+            for rc in reused_chunks:
+                if not isinstance(rc, CodeChunk):
+                    continue
+                for i, cd in enumerate(existing_chunk_dicts):
+                    if (
+                        cd.get("chunk_type") == "code"
+                        and cd.get("file_path") == rc.file_path
+                        and cd.get("start_line") == rc.start_line
+                    ):
+                        reused_indices.append(i)
+                        break
+
+            if reused_indices and self._ensure_index_loaded():
+                try:
+                    reused_embeddings = np.array(
+                        [self._faiss_index.reconstruct(i) for i in reused_indices],
+                        dtype=np.float32,
+                    )
+                except Exception as e:
+                    self.log.warning(f"Could not reuse embeddings: {e}")
+                    reused_embeddings = None
+
+        # Embed only new/changed chunks
+        chunks_to_embed = new_chunks
+        if chunks_to_embed:
+            self.log.info(
+                f"Embedding {len(chunks_to_embed)} new chunks "
+                f"(reusing {len(reused_chunks)} unchanged)..."
+            )
+            texts = [self._chunk_to_embed_text(c) for c in chunks_to_embed]
+            new_embeddings, valid_new_chunks = self._encode_texts_with_sync(
+                texts, chunks_to_embed
+            )
+        else:
+            self.log.info(
+                f"All {len(reused_chunks)} chunks unchanged, reusing embeddings"
+            )
+            new_embeddings = np.array([], dtype=np.float32).reshape(0, 0)
+            valid_new_chunks = []
+
+        # Combine reused + new embeddings
+        valid_chunks = []
+        embedding_parts = []
+        if reused_embeddings is not None and reused_embeddings.size > 0:
+            valid_chunks.extend(reused_chunks)
+            embedding_parts.append(reused_embeddings)
+        elif reused_chunks:
+            # Fallback: could not reuse embeddings, must re-embed reused chunks too
+            self.log.info(
+                "Re-embedding unchanged chunks (no existing index to reuse from)"
+            )
+            texts = [self._chunk_to_embed_text(c) for c in reused_chunks]
+            reused_emb, valid_reused = self._encode_texts_with_sync(
+                texts, reused_chunks
+            )
+            if valid_reused:
+                valid_chunks.extend(valid_reused)
+                embedding_parts.append(reused_emb)
+
+        if valid_new_chunks:
+            valid_chunks.extend(valid_new_chunks)
+            embedding_parts.append(new_embeddings)
+
+        if not valid_chunks:
             self.log.error("All embeddings failed — index not saved")
             return IndexResult(
                 files_indexed=files_indexed,
@@ -289,6 +366,7 @@ class CodeIndexSDK:
                 duration_seconds=time.time() - start,
             )
 
+        embeddings = np.concatenate(embedding_parts, axis=0)
         faiss_index = self._build_faiss_index(embeddings)
 
         # Persist atomically
@@ -541,8 +619,7 @@ class CodeIndexSDK:
                     continue
 
                 # Check sensitive file patterns
-                fname_lower = fname.lower()
-                if any(p in fname_lower for p in _SENSITIVE_PATTERNS):
+                if _is_sensitive_file(fname):
                     self.log.debug(f"Skipping sensitive file: {rel_path}")
                     continue
 
@@ -579,6 +656,14 @@ class CodeIndexSDK:
 
     def _read_file_safe(self, file_path: str) -> Optional[str]:
         """Read a file, returning None on error or binary content."""
+        # Validate the path is within the repo root
+        if self._path_validator is not None:
+            try:
+                self._path_validator.validate(file_path)
+            except Exception:
+                self.log.warning(f"Path validation failed: {file_path}")
+                return None
+
         try:
             with open(file_path, "rb") as f:
                 raw = f.read(8192)
