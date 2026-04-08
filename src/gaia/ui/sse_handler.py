@@ -424,6 +424,10 @@ class SSEOutputHandler(OutputHandler):
             }
         )
 
+    def print_agent_created(self, agent_id: str) -> None:
+        """Notify the frontend that a new agent is available in the registry."""
+        self._emit({"type": "agent_created", "agent_id": agent_id})
+
     # === Optional Methods (with SSE-friendly implementations) ===
 
     def print_streaming_text(self, text_chunk: str, end_of_stream: bool = False):

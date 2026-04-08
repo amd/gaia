@@ -152,6 +152,8 @@ export interface StreamCallbacks {
     onDone: (event: StreamEvent) => void;
     /** Error occurred. */
     onError: (error: Error) => void;
+    /** A new agent was created and registered — refresh the agent list. */
+    onAgentCreated?: (event: StreamEvent) => void;
 }
 
 /** Agent event types that represent activity rather than content. */
@@ -256,6 +258,9 @@ export function sendMessageStream(
                                 } else if (event.type === 'error') {
                                     log.stream.error(`Stream error event:`, event.content);
                                     callbacks.onError(new Error(event.content || 'Unknown error'));
+                                } else if (event.type === 'agent_created') {
+                                    log.stream.info(`Agent created: ${event.agent_id}`);
+                                    callbacks.onAgentCreated?.(event);
                                 } else if (AGENT_EVENT_TYPES.has(event.type)) {
                                     agentEventCount++;
                                     log.stream.debug(`Agent event: ${event.type}`, event);

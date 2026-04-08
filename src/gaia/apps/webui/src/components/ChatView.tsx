@@ -949,6 +949,13 @@ export function ChatView({ sessionId, onCreateAgent }: ChatViewProps) {
                 clearStreamContent();
                 clearAgentSteps();
             },
+            onAgentCreated: () => {
+                // A new agent was created — refresh the list so it appears
+                // in the agent selector immediately without a page reload.
+                api.listAgents()
+                    .then((data) => useChatStore.getState().setAgents(data.agents || []))
+                    .catch(() => { /* non-critical */ });
+            },
         });
 
         abortRef.current = controller;

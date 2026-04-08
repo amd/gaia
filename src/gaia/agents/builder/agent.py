@@ -165,7 +165,12 @@ class BuilderAgent(Agent):
             Returns:
                 Confirmation message with the path to the created agent.py.
             """
-            return _create_agent_impl(name, description, enable_mcp=enable_mcp)
+            result = _create_agent_impl(name, description, enable_mcp=enable_mcp)
+            if not result.startswith("Error:"):
+                # Notify the UI — triggers an immediate agent-list refresh
+                created_id = _normalize_agent_id(_split_camel_case(name.strip()))
+                self.console.print_agent_created(created_id)
+            return result
 
     def _compose_system_prompt(self) -> str:
         """Compose system prompt without the base class JSON response format.

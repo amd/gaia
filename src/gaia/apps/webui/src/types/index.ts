@@ -272,7 +272,8 @@ export type StreamEventType =
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
-    | 'mcp_status';  // MCP server connection status update
+    | 'mcp_status'   // MCP server connection status update
+    | 'agent_created'; // New agent created — triggers agent list refresh
 
 export interface StreamEvent {
     type: StreamEventType;
@@ -308,6 +309,8 @@ export interface StreamEvent {
         duration_seconds?: number;
         truncated?: boolean;
     };
+    /** Agent ID of the newly created agent (for agent_created events). */
+    agent_id?: string;
     /** Confirmation ID (for tool_confirm events). */
     confirm_id?: string;
     /** Timeout in seconds (for tool_confirm events). */

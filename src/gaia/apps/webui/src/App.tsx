@@ -71,12 +71,28 @@ function App() {
         setAgents,
     } = useChatStore();
 
-    // Fetch agents once on mount
-    useEffect(() => {
-        api.listAgents()
-            .then((data) => setAgents(data.agents || []))
-            .catch(() => { /* ignore -- agents list is non-critical */ });
+    // Load agent list on mount, then poll every 30s.
+    // Fingerprinting avoids re-renders when the list is unchanged.
+    // The SSE stream emits agent_created events for immediate updates;
+    // polling is a safety net for manually created / dropped agents.
+    const lastAgentFingerprintRef = useRef<string>('');
+    const loadAgents = useCallback(async () => {
+        try {
+            const data = await api.listAgents();
+            const agents = data.agents || [];
+            const fp = agents.map((a) => a.id).sort().join(',');
+            if (fp !== lastAgentFingerprintRef.current) {
+                lastAgentFingerprintRef.current = fp;
+                setAgents(agents);
+            }
+        } catch { /* ignore -- agents list is non-critical */ }
     }, [setAgents]);
+
+    useEffect(() => {
+        loadAgents();
+        const interval = setInterval(loadAgents, 30_000);
+        return () => clearInterval(interval);
+    }, [loadAgents]);
 
     // Mobile gateway state
     const [showMobileAccess, setShowMobileAccess] = useState(false);
