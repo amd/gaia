@@ -50,6 +50,7 @@ from gaia.pipeline.state import (
 from gaia.quality.scorer import QualityScorer
 from gaia.utils.id_generator import generate_loop_id
 from gaia.utils.logging import get_logger, setup_logging
+from gaia.utils.component_loader import ComponentLoader
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -170,6 +171,7 @@ class PipelineEngine:
         self._hook_registry: Optional[HookRegistry] = None
         self._hook_executor: Optional[HookExecutor] = None
         self._routing_engine: Optional[RoutingEngine] = None
+        self._component_loader: Optional[ComponentLoader] = None
 
         # State
         self._context: Optional[PipelineContext] = None
@@ -227,6 +229,10 @@ class PipelineEngine:
 
         # Initialize quality scorer
         self._quality_scorer = QualityScorer()
+
+        # Initialize component loader for Component Framework
+        self._component_loader = ComponentLoader()
+        logger.info("ComponentLoader initialized")
 
         # Resolve agents_dir — use config, then constructor arg, then default path
         agents_dir = self._config.get("agents_dir", self._agents_dir)
