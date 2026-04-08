@@ -126,7 +126,22 @@ async def upload_by_path(
         try:
             if file_size <= LARGE_FILE_THRESHOLD:
                 # Small file: index synchronously
-                chunk_count = await _index_document(temp_path)
+                try:
+                    chunk_count = await _index_document(temp_path)
+                except Exception as e:
+                    logger.error("Indexing failed for %s: %s", safe_filepath.name, e)
+                    doc = db.add_document(
+                        filename=safe_filepath.name,
+                        filepath=str(safe_filepath),
+                        file_hash=file_hash,
+                        file_size=file_size,
+                        chunk_count=0,
+                        file_mtime=file_mtime,
+                    )
+                    db.update_document_status(doc["id"], "failed")
+                    doc["indexing_status"] = "failed"
+                    return doc_to_response(doc)
+
                 doc = db.add_document(
                     filename=safe_filepath.name,
                     filepath=str(safe_filepath),
@@ -164,14 +179,21 @@ async def upload_by_path(
                     )
                     chunk_count = await _index_document(temp_file)
                     if doc_id in indexing_tasks:
-                        db.update_document_status(
-                            doc_id, "complete", chunk_count=chunk_count
-                        )
-                        logger.info(
-                            "Background indexing complete for %s: %d chunks",
-                            original_name,
-                            chunk_count,
-                        )
+                        if chunk_count == 0:
+                            db.update_document_status(doc_id, "failed", chunk_count=0)
+                            logger.warning(
+                                "Background indexing returned 0 chunks for %s",
+                                original_name,
+                            )
+                        else:
+                            db.update_document_status(
+                                doc_id, "complete", chunk_count=chunk_count
+                            )
+                            logger.info(
+                                "Background indexing complete for %s: %d chunks",
+                                original_name,
+                                chunk_count,
+                            )
                 except asyncio.CancelledError:
                     db.update_document_status(doc_id, "cancelled")
                     logger.info("Background indexing cancelled for %s", original_name)
