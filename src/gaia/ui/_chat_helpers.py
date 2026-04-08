@@ -1159,14 +1159,17 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         # Clean LLM output artifacts before DB storage.
         # Apply all canonical patterns so stored content is always clean
         # regardless of which streaming path was taken.
-        # Order matters: strip embedded JSON blobs BEFORE _clean_answer_json so
-        # that stray closing braces from tool/RAG JSON don't confuse the answer extractor.
+        # Order matters: _clean_answer_json MUST run before _THOUGHT_JSON_SUB_RE.
+        # The base agent asks for {"thought":..., "answer":...} JSON; if that JSON
+        # leaks into full_response (e.g. streaming buffer released early), the
+        # thought-stripper would consume the entire blob including the answer,
+        # leaving an empty string.  Extracting the answer first prevents that.
         if full_response:
             full_response = _TOOL_CALL_JSON_SUB_RE.sub("", full_response)
+            # Extract answer from {"thought":..., "answer":...} before thought stripping.
+            full_response = _clean_answer_json(full_response)
             full_response = _THOUGHT_JSON_SUB_RE.sub("", full_response)
             full_response = _RAG_RESULT_JSON_SUB_RE.sub("", full_response)
-            # _clean_answer_json handles pure {"answer": "..."} responses (whole string).
-            full_response = _clean_answer_json(full_response)
             # _ANSWER_JSON_SUB_RE handles mixed content where {"answer": "..."} is
             # embedded after plain text — strips the duplicate JSON wrapper.
             full_response = _ANSWER_JSON_SUB_RE.sub("", full_response)
