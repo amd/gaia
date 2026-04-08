@@ -6,7 +6,7 @@ description: Complete design for MD-frontmatter agent format, explicit tool invo
 # Agent Ecosystem Design Specification
 
 **Version:** 1.0.0
-**Status:** Design — Awaiting Engineering Review
+**Status:** Partially Implemented — Phase 5 delivered Python-class stages; MD-format registry loading and config/agents/ MD files remain as Phase 2 work. See Section 2.2 revision below.
 **Date:** 2026-04-07
 **Branch:** `feature/pipeline-orchestration-v1`
 **Author:** planning-analysis-strategist (Dr. Sarah Kim)
@@ -42,13 +42,21 @@ The new `.md` agent format is designed as a strict superset of PR #720's `AgentM
 
 ### 2.2 What Is Missing
 
-1. **Prompt bodies do not exist.** Every `config/agents/*.yaml` file contains `system_prompt: prompts/some-file.md` pointing to a file that has not been written. The `AgentDefinition.system_prompt` field is therefore always an empty string after load.
+1. **Prompt bodies do not exist.** Every `config/agents/*.yaml` file contains `system_prompt: prompts/some-file.md` pointing to a file that has not been written. The `AgentDefinition.system_prompt` field is therefore always an empty string after load. **[PARTIALLY IMPLEMENTED in Phase 5 — `57ee63d`]** `src/gaia/utils/frontmatter_parser.py` now provides full MD-frontmatter parsing; the config-file body-as-prompt pattern infrastructure is in place. However, `registry.py` has not been wired to call `_load_md_agent()`, so existing YAML agents still resolve to empty system prompts.
 
-2. **No formal tool invocation syntax.** `master-ecosystem-creator.md` shows inline `mcp__sequential-thinking__sequentialthinking "..."` calls inside prose. `domain-analyzer.md` uses YAML `step_N:` blocks inside the frontmatter. There is no agreed-upon syntax for embedding tool invocations in the Markdown body of a prompt.
+2. **Formal tool invocation syntax — DELIVERED (Phase 5).** The `tool-call` fenced block syntax is now formally specified in `docs/guides/explicit-tool-calling.mdx` (commit `e952716`) and demonstrated in `component-framework/templates/agent-definition.md`. The syntax covers basic CALL, MCP CALL, CALL with prompt, and conditional IF/END IF blocks. No runtime parser exists yet (LLM-evaluated in Phase 1 scope); machine-parseable evaluation remains Phase 2 work as specified in Section 4.4 Scope Boundary.
 
-3. **No Workflow Modeler, Loom Builder, or Ecosystem Builder agents.** Stage 1 (Domain Analyzer) exists. Stages 2, 3, and 4 do not.
+3. **Pipeline stages — PARTIALLY DELIVERED (Phase 5) with architectural deviation.** Phase 5 delivered Python-class implementations of Stages 1–4 plus a GapDetector (Stage 4b) and PipelineExecutor (Stage 5):
+   - Stage 1: `src/gaia/pipeline/stages/domain_analyzer.py` (`DomainAnalyzer(Agent)`) [IMPLEMENTED — `8d6ffdd`]
+   - Stage 2: `src/gaia/pipeline/stages/workflow_modeler.py` (`WorkflowModeler(Agent)`) [IMPLEMENTED — `a32187c`]
+   - Stage 3: `src/gaia/pipeline/stages/loom_builder.py` (`LoomBuilder(Agent)`) [IMPLEMENTED — `8dd22c1`]
+   - Stage 4a: `src/gaia/pipeline/stages/gap_detector.py` (`GapDetector(Agent)`) [IMPLEMENTED — `fa3ef98`]
+   - Stage 4b: `src/gaia/pipeline/stages/pipeline_executor.py` (`PipelineExecutor(Agent)`) [IMPLEMENTED — `0c5f294`]
+   - Coordinator: `src/gaia/pipeline/orchestrator.py` (`PipelineOrchestrator(Agent)`) [IMPLEMENTED — `fa3ef98`]
 
-4. **The registry cannot load `.md` files.** `_load_all_agents()` globs only for `*.yaml` and `*.yml`. No frontmatter-aware Markdown parser exists in the registry.
+   **Architectural deviation:** This spec anticipated MD-format agent config files in `config/agents/` (e.g., `workflow-modeler.md`). Phase 5 built Python subclasses of `Agent` instead. The MD-format "Ecosystem Builder" (`config/agents/ecosystem-builder.md`) — Stage 4 as originally designed — has not been built. The `master-ecosystem-creator.md` file serves a related but distinct role (Claude Code subagent for on-demand spawning). The MD-format pipeline described in Sections 5.3–5.5 remains as Phase 2 work for the registry-loadable agent definition system.
+
+4. **Frontmatter parser delivered; registry MD loading still pending.** Phase 5 delivered `src/gaia/utils/frontmatter_parser.py` (410 LOC, commit `57ee63d`) — a complete frontmatter-aware Markdown parser with 493 unit tests. The `ComponentLoader` (`src/gaia/utils/component_loader.py`) uses it for template loading. However, `src/gaia/agents/registry.py` has NOT been updated to call `_load_md_agent()`. The `senior-dev-work-order.md` Task 2 (add `_load_md_agent()` to registry) remains unexecuted. Status: parser infrastructure delivered; registry integration pending. **[INFRASTRUCTURE IMPLEMENTED in Phase 5 — `57ee63d`; REGISTRY WIRING PENDING]**
 
 5. **Capability vocabulary is not standardized.** Open Item 4 from the PR #720 analysis: the 18 YAML files use freeform capability strings with no validation against `src/gaia/core/capabilities.py`.
 
@@ -843,6 +851,8 @@ The four-stage pipeline transforms a free-text task description into an executab
 ```
 
 Each stage produces a named artifact file. Artifact files are the contract between stages. A stage may consume any artifact from any previous stage as long as it is available.
+
+> **Implementation Status — 2026-04-08:** Phase 5 delivered Python-class implementations of all five pipeline stages (DomainAnalyzer, WorkflowModeler, LoomBuilder, GapDetector, PipelineExecutor) as `Agent` subclasses in `src/gaia/pipeline/stages/`. The MD-format config-file agents described in Sections 5.3–5.5 (`config/agents/workflow-modeler.md`, etc.) remain as planned artifacts for the registry-loadable agent system (Phase 2). The `FrontmatterParser` required for registry loading exists (`src/gaia/utils/frontmatter_parser.py`); the `_load_md_agent()` registry integration does not. Quality Gate 7 passed 13/13 using the Python-class implementations.
 
 ### 5.2 Stage 1: Domain Analyzer
 

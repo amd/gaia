@@ -854,3 +854,15 @@ verification checklist in the action plan.]
 *Pipeline iteration 1 of 5 agents*
 *Milestone: 1 — Foundation*
 *Next milestone owner: quality-reviewer (verification of Milestone 1 deliverables)*
+
+---
+
+## Superseded by Phase 5 (appended 2026-04-08)
+
+The following P0 tasks from this work order are now superseded by Phase 5 implementation:
+
+- **Task 3: `_load_md_agent()`** — Superseded. `src/gaia/utils/frontmatter_parser.py` provides equivalent and more complete frontmatter parsing. New work: integrate `frontmatter_parser.py` into `registry.py`'s agent loading path instead of writing a new method.
+- **Task 2: `_build_agent_definition()` helper** — Superseded. `ComponentLoader` in `src/gaia/utils/component_loader.py` handles component definition construction.
+- **Task 7: Template library creation** — Superseded. `component-framework/` (47 files) IS the template library. New work: write registry metadata `.md` files for the 5 new Phase 5 stage agents (DomainAnalyzer, WorkflowModeler, LoomBuilder, PipelineExecutor, GapDetector) using the new MD-frontmatter format spec.
+
+**Remaining active P0 tasks:** Task 1 (spec edits), Task 5 (senior-developer.md migration proof-of-concept), Task 6 (unit tests for frontmatter_parser integration with registry).

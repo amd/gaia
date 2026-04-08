@@ -23,16 +23,16 @@ The matrix is organized by system category rather than by commit order. Each ent
 
 | Metric | Value |
 |---|---|
-| Files changed | 890 |
-| Lines inserted | 266,715 |
+| Files changed | 970 |
+| Lines inserted | 300,282 |
 | Lines deleted | 13,447 |
-| Net lines added | 253,268 |
-| Branch-specific commits | 58 |
+| Net lines added | 286,835 |
+| Branch-specific commits | 71 |
 | Oldest commit date | 2026-03-16 |
-| Most recent commit date | 2026-04-07 |
-| Delivery phases represented | P1, P2, P3-S1, P3-S2, P3-S3, P3-S4, P4-W1, P4-W2, P4-W3, BAIBEL, Session |
+| Most recent commit date | 2026-04-08 |
+| Delivery phases represented | P1, P2, P3-S1, P3-S2, P3-S3, P3-S4, P4-W1, P4-W2, P4-W3, BAIBEL, P5, Session |
 
-Note: The planning strategist summary cited 30 branch-specific commits. A full `git log main..HEAD --no-merges` enumeration on 2026-04-07 produces 58 commits. The higher count is used throughout this document as the accurate figure. The discrepancy likely reflects the strategist counting only pipeline-scoped commits and excluding Agent UI, CI/CD, and pre-existing main-branch backports.
+Note: The planning strategist summary cited 30 branch-specific commits. A full `git log main..HEAD --no-merges` enumeration on 2026-04-07 produced 58 commits; updated enumeration on 2026-04-08 after Phase 5 pull produces 71 commits. The 71-commit figure is used throughout this document as the accurate figure. The original discrepancy reflected the strategist counting only pipeline-scoped commits and excluding Agent UI, CI/CD, and pre-existing main-branch backports.
 
 ---
 
@@ -78,6 +78,7 @@ The change matrix in Section 3 uses the following column schema. All reviewers s
   - [3.10 Documentation and Specifications](#310-documentation-and-specifications--docs)
   - [3.11 Testing Infrastructure](#311-testing-infrastructure--tests)
   - [3.12 Build, CI/CD, and Packaging](#312-build-cicd-and-packaging--github-util-pyprojecttoml)
+  - [3.13 Phase 5 — Autonomous Agent Ecosystem](#313-phase-5--autonomous-agent-ecosystem--srcgaiapipelinestages-srcgaiautilscomponent-framework)
 - [Section 4 — Cross-Cutting Concerns](#section-4--cross-cutting-concerns)
   - [4.1 Quality Gate Pattern (QGP)](#41-quality-gate-pattern-qgp)
   - [4.2 State Propagation Chain (SPC)](#42-state-propagation-chain-spc)
@@ -111,7 +112,9 @@ The `feature/pipeline-orchestration-v1` branch was initiated to deliver a self-c
 
 The scope expanded substantially over the development period to encompass six distinct programs of work: the core pipeline engine, the quality gate system, a parallel conversation-compaction framework (BAIBEL, Phases 0–3 complete), an Enterprise Infrastructure Program (Phase 3: four sprints of modular architecture, DI+performance, caching+config, and observability+API), a Production Hardening Program (Phase 4: three weeks of health monitoring, resilience patterns, and data protection+performance profiling), and ongoing Agent UI feature delivery. These programs ran concurrently on the same branch. The result is a branch that delivers both a new top-level capability and a significant restructuring of GAIA's internal infrastructure.
 
-The branch spans 890 changed files, 266,715 inserted lines, 13,447 deleted lines, and 58 commits across a 22-day window from 2026-03-16 to 2026-04-07.
+The branch spans 970 changed files, 300,282 inserted lines, 13,447 deleted lines, and 71 commits across a 23-day window from 2026-03-16 to 2026-04-08. The Phase 5 program (9 commits, ~33,567 net lines) was added after the initial matrix publication.
+
+A seventh concurrent program — Phase 5: Autonomous Agent Ecosystem Creation — was added after the initial branch-change-matrix publication. Phase 5 delivers a five-stage self-building pipeline (`DomainAnalyzer` → `WorkflowModeler` → `LoomBuilder` → `GapDetector` → `PipelineExecutor`) with automatic agent spawning via `GapDetector` and integration of the Clear Thought MCP for sequential reasoning at each stage. Phase 5 passed Quality Gate 7 (13/13 criteria, 100%) and introduced the `component-framework/` meta-template library (24+ templates across 6 categories) and `ComponentLoader` utility. It is documented in `docs/spec/phase5_multi_stage_pipeline.md` and guided by `docs/reference/phase5-implementation-plan.md`.
 
 ---
 
@@ -129,7 +132,7 @@ Key design properties:
 - The `DefectRouter` maps specific defect types to remediation agents using a configurable routing table rather than hardcoded logic.
 - All quality scoring, audit logging, defect tracking, and metrics storage run in-process with no external I/O required, preserving GAIA's local-first design principle.
 
-The engine is implemented across 17 files in `src/gaia/pipeline/`. It is exposed via a CLI stub (`gaia pipeline`) and is documented in `docs/spec/pipeline-engine.mdx`.
+The engine is implemented across 17 files in `src/gaia/pipeline/`. It is exposed via a CLI stub (`gaia pipeline`) and is documented in `docs/spec/pipeline-engine.mdx`. The Phase 5 extension adds a `PipelineOrchestrator` (`src/gaia/pipeline/orchestrator.py`) that wraps the four-stage domain-to-ecosystem pipeline with autonomous gap detection and agent spawning, and integrates the `ComponentLoader` into the `PipelineEngine` initialization path (`src/gaia/pipeline/engine.py`).
 
 ---
 
@@ -182,25 +185,40 @@ The following previously-existing GAIA modules were modified on this branch. The
 
 The following items were identified as incomplete or deferred at the time of the most recent commit (2026-04-07). They represent work that was planned within the scope of this branch but was not completed before the branch was prepared for review. Each item should be evaluated by the merge review team to determine whether it must be completed before merge, can be tracked as a post-merge issue, or has been intentionally deferred.
 
-1. **AgentOrchestrator not built — RoutingAgent retains hardcoded CodeAgent default.** The `RoutingAgent` (`src/gaia/agents/routing/agent.py`) was modified to accept capability-based routing requests, but the `AgentOrchestrator` that was intended to provide dynamic agent selection has not been implemented. The routing agent currently falls back to `CodeAgent` when no explicit agent is matched. Any caller that relies on capability-based dispatch at runtime will receive incorrect behavior until this is resolved. Status: open, no mitigation in place.
+1. **AgentOrchestrator not built (routing level) — RoutingAgent retains hardcoded CodeAgent default.** The `PipelineOrchestrator` (`src/gaia/pipeline/orchestrator.py`, Phase 5, commit `fa3ef98`) delivers five-stage orchestration with gap detection and is architecturally more capable than the originally-scoped AgentOrchestrator. However, the RoutingAgent's hardcoded CodeAgent fallback has not been removed. The two issues are now decoupled: pipeline-level orchestration is resolved; routing-agent-level dynamic selection remains open. Status: routing default open; pipeline orchestration resolved.
 
-2. **BAIBEL Phase 4 (adaptive learning) not started.** The BAIBEL-GAIA Integration Master Specification (`docs/spec/baibel-gaia-integration-master.md`) defines a five-phase roadmap (Phases 0–4). Phases 0, 1, 2, and 3 (Architectural Modernization — 4 sprints: Modular Architecture, DI+Performance, Caching+Config, Observability+API) are all complete on this branch, each passing their respective Quality Gates (QG4, QG4, QG4, QG5). BAIBEL Phase 4 (Adaptive Learning) has not been started. The BAIBEL workstream on this branch therefore represents a substantially integrated framework, with only the adaptive learning layer deferred. Status: Phase 4 deferred to future branch.
+2. **BAIBEL Phase 4 (adaptive learning) not started.** The BAIBEL-GAIA Integration Master Specification (`docs/spec/baibel-gaia-integration-master.md`) defines a five-phase roadmap (Phases 0–4). Phases 0, 1, 2, and 3 (Architectural Modernization — 4 sprints: Modular Architecture, DI+Performance, Caching+Config, Observability+API) are all complete on this branch, each passing their respective Quality Gates (QG4, QG4, QG4, QG5). BAIBEL Phase 4 (Adaptive Learning) has not been started. The BAIBEL workstream on this branch therefore represents a substantially integrated framework, with only the adaptive learning layer deferred. Status: Phase 4 deferred to future branch. (Phase 5 — 2026-04-08 — confirmed this remains deferred; no Phase 5 commit touches BAIBEL Phase 4.)
 
-3. **Security Boundary incomplete — resilience primitives not wired into pipeline engine call sites.** The resilience primitives (`CircuitBreaker`, `Bulkhead`, `Retry` in `src/gaia/resilience/`) and the data protection components (`DataProtection`, `WorkspacePolicy` in `src/gaia/security/`) were delivered as standalone modules with full test coverage. However, integration wiring from these primitives into the pipeline engine's agent call paths (`engine.py`, `loop_manager.py`, `routing_engine.py`) has not been completed. A pipeline run that encounters a failing agent will not automatically benefit from circuit breaker protection unless the caller explicitly wraps the call. Status: open, medium risk.
+3. **Security Boundary incomplete — resilience primitives not wired into pipeline engine call sites.** The resilience primitives (`CircuitBreaker`, `Bulkhead`, `Retry` in `src/gaia/resilience/`) and the data protection components (`DataProtection`, `WorkspacePolicy` in `src/gaia/security/`) were delivered as standalone modules with full test coverage. However, integration wiring from these primitives into the pipeline engine's agent call paths (`engine.py`, `loop_manager.py`, `routing_engine.py`) has not been completed. A pipeline run that encounters a failing agent will not automatically benefit from circuit breaker protection unless the caller explicitly wraps the call. Status: open, medium risk. (Phase 5 — 2026-04-08 — confirmed: ComponentLoader wired into engine.py in commit `8d6ffdd`; resilience primitives remain unwired. Item still open.)
 
-4. **Capability vocabulary not standardized across agent YAML configuration files.** The `AgentCapabilities` system (`src/gaia/core/capabilities.py`) defines a formal vocabulary for describing what an agent can do. The `AgentRegistry` uses this vocabulary to match pipeline routing requests to agents. However, the 17+ YAML agent configuration files in the `config/agents/` directory have not been uniformly updated to use this vocabulary. Some use legacy field names, some omit capability declarations entirely. This means the registry cannot reliably discover all available agents at runtime. Status: open, blocks full pipeline routing functionality.
+4. **Capability vocabulary not standardized across existing agent YAML configuration files.** The existing 18 YAML files in `config/agents/` remain unchanged (no Phase 5 commit touched them). Phase 5 introduced a parallel capability vocabulary for the new `.md`-format agent ecosystem via the `component-framework` meta-templates and `ComponentLoader`. This creates two divergent capability systems: the legacy YAML vocabulary and the new `.md` frontmatter vocabulary. Full vocabulary unification requires: (a) updating the 18 YAML files to the standardized vocabulary OR (b) migrating them to the new `.md` format. Status: open, now involves vocabulary bifurcation risk. The 5 new Python stage agents (DomainAnalyzer, WorkflowModeler, LoomBuilder, PipelineExecutor, GapDetector) also lack registry metadata files entirely, meaning the AgentRegistry cannot discover or route to them at runtime using the standard routing infrastructure. Status: open, HIGH risk (elevated from MEDIUM).
 
-5. **Quality reviewer final coherence check (Task 6) interrupted — needs completion.** A structured quality review task was in progress on the branch documentation when work was interrupted. The specific task (referenced internally as Task 6) was a final coherence check across the specification documents, checking that code examples match implementation and that cross-document references are consistent. This check was not completed. Some specification documents may contain inconsistencies with the implemented code. Status: open, documentation risk.
+5. **Quality reviewer final coherence check not completed — scope expanded by Phase 5.** The original Task 6 coherence check (verifying cross-spec consistency and code-example accuracy for pre-Phase-5 specs) remains incomplete. Phase 5 added three new spec documents (`docs/spec/phase5_multi_stage_pipeline.md`, `docs/spec/component-framework-design-spec.md`, `docs/spec/component-framework-implementation-plan.md`) that also require coherence review. Of particular concern: the design spec (`agent-ecosystem-design-spec.md`) Section 2.2 "What Is Missing" still lists items 3 and 4 as missing (Workflow Modeler, Loom Builder, Ecosystem Builder; MD registry loading) even though Phase 5 built the Python stage agents. Status: open, scope expanded.
 
 6. **Additional items identified in `future-where-to-resume-left-off.md`.** The root-level document `/c/Users/amikinka/gaia/future-where-to-resume-left-off.md` serves as the program handoff document and contains the authoritative list of remaining work. As of version 19.0 of that document (dated 2026-04-06), the program is declared 100% complete for the BAIBEL-internal phase tracking. However, the five items above were identified independently from repository inspection and are not reflected as open in that document. Reviewers should treat the document as a historical record of what was completed, not as a guarantee that all integration work is merge-ready.
 
-7. **YAML frontmatter missing from six `docs/spec/*.md` files.** Six specification files were committed to `docs/spec/` without YAML frontmatter: `agent-ui-eval-kpi-reference.md`, `agent-ui-eval-kpis.md`, `gaia-loom-architecture.md`, `nexus-gaia-native-integration-spec.md`, `pipeline-metrics-competitive-analysis.md`, and `pipeline-metrics-kpi-reference.md`. The Mintlify documentation framework requires YAML frontmatter (at minimum a `title` field) for `.md` files to render correctly in the documentation site. Without frontmatter, these files will either fail to render or be rendered with incorrect titles. Status: open, documentation build risk.
+7. **YAML frontmatter missing from nine `docs/spec/*.md` files.** Nine specification files were committed to `docs/spec/` without YAML frontmatter. The Mintlify documentation framework requires YAML frontmatter (at minimum a `title` field) for `.md` files to render correctly in the documentation site. Without frontmatter, these files will either fail to render or be rendered with incorrect titles. Status: open, documentation build risk.
+
+   Files requiring frontmatter:
+   - `agent-ui-eval-kpi-reference.md`
+   - `agent-ui-eval-kpis.md`
+   - `gaia-loom-architecture.md`
+   - `nexus-gaia-native-integration-spec.md`
+   - `pipeline-metrics-competitive-analysis.md`
+   - `pipeline-metrics-kpi-reference.md`
+   - `phase5_multi_stage_pipeline.md` [NEWLY IDENTIFIED — Phase 5]
+   - `component-framework-design-spec.md` [NEWLY IDENTIFIED — Phase 5]
+   - `component-framework-implementation-plan.md` [NEWLY IDENTIFIED — Phase 5]
+
+   (Phase 5 — 2026-04-08 — confirmed: original 6 files unchanged. Phase 5 added 3 more files without frontmatter, bringing total to 9.)
+
+8. **Phase 5 stage agents lack registry metadata config files.** `DomainAnalyzer`, `WorkflowModeler`, `LoomBuilder`, `PipelineExecutor`, `GapDetector` exist as Python classes in `src/gaia/pipeline/stages/` but have no corresponding `config/agents/*.yaml` or `config/agents/*.md` registry metadata files. The `AgentRegistry` cannot discover or route to these agents at runtime using the standard routing infrastructure. The `PipelineOrchestrator` invokes them directly as class instances, bypassing the registry entirely. Status: open, blocks Phase 5 pipeline from using the standard routing infrastructure. Also note: `GapDetector` has an undocumented runtime dependency on the Claude Code API environment — if `PipelineOrchestrator` is invoked outside a Claude Code session, the auto-spawn trigger will fail silently or with an unhandled exception. This constraint is not documented in `docs/guides/auto-spawn-pipeline.mdx`. Recommend adding a prerequisite note before merge.
 
 ---
 
 ## Section 3 — Change Matrix by Category
 
-The twelve sub-tables below cover every material source-code change on this branch, organized by system category. Each row describes a module or logical file group within that category. Column definitions are given in Section 1.
+The thirteen sub-tables below cover every material source-code change on this branch, organized by system category. Each row describes a module or logical file group within that category. Column definitions are given in Section 1.
 
 Abbreviations used in the **Phase** column are defined in Section 7.1. Abbreviations used in the **Test Coverage** column: `UNIT` = unit tests present; `INTEGRATION` = integration tests present; `BOTH` = unit and integration; `SMOKE` = smoke tests only; `NONE` = no automated tests. Abbreviations used in the **Docs** column: `YES` = guide or SDK page written; `PARTIAL` = spec file exists but no user-facing guide; `NO` = no documentation.
 
@@ -507,6 +525,43 @@ Total branch test count: 1,245+ tests at a reported 99.9% pass rate (one pre-exi
 
 ---
 
+### 3.13 Phase 5 — Autonomous Agent Ecosystem — `src/gaia/pipeline/stages/`, `src/gaia/utils/`, `component-framework/`
+
+9 commits (`57ee63d` → `fa3ef98`), all new on this branch. Phase 5 delivers a self-building agent ecosystem: a five-stage pipeline that transforms a task description into a runnable set of agents. All 13 Quality Gate 7 criteria passed.
+
+| Module / Component | Change Type | Files | Lines Added | Phase | Commit | Depends On | Consumed By | Test Coverage | Docs | Risk |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `utils/frontmatter_parser.py` | NEW | 1 | 410 | P5 | `57ee63d` | `yaml` (optional) | `utils/component_loader.py`, `agents/registry.py` (future) | UNIT (493 tests in `test_frontmatter_parser.py`) | PARTIAL | LOW |
+| `utils/component_loader.py` | NEW | 1 | 474 | P5 | `57ee63d` | `utils/frontmatter_parser.py`, `component-framework/` | `pipeline/engine.py`, `agents/base/agent.py`, all stage agents | UNIT (860 tests in `test_component_loader.py`) | PARTIAL | LOW |
+| `utils/__init__.py` | EXTENDED | 1 | 4 | P5 | `57ee63d` | — | All `utils/` consumers | SMOKE | YES | LOW |
+| `pipeline/stages/__init__.py` | NEW | 1 | 23 | P5 | `fa3ef98` | All stage classes | `pipeline/orchestrator.py` | SMOKE | PARTIAL | LOW |
+| `pipeline/stages/domain_analyzer.py` | NEW | 1 | 365 | P5 | `8d6ffdd` | `agents/base/agent.py`, `agents/base/tools.py`, `utils/component_loader.py` | `pipeline/orchestrator.py` | BOTH (QG7: DOMAIN-001/002/003 PASS) | PARTIAL | LOW |
+| `pipeline/stages/workflow_modeler.py` | NEW | 1 | 387 | P5 | `a32187c` | `agents/base/agent.py`, `agents/base/tools.py`, `utils/component_loader.py` | `pipeline/orchestrator.py` | BOTH (QG7: GENERATION-001/002 PASS) | PARTIAL | LOW |
+| `pipeline/stages/loom_builder.py` | NEW | 1 | 426 | P5 | `8dd22c1` | `agents/base/agent.py`, `agents/base/tools.py`, `utils/component_loader.py` | `pipeline/orchestrator.py` | BOTH (QG7: GENERATION-003, ORCHESTRATION-001 PASS) | PARTIAL | LOW |
+| `pipeline/stages/pipeline_executor.py` | NEW | 1 | 488 | P5 | `0c5f294` | `agents/base/agent.py`, `agents/base/tools.py`, `utils/component_loader.py` | `pipeline/orchestrator.py` | BOTH (QG7: ORCHESTRATION-002/003 PASS) | PARTIAL | LOW |
+| `pipeline/stages/gap_detector.py` | NEW | 1 | 419 | P5 | `fa3ef98` | `agents/base/agent.py`, `agents/base/tools.py` | `pipeline/orchestrator.py` | BOTH (QG7: INTEGRATION-001/002 PASS) | PARTIAL | MEDIUM |
+| `pipeline/orchestrator.py` | NEW | 1 | 518 | P5 | `fa3ef98` | All five stage classes, `agents/base/agent.py`, `agents/base/tools.py` | CLI (future), demo scripts | BOTH (QG7: THREAD-007 PASS — 100 threads) | YES (`docs/guides/auto-spawn-pipeline.mdx`) | MEDIUM |
+| `agents/base/agent.py` | EXTENDED | 1 | 254 | P5 | `520bea3` | `utils/component_loader.py` | All agent subclasses (blast radius: every agent in GAIA) | UNIT | PARTIAL | MEDIUM |
+| `pipeline/engine.py` | EXTENDED | 1 | 6 | P5 | `8d6ffdd` | `utils/component_loader.py` | All pipeline engine consumers | SMOKE | PARTIAL | LOW |
+| `component-framework/` (templates, commands, checklists, documents, knowledge, memory, tasks, personas, workflows) | NEW | 74 | ~8,000 | P5 | `57ee63d`, `e952716` | — | `utils/component_loader.py` (loads these as templates) | UNIT (component_loader tests cover load/render paths) | PARTIAL | LOW |
+| `agents/master-ecosystem-creator.md` | NEW | 1 | 439 | P5 | `e952716` | `component-framework/` templates | `pipeline/orchestrator.py` (invoked on gap detect) | NONE | YES | MEDIUM |
+| `docs/guides/auto-spawn-pipeline.mdx` | NEW | 1 | 353 | P5 | `fa3ef98` | — | End users | N/A | YES | LOW |
+| `docs/guides/explicit-tool-calling.mdx` | NEW | 1 | 336 | P5 | `e952716` | — | End users, prompt authors | N/A | YES | LOW |
+| `docs/spec/phase5_multi_stage_pipeline.md` | NEW | 1 | 1,719 | P5 | `8d6ffdd` | — | Architecture reviewers | N/A | YES (is the doc) | LOW |
+| `docs/spec/component-framework-design-spec.md` | NEW | 1 | 1,447 | P5 | `8d6ffdd` | — | Engineering leads | N/A | YES (is the doc) | LOW |
+| `docs/reference/phase5-implementation-plan.md` | NEW | 1 | 767 | P5 | `8d6ffdd` | — | Program managers | N/A | YES (is the doc) | LOW |
+| `docs/reference/quality-gate-7-report.md` | NEW | 1 | 356 | P5 | `f57e5ba` | — | Merge reviewers, QA | N/A | YES (is the doc) | LOW |
+| `tests/e2e/test_quality_gate_7.py` | NEW | 1 | 1,184 | P5 | `f57e5ba` | All stage classes, orchestrator | QG7 validation | BOTH | YES | LOW |
+| `tests/e2e/test_full_pipeline.py` | NEW | 1 | 479 | P5 | `e952716` | All stage classes | End-to-end validation | BOTH | YES | LOW |
+| `tests/unit/utils/test_component_loader.py` | NEW | 1 | 860 | P5 | `57ee63d` | `utils/component_loader.py` | CI test suite | UNIT | YES | LOW |
+| `tests/unit/utils/test_frontmatter_parser.py` | NEW | 1 | 493 | P5 | `f57e5ba` | `utils/frontmatter_parser.py` | CI test suite | UNIT | YES | LOW |
+
+**Risk note on `agents/base/agent.py` EXTENDED:** Adding `ComponentLoader` initialization and five new tool methods to the base `Agent` class affects every agent subclass in the repository. `ComponentLoader` is initialized unconditionally in `Agent.__init__`. If `component-framework/` templates directory is absent or malformed in a deployment, this will raise at agent startup for all agents. This risk is LOW in the repository (directory is committed) but MEDIUM in fresh-clone or CI environments where the directory may not exist. Recommend confirming `ComponentLoader.__init__` handles missing directory gracefully.
+
+**Risk note on `gap_detector.py` and `pipeline/orchestrator.py`:** The `GapDetector` scans available agents and invokes `master-ecosystem-creator.md` (a Claude Code subagent, not a GAIA Python agent) when gaps are detected. This creates an external dependency on the Claude Code environment that is not present in standard GAIA deployments. If the orchestrator is invoked outside a Claude Code session, the auto-spawn trigger will fail silently or with an unhandled exception. This architectural constraint is not documented in `docs/guides/auto-spawn-pipeline.mdx`. Recommend adding a prerequisite note before merge.
+
+---
+
 ## Section 4 — Cross-Cutting Concerns
 
 Six architectural themes span multiple categories in the change matrix. Each theme represents a design decision or integration pattern that a reviewer cannot fully evaluate by looking at a single module in isolation.
@@ -773,7 +828,7 @@ Risk levels in this document are assigned using the following criteria:
 
 ### 7.1 Commit Index
 
-All 58 branch-specific commits (`git log main..HEAD --no-merges`) are listed below in reverse chronological order (most recent first). Commits are classified by the primary category they belong to and the delivery phase they represent.
+All 71 branch-specific commits (`git log main..HEAD --no-merges`) are listed below in reverse chronological order (most recent first). Commits are classified by the primary category they belong to and the delivery phase they represent.
 
 The Phase column uses the following abbreviations:
 - **P1**: Pipeline Phase 1 — core engine foundations
@@ -785,9 +840,20 @@ The Phase column uses the following abbreviations:
 - **CI**: Build, CI/CD, and packaging
 - **CROSS**: Cross-cutting or multi-category
 - **SESSION**: Session work — dataclass fixes, shadow module removal, housekeeping
+- **P5**: Phase 5 — Autonomous Agent Ecosystem Creation (DomainAnalyzer → WorkflowModeler → LoomBuilder → GapDetector → PipelineExecutor + ComponentLoader + component-framework templates)
 
 | Short SHA | Commit Title | Category | Phase |
 |---|---|---|---|
+| `fa3ef98` | feat(pipeline): add autonomous agent spawning with GapDetector | Pipeline Orchestration | P5 |
+| `f57e5ba` | test(phase5): Add Quality Gate 7 validation tests and report | Testing Infrastructure | P5 |
+| `e952716` | feat(phase5): Complete component-framework templates and tool calling docs | Documentation + Component Framework | P5 |
+| `0c5f294` | feat(pipeline): add PipelineExecutor stage for agent orchestration execution | Pipeline Orchestration | P5 |
+| `8dd22c1` | feat(pipeline): add LoomBuilder stage for agent execution graph construction | Pipeline Orchestration | P5 |
+| `a32187c` | feat(pipeline): add WorkflowModeler stage for workflow pattern selection | Pipeline Orchestration | P5 |
+| `8d6ffdd` | feat(pipeline): add DomainAnalyzer stage with component integration | Pipeline Orchestration | P5 |
+| `520bea3` | feat(agents): add component framework tools to Agent base class | Agent Infrastructure | P5 |
+| `57ee63d` | feat(component-framework): implement template system with loader utility | Component Framework | P5 |
+| `08b93eb` | docs: add agent ecosystem design spec, action plan, and senior-dev work order | Documentation | P5 |
 | `5931d85` | chore: minor fixes and updates | Cross-Cutting | CROSS |
 | `82a6d42` | docs: add Phase 4 closeout report and update roadmap | Documentation | P4-W3 |
 | `4c02e45` | feat: add Phase 4 Week 3 Data Protection + Performance Profiling | Operational Reliability | P4-W3 |
@@ -868,7 +934,7 @@ File counts below reflect changed or added source files as reported by `git diff
 | 11. Testing Infrastructure | `tests/` | 162 | New unit tests for all Phase 3 and Phase 4 modules; integration test fixes; MCP isolation fix; eval benchmark framework tests |
 | 12. Build, CI/CD, and Packaging | `.github/workflows/`, `util/lint.py`, `util/lint.ps1`, `pyproject.toml`, package.json files | 27 | OIDC publishing migration, merge queue fix, lint tooling for Windows, `gaia init` frontend build integration |
 
-**Total tracked in matrix:** 890 files (matches `git diff --stat` summary)
+**Total tracked in matrix:** 970 files (matches `git diff --stat` summary; includes Phase 5 additions)
 
 ---
 
