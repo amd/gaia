@@ -269,18 +269,18 @@ class TestCreateAgentImpl:
         assert "curly" in source
         assert "quotes" in source
 
-    def test_mcp_comments_present(self, tmp_path, monkeypatch):
+    def test_mcp_docs_link_present(self, tmp_path, monkeypatch):
+        """Non-MCP generated agent.py has an MCP docs link (not a comment block)."""
         monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
         _create_agent_impl("Mcp Agent")
         py_path = tmp_path / ".gaia" / "agents" / "mcp" / "agent.py"
         content = py_path.read_text(encoding="utf-8")
-        assert "mcp_servers.json" in content
-        assert "MCPClientMixin" in content
-        assert "MCPConfig" in content
-        assert "_mcp_manager" in content
+        assert "amd-gaia.ai/sdk/infrastructure/mcp" in content
+        # The MCP code should NOT be in the non-MCP template
+        assert "MCPClientMixin" not in content
 
     def test_mcp_imports_valid(self):
-        """MCP import paths referenced in generated comments actually exist."""
+        """MCP import paths used in the MCP-enabled template actually exist."""
         assert importlib.util.find_spec("gaia.mcp.mixin") is not None
         assert importlib.util.find_spec("gaia.mcp.client.config") is not None
         assert (
@@ -415,6 +415,143 @@ class TestCreateAgentImpl:
         py_path = tmp_path / ".gaia" / "agents" / "beta" / "agent.py"
         source = py_path.read_text(encoding="utf-8")
         assert "AGENT_NAME = 'Beta Agent'" in source
+
+
+# ---------------------------------------------------------------------------
+# MCP-enabled agent creation
+# ---------------------------------------------------------------------------
+
+
+class TestCreateAgentImplMCP:
+    def test_mcp_enabled_creates_json_file(self, tmp_path, monkeypatch):
+        """mcp_servers.json is created alongside agent.py when enable_mcp=True."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Widget Agent", enable_mcp=True)
+        mcp_path = tmp_path / ".gaia" / "agents" / "widget" / "mcp_servers.json"
+        assert mcp_path.exists()
+
+    def test_mcp_enabled_json_is_empty_skeleton(self, tmp_path, monkeypatch):
+        """mcp_servers.json contains an empty mcpServers dict."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Widget Agent", enable_mcp=True)
+        import json
+
+        mcp_path = tmp_path / ".gaia" / "agents" / "widget" / "mcp_servers.json"
+        data = json.loads(mcp_path.read_text(encoding="utf-8"))
+        assert "mcpServers" in data
+        assert data["mcpServers"] == {}
+
+    def test_mcp_enabled_agent_has_mixin_in_class(self, tmp_path, monkeypatch):
+        """Generated source has MCPClientMixin in the class declaration (Agent first)."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Widget Agent", enable_mcp=True)
+        source = (tmp_path / ".gaia" / "agents" / "widget" / "agent.py").read_text(
+            encoding="utf-8"
+        )
+        assert "class WidgetAgent(Agent, MCPClientMixin):" in source
+
+    def test_mcp_enabled_agent_has_init_with_mcp_manager(self, tmp_path, monkeypatch):
+        """Generated source has __init__ setting _mcp_manager before super().__init__()."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Widget Agent", enable_mcp=True)
+        source = (tmp_path / ".gaia" / "agents" / "widget" / "agent.py").read_text(
+            encoding="utf-8"
+        )
+        assert "self._mcp_manager = MCPClientManager(" in source
+        assert "super().__init__(**kwargs)" in source
+        # _mcp_manager must appear before super().__init__(**kwargs) in the __init__ body
+        mcp_mgr_pos = source.index("self._mcp_manager = MCPClientManager(")
+        # Find the super().__init__(**kwargs) that follows _mcp_manager (not the comment)
+        super_pos = source.index("super().__init__(**kwargs)", mcp_mgr_pos)
+        assert mcp_mgr_pos < super_pos
+
+    def test_mcp_enabled_register_tools_loads_mcp(self, tmp_path, monkeypatch):
+        """_register_tools calls self.load_mcp_servers_from_config()."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Widget Agent", enable_mcp=True)
+        source = (tmp_path / ".gaia" / "agents" / "widget" / "agent.py").read_text(
+            encoding="utf-8"
+        )
+        assert "self.load_mcp_servers_from_config()" in source
+
+    def test_mcp_enabled_imports_present(self, tmp_path, monkeypatch):
+        """All four MCP imports are present in the generated source."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Widget Agent", enable_mcp=True)
+        source = (tmp_path / ".gaia" / "agents" / "widget" / "agent.py").read_text(
+            encoding="utf-8"
+        )
+        assert "from pathlib import Path" in source
+        assert "from gaia.mcp.mixin import MCPClientMixin" in source
+        assert "from gaia.mcp.client.config import MCPConfig" in source
+        assert (
+            "from gaia.mcp.client.mcp_client_manager import MCPClientManager" in source
+        )
+
+    def test_mcp_enabled_syntax_valid(self, tmp_path, monkeypatch):
+        """Generated MCP-enabled source passes ast.parse()."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Widget Agent", enable_mcp=True)
+        source = (tmp_path / ".gaia" / "agents" / "widget" / "agent.py").read_text(
+            encoding="utf-8"
+        )
+        ast.parse(source)  # raises SyntaxError on failure
+
+    def test_mcp_enabled_importable(self, tmp_path, monkeypatch):
+        """Generated MCP-enabled agent.py can be imported (class definition only)."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Widget Agent", enable_mcp=True)
+        py_path = tmp_path / ".gaia" / "agents" / "widget" / "agent.py"
+        spec = importlib.util.spec_from_file_location("widget_mcp_test", py_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert hasattr(module, "WidgetAgent")
+
+    def test_mcp_disabled_no_json_file(self, tmp_path, monkeypatch):
+        """mcp_servers.json is NOT created when enable_mcp=False."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Widget Agent", enable_mcp=False)
+        mcp_path = tmp_path / ".gaia" / "agents" / "widget" / "mcp_servers.json"
+        assert not mcp_path.exists()
+
+    def test_mcp_disabled_no_mixin_in_class(self, tmp_path, monkeypatch):
+        """Generated source does NOT include MCPClientMixin when enable_mcp=False."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Widget Agent", enable_mcp=False)
+        source = (tmp_path / ".gaia" / "agents" / "widget" / "agent.py").read_text(
+            encoding="utf-8"
+        )
+        assert "MCPClientMixin" not in source
+        assert "class WidgetAgent(Agent):" in source
+
+    def test_mcp_disabled_has_docs_link(self, tmp_path, monkeypatch):
+        """Non-MCP template contains a 1-line MCP docs link instead of 40-line block."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Widget Agent", enable_mcp=False)
+        source = (tmp_path / ".gaia" / "agents" / "widget" / "agent.py").read_text(
+            encoding="utf-8"
+        )
+        assert "amd-gaia.ai/sdk/infrastructure/mcp" in source
+        # The verbose 40-line comment block should NOT be present
+        assert "Add MCP server support" not in source
+
+    def test_mcp_json_write_failure_cleans_up_and_returns_error(
+        self, tmp_path, monkeypatch
+    ):
+        """If mcp_servers.json write fails, directory is removed and Error: is returned."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        original_write = Path.write_text
+
+        def failing_write(self_path, *args, **kwargs):
+            if self_path.name == "mcp_servers.json":
+                raise OSError("disk full")
+            return original_write(self_path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", failing_write)
+        result = _create_agent_impl("Widget Agent", enable_mcp=True)
+        assert result.startswith("Error:")
+        target = tmp_path / ".gaia" / "agents" / "widget"
+        assert not target.exists()
 
 
 # ---------------------------------------------------------------------------

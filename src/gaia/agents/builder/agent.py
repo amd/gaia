@@ -9,6 +9,7 @@ name, then calls the ``create_agent`` tool to write a Python agent file under
 """
 
 import ast
+import json
 import os
 import re
 import shutil
@@ -151,17 +152,20 @@ class BuilderAgent(Agent):
         """Register the create_agent tool."""
 
         @tool
-        def create_agent(name: str, description: str = "") -> str:
+        def create_agent(
+            name: str, description: str = "", enable_mcp: bool = False
+        ) -> str:
             """Create a new custom agent in the user's GAIA agents directory.
 
             Args:
                 name: Human-readable agent name, e.g. "Widget Agent".
                 description: One-sentence description of what the agent does.
+                enable_mcp: If True, scaffold MCP support with a local mcp_servers.json.
 
             Returns:
                 Confirmation message with the path to the created agent.py.
             """
-            return _create_agent_impl(name, description)
+            return _create_agent_impl(name, description, enable_mcp=enable_mcp)
 
     def _compose_system_prompt(self) -> str:
         """Compose system prompt without the base class JSON response format.
@@ -198,7 +202,6 @@ class BuilderAgent(Agent):
         - Always calls ``console.print_final_answer()`` so the SSE handler
           in ``_chat_helpers.py`` captures the final answer event.
         """
-        import json
         import time
 
         start_time = time.time()
@@ -326,7 +329,9 @@ def _normalize_agent_id(name: str) -> str:
     return slug
 
 
-def _create_agent_impl(name: str, description: str = "") -> str:
+def _create_agent_impl(
+    name: str, description: str = "", enable_mcp: bool = False
+) -> str:
     """Core implementation of the create_agent tool, separated for testability."""
     from gaia.agents.builder.template import (
         TEMPLATE_INSTRUCTIONS,
@@ -384,6 +389,7 @@ def _create_agent_impl(name: str, description: str = "") -> str:
         class_name=class_name,
         starters=TEMPLATE_STARTERS,
         system_prompt=TEMPLATE_INSTRUCTIONS,
+        enable_mcp=enable_mcp,
     )
 
     # ── 5. Validate syntax before writing ────────────────────────────────────
@@ -393,9 +399,23 @@ def _create_agent_impl(name: str, description: str = "") -> str:
         logger.error("builder: Generated source has syntax error: %s", exc)
         return "Error: Generated agent source is invalid. Please try again."
 
-    # ── 6. Write agent.py — with cleanup on failure ──────────────────────────
+    # ── 6. Write files — mcp_servers.json first so cleanup covers both ────────
     target.mkdir(parents=True, exist_ok=True)
     py_path = target / "agent.py"
+
+    if enable_mcp:
+        mcp_path = target / "mcp_servers.json"
+        try:
+            mcp_path.write_text(
+                json.dumps({"mcpServers": {}}, indent=2) + "\n", encoding="utf-8"
+            )
+        except Exception as exc:
+            shutil.rmtree(target, ignore_errors=True)
+            logger.error(
+                "builder: Failed to write mcp_servers.json for %s: %s", agent_id, exc
+            )
+            return f"Error: Could not write MCP config file ({exc}). Please try again."
+
     try:
         py_path.write_text(source, encoding="utf-8")
     except Exception as exc:
@@ -415,6 +435,22 @@ def _create_agent_impl(name: str, description: str = "") -> str:
     except Exception as exc:
         logger.warning("builder: Hot-reload skipped: %s", exc)
 
+    if enable_mcp:
+        return (
+            f"Done! I've created your '{display_name}' agent at:\n\n"
+            f"  {py_path}\n\n"
+            "MCP support is wired up and ready. Edit mcp_servers.json to add your\n"
+            "servers, for example:\n\n"
+            '  {\n    "mcpServers": {\n      "time": {\n'
+            '        "command": "uvx",\n        "args": ["mcp-server-time"]\n'
+            "      }\n    }\n  }\n\n"
+            "The agent is already loaded — you'll see it in the agent selector in "
+            "the GAIA UI.\n\n"
+            "To customize it, open agent.py and:\n"
+            "  - Edit `_get_system_prompt()` to change the agent's personality\n"
+            "  - Add `@tool` functions above `self.load_mcp_servers_from_config()`\n"
+            "    in `_register_tools()` to add Python tools alongside MCP tools"
+        )
     return (
         f"Done! I've created your '{display_name}' agent at:\n\n"
         f"  {py_path}\n\n"
