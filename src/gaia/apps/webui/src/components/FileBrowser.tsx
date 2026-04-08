@@ -80,8 +80,78 @@ interface FilePreview {
     row_count: number | null;
 }
 
+/** Result of indexing and attaching files to a session. */
+interface IndexResult {
+    docIds: string[];
+    supported: string[];
+    unsupported: string[];
+    failed: number;
+    lastError: string;
+}
+
+/**
+ * Core indexing + attaching logic shared by "Index Selected" and "Ask Agent".
+ * Validates extensions, indexes supported files, and attaches them to the session.
+ */
+async function indexAndAttachFiles(
+    files: string[],
+    entries: FileEntry[],
+    sessionId: string | null,
+    updateSessionInList: (id: string, patch: Record<string, unknown>) => void,
+): Promise<IndexResult> {
+    const supported: string[] = [];
+    const unsupported: string[] = [];
+    for (const filepath of files) {
+        const ext = filepath.includes('.') ? '.' + filepath.split('.').pop()?.toLowerCase() : '';
+        if (ext && !isExtensionSupported(ext)) {
+            unsupported.push(filepath);
+        } else {
+            supported.push(filepath);
+        }
+    }
+
+    const docIds: string[] = [];
+    let failed = 0;
+    let lastError = '';
+    const folderPaths = new Set(entries.filter(e => e.type === 'folder').map(e => e.path));
+
+    for (const filepath of supported) {
+        try {
+            if (folderPaths.has(filepath)) {
+                const result = await api.indexFolder(filepath);
+                result.documents.forEach(d => { if (d.id) docIds.push(d.id); });
+            } else {
+                const doc = await api.uploadDocumentByPath(filepath);
+                if (doc?.id) docIds.push(doc.id);
+            }
+        } catch (err) {
+            failed++;
+            lastError = err instanceof Error ? err.message : 'Unknown error';
+        }
+    }
+
+    // Attach indexed documents to the active session
+    if (sessionId && docIds.length > 0) {
+        for (const docId of docIds) {
+            try {
+                await api.attachDocument(sessionId, docId);
+            } catch (attachErr) {
+                log.doc.warn(`Could not attach document to session: ${attachErr}`);
+            }
+        }
+        const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
+        const existing = freshSession?.document_ids ?? [];
+        const toAdd = docIds.filter(id => !existing.includes(id));
+        if (toAdd.length > 0) {
+            updateSessionInList(sessionId, { document_ids: [...existing, ...toAdd] });
+        }
+    }
+
+    return { docIds, supported, unsupported, failed, lastError };
+}
+
 export function FileBrowser() {
-    const { setShowFileBrowser, currentSessionId, updateSessionInList } = useChatStore();
+    const { setShowFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
 
     // Browse state
     const [currentPath, setCurrentPath] = useState<string>('');
@@ -194,27 +264,19 @@ export function FileBrowser() {
         const files = Array.from(selectedFiles);
         setIndexError(null);
 
-        // Pre-check: filter out unsupported file types and warn the user
-        const supportedFiles: string[] = [];
-        const unsupportedFiles: string[] = [];
-        for (const filepath of files) {
-            const ext = filepath.includes('.') ? '.' + filepath.split('.').pop()?.toLowerCase() : '';
-            if (ext && !isExtensionSupported(ext)) {
-                unsupportedFiles.push(filepath);
-            } else {
-                supportedFiles.push(filepath);
-            }
-        }
-
-        if (unsupportedFiles.length > 0 && supportedFiles.length === 0) {
-            // All selected files are unsupported
-            const firstFile = unsupportedFiles[0];
+        // Quick pre-check for all-unsupported case (show error immediately)
+        const hasSupported = files.some(f => {
+            const ext = f.includes('.') ? '.' + f.split('.').pop()?.toLowerCase() : '';
+            return !ext || isExtensionSupported(ext);
+        });
+        if (!hasSupported) {
+            const firstFile = files[0];
             const ext = '.' + firstFile.split('.').pop()?.toLowerCase();
             const category = getUnsupportedCategory(ext);
             setIndexError({
-                filename: unsupportedFiles.length === 1
+                filename: files.length === 1
                     ? firstFile.split(/[\\/]/).pop() || firstFile
-                    : `${unsupportedFiles.length} files`,
+                    : `${files.length} files`,
                 error: category
                     ? category.message
                     : `File type "${ext}" is not supported for indexing.`,
@@ -222,87 +284,79 @@ export function FileBrowser() {
             return;
         }
 
-        if (unsupportedFiles.length > 0) {
-            // Some files are unsupported — warn but continue with supported ones
-            log.doc.warn(`Skipping ${unsupportedFiles.length} unsupported file(s)`);
-            setIndexStatus(`Skipping ${unsupportedFiles.length} unsupported file(s)...`);
-        }
+        setIndexingFiles(new Set(files));
+        setIndexStatus(`Indexing ${files.length} file(s)...`);
 
-        if (supportedFiles.length === 0) return;
-
-        setIndexingFiles(new Set(supportedFiles));
-        setIndexStatus(`Indexing ${supportedFiles.length} file(s)...`);
-
-        let success = 0;
-        let failed = 0;
-        let lastError = '';
-        const newDocIds: string[] = [];
-        const folderPaths = new Set(entries.filter(e => e.type === 'folder').map(e => e.path));
-        for (const filepath of supportedFiles) {
-            try {
-                if (folderPaths.has(filepath)) {
-                    const result = await api.indexFolder(filepath);
-                    result.documents.forEach(d => { if (d.id) newDocIds.push(d.id); });
-                } else {
-                    const doc = await api.uploadDocumentByPath(filepath);
-                    if (doc?.id) newDocIds.push(doc.id);
-                }
-                success++;
-                setIndexStatus(`Indexed ${success}/${supportedFiles.length}...`);
-            } catch (err) {
-                failed++;
-                lastError = err instanceof Error ? err.message : 'Unknown error';
-            }
-        }
-
-        // Auto-attach successfully indexed documents to the active session
-        if (currentSessionId && newDocIds.length > 0) {
-            for (const docId of newDocIds) {
-                try {
-                    await api.attachDocument(currentSessionId, docId);
-                } catch (attachErr) {
-                    log.doc.warn(`Could not attach document to session: ${attachErr}`);
-                }
-            }
-            const freshSession = useChatStore.getState().sessions.find(s => s.id === currentSessionId);
-            const existing = freshSession?.document_ids ?? [];
-            const toAdd = newDocIds.filter(id => !existing.includes(id));
-            if (toAdd.length > 0) {
-                updateSessionInList(currentSessionId, { document_ids: [...existing, ...toAdd] });
-            }
-        }
+        const result = await indexAndAttachFiles(files, entries, currentSessionId, updateSessionInList);
 
         setIndexingFiles(new Set());
-        if (failed > 0) {
-            setIndexStatus(`Done: ${success} indexed, ${failed} failed`);
+        if (result.failed > 0) {
+            setIndexStatus(`Done: ${result.docIds.length} indexed, ${result.failed} failed`);
             setIndexError({
-                filename: `${failed} file(s)`,
-                error: lastError || 'Indexing failed for some files',
+                filename: `${result.failed} file(s)`,
+                error: result.lastError || 'Indexing failed for some files',
             });
         } else {
-            const skippedNote = unsupportedFiles.length > 0
-                ? ` (${unsupportedFiles.length} skipped — unsupported type)`
+            const skippedNote = result.unsupported.length > 0
+                ? ` (${result.unsupported.length} skipped — unsupported type)`
                 : '';
-            setIndexStatus(`Successfully indexed ${success} file(s)${skippedNote}`);
+            setIndexStatus(`Successfully indexed ${result.docIds.length} file(s)${skippedNote}`);
         }
         if (indexStatusTimerRef.current) clearTimeout(indexStatusTimerRef.current);
         indexStatusTimerRef.current = setTimeout(() => setIndexStatus(null), 5000);
         setSelectedFiles(new Set());
-    }, [selectedFiles, currentSessionId, updateSessionInList]);
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries]);
 
-    const handleAskAgent = useCallback(() => {
+    const handleAskAgent = useCallback(async () => {
         if (selectedFiles.size === 0) return;
         const files = Array.from(selectedFiles);
-        // Close file browser and send a prompt to the chat
-        setShowFileBrowser(false);
-        // Dispatch event for ChatView to pick up
-        const prompt = files.length === 1
-            ? `Analyze this file for me: ${files[0]}`
-            : `Analyze these files for me:\n${files.map(f => `- ${f}`).join('\n')}`;
-        setTimeout(() => {
-            window.dispatchEvent(new CustomEvent('gaia:send-prompt', { detail: { prompt } }));
-        }, 100);
-    }, [selectedFiles, setShowFileBrowser]);
+        setIndexError(null);
+        setIndexingFiles(new Set(files));
+        setIndexStatus(`Indexing ${files.length} file(s) for analysis...`);
+
+        try {
+            const result = await indexAndAttachFiles(files, entries, currentSessionId, updateSessionInList);
+
+            if (result.supported.length === 0) {
+                const ext = '.' + files[0].split('.').pop()?.toLowerCase();
+                const category = getUnsupportedCategory(ext);
+                setIndexError({
+                    filename: files.length === 1 ? files[0].split(/[\\/]/).pop() || files[0] : `${files.length} files`,
+                    error: category?.message ?? `File type "${ext}" is not supported for indexing.`,
+                });
+                return;
+            }
+
+            if (result.docIds.length === 0) {
+                setIndexError({
+                    filename: result.supported.length === 1
+                        ? result.supported[0].split(/[\\/]/).pop() || result.supported[0]
+                        : `${result.supported.length} files`,
+                    error: 'Failed to index selected file(s). Please try again.',
+                });
+                return;
+            }
+
+            // Build prompt with file names (not paths) and send to chat
+            const fileNames = result.supported.map(f => f.split(/[\\/]/).pop() || f);
+            const prompt = fileNames.length === 1
+                ? `Please analyze this document for me: ${fileNames[0]}`
+                : `Please analyze these documents for me:\n${fileNames.map(n => `- ${n}`).join('\n')}`;
+
+            setPendingPrompt(prompt);
+            setShowFileBrowser(false);
+            setSelectedFiles(new Set());
+        } catch (err) {
+            log.doc.error('Ask Agent failed', err);
+            setIndexError({
+                filename: files.length === 1 ? files[0].split(/[\\/]/).pop() || files[0] : `${files.length} files`,
+                error: err instanceof Error ? err.message : 'An unexpected error occurred.',
+            });
+        } finally {
+            setIndexingFiles(new Set());
+            setIndexStatus(null);
+        }
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, setShowFileBrowser]);
 
     // Build breadcrumb segments from current path
     const pathSegments = currentPath ? currentPath.replace(/\\/g, '/').split('/').filter(Boolean) : [];
@@ -548,8 +602,8 @@ export function FileBrowser() {
                             <button
                                 className="fb-action-btn primary"
                                 onClick={handleAskAgent}
-                                disabled={selectedFiles.size === 0}
-                                title="Send selected files to the chat agent for analysis"
+                                disabled={selectedFiles.size === 0 || indexingFiles.size > 0}
+                                title="Index and send selected files to the chat agent for analysis"
                             >
                                 <Brain size={14} />
                                 Ask Agent

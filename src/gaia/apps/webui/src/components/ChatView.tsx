@@ -132,6 +132,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     } = useChatStore();
 
     const { addNotification } = useNotificationStore();
+    const pendingPrompt = useChatStore((s) => s.pendingPrompt);
 
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
@@ -259,20 +260,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
             .catch(() => {});
     }, [setDocuments]);
 
-    // Consume pending prompt from store (set by WelcomeScreen suggestions).
-    // This replaces the fragile event-dispatch-with-setTimeout pattern —
-    // the prompt is stored in Zustand before the session is created, so
-    // ChatView reliably picks it up on mount regardless of render timing.
+    // Consume pending prompt from store (set by WelcomeScreen suggestions
+    // or Ask Agent in FileBrowser). Reactive subscription ensures prompts
+    // are consumed both on mount AND when set while ChatView is already
+    // mounted (e.g., Ask Agent from file browser in an existing session).
     useEffect(() => {
+        // Use getState() as authoritative source to prevent double-fire
+        // in React StrictMode (effects mount/unmount/remount).
         const pending = useChatStore.getState().pendingPrompt;
-        if (pending) {
-            log.chat.info(`Consuming pending prompt: "${pending.slice(0, 60)}"`);
-            useChatStore.getState().setPendingPrompt(null);
-            setInput(pending);
-            // Defer send to next tick so React finishes mount
-            requestAnimationFrame(() => sendMessageRef.current(pending));
-        }
-    }, [sessionId]);
+        if (!pending) return;
+        log.chat.info(`Consuming pending prompt: "${pending.slice(0, 60)}"`);
+        useChatStore.getState().setPendingPrompt(null);
+        setInput(pending);
+        // Defer send to next tick so React finishes mount
+        requestAnimationFrame(() => sendMessageRef.current(pending));
+    }, [pendingPrompt]);
 
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
     // streaming, and also schedules a trailing scroll so the final chunk
