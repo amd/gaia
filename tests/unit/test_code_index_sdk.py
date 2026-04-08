@@ -86,7 +86,15 @@ class TestIndexRepository:
 
             mock_encode.return_value = (
                 np.zeros((1, 768), dtype="float32"),
-                [CodeChunk(content="def foo(): pass", file_path="a.py", language="python", start_line=1, end_line=1)],
+                [
+                    CodeChunk(
+                        content="def foo(): pass",
+                        file_path="a.py",
+                        language="python",
+                        start_line=1,
+                        end_line=1,
+                    )
+                ],
             )
             mock_save.return_value = None
 

@@ -638,9 +638,7 @@ class CodeIndexSDK:
             # Use health endpoint to check actually running models, not just
             # downloaded ones (list_models/get_status returns all downloaded).
             health = self._llm_client.health_check()
-            running = [
-                m.get("id", "") for m in health.get("all_models_loaded", [])
-            ]
+            running = [m.get("id", "") for m in health.get("all_models_loaded", [])]
             if self.config.embedding_model not in running:
                 self._llm_client.load_model(
                     self.config.embedding_model,
