@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """
@@ -39,6 +39,10 @@ except ImportError:
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
 from gaia.security import PathValidator
+
+# Cache integrity verification
+CACHE_HEADER = b"GAIA_CACHE_V1\n"
+MAX_CACHE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
 @dataclass
@@ -1814,108 +1818,126 @@ These positions indicate where to split the text."""
                 print(f"💾 Loading from cache: {Path(file_path).name}")
             self.log.info(f"📦 Loading cached index for: {file_path}")
             try:
+                file_size = os.path.getsize(cache_path)
+                if file_size > MAX_CACHE_SIZE:
+                    raise ValueError(f"Cache file too large: {file_size} bytes")
+
                 with open(cache_path, "rb") as f:
-                    cached_data = pickle.load(f)
-                    cached_chunks = cached_data["chunks"]
-                    cached_full_text = cached_data.get(
-                        "full_text", ""
-                    )  # May not exist in old caches
-                    cached_metadata = cached_data.get(
-                        "metadata", {}
-                    )  # May not exist in old caches
+                    header = f.readline(128)
+                    if header != CACHE_HEADER:
+                        raise ValueError("Invalid cache format header")
+                    stored_checksum = f.readline(128).decode().strip()
+                    pickled_data = f.read()
 
-                    # Check if cache might be missing VLM content
-                    # If metadata doesn't have VLM info, it's an old cache
-                    if not cached_metadata.get("vlm_checked", False):
-                        if self.config.show_stats:
-                            print(
-                                "  ⚠️  Cache might be missing image text (pre-VLM cache)"
-                            )
-                            print(
-                                "     💡 Use /clear-cache to force re-extraction with VLM"
-                            )
+                actual_checksum = hashlib.sha256(pickled_data).hexdigest()
+                if actual_checksum != stored_checksum:
+                    raise ValueError("Cache checksum mismatch")
 
-                    # Verify Markdown cache exists alongside pickle cache
-                    if os.path.exists(md_cache_path):
-                        self.log.info(
-                            f"  ✅ Markdown cache also available: {md_cache_path}"
-                        )
+                # Checksum verification above ensures the pickled data has not
+                # been corrupted or naively tampered with before deserializing.
+                cached_data = pickle.loads(pickled_data)  # nosec B301
+                cached_chunks = cached_data["chunks"]
+                cached_full_text = cached_data.get("full_text", "")
+                cached_metadata = cached_data.get("metadata", {})
 
+                # Check if cache might be missing VLM content
+                # If metadata doesn't have VLM info, it's an old cache
+                if not cached_metadata.get("vlm_checked", False):
                     if self.config.show_stats:
-                        vlm_info = ""
-                        if cached_metadata.get("vlm_pages", 0) > 0:
-                            vlm_info = f" (VLM: {cached_metadata['vlm_pages']} pages)"
+                        print("  ⚠️  Cache might be missing image text (pre-VLM cache)")
                         print(
-                            f"  ✅ Loaded {len(cached_chunks)} cached chunks{vlm_info}"
+                            "     💡 Use /clear-cache to force re-extraction with VLM"
                         )
 
-                    # Track chunk indices for this file
-                    start_idx = len(self.chunks)
-                    file_chunk_indices = []
+                # Verify Markdown cache exists alongside pickle cache
+                if os.path.exists(md_cache_path):
+                    self.log.info(
+                        f"  ✅ Markdown cache also available: {md_cache_path}"
+                    )
 
-                    if self.index is None:
-                        # First document - use cached index directly
-                        self.chunks = cached_chunks
-                        # Track indices for all chunks (0 to len-1)
-                        for i in range(len(cached_chunks)):
-                            file_chunk_indices.append(i)
-                            self.chunk_to_file[i] = file_path
-                        self.index, self.chunks = self._create_vector_index(self.chunks)
-                    else:
-                        # Merge with existing chunks and recreate index
-                        old_count = len(self.chunks)
-                        self.chunks.extend(cached_chunks)
-                        # Track indices for new chunks (start_idx to start_idx+len-1)
-                        for i in range(len(cached_chunks)):
-                            chunk_idx = start_idx + i
-                            file_chunk_indices.append(chunk_idx)
-                            self.chunk_to_file[chunk_idx] = file_path
-                        if self.config.show_stats:
-                            print(
-                                f"  🔄 Rebuilding index ({old_count} + {len(cached_chunks)} = {len(self.chunks)} chunks)"
-                            )
-                        self.index, self.chunks = self._create_vector_index(self.chunks)
+                if self.config.show_stats:
+                    vlm_info = ""
+                    if cached_metadata.get("vlm_pages", 0) > 0:
+                        vlm_info = f" (VLM: {cached_metadata['vlm_pages']} pages)"
+                    print(f"  ✅ Loaded {len(cached_chunks)} cached chunks{vlm_info}")
 
-                    # Store file-to-chunk mapping
-                    self.file_to_chunk_indices[file_path] = file_chunk_indices
+                # Track chunk indices for this file
+                start_idx = len(self.chunks)
+                file_chunk_indices = []
 
-                    # Restore metadata in memory
-                    if cached_full_text or cached_metadata:
-                        self.file_metadata[file_path] = {
-                            "full_text": cached_full_text,
-                            **cached_metadata,
-                        }
-
-                    self.indexed_files.add(file_path)
-
-                    # Track access time for LRU (was missing — pre-existing bug)
-                    current_time = time.time()
-                    self.file_index_times[file_path] = current_time
-                    self._access_counter += 1
-                    self.file_access_times[file_path] = self._access_counter
-
+                if self.index is None:
+                    # First document - use cached index directly
+                    self.chunks = cached_chunks
+                    # Track indices for all chunks (0 to len-1)
+                    for i in range(len(cached_chunks)):
+                        file_chunk_indices.append(i)
+                        self.chunk_to_file[i] = file_path
+                    self.index, self.chunks = self._create_vector_index(self.chunks)
+                else:
+                    # Merge with existing chunks and recreate index
+                    old_count = len(self.chunks)
+                    self.chunks.extend(cached_chunks)
+                    # Track indices for new chunks (start_idx to start_idx+len-1)
+                    for i in range(len(cached_chunks)):
+                        chunk_idx = start_idx + i
+                        file_chunk_indices.append(chunk_idx)
+                        self.chunk_to_file[chunk_idx] = file_path
                     if self.config.show_stats:
-                        print("  ✅ Successfully loaded from cache")
+                        print(
+                            f"  🔄 Rebuilding index ({old_count} + {len(cached_chunks)} = {len(self.chunks)} chunks)"
+                        )
+                    self.index, self.chunks = self._create_vector_index(self.chunks)
 
-                    # Check memory limits after cache load
-                    limits_ok = self._check_memory_limits()
+                # Store file-to-chunk mapping
+                self.file_to_chunk_indices[file_path] = file_chunk_indices
 
-                    # Update stats for cache load
-                    stats["success"] = True
-                    stats["num_chunks"] = len(cached_chunks)
-                    stats["num_pages"] = cached_metadata.get("num_pages")
-                    stats["vlm_pages"] = cached_metadata.get("vlm_pages")
-                    stats["total_images"] = cached_metadata.get("total_images")
-                    stats["total_indexed_files"] = len(self.indexed_files)
-                    stats["total_chunks"] = len(self.chunks)
-                    stats["from_cache"] = True
-                    if not limits_ok:
-                        stats["memory_limit_warning"] = True
-                    return stats
+                # Restore metadata in memory
+                if cached_full_text or cached_metadata:
+                    self.file_metadata[file_path] = {
+                        "full_text": cached_full_text,
+                        **cached_metadata,
+                    }
+
+                self.indexed_files.add(file_path)
+
+                # Track access time for LRU (was missing — pre-existing bug)
+                current_time = time.time()
+                self.file_index_times[file_path] = current_time
+                self._access_counter += 1
+                self.file_access_times[file_path] = self._access_counter
+
+                if self.config.show_stats:
+                    print("  ✅ Successfully loaded from cache")
+
+                # Check memory limits after cache load
+                limits_ok = self._check_memory_limits()
+
+                # Update stats for cache load
+                stats["success"] = True
+                stats["num_chunks"] = len(cached_chunks)
+                stats["num_pages"] = cached_metadata.get("num_pages")
+                stats["vlm_pages"] = cached_metadata.get("vlm_pages")
+                stats["total_images"] = cached_metadata.get("total_images")
+                stats["total_indexed_files"] = len(self.indexed_files)
+                stats["total_chunks"] = len(self.chunks)
+                stats["from_cache"] = True
+                if not limits_ok:
+                    stats["memory_limit_warning"] = True
+                return stats
             except Exception as e:
                 self.log.warning(f"Cache load failed: {e}, reindexing")
                 if self.config.show_stats:
-                    print("  ⚠️  Cache loading failed, will reindex from scratch")
+                    print(
+                        "  ⚠️  Cache outdated or corrupted, will reindex from scratch"
+                    )
+                try:
+                    os.remove(cache_path)
+                except OSError:
+                    pass
+                try:
+                    os.remove(md_cache_path)
+                except OSError:
+                    pass
 
         # Extract and process document
         if self.config.show_stats:
@@ -2011,8 +2033,12 @@ These positions indicate where to split the text."""
                 "full_text": text,  # Cache full extracted text (for /dump)
                 "metadata": file_metadata,  # Cache metadata (num_pages, vlm_pages, etc.)
             }
+            pickled = pickle.dumps(cache_data)
+            checksum = hashlib.sha256(pickled).hexdigest()
             with open(cache_path, "wb") as f:
-                pickle.dump(cache_data, f)
+                f.write(CACHE_HEADER)
+                f.write(f"{checksum}\n".encode())
+                f.write(pickled)
 
             # Store metadata in memory for fast access
             self.file_metadata[file_path] = {

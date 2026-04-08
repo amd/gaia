@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """
@@ -7,6 +7,7 @@ Test suite for GAIA RAG (Retrieval-Augmented Generation) functionality
 """
 
 import os
+import pickle
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -17,7 +18,7 @@ import pytest
 # Test imports
 try:
     from gaia.chat.sdk import AgentConfig, AgentSDK
-    from gaia.rag.sdk import RAGSDK, RAGConfig, RAGResponse, quick_rag
+    from gaia.rag.sdk import CACHE_HEADER, RAGSDK, RAGConfig, RAGResponse, quick_rag
 
     RAG_AVAILABLE = True
 except ImportError as e:
@@ -313,6 +314,134 @@ class TestRAGSDK:
                 result2 = rag2.index_document(str(fake_pdf))
                 assert isinstance(result2, dict)
                 assert result2.get("success") is True
+
+    def test_corrupted_cache_recovery(self, mock_dependencies):
+        """Test that corrupted cache files are deleted and re-indexed."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                # Create fake PDF file
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                # First indexing creates a valid cache
+                rag1 = RAGSDK(config)
+                result1 = rag1.index_document(str(fake_pdf))
+                assert result1.get("success") is True
+
+                # Find the cache file and corrupt it
+                cache_files = list(Path(temp_dir).glob("*.pkl"))
+                assert len(cache_files) == 1
+                cache_file = cache_files[0]
+                cache_file.write_bytes(b"corrupted data")
+
+                # Second indexing should detect corruption, delete cache, and re-index
+                rag2 = RAGSDK(config)
+                result2 = rag2.index_document(str(fake_pdf))
+                assert result2.get("success") is True
+                assert not result2.get("from_cache")
+
+                # Corrupted cache file should have been replaced with a valid one
+                assert cache_file.exists()
+                assert cache_file.read_bytes().startswith(CACHE_HEADER)
+
+    def test_cache_checksum_mismatch_recovery(self, mock_dependencies):
+        """Test that a cache with valid header but wrong checksum is rejected."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                # First indexing creates a valid cache
+                rag1 = RAGSDK(config)
+                result1 = rag1.index_document(str(fake_pdf))
+                assert result1.get("success") is True
+
+                # Write a file with valid header but wrong checksum
+                cache_files = list(Path(temp_dir).glob("*.pkl"))
+                assert len(cache_files) == 1
+                cache_file = cache_files[0]
+                payload = pickle.dumps({"chunks": [], "full_text": "", "metadata": {}})
+                with open(cache_file, "wb") as f:
+                    f.write(CACHE_HEADER)
+                    f.write(
+                        b"0000000000000000000000000000000000000000000000000000000000000000\n"
+                    )
+                    f.write(payload)
+
+                # Should detect mismatch, delete, and re-index
+                rag2 = RAGSDK(config)
+                result2 = rag2.index_document(str(fake_pdf))
+                assert result2.get("success") is True
+                assert not result2.get("from_cache")
+
+    def test_oversized_cache_rejected(self, mock_dependencies):
+        """Test that a cache file exceeding MAX_CACHE_SIZE is rejected."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                # First indexing creates a valid cache
+                rag1 = RAGSDK(config)
+                result1 = rag1.index_document(str(fake_pdf))
+                assert result1.get("success") is True
+
+                # Simulate an oversized cache by temporarily lowering the limit
+                cache_files = list(Path(temp_dir).glob("*.pkl"))
+                assert len(cache_files) == 1
+                original_size = cache_files[0].stat().st_size
+
+                with patch("gaia.rag.sdk.MAX_CACHE_SIZE", original_size - 1):
+                    rag2 = RAGSDK(config)
+                    result2 = rag2.index_document(str(fake_pdf))
+                    assert result2.get("success") is True
+                    assert not result2.get("from_cache")
+
+    def test_old_format_cache_migration(self, mock_dependencies):
+        """Test that old-format cache files (no header) are rebuilt."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                # First indexing creates a valid cache
+                rag1 = RAGSDK(config)
+                result1 = rag1.index_document(str(fake_pdf))
+                assert result1.get("success") is True
+
+                # Overwrite with old-format cache (plain pickle, no header)
+                cache_files = list(Path(temp_dir).glob("*.pkl"))
+                assert len(cache_files) == 1
+                cache_file = cache_files[0]
+                old_data = {"chunks": ["old chunk"], "full_text": "old", "metadata": {}}
+                with open(cache_file, "wb") as f:
+                    pickle.dump(old_data, f)
+
+                # Should detect missing header, delete, and re-index
+                rag2 = RAGSDK(config)
+                result2 = rag2.index_document(str(fake_pdf))
+                assert result2.get("success") is True
+                assert not result2.get("from_cache")
 
     def test_status_reporting(self, mock_dependencies):
         """Test status reporting."""
