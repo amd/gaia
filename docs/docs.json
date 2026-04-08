@@ -71,6 +71,7 @@
                   "guides/docker",
                   "guides/routing",
                   "guides/explicit-tool-calling",
+                  "guides/auto-spawn-pipeline",
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health",
