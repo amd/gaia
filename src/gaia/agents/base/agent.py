@@ -24,6 +24,7 @@ from gaia.agents.base.tools import (
     ToolRegistry,
     ToolAccessDeniedError,
 )
+from gaia.utils.component_loader import ComponentLoader, ComponentLoaderError
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
@@ -229,6 +230,11 @@ class Agent(abc.ABC):
             logger.warning(f"Failed to connect to Nexus: {e}, Chronicle disabled")
             self._enable_chronicle = False
             self._nexus = None
+
+        # Component Framework Integration: Initialize ComponentLoader
+        # This enables agents to read/write/update component templates during execution
+        self._component_loader = ComponentLoader()
+        logger.debug(f"Agent {self.__class__.__name__} ComponentLoader initialized")
 
         # Note: system_prompt is now a lazy @property that composes on first access
         # Tool descriptions and response format are added in _compose_system_prompt()
@@ -3170,6 +3176,254 @@ You must respond ONLY in valid JSON. No text before { or after }.
             List of error messages
         """
         return self.error_history
+
+    # ========================================================================
+    # Component Framework Tools
+    # ========================================================================
+
+    def load_component(self, component_path: str) -> Dict[str, Any]:
+        """
+        Load a component template from the component-framework directory.
+
+        This tool enables agents to read component templates during execution.
+        The component is parsed and returned with frontmatter and content separated.
+
+        Args:
+            component_path: Relative path to component (e.g., "tasks/task-breakdown.md")
+
+        Returns:
+            Dictionary with frontmatter and content:
+            {
+                "frontmatter": {...},
+                "content": "...",
+                "full_content": "..."
+            }
+
+        Raises:
+            ComponentLoaderError: If component cannot be loaded
+
+        Example:
+            >>> component = self.load_component("checklists/domain-analysis-checklist.md")
+            >>> print(component["frontmatter"]["template_id"])
+            'domain-analysis-checklist'
+        """
+        try:
+            result = self._component_loader.load_component(component_path)
+            logger.debug(f"Loaded component: {component_path}")
+            return result
+        except ComponentLoaderError as e:
+            logger.error(f"Failed to load component {component_path}: {e}")
+            raise
+
+    def save_component(
+        self,
+        component_path: str,
+        content: str,
+        frontmatter: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Save a component template to the component-framework directory.
+
+        This tool enables agents to create new component templates or update existing ones.
+        If frontmatter is provided, it will be prepended as YAML.
+
+        Args:
+            component_path: Relative path to save component (e.g., "tasks/my-task.md")
+            content: Markdown content for the component body
+            frontmatter: Optional dictionary of frontmatter fields
+
+        Returns:
+            Full path to saved component
+
+        Raises:
+            ComponentLoaderError: If component cannot be saved
+
+        Example:
+            >>> self.save_component(
+            ...     "tasks/generated-task.md",
+            ...     "# Generated Task\\n\\nThis is the content...",
+            ...     {"template_id": "generated-task", "version": "1.0.0"}
+            ... )
+        """
+        try:
+            # Validate frontmatter if provided
+            if frontmatter:
+                required_fields = ["template_id", "template_type", "version"]
+                for field in required_fields:
+                    if field not in frontmatter:
+                        raise ComponentLoaderError(
+                            f"Missing required frontmatter field: {field}",
+                            path=component_path,
+                            cause="validation_error"
+                        )
+
+            full_path = self._component_loader.save_component(
+                component_path, content, frontmatter
+            )
+            logger.info(f"Saved component: {component_path} -> {full_path}")
+            return full_path
+        except Exception as e:
+            logger.error(f"Failed to save component {component_path}: {e}")
+            raise ComponentLoaderError(
+                str(e),
+                path=component_path,
+                cause="save_error"
+            )
+
+    def update_component(
+        self,
+        component_path: str,
+        updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Update a component template in the component-framework directory.
+
+        This tool enables agents to modify existing components.
+        Updates can modify frontmatter fields, content, or both.
+
+        Args:
+            component_path: Relative path to component (e.g., "tasks/task-tracking.md")
+            updates: Dictionary with optional keys:
+                - "frontmatter": Dict of frontmatter fields to update
+                - "content": New content string (replaces entire content)
+                - "append_content": Content to append to existing content
+
+        Returns:
+            Updated component dictionary (same format as load_component)
+
+        Raises:
+            ComponentLoaderError: If component cannot be updated
+
+        Example:
+            >>> self.update_component(
+            ...     "tasks/task-tracking.md",
+            ...     {"append_content": "\\n## Update: Task completed at 2026-04-07"}
+            ... )
+        """
+        try:
+            # Load existing component
+            existing = self._component_loader.load_component(component_path)
+
+            # Apply frontmatter updates
+            if "frontmatter" in updates and updates["frontmatter"]:
+                existing["frontmatter"].update(updates["frontmatter"])
+
+            # Apply content updates
+            if "content" in updates:
+                existing["content"] = updates["content"]
+            elif "append_content" in updates:
+                existing["content"] = existing["content"] + updates["append_content"]
+
+            # Rebuild full content
+            import yaml
+            frontmatter_yaml = yaml.dump(
+                existing["frontmatter"],
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False
+            )
+            existing["full_content"] = f"---\n{frontmatter_yaml}---\n{existing['content']}"
+
+            # Write back to file
+            self._component_loader.save_component(
+                component_path,
+                existing["content"],
+                existing["frontmatter"]
+            )
+
+            logger.info(f"Updated component: {component_path}")
+            return existing
+        except ComponentLoaderError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to update component {component_path}: {e}")
+            raise ComponentLoaderError(
+                str(e),
+                path=component_path,
+                cause="update_error"
+            )
+
+    def list_components(
+        self,
+        component_type: Optional[str] = None,
+        category: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        List available component templates.
+
+        This tool enables agents to discover available components
+        by type, category, or all components.
+
+        Args:
+            component_type: Filter by type (memory, knowledge, tasks, commands, documents, checklists)
+            category: Filter by category field in frontmatter
+
+        Returns:
+            List of component metadata dictionaries:
+            [
+                {
+                    "path": "tasks/task-breakdown.md",
+                    "template_id": "task-breakdown",
+                    "template_type": "tasks",
+                    "description": "...",
+                    "version": "1.0.0"
+                },
+                ...
+            ]
+
+        Example:
+            >>> tasks = self.list_components(component_type="tasks")
+            >>> checklists = self.list_components(category="analysis")
+        """
+        try:
+            return self._component_loader.list_components(
+                component_type=component_type,
+                category=category
+            )
+        except Exception as e:
+            logger.error(f"Failed to list components: {e}")
+            return []
+
+    def render_component(
+        self,
+        component_path: str,
+        variables: Dict[str, str]
+    ) -> str:
+        """
+        Render a component template with variable substitution.
+
+        This tool enables agents to populate templates with dynamic values.
+        Variables use the format {{VARIABLE_NAME}} in the template.
+
+        Args:
+            component_path: Relative path to component template
+            variables: Dictionary of variable substitutions
+                Keys should include the {{}} brackets or they will be added automatically
+
+        Returns:
+            Rendered component content string
+
+        Raises:
+            ComponentLoaderError: If component cannot be loaded or rendered
+
+        Example:
+            >>> rendered = self.render_component(
+            ...     "tasks/task-breakdown.md",
+            ...     {"{{TASK_NAME}}": "Build API", "{{TASK_ID}}": "task-001"}
+            ... )
+        """
+        try:
+            return self._component_loader.render_component(component_path, variables)
+        except ComponentLoaderError as e:
+            logger.error(f"Failed to render component {component_path}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to render component {component_path}: {e}")
+            raise ComponentLoaderError(
+                str(e),
+                path=component_path,
+                cause="render_error"
+            )
 
     def cleanup(self) -> None:
         """
