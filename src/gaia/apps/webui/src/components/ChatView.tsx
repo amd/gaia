@@ -956,10 +956,10 @@ export function ChatView({ sessionId, onCreateAgent }: ChatViewProps) {
                     .then((data) => useChatStore.getState().setAgents(data.agents || []))
                     .catch(() => { /* non-critical */ });
             },
-        });
+        }, undefined, undefined, activeAgentId);
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;

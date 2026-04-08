@@ -169,6 +169,7 @@ export function sendMessageStream(
     onChunkOrCallbacks: ((event: StreamEvent) => void) | StreamCallbacks,
     onDone?: (event: StreamEvent) => void,
     onError?: (error: Error) => void,
+    agentType?: string,
 ): AbortController {
     // Support both old 3-arg style and new callbacks style
     let callbacks: StreamCallbacks;
@@ -198,6 +199,7 @@ export function sendMessageStream(
             session_id: sessionId,
             message,
             stream: true,
+            ...(agentType ? { agent_type: agentType } : {}),
         }),
         signal: controller.signal,
     })

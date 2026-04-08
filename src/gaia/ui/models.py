@@ -179,6 +179,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., max_length=100_000)
     document_ids: Optional[List[str]] = None
     stream: bool = True
+    agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
 class SourceInfo(BaseModel):

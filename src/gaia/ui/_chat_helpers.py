@@ -439,8 +439,28 @@ async def _get_chat_response(
             )
             model_id = custom_model
 
-        agent_type = session.get("agent_type") or "chat"
         session_id = request.session_id
+        stored_agent_type = session.get("agent_type") or "chat"
+        agent_type = request.agent_type or stored_agent_type
+
+        # Validate requested agent_type exists in the registry before persisting
+        registry = _agent_registry
+        if agent_type != "chat" and registry and not registry.get(agent_type):
+            logger.warning(
+                "chat: Session %s requested unknown agent_type '%s', falling back to chat",
+                session_id[:8],
+                agent_type,
+            )
+            agent_type = "chat"
+
+        if agent_type != stored_agent_type:
+            db.update_session(session_id, agent_type=agent_type)
+            logger.info(
+                "chat: Session %s agent_type changed: %s -> %s",
+                session_id[:8],
+                stored_agent_type,
+                agent_type,
+            )
         logger.info("chat: Session %s using agent type: %s", session_id[:8], agent_type)
 
         # ── Agent cache ──────────────────────────────────────────────────────
@@ -654,7 +674,27 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             )
             model_id = custom_model
 
-        agent_type = session.get("agent_type") or "chat"
+        stored_agent_type = session.get("agent_type") or "chat"
+        agent_type = request.agent_type or stored_agent_type
+
+        # Validate requested agent_type exists in the registry before persisting
+        registry = _agent_registry
+        if agent_type != "chat" and registry and not registry.get(agent_type):
+            logger.warning(
+                "chat: Session %s requested unknown agent_type '%s', falling back to chat (streaming)",
+                session_id[:8],
+                agent_type,
+            )
+            agent_type = "chat"
+
+        if agent_type != stored_agent_type:
+            db.update_session(session_id, agent_type=agent_type)
+            logger.info(
+                "chat: Session %s agent_type changed: %s -> %s (streaming)",
+                session_id[:8],
+                stored_agent_type,
+                agent_type,
+            )
         logger.info(
             "chat: Session %s using agent type: %s (streaming)",
             session_id[:8],

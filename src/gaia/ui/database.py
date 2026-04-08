@@ -313,8 +313,9 @@ class ChatDatabase:
         title: str = None,
         system_prompt: str = None,
         document_ids: list = None,
+        agent_type: str = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title, system prompt, and/or document_ids."""
+        """Update session title, system prompt, agent_type, and/or document_ids."""
         updates = []
         params = []
 
@@ -324,6 +325,9 @@ class ChatDatabase:
         if system_prompt is not None:
             updates.append("system_prompt = ?")
             params.append(system_prompt)
+        if agent_type is not None:
+            updates.append("agent_type = ?")
+            params.append(agent_type)
 
         updates.append("updated_at = ?")
         params.append(self._now())
