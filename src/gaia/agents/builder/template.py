@@ -105,7 +105,7 @@ def generate_agent_source(
         "    #         from gaia.mcp.client.config import MCPConfig",
         "    #         from gaia.mcp.client.mcp_client_manager import MCPClientManager",
         "    #",
-        f"    #      b) Change the class declaration (IMPORTANT — MCPClientMixin must be added here):",
+        "    #      b) Change the class declaration (IMPORTANT — MCPClientMixin must be added here):",
         f"    #         class {class_name}(Agent, MCPClientMixin):  # <-- add MCPClientMixin",
         "    #",
         "    #      c) Add __init__ to wire up the config:",

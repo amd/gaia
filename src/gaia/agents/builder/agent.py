@@ -24,7 +24,7 @@ from gaia.logger import get_logger
 logger = get_logger(__name__)
 
 # Agent ID cannot match any of these — they are reserved for built-in agents.
-_RESERVED_IDS = {"chat", "gaia", "builder"}
+_RESERVED_IDS = {"agent", "chat", "gaia", "builder"}
 
 # Allowed characters for a generated agent ID.
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,50}[a-z0-9]$")
@@ -53,6 +53,34 @@ def _name_to_class_name(name: str) -> str:
     if class_name and class_name[0].isdigit():
         class_name = f"Gaia{class_name}"
     return class_name
+
+
+def _split_camel_case(name: str) -> str:
+    """Split PascalCase/camelCase into space-separated words.
+
+    Examples:
+        "AlphaAgent"    → "Alpha Agent"
+        "MCPAgent"      → "MCP Agent"
+        "myTool"        → "my Tool"
+        "already split" → "already split"
+    """
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", name)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", s)
+
+
+def _normalize_display_name(name: str) -> str:
+    """Ensure the display name ends with 'Agent'.
+
+    Examples:
+        "Beta"          → "Beta Agent"
+        "Alpha Agent"   → "Alpha Agent"
+        "My Cool Agent" → "My Cool Agent"
+    """
+    words = name.split()
+    while words and words[-1].lower() == "agent":
+        words.pop()
+    words.append("Agent")
+    return " ".join(words)
 
 
 @dataclass
@@ -276,25 +304,26 @@ class BuilderAgent(Agent):
 
 
 def _normalize_agent_id(name: str) -> str:
-    """Convert a human name to a safe directory/YAML id.
+    """Convert a human name to a safe directory id.
 
     Rules:
     - Lowercase, spaces → hyphens
     - Strip characters that are not alphanumeric or hyphen
     - Strip leading/trailing hyphens
-    - Strip exactly one trailing "-agent" suffix (deduplicate), then re-add it
+    - Strip trailing "-agent" suffix (the directory should not contain "agent")
     - Result must match ``_SAFE_ID_RE``
 
     Examples:
-        "Widget Agent"      → "widget-agent"
-        "My Agent Agent"    → "my-agent"
-        "zoo"               → "zoo-agent"
+        "Widget Agent"      → "widget"
+        "My Agent Agent"    → "my"
+        "zoo"               → "zoo"
+        "My Cool Agent"     → "my-cool"
     """
     slug = re.sub(r"[^a-z0-9-]", "", name.lower().replace(" ", "-")).strip("-")
-    # Remove trailing -agent suffix (may appear multiple times) then re-add once
+    # Remove trailing -agent suffix (may appear multiple times)
     while slug.endswith("-agent"):
         slug = slug[: -len("-agent")].strip("-")
-    return f"{slug}-agent" if slug else ""
+    return slug
 
 
 def _create_agent_impl(name: str, description: str = "") -> str:
@@ -305,8 +334,11 @@ def _create_agent_impl(name: str, description: str = "") -> str:
         generate_agent_source,
     )
 
+    # ── 0. Split camelCase so downstream functions get space-separated words ─
+    name = _split_camel_case(name.strip())
+
     # ── 1. Normalize and validate the agent ID ──────────────────────────────
-    agent_id = _normalize_agent_id(name.strip())
+    agent_id = _normalize_agent_id(name)
 
     if not agent_id or not _SAFE_ID_RE.match(agent_id):
         return (
@@ -314,8 +346,7 @@ def _create_agent_impl(name: str, description: str = "") -> str:
             "Please use letters, numbers, and spaces (e.g. 'Weather Agent')."
         )
 
-    base_id = agent_id[: -len("-agent")]
-    if base_id in _RESERVED_IDS or agent_id in _RESERVED_IDS:
+    if agent_id in _RESERVED_IDS:
         return f"Error: '{name}' is reserved. Please choose a different name."
 
     # ── 2. Resolve and verify target path ───────────────────────────────────
@@ -333,21 +364,22 @@ def _create_agent_impl(name: str, description: str = "") -> str:
             "Please choose a different name."
         )
 
-    # ── 3. Generate class name ───────────────────────────────────────────────
-    class_name = _name_to_class_name(name.strip())
+    # ── 3. Generate class name and display name ─────────────────────────────
+    class_name = _name_to_class_name(name)
     if not class_name or not class_name.isidentifier():
         return (
             "Error: Invalid agent name. "
             "Please use letters, numbers, and spaces (e.g. 'Weather Agent')."
         )
+    display_name = _normalize_display_name(name)
 
     # ── 4. Generate Python source ────────────────────────────────────────────
     desc = (
-        description.strip() if description.strip() else f"Custom agent: {name.strip()}"
+        description.strip() if description.strip() else f"Custom agent: {display_name}"
     )
     source = generate_agent_source(
         agent_id=agent_id,
-        agent_name=name.strip(),
+        agent_name=display_name,
         description=desc,
         class_name=class_name,
         starters=TEMPLATE_STARTERS,
@@ -384,7 +416,7 @@ def _create_agent_impl(name: str, description: str = "") -> str:
         logger.warning("builder: Hot-reload skipped: %s", exc)
 
     return (
-        f"Done! I've created your '{name.strip()}' agent at:\n\n"
+        f"Done! I've created your '{display_name}' agent at:\n\n"
         f"  {py_path}\n\n"
         "The agent is already loaded and ready to use — you'll see it in the "
         "agent selector in the GAIA UI.\n\n"
