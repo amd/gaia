@@ -88,7 +88,10 @@ class ComponentLoader:
         "tasks",
         "commands",
         "documents",
-        "checklists"
+        "checklists",
+        "personas",
+        "workflows",
+        "templates"
     ]
 
     # Required frontmatter fields
