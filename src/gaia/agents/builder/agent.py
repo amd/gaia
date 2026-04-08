@@ -4,17 +4,17 @@
 BuilderAgent — built-in hidden agent that scaffolds custom GAIA agents.
 
 Users interact with it via the "+" button in the Agent UI.  It asks for a
-name, then calls the ``create_agent`` tool to write a YAML manifest under
-``~/.gaia/agents/<id>/agent.yaml``.
+name, then calls the ``create_agent`` tool to write a Python agent file under
+``~/.gaia/agents/<id>/agent.py``.
 """
 
+import ast
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
-
-import yaml
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
@@ -28,6 +28,31 @@ _RESERVED_IDS = {"chat", "gaia", "builder"}
 
 # Allowed characters for a generated agent ID.
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,50}[a-z0-9]$")
+
+
+def _name_to_class_name(name: str) -> str:
+    """Convert a human name to a valid Python class name.
+
+    Examples:
+        "Widget Agent"      → "WidgetAgent"
+        "zoo"               → "ZooAgent"
+        "My Agent Agent"    → "MyAgent"
+        "42 Things"         → "Gaia42ThingsAgent"
+        "Agent"             → "CustomAgent"
+    """
+    words = re.sub(r"[^a-zA-Z0-9 ]", "", name).split()
+    class_name = "".join(w.capitalize() for w in words)
+    # Deduplicate trailing "Agent"
+    while class_name.endswith("Agent") and class_name != "Agent":
+        class_name = class_name[:-5]
+    # Prevent shadowing the base class import (name was just "Agent" repeated)
+    if class_name == "Agent":
+        class_name = "Custom"
+    class_name = f"{class_name}Agent" if class_name else ""
+    # Handle digit-starting names
+    if class_name and class_name[0].isdigit():
+        class_name = f"Gaia{class_name}"
+    return class_name
 
 
 @dataclass
@@ -47,8 +72,8 @@ class BuilderAgentConfig:
 class BuilderAgent(Agent):
     """Hidden built-in agent that creates custom agent scaffolds.
 
-    Has a single tool — ``create_agent`` — which writes a YAML manifest to
-    ``~/.gaia/agents/<id>/agent.yaml`` and hot-reloads it into the running
+    Has a single tool — ``create_agent`` — which writes a Python agent file to
+    ``~/.gaia/agents/<id>/agent.py`` and hot-reloads it into the running
     registry so the new agent is immediately available without a server restart.
     """
 
@@ -106,7 +131,7 @@ class BuilderAgent(Agent):
                 description: One-sentence description of what the agent does.
 
             Returns:
-                Confirmation message with the path to the created agent.yaml.
+                Confirmation message with the path to the created agent.py.
             """
             return _create_agent_impl(name, description)
 
@@ -275,9 +300,9 @@ def _normalize_agent_id(name: str) -> str:
 def _create_agent_impl(name: str, description: str = "") -> str:
     """Core implementation of the create_agent tool, separated for testability."""
     from gaia.agents.builder.template import (
-        TEMPLATE_COMMENTS,
         TEMPLATE_INSTRUCTIONS,
         TEMPLATE_STARTERS,
+        generate_agent_source,
     )
 
     # ── 1. Normalize and validate the agent ID ──────────────────────────────
@@ -289,9 +314,7 @@ def _create_agent_impl(name: str, description: str = "") -> str:
             "Please use letters, numbers, and spaces (e.g. 'Weather Agent')."
         )
 
-    base_id = agent_id[
-        : -len("-agent")
-    ]  # strip the trailing -agent for reservation check
+    base_id = agent_id[: -len("-agent")]
     if base_id in _RESERVED_IDS or agent_id in _RESERVED_IDS:
         return f"Error: '{name}' is reserved. Please choose a different name."
 
@@ -299,7 +322,6 @@ def _create_agent_impl(name: str, description: str = "") -> str:
     agents_dir = Path.home() / ".gaia" / "agents"
     target = (agents_dir / agent_id).resolve()
 
-    # Guard against path traversal
     try:
         target.relative_to(agents_dir.resolve())
     except ValueError:
@@ -311,53 +333,46 @@ def _create_agent_impl(name: str, description: str = "") -> str:
             "Please choose a different name."
         )
 
-    # ── 3. Build the YAML data dict ──────────────────────────────────────────
-    data = {
-        "manifest_version": 1,
-        "id": agent_id,
-        "name": name.strip(),
-        "description": (
-            description.strip()
-            if description.strip()
-            else f"Custom agent: {name.strip()}"
-        ),
-        "instructions": TEMPLATE_INSTRUCTIONS,
-        "tools": [],
-        "conversation_starters": TEMPLATE_STARTERS,
-    }
+    # ── 3. Generate class name ───────────────────────────────────────────────
+    class_name = _name_to_class_name(name.strip())
+    if not class_name or not class_name.isidentifier():
+        return (
+            "Error: Invalid agent name. "
+            "Please use letters, numbers, and spaces (e.g. 'Weather Agent')."
+        )
 
-    # ── 4. Write safely — never string interpolation ─────────────────────────
-    target.mkdir(parents=True, exist_ok=True)
-    yaml_path = target / "agent.yaml"
-
-    # yaml.dump handles escaping; TEMPLATE_COMMENTS is appended as plain text
-    yaml_content = yaml.dump(
-        data,
-        default_flow_style=False,
-        allow_unicode=True,
-        sort_keys=False,
-        width=88,
+    # ── 4. Generate Python source ────────────────────────────────────────────
+    desc = (
+        description.strip() if description.strip() else f"Custom agent: {name.strip()}"
     )
-    yaml_content += TEMPLATE_COMMENTS
-    yaml_path.write_text(yaml_content, encoding="utf-8")
+    source = generate_agent_source(
+        agent_id=agent_id,
+        agent_name=name.strip(),
+        description=desc,
+        class_name=class_name,
+        starters=TEMPLATE_STARTERS,
+        system_prompt=TEMPLATE_INSTRUCTIONS,
+    )
 
-    # ── 5. Round-trip validation ─────────────────────────────────────────────
+    # ── 5. Validate syntax before writing ────────────────────────────────────
     try:
-        from gaia.agents.registry import AgentManifest
+        ast.parse(source)
+    except SyntaxError as exc:
+        logger.error("builder: Generated source has syntax error: %s", exc)
+        return "Error: Generated agent source is invalid. Please try again."
 
-        raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-        AgentManifest(**raw)
+    # ── 6. Write agent.py — with cleanup on failure ──────────────────────────
+    target.mkdir(parents=True, exist_ok=True)
+    py_path = target / "agent.py"
+    try:
+        py_path.write_text(source, encoding="utf-8")
     except Exception as exc:
-        # Clean up and report — should never happen with our fixed template
-        yaml_path.unlink(missing_ok=True)
-        try:
-            target.rmdir()
-        except OSError:
-            pass
-        logger.error("builder: YAML validation failed for %s: %s", agent_id, exc)
-        return f"Error: Generated YAML is invalid ({exc}). Please try again."
+        py_path.unlink(missing_ok=True)
+        shutil.rmtree(target, ignore_errors=True)
+        logger.error("builder: Failed to write agent.py for %s: %s", agent_id, exc)
+        return f"Error: Could not write agent file ({exc}). Please try again."
 
-    # ── 6. Hot-reload into the running registry ───────────────────────────────
+    # ── 7. Hot-reload into the running registry ──────────────────────────────
     try:
         from gaia.ui._chat_helpers import get_agent_registry
 
@@ -366,15 +381,15 @@ def _create_agent_impl(name: str, description: str = "") -> str:
             registry.register_from_dir(target)
             logger.info("builder: Hot-reloaded agent '%s' into registry", agent_id)
     except Exception as exc:
-        # Hot-reload failure is non-fatal — the agent exists on disk
         logger.warning("builder: Hot-reload skipped: %s", exc)
 
     return (
         f"Done! I've created your '{name.strip()}' agent at:\n\n"
-        f"  {yaml_path}\n\n"
+        f"  {py_path}\n\n"
         "The agent is already loaded and ready to use — you'll see it in the "
         "agent selector in the GAIA UI.\n\n"
-        "To customize it, open the YAML file and edit the `instructions` field "
-        "with your own system prompt. You can also uncomment the `tools`, "
-        "`models`, and `mcp_servers` sections to extend your agent's capabilities."
+        "To customize it, open agent.py and:\n"
+        "  - Edit `_get_system_prompt()` to change the agent's personality\n"
+        "  - Add `@tool` functions in `_register_tools()` to give it capabilities\n"
+        "  - See the 'Advanced' section at the bottom for model and MCP options"
     )
