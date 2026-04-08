@@ -239,3 +239,7 @@ util/custom/*
 
 # Real-world eval corpus documents (sourced from public web, not committed)
 eval/corpus/real_world/
+# Component Framework runtime files
+component-framework/**/*.lock
+component-framework/**/.lock
+component-framework/memory/working-memory.md.lock
