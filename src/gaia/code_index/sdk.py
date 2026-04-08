@@ -260,14 +260,14 @@ class CodeIndexSDK:
 
                 if self.config.index_git_history:
                     commits = git_indexer.get_commits()
-                    all_chunks.extend(commits)
+                    new_chunks.extend(commits)
                     commits_indexed = len(commits)
                     if commits_indexed:
                         self.log.info(f"Indexed {commits_indexed} commits")
 
                 if self.config.index_prs:
                     prs = git_indexer.get_pull_requests()
-                    all_chunks.extend(prs)
+                    new_chunks.extend(prs)
                     prs_indexed = len(prs)
                     if prs_indexed:
                         self.log.info(f"Indexed {prs_indexed} PRs")
@@ -658,10 +658,8 @@ class CodeIndexSDK:
         """Read a file, returning None on error or binary content."""
         # Validate the path is within the repo root
         if self._path_validator is not None:
-            try:
-                self._path_validator.validate(file_path)
-            except Exception:
-                self.log.warning(f"Path validation failed: {file_path}")
+            if not self._path_validator.is_path_allowed(file_path, prompt_user=False):
+                self.log.warning(f"Path outside allowed scope: {file_path}")
                 return None
 
         try:
