@@ -84,6 +84,7 @@ interface FilePreview {
 interface IndexResult {
     docIds: string[];
     supported: string[];
+    succeededFiles: string[];
     unsupported: string[];
     failed: number;
     lastError: string;
@@ -111,6 +112,7 @@ async function indexAndAttachFiles(
     }
 
     const docIds: string[] = [];
+    const succeededFiles: string[] = [];
     let failed = 0;
     let lastError = '';
     const folderPaths = new Set(entries.filter(e => e.type === 'folder').map(e => e.path));
@@ -119,10 +121,18 @@ async function indexAndAttachFiles(
         try {
             if (folderPaths.has(filepath)) {
                 const result = await api.indexFolder(filepath);
-                result.documents.forEach(d => { if (d.id) docIds.push(d.id); });
+                const newIds: string[] = [];
+                result.documents.forEach(d => { if (d.id) newIds.push(d.id); });
+                if (newIds.length > 0) {
+                    newIds.forEach(id => docIds.push(id));
+                    succeededFiles.push(filepath);
+                }
             } else {
                 const doc = await api.uploadDocumentByPath(filepath);
-                if (doc?.id) docIds.push(doc.id);
+                if (doc?.id) {
+                    docIds.push(doc.id);
+                    succeededFiles.push(filepath);
+                }
             }
         } catch (err) {
             failed++;
@@ -147,7 +157,7 @@ async function indexAndAttachFiles(
         }
     }
 
-    return { docIds, supported, unsupported, failed, lastError };
+    return { docIds, supported, succeededFiles, unsupported, failed, lastError };
 }
 
 export function FileBrowser() {
@@ -351,10 +361,9 @@ export function FileBrowser() {
                 setIndexStatus(`Warning: ${result.failed} file(s) failed to index and will be excluded.`);
             }
 
-            // Build prompt with successfully indexed file names (not paths)
-            const fileNames = result.docIds.length > 0
-                ? result.supported.filter((_, i) => i < result.docIds.length).map(f => f.split(/[\\/]/).pop() || f)
-                : result.supported.map(f => f.split(/[\\/]/).pop() || f);
+            // Build prompt from files that were actually indexed (not just supported)
+            const fileNames = (result.succeededFiles.length > 0 ? result.succeededFiles : result.supported)
+                .map(f => f.split(/[\\/]/).pop() || f);
             const prompt = fileNames.length === 1
                 ? `Please analyze this document for me: ${fileNames[0]}`
                 : `Please analyze these documents for me:\n${fileNames.map(n => `- ${n}`).join('\n')}`;

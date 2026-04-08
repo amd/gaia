@@ -133,3 +133,36 @@ class TestAskAgentWorkflow:
         doc_ids = session_arg.get("document_ids", [])
         assert doc1["id"] in doc_ids
         assert doc2["id"] in doc_ids
+
+    @patch("gaia.ui.server._get_chat_response")
+    def test_upload_without_attach_has_no_rag_context(self, mock_chat, client, db):
+        """Uploaded but unattached documents must NOT appear in session context.
+
+        Verifies that the attachment step (POST /api/sessions/{id}/documents)
+        is required for RAG context to flow through to _get_chat_response.
+        """
+        mock_chat.return_value = "I have no document context."
+
+        # 1. Create session
+        session_resp = client.post("/api/sessions", json={})
+        session_id = session_resp.json()["id"]
+
+        # 2. Add a document to DB (simulates successful upload) but do NOT attach
+        doc = db.add_document("report.pdf", "/home/user/report.pdf", "abc123hash")
+
+        # 3. Send chat message without attaching the document
+        chat_resp = client.post(
+            "/api/chat/send",
+            json={
+                "session_id": session_id,
+                "message": "Summarize report.pdf",
+                "stream": False,
+            },
+        )
+        assert chat_resp.status_code == 200
+
+        # 4. Verify _get_chat_response received session WITHOUT the doc_id
+        mock_chat.assert_called_once()
+        session_arg = mock_chat.call_args[0][1]
+        doc_ids = session_arg.get("document_ids", [])
+        assert doc["id"] not in doc_ids
