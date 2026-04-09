@@ -22,6 +22,8 @@ const { spawn } = require("child_process");
 const TrayManager = require("./services/tray-manager.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
+const backendInstaller = require("./services/backend-installer.cjs");
+const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -73,35 +75,21 @@ let isQuitting = false;
 
 // ── Backend Process ────────────────────────────────────────────────────────
 
-function findGaiaCommand() {
-  const isWindows = process.platform === "win32";
-
-  // Check common locations
-  const candidates = isWindows
-    ? ["gaia.exe", "gaia", "gaia.cmd"]
-    : ["gaia"];
-
-  for (const cmd of candidates) {
-    try {
-      const { execSync } = require("child_process");
-      const check = isWindows ? `where ${cmd}` : `which ${cmd}`;
-      execSync(check, { stdio: "ignore" });
-      return cmd;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
+/**
+ * Start the GAIA Python backend. Expects the backend installer to have
+ * already ensured the venv is populated — callers should await
+ * `bootstrapBackend()` first.
+ *
+ * Returns the ChildProcess, or null if the gaia binary cannot be found
+ * (shouldn't happen post-ensureBackend, but we guard just in case).
+ */
 function startBackend() {
-  const gaiaCmd = findGaiaCommand();
+  const gaiaCmd = backendInstaller.findGaiaBin();
 
   if (!gaiaCmd) {
-    console.warn(
-      "Warning: gaia CLI not found. Backend will not start automatically."
+    console.error(
+      "[main] GAIA backend not found even after install — cannot start backend"
     );
-    console.warn("Install with: pip install amd-gaia");
     return null;
   }
 
@@ -337,6 +325,89 @@ function setupJumpList() {
   }
 }
 
+// ── Backend Bootstrap (Phase A) ───────────────────────────────────────────
+
+/**
+ * Ensure the Python backend is installed before the main window loads.
+ *
+ * Shows a borderless progress window while the install runs. On failure,
+ * surfaces a retry / manual / quit dialog. Loops until the user either
+ * succeeds, chooses manual install, or quits.
+ *
+ * Returns true if the backend is ready, false if the user chose to quit.
+ */
+async function bootstrapBackend() {
+  // Fast-path: if an install is obviously not needed (binary present and
+  // version matches), skip the progress window entirely and go straight to
+  // ensureBackend which will confirm readiness.
+  const existingBin = backendInstaller.findGaiaBin();
+  if (existingBin) {
+    const installedVersion = backendInstaller.getInstalledVersion(existingBin);
+    let expectedVersion = null;
+    try {
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(__dirname, "package.json"), "utf8")
+      );
+      expectedVersion = pkg.version;
+    } catch {
+      // ignore
+    }
+    if (installedVersion && installedVersion === expectedVersion) {
+      console.log(
+        `[main] GAIA backend already at ${installedVersion} — skipping bootstrap UI`
+      );
+      // Clean up any stale state file so the state machine reflects reality.
+      backendInstaller.setState(backendInstaller.STATES.READY, {
+        version: expectedVersion,
+        installedVersion,
+      });
+      return true;
+    }
+  }
+
+  // Slow path: need to install or upgrade. Show the progress window.
+  let keepTrying = true;
+  while (keepTrying) {
+    const progress = installerProgressDialog.createProgressWindow();
+
+    try {
+      await backendInstaller.ensureBackend({
+        onProgress: progress.onProgress,
+      });
+      progress.close();
+      console.log("[main] Backend bootstrap complete");
+      return true;
+    } catch (err) {
+      progress.close();
+      console.error(
+        `[main] Backend bootstrap failed: ${err && err.message ? err.message : err}`
+      );
+
+      const errorInfo = {
+        message: (err && err.message) || "GAIA install failed.",
+        stage: (err && err.stage) || null,
+        suggestion: (err && err.suggestion) || null,
+      };
+
+      const choice = await installerProgressDialog.showFailureDialog(
+        null,
+        errorInfo
+      );
+
+      if (choice === "retry") {
+        continue; // loop
+      }
+      if (choice === "manual") {
+        // The user was directed to the docs in an external browser. Quit so
+        // they can complete the manual install and restart.
+        return false;
+      }
+      return false; // quit
+    }
+  }
+  return false;
+}
+
 // ── App Lifecycle ──────────────────────────────────────────────────────────
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling
@@ -349,6 +420,15 @@ try {
 }
 
 app.whenReady().then(async () => {
+  // Phase A: ensure the Python backend is installed BEFORE creating the
+  // main window. The progress dialog owns the UI during this phase.
+  const bootstrapOk = await bootstrapBackend();
+  if (!bootstrapOk) {
+    console.log("[main] Backend bootstrap aborted — quitting");
+    app.quit();
+    return;
+  }
+
   // Start the Python backend
   backendProcess = startBackend();
 
