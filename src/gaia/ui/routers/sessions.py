@@ -85,6 +85,8 @@ async def update_session(
     db: ChatDatabase = Depends(get_db),
 ):
     """Update session title, system prompt, or linked documents."""
+    if request.agent_type is not None:
+        evict_session_agent(session_id)
     session = db.update_session(
         session_id,
         title=request.title,
@@ -94,8 +96,6 @@ async def update_session(
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if request.agent_type is not None:
-        evict_session_agent(session_id)
     return session_to_response(session)
 
 

@@ -137,7 +137,7 @@ class CreateSessionRequest(BaseModel):
     model: Optional[str] = None
     system_prompt: Optional[str] = None
     document_ids: List[str] = Field(default_factory=list)
-    agent_type: Optional[str] = None
+    agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
 class UpdateSessionRequest(BaseModel):
