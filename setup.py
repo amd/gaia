@@ -131,6 +131,7 @@ setup(
             "pytest-benchmark",
             "pytest-mock",
             "pytest-asyncio",
+            "pyfakefs",
             "memory_profiler",
             "matplotlib",
             "adjustText",
