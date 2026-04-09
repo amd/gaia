@@ -11,7 +11,7 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { getSessionHash } from '../utils/format';
 import { bugReportUrl } from './UnsupportedFeature';
-import type { Message, StreamEvent, AgentStep, Attachment } from '../types';
+import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
 import './ChatView.css';
 
 const EMPTY_SUGGESTIONS = [
@@ -102,6 +102,7 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 active: true, timestamp: ts,
             };
         case 'status':
+            if (event.message?.startsWith('Agent: ')) return null;
             return {
                 id, type: 'status',
                 label: event.message || event.status || 'Working',
@@ -122,9 +123,10 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
 interface ChatViewProps {
     sessionId: string;
     onCreateAgent?: () => void;
+    onAgentChange?: (agentId: string) => void;
 }
 
-export function ChatView({ sessionId, onCreateAgent }: ChatViewProps) {
+export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
@@ -152,6 +154,11 @@ export function ChatView({ sessionId, onCreateAgent }: ChatViewProps) {
     // Agent picker dropdown state
     const [agentPickerOpen, setAgentPickerOpen] = useState(false);
     const agentPickerRef = useRef<HTMLDivElement>(null);
+    // Use session's stored agent_type as the source of truth for the picker display
+    const displayedAgentId = session?.agent_type || activeAgentId;
+    // Resolve human-readable agent names for the message header
+    const sessionAgentName = agents.find((a) => a.id === session?.agent_type)?.name;
+    const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name;
 
     // Close agent picker on outside click
     useEffect(() => {
@@ -164,6 +171,25 @@ export function ChatView({ sessionId, onCreateAgent }: ChatViewProps) {
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
     }, [agentPickerOpen]);
+
+    const handleAgentChange = useCallback(async (newAgentId: string) => {
+        setAgentPickerOpen(false);
+        if (newAgentId === displayedAgentId) return;
+        const previousAgentId = displayedAgentId; // capture before any mutations
+        setActiveAgentId(newAgentId);
+        if (messages.length === 0) {
+            updateSessionInList(sessionId, { agent_type: newAgentId } as Partial<Session>);
+            try {
+                await api.updateSession(sessionId, { agent_type: newAgentId });
+            } catch {
+                // Roll back optimistic update on failure
+                updateSessionInList(sessionId, { agent_type: previousAgentId } as Partial<Session>);
+                setActiveAgentId(previousAgentId);
+            }
+        } else {
+            onAgentChange?.(newAgentId);
+        }
+    }, [displayedAgentId, messages.length, sessionId, setActiveAgentId, updateSessionInList, onAgentChange]);
 
     // Smooth streaming exit — snapshot last content so fade-out shows real text
     const [streamEnding, setStreamEnding] = useState(false);
@@ -1341,6 +1367,7 @@ export function ChatView({ sessionId, onCreateAgent }: ChatViewProps) {
                                 onDelete={!isStreaming ? handleDeleteMessage : undefined}
                                 onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
                                 latencyMs={latencyMs}
+                                agentName={msg.role === 'assistant' ? sessionAgentName : undefined}
                             />
                         </div>
                     );
@@ -1362,6 +1389,7 @@ export function ChatView({ sessionId, onCreateAgent }: ChatViewProps) {
                             showTerminalCursor={streamEnding}
                             agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
                             agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
+                            agentName={activeAgentName}
                         />
                     </div>
                 )}
@@ -1482,12 +1510,13 @@ export function ChatView({ sessionId, onCreateAgent }: ChatViewProps) {
                             <div className="agent-picker" ref={agentPickerRef}>
                                 <button
                                     className="agent-picker-btn"
-                                    onClick={() => setAgentPickerOpen((v) => !v)}
+                                    onClick={() => !isStreaming && setAgentPickerOpen((v) => !v)}
                                     title="Switch agent"
                                     aria-label="Switch agent"
+                                    disabled={isStreaming}
                                 >
                                     <Bot size={10} />
-                                    <span>{agents.find((a) => a.id === activeAgentId)?.name || 'Agent'}</span>
+                                    <span>{agents.find((a) => a.id === displayedAgentId)?.name || 'Agent'}</span>
                                     <ChevronDown size={10} />
                                 </button>
                                 {agentPickerOpen && (
@@ -1495,11 +1524,8 @@ export function ChatView({ sessionId, onCreateAgent }: ChatViewProps) {
                                         {agents.map((agent) => (
                                             <button
                                                 key={agent.id}
-                                                className={`agent-picker-option${agent.id === activeAgentId ? ' active' : ''}`}
-                                                onClick={() => {
-                                                    setActiveAgentId(agent.id);
-                                                    setAgentPickerOpen(false);
-                                                }}
+                                                className={`agent-picker-option${agent.id === displayedAgentId ? ' active' : ''}`}
+                                                onClick={() => handleAgentChange(agent.id)}
                                             >
                                                 <Bot size={12} />
                                                 <span>{agent.name}</span>

@@ -146,6 +146,7 @@ class UpdateSessionRequest(BaseModel):
     title: Optional[str] = None
     system_prompt: Optional[str] = None
     document_ids: Optional[List[str]] = None
+    agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
 class SessionResponse(BaseModel):

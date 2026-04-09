@@ -340,6 +340,12 @@ function App() {
         }
     }, [addSession, setCurrentSession, setMessages, setSidebarOpen, checkSystemStatus]);
 
+    // Switch to a different agent — creates a new session with the chosen agent
+    const handleAgentChange = useCallback(async (newAgentId: string) => {
+        useChatStore.getState().setActiveAgentId(newAgentId);
+        await handleNewTask();
+    }, [handleNewTask]);
+
     // Create task with a pre-filled prompt — stores the prompt in Zustand
     // so ChatView can consume it reliably on mount (no timing race).
     const { setPendingPrompt } = useChatStore();
@@ -410,6 +416,15 @@ function App() {
             }
         }
     }, [tunnelActive]);
+
+    // Sync agent picker to the selected session's agent_type
+    useEffect(() => {
+        const { sessions, setActiveAgentId } = useChatStore.getState();
+        const session = sessions.find((s) => s.id === currentSessionId);
+        if (session?.agent_type) {
+            setActiveAgentId(session.agent_type);
+        }
+    }, [currentSessionId]);
 
     // Log view transitions
     useEffect(() => {
@@ -490,7 +505,7 @@ function App() {
 
                 <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
                     {displayedSessionId ? (
-                        <ChatView key={displayedSessionId} sessionId={displayedSessionId} onCreateAgent={handleNewBuilderTask} />
+                        <ChatView key={displayedSessionId} sessionId={displayedSessionId} onCreateAgent={handleNewBuilderTask} onAgentChange={handleAgentChange} />
                     ) : (
                         <WelcomeScreen
                             onNewTask={handleNewTask}

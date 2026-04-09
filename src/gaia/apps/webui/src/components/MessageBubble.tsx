@@ -28,6 +28,8 @@ interface MessageBubbleProps {
     onResend?: (message: Message) => void;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
+    /** Display name of the agent that produced this message (e.g. "Chat Agent"). */
+    agentName?: string;
 }
 
 
@@ -290,7 +292,7 @@ function formatLatency(ms: number): string {
     return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function MessageBubble({ message, isStreaming, showTerminalCursor, agentSteps, agentStepsActive, onDelete, onResend, latencyMs }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, showTerminalCursor, agentSteps, agentStepsActive, onDelete, onResend, latencyMs, agentName }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     // Memoize the expensive LLM content cleaning (brace-depth parser) so it
     // doesn't re-run on every render — only when message content changes.
@@ -357,14 +359,18 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                                 <div className="msg-avatar msg-avatar-assistant" aria-hidden="true">
                                     <img src={gaiaRobot} alt="" />
                                 </div>
-                                <div className="msg-role role-assistant">GAIA</div>
+                                <span className="msg-role-brand">GAIA</span>
+                                {agentName && <span className="msg-role-agent">{agentName}</span>}
+                                {(isStreaming || message.created_at) && (
+                                    <span className="msg-header-sep">|</span>
+                                )}
+                                {isStreaming && (
+                                    <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} />
+                                )}
+                                {!isStreaming && message.created_at && (
+                                    <span className="msg-timestamp">{formatMsgTime(message.created_at)}</span>
+                                )}
                             </>
-                        )}
-                        {message.created_at && (
-                            <span className="msg-timestamp">{formatMsgTime(message.created_at)}</span>
-                        )}
-                        {message.role === 'assistant' && isStreaming && (
-                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} />
                         )}
                     </div>
                     {!isStreaming && (
