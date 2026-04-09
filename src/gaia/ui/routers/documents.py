@@ -351,11 +351,12 @@ async def upload_document_blob(
             _cleanup_temp(partial_path)
 
     # 7. Index and record. Wrap both so an indexing OR db failure unlinks
-    # the final file (no orphan rows/files).
+    # the final file (no orphan rows/files). The stat() call is also inside
+    # the try so a rare filesystem hiccup post-rename doesn't leak the file.
     _index_document = _server_mod()._index_document
-    file_mtime = final_path.stat().st_mtime
 
     try:
+        file_mtime = final_path.stat().st_mtime
         chunk_count = await _index_document(final_path)
         doc = db.add_document(
             filename=display_name,
