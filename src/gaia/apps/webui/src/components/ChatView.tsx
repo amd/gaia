@@ -14,13 +14,21 @@ import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment } from '../types';
 import './ChatView.css';
 
+/** Cache for getComputedStyle results — avoids repeated style recalculations
+ *  for the same textarea element since its styles rarely change. */
+const _computedStyleCache = new WeakMap<HTMLTextAreaElement, CSSStyleDeclaration>();
+
 /** Returns the pixel {x, y} of the caret inside a textarea, measured from the
  *  textarea's top-left corner (including its padding). Uses a hidden mirror div
  *  with matching styles so the result works for any font and multiline input.
  *  Accounts for scrollTop so the position stays correct when content overflows. */
 function getCaretXY(el: HTMLTextAreaElement): { x: number; y: number } {
     const sel = el.selectionStart ?? 0;
-    const computed = window.getComputedStyle(el);
+    let computed = _computedStyleCache.get(el);
+    if (!computed) {
+        computed = window.getComputedStyle(el);
+        _computedStyleCache.set(el, computed);
+    }
     const mirror = document.createElement('div');
     mirror.style.cssText = [
         'position:absolute', 'visibility:hidden', 'overflow:hidden',
@@ -205,16 +213,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
-    const rafRef = useRef<number>(0);
+    const caretRafRef = useRef<number>(0);
     const updateCaret = useCallback(() => {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = requestAnimationFrame(() => {
+        cancelAnimationFrame(caretRafRef.current);
+        caretRafRef.current = requestAnimationFrame(() => {
             if (!inputRef.current) return;
             const { x, y } = getCaretXY(inputRef.current);
             setCaret(prev => ({ ...prev, x, y }));
         });
     }, []);
-    useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
+    useEffect(() => () => cancelAnimationFrame(caretRafRef.current), []);
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
     const toolOccurredRef = useRef(false);
@@ -226,7 +234,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // (which can be hundreds/sec), dramatically reducing DOM mutations
     // and eliminating extension-triggered "runtime.lastError" floods.
     const streamBufferRef = useRef('');
-    const rafRef = useRef<number | null>(null);
+    const streamRafRef = useRef<number | null>(null);
     const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     /** Timestamp of the last auto-scroll (used for throttling). */
     const lastScrollRef = useRef(0);
@@ -236,7 +244,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const isNearBottomRef = useRef(true);
 
     const flushStreamBuffer = useCallback(() => {
-        rafRef.current = null;
+        streamRafRef.current = null;
         if (streamBufferRef.current) {
             setStreamContent(streamBufferRef.current);
         }
@@ -351,9 +359,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 abortRef.current.abort();
                 abortRef.current = null;
             }
-            if (rafRef.current !== null) {
-                cancelAnimationFrame(rafRef.current);
-                rafRef.current = null;
+            if (streamRafRef.current !== null) {
+                cancelAnimationFrame(streamRafRef.current);
+                streamRafRef.current = null;
             }
             if (scrollTimerRef.current) {
                 clearTimeout(scrollTimerRef.current);
@@ -391,9 +399,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
             abortRef.current = null;
         }
         // Cancel any pending rAF flush
-        if (rafRef.current !== null) {
-            cancelAnimationFrame(rafRef.current);
-            rafRef.current = null;
+        if (streamRafRef.current !== null) {
+            cancelAnimationFrame(streamRafRef.current);
+            streamRafRef.current = null;
         }
         // Use the buffer (most up-to-date) or fall back to store content
         const storeState = useChatStore.getState();
@@ -441,6 +449,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const el = e.target;
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+        updateCaret();
     };
 
     // Handle clipboard paste (screenshots)
@@ -653,8 +662,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     // Buffer chunks and flush to store at most once per frame (~60fps)
                     // instead of triggering a React re-render on every single SSE chunk
                     streamBufferRef.current = cleaned;
-                    if (rafRef.current === null) {
-                        rafRef.current = requestAnimationFrame(flushStreamBuffer);
+                    if (streamRafRef.current === null) {
+                        streamRafRef.current = requestAnimationFrame(flushStreamBuffer);
                     }
                 }
             },
@@ -855,9 +864,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 doneHandled = true;
 
                 // Cancel any pending rAF flush — we have the final content
-                if (rafRef.current !== null) {
-                    cancelAnimationFrame(rafRef.current);
-                    rafRef.current = null;
+                if (streamRafRef.current !== null) {
+                    cancelAnimationFrame(streamRafRef.current);
+                    streamRafRef.current = null;
                 }
                 streamBufferRef.current = '';
 
@@ -922,9 +931,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onError: (err) => {
                 // Cancel any pending rAF flush
-                if (rafRef.current !== null) {
-                    cancelAnimationFrame(rafRef.current);
-                    rafRef.current = null;
+                if (streamRafRef.current !== null) {
+                    cancelAnimationFrame(streamRafRef.current);
+                    streamRafRef.current = null;
                 }
                 streamBufferRef.current = '';
 
