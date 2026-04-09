@@ -463,6 +463,19 @@ async def _get_chat_response(
             )
         logger.info("chat: Session %s using agent type: %s", session_id[:8], agent_type)
 
+        # Honour agent model preferences from the registry (skipped when the
+        # user has set a custom model override, which always takes priority).
+        if not custom_model and registry and agent_type != "chat":
+            preferred = registry.resolve_model(agent_type)
+            if preferred:
+                logger.info(
+                    "chat: Agent %s prefers model %s (was %s)",
+                    agent_type,
+                    preferred,
+                    model_id,
+                )
+                model_id = preferred
+
         # ── Agent cache ──────────────────────────────────────────────────────
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
@@ -700,6 +713,19 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             session_id[:8],
             agent_type,
         )
+
+        # Honour agent model preferences from the registry (skipped when the
+        # user has set a custom model override, which always takes priority).
+        if not custom_model and registry and agent_type != "chat":
+            preferred = registry.resolve_model(agent_type)
+            if preferred:
+                logger.info(
+                    "chat: Agent %s prefers model %s (was %s) (streaming)",
+                    agent_type,
+                    preferred,
+                    model_id,
+                )
+                model_id = preferred
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.

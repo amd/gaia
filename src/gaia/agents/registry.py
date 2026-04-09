@@ -435,7 +435,7 @@ class AgentRegistry:
                     # triggers _register_tools() which clears _TOOL_REGISTRY and then
                     # re-loads MCP tools at the end.  Loading here would be wiped.
                 except Exception as _mcp_err:
-                    logger.debug(
+                    logger.warning(
                         "registry: MCP init failed for %s: %s", _cls.__name__, _mcp_err
                     )
                     self_inner._mcp_manager = None
