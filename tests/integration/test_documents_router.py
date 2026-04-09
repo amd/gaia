@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from gaia.ui.routers.documents import MANAGED_DOCS_DIR, MAX_DOCUMENT_UPLOAD_SIZE
+from gaia.ui.routers.documents import MAX_DOCUMENT_UPLOAD_SIZE
 from gaia.ui.server import create_app
 
 logger = logging.getLogger(__name__)
