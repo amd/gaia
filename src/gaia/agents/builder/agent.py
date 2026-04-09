@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 _RESERVED_IDS = {"agent", "chat", "gaia", "builder"}
 
 # Allowed characters for a generated agent ID.
-_SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,50}[a-z0-9]$")
+_SAFE_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$")
 
 
 def _name_to_class_name(name: str) -> str:
@@ -176,7 +176,7 @@ class BuilderAgent(Agent):
     def process_query(  # type: ignore[override]
         self,
         user_input: str,
-        max_steps: int = None,
+        max_steps: Optional[int] = None,
         trace: bool = False,
         filename: str = None,
     ) -> Dict[str, Any]:

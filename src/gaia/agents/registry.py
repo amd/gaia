@@ -375,6 +375,7 @@ class AgentRegistry:
         merged_config_path = self._write_merged_mcp_config(manifest, agent_dir)
 
         # Capture manifest data for closures
+        manifest_id = manifest.id
         instructions = manifest.instructions
         merged_config_path_str = str(merged_config_path) if merged_config_path else None
         tool_names = list(manifest.tools)
@@ -394,6 +395,14 @@ class AgentRegistry:
                 register_method = f"register_{t_name}_tools"
                 if hasattr(self_inner, register_method):
                     getattr(self_inner, register_method)()
+                else:
+                    logger.warning(
+                        "registry: manifest agent '%s' requests tool '%s' but "
+                        "no %s() method found — tool will be unavailable",
+                        manifest_id,
+                        t_name,
+                        register_method,
+                    )
             # Load MCP tools after Python tools so they aren't wiped by the clear above.
             # Load MCP tools last so they survive the TOOL_REGISTRY.clear() above.
             if getattr(self_inner, "_mcp_manager", None) is not None:
