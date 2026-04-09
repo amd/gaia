@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Start the GAIA Agent UI (backend + frontend dev server) on Windows
-# Usage: .\scripts\start-agent-ui.ps1 [-BackendOnly] [-FrontendOnly] [-Port 4200] [-DevPort 5174]
+# Usage: .\installer\scripts\start-agent-ui.ps1 [-BackendOnly] [-FrontendOnly] [-Port 4200] [-DevPort 5174]
 
 param(
     [switch]$BackendOnly,
@@ -15,7 +15,7 @@ param(
 
 if ($Help) {
     Write-Host @"
-Usage: .\scripts\start-agent-ui.ps1 [OPTIONS]
+Usage: .\installer\scripts\start-agent-ui.ps1 [OPTIONS]
 
 Start the GAIA Agent UI backend and/or frontend dev server.
 

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Start the GAIA Agent UI (backend + frontend dev server)
-# Usage: ./scripts/start-agent-ui.sh [--backend-only] [--frontend-only] [--port PORT] [--dev-port PORT]
+# Usage: ./installer/scripts/start-agent-ui.sh [--backend-only] [--frontend-only] [--port PORT] [--dev-port PORT]
 
 set -e
 
