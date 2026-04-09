@@ -12,6 +12,7 @@
  *   tray:*           — Tray icon/config (T1)
  *   notification:*   — Desktop notifications & permission prompts (T5)
  *   install:*        — First-run backend install progress (Phase A)
+ *   gaia:update:*    — Auto-update status & manual check (Phase F)
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -77,4 +78,26 @@ contextBridge.exposeInMainWorld("gaiaInstall", {
 
   // Open the log file in the OS's default viewer.
   openLogFile: () => ipcRenderer.invoke("install:open-log-file"),
+});
+
+// ── Auto-update (Phase F) ───────────────────────────────────────────────
+// Exposed as a separate global so the renderer can show a small "update
+// available" chip without pulling in the full gaiaAPI surface. Mirrors
+// the naming convention (gaiaInstall, gaiaUpdater, gaiaAPI).
+contextBridge.exposeInMainWorld("gaiaUpdater", {
+  /** Get the current update state (status, version, progress, error). */
+  getStatus: () => ipcRenderer.invoke("gaia:update:get-status"),
+
+  /** Manually trigger a check. Resolves with the post-check state. */
+  check: () => ipcRenderer.invoke("gaia:update:check"),
+
+  /**
+   * Subscribe to status changes. The callback is invoked with the full
+   * state object on every state transition. Returns an unsubscribe fn.
+   */
+  onStatusChange: (callback) => {
+    const handler = (_event, state) => callback(state);
+    ipcRenderer.on("gaia:update:status", handler);
+    return () => ipcRenderer.removeListener("gaia:update:status", handler);
+  },
 });
