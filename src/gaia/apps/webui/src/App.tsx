@@ -11,6 +11,7 @@ import { FileBrowser } from './components/FileBrowser';
 import { SettingsModal } from './components/SettingsModal';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
+import { UpdateIndicator } from './components/UpdateIndicator';
 import { PermissionPrompt } from './components/PermissionPrompt';
 import { useChatStore } from './stores/chatStore';
 import * as api from './services/api';
@@ -539,6 +540,10 @@ function App() {
 
             {/* Tool confirmation popup */}
             <PermissionPrompt />
+
+            {/* Phase F: desktop auto-update status chip (only renders in the
+                Electron app; the hook no-ops when window.gaiaUpdater is absent). */}
+            <UpdateIndicator />
 
             {/* Session creation error toast */}
             {createError && (
