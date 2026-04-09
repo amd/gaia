@@ -1,3 +1,9 @@
+---
+title: Agent UI Eval KPI Quick Reference
+description: Quick reference table for all 16 Agent UI Eval KPIs including per-turn, scenario, and scorecard-level metrics with pass thresholds and file locations.
+status: Published
+---
+
 # GAIA Agent UI Eval — KPI Quick Reference
 
 **Date:** 2026-03-31 | **Source:** `docs/spec/agent-ui-eval-kpis.md` v1.1

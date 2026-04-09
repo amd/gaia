@@ -1,3 +1,8 @@
+---
+title: Phase 5 Multi-Stage Pipeline Architecture
+description: Multi-stage pipeline with Domain Analyzer, Workflow Modeler, Loom Builder, and Pipeline Executor
+---
+
 # Phase 5: Multi-Stage Pipeline Architecture
 
 ## Overview

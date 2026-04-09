@@ -1,3 +1,9 @@
+---
+title: GAIA Loom Architecture
+description: Strategic architecture document for GAIA Loom pipeline orchestration, covering the Layer 3 task completion rate gap, competitive positioning vs Manus AI and OpenClaw, and implementation roadmap.
+status: Published
+---
+
 # GAIA Loom — Pipeline Orchestration Architecture and Competitive Positioning
 
 **Version:** 1.0

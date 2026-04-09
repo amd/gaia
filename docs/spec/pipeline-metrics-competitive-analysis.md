@@ -1,3 +1,9 @@
+---
+title: Pipeline Metrics Competitive Analysis
+description: Analysis of the three-layer metric stack (Infrastructure, Engineering Health, Capability), TTFT/TPS deep dive with AMD NPU/iGPU context, and competitive positioning vs Manus AI, OpenClaw, and local LLM tools.
+status: Published
+---
+
 # GAIA Pipeline Metrics: What's New, How It Works, and Competitive Context
 
 **Date:** 2026-04-01 | **Branch:** `feature/pipeline-orchestration-v1`

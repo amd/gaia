@@ -8,9 +8,9 @@ The Workflow Modeler takes domain analysis blueprints and generates
 execution workflows with phases, milestones, and task dependencies.
 """
 
-from typing import Any, Dict, List, Optional
 import json
 import logging
+from typing import Any, Dict, List
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
@@ -34,9 +34,9 @@ class WorkflowModeler(Agent):
 
     def __init__(self, **kwargs):
         """Initialize the Workflow Modeler agent."""
-        kwargs.setdefault('model_id', 'Qwen3.5-35B-A3B-GGUF')
-        kwargs.setdefault('max_steps', 15)
-        kwargs.setdefault('debug', False)
+        kwargs.setdefault("model_id", "Qwen3.5-35B-A3B-GGUF")
+        kwargs.setdefault("max_steps", 15)
+        kwargs.setdefault("debug", False)
 
         super().__init__(**kwargs)
 
@@ -74,15 +74,17 @@ Return JSON:
   "rationale": "why this pattern fits",
   "suitability_score": 0.0-1.0,
   "alternative_patterns": ["other", "options"]
-}"""
+}""",
             )
 
-            self._workflow_pattern = pattern_result.get('pattern', 'pipeline')
+            self._workflow_pattern = pattern_result.get("pattern", "pipeline")
             logger.info(f"Selected workflow pattern: {self._workflow_pattern}")
             return pattern_result
 
         @tool
-        def define_phases(domain_blueprint: Dict[str, Any], workflow_pattern: str) -> Dict[str, Any]:
+        def define_phases(
+            domain_blueprint: Dict[str, Any], workflow_pattern: str
+        ) -> Dict[str, Any]:
             """
             Define execution phases for the workflow.
 
@@ -113,10 +115,10 @@ Return JSON:
       "estimated_duration": "2-3 days"
     }
   ]
-}"""
+}""",
             )
 
-            self._phases = phases_result.get('phases', [])
+            self._phases = phases_result.get("phases", [])
             logger.info(f"Defined {len(self._phases)} phases")
             return phases_result
 
@@ -148,10 +150,10 @@ Return JSON:
       "success_criteria": ["criteria1", "criteria2"]
     }
   ]
-}"""
+}""",
             )
 
-            self._milestones = milestones_result.get('milestones', [])
+            self._milestones = milestones_result.get("milestones", [])
             logger.info(f"Planned {len(self._milestones)} milestones")
             return milestones_result
 
@@ -179,15 +181,17 @@ Return JSON:
   "complexity_factors": ["factor1", "factor2"],
   "resource_estimate": "resource description",
   "risk_level": "low|medium|high"
-}"""
+}""",
             )
 
-            self._estimated_complexity = complexity_result.get('complexity_score', 0.5)
+            self._estimated_complexity = complexity_result.get("complexity_score", 0.5)
             logger.info(f"Estimated complexity: {self._estimated_complexity}")
             return complexity_result
 
         @tool
-        def recommend_agents(workflow_pattern: str, phases: List[Dict[str, Any]]) -> Dict[str, Any]:
+        def recommend_agents(
+            workflow_pattern: str, phases: List[Dict[str, Any]]
+        ) -> Dict[str, Any]:
             """
             Recommend agents for workflow execution.
 
@@ -209,10 +213,10 @@ Return JSON:
   "recommended_agents": ["agent1", "agent2"],
   "agent_phase_mapping": {"Phase 1": ["agent1"], "Phase 2": ["agent2"]},
   "rationale": "why these agents are selected"
-}"""
+}""",
             )
 
-            self._recommended_agents = agents_result.get('recommended_agents', [])
+            self._recommended_agents = agents_result.get("recommended_agents", [])
             logger.info(f"Recommended {len(self._recommended_agents)} agents")
             return agents_result
 
@@ -230,7 +234,9 @@ Return JSON:
             return self.load_component(component_path)
 
         @tool
-        def save_workflow_artifact(artifact_name: str, workflow_model: Dict[str, Any]) -> str:
+        def save_workflow_artifact(
+            artifact_name: str, _workflow_model: Dict[str, Any]
+        ) -> str:
             """
             Save workflow model as an artifact.
 
@@ -243,18 +249,20 @@ Return JSON:
             """
             content = f"# Workflow Model: {artifact_name}\n\n"
             content += f"## Pattern\n\n{self._workflow_pattern}\n\n"
-            content += f"## Phases\n\n"
+            content += "## Phases\n\n"
             for phase in self._phases:
                 content += f"### {phase.get('name', 'Phase')}\n"
                 content += f"Objectives: {', '.join(phase.get('objectives', []))}\n"
                 content += f"Tasks: {', '.join(phase.get('tasks', []))}\n\n"
 
-            content += f"## Milestones\n\n"
+            content += "## Milestones\n\n"
             for milestone in self._milestones:
                 content += f"- **{milestone.get('name', 'Milestone')}**: "
                 content += f"{', '.join(milestone.get('deliverables', []))}\n"
 
-            component_path = f"workflows/workflow-{artifact_name.lower().replace(' ', '-')}.md"
+            component_path = (
+                f"workflows/workflow-{artifact_name.lower().replace(' ', '-')}.md"
+            )
             frontmatter = {
                 "template_id": f"workflow-{artifact_name.lower().replace(' ', '-')}",
                 "template_type": "workflows",
@@ -262,7 +270,7 @@ Return JSON:
                 "description": f"Workflow model for {artifact_name}",
                 "pattern": self._workflow_pattern,
                 "phases_count": len(self._phases),
-                "milestones_count": len(self._milestones)
+                "milestones_count": len(self._milestones),
             }
 
             return self.save_component(component_path, content, frontmatter)
@@ -270,20 +278,25 @@ Return JSON:
     def _analyze_with_llm(self, query: str, system_prompt: str) -> Dict[str, Any]:
         """Helper method to analyze with LLM and parse JSON response."""
         try:
-            response = self.chat.chat(query, system_prompt=system_prompt)
+            messages = [{"role": "user", "content": query}]
+            response = self.chat.send_messages(messages, system_prompt=system_prompt)
+            response_text = (
+                response.text if hasattr(response, "text") else str(response)
+            )
 
-            if isinstance(response, str):
+            if isinstance(response_text, str):
                 import re
-                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+
+                json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
                 if json_match:
                     return json.loads(json_match.group())
                 else:
-                    logger.warning(f"Could not extract JSON: {response[:200]}")
-                    return {"raw_response": response}
+                    logger.warning(f"Could not extract JSON: {response_text[:200]}")
+                    return {"raw_response": response_text}
             elif isinstance(response, dict):
                 return response
             else:
-                return {"raw_response": str(response)}
+                return {"raw_response": response_text}
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON parse error: {e}")
@@ -308,36 +321,34 @@ Return JSON:
             - recommended_agents: List[str]
             - reasoning: str
         """
-        logger.info(f"Starting workflow modeling for domain: {domain_blueprint.get('primary_domain', 'unknown')}")
+        logger.info(
+            f"Starting workflow modeling for domain: {domain_blueprint.get('primary_domain', 'unknown')}"
+        )
 
         # Step 1: Select workflow pattern
-        pattern_result = self.execute_tool(
-            "select_workflow_pattern",
-            {"domain_blueprint": domain_blueprint}
+        self.execute_tool(
+            "select_workflow_pattern", {"domain_blueprint": domain_blueprint}
         )
 
         # Step 2: Define phases
-        phases_result = self.execute_tool(
+        self.execute_tool(
             "define_phases",
-            {"domain_blueprint": domain_blueprint, "workflow_pattern": self._workflow_pattern}
+            {
+                "domain_blueprint": domain_blueprint,
+                "workflow_pattern": self._workflow_pattern,
+            },
         )
 
         # Step 3: Plan milestones
-        self.execute_tool(
-            "plan_milestones",
-            {"phases": self._phases}
-        )
+        self.execute_tool("plan_milestones", {"phases": self._phases})
 
         # Step 4: Estimate complexity
-        complexity_result = self.execute_tool(
-            "estimate_complexity",
-            {"domain_blueprint": domain_blueprint}
-        )
+        self.execute_tool("estimate_complexity", {"domain_blueprint": domain_blueprint})
 
         # Step 5: Recommend agents
-        agents_result = self.execute_tool(
+        self.execute_tool(
             "recommend_agents",
-            {"workflow_pattern": self._workflow_pattern, "phases": self._phases}
+            {"workflow_pattern": self._workflow_pattern, "phases": self._phases},
         )
 
         # Build workflow model
@@ -347,10 +358,12 @@ Return JSON:
             "milestones": self._milestones,
             "complexity_score": self._estimated_complexity,
             "recommended_agents": self._recommended_agents,
-            "reasoning": self._generate_reasoning(domain_blueprint)
+            "reasoning": self._generate_reasoning(domain_blueprint),
         }
 
-        logger.info(f"Workflow modeling complete. Pattern: {self._workflow_pattern}, Complexity: {self._estimated_complexity:.2f}")
+        logger.info(
+            f"Workflow modeling complete. Pattern: {self._workflow_pattern}, Complexity: {self._estimated_complexity:.2f}"
+        )
         return workflow_model
 
     def _generate_reasoning(self, domain_blueprint: Dict[str, Any]) -> str:

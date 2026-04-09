@@ -1,3 +1,8 @@
+---
+title: Component Framework Design Specification
+description: Design specification for reusable templates and patterns that agents reference during pipeline execution
+---
+
 # Component Framework Design Specification
 
 **Version:** 1.0.0

@@ -861,8 +861,16 @@ verification checklist in the action plan.]
 
 The following P0 tasks from this work order are now superseded by Phase 5 implementation:
 
-- **Task 3: `_load_md_agent()`** — Superseded. `src/gaia/utils/frontmatter_parser.py` provides equivalent and more complete frontmatter parsing. New work: integrate `frontmatter_parser.py` into `registry.py`'s agent loading path instead of writing a new method.
-- **Task 2: `_build_agent_definition()` helper** — Superseded. `ComponentLoader` in `src/gaia/utils/component_loader.py` handles component definition construction.
-- **Task 7: Template library creation** — Superseded. `component-framework/` (47 files) IS the template library. New work: write registry metadata `.md` files for the 5 new Phase 5 stage agents (DomainAnalyzer, WorkflowModeler, LoomBuilder, PipelineExecutor, GapDetector) using the new MD-frontmatter format spec.
+| Task | Description | Status After Phase 5 |
+|------|-------------|---------------------|
+| Task 1 | Apply 8 spec edits to `agent-ecosystem-design-spec.md` | NOT DONE — none of the 8 edits (complexity_range format, `_load_md_agent()` code, capabilities comment) were applied. The design spec at `docs/spec/agent-ecosystem-design-spec.md` still shows `complexity_range: {min: X, max: Y}` format (Section 3.2). These edits are still required. |
+| Task 2 | Add `_build_agent_definition()` to `src/gaia/agents/registry.py` | SUPERSEDED — `ComponentLoader` in `src/gaia/utils/component_loader.py` handles component definition construction. Task 2 no longer needed as originally specified. |
+| Task 3 | Add `_load_md_agent()` to `src/gaia/agents/registry.py` | SUPERSEDED — `src/gaia/utils/frontmatter_parser.py` provides equivalent and more complete frontmatter parsing. New work: integrate `frontmatter_parser.py` into `registry.py`'s agent loading path instead of writing a new method. |
+| Task 4 | Apply `senior-developer.md` frontmatter edits per action plan | NOT DONE — depends on Task 5. Still required once senior-developer.md is created. |
+| Task 5 | Write `config/agents/senior-developer.md` proof-of-concept agent file | NOT DONE — no `config/agents/senior-developer.md` file exists (only `senior-developer.yaml`). Still required as migration proof-of-concept. |
+| Task 6 (P1) | Write unit tests for `_load_md_agent()` | SUPERSEDED PARTIALLY — `test_frontmatter_parser.py` provides 493 tests for the parser. Registry-level tests for `_load_md_agent()` do not exist because `_load_md_agent()` was not added to registry. When registry integration is completed, these tests still need to be written. |
+| Task 7 (P2) | Create template library in `component-framework/templates/` | SUPERSEDED — Phase 5 (`57ee63d`, `e952716`) delivered 12+ meta-templates in `component-framework/templates/`. Task 7 is complete. |
 
-**Remaining active P0 tasks:** Task 1 (spec edits), Task 5 (senior-developer.md migration proof-of-concept), Task 6 (unit tests for frontmatter_parser integration with registry).
+**Remaining active tasks:** Task 1 (spec edits), Task 4 (senior-developer.md frontmatter edits), Task 5 (senior-developer.md creation). Tasks 2, 3, 6, and 7 are superseded by Phase 5 implementation.
+
+**Note on Tasks 5 and 6:** These tasks require reconciliation with the Phase 5 implementation approach (utility module vs. registry method). The `FrontmatterParser` exists at `src/gaia/utils/frontmatter_parser.py`; the registry integration (`_load_md_agent()` or equivalent) remains to be implemented.

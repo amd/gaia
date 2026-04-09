@@ -1,3 +1,8 @@
+---
+title: Component Framework Implementation Plan
+description: Implementation plan for the Component Framework template system and loader utility
+---
+
 # Component Framework Implementation Plan
 
 **Version:** 1.0.0

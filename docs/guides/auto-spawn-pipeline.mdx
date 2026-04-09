@@ -1,3 +1,9 @@
+---
+title: Autonomous Agent Spawning Pipeline
+description: Guide to the GAIA pipeline's autonomous agent spawning capability including GapDetector, Master Ecosystem Creator integration, and standalone deployment options.
+status: Published
+---
+
 # Autonomous Agent Spawning Pipeline
 
 ## Overview
@@ -10,6 +16,17 @@ This capability enables true agentic autonomy: provide a high-level objective, a
 3. Check which agents already exist
 4. **Automatically generate missing agents**
 5. Execute the complete pipeline
+
+## Prerequisites
+
+**IMPORTANT:** The auto-spawn pipeline's GapDetector invokes `master-ecosystem-creator.md`, a Claude Code subagent. This creates a runtime dependency on the Claude Code environment. Running `PipelineOrchestrator` outside Claude Code will result in silent failures or unhandled exceptions when gaps are detected.
+
+For standalone deployments without Claude Code, either:
+1. Pre-generate required agents manually
+2. Implement an alternative agent generation mechanism
+3. Set `auto_spawn=False` to block pipeline when gaps detected
+
+**Clear Thought MCP:** The pipeline also integrates Clear Thought MCP for sequential thinking at each stage. Ensure the Clear Thought MCP server is available for full strategic analysis capabilities. Without it, the pipeline operates in degraded mode.
 
 ## Architecture
 

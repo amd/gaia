@@ -253,6 +253,67 @@ prompt: |
             }
 
         @tool
+        def check_mcp_availability() -> Dict[str, Any]:
+            """
+            Check runtime availability of required MCP servers.
+
+            This tool checks if the MCP servers required for agent generation
+            are available at runtime.
+
+            Returns:
+                Dictionary with:
+                - mcp_available: bool - True if MCP servers are reachable
+                - required_servers: List[str] - list of required MCP servers
+                - unavailable_servers: List[str] - list of unavailable servers
+                - can_spawn_agents: bool - True if agent spawning is possible
+            """
+            required_servers = ["clear-thought", "master-ecosystem-creator"]
+            unavailable_servers = []
+
+            # Check MCP availability by attempting to list MCP tools
+            # In runtime, this would check actual MCP server connections
+            try:
+                # Attempt to access MCP registry - this is a stub that will be
+                # replaced with actual MCP connection checking in production
+                from gaia.mcp.mcp_bridge import MCPBridge
+
+                bridge = MCPBridge()
+                available = bridge.get_available_servers()
+
+                for server in required_servers:
+                    if server not in available:
+                        unavailable_servers.append(server)
+
+            except ImportError:
+                # MCP not available in this environment
+                logger.warning(
+                    "MCP bridge not available - agent spawning will be disabled"
+                )
+                unavailable_servers = required_servers.copy()
+            except Exception as e:
+                logger.warning(f"MCP availability check failed: {e}")
+                unavailable_servers = required_servers.copy()
+
+            mcp_available = len(unavailable_servers) == 0
+
+            result = {
+                "mcp_available": mcp_available,
+                "required_servers": required_servers,
+                "unavailable_servers": unavailable_servers,
+                "can_spawn_agents": mcp_available,
+            }
+
+            if not mcp_available:
+                logger.warning(
+                    f"MCP servers unavailable: {unavailable_servers}. "
+                    "Agent spawning will be blocked."
+                )
+            else:
+                logger.info("MCP servers available for agent spawning")
+
+            return result
+
+        @tool
         def get_gap_analysis() -> Dict[str, Any]:
             """
             Get the current gap analysis state.
@@ -332,6 +393,17 @@ prompt: |
 
         return None
 
+    def execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a registered tool by name."""
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        if tool_name not in _TOOL_REGISTRY:
+            logger.error(f"Tool {tool_name} not registered")
+            return {"error": f"Tool {tool_name} not registered"}
+
+        tool_fn = _TOOL_REGISTRY[tool_name]["function"]
+        return tool_fn(self, **tool_args)
+
     def detect_gaps(
         self,
         recommended_agents: List[str],
@@ -345,8 +417,9 @@ prompt: |
         This method:
         1. Scans available agents
         2. Compares against recommended agents
-        3. Analyzes gaps
-        4. Returns gap analysis with generation plan
+        3. Checks MCP server availability
+        4. Analyzes gaps
+        5. Returns gap analysis with generation plan
 
         Args:
             recommended_agents: List of agent IDs recommended by WorkflowModeler
@@ -355,7 +428,7 @@ prompt: |
             claude_agents_dir: Path to .claude/agents/ directory
 
         Returns:
-            Gap analysis result with generation plan
+            Gap analysis result with generation plan and MCP status
         """
         logger.info(
             f"Starting gap detection for {len(recommended_agents)} recommended agents"
@@ -376,7 +449,10 @@ prompt: |
             },
         )
 
-        # Step 3: Analyze gaps
+        # Step 3: Check MCP availability (runtime check)
+        mcp_result = self.execute_tool("check_mcp_availability", {})
+
+        # Step 4: Analyze gaps
         gap_result = self.execute_tool(
             "analyze_gaps",
             {
@@ -385,9 +461,19 @@ prompt: |
             },
         )
 
+        # Merge MCP status into gap result
+        gap_result["mcp_status"] = mcp_result
+        gap_result["can_spawn_agents"] = mcp_result.get("can_spawn_agents", False)
+
+        # If MCP unavailable, block spawning even if gaps exist
+        if not mcp_result.get("mcp_available", False):
+            gap_result["generation_plan"]["block_pipeline"] = True
+            gap_result["generation_plan"]["mcp_unavailable"] = True
+
         return {
             "scan_result": scan_result,
             "compare_result": compare_result,
+            "mcp_result": mcp_result,
             "gap_result": gap_result,
         }
 

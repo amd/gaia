@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: MIT
 
 """
-Pipeline Executor - Stage 4 of the GAIA multi-stage pipeline.
+Pipeline Executor - Stage 5 of the GAIA multi-stage pipeline.
 
 The Pipeline Executor takes loom topologies and executes the agent
 orchestration with monitoring, adaptive rerouting, and completion detection.
 """
 
-from typing import Any, Dict, List, Optional
 import json
 import logging
 import time
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 class PipelineExecutor(Agent):
     """
-    Pipeline Executor Agent - Stage 4 of the multi-stage pipeline.
+    Pipeline Executor Agent - Stage 5 of the multi-stage pipeline.
 
     This agent takes loom topologies and:
     1. Executes agent sequence according to execution graph
@@ -33,9 +33,9 @@ class PipelineExecutor(Agent):
 
     def __init__(self, **kwargs):
         """Initialize the Pipeline Executor agent."""
-        kwargs.setdefault('model_id', 'Qwen3.5-35B-A3B-GGUF')
-        kwargs.setdefault('max_steps', 20)
-        kwargs.setdefault('debug', True)
+        kwargs.setdefault("model_id", "Qwen3.5-35B-A3B-GGUF")
+        kwargs.setdefault("max_steps", 20)
+        kwargs.setdefault("debug", True)
 
         super().__init__(**kwargs)
 
@@ -47,7 +47,7 @@ class PipelineExecutor(Agent):
             "duration_seconds": 0,
             "iterations": 0,
             "successful_steps": 0,
-            "failed_steps": 0
+            "failed_steps": 0,
         }
         self._artifacts_produced: List[Dict[str, Any]] = []
         self._components_updated: List[str] = []
@@ -57,7 +57,9 @@ class PipelineExecutor(Agent):
         """Register pipeline execution tools."""
 
         @tool
-        def execute_agent_sequence(agent_sequence: List[str], loom_topology: Dict[str, Any]) -> Dict[str, Any]:
+        def execute_agent_sequence(
+            agent_sequence: List[str], loom_topology: Dict[str, Any]
+        ) -> Dict[str, Any]:
             """
             Execute a sequence of agents according to loom topology.
 
@@ -81,22 +83,24 @@ class PipelineExecutor(Agent):
                 agent_result = self._execute_agent_step(agent_id, loom_topology)
                 results.append(agent_result)
 
-                if agent_result.get('status') == 'success':
-                    self._execution_metrics['successful_steps'] += 1
+                if agent_result.get("status") == "success":
+                    self._execution_metrics["successful_steps"] += 1
                 else:
-                    self._execution_metrics['failed_steps'] += 1
+                    self._execution_metrics["failed_steps"] += 1
                     failed_agents.append(agent_id)
 
-            self._execution_history.append({
-                "action": "execute_agent_sequence",
-                "agents_executed": len(agent_sequence),
-                "failed": len(failed_agents)
-            })
+            self._execution_history.append(
+                {
+                    "action": "execute_agent_sequence",
+                    "agents_executed": len(agent_sequence),
+                    "failed": len(failed_agents),
+                }
+            )
 
             return {
                 "success": len(failed_agents) == 0,
                 "results": results,
-                "failed_agents": failed_agents
+                "failed_agents": failed_agents,
             }
 
         @tool
@@ -113,9 +117,12 @@ class PipelineExecutor(Agent):
                 - errors: List[str]
             """
             # Calculate health metrics
-            total_steps = self._execution_metrics['successful_steps'] + self._execution_metrics['failed_steps']
-            success_rate = (
-                self._execution_metrics['successful_steps'] / max(total_steps, 1)
+            total_steps = (
+                self._execution_metrics["successful_steps"]
+                + self._execution_metrics["failed_steps"]
+            )
+            success_rate = self._execution_metrics["successful_steps"] / max(
+                total_steps, 1
             )
 
             if success_rate >= 0.9:
@@ -129,9 +136,11 @@ class PipelineExecutor(Agent):
                 "status": status,
                 "success_rate": round(success_rate, 2),
                 "active_agents": 1,  # Current executor
-                "completed_steps": self._execution_metrics['successful_steps'],
-                "pending_steps": max(0, total_steps - self._execution_metrics['successful_steps']),
-                "errors": []
+                "completed_steps": self._execution_metrics["successful_steps"],
+                "pending_steps": max(
+                    0, total_steps - self._execution_metrics["successful_steps"]
+                ),
+                "errors": [],
             }
 
             logger.info(f"Execution health: {status}")
@@ -139,15 +148,14 @@ class PipelineExecutor(Agent):
 
         @tool
         def perform_adaptive_reroute(
-            failed_agent: str,
-            loom_topology: Dict[str, Any]
+            failed_agent: str, _loom_topology: Dict[str, Any]
         ) -> Dict[str, Any]:
             """
             Perform adaptive rerouting when an agent fails.
 
             Args:
                 failed_agent: ID of failed agent
-                loom_topology: Loom topology
+                _loom_topology: Loom topology
 
             Returns:
                 Reroute plan with:
@@ -163,20 +171,26 @@ Return JSON:
   "alternative_agents": ["backup_agent1", "backup_agent2"],
   "modified_graph": {"nodes": [], "edges": []},
   "recovery_strategy": "description of recovery approach"
-}"""
+}""",
             )
 
-            self._execution_history.append({
-                "action": "adaptive_reroute",
-                "failed_agent": failed_agent,
-                "alternatives": reroute_result.get('alternative_agents', [])
-            })
+            self._execution_history.append(
+                {
+                    "action": "adaptive_reroute",
+                    "failed_agent": failed_agent,
+                    "alternatives": reroute_result.get("alternative_agents", []),
+                }
+            )
 
-            logger.info(f"Adaptive reroute for {failed_agent}: {reroute_result.get('recovery_strategy', 'N/A')}")
+            logger.info(
+                f"Adaptive reroute for {failed_agent}: {reroute_result.get('recovery_strategy', 'N/A')}"
+            )
             return reroute_result
 
         @tool
-        def collect_artifacts(execution_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        def collect_artifacts(
+            execution_results: List[Dict[str, Any]],
+        ) -> Dict[str, Any]:
             """
             Collect artifacts from execution results.
 
@@ -191,29 +205,26 @@ Return JSON:
             artifacts = []
 
             for result in execution_results:
-                if isinstance(result, dict) and 'output' in result:
-                    artifacts.append({
-                        "type": "agent_output",
-                        "content": result['output'],
-                        "timestamp": time.time()
-                    })
-                    self._artifacts_produced.append({
-                        "type": "agent_output",
-                        "content": result['output']
-                    })
+                if isinstance(result, dict) and "output" in result:
+                    artifacts.append(
+                        {
+                            "type": "agent_output",
+                            "content": result["output"],
+                            "timestamp": time.time(),
+                        }
+                    )
+                    self._artifacts_produced.append(
+                        {"type": "agent_output", "content": result["output"]}
+                    )
 
             summary = f"Collected {len(artifacts)} artifacts from {len(execution_results)} execution results"
             logger.info(summary)
 
-            return {
-                "artifacts": artifacts,
-                "summary": summary
-            }
+            return {"artifacts": artifacts, "summary": summary}
 
         @tool
         def detect_completion(
-            execution_graph: Dict[str, Any],
-            execution_results: List[Dict[str, Any]]
+            execution_graph: Dict[str, Any], execution_results: List[Dict[str, Any]]
         ) -> Dict[str, Any]:
             """
             Detect if pipeline execution is complete.
@@ -232,15 +243,13 @@ Return JSON:
             # Check if all nodes in graph have been executed
             executed_nodes = set()
             for result in execution_results:
-                if isinstance(result, dict) and 'agent_id' in result:
-                    executed_nodes.add(result['agent_id'])
+                if isinstance(result, dict) and "agent_id" in result:
+                    executed_nodes.add(result["agent_id"])
 
-            graph_nodes = {node['id'] for node in execution_graph.get('nodes', [])}
+            graph_nodes = {node["id"] for node in execution_graph.get("nodes", [])}
             remaining_nodes = list(graph_nodes - executed_nodes)
 
-            completion_percentage = (
-                len(executed_nodes) / max(len(graph_nodes), 1) * 100
-            )
+            completion_percentage = len(executed_nodes) / max(len(graph_nodes), 1) * 100
 
             is_complete = len(remaining_nodes) == 0 and completion_percentage >= 100
 
@@ -248,7 +257,11 @@ Return JSON:
                 "is_complete": is_complete,
                 "completion_percentage": round(completion_percentage, 1),
                 "remaining_nodes": remaining_nodes,
-                "final_output": self._generate_final_output(execution_results) if is_complete else None
+                "final_output": (
+                    self._generate_final_output(execution_results)
+                    if is_complete
+                    else None
+                ),
             }
 
             if is_complete:
@@ -256,7 +269,9 @@ Return JSON:
                 logger.info("Pipeline execution complete")
             else:
                 self._execution_status = "in_progress"
-                logger.info(f"Pipeline execution: {completion_percentage:.1f}% complete")
+                logger.info(
+                    f"Pipeline execution: {completion_percentage:.1f}% complete"
+                )
 
             return completion_status
 
@@ -287,12 +302,12 @@ Return JSON:
             """
             try:
                 component = self.load_component(component_path)
-                frontmatter = component.get('frontmatter', {})
-                content = component.get('content', '')
+                frontmatter = component.get("frontmatter", {})
+                content = component.get("content", "")
 
                 # Add status update to frontmatter
-                frontmatter['execution_status'] = status
-                frontmatter['last_updated'] = time.strftime('%Y-%m-%d %H:%M:%S')
+                frontmatter["execution_status"] = status
+                frontmatter["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
                 # Append status to content
                 content += f"\n\n---\nStatus: {status} at {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -307,30 +322,36 @@ Return JSON:
                 return component_path
 
         @tool
-        def save_execution_summary(artifact_name: str, execution_result: Dict[str, Any]) -> str:
+        def save_execution_summary(
+            artifact_name: str, _execution_result: Dict[str, Any]
+        ) -> str:
             """
             Save pipeline execution summary.
 
             Args:
                 artifact_name: Name for the artifact
-                execution_result: Final execution result
+                _execution_result: Final execution result
 
             Returns:
                 Path to saved artifact
             """
             content = f"# Pipeline Execution Summary: {artifact_name}\n\n"
             content += f"## Execution Status\n\n{self._execution_status}\n\n"
-            content += f"## Metrics\n\n"
+            content += "## Metrics\n\n"
             content += f"- Duration: {self._execution_metrics['duration_seconds']:.2f} seconds\n"
             content += f"- Iterations: {self._execution_metrics['iterations']}\n"
-            content += f"- Successful Steps: {self._execution_metrics['successful_steps']}\n"
+            content += (
+                f"- Successful Steps: {self._execution_metrics['successful_steps']}\n"
+            )
             content += f"- Failed Steps: {self._execution_metrics['failed_steps']}\n"
             content += f"- Artifacts Produced: {len(self._artifacts_produced)}\n"
             content += f"- Components Updated: {len(self._components_updated)}\n\n"
 
-            content += f"## Execution History\n\n"
+            content += "## Execution History\n\n"
             for entry in self._execution_history[-10:]:  # Last 10 entries
-                content += f"- {entry.get('action', 'N/A')}: {json.dumps(entry, indent=2)}\n"
+                content += (
+                    f"- {entry.get('action', 'N/A')}: {json.dumps(entry, indent=2)}\n"
+                )
 
             component_path = f"documents/execution-summary-{artifact_name.lower().replace(' ', '-')}.md"
             frontmatter = {
@@ -339,7 +360,7 @@ Return JSON:
                 "version": "1.0.0",
                 "description": f"Execution summary for {artifact_name}",
                 "status": self._execution_status,
-                "duration": self._execution_metrics['duration_seconds']
+                "duration": self._execution_metrics["duration_seconds"],
             }
 
             return self.save_component(component_path, content, frontmatter)
@@ -347,20 +368,25 @@ Return JSON:
     def _analyze_with_llm(self, query: str, system_prompt: str) -> Dict[str, Any]:
         """Helper method to analyze with LLM and parse JSON response."""
         try:
-            response = self.chat.chat(query, system_prompt=system_prompt)
+            messages = [{"role": "user", "content": query}]
+            response = self.chat.send_messages(messages, system_prompt=system_prompt)
+            response_text = (
+                response.text if hasattr(response, "text") else str(response)
+            )
 
-            if isinstance(response, str):
+            if isinstance(response_text, str):
                 import re
-                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+
+                json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
                 if json_match:
                     return json.loads(json_match.group())
                 else:
-                    logger.warning(f"Could not extract JSON: {response[:200]}")
-                    return {"raw_response": response}
+                    logger.warning(f"Could not extract JSON: {response_text[:200]}")
+                    return {"raw_response": response_text}
             elif isinstance(response, dict):
                 return response
             else:
-                return {"raw_response": str(response)}
+                return {"raw_response": response_text}
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON parse error: {e}")
@@ -369,7 +395,9 @@ Return JSON:
             logger.error(f"LLM analysis failed: {e}")
             return {"error": str(e)}
 
-    def _execute_agent_step(self, agent_id: str, loom_topology: Dict[str, Any]) -> Dict[str, Any]:
+    def _execute_agent_step(
+        self, agent_id: str, _loom_topology: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Execute a single agent step (stub for actual agent invocation)."""
         # In real implementation, this would:
         # 1. Load agent configuration from loom_topology
@@ -381,22 +409,22 @@ Return JSON:
             "agent_id": agent_id,
             "status": "success",  # Stub: always success
             "output": f"Agent {agent_id} executed successfully",
-            "timestamp": time.time()
+            "timestamp": time.time(),
         }
 
     def _generate_final_output(self, execution_results: List[Dict[str, Any]]) -> str:
         """Generate final output from execution results."""
         outputs = []
         for result in execution_results:
-            if isinstance(result, dict) and 'output' in result:
-                outputs.append(result['output'])
+            if isinstance(result, dict) and "output" in result:
+                outputs.append(result["output"])
 
         return "\n\n".join(outputs)
 
     def execute_pipeline(
         self,
         loom_topology: Dict[str, Any],
-        domain_blueprint: Optional[Dict[str, Any]] = None
+        _domain_blueprint: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Execute the pipeline with loom topology.
@@ -413,49 +441,54 @@ Return JSON:
             - execution_metrics: Dict
             - final_output: str
         """
-        logger.info(f"Starting pipeline execution with {len(loom_topology.get('agent_sequence', []))} agents")
+        logger.info(
+            f"Starting pipeline execution with {len(loom_topology.get('agent_sequence', []))} agents"
+        )
 
-        self._execution_metrics['start_time'] = time.time()
-        start_time = self._execution_metrics['start_time']
+        self._execution_metrics["start_time"] = time.time()
+        start_time = self._execution_metrics["start_time"]
 
-        agent_sequence = loom_topology.get('agent_sequence', [])
-        execution_graph = loom_topology.get('execution_graph', {})
+        agent_sequence = loom_topology.get("agent_sequence", [])
+        execution_graph = loom_topology.get("execution_graph", {})
 
         # Step 1: Execute agent sequence
         execution_result = self.execute_tool(
             "execute_agent_sequence",
-            {"agent_sequence": agent_sequence, "loom_topology": loom_topology}
+            {"agent_sequence": agent_sequence, "loom_topology": loom_topology},
         )
 
         # Step 2: Monitor health
-        health_status = self.execute_tool("monitor_execution_health")
+        health_status = self.execute_tool("monitor_execution_health", {})
 
         # Step 3: Handle failures with adaptive rerouting
-        if execution_result.get('failed_agents'):
-            for failed_agent in execution_result['failed_agents']:
-                reroute_plan = self.execute_tool(
+        if execution_result.get("failed_agents"):
+            for failed_agent in execution_result["failed_agents"]:
+                _reroute_plan = self.execute_tool(
                     "perform_adaptive_reroute",
-                    {"failed_agent": failed_agent, "loom_topology": loom_topology}
+                    {"failed_agent": failed_agent, "loom_topology": loom_topology},
                 )
                 # In real implementation, would execute reroute
 
         # Step 4: Collect artifacts
-        artifacts_result = self.execute_tool(
+        _artifacts_result = self.execute_tool(
             "collect_artifacts",
-            {"execution_results": execution_result.get('results', [])}
+            {"execution_results": execution_result.get("results", [])},
         )
 
         # Step 5: Detect completion
         completion_status = self.execute_tool(
             "detect_completion",
-            {"execution_graph": execution_graph, "execution_results": execution_result.get('results', [])}
+            {
+                "execution_graph": execution_graph,
+                "execution_results": execution_result.get("results", []),
+            },
         )
 
         # Update metrics
         end_time = time.time()
-        self._execution_metrics['end_time'] = end_time
-        self._execution_metrics['duration_seconds'] = end_time - start_time
-        self._execution_metrics['iterations'] += 1
+        self._execution_metrics["end_time"] = end_time
+        self._execution_metrics["duration_seconds"] = end_time - start_time
+        self._execution_metrics["iterations"] += 1
 
         # Build final result
         pipeline_result = {
@@ -466,7 +499,7 @@ Return JSON:
             "execution_history": self._execution_history,
             "health_status": health_status,
             "completion_status": completion_status,
-            "final_output": completion_status.get('final_output', '')
+            "final_output": completion_status.get("final_output", ""),
         }
 
         logger.info(

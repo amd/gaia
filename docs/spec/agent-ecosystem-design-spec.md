@@ -46,12 +46,12 @@ The new `.md` agent format is designed as a strict superset of PR #720's `AgentM
 
 2. **Formal tool invocation syntax — DELIVERED (Phase 5).** The `tool-call` fenced block syntax is now formally specified in `docs/guides/explicit-tool-calling.mdx` (commit `e952716`) and demonstrated in `component-framework/templates/agent-definition.md`. The syntax covers basic CALL, MCP CALL, CALL with prompt, and conditional IF/END IF blocks. No runtime parser exists yet (LLM-evaluated in Phase 1 scope); machine-parseable evaluation remains Phase 2 work as specified in Section 4.4 Scope Boundary.
 
-3. **Pipeline stages — PARTIALLY DELIVERED (Phase 5) with architectural deviation.** Phase 5 delivered Python-class implementations of Stages 1–4 plus a GapDetector (Stage 4b) and PipelineExecutor (Stage 5):
+3. **Pipeline stages — PARTIALLY DELIVERED (Phase 5) with architectural deviation.** Phase 5 delivered Python-class implementations of Stages 1–4 plus GapDetector (Stage 4) and PipelineExecutor (Stage 5):
    - Stage 1: `src/gaia/pipeline/stages/domain_analyzer.py` (`DomainAnalyzer(Agent)`) [IMPLEMENTED — `8d6ffdd`]
    - Stage 2: `src/gaia/pipeline/stages/workflow_modeler.py` (`WorkflowModeler(Agent)`) [IMPLEMENTED — `a32187c`]
    - Stage 3: `src/gaia/pipeline/stages/loom_builder.py` (`LoomBuilder(Agent)`) [IMPLEMENTED — `8dd22c1`]
-   - Stage 4a: `src/gaia/pipeline/stages/gap_detector.py` (`GapDetector(Agent)`) [IMPLEMENTED — `fa3ef98`]
-   - Stage 4b: `src/gaia/pipeline/stages/pipeline_executor.py` (`PipelineExecutor(Agent)`) [IMPLEMENTED — `0c5f294`]
+   - Stage 4: `src/gaia/pipeline/stages/gap_detector.py` (`GapDetector(Agent)`) [IMPLEMENTED — `fa3ef98`]
+   - Stage 5: `src/gaia/pipeline/stages/pipeline_executor.py` (`PipelineExecutor(Agent)`) [IMPLEMENTED — `0c5f294`]
    - Coordinator: `src/gaia/pipeline/orchestrator.py` (`PipelineOrchestrator(Agent)`) [IMPLEMENTED — `fa3ef98`]
 
    **Architectural deviation:** This spec anticipated MD-format agent config files in `config/agents/` (e.g., `workflow-modeler.md`). Phase 5 built Python subclasses of `Agent` instead. The MD-format "Ecosystem Builder" (`config/agents/ecosystem-builder.md`) — Stage 4 as originally designed — has not been built. The `master-ecosystem-creator.md` file serves a related but distinct role (Claude Code subagent for on-demand spawning). The MD-format pipeline described in Sections 5.3–5.5 remains as Phase 2 work for the registry-loadable agent definition system.

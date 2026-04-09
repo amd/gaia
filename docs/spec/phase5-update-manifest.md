@@ -183,27 +183,33 @@ resilience primitives remain unwired. Item still open.)
 
 **Previous status:** OPEN — blocks full pipeline routing functionality.
 
-**New status:** STILL OPEN — Phase 5 introduced a NEW capability vocabulary system but did not
-back-fill the existing 18 YAML files.
+**New status:** PARTIALLY RESOLVED — Phase 5 Python stage agents now have MD config files with
+aligned capability vocabularies. The 5 pipeline stage Python classes now have corresponding MD
+config files in `config/agents/` with `pipeline.entrypoint` fields (per ADR-001 hybrid pattern)
+and `capabilities` lists that match Python tool names.
 
-**Evidence:** `git log --oneline 08b93eb..HEAD --name-only -- "config/agents/*.yaml"` returns no
-output. No Phase 5 commit modified any file in `config/agents/`. The 18 YAML files
-(`accessibility-reviewer.yaml`, `api-designer.yaml`, etc.) remain unchanged. Phase 5 introduced a
-parallel capability vocabulary in `component-framework/templates/agent-definition.md` (the
-meta-template uses `capabilities: [...]` list format) and in `src/gaia/utils/component_loader.py`.
-These are net-new systems using the new `.md` agent format, not a standardization of the existing
-YAML files.
+**Evidence:**
+- `config/agents/domain-analyzer.md` — capabilities: `identify_domains`, `extract_requirements`, `map_dependencies`, `save_analysis_result`
+- `config/agents/workflow-modeler.md` — capabilities: `select_workflow_pattern`, `define_phases`, `plan_milestones`, `estimate_complexity`, `recommend_agents`, `save_workflow_artifact`
+- `config/agents/loom-builder.md` — capabilities: `select_agents_for_phase`, `configure_agent`, `build_execution_graph`, `bind_components`, `identify_agent_gaps`, `save_loom_topology`
+- `config/agents/pipeline-executor.md` — capabilities: `execute_agent_sequence`, `monitor_execution_health`, `perform_adaptive_reroute`, `collect_artifacts`, `detect_completion`, `save_execution_summary`
+- `config/agents/gap-detector.md` — capabilities: `scan_available_agents`, `compare_agents`, `analyze_gaps`, `trigger_agent_generation`, `get_gap_analysis`
+
+All 5 MD files include `pipeline.entrypoint` field pointing to Python class (e.g., `src/gaia/pipeline/stages/domain_analyzer.py::DomainAnalyzer`).
+
+The 18 legacy YAML files in `config/agents/` remain unchanged, but the Python stage agents are now
+discoverable via AgentRegistry using the MD config files.
 
 **Action for quality-reviewer:** Update Item 4 text to:
 
 ```
-4. **Capability vocabulary not standardized across existing agent YAML configuration files.** The
-existing 18 YAML files in `config/agents/` remain unchanged (no Phase 5 commit touched them). Phase
-5 introduced a parallel capability vocabulary for the new `.md`-format agent ecosystem via the
-`component-framework` meta-templates and `ComponentLoader`. This creates two divergent capability
-systems: the legacy YAML vocabulary and the new `.md` frontmatter vocabulary. Full vocabulary
-unification requires: (a) updating the 18 YAML files to the standardized vocabulary OR (b) migrating
-them to the new `.md` format. Status: open, now involves vocabulary bifurcation risk.
+4. **Capability vocabulary bifurcation PARTIALLY RESOLVED.** The 5 Python pipeline stage agents
+now have MD config files in `config/agents/` with `pipeline.entrypoint` fields and aligned
+capability vocabularies matching Python tool names. The 18 legacy YAML files remain unchanged
+with their original vocabulary. Full unification still requires either: (a) updating the 18 YAML
+files to match the new vocabulary OR (b) migrating them to `.md` format. The Python stage agents
+are now discoverable via AgentRegistry. Status: PARTIALLY RESOLVED (Python stages fixed, legacy
+YAML files still divergent).
 ```
 
 ---
@@ -328,6 +334,64 @@ Python classes (`src/gaia/pipeline/stages/`) rather than as MD-format config age
 and 4 are therefore misleading as written — the stages exist but not in the format the spec
 anticipated. See Section F of the Phase 5 Update Manifest for required spec reconciliation.
 Status: DELIVERED with architectural deviation from plan.
+```
+
+---
+
+### Item 8 — GapDetector undocumented MCP runtime dependency
+
+**Previous status:** N/A — not identified at matrix publication time.
+
+**New status:** DOCUMENTED — GapDetector now includes runtime MCP availability check and documentation.
+
+**Evidence:**
+- `src/gaia/pipeline/stages/gap_detector.py` — Added `check_mcp_availability()` tool that verifies
+  MCP servers are reachable (commit fa3ef98)
+- `config/agents/gap-detector.md` — Added "Runtime MCP Availability Check" section documenting
+  the MCP dependency, required servers (clear-thought, master-ecosystem-creator), and standalone
+  deployment options
+- `docs/guides/auto-spawn-pipeline.mdx` — Added Prerequisites section warning that
+  "Running PipelineOrchestrator outside Claude Code will result in silent failures"
+
+**Action for quality-reviewer:** Add new Item 8:
+
+```
+8. **GapDetector MCP runtime dependency — DOCUMENTED.** The GapDetector invokes
+`master-ecosystem-creator.md` (a Claude Code subagent) when gaps are detected. This creates a
+runtime dependency on the MCP environment. Phase 5 added: (1) runtime MCP availability check
+(`check_mcp_availability()` tool), (2) documentation in `config/agents/gap-detector.md` with
+"Runtime MCP Availability Check" section, and (3) prerequisites warning in
+`docs/guides/auto-spawn-pipeline.mdx`. For standalone deployments, options are: (a) pre-generate
+required agents manually, (b) set `auto_spawn=False` to block pipeline when gaps detected, or
+(c) implement alternative agent generation mechanism. Status: DOCUMENTED with graceful degradation.
+```
+
+---
+
+### Item 9 — Python stage agents missing MD config files for AgentRegistry discovery
+
+**Previous status:** N/A — not identified at matrix publication time.
+
+**New status:** RESOLVED — All 5 Python stage agents now have MD config files with `pipeline.entrypoint`.
+
+**Evidence:**
+- `config/agents/domain-analyzer.md` — Added `pipeline.entrypoint: src/gaia/pipeline/stages/domain_analyzer.py::DomainAnalyzer`
+- `config/agents/workflow-modeler.md` — Added `pipeline.entrypoint: src/gaia/pipeline/stages/workflow_modeler.py::WorkflowModeler`
+- `config/agents/loom-builder.md` — Added `pipeline.entrypoint: src/gaia/pipeline/stages/loom_builder.py::LoomBuilder`
+- `config/agents/pipeline-executor.md` — Added `pipeline.entrypoint: src/gaia/pipeline/stages/pipeline_executor.py::PipelineExecutor`
+- `config/agents/gap-detector.md` — Added `pipeline.entrypoint: src/gaia/pipeline/stages/gap_detector.py::GapDetector`
+
+All MD files have `capabilities` lists aligned with Python tool names (ADR-001 hybrid pattern compliance).
+
+**Action for quality-reviewer:** Add new Item 9:
+
+```
+9. **Python stage agents missing registry metadata — RESOLVED.** The 5 Python pipeline stage
+agents (`DomainAnalyzer`, `WorkflowModeler`, `LoomBuilder`, `PipelineExecutor`, `GapDetector`)
+had no MD config files for `AgentRegistry` discovery. Phase 5 update (2026-04-08) created MD
+config files in `config/agents/` for all 5 stages with `pipeline.entrypoint` fields pointing to
+Python classes and `capabilities` aligned with Python tool names. The AgentRegistry can now
+discover Python stage agents via MD configs. Status: RESOLVED per ADR-001 hybrid pattern.
 ```
 
 ---

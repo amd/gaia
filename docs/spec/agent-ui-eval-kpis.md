@@ -1,3 +1,9 @@
+---
+title: Agent UI Eval KPI Specification
+description: Complete specification for the GAIA Agent UI Eval automated benchmark system including all 16 KPIs, pass/fail logic, gap registry, and production readiness thresholds.
+status: Published
+---
+
 # GAIA Agent UI Eval — KPI Specification
 
 **Version:** 1.1

@@ -12,10 +12,11 @@ These tests validate Quality Gate 7 integration criteria:
 - INTEGRATION-002: Generated agents functional in pipeline
 """
 
-import pytest
 import time
 from pathlib import Path
 from unittest.mock import Mock
+
+import pytest
 
 
 class TestFullPipelineExecution:
@@ -35,189 +36,297 @@ class TestFullPipelineExecution:
     @pytest.fixture
     def mock_execute_tool_domain_analyzer(self):
         """Mock execute_tool for DomainAnalyzer."""
-        def mock_execute(tool_name, tool_args):
+
+        def mock_execute(analyzer, tool_name, tool_args):
             if tool_name == "identify_domains":
-                return {
+                # Update internal state
+                result = {
                     "primary_domain": "Data Analysis",
-                    "secondary_domains": ["File Processing", "Statistics", "Data Visualization"],
+                    "secondary_domains": [
+                        "File Processing",
+                        "Statistics",
+                        "Data Visualization",
+                    ],
                     "domain_descriptions": {
                         "Data Analysis": "Processing and interpreting data",
-                        "File Processing": "Reading and parsing CSV files"
-                    }
+                        "File Processing": "Reading and parsing CSV files",
+                    },
                 }
+                analyzer._identified_domains = ["Data Analysis"] + result[
+                    "secondary_domains"
+                ]
+                return result
             elif tool_name == "extract_requirements":
-                return {
+                domain = tool_args.get("domain", "unknown")
+                result = {
                     "functional_requirements": ["Read CSV files", "Compute statistics"],
                     "non_functional_requirements": ["Handle large files"],
-                    "domain_knowledge_needed": ["CSV parsing", "Statistics"]
+                    "domain_knowledge_needed": ["CSV parsing", "Statistics"],
                 }
+                analyzer._domain_requirements[domain] = result[
+                    "functional_requirements"
+                ]
+                analyzer._domain_constraints[domain] = result[
+                    "non_functional_requirements"
+                ]
+                return result
             elif tool_name == "map_dependencies":
-                return {
+                result = {
                     "from_domain": "File Processing",
                     "to_domain": "Data Analysis",
                     "dependency_type": "data",
                     "description": "Data flows from file parsing to analysis",
-                    "direction": "unidirectional"
+                    "direction": "unidirectional",
                 }
+                analyzer._cross_domain_dependencies.append(result)
+                return result
             return {}
+
         return mock_execute
 
     @pytest.fixture
     def mock_execute_tool_workflow_modeler(self):
         """Mock execute_tool for WorkflowModeler."""
-        def mock_execute(tool_name, tool_args):
+
+        def mock_execute(modeler, tool_name, tool_args):
             if tool_name == "select_workflow_pattern":
-                return {
+                result = {
                     "pattern": "pipeline",
                     "rationale": "Sequential data processing workflow",
-                    "suitability_score": 0.9
+                    "suitability_score": 0.9,
                 }
+                modeler._workflow_pattern = result["pattern"]
+                return result
             elif tool_name == "define_phases":
-                return {
+                result = {
                     "phases": [
                         {
                             "name": "Data Ingestion",
                             "objectives": ["Load CSV", "Validate format"],
                             "tasks": ["Parse CSV", "Check schema"],
                             "exit_criteria": {"deliverable": "parsed_data"},
-                            "estimated_duration": "1-2 hours"
+                            "estimated_duration": "1-2 hours",
                         },
                         {
                             "name": "Analysis",
                             "objectives": ["Compute statistics"],
                             "tasks": ["Calculate metrics"],
                             "exit_criteria": {"deliverable": "analysis_results"},
-                            "estimated_duration": "2-4 hours"
-                        }
+                            "estimated_duration": "2-4 hours",
+                        },
                     ]
                 }
+                modeler._phases = result["phases"]
+                return result
             elif tool_name == "plan_milestones":
-                return {
+                result = {
                     "milestones": [
                         {
                             "name": "Data Loaded",
                             "phase": "Data Ingestion",
                             "deliverables": ["parsed_data.csv"],
-                            "success_criteria": ["Data validated"]
+                            "success_criteria": ["Data validated"],
                         }
                     ]
                 }
+                modeler._milestones = result["milestones"]
+                return result
             elif tool_name == "estimate_complexity":
-                return {
+                result = {
                     "complexity_score": 0.6,
                     "complexity_factors": ["Multiple domains", "File I/O"],
-                    "resource_estimate": "4-8 hours"
+                    "resource_estimate": "4-8 hours",
                 }
+                modeler._estimated_complexity = result["complexity_score"]
+                return result
             elif tool_name == "recommend_agents":
-                return {
+                result = {
                     "recommended_agents": ["file-processor", "data-analyst"],
                     "agent_phase_mapping": {
                         "Data Ingestion": ["file-processor"],
-                        "Analysis": ["data-analyst"]
+                        "Analysis": ["data-analyst"],
                     },
-                    "rationale": "Specialized agents for each phase"
+                    "rationale": "Specialized agents for each phase",
                 }
+                modeler._recommended_agents = result["recommended_agents"]
+                return result
             return {}
+
         return mock_execute
 
     @pytest.fixture
     def mock_execute_tool_loom_builder(self):
         """Mock execute_tool for LoomBuilder."""
-        def mock_execute(tool_name, tool_args):
+
+        def mock_execute(builder, tool_name, tool_args):
             if tool_name == "select_agents_for_phase":
                 return {
                     "selected_agents": ["file-processor", "data-analyst"],
                     "agent_roles": {
                         "file-processor": "Handle CSV parsing",
-                        "data-analyst": "Compute statistics"
+                        "data-analyst": "Compute statistics",
                     },
-                    "selection_rationale": "Specialized agents"
+                    "selection_rationale": "Specialized agents",
                 }
             elif tool_name == "configure_agent":
-                return {
+                agent_id = tool_args.get("agent_id", "unknown")
+                result = {
                     "model_id": "Qwen3.5-35B-A3B-GGUF",
                     "tools": ["file_read", "statistics"],
                     "prompt_additions": "Focus on accurate processing",
-                    "parameters": {"max_steps": 10}
+                    "parameters": {"max_steps": 10},
                 }
+                builder._agent_configurations[agent_id] = result
+                return result
             elif tool_name == "build_execution_graph":
-                return {
-                    "nodes": [
-                        {"id": "file-processor", "type": "agent", "order": 0},
-                        {"id": "data-analyst", "type": "agent", "order": 1}
-                    ],
-                    "edges": [
-                        {"from": "file-processor", "to": "data-analyst", "condition": "on_success"}
-                    ],
-                    "entry_point": "file-processor",
-                    "exit_point": "data-analyst"
+                agent_sequence = tool_args.get("agent_sequence", [])
+                nodes = []
+                edges = []
+                for i, agent_id in enumerate(agent_sequence):
+                    nodes.append({"id": agent_id, "type": "agent", "order": i})
+                    if i > 0:
+                        edges.append(
+                            {
+                                "from": agent_sequence[i - 1],
+                                "to": agent_id,
+                                "condition": "on_success",
+                            }
+                        )
+                result = {
+                    "nodes": nodes,
+                    "edges": edges,
+                    "entry_point": agent_sequence[0] if agent_sequence else None,
+                    "exit_point": agent_sequence[-1] if agent_sequence else None,
                 }
+                builder._execution_graph = result
+                builder._agent_sequence = agent_sequence
+                return result
             elif tool_name == "bind_components":
-                return {
+                agent_id = tool_args.get("agent_id", "unknown")
+                result = {
                     "read_components": ["knowledge/data-processing.md"],
                     "write_components": ["tasks/analysis-task.md"],
-                    "templates": ["checklists/data-validation.md"]
+                    "templates": ["checklists/data-validation.md"],
                 }
+                if agent_id not in builder._component_bindings:
+                    builder._component_bindings[agent_id] = []
+                builder._component_bindings[agent_id].extend(
+                    result["read_components"] + result["write_components"]
+                )
+                return result
             elif tool_name == "identify_agent_gaps":
                 return {
                     "available_agents": ["file-processor", "data-analyst"],
                     "missing_agents": [],
-                    "generation_needed": []
+                    "generation_needed": [],
                 }
             return {}
+
         return mock_execute
 
     @pytest.fixture
     def mock_execute_tool_pipeline_executor(self):
         """Mock execute_tool for PipelineExecutor."""
-        def mock_execute(tool_name, tool_args):
+
+        def mock_execute(executor, tool_name, tool_args=None):
+            tool_args = tool_args or {}
             if tool_name == "execute_agent_sequence":
-                return {
+                agent_sequence = tool_args.get("agent_sequence", [])
+                result = {
                     "success": True,
                     "results": [
-                        {"agent_id": "file-processor", "status": "success", "output": "Data loaded"},
-                        {"agent_id": "data-analyst", "status": "success", "output": "Analysis complete"}
+                        {
+                            "agent_id": agent_id,
+                            "status": "success",
+                            "output": f"Agent {agent_id} executed successfully",
+                        }
+                        for agent_id in agent_sequence
                     ],
-                    "failed_agents": []
+                    "failed_agents": [],
                 }
+                executor._execution_status = "completed"
+                executor._execution_metrics["successful_steps"] = len(agent_sequence)
+                return result
             elif tool_name == "monitor_execution_health":
                 return {
                     "status": "healthy",
                     "success_rate": 1.0,
                     "active_agents": 1,
-                    "completed_steps": 2,
-                    "pending_steps": 0
+                    "completed_steps": executor._execution_metrics["successful_steps"],
+                    "pending_steps": 0,
                 }
             elif tool_name == "perform_adaptive_reroute":
                 return {
                     "alternative_agents": ["backup-agent"],
                     "modified_graph": {"nodes": [], "edges": []},
-                    "recovery_strategy": "Use backup agent"
+                    "recovery_strategy": "Use backup agent",
                 }
             elif tool_name == "collect_artifacts":
+                execution_results = tool_args.get("execution_results", [])
+                artifacts = []
+                for result in execution_results:
+                    if isinstance(result, dict) and "output" in result:
+                        artifacts.append(
+                            {
+                                "type": "agent_output",
+                                "content": result["output"],
+                            }
+                        )
+                        executor._artifacts_produced.append(
+                            {"type": "agent_output", "content": result["output"]}
+                        )
                 return {
-                    "artifacts": [{"type": "agent_output", "content": "Results"}],
-                    "summary": "Collected 1 artifacts"
+                    "artifacts": artifacts,
+                    "summary": f"Collected {len(artifacts)} artifacts",
                 }
             elif tool_name == "detect_completion":
+                execution_graph = tool_args.get("execution_graph", {})
+                execution_results = tool_args.get("execution_results", [])
+
+                # Check if all nodes in graph have been executed
+                executed_nodes = set()
+                for result in execution_results:
+                    if isinstance(result, dict) and "agent_id" in result:
+                        executed_nodes.add(result["agent_id"])
+
+                graph_nodes = {node["id"] for node in execution_graph.get("nodes", [])}
+                remaining_nodes = list(graph_nodes - executed_nodes)
+
+                completion_percentage = (
+                    len(executed_nodes) / max(len(graph_nodes), 1) * 100
+                )
+                is_complete = len(remaining_nodes) == 0 and completion_percentage >= 100
+
+                if is_complete:
+                    executor._execution_status = "completed"
+
                 return {
-                    "is_complete": True,
-                    "completion_percentage": 100.0,
-                    "remaining_nodes": [],
-                    "final_output": "Pipeline execution complete"
+                    "is_complete": is_complete,
+                    "completion_percentage": round(completion_percentage, 1),
+                    "remaining_nodes": remaining_nodes,
+                    "final_output": (
+                        "Pipeline execution complete" if is_complete else None
+                    ),
                 }
             return {}
+
         return mock_execute
 
-    def test_stage1_domain_analyzer(self, sample_task_description, mock_execute_tool_domain_analyzer):
+    def test_stage1_domain_analyzer(
+        self, sample_task_description, mock_execute_tool_domain_analyzer
+    ):
         """
         INTEGRATION-001.1: Domain Analyzer produces valid blueprint.
         """
         from gaia.pipeline.stages.domain_analyzer import DomainAnalyzer
 
         # Create instance
-        analyzer = DomainAnalyzer(model_id='test-model', debug=False, max_steps=5)
-        analyzer.execute_tool = Mock(side_effect=mock_execute_tool_domain_analyzer)
+        analyzer = DomainAnalyzer(model_id="test-model", debug=False, max_steps=5)
+
+        def mock_execute_with_self(tool_name, tool_args):
+            return mock_execute_tool_domain_analyzer(analyzer, tool_name, tool_args)
+
+        analyzer.execute_tool = Mock(side_effect=mock_execute_with_self)
 
         # Execute Stage 1
         blueprint = analyzer.analyze(sample_task_description)
@@ -248,12 +357,16 @@ class TestFullPipelineExecution:
         domain_blueprint = {
             "primary_domain": "Data Analysis",
             "secondary_domains": ["File Processing", "Statistics"],
-            "complexity_score": 0.6
+            "complexity_score": 0.6,
         }
 
         # Create instance
-        modeler = WorkflowModeler(model_id='test-model', debug=False, max_steps=5)
-        modeler.execute_tool = Mock(side_effect=mock_execute_tool_workflow_modeler)
+        modeler = WorkflowModeler(model_id="test-model", debug=False, max_steps=5)
+
+        def mock_execute_with_self(tool_name, tool_args):
+            return mock_execute_tool_workflow_modeler(modeler, tool_name, tool_args)
+
+        modeler.execute_tool = Mock(side_effect=mock_execute_with_self)
 
         # Execute Stage 2
         workflow_model = modeler.model_workflow(domain_blueprint)
@@ -267,7 +380,14 @@ class TestFullPipelineExecution:
         assert "reasoning" in workflow_model
 
         # Validate content
-        assert workflow_model["workflow_pattern"] in ["waterfall", "agile", "spiral", "v-model", "pipeline", "iterative"]
+        assert workflow_model["workflow_pattern"] in [
+            "waterfall",
+            "agile",
+            "spiral",
+            "v-model",
+            "pipeline",
+            "iterative",
+        ]
         assert len(workflow_model["phases"]) >= 1
         assert len(workflow_model["recommended_agents"]) >= 1
 
@@ -282,14 +402,18 @@ class TestFullPipelineExecution:
             "workflow_pattern": "pipeline",
             "phases": [
                 {"name": "Data Ingestion", "objectives": ["Load CSV"]},
-                {"name": "Analysis", "objectives": ["Compute statistics"]}
+                {"name": "Analysis", "objectives": ["Compute statistics"]},
             ],
-            "recommended_agents": ["file-processor", "data-analyst"]
+            "recommended_agents": ["file-processor", "data-analyst"],
         }
 
         # Create instance
-        builder = LoomBuilder(model_id='test-model', debug=False, max_steps=5)
-        builder.execute_tool = Mock(side_effect=mock_execute_tool_loom_builder)
+        builder = LoomBuilder(model_id="test-model", debug=False, max_steps=5)
+
+        def mock_execute_with_self(tool_name, tool_args):
+            return mock_execute_tool_loom_builder(builder, tool_name, tool_args)
+
+        builder.execute_tool = Mock(side_effect=mock_execute_with_self)
 
         # Execute Stage 3
         domain_blueprint = {"primary_domain": "Data Analysis"}
@@ -321,19 +445,27 @@ class TestFullPipelineExecution:
             "execution_graph": {
                 "nodes": [
                     {"id": "file-processor", "type": "agent", "order": 0},
-                    {"id": "data-analyst", "type": "agent", "order": 1}
+                    {"id": "data-analyst", "type": "agent", "order": 1},
                 ],
                 "edges": [
-                    {"from": "file-processor", "to": "data-analyst", "condition": "on_success"}
+                    {
+                        "from": "file-processor",
+                        "to": "data-analyst",
+                        "condition": "on_success",
+                    }
                 ],
                 "entry_point": "file-processor",
-                "exit_point": "data-analyst"
-            }
+                "exit_point": "data-analyst",
+            },
         }
 
         # Create instance
-        executor = PipelineExecutor(model_id='test-model', debug=False, max_steps=5)
-        executor.execute_tool = Mock(side_effect=mock_execute_tool_pipeline_executor)
+        executor = PipelineExecutor(model_id="test-model", debug=False, max_steps=5)
+
+        def mock_execute_with_self(tool_name, tool_args=None):
+            return mock_execute_tool_pipeline_executor(executor, tool_name, tool_args)
+
+        executor.execute_tool = Mock(side_effect=mock_execute_with_self)
 
         # Execute Stage 4
         domain_blueprint = {"primary_domain": "Data Analysis"}
@@ -359,11 +491,14 @@ class TestFullPipelineExecution:
         assert "is_complete" in completion
         assert completion["is_complete"] == True
 
-    def test_full_pipeline_integration(self, sample_task_description,
-                                       mock_execute_tool_domain_analyzer,
-                                       mock_execute_tool_workflow_modeler,
-                                       mock_execute_tool_loom_builder,
-                                       mock_execute_tool_pipeline_executor):
+    def test_full_pipeline_integration(
+        self,
+        sample_task_description,
+        mock_execute_tool_domain_analyzer,
+        mock_execute_tool_workflow_modeler,
+        mock_execute_tool_loom_builder,
+        mock_execute_tool_pipeline_executor,
+    ):
         """
         INTEGRATION-001: Complete end-to-end pipeline execution.
 
@@ -375,29 +510,49 @@ class TestFullPipelineExecution:
 
         # Stage 1: Domain Analysis
         from gaia.pipeline.stages.domain_analyzer import DomainAnalyzer
-        analyzer = DomainAnalyzer(model_id='test-model', debug=False, max_steps=5)
-        analyzer.execute_tool = Mock(side_effect=mock_execute_tool_domain_analyzer)
+
+        analyzer = DomainAnalyzer(model_id="test-model", debug=False, max_steps=5)
+
+        def mock_analyzer_execute(tool_name, tool_args):
+            return mock_execute_tool_domain_analyzer(analyzer, tool_name, tool_args)
+
+        analyzer.execute_tool = Mock(side_effect=mock_analyzer_execute)
         domain_blueprint = analyzer.analyze(sample_task_description)
         assert domain_blueprint["primary_domain"] is not None
 
         # Stage 2: Workflow Modeling
         from gaia.pipeline.stages.workflow_modeler import WorkflowModeler
-        modeler = WorkflowModeler(model_id='test-model', debug=False, max_steps=5)
-        modeler.execute_tool = Mock(side_effect=mock_execute_tool_workflow_modeler)
+
+        modeler = WorkflowModeler(model_id="test-model", debug=False, max_steps=5)
+
+        def mock_modeler_execute(tool_name, tool_args):
+            return mock_execute_tool_workflow_modeler(modeler, tool_name, tool_args)
+
+        modeler.execute_tool = Mock(side_effect=mock_modeler_execute)
         workflow_model = modeler.model_workflow(domain_blueprint)
         assert workflow_model["workflow_pattern"] is not None
 
         # Stage 3: Loom Building
         from gaia.pipeline.stages.loom_builder import LoomBuilder
-        builder = LoomBuilder(model_id='test-model', debug=False, max_steps=5)
-        builder.execute_tool = Mock(side_effect=mock_execute_tool_loom_builder)
+
+        builder = LoomBuilder(model_id="test-model", debug=False, max_steps=5)
+
+        def mock_builder_execute(tool_name, tool_args):
+            return mock_execute_tool_loom_builder(builder, tool_name, tool_args)
+
+        builder.execute_tool = Mock(side_effect=mock_builder_execute)
         loom_topology = builder.build_loom(workflow_model, domain_blueprint)
         assert "execution_graph" in loom_topology
 
         # Stage 4: Pipeline Execution
         from gaia.pipeline.stages.pipeline_executor import PipelineExecutor
-        executor = PipelineExecutor(model_id='test-model', debug=False, max_steps=5)
-        executor.execute_tool = Mock(side_effect=mock_execute_tool_pipeline_executor)
+
+        executor = PipelineExecutor(model_id="test-model", debug=False, max_steps=5)
+
+        def mock_executor_execute(tool_name, tool_args=None):
+            return mock_execute_tool_pipeline_executor(executor, tool_name, tool_args)
+
+        executor.execute_tool = Mock(side_effect=mock_executor_execute)
         execution_result = executor.execute_pipeline(loom_topology, domain_blueprint)
         assert execution_result["execution_status"] is not None
 
@@ -420,8 +575,9 @@ class TestComponentFrameworkIntegration:
         """
         INTEGRATION-002: Component framework accessible to agents.
         """
-        from gaia.utils.component_loader import ComponentLoader, ComponentLoaderError
         from pathlib import Path
+
+        from gaia.utils.component_loader import ComponentLoader, ComponentLoaderError
 
         # Initialize loader
         loader = ComponentLoader(framework_dir=Path("component-framework"))
@@ -462,7 +618,7 @@ class TestComponentFrameworkIntegration:
             "checklists",
             "personas",
             "workflows",
-            "templates"
+            "templates",
         ]
 
         for dir_name in expected_dirs:

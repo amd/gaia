@@ -1,3 +1,9 @@
+---
+title: Nexus GAIA Native Integration Specification
+description: Complete specification for implementing all Nexus system capabilities natively in GAIA, including 29 new Python modules across 8 packages for intent orchestration, PII sanitization, knowledge harvesting, and GitHub integration.
+status: Published
+---
+
 # Nexus → GAIA Native Integration Specification
 
 **Version:** 1.0

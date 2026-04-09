@@ -1,3 +1,9 @@
+---
+title: Pipeline Metrics KPI Quick Reference
+description: Quick reference for all 14 pipeline metric types (PM-01 to PM-14), production monitoring alerts, health bands, risk scoring, benchmark suite (BF-01 to BF-06), and QualityScorer 27 categories with pass thresholds.
+status: Published
+---
+
 # Pipeline Metrics — KPI Quick Reference
 
 **Branch:** `feature/pipeline-orchestration-v1` | **Date:** 2026-04-01

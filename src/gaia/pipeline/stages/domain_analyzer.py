@@ -8,9 +8,9 @@ The Domain Analyzer identifies domains involved in a task, extracts requirements
 and maps dependencies between domain entities.
 """
 
-from typing import Any, Dict, List, Optional
 import json
 import logging
+from typing import Any, Dict, List
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
@@ -35,9 +35,9 @@ class DomainAnalyzer(Agent):
     def __init__(self, **kwargs):
         """Initialize the Domain Analyzer agent."""
         # Set default model for domain analysis
-        kwargs.setdefault('model_id', 'Qwen3.5-35B-A3B-GGUF')
-        kwargs.setdefault('max_steps', 15)
-        kwargs.setdefault('debug', False)
+        kwargs.setdefault("model_id", "Qwen3.5-35B-A3B-GGUF")
+        kwargs.setdefault("max_steps", 15)
+        kwargs.setdefault("debug", False)
 
         super().__init__(**kwargs)
 
@@ -75,14 +75,16 @@ Return JSON:
   "primary_domain": "the main domain",
   "secondary_domains": ["list", "of", "secondary", "domains"],
   "domain_descriptions": {"domain": "brief description"}
-}"""
+}""",
             )
 
-            self._identified_domains = domains_result.get('secondary_domains', [])
-            if domains_result.get('primary_domain'):
-                self._identified_domains.insert(0, domains_result['primary_domain'])
+            self._identified_domains = domains_result.get("secondary_domains", [])
+            if domains_result.get("primary_domain"):
+                self._identified_domains.insert(0, domains_result["primary_domain"])
 
-            logger.info(f"Identified {len(self._identified_domains)} domains: {self._identified_domains}")
+            logger.info(
+                f"Identified {len(self._identified_domains)} domains: {self._identified_domains}"
+            )
             return domains_result
 
         @tool
@@ -105,13 +107,19 @@ Return JSON:
   "functional_requirements": ["list", "of", "requirements"],
   "non_functional_requirements": ["list", "of", "constraints"],
   "domain_knowledge_needed": ["topics", "to", "research"]
-}"""
+}""",
             )
 
-            self._domain_requirements[domain] = requirements_result.get('functional_requirements', [])
-            self._domain_constraints[domain] = requirements_result.get('non_functional_requirements', [])
+            self._domain_requirements[domain] = requirements_result.get(
+                "functional_requirements", []
+            )
+            self._domain_constraints[domain] = requirements_result.get(
+                "non_functional_requirements", []
+            )
 
-            logger.info(f"Extracted {len(self._domain_requirements[domain])} requirements for {domain}")
+            logger.info(
+                f"Extracted {len(self._domain_requirements[domain])} requirements for {domain}"
+            )
             return requirements_result
 
         @tool
@@ -136,11 +144,11 @@ Return JSON:
   "dependency_type": "data|control|temporal|resource",
   "description": "description of dependency",
   "direction": "unidirectional|bidirectional"
-}"""
+}""",
             )
 
-            dependency_result['from'] = domain_a
-            dependency_result['to'] = domain_b
+            dependency_result["from"] = domain_a
+            dependency_result["to"] = domain_b
             self._cross_domain_dependencies.append(dependency_result)
 
             logger.info(f"Mapped dependency: {domain_a} -> {domain_b}")
@@ -160,7 +168,7 @@ Return JSON:
             return self.load_component(component_path)
 
         @tool
-        def save_analysis_result(artifact_name: str, result: Dict[str, Any]) -> str:
+        def save_analysis_result(artifact_name: str, _result: Dict[str, Any]) -> str:
             """
             Save domain analysis result as an artifact.
 
@@ -173,26 +181,28 @@ Return JSON:
             """
             # Save to component-framework/knowledge/
             content = f"# Domain Analysis: {artifact_name}\n\n"
-            content += f"## Identified Domains\n\n"
+            content += "## Identified Domains\n\n"
             for domain in self._identified_domains:
                 content += f"- {domain}\n"
 
-            content += f"\n## Requirements\n\n"
+            content += "\n## Requirements\n\n"
             for domain, reqs in self._domain_requirements.items():
                 content += f"### {domain}\n"
                 for req in reqs:
                     content += f"- {req}\n"
 
-            content += f"\n## Dependencies\n\n"
+            content += "\n## Dependencies\n\n"
             for dep in self._cross_domain_dependencies:
                 content += f"- {dep['from']} -> {dep['to']}: {dep.get('description', 'dependency')}\n"
 
-            component_path = f"knowledge/domain-{artifact_name.lower().replace(' ', '-')}.md"
+            component_path = (
+                f"knowledge/domain-{artifact_name.lower().replace(' ', '-')}.md"
+            )
             frontmatter = {
                 "template_id": f"domain-{artifact_name.lower().replace(' ', '-')}",
                 "template_type": "knowledge",
                 "version": "1.0.0",
-                "description": f"Domain analysis for {artifact_name}"
+                "description": f"Domain analysis for {artifact_name}",
             }
 
             return self.save_component(component_path, content, frontmatter)
@@ -200,25 +210,29 @@ Return JSON:
     def _analyze_with_llm(self, query: str, system_prompt: str) -> Dict[str, Any]:
         """Helper method to analyze with LLM and parse JSON response."""
         try:
-            response = self.chat.chat(
-                query,
-                system_prompt=system_prompt
+            messages = [{"role": "user", "content": query}]
+            response = self.chat.send_messages(messages, system_prompt=system_prompt)
+            response_text = (
+                response.text if hasattr(response, "text") else str(response)
             )
 
             # Extract JSON from response
-            if isinstance(response, str):
+            if isinstance(response_text, str):
                 # Try to extract JSON block
                 import re
-                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+
+                json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
                 if json_match:
                     return json.loads(json_match.group())
                 else:
-                    logger.warning(f"Could not extract JSON from response: {response[:200]}")
-                    return {"raw_response": response}
+                    logger.warning(
+                        f"Could not extract JSON from response: {response_text[:200]}"
+                    )
+                    return {"raw_response": response_text}
             elif isinstance(response, dict):
                 return response
             else:
-                return {"raw_response": str(response)}
+                return {"raw_response": response_text}
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM response as JSON: {e}")
@@ -248,21 +262,20 @@ Return JSON:
         logger.info(f"Starting domain analysis for: {task_description[:100]}...")
 
         # Step 1: Identify domains
-        domains = self.execute_tool("identify_domains", {"task_description": task_description})
+        self.execute_tool("identify_domains", {"task_description": task_description})
 
         # Step 2: Extract requirements for each domain
         for domain in self._identified_domains[:5]:  # Limit to top 5 domains
             self.execute_tool(
                 "extract_requirements",
-                {"domain": domain, "task_description": task_description}
+                {"domain": domain, "task_description": task_description},
             )
 
         # Step 3: Map dependencies between domains
         for i, domain_a in enumerate(self._identified_domains[:3]):
-            for domain_b in self._identified_domains[i+1:3]:
+            for domain_b in self._identified_domains[i + 1 : 3]:
                 self.execute_tool(
-                    "map_dependencies",
-                    {"domain_a": domain_a, "domain_b": domain_b}
+                    "map_dependencies", {"domain_a": domain_a, "domain_b": domain_b}
                 )
 
         # Step 4: Calculate complexity score
@@ -271,17 +284,21 @@ Return JSON:
 
         # Step 5: Build and return blueprint
         blueprint = {
-            "primary_domain": self._identified_domains[0] if self._identified_domains else "unknown",
+            "primary_domain": (
+                self._identified_domains[0] if self._identified_domains else "unknown"
+            ),
             "secondary_domains": self._identified_domains[1:],
             "domain_requirements": self._domain_requirements,
             "domain_constraints": self._domain_constraints,
             "cross_domain_dependencies": self._cross_domain_dependencies,
             "complexity_score": self._complexity_score,
             "confidence_score": self._confidence_score,
-            "reasoning": self._generate_reasoning()
+            "reasoning": self._generate_reasoning(),
         }
 
-        logger.info(f"Domain analysis complete. Complexity: {self._complexity_score:.2f}, Confidence: {self._confidence_score:.2f}")
+        logger.info(
+            f"Domain analysis complete. Complexity: {self._complexity_score:.2f}, Confidence: {self._confidence_score:.2f}"
+        )
         return blueprint
 
     def _calculate_complexity(self) -> float:
@@ -292,15 +309,19 @@ Return JSON:
         # - Number of dependencies (more = more complex)
         # - Dependency types (bidirectional > unidirectional)
 
-        domain_factor = min(len(self._identified_domains) / 10.0, 1.0)  # Cap at 10 domains
+        domain_factor = min(
+            len(self._identified_domains) / 10.0, 1.0
+        )  # Cap at 10 domains
 
         total_reqs = sum(len(reqs) for reqs in self._domain_requirements.values())
         req_factor = min(total_reqs / 20.0, 1.0)  # Cap at 20 requirements
 
-        dep_factor = min(len(self._cross_domain_dependencies) / 5.0, 1.0)  # Cap at 5 dependencies
+        dep_factor = min(
+            len(self._cross_domain_dependencies) / 5.0, 1.0
+        )  # Cap at 5 dependencies
 
         # Weighted average
-        complexity = (0.3 * domain_factor + 0.4 * req_factor + 0.3 * dep_factor)
+        complexity = 0.3 * domain_factor + 0.4 * req_factor + 0.3 * dep_factor
         return round(complexity, 2)
 
     def _calculate_confidence(self) -> float:
