@@ -7,7 +7,7 @@
 **Target Branch:** `main`
 **Document Status:** Draft — complete, all sections present
 **Produced by:** software-program-manager
-**Date:** 2026-04-07
+**Date:** 2026-04-08
 
 ---
 
@@ -23,16 +23,16 @@ The matrix is organized by system category rather than by commit order. Each ent
 
 | Metric | Value |
 |---|---|
-| Files changed | 970 |
-| Lines inserted | 300,282 |
+| Files changed | 984 |
+| Lines inserted | 306,247 |
 | Lines deleted | 13,447 |
-| Net lines added | 286,835 |
-| Branch-specific commits | 72 |
+| Net lines added | 292,800 |
+| Branch-specific commits | 73 |
 | Oldest commit date | 2026-03-16 |
 | Most recent commit date | 2026-04-08 |
-| Delivery phases represented | P1, P2, P3-S1, P3-S2, P3-S3, P3-S4, P4-W1, P4-W2, P4-W3, BAIBEL, P5, Session |
+| Delivery phases represented | P1, P2, P3-S1, P3-S2, P3-S3, P3-S4, P4-W1, P4-W2, P4-W3, BAIBEL, P5, P6, Session |
 
-Note: The planning strategist summary cited 30 branch-specific commits. A full `git log main..HEAD --no-merges` enumeration on 2026-04-07 produced 58 commits; updated enumeration on 2026-04-08 after Phase 5 pull produces 72 commits. The 72-commit figure is used throughout this document as the accurate figure. The original discrepancy reflected the strategist counting only pipeline-scoped commits and excluding Agent UI, CI/CD, and pre-existing main-branch backports.
+Note: The planning strategist summary cited 30 branch-specific commits. A full `git log main..HEAD --no-merges` enumeration on 2026-04-07 produced 58 commits; updated enumeration on 2026-04-08 after Phase 5 pull produces 72 commits; updated enumeration on 2026-04-08 after Phase 6 pull (commit `41ee396`) produces 73 commits. The 73-commit figure is used throughout this document as the accurate figure. The original discrepancy reflected the strategist counting only pipeline-scoped commits and excluding Agent UI, CI/CD, and pre-existing main-branch backports.
 
 ---
 
@@ -112,7 +112,7 @@ The `feature/pipeline-orchestration-v1` branch was initiated to deliver a self-c
 
 The scope expanded substantially over the development period to encompass six distinct programs of work: the core pipeline engine, the quality gate system, a parallel conversation-compaction framework (BAIBEL, Phases 0–3 complete), an Enterprise Infrastructure Program (Phase 3: four sprints of modular architecture, DI+performance, caching+config, and observability+API), a Production Hardening Program (Phase 4: three weeks of health monitoring, resilience patterns, and data protection+performance profiling), and ongoing Agent UI feature delivery. These programs ran concurrently on the same branch. The result is a branch that delivers both a new top-level capability and a significant restructuring of GAIA's internal infrastructure.
 
-The branch spans 970 changed files, 300,282 inserted lines, 13,447 deleted lines, and 71 commits across a 23-day window from 2026-03-16 to 2026-04-08. The Phase 5 program (9 commits, ~33,567 net lines) was added after the initial matrix publication.
+The branch spans 984 changed files, 306,247 inserted lines, 13,447 deleted lines, and 73 commits across a 23-day window from 2026-03-16 to 2026-04-08. The Phase 5 program (9 commits, ~33,567 net lines) was added after the initial matrix publication. The Phase 6 pull (commit `41ee396`, 2026-04-08) added a further 14 changed files and ~5,965 inserted lines.
 
 A seventh concurrent program — Phase 5: Autonomous Agent Ecosystem Creation — was added after the initial branch-change-matrix publication. Phase 5 delivers a five-stage self-building pipeline (`DomainAnalyzer` → `WorkflowModeler` → `LoomBuilder` → `GapDetector` → `PipelineExecutor`) with automatic agent spawning via `GapDetector` and integration of the Clear Thought MCP for sequential reasoning at each stage. Phase 5 passed Quality Gate 7 (13/13 criteria, 100%) and introduced the `component-framework/` meta-template library (24+ templates across 6 categories) and `ComponentLoader` utility. It is documented in `docs/spec/phase5_multi_stage_pipeline.md` and guided by `docs/reference/phase5-implementation-plan.md`.
 
@@ -183,7 +183,7 @@ The following previously-existing GAIA modules were modified on this branch. The
 
 ### Open Items: Incomplete Work on This Branch
 
-The following items were identified as incomplete or deferred at the time of the most recent commit (2026-04-07). They represent work that was planned within the scope of this branch but was not completed before the branch was prepared for review. Each item should be evaluated by the merge review team to determine whether it must be completed before merge, can be tracked as a post-merge issue, or has been intentionally deferred.
+The following items were identified as incomplete or deferred at the time of the most recent commit (2026-04-08). They represent work that was planned within the scope of this branch but was not completed before the branch was prepared for review. Each item should be evaluated by the merge review team to determine whether it must be completed before merge, can be tracked as a post-merge issue, or has been intentionally deferred.
 
 1. **AgentOrchestrator not built (routing level) — RoutingAgent retains hardcoded CodeAgent default.** The `PipelineOrchestrator` (`src/gaia/pipeline/orchestrator.py`, Phase 5, commit `fa3ef98`) delivers five-stage orchestration with gap detection and is architecturally more capable than the originally-scoped AgentOrchestrator. However, the RoutingAgent's hardcoded CodeAgent fallback has not been removed. The two issues are now decoupled: pipeline-level orchestration is resolved; routing-agent-level dynamic selection remains open. Status: routing default open; pipeline orchestration resolved.
 
@@ -191,13 +191,13 @@ The following items were identified as incomplete or deferred at the time of the
 
 3. **Security Boundary incomplete — resilience primitives not wired into pipeline engine call sites.** The resilience primitives (`CircuitBreaker`, `Bulkhead`, `Retry` in `src/gaia/resilience/`) and the data protection components (`DataProtection`, `WorkspacePolicy` in `src/gaia/security/`) were delivered as standalone modules with full test coverage. However, integration wiring from these primitives into the pipeline engine's agent call paths (`engine.py`, `loop_manager.py`, `routing_engine.py`) has not been completed. A pipeline run that encounters a failing agent will not automatically benefit from circuit breaker protection unless the caller explicitly wraps the call. Status: open, medium risk. (Phase 5 — 2026-04-08 — confirmed: ComponentLoader wired into engine.py in commit `8d6ffdd`; resilience primitives remain unwired. Item still open.)
 
-4. **Capability vocabulary bifurcation PARTIALLY RESOLVED.** The 5 Python pipeline stage agents now have MD config files in `config/agents/` with `pipeline.entrypoint` fields and aligned capability vocabularies matching Python tool names (per ADR-001 hybrid pattern). The 18 legacy YAML files remain unchanged with their original vocabulary. Full unification still requires either: (a) updating the 18 YAML files to match the new vocabulary OR (b) migrating them to `.md` format. The Python stage agents are now discoverable via AgentRegistry. Status: PARTIALLY RESOLVED (Python stages fixed, legacy YAML files still divergent).
+4. **Capability vocabulary bifurcation PARTIALLY RESOLVED.** The 5 Python pipeline stage agents now have MD config files in `config/agents/` with `pipeline.entrypoint` fields and aligned capability vocabularies matching Python tool names (per ADR-001 hybrid pattern). The 18 legacy YAML files remain unchanged with their original vocabulary. Full unification still requires either: (a) updating the 18 YAML files to match the new vocabulary OR (b) migrating them to `.md` format. The Python stage agents are now discoverable via AgentRegistry. Status: PARTIALLY RESOLVED (Python stages fixed, legacy YAML files still divergent). (Phase 6 — 2026-04-08 — PARTIALLY RESOLVED: docs/spec/unified-capability-model.md (v1.0.0, 434 lines, Status: Proposed) defines the unified capability vocabulary in commit 41ee396. The 18 legacy YAML files in config/agents/ still use the old vocabulary. Risk reduced from HIGH to MEDIUM — clear path now exists. Migration of legacy YAML files to unified vocabulary remains open.)
 
 5. **Quality reviewer final coherence check not completed — scope expanded by Phase 5.** The original Task 6 coherence check (verifying cross-spec consistency and code-example accuracy for pre-Phase-5 specs) remains incomplete. Phase 5 added three new spec documents (`docs/spec/phase5_multi_stage_pipeline.md`, `docs/spec/component-framework-design-spec.md`, `docs/spec/component-framework-implementation-plan.md`) that also require coherence review. Of particular concern: the design spec (`agent-ecosystem-design-spec.md`) Section 2.2 "What Is Missing" still lists items 3 and 4 as missing (Workflow Modeler, Loom Builder, Ecosystem Builder; MD registry loading) even though Phase 5 built the Python stage agents. Status: open, scope expanded.
 
 6. **Additional items identified in `future-where-to-resume-left-off.md`.** The root-level document `/c/Users/amikinka/gaia/future-where-to-resume-left-off.md` serves as the program handoff document and contains the authoritative list of remaining work. As of version 19.0 of that document (dated 2026-04-06), the program is declared 100% complete for the BAIBEL-internal phase tracking. However, the five items above were identified independently from repository inspection and are not reflected as open in that document. Reviewers should treat the document as a historical record of what was completed, not as a guarantee that all integration work is merge-ready.
 
-7. **YAML frontmatter missing from nine `docs/spec/*.md` files.** Nine specification files were committed to `docs/spec/` without YAML frontmatter. The Mintlify documentation framework requires YAML frontmatter (at minimum a `title` field) for `.md` files to render correctly in the documentation site. Without frontmatter, these files will either fail to render or be rendered with incorrect titles. Status: open, documentation build risk.
+7. **YAML frontmatter missing from nine `docs/spec/*.md` files.** Nine specification files were committed to `docs/spec/` without YAML frontmatter. The Mintlify documentation framework requires YAML frontmatter (at minimum a `title` field) for `.md` files to render correctly in the documentation site. Without frontmatter, these files will either fail to render or be rendered with incorrect titles. Status: open, documentation build risk. (Phase 6 — 2026-04-08 — CLOSED: All 9 spec files received YAML frontmatter in commit 41ee396. Documentation build risk eliminated.)
 
    Files requiring frontmatter:
    - `agent-ui-eval-kpi-reference.md`
@@ -212,7 +212,7 @@ The following items were identified as incomplete or deferred at the time of the
 
    (Phase 5 — 2026-04-08 — confirmed: original 6 files unchanged. Phase 5 added 3 more files without frontmatter, bringing total to 9.)
 
-8. **GapDetector MCP runtime dependency — DOCUMENTED.** The GapDetector invokes `master-ecosystem-creator.md` (a Claude Code subagent) when gaps are detected. This creates a runtime dependency on the MCP environment. Phase 5 added: (1) runtime MCP availability check (`check_mcp_availability()` tool), (2) documentation in `config/agents/gap-detector.md` with "Runtime MCP Availability Check" section, and (3) prerequisites warning in `docs/guides/auto-spawn-pipeline.mdx`. For standalone deployments, options are: (a) pre-generate required agents manually, (b) set `auto_spawn=False` to block pipeline when gaps detected, or (c) implement alternative agent generation mechanism. Status: DOCUMENTED with graceful degradation.
+8. **GapDetector MCP runtime dependency — DOCUMENTED.** The GapDetector invokes `master-ecosystem-creator.md` (a Claude Code subagent) when gaps are detected. This creates a runtime dependency on the MCP environment. Phase 5 added: (1) runtime MCP availability check (`check_mcp_availability()` tool), (2) documentation in `config/agents/gap-detector.md` with "Runtime MCP Availability Check" section, and (3) prerequisites warning in `docs/guides/auto-spawn-pipeline.mdx`. For standalone deployments, options are: (a) pre-generate required agents manually, (b) set `auto_spawn=False` to block pipeline when gaps detected, or (c) implement alternative agent generation mechanism. Status: DOCUMENTED with graceful degradation. (Phase 6 — 2026-04-08 — CLOSED: Five MD-frontmatter registry config files added in commit 41ee396: config/agents/domain-analyzer.md, gap-detector.md, loom-builder.md, pipeline-executor.md, workflow-modeler.md. GapDetector Claude Code prerequisite documented in docs/guides/auto-spawn-pipeline.mdx.)
 
 9. **Python stage agents missing registry metadata — RESOLVED.** The 5 Python pipeline stage agents (`DomainAnalyzer`, `WorkflowModeler`, `LoomBuilder`, `PipelineExecutor`, `GapDetector`) had no MD config files for `AgentRegistry` discovery. Phase 5 update (2026-04-08) created MD config files in `config/agents/` for all 5 stages with `pipeline.entrypoint` fields pointing to Python classes and `capabilities` aligned with Python tool names. The AgentRegistry can now discover Python stage agents via MD configs. Status: RESOLVED per ADR-001 hybrid pattern.
 
@@ -844,7 +844,7 @@ Risk levels in this document are assigned using the following criteria:
 
 ### 7.1 Commit Index
 
-All 71 branch-specific commits (`git log main..HEAD --no-merges`) are listed below in reverse chronological order (most recent first). Commits are classified by the primary category they belong to and the delivery phase they represent.
+All 73 branch-specific commits (`git log main..HEAD --no-merges`) are listed below in reverse chronological order (most recent first). Commits are classified by the primary category they belong to and the delivery phase they represent.
 
 The Phase column uses the following abbreviations:
 - **P1**: Pipeline Phase 1 — core engine foundations
@@ -857,9 +857,11 @@ The Phase column uses the following abbreviations:
 - **CROSS**: Cross-cutting or multi-category
 - **SESSION**: Session work — dataclass fixes, shadow module removal, housekeeping
 - **P5**: Phase 5 — Autonomous Agent Ecosystem Creation (DomainAnalyzer → WorkflowModeler → LoomBuilder → GapDetector → PipelineExecutor + ComponentLoader + component-framework templates)
+- **P6**: Phase 6 — Pipeline completion: MD registry configs, stage agent refactors, spec frontmatter, unified capability model, ADR-001, unit tests, e2e expansion
 
 | Short SHA | Commit Title | Category | Phase |
 |---|---|---|---|
+| `41ee396` | feat(phase5): Complete five-stage auto-spawn pipeline implementation | Pipeline Orchestration + Documentation + Testing | P6 |
 | `fa3ef98` | feat(pipeline): add autonomous agent spawning with GapDetector | Pipeline Orchestration | P5 |
 | `f57e5ba` | test(phase5): Add Quality Gate 7 validation tests and report | Testing Infrastructure | P5 |
 | `e952716` | feat(phase5): Complete component-framework templates and tool calling docs | Documentation + Component Framework | P5 |
@@ -950,7 +952,7 @@ File counts below reflect changed or added source files as reported by `git diff
 | 11. Testing Infrastructure | `tests/` | 162 | New unit tests for all Phase 3 and Phase 4 modules; integration test fixes; MCP isolation fix; eval benchmark framework tests |
 | 12. Build, CI/CD, and Packaging | `.github/workflows/`, `util/lint.py`, `util/lint.ps1`, `pyproject.toml`, package.json files | 27 | OIDC publishing migration, merge queue fix, lint tooling for Windows, `gaia init` frontend build integration |
 
-**Total tracked in matrix:** 970 files (matches `git diff --stat` summary; includes Phase 5 additions)
+**Total tracked in matrix:** 984 files (matches `git diff --stat` summary; includes Phase 5 and Phase 6 additions: 306,247 insertions, 73 commits)
 
 ---
 
@@ -1038,4 +1040,4 @@ One of the six cross-cutting architectural themes in this branch. The SPC descri
 
 ---
 
-*End of document. All seven sections present: Section 1 (Header), Section 2 (Executive Summary), Section 3 (Change Matrix by Category), Section 4 (Cross-Cutting Concerns), Section 5 (Bug Fixes and Regressions Addressed), Section 6 (Risk Assessment Summary), Section 7 (Appendix). Open Items: 15 items (1–8 original; 9–15 added 2026-04-08 from PR amd/gaia#606 integration analysis). See `docs/reference/pr606-integration-analysis.md` for full analysis.*
+*End of document. All seven sections present: Section 1 (Header), Section 2 (Executive Summary), Section 3 (Change Matrix by Category), Section 4 (Cross-Cutting Concerns), Section 5 (Bug Fixes and Regressions Addressed), Section 6 (Risk Assessment Summary), Section 7 (Appendix). Open Items: 15 items (1–8 original; 9–15 added 2026-04-08 from PR amd/gaia#606 integration analysis); OI-7 CLOSED and OI-8 CLOSED in Phase 6 commit 41ee396 (2026-04-08); OI-4 risk reduced from HIGH to MEDIUM. Branch stats updated to 984 files, 306,247 insertions, 73 commits. See `docs/reference/pr606-integration-analysis.md` for full analysis.*
