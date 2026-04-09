@@ -12,9 +12,13 @@ const API_BASE = '/api';
 
 function getFriendlyError(status: number, detail: string): string {
     switch (status) {
-        case 403: return 'Access denied. This location is outside your home directory.';
-        case 404: return 'Not found. The file or folder may have been moved or deleted.';
-        case 413: return 'File too large to process.';
+        case 403: return detail || 'Access denied.';
+        // Prefer the backend's detail for 404s — the previous canned string
+        // ("The file or folder may have been moved or deleted.") was misleading
+        // for upload/indexing flows where the real cause was a malformed
+        // filepath, not a missing file. See issue #728.
+        case 404: return detail || 'The requested item was not found.';
+        case 413: return detail || 'File too large to process.';
         case 500: return 'Server error. Please try again.';
         case 502:
         case 503: return 'Service unavailable. Is the backend running?';
@@ -311,6 +315,47 @@ export async function listDocuments(): Promise<{ documents: Document[]; total: n
 
 export async function uploadDocumentByPath(filepath: string): Promise<Document> {
     return apiFetch('POST', '/documents/upload-path', { filepath });
+}
+
+/**
+ * Upload a document as a multipart blob for indexing.
+ *
+ * Used by drag-and-drop in both the Document Library and ChatView.
+ * Required for browser-mode users (and modern Electron versions, where
+ * File.path is no longer populated for drag-drop) — there's no reliable
+ * way to get an absolute filesystem path from a browser File object,
+ * so we have to stream the content directly to the server.
+ *
+ * Errors are mapped through getFriendlyError so 404/413 messages are
+ * consistent with the rest of the app.
+ */
+export async function uploadDocumentBlob(file: File): Promise<Document> {
+    const url = `${API_BASE}/documents/upload`;
+    const t = log.api.time();
+    log.api.info(`POST ${url}`, { fileName: file.name, size: file.size });
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    let res: Response;
+    try {
+        res = await fetch(url, { method: 'POST', body: formData });
+    } catch (err) {
+        log.api.error(`POST ${url} - network error`, err);
+        throw err;
+    }
+
+    if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
+        let detail = errorText;
+        try { detail = JSON.parse(errorText).detail || errorText; } catch {}
+        throw new Error(getFriendlyError(res.status, detail));
+    }
+
+    const data = await res.json();
+    log.api.timed(`POST ${url} -> ${res.status}`, t, data);
+    return data;
 }
 
 export async function deleteDocument(id: string): Promise<void> {

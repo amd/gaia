@@ -1069,7 +1069,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [documents, sessionId, updateSessionInList]);
 
-    // Drag & drop
+    // Drag & drop — uploads the file blob directly rather than relying on
+    // File.path (which is browser-undefined and was removed in Electron 32+).
+    // See issue #728.
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1077,9 +1079,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (e.dataTransfer.files.length > 0) {
             setShowDocLibrary(true);
             for (const file of Array.from(e.dataTransfer.files)) {
-                const filepath = (file as any).path || file.name;
                 try {
-                    const doc = await api.uploadDocumentByPath(filepath);
+                    const doc = await api.uploadDocumentBlob(file);
                     if (sessionId && doc?.id) {
                         try {
                             await api.attachDocument(sessionId, doc.id);
@@ -1093,7 +1094,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         }
                     }
                 } catch (err) {
-                    log.doc.error(`Upload failed: ${filepath}`, err);
+                    log.doc.error(`Upload failed: ${file.name}`, err);
                 }
             }
         }
