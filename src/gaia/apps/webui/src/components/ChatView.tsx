@@ -14,6 +14,34 @@ import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment } from '../types';
 import './ChatView.css';
 
+/** Returns the pixel {x, y} of the caret inside a textarea, measured from the
+ *  textarea's top-left corner (including its padding). Uses a hidden mirror div
+ *  with matching styles so the result works for any font and multiline input. */
+function getCaretXY(el: HTMLTextAreaElement): { x: number; y: number } {
+    const sel = el.selectionStart ?? 0;
+    const computed = window.getComputedStyle(el);
+    const mirror = document.createElement('div');
+    mirror.style.cssText = [
+        'position:absolute', 'visibility:hidden', 'overflow:hidden',
+        'white-space:pre-wrap', 'word-wrap:break-word',
+        'top:-9999px', 'left:-9999px',
+        `box-sizing:${computed.boxSizing}`,
+        `width:${computed.width}`,
+        `padding:${computed.padding}`,
+        `font:${computed.font}`,
+        `letter-spacing:${computed.letterSpacing}`,
+        `word-spacing:${computed.wordSpacing}`,
+    ].join(';');
+    mirror.appendChild(document.createTextNode(el.value.substring(0, sel)));
+    const marker = document.createElement('span');
+    marker.textContent = '\u200b';
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+    const coords = { x: marker.offsetLeft, y: marker.offsetTop };
+    document.body.removeChild(mirror);
+    return coords;
+}
+
 const EMPTY_SUGGESTIONS = [
     'Summarize a document',
     'Find a file on my computer',
@@ -137,6 +165,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useState('');
+    const [caretPos, setCaretPos] = useState({ x: 0, y: 0 });
+    const [caretFocused, setCaretFocused] = useState(false);
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -173,6 +203,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
+    const updateCaret = useCallback(() => {
+        requestAnimationFrame(() => {
+            if (!inputRef.current) return;
+            setCaretPos(getCaretXY(inputRef.current));
+        });
+    }, []);
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
     const toolOccurredRef = useRef(false);
@@ -1397,14 +1433,26 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             value={input}
                             onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
+                            onKeyUp={updateCaret}
                             onPaste={handlePaste}
+                            onClick={updateCaret}
+                            onSelect={updateCaret}
+                            onFocus={() => { setCaretFocused(true); updateCaret(); }}
+                            onBlur={() => setCaretFocused(false)}
                             placeholder="Type a message or paste an image... (Shift+Enter for new line)"
                             rows={1}
                             disabled={isStreaming}
                             aria-label="Message input"
+                            style={{ caretColor: 'transparent' }}
                         />
+                        {!isStreaming && caretFocused && (
+                            <span
+                                className="input-cursor"
+                                style={{ left: `${caretPos.x}px`, top: `${caretPos.y}px` }}
+                                aria-hidden="true"
+                            />
+                        )}
                     </div>
-                    {!isStreaming && <span className="input-cursor" aria-hidden="true" />}
                     <div className="input-btns">
                         <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">
                             <Upload size={15} />

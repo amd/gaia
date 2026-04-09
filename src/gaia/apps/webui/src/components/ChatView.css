@@ -579,21 +579,6 @@
 .msg-input::placeholder { color: var(--text-muted); opacity: 0.6; font-family: var(--font-sans); }
 .msg-input:disabled { opacity: 0.5; }
 
-/* Blinking block cursor -- pixelated terminal aesthetic */
-.input-cursor {
-    display: inline-block;
-    width: 8px;
-    height: 17px;
-    background: var(--amd-red);
-    animation: cursorBlink 1s step-end infinite;
-    align-self: center;
-    flex-shrink: 0;
-    border-radius: 0;
-    image-rendering: pixelated;
-    box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
-    margin-right: 4px;
-}
-
 .input-btns {
     display: flex;
     gap: 2px;
@@ -742,6 +727,19 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    position: relative;
+}
+
+/* Block cursor — terminal aesthetic, tracks caret position via inline style */
+.input-cursor {
+    position: absolute;
+    width: 10px;
+    height: 18px;
+    background: var(--amd-red);
+    animation: cursorBlink 1s step-end infinite;
+    pointer-events: none;
+    will-change: left, top;
+    box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
 }
 
 .input-box.has-attachments {
