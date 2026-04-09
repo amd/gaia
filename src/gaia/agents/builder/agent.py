@@ -125,6 +125,7 @@ class BuilderAgent(Agent):
             else os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
         )
 
+        self.response_mode = "conversational"
         super().__init__(
             base_url=effective_base_url,
             model_id=effective_model_id,
@@ -171,24 +172,6 @@ class BuilderAgent(Agent):
                 created_id = _normalize_agent_id(_split_camel_case(name.strip()))
                 self.console.print_agent_created(created_id)
             return result
-
-    def _compose_system_prompt(self) -> str:
-        """Compose system prompt without the base class JSON response format.
-
-        The builder uses a conversational flow with simple tool-calling
-        instructions embedded directly in its system prompt.  The base class
-        ``_response_format_template`` (JSON-only + planning) conflicts with
-        conversational greetings, so it is deliberately excluded here.
-        """
-        parts = []
-        custom = self._get_system_prompt()
-        if custom:
-            parts.append(custom)
-        if hasattr(self, "_format_tools_for_prompt"):
-            tools_desc = self._format_tools_for_prompt()
-            if tools_desc:
-                parts.append(f"==== AVAILABLE TOOLS ====\n{tools_desc}")
-        return "\n\n".join(p for p in parts if p)
 
     def process_query(  # type: ignore[override]
         self,

@@ -35,13 +35,9 @@ the Python code directly.
 - After creating the agent, tell the user they can reload the GAIA UI to see \
   their new agent appear in the agent selector.
 
-## How to call tools
-When you need to call a tool, output ONLY a JSON object on a single line:
+## Tool call examples
 {"tool": "create_agent", "tool_args": {"name": "Agent Name", "description": "What it does", "enable_mcp": false}}
 
 For MCP-enabled agents use enable_mcp: true:
 {"tool": "create_agent", "tool_args": {"name": "Agent Name", "description": "What it does", "enable_mcp": true}}
-
-When responding conversationally (no tool call needed), just write plain text. \
-Do NOT wrap conversational replies in JSON.
 """
