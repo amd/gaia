@@ -366,6 +366,10 @@ class SSEOutputHandler(OutputHandler):
     ):  # pylint: disable=unused-argument
         if answer:
             answer = _THINK_TAG_SUB_RE.sub("", answer)
+            # Extract answer text from {"thought":..., "answer":...} JSON before
+            # the regex cleaners run.  _THOUGHT_JSON_SUB_RE would otherwise strip
+            # the entire blob (including the answer value) leaving an empty string.
+            answer = _clean_answer_json(answer.strip())
             # Strip any trailing {"answer": "..."} JSON blob that some models
             # append to their plain-text response.
             answer = _ANSWER_JSON_SUB_RE.sub("", answer)
@@ -423,6 +427,10 @@ class SSEOutputHandler(OutputHandler):
                 "message": f"Agent: {agent_name}",
             }
         )
+
+    def print_agent_created(self, agent_id: str) -> None:
+        """Notify the frontend that a new agent is available in the registry."""
+        self._emit({"type": "agent_created", "agent_id": agent_id})
 
     # === Optional Methods (with SSE-friendly implementations) ===
 
@@ -485,16 +493,23 @@ class SSEOutputHandler(OutputHandler):
 
             stripped = self._stream_buffer.strip()
 
-            # Case 0: Buffer starts with "{" but we haven't seen enough to
-            # know if it's an LLM JSON block (e.g., {"answer":...}).  Hold
-            # the buffer for a few more chunks so Cases 1/1b can detect the
-            # pattern.  Without this, a lone "{" token is emitted as text
-            # before "answer"/"tool" appears, breaking downstream filters.
+            # Case 0: Buffer starts with "{" — hold until we can identify the
+            # JSON type (tool call vs final answer).  The LLM outputs either
+            # {"tool": ..., "tool_args": {...}} or {"thought": ..., "answer": ...}.
+            # We MUST see "tool" or "answer" before routing to Case 1/1b.
+            # Releasing early (e.g., on "thought") causes partial JSON to leak
+            # as text chunks and then get stripped by _THOUGHT_JSON_SUB_RE,
+            # producing an empty response.
+            # Hold limit: 8 KB for proper JSON objects ({"...}), 30 bytes for
+            # curly braces in plain text (e.g. "Use {var} in your code").
+            _looks_like_json_obj = bool(re.match(r'^\{\s*"', stripped))
+            _hold_limit = 8192 if _looks_like_json_obj else 30
             if (
                 stripped.startswith("{")
-                and len(stripped) < 30
-                and not any(m in stripped for m in ('"tool"', '"answer"', '"thought"'))
+                and '"tool"' not in stripped
+                and '"answer"' not in stripped
                 and not end_of_stream
+                and len(stripped) < _hold_limit
             ):
                 return  # Wait for more tokens
 

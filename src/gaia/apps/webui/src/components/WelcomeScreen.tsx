@@ -1,14 +1,15 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useState, useEffect, useRef } from 'react';
-import { Lock, Zap, FileText, DollarSign, Terminal } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { Lock, Zap, FileText, DollarSign, Terminal, Bot, Plus } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import './WelcomeScreen.css';
 
 interface WelcomeScreenProps {
     onNewTask: () => void;
     onSendPrompt: (prompt: string) => void;
+    onCreateAgent?: () => void;
 }
 
 const TITLE_TEXT = 'GAIA Agent UI';
@@ -33,15 +34,21 @@ function hackerDelay(char: string, prevChar: string): number {
     return 18 + Math.random() * 22;
 }
 
-const SUGGESTIONS = [
+const DEFAULT_SUGGESTIONS = [
     'Scan my Downloads and tell me what I should clean up',
     'Index a folder of documents so I can chat about them',
     'What have I been working on lately? Show my recent files',
     'What hardware is in my PC? Tell me about my CPU and GPU',
 ];
 
-export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
-    const { systemStatus } = useChatStore();
+export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: WelcomeScreenProps) {
+    const { systemStatus, agents, activeAgentId, setActiveAgentId } = useChatStore();
+
+    const suggestions = useMemo(() => {
+        const active = agents.find((a) => a.id === activeAgentId);
+        if (active?.conversation_starters?.length) return active.conversation_starters;
+        return DEFAULT_SUGGESTIONS;
+    }, [agents, activeAgentId]);
     const [displayedText, setDisplayedText] = useState('');
     const [typingComplete, setTypingComplete] = useState(false);
     const [subtitleText, setSubtitleText] = useState('');
@@ -52,6 +59,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
     // Determine if a setup hint should be shown to guide first-time users.
     // Only show hints when backend is reachable (systemStatus is not null).
     const notInitialized = systemStatus !== null && !systemStatus.initialized;
+    const isInitializing = systemStatus?.init_state === 'initializing';
     const noModel = systemStatus !== null && systemStatus.lemonade_running && !systemStatus.model_loaded;
 
     // Title typing effect
@@ -149,6 +157,22 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
                         expandedDesc="No API keys, no subscriptions, no hidden costs. Fully open-source." />
                 </div>
 
+                {agents.length > 1 && (
+                    <div className="agent-pills">
+                        {agents.map((agent) => (
+                            <button
+                                key={agent.id}
+                                className={`agent-pill${agent.id === activeAgentId ? ' active' : ''}`}
+                                onClick={() => setActiveAgentId(agent.id)}
+                                title={agent.description || agent.name}
+                            >
+                                <Bot size={14} />
+                                <span>{agent.name}</span>
+                            </button>
+                        ))}
+                    </div>
+                )}
+
                 {/* First-run setup hints */}
                 {notInitialized && (
                     <div className="welcome-setup-hint">
@@ -168,15 +192,23 @@ export function WelcomeScreen({ onNewTask, onSendPrompt }: WelcomeScreenProps) {
                     </div>
                 )}
 
-                <button className="btn-primary start-btn" onClick={onNewTask}>
-                    Start a New Task
-                </button>
+                <div className="welcome-actions">
+                    <button className="btn-primary start-btn" onClick={onNewTask} disabled={isInitializing}>
+                        Start a New Task
+                    </button>
+                    {onCreateAgent && (
+                        <button className="build-agent-btn" onClick={onCreateAgent} disabled={isInitializing}>
+                            <Plus size={14} />
+                            Build a Custom Agent
+                        </button>
+                    )}
+                </div>
 
                 <div className="suggestions">
                     <span className="suggestions-label">Try asking:</span>
                     <div className="suggestion-chips">
-                        {SUGGESTIONS.map((s) => (
-                            <button key={s} className="chip" onClick={() => onSendPrompt(s)}>
+                        {suggestions.map((s) => (
+                            <button key={s} className="chip" onClick={() => onSendPrompt(s)} disabled={isInitializing}>
                                 {s}
                             </button>
                         ))}

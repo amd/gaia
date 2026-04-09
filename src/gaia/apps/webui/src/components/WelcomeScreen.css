@@ -342,6 +342,55 @@
     line-height: 1.6;
 }
 
+/* ── Agent pills ─────────────────────────────────────────────── */
+.agent-pills {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 24px;
+    opacity: 0;
+}
+
+.content-revealed .agent-pills {
+    animation: fadeInUp 500ms var(--ease) 420ms forwards;
+}
+
+.agent-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 14px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: all 0.2s var(--ease);
+    white-space: nowrap;
+}
+
+.agent-pill:hover {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+}
+
+.agent-pill.active {
+    background: #ed1c24;
+    border-color: #ed1c24;
+    color: #fff;
+}
+
+.agent-pill.active:hover {
+    background: #d41920;
+    border-color: #d41920;
+    color: #fff;
+}
+
 /* ── First-run setup hint ─────────────────────────────────────── */
 .welcome-setup-hint {
     display: flex;
@@ -382,17 +431,53 @@
     background: rgba(255, 255, 255, 0.08);
 }
 
-/* ── Start button: scale-in via content-revealed ──────────────── */
-.start-btn {
-    margin-bottom: 36px;
-    padding: 14px 40px;
-    font-size: 14px;
-    border-radius: var(--radius-lg);
+/* ── Action buttons: flex row so both buttons share the same height ── */
+.welcome-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-bottom: 28px;
     opacity: 0;
 }
 
-.content-revealed .start-btn {
+.content-revealed .welcome-actions {
     animation: fadeInScale 500ms var(--ease) 500ms forwards;
+}
+
+/* ── Start button ──────────────────────────────────────────────── */
+.start-btn {
+    padding: 14px 40px;
+    font-size: 14px;
+    border-radius: var(--radius-lg);
+}
+
+/* ── Build a Custom Agent button ───────────────────────────────── */
+.build-agent-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 13px 28px;
+    font-size: 14px;
+    font-family: var(--font-sans);
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    transition: all 0.15s var(--ease);
+}
+
+.build-agent-btn:hover:not(:disabled) {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+}
+
+.build-agent-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 /* ── Suggestions: cascading chip reveal via content-revealed ──── */
@@ -477,7 +562,7 @@
     }
 
     .feature-card { padding: 16px 12px 14px; height: 145px; }
-    .start-btn { margin-bottom: 28px; }
+    .welcome-actions { flex-direction: column; gap: 12px; }
 }
 
 @media (max-width: 480px) {

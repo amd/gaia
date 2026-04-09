@@ -175,6 +175,25 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for file_mtime: %s", e)
 
+        # Add agent_type column to sessions for agent selection
+        try:
+            sess_cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+            ]
+            if "agent_type" not in sess_cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN agent_type TEXT DEFAULT 'chat'"
+                )
+                # SQLite ALTER TABLE DEFAULT doesn't backfill existing rows
+                self._conn.execute(
+                    "UPDATE sessions SET agent_type = 'chat' WHERE agent_type IS NULL"
+                )
+                self._conn.commit()
+                logger.info("Migrated sessions table: added agent_type column")
+        except Exception as e:
+            logger.debug("Migration check for agent_type: %s", e)
+
     def close(self):
         """Close database connection."""
         if self._conn:
@@ -206,18 +225,20 @@ class ChatDatabase:
         model: str = None,
         system_prompt: str = None,
         document_ids: List[str] = None,
+        agent_type: str = None,
     ) -> Dict[str, Any]:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
         model = model or "Qwen3.5-35B-A3B-GGUF"
         title = title or "New Chat"
+        agent_type = agent_type or "chat"
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (session_id, title, now, now, model, system_prompt),
+                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, agent_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, title, now, now, model, system_prompt, agent_type),
             )
 
             # Attach documents if provided
@@ -292,8 +313,9 @@ class ChatDatabase:
         title: str = None,
         system_prompt: str = None,
         document_ids: list = None,
+        agent_type: str = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title, system prompt, and/or document_ids."""
+        """Update session title, system prompt, agent_type, and/or document_ids."""
         updates = []
         params = []
 
@@ -303,6 +325,9 @@ class ChatDatabase:
         if system_prompt is not None:
             updates.append("system_prompt = ?")
             params.append(system_prompt)
+        if agent_type is not None:
+            updates.append("agent_type = ?")
+            params.append(agent_type)
 
         updates.append("updated_at = ?")
         params.append(self._now())

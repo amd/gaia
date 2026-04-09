@@ -81,33 +81,6 @@ class BlenderAgent(Agent):
 You are a specialized Blender 3D assistant that can create and modify 3D scenes.
 You will use a set of tools to accomplish tasks based on the user's request.
 
-==== JSON RESPONSE FORMAT ====
-ALWAYS respond with a single valid JSON object. NO text outside this structure.
-- Use double quotes for keys and string values
-- Ensure all braces and brackets are properly closed
-- No trailing commas in arrays or objects
-- All required fields must be included
-- Never wrap your JSON in code blocks or backticks
-
-Your JSON response must follow this format:
-{{
-    "thought": "your reasoning about what to do",
-    "goal": "clear statement of what you're achieving",
-    "plan": [
-        {{"tool": "tool1", "tool_args": {{"arg1": "val1"}}}},
-        {{"tool": "tool2", "tool_args": {{"arg1": "val1"}}}}
-    ],
-    "tool": "first_tool_to_execute",
-    "tool_args": {{"arg1": "val1", "arg2": "val2"}}
-}}
-
-For final answers:
-{{
-    "thought": "your reasoning",
-    "goal": "what was achieved",
-    "answer": "your final answer"
-}}
-
 ==== CRITICAL RULES ====
 1. Create a plan for multi-step tasks, but simple single operations (like clear_scene) can execute directly
 2. Each plan step must be atomic (one tool call per step)

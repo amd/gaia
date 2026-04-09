@@ -223,6 +223,12 @@ class OutputHandler(ABC):
         """Print tool info. Optional - default no-op."""
         ...
 
+    def print_agent_created(
+        self, agent_id: str  # pylint: disable=unused-argument
+    ) -> None:
+        """Signal that a new agent was created and hot-loaded. Optional — default no-op."""
+        ...
+
 
 class ProgressIndicator:
     """A simple progress indicator that shows a spinner or dots animation with elapsed time."""

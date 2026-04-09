@@ -12,6 +12,16 @@ export interface Session {
     system_prompt: string | null;
     message_count: number;
     document_ids: string[];
+    agent_type?: string;
+}
+
+export interface AgentInfo {
+    id: string;
+    name: string;
+    description: string;
+    source: string;
+    conversation_starters: string[];
+    models: string[];
 }
 
 export interface InferenceStats {
@@ -105,6 +115,9 @@ export interface SystemStatus {
     default_model_name: string | null;
     lemonade_url: string | null;
     expected_model_loaded: boolean;
+    // Boot-time initialization tracking
+    init_state?: 'initializing' | 'ready' | 'degraded';
+    init_tasks?: Array<{ name: string; status: string }>;
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────
@@ -236,6 +249,10 @@ export interface AgentStep {
         files: Array<Record<string, unknown>>;
         total: number;
     };
+    /** MCP server name (for MCP tools). */
+    mcpServer?: string;
+    /** Tool call latency in milliseconds. */
+    latencyMs?: number;
 }
 
 /** Extended SSE event types for agent communication. */
@@ -255,7 +272,8 @@ export type StreamEventType =
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
-    | 'mcp_status';  // MCP server connection status update
+    | 'mcp_status'   // MCP server connection status update
+    | 'agent_created'; // New agent created — triggers agent list refresh
 
 export interface StreamEvent {
     type: StreamEventType;
@@ -291,10 +309,16 @@ export interface StreamEvent {
         duration_seconds?: number;
         truncated?: boolean;
     };
+    /** Agent ID of the newly created agent (for agent_created events). */
+    agent_id?: string;
     /** Confirmation ID (for tool_confirm events). */
     confirm_id?: string;
     /** Timeout in seconds (for tool_confirm events). */
     timeout_seconds?: number;
+    /** MCP server name (for tool_start of MCP tools). */
+    mcp_server?: string;
+    /** Tool call latency in milliseconds (for tool_result). */
+    latency_ms?: number;
     /** Structured result data (for tool_result with search results, file lists, etc.). */
     result_data?: {
         type: string;

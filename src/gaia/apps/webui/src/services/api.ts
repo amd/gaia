@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, AgentInfo } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -91,6 +91,12 @@ export async function downloadModel(modelName: string, force = false): Promise<{
     return apiFetch('POST', '/system/download-model', { model_name: modelName, force });
 }
 
+// -- Agents --------------------------------------------------------------------
+
+export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number }> {
+    return apiFetch('GET', '/agents');
+}
+
 // -- Sessions ------------------------------------------------------------------
 
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
@@ -105,7 +111,7 @@ export async function getSession(id: string): Promise<Session> {
     return apiFetch('GET', `/sessions/${id}`);
 }
 
-export async function updateSession(id: string, data: { title?: string; system_prompt?: string }): Promise<Session> {
+export async function updateSession(id: string, data: { title?: string; system_prompt?: string; agent_type?: string }): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}`, data);
 }
 
@@ -146,6 +152,8 @@ export interface StreamCallbacks {
     onDone: (event: StreamEvent) => void;
     /** Error occurred. */
     onError: (error: Error) => void;
+    /** A new agent was created and registered — refresh the agent list. */
+    onAgentCreated?: (event: StreamEvent) => void;
 }
 
 /** Agent event types that represent activity rather than content. */
@@ -161,6 +169,7 @@ export function sendMessageStream(
     onChunkOrCallbacks: ((event: StreamEvent) => void) | StreamCallbacks,
     onDone?: (event: StreamEvent) => void,
     onError?: (error: Error) => void,
+    agentType?: string,
 ): AbortController {
     // Support both old 3-arg style and new callbacks style
     let callbacks: StreamCallbacks;
@@ -190,6 +199,7 @@ export function sendMessageStream(
             session_id: sessionId,
             message,
             stream: true,
+            ...(agentType ? { agent_type: agentType } : {}),
         }),
         signal: controller.signal,
     })
@@ -250,6 +260,9 @@ export function sendMessageStream(
                                 } else if (event.type === 'error') {
                                     log.stream.error(`Stream error event:`, event.content);
                                     callbacks.onError(new Error(event.content || 'Unknown error'));
+                                } else if (event.type === 'agent_created') {
+                                    log.stream.info(`Agent created: ${event.agent_id}`);
+                                    callbacks.onAgentCreated?.(event);
                                 } else if (AGENT_EVENT_TYPES.has(event.type)) {
                                     agentEventCount++;
                                     log.stream.debug(`Agent event: ${event.type}`, event);

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
@@ -11,7 +11,7 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { getSessionHash } from '../utils/format';
 import { bugReportUrl } from './UnsupportedFeature';
-import type { Message, StreamEvent, AgentStep, Attachment } from '../types';
+import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
 import './ChatView.css';
 
 const EMPTY_SUGGESTIONS = [
@@ -87,6 +87,7 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 tool: event.tool,
                 detail: event.detail,
                 active: true, timestamp: ts,
+                mcpServer: event.mcp_server,
             };
         case 'plan':
             return {
@@ -101,6 +102,7 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 active: true, timestamp: ts,
             };
         case 'status':
+            if (event.message?.startsWith('Agent: ')) return null;
             return {
                 id, type: 'status',
                 label: event.message || event.status || 'Working',
@@ -120,15 +122,18 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
 
 interface ChatViewProps {
     sessionId: string;
+    onCreateAgent?: () => void;
+    onAgentChange?: (agentId: string) => void;
 }
 
-export function ChatView({ sessionId }: ChatViewProps) {
+export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
         documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
         systemStatus,
+        agents, activeAgentId, setActiveAgentId,
     } = useChatStore();
 
     const { addNotification } = useNotificationStore();
@@ -146,6 +151,46 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
+    // Agent picker dropdown state
+    const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+    const agentPickerRef = useRef<HTMLDivElement>(null);
+    // Use session's stored agent_type as the source of truth for the picker display
+    const displayedAgentId = session?.agent_type || activeAgentId;
+    // Resolve human-readable agent names for the message header
+    const sessionAgentName = agents.find((a) => a.id === session?.agent_type)?.name;
+    const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name;
+
+    // Close agent picker on outside click
+    useEffect(() => {
+        if (!agentPickerOpen) return;
+        const handler = (e: MouseEvent) => {
+            if (agentPickerRef.current && !agentPickerRef.current.contains(e.target as Node)) {
+                setAgentPickerOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, [agentPickerOpen]);
+
+    const handleAgentChange = useCallback(async (newAgentId: string) => {
+        setAgentPickerOpen(false);
+        if (newAgentId === displayedAgentId) return;
+        const previousAgentId = displayedAgentId; // capture before any mutations
+        setActiveAgentId(newAgentId);
+        if (messages.length === 0) {
+            updateSessionInList(sessionId, { agent_type: newAgentId } as Partial<Session>);
+            try {
+                await api.updateSession(sessionId, { agent_type: newAgentId });
+            } catch {
+                // Roll back optimistic update on failure
+                updateSessionInList(sessionId, { agent_type: previousAgentId } as Partial<Session>);
+                setActiveAgentId(previousAgentId);
+            }
+        } else {
+            onAgentChange?.(newAgentId);
+        }
+    }, [displayedAgentId, messages.length, sessionId, setActiveAgentId, updateSessionInList, onAgentChange]);
+
     // Smooth streaming exit — snapshot last content so fade-out shows real text
     const [streamEnding, setStreamEnding] = useState(false);
     const lastStreamContentRef = useRef('');
@@ -513,9 +558,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // new message and streaming response are visible.
         isNearBottomRef.current = true;
 
-        if ((!text && !hasAttachments) || isStreaming) {
+        const isInitializing = systemStatus?.init_state === 'initializing';
+        if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
+            if (isInitializing) log.chat.debug('Send blocked: system initializing');
             return;
         }
 
@@ -697,6 +744,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         result: event.summary || event.title || 'Done',
                         active: false,
                         success: event.success !== false,
+                        latencyMs: event.latency_ms,
                     };
                     // Pass through structured command output if available
                     if (event.command_output) {
@@ -927,10 +975,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 clearStreamContent();
                 clearAgentSteps();
             },
-        });
+            onAgentCreated: () => {
+                // A new agent was created — refresh the list so it appears
+                // in the agent selector immediately without a page reload.
+                api.listAgents()
+                    .then((data) => useChatStore.getState().setAgents(data.agents || []))
+                    .catch(() => { /* non-critical */ });
+            },
+        }, undefined, undefined, activeAgentId);
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
@@ -1312,6 +1367,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 onDelete={!isStreaming ? handleDeleteMessage : undefined}
                                 onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
                                 latencyMs={latencyMs}
+                                agentName={msg.role === 'assistant' ? sessionAgentName : undefined}
                             />
                         </div>
                     );
@@ -1333,6 +1389,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             showTerminalCursor={streamEnding}
                             agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
                             agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
+                            agentName={activeAgentName}
                         />
                     </div>
                 )}
@@ -1400,7 +1457,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             onPaste={handlePaste}
                             placeholder="Type a message or paste an image... (Shift+Enter for new line)"
                             rows={1}
-                            disabled={isStreaming}
+                            disabled={isStreaming || systemStatus?.init_state === 'initializing'}
                             aria-label="Message input"
                         />
                     </div>
@@ -1435,6 +1492,51 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     </div>
                 </div>
                 <div className="input-footer">
+                    {onCreateAgent && (
+                        <>
+                            <button
+                                className="create-agent-btn"
+                                onClick={onCreateAgent}
+                                title="Build a custom agent"
+                                aria-label="Build a custom agent"
+                            >
+                                <Plus size={10} />
+                            </button>
+                            {agents.length > 1 && <span className="input-footer-sep" />}
+                        </>
+                    )}
+                    {agents.length > 1 && (
+                        <>
+                            <div className="agent-picker" ref={agentPickerRef}>
+                                <button
+                                    className="agent-picker-btn"
+                                    onClick={() => !isStreaming && setAgentPickerOpen((v) => !v)}
+                                    title="Switch agent"
+                                    aria-label="Switch agent"
+                                    disabled={isStreaming}
+                                >
+                                    <Bot size={10} />
+                                    <span>{agents.find((a) => a.id === displayedAgentId)?.name || 'Agent'}</span>
+                                    <ChevronDown size={10} />
+                                </button>
+                                {agentPickerOpen && (
+                                    <div className="agent-picker-dropdown">
+                                        {agents.map((agent) => (
+                                            <button
+                                                key={agent.id}
+                                                className={`agent-picker-option${agent.id === displayedAgentId ? ' active' : ''}`}
+                                                onClick={() => handleAgentChange(agent.id)}
+                                            >
+                                                <Bot size={12} />
+                                                <span>{agent.name}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <span className="input-footer-sep" />
+                        </>
+                    )}
                     <span className="input-footer-item">
                         <Lock size={10} />
                         <span>100% local &amp; private</span>
