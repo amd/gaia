@@ -1191,6 +1191,14 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Result of the tool execution
         """
+        if not tool_name:
+            logger.error("Tool name is None or empty")
+            return {
+                "status": "error",
+                "error": "Tool name is missing from LLM response",
+                "error_displayed": True,
+            }
+
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
         if tool_name not in _TOOL_REGISTRY:
@@ -1669,7 +1677,7 @@ Do NOT wrap conversational replies in JSON.
 
                 if (
                     isinstance(next_step, dict)
-                    and "tool" in next_step
+                    and next_step.get("tool")
                     and "tool_args" in next_step
                 ):
                     # We have a properly formatted step with tool and args
@@ -2275,7 +2283,7 @@ Do NOT wrap conversational replies in JSON.
                 for i, step in enumerate(parsed["plan"]):
                     if not isinstance(step, dict):
                         invalid_steps.append((i, type(step).__name__, step))
-                    elif "tool" not in step:
+                    elif "tool" not in step or not step["tool"]:
                         invalid_steps.append((i, "missing tool field", step))
                     elif "tool_args" not in step:
                         # Auto-add empty tool_args for convenience
@@ -2322,7 +2330,7 @@ Do NOT wrap conversational replies in JSON.
                 )
 
             # If the response contains a tool call, execute it
-            if "tool" in parsed and "tool_args" in parsed:
+            if parsed.get("tool") and "tool_args" in parsed:
 
                 # Display the current plan with the current step highlighted
                 if self.current_plan:
