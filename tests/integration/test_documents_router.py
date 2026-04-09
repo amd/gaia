@@ -102,10 +102,47 @@ def test_upload_blob_happy_path(client, mock_index_document, managed_docs_sandbo
     assert filepath.parent == managed_docs_sandbox
     assert filepath.read_bytes() == content
 
+    # The on-disk filename must embed the original stem so the agent LLM
+    # and RAG tools can recognize the file. Pattern: "<uuid>_<stem>.<ext>"
+    assert filepath.name.endswith(
+        "_report.txt"
+    ), f"Expected on-disk name to end with '_report.txt', got {filepath.name}"
+
     # Indexing was called exactly once with the final path
     mock_index_document.assert_awaited_once()
     called_arg = mock_index_document.await_args.args[0]
     assert Path(called_arg) == filepath
+
+
+def test_upload_blob_sanitizes_illegal_filename_chars(
+    client, mock_index_document, managed_docs_sandbox
+):
+    """Windows-illegal characters in the original name must not reach disk.
+
+    The sanitizer strips ``<>:"/\\|?*`` plus control chars. We use a
+    subset that survives the HTTP multipart transport layer (the test
+    client URL-encodes some of the fancier characters before they reach
+    the server, which is fine — we only care about what hits disk).
+    """
+    content = b"content"
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("weird<name>|x?y*.txt", content, "text/plain")},
+    )
+    assert response.status_code == 200, response.text
+
+    doc = response.json()
+    filepath = Path(doc["filepath"])
+    assert filepath.exists()
+    # None of the illegal chars should be present in the on-disk filename.
+    illegal = set('<>:"|?*')
+    assert not (
+        illegal & set(filepath.name)
+    ), f"Illegal characters leaked into on-disk filename: {filepath.name}"
+    # And the sanitized stem should still be recognizable (contain "weird"
+    # and "name" — the alphanumeric parts survive)
+    assert "weird" in filepath.name
+    assert "name" in filepath.name
 
 
 def test_upload_blob_dedup_returns_existing(

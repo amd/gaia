@@ -105,6 +105,33 @@ def _is_server_owned(filepath: str) -> bool:
         return False
 
 
+# Characters that are illegal in Windows filenames (POSIX is more permissive,
+# but sanitizing to the Windows rules gives cross-platform portability).
+_ILLEGAL_FILENAME_CHARS = '<>:"/\\|?*'
+
+
+def _sanitize_stem(stem: str, max_length: int = 80) -> str:
+    """Sanitize a filename stem for safe cross-platform filesystem use.
+
+    Replaces characters that are illegal on Windows (``<>:"/\\|?*``) and
+    control characters with underscores, trims leading/trailing whitespace
+    and dots (Windows disallows trailing dots/spaces), and truncates to
+    *max_length* characters. Returns ``"file"`` if nothing usable remains.
+
+    The returned stem is combined with a UUID prefix to form the final
+    on-disk filename, so collisions are impossible regardless of what the
+    user-provided name contained. The purpose of preserving the original
+    name is purely so downstream consumers (RAG tools, the LLM) can
+    recognize the document by its human-readable name.
+    """
+    cleaned = "".join(
+        "_" if c in _ILLEGAL_FILENAME_CHARS or ord(c) < 32 else c for c in stem
+    )
+    cleaned = cleaned.strip(" .")
+    cleaned = cleaned[:max_length]
+    return cleaned or "file"
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
@@ -336,10 +363,16 @@ async def upload_document_blob(
             )
             return doc_to_response(existing)
 
-        # 6. Promote partial -> final (atomic rename). After this, the
-        # partial_path variable is cleared so the finally block won't
-        # unlink our now-final file.
-        final_path = MANAGED_DOCS_DIR / f"{uuid.uuid4()}{ext}"
+        # 6. Promote partial -> final (atomic rename). The on-disk filename
+        # embeds the sanitized original stem so that downstream consumers
+        # (RAG tools, the agent LLM) can recognize the document by its
+        # human-readable name — a pure-UUID filename causes the LLM to
+        # hallucinate paths when it needs to reference the file in a tool
+        # call. The UUID prefix still guarantees uniqueness. After this,
+        # `partial_path` is cleared so the finally block won't unlink our
+        # now-final file.
+        safe_stem = _sanitize_stem(Path(display_name).stem)
+        final_path = MANAGED_DOCS_DIR / f"{uuid.uuid4()}_{safe_stem}{ext}"
         try:
             os.replace(partial_path, final_path)
         except OSError as e:
