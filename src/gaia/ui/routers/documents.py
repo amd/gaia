@@ -12,14 +12,16 @@ effect correctly.
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_indexing_tasks, get_upload_locks
@@ -43,6 +45,21 @@ from ..utils import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["documents"])
+
+# ── Blob upload configuration ────────────────────────────────────────────────
+
+# Server-managed location for documents uploaded as blobs (drag-and-drop in
+# browser mode, or any flow that can't provide a real filesystem path).
+# Files stored here are owned by the server and cleaned up on doc deletion.
+MANAGED_DOCS_DIR = Path.home() / ".gaia" / "documents"
+
+# Maximum size for a blob-uploaded document. Matches /api/files/upload for
+# consistency; path-based uploads (where the user already owns the file)
+# have no server-enforced cap.
+MAX_DOCUMENT_UPLOAD_SIZE = 20 * 1024 * 1024  # 20 MB
+
+# Streaming chunk size for multipart blob upload.
+UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB
 
 
 def _server_mod():
@@ -71,6 +88,21 @@ def _cleanup_temp(path: Path) -> None:
         path.unlink(missing_ok=True)
     except Exception as e:
         logger.warning("Failed to clean up temp file %s: %s", path, e)
+
+
+def _is_server_owned(filepath: str) -> bool:
+    """Return True if *filepath* lives inside the server-managed docs dir.
+
+    Used by ``delete_document`` to decide whether to unlink the on-disk file.
+    User-provided paths (from ``upload-path``) are NOT server-owned and must
+    be left untouched on delete.
+    """
+    try:
+        resolved = Path(filepath).resolve()
+        managed = MANAGED_DOCS_DIR.resolve()
+        return resolved.is_relative_to(managed)
+    except (OSError, ValueError):
+        return False
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -205,6 +237,174 @@ async def upload_by_path(
     # the number of distinct file paths ever uploaded.
 
 
+@router.post("/api/documents/upload", response_model=DocumentResponse)
+async def upload_document_blob(
+    file: UploadFile = File(...),
+    db: ChatDatabase = Depends(get_db),
+):
+    """Index a document from an uploaded blob.
+
+    This is the drag-and-drop / browser-mode entry point. Unlike
+    ``upload-path`` (which takes a server-side filesystem path), this
+    endpoint accepts the file content directly as multipart form data —
+    required because browser File objects do not expose an absolute
+    filesystem path.
+
+    The blob is streamed to ``MANAGED_DOCS_DIR`` with an abort-on-overflow
+    size check, deduplicated by SHA-256 content hash, then indexed via the
+    standard RAG pipeline. Files are capped at ``MAX_DOCUMENT_UPLOAD_SIZE``.
+
+    On any failure, partial / orphaned files are cleaned up.
+    """
+    # 1. Validate filename
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    if "\x00" in file.filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    # Strip any path components the client might have sent (defense in depth;
+    # we never use this value as a filesystem path, but it's stored in the
+    # db for display and returned to the frontend).
+    display_name = Path(file.filename).name
+    ext = Path(display_name).suffix.lower()
+
+    # 2. Validate extension against the strict document set (no images etc.)
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"File type '{ext}' is not supported. "
+                f"Allowed types: {sorted(ALLOWED_EXTENSIONS)}"
+            ),
+        )
+
+    # 3. Ensure the managed directory exists
+    try:
+        MANAGED_DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.error("Failed to create managed docs dir %s: %s", MANAGED_DOCS_DIR, e)
+        raise HTTPException(
+            status_code=500, detail="Failed to prepare document storage"
+        )
+
+    # 4. Stream-write to a .partial file, hashing as we go, aborting on
+    # oversize. try/finally ensures the partial is cleaned up on any exit
+    # path (including ClientDisconnect and CancelledError).
+    partial_path: Path | None = MANAGED_DOCS_DIR / f"{uuid.uuid4()}.partial"
+    final_path: Path | None = None
+    hasher = hashlib.sha256()
+    bytes_written = 0
+
+    try:
+        try:
+            with open(partial_path, "wb") as out:
+                while True:
+                    chunk = await file.read(UPLOAD_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    bytes_written += len(chunk)
+                    if bytes_written > MAX_DOCUMENT_UPLOAD_SIZE:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                f"File too large. Maximum size is "
+                                f"{MAX_DOCUMENT_UPLOAD_SIZE // (1024 * 1024)} MB."
+                            ),
+                        )
+                    hasher.update(chunk)
+                    out.write(chunk)
+        except HTTPException:
+            raise
+        except OSError as e:
+            logger.error("Failed to write blob upload to %s: %s", partial_path, e)
+            raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+
+        if bytes_written == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        file_hash = hasher.hexdigest()
+
+        # 5. Dedup by hash — if this content is already indexed, return the
+        # existing doc and discard the partial. Fast path for "user dropped
+        # the same file twice."
+        existing = db.get_document_by_hash(file_hash)
+        if existing:
+            logger.info(
+                "Blob upload dedup: %s matches existing doc %s",
+                display_name,
+                existing.get("id"),
+            )
+            return doc_to_response(existing)
+
+        # 6. Promote partial -> final (atomic rename). After this, the
+        # partial_path variable is cleared so the finally block won't
+        # unlink our now-final file.
+        final_path = MANAGED_DOCS_DIR / f"{uuid.uuid4()}{ext}"
+        try:
+            os.replace(partial_path, final_path)
+        except OSError as e:
+            logger.error("Failed to promote %s -> %s: %s", partial_path, final_path, e)
+            raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+        partial_path = None  # ownership transferred
+    finally:
+        if partial_path is not None:
+            _cleanup_temp(partial_path)
+
+    # 7. Index and record. Wrap both so an indexing OR db failure unlinks
+    # the final file (no orphan rows/files).
+    _index_document = _server_mod()._index_document
+    file_mtime = final_path.stat().st_mtime
+
+    try:
+        chunk_count = await _index_document(final_path)
+        doc = db.add_document(
+            filename=display_name,
+            filepath=str(final_path),
+            file_hash=file_hash,
+            file_size=bytes_written,
+            chunk_count=chunk_count,
+            file_mtime=file_mtime,
+        )
+    except HTTPException:
+        _cleanup_temp(final_path)
+        raise
+    except Exception as e:
+        _cleanup_temp(final_path)
+        logger.error(
+            "Failed to index uploaded document %s: %s",
+            display_name,
+            e,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to index document: {e}"
+        ) from e
+
+    # 8. Concurrent-drop race guard: if a simultaneous upload of the same
+    # new file beat us to add_document, it will return the OTHER doc
+    # (dedup by hash) whose filepath points at the winning file — leaving
+    # ours as an orphan on disk. Detect that and unlink.
+    try:
+        returned_path = Path(doc["filepath"]).resolve()
+        if returned_path != final_path.resolve():
+            logger.info(
+                "Blob upload race: %s lost to %s, unlinking orphan",
+                final_path,
+                returned_path,
+            )
+            _cleanup_temp(final_path)
+    except (OSError, KeyError):
+        pass
+
+    logger.info(
+        "Blob upload indexed: %s (%d bytes, %d chunks)",
+        display_name,
+        bytes_written,
+        doc.get("chunk_count", 0),
+    )
+    return doc_to_response(doc)
+
+
 @router.get("/api/documents/monitor/status")
 async def monitor_status(request: Request):
     """Get status of the document file monitor."""
@@ -258,9 +458,29 @@ async def cancel_indexing(
 
 @router.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
-    """Remove a document from the library."""
-    if not db.delete_document(doc_id):
+    """Remove a document from the library.
+
+    For blob-uploaded documents (files the server owns under
+    ``MANAGED_DOCS_DIR``), the on-disk file is also unlinked as a
+    best-effort cleanup. User-owned files from ``upload-path`` are left
+    alone.
+    """
+    # Fetch first so we know the filepath even after deletion. This also
+    # distinguishes "not found" from "found but db delete race lost."
+    doc = db.get_document(doc_id)
+    if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    if not db.delete_document(doc_id):
+        # Row vanished between fetch and delete (concurrent delete).
+        # Treat as not found — idempotent for the caller.
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Best-effort filesystem cleanup for server-owned files.
+    filepath = doc.get("filepath")
+    if filepath and _is_server_owned(filepath):
+        _cleanup_temp(Path(filepath))
+
     return {"deleted": True}
 
 

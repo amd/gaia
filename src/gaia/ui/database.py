@@ -568,6 +568,22 @@ class ChatDatabase:
 
             return self._enrich_document(dict(row))
 
+    def get_document_by_hash(self, file_hash: str) -> Optional[Dict[str, Any]]:
+        """Get document by its SHA-256 content hash.
+
+        Used by the blob upload endpoint to short-circuit re-indexing when
+        the same file content has already been uploaded.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM documents WHERE file_hash = ?", (file_hash,)
+            ).fetchone()
+
+            if not row:
+                return None
+
+            return self._enrich_document(dict(row))
+
     def _enrich_document(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         """Add sessions_using count to document dict.
 
