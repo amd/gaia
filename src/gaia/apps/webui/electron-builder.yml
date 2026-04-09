@@ -1,0 +1,173 @@
+# electron-builder configuration for GAIA Agent UI.
+#
+# Replaces forge.config.cjs (Phase C of the desktop-installer plan).
+# Produces four installer artifacts: NSIS .exe (Windows), DMG (macOS),
+# DEB + AppImage (Linux).
+#
+# Paths with `../../../../installer/...` resolve from this file's location
+# (src/gaia/apps/webui/) to the repo root's `installer/` tree populated by
+# Phases B, C (this file), and E.
+#
+# See docs/plans/desktop-installer.mdx §7 Phase C for context.
+
+appId: ai.amd.gaia
+productName: GAIA Agent UI
+copyright: Copyright © 2026 Advanced Micro Devices, Inc.
+
+directories:
+  output: dist-app
+  buildResources: ../../../../installer
+
+# Files included in the asar. Mirrors forge.config.cjs packagerConfig.ignore
+# but as an include list (which is what electron-builder expects).
+files:
+  - main.cjs
+  - preload.cjs
+  - bin/**/*
+  - services/**/*
+  - assets/**/*
+  - app.config.json
+  - package.json
+  - "!**/*.{ts,tsx,map}"
+  - "!src/**/*"
+  - "!public/**/*"
+  - "!out/**/*"
+  - "!**/.gaia/**"
+  - "!gaia.log"
+  - "!**/node_modules/.cache/**"
+  - "!forge.config.cjs"
+  - "!vite.config.ts"
+  - "!tsconfig.json"
+  - "!index.html"
+  - "!electron-builder.yml"
+
+# dist/ ships as extraResource (loaded via process.resourcesPath) — matches
+# the old forge.config.cjs.packagerConfig.extraResource behavior.
+extraResources:
+  - from: dist
+    to: dist
+    filter:
+      - "**/*"
+
+asar: true
+# Nothing currently needs to be unpacked from the asar.
+asarUnpack: []
+
+# afterPack hook: prune Chromium locales to en-US only (~45 MB savings).
+# Replaces the postPackage hook from forge.config.cjs.
+afterPack: ../../../../installer/scripts/after-pack.cjs
+
+# Auto-update provider — Phase F wires up the actual electron-updater logic;
+# for now this just declares where electron-updater should look.
+publish:
+  provider: github
+  owner: amd
+  repo: gaia
+  vPrefixedTagName: true
+
+# Code signing — env-driven, off by default for unsigned local builds.
+# Phase H integrates SignPath for Windows and Apple Developer ID for macOS.
+forceCodeSigning: false
+
+# ─── Windows (NSIS) ─────────────────────────────────────────────────────
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: ../../../../installer/nsis/icon.ico
+  artifactName: ${productName}-${version}-${arch}-Setup.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: GAIA Agent UI
+  installerIcon: ../../../../installer/nsis/icon.ico
+  uninstallerIcon: ../../../../installer/nsis/icon.ico
+  installerHeaderIcon: ../../../../installer/nsis/icon.ico
+  installerSidebar: ../../../../installer/nsis/installer-sidebar.bmp
+  uninstallerSidebar: ../../../../installer/nsis/installer-sidebar.bmp
+  uninstallDisplayName: ${productName}
+  license: ../../../../LICENSE.md
+  include: ../../../../installer/nsis/installer.nsh
+  # Respect §5 — keep user data by default. The uninstaller wizard / the
+  # `gaia uninstall --purge` command handle data removal when the user opts in.
+  deleteAppDataOnUninstall: false
+
+# ─── macOS (DMG) ────────────────────────────────────────────────────────
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  icon: ../../../../installer/macos/icon.icns
+  category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: ../../../../installer/macos/entitlements.mac.plist
+  entitlementsInherit: ../../../../installer/macos/entitlements.mac.plist
+  # Notarization is env-driven (APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD +
+  # APPLE_TEAM_ID). Phase H wires this up; until then unsigned builds are
+  # produced for local dev.
+  notarize: false
+
+dmg:
+  background: ../../../../installer/macos/dmg-background.png
+  iconSize: 80
+  contents:
+    - x: 130
+      y: 220
+      type: file
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+  window:
+    width: 660
+    height: 400
+
+# ─── Linux (DEB + AppImage) ─────────────────────────────────────────────
+linux:
+  target:
+    - target: deb
+      arch:
+        - x64
+    - target: AppImage
+      arch:
+        - x64
+  icon: ../../../../installer/linux/gaia-ui.png
+  category: Development
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  desktop:
+    entry:
+      Name: GAIA Agent UI
+      Comment: Privacy-first agentic AI interface for AMD Ryzen AI
+      Categories: Development;Utility;
+      StartupWMClass: GAIA Agent UI
+
+deb:
+  depends:
+    - libnotify4
+    - libnss3
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libdrm2
+    - libgbm1
+    - libxcb-dri3-0
+  recommends:
+    - python3
+    - python3-venv
+  priority: optional
+  fpm:
+    - "--after-install=../../../../installer/debian/postinst"
+    - "--before-remove=../../../../installer/debian/prerm"
+    - "--after-remove=../../../../installer/debian/postrm"
+
+appImage:
+  artifactName: ${productName}-${version}-${arch}.${ext}
