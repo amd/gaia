@@ -10,6 +10,7 @@ import json
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -59,7 +60,7 @@ class AgentManifest(BaseModel):
     def validate_id(cls, v):
         if not v or not v.strip():
             raise ValueError("Agent ID cannot be empty")
-        if not re.match(r"^[a-z0-9][a-z0-9-]{0,50}[a-z0-9]$", v):
+        if not re.match(r"^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$", v):
             raise ValueError(
                 f"Agent ID '{v}' is invalid. "
                 "Use lowercase letters, digits, and hyphens (e.g. 'my-agent')."
@@ -92,6 +93,7 @@ class AgentRegistry:
     def __init__(self):
         self._agents: Dict[str, AgentRegistration] = {}
         self._lemonade_models: Optional[List[str]] = None  # cache
+        self._lemonade_models_last_fail: Optional[float] = None  # monotonic timestamp
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -366,7 +368,8 @@ class AgentRegistry:
                 logger.warning(
                     "registry: Could not load tool mixin %s: %s", tool_name, e
                 )
-        bases.append(MCPClientMixin)
+        if manifest.mcp_servers:
+            bases.append(MCPClientMixin)
 
         # Write merged MCP config to agent_dir for this agent's use
         merged_config_path = self._write_merged_mcp_config(manifest, agent_dir)
@@ -478,9 +481,18 @@ class AgentRegistry:
 
         Args:
             agent_dir: Path to the agent directory (must contain agent.py or
-                agent.yaml).
+                agent.yaml).  Must be located under ``~/.gaia/agents/`` to
+                prevent loading code from arbitrary filesystem locations.
         """
-        agent_dir = Path(agent_dir)
+        agent_dir = Path(agent_dir).resolve()
+        agents_root = (Path.home() / ".gaia" / "agents").resolve()
+        try:
+            agent_dir.relative_to(agents_root)
+        except ValueError:
+            raise ValueError(
+                f"register_from_dir: agent_dir '{agent_dir}' is outside the "
+                f"allowed agents root '{agents_root}'"
+            )
         try:
             self._load_from_dir(agent_dir)
             logger.info("registry: Hot-loaded agent from %s", agent_dir)
@@ -569,10 +581,23 @@ class AgentRegistry:
         )
         return None
 
+    _LEMONADE_RETRY_INTERVAL = 10.0  # seconds between retries when offline
+
     def _get_available_models(self) -> List[str]:
-        """Query Lemonade server for available models (cached)."""
+        """Query Lemonade server for available models (cached on success).
+
+        Retries are rate-limited to every 10 seconds so that an offline
+        Lemonade server does not block each chat request for 2 s.
+        """
         if self._lemonade_models is not None:
             return self._lemonade_models
+
+        if (
+            self._lemonade_models_last_fail is not None
+            and time.monotonic() - self._lemonade_models_last_fail
+            < self._LEMONADE_RETRY_INTERVAL
+        ):
+            return []
 
         try:
             import requests
@@ -586,5 +611,6 @@ class AgentRegistry:
         except Exception:
             pass
 
-        # Do NOT cache on failure — allow retrying when Lemonade comes online.
+        # Record failure timestamp; do NOT cache models so we retry after the interval.
+        self._lemonade_models_last_fail = time.monotonic()
         return []
