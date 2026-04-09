@@ -36,7 +36,20 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-# Allowed document extensions for upload
+# Allowed document extensions for upload.
+#
+# IMPORTANT: Only include extensions that have a real extractor in
+# ``src/gaia/rag/sdk.py::_extract_text_from_file``. Adding an extension here
+# without a corresponding extractor causes the RAG pipeline to fall through
+# to the "unknown file type, read as text" branch, which silently indexes
+# binary garbage (Word/PowerPoint are ZIP containers, legacy .xls is BIFF,
+# etc.) and poisons retrieval quality.
+#
+# Notable intentional exclusions (no parser ships with GAIA today):
+#   .doc/.docx/.ppt/.pptx — need python-docx / python-pptx
+#   .xls (legacy BIFF)    — openpyxl only handles .xlsx; would raise on open
+# See ``_UNSUPPORTED_CATEGORIES`` below for the user-facing rejection hint.
+# Image formats are tracked by issue #730 (VLM-based indexing).
 ALLOWED_EXTENSIONS = frozenset(
     {
         ".pdf",
@@ -44,11 +57,6 @@ ALLOWED_EXTENSIONS = frozenset(
         ".md",
         ".csv",
         ".json",
-        ".doc",
-        ".docx",
-        ".ppt",
-        ".pptx",
-        ".xls",
         ".xlsx",
         ".html",
         ".htm",
@@ -274,6 +282,14 @@ def sanitize_document_path(user_path: str) -> Path:
                 "Database files are not supported for direct indexing. "
                 "Tip: Export your data to CSV or JSON format, then index those files.",
             ),
+            "office": (
+                {".doc", ".docx", ".ppt", ".pptx", ".xls"},
+                "Microsoft Word, PowerPoint, and legacy Excel (.xls) files "
+                "are not yet supported — GAIA does not currently ship the "
+                "parsers needed to extract text from these formats. "
+                "Tip: Save as PDF from Word/PowerPoint, or re-save .xls as "
+                ".xlsx — GAIA supports PDFs and modern .xlsx workbooks.",
+            ),
         }
 
         hint = ""
@@ -289,7 +305,7 @@ def sanitize_document_path(user_path: str) -> Path:
 
         detail = (
             f"{hint} "
-            f"Supported formats: PDF, TXT, MD, CSV, JSON, Office docs (DOC/DOCX, PPT/PPTX, XLS/XLSX), "
+            f"Supported formats: PDF, TXT, MD, CSV, JSON, XLSX, "
             f"HTML, XML, YAML, and 30+ code file formats. "
             f"Want support for {category + ' files' if category else 'this file type'}? "
             f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"
