@@ -16,7 +16,8 @@ import './ChatView.css';
 
 /** Returns the pixel {x, y} of the caret inside a textarea, measured from the
  *  textarea's top-left corner (including its padding). Uses a hidden mirror div
- *  with matching styles so the result works for any font and multiline input. */
+ *  with matching styles so the result works for any font and multiline input.
+ *  Accounts for scrollTop so the position stays correct when content overflows. */
 function getCaretXY(el: HTMLTextAreaElement): { x: number; y: number } {
     const sel = el.selectionStart ?? 0;
     const computed = window.getComputedStyle(el);
@@ -28,7 +29,9 @@ function getCaretXY(el: HTMLTextAreaElement): { x: number; y: number } {
         `box-sizing:${computed.boxSizing}`,
         `width:${computed.width}`,
         `padding:${computed.padding}`,
+        `border:${computed.border}`,
         `font:${computed.font}`,
+        `line-height:${computed.lineHeight}`,
         `letter-spacing:${computed.letterSpacing}`,
         `word-spacing:${computed.wordSpacing}`,
     ].join(';');
@@ -37,7 +40,7 @@ function getCaretXY(el: HTMLTextAreaElement): { x: number; y: number } {
     marker.textContent = '\u200b';
     mirror.appendChild(marker);
     document.body.appendChild(mirror);
-    const coords = { x: marker.offsetLeft, y: marker.offsetTop };
+    const coords = { x: marker.offsetLeft, y: marker.offsetTop - el.scrollTop };
     document.body.removeChild(mirror);
     return coords;
 }
@@ -165,8 +168,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useState('');
-    const [caretPos, setCaretPos] = useState({ x: 0, y: 0 });
-    const [caretFocused, setCaretFocused] = useState(false);
+    const [caret, setCaret] = useState({ x: 0, y: 0, focused: false });
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -203,12 +205,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
+    const rafRef = useRef<number>(0);
     const updateCaret = useCallback(() => {
-        requestAnimationFrame(() => {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = requestAnimationFrame(() => {
             if (!inputRef.current) return;
-            setCaretPos(getCaretXY(inputRef.current));
+            const { x, y } = getCaretXY(inputRef.current);
+            setCaret(prev => ({ ...prev, x, y }));
         });
     }, []);
+    useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
     const toolOccurredRef = useRef(false);
@@ -1433,22 +1439,20 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             value={input}
                             onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
-                            onKeyUp={updateCaret}
                             onPaste={handlePaste}
-                            onClick={updateCaret}
                             onSelect={updateCaret}
-                            onFocus={() => { setCaretFocused(true); updateCaret(); }}
-                            onBlur={() => setCaretFocused(false)}
+                            onFocus={() => { setCaret(prev => ({ ...prev, focused: true })); updateCaret(); }}
+                            onBlur={() => setCaret(prev => ({ ...prev, focused: false }))}
                             placeholder="Type a message or paste an image... (Shift+Enter for new line)"
                             rows={1}
                             disabled={isStreaming}
                             aria-label="Message input"
                             style={{ caretColor: 'transparent' }}
                         />
-                        {!isStreaming && caretFocused && (
+                        {!isStreaming && caret.focused && (
                             <span
                                 className="input-cursor"
-                                style={{ left: `${caretPos.x}px`, top: `${caretPos.y}px` }}
+                                style={{ left: `${caret.x}px`, top: `${caret.y}px` }}
                                 aria-hidden="true"
                             />
                         )}

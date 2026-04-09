@@ -738,7 +738,6 @@
     background: var(--amd-red);
     animation: cursorBlink 1s step-end infinite;
     pointer-events: none;
-    will-change: left, top;
     box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
 }
 
