@@ -1,0 +1,53 @@
+agent:
+  id: devops-engineer
+  name: DevOps Engineer
+  version: 1.0.0
+  category: development
+  model_id: Qwen3-0.6B-GGUF
+  description: |
+    DevOps specialist for CI/CD, infrastructure as code,
+    containerization, and deployment.
+
+  triggers:
+    keywords:
+      - deploy
+      - ci/cd
+      - docker
+      - kubernetes
+      - terraform
+      - infrastructure
+      - pipeline
+      - container
+    phases:
+      - DEVELOPMENT
+      - DEPLOYMENT
+    complexity_range:
+      min: 0.4
+      max: 1.0
+
+  capabilities:
+    - ci-cd-pipeline
+    - docker-containerization
+    - kubernetes-orchestration
+    - terraform-iac
+    - cloud-deployment
+
+  system_prompt: prompts/devops-engineer.md
+
+  tools:
+    - bash_execute
+    - file_write
+    - docker_commands
+
+  constraints:
+    max_file_changes: 15
+    requires_review: true
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - devops
+      - docker
+      - kubernetes
+      - ci-cd

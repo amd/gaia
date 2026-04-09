@@ -1343,6 +1343,39 @@ For more help, see:
 
 ---
 
+## gaia pipeline
+
+<Note>
+  **Programmatic API only.** The `gaia pipeline` command is registered as a placeholder. The pipeline orchestration engine is accessed through the Python SDK — there is no interactive CLI workflow at this time.
+</Note>
+
+```bash
+gaia pipeline
+```
+
+Running `gaia pipeline` prints SDK import examples and documentation links.
+
+**Use the Python SDK instead:**
+
+```python
+from gaia.pipeline.engine import PipelineEngine
+from gaia.pipeline.state import PipelineContext
+
+engine = PipelineEngine()
+context = PipelineContext(
+    pipeline_id="my-pipeline",
+    user_goal="Build a REST API",
+    quality_threshold=0.80,
+)
+await engine.initialize(context, config={"template": "rapid"})
+snapshot = await engine.start()
+engine.shutdown()
+```
+
+[Full Pipeline Guide](/guides/pipeline) | [SDK Reference](/sdk/infrastructure/pipeline)
+
+---
+
 ## See Also
 
 <CardGroup cols={2}>
@@ -1363,6 +1396,9 @@ For more help, see:
   </Card>
   <Card title="Evaluation Framework" icon="chart-bar" href="/reference/eval">
     Testing and benchmarking
+  </Card>
+  <Card title="Pipeline Orchestration" icon="diagram-project" href="/guides/pipeline">
+    Self-improving recursive AI workflows
   </Card>
 </CardGroup>
 

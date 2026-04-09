@@ -1,0 +1,371 @@
+---
+title: "GAIA Agent UI Eval: KPI Dashboard"
+description: "Executive briefing on the GAIA Agent UI evaluation benchmark, quality KPIs, current state, and production readiness criteria."
+---
+
+# GAIA Agent UI Eval: KPI Dashboard
+
+**Audience:** AMD Engineering Leadership
+**Date:** 2026-03-31
+**Status:** Stage 3 Pipeline Output — Final
+
+---
+
+## Slide 1: What We Measure and Why
+
+The **GAIA Agent UI Eval** is an automated quality benchmark that tests the GAIA chat agent end-to-end across structured multi-turn conversations.
+
+### Purpose
+
+<CardGroup cols={3}>
+  <Card title="Catch Regressions Early" icon="shield-check">
+    Detect quality drops before they reach users, with actionable root cause attribution pointing to specific files.
+  </Card>
+  <Card title="Quantify Agent Quality" icon="chart-line">
+    Replace subjective "it seems to work" with reproducible numeric scores across seven measurable dimensions.
+  </Card>
+  <Card title="Guide Engineering Priorities" icon="compass">
+    Root cause categories (architecture / prompt / tool / RAG) directly map to engineering team ownership.
+  </Card>
+</CardGroup>
+
+### Two Distinct Systems — Do Not Conflate
+
+| System | Location | Method | Scope |
+|--------|----------|--------|-------|
+| **Agent UI Eval** (primary) | `eval/` | LLM-as-judge, multi-turn scenarios | Chat agent, RAG, MCP session |
+| **Legacy RAG Eval** (tertiary) | `src/gaia/eval/` | TF-IDF cosine similarity + Claude qualitative | Code generation, summarization |
+
+This briefing focuses exclusively on the Agent UI Eval system.
+
+---
+
+## Slide 2: Architecture Overview
+
+The eval system drives real conversations through the live GAIA Agent UI using the same MCP tools a user would employ, then scores every response.
+
+```
+YAML Scenario → Runner (src/gaia/eval/runner.py) → claude -p subprocess
+                                           |
+                              [Eval Agent as judge]
+                              Phase 1: Create session, index docs
+                              Phase 2: Send messages turn by turn
+                              Phase 3: Score each turn (7 dimensions)
+                              Phase 4: Scenario-level root cause
+                              Phase 5: Return JSON result
+                                           |
+                              Runner: Recompute scores deterministically
+                                           |
+                              scorecard.json + summary.md
+```
+
+### Key Design Decisions
+
+- **Deterministic scoring:** The runner **overwrites** the judge LLM's self-reported scores with a mathematically verified weighted sum. LLM arithmetic errors do not reach the scorecard.
+- **Real tool calls:** The eval agent uses the same `index_document`, `query_documents`, `send_message` MCP tools as production users. Tests reflect real agent behavior.
+- **Cost bounded:** Each scenario is capped at $2.00 in judge API spend (`claude-sonnet-4-6`). Local agent inference (Qwen3 on AMD GPU) costs $0.00.
+
+---
+
+## Slide 3: The 7 Quality Dimensions
+
+Every agent turn is scored across seven dimensions by Claude acting as judge. These scores feed a weighted composite.
+
+| # | Dimension | Weight | What It Measures |
+|---|-----------|--------|------------------|
+| 1 | `correctness` | **25%** | Factual accuracy vs. ground truth |
+| 2 | `tool_selection` | **20%** | Right tools, right order |
+| 3 | `context_retention` | **20%** | Memory of prior turns |
+| 4 | `completeness` | **15%** | All parts of the question answered |
+| 5 | `efficiency` | **10%** | Steps taken vs. optimal path |
+| 6 | `personality` | **5%** | Confident, not sycophantic |
+| 7 | `error_recovery` | **5%** | Handles failures gracefully |
+
+### Weighted Formula
+
+```
+overall_score = correctness×0.25 + tool_selection×0.20 +
+                context_retention×0.20 + completeness×0.15 +
+                efficiency×0.10 + personality×0.05 + error_recovery×0.05
+```
+
+### Hard Gates (applied before weighting)
+
+<Warning>
+A turn automatically FAILS if `correctness < 4` (substantially wrong answer), regardless of scores on other dimensions. This rule is enforced deterministically by the runner (`src/gaia/eval/runner.py:640-685`). The judge is separately instructed to assign `correctness = 0` for hallucinated answers (`eval/prompts/judge_turn.md:41`); since 0 is less than 4, it also triggers the runner's FAIL gate. These are two layers of the same control, not two independent checks.
+</Warning>
+
+A scenario PASSES only when its mean turn score is >= 6.0 and no turn triggers a hard gate.
+
+---
+
+## Slide 4: Current Baseline State
+
+**Benchmark run:** `eval-20260320-182258` | **Date:** 2026-03-20 | **Scenarios:** 25
+
+<CardGroup cols={3}>
+  <Card title="Pass Rate" icon="circle-check">
+    **84%** (21 / 25 scenarios)
+  </Card>
+  <Card title="Avg Score" icon="star">
+    **8.61 / 10**
+  </Card>
+  <Card title="Est. Cost" icon="dollar-sign">
+    **$3.15** total (~$0.13/scenario avg)
+  </Card>
+</CardGroup>
+
+### Top Performers
+
+| Scenario | Score | Category |
+|----------|-------|----------|
+| `no_sycophancy` | 9.90 | personality |
+| `no_tools_needed` | 9.70 | tool_selection |
+| `honest_limitation` | 9.70 | personality |
+| `conversation_summary` | 9.55 | context_retention |
+
+### Failures in Baseline Run
+
+| Scenario | Score | Root Cause |
+|----------|-------|------------|
+| `smart_discovery` | 2.80 | `search_file` scope — only scanned Windows user folders, not project dirs |
+| `table_extraction` | 5.17 | CSV chunking — 500-row CSV indexed into 2 chunks (< 10% data visibility) |
+| `search_empty_fallback` | 5.32 | Search file extension scope; `*.py` files not in default search set |
+| `negation_handling` | 4.62 | Path truncation bug causing multi-turn context loss |
+
+All four failures were subsequently fixed through targeted code changes. Post-fix rerun: **20/23 PASS (87.0%)**.
+
+---
+
+## Slide 5: Quality by Category
+
+Breakdown of the 23-scenario evaluation run by category. Categories reflect the type of capability being tested.
+
+> **Note:** The `eval/results/baseline.json` file records all 25 scenarios under `category = "unknown"` because the baseline was generated before the runner's category injection fix (`src/gaia/eval/runner.py:588`). The per-category scores below are derived from a separate analysis pass, not from `baseline.json` directly. The `compare_scorecards()` by-category regression detection is non-functional against this baseline (see KPI-16 Known Issues and Gap G-08 in the full spec).
+
+| Category | Scenarios | Pass | Fail | Avg Score | Assessment |
+|----------|-----------|------|------|-----------|------------|
+| `context_retention` | 5 | 5 | 0 | **9.23** | Strongest — history_pairs=5 works |
+| `personality` | 2 | 1 | 1 | **8.53** | Strong — anti-sycophancy solid |
+| `honest_limitation` | 1 | 1 | 0 | **9.70** | Excellent capability boundaries |
+| `adversarial` | 3 | 3 | 0 | **8.10** | Edge cases handled gracefully |
+| `error_recovery` | 3 | 2 | 1 | **7.58** | Moderate — file discovery gap |
+| `tool_selection` | 3 | 2 | 1 | **7.16** | Moderate — smart discovery gap |
+| `rag_quality` | 6 | 2 | 4 | **6.96** | Weakest — CSV and synthesis gaps |
+
+<Warning>
+`rag_quality` is the most critical gap. At 2/6 PASS (33%) and 6.96 average, it is the primary barrier to Beta graduation. The root causes are architectural: CSV file aggregation requires a dedicated tool (not RAG), and cross-section synthesis requires correct session scoping during document indexing.
+</Warning>
+
+### After Fix Phase (Post-Remediation)
+
+With three targeted fixes applied (basename path fallback, verbosity calibration, session isolation):
+- `rag_quality` improved: `negation_handling` +4.01, `cross_section_rag` +2.60
+- Overall: 20/23 PASS (87.0%), avg score 7.98/10
+
+---
+
+## Slide 6: Reliability Risk — Flakiness
+
+<Warning>
+The current benchmark system has no flakiness detection. Every scenario is run exactly once per benchmark execution. This is a critical gap for production gating.
+</Warning>
+
+### Three Documented Flaky Scenarios
+
+Three scenarios have been observed to oscillate between PASS and FAIL across independent runs, driven by local LLM non-determinism (Qwen3-Coder-30B):
+
+| Scenario | Observed Run-to-Run Scores | Pattern |
+|----------|---------------------------|---------|
+| `negation_handling` | 9.8 → 8.4 → 4.62 → 8.63 | PASS / PASS / FAIL / PASS |
+| `vague_request_clarification` | 9.5 → 4.5 → 8.15 | PASS / FAIL / PASS |
+| `conversation_summary` | Multiple PASS, one observed regression | Mostly stable |
+
+### Observed Score Variance Across Full Runs
+
+| Run ID | Scenarios | Pass Rate | Avg Score |
+|--------|-----------|-----------|-----------|
+| `eval-20260320-163359` | 25 | 80% | 8.4 |
+| `eval-20260320-182258` | 25 | 84% | 8.61 (**baseline**) |
+| `eval-20260320-195451` | 25 | 76% | 8.5 |
+
+**Range: 76% – 84% (8 percentage points) from LLM non-determinism alone**, not from code changes.
+
+### Implication for Production Gating
+
+A system gating on a single-pass 84% result may actually have a reliable pass rate of 76-84%. The production threshold of 95% must account for this variance floor. Until multi-pass flakiness measurement is implemented (Gap G-01; proposed: 3-pass `MultiPassEvaluator` per `eval/ARCHITECTURE_ANALYSIS.md §2.6`), the 95% threshold cannot be verified.
+
+---
+
+## Slide 7: Gap Analysis — 5 Most Critical Missing KPIs
+
+The following gaps represent missing instrumentation that limits the system's ability to serve as a reliable production gate.
+
+| Priority | Gap | Impact | Proposed KPI |
+|----------|-----|--------|--------------|
+| **P0** | No flakiness / variance measurement | Single-pass results have ±8 pp variance; production gating unreliable | `flakiness_score = FAIL_count / N_runs` per scenario |
+| **P1** | No latency SLA | No target for scenario execution time; full runs take ~45 min | `p90_elapsed_s ≤ 300s per scenario` |
+| **P1** | No `chunk_count` in scorecard | CSV/large-doc failures are invisible without chunk coverage data | `min_chunk_count`, `avg_chunk_count` per scenario |
+| **P1** | No exercisable scenario fraction | 19 real-world scenarios silently SKIPPED_NO_DOCUMENT in CI (plus 3 vision, 6 web_system scenarios requiring special capabilities) | `exercisable_fraction = (total - skipped) / total` |
+| **P2** | No cross-run trend tracking | Cannot detect gradual score drift without manual analysis | `metrics.jsonl` with per-run time-series |
+
+### Additional Gaps (P2–P3)
+
+- **G-06:** Judge model version not pinned — cross-model score comparisons are invalid
+- **G-07:** No automated CI regression gate — regressions reach main before detection
+- **G-08:** Persona coverage not tracked in scorecard
+- **G-09:** Tool call count not tracked per turn
+- **G-10:** Corpus fact coverage not measured
+
+---
+
+## Slide 8: Production Readiness Ladder
+
+### Alpha: Internal Testing
+
+| Metric | Threshold | Current State |
+|--------|-----------|---------------|
+| `judged_pass_rate` | ≥ 70% | 84% — PASS |
+| `avg_score` | ≥ 7.0 | 8.61 — PASS |
+| Infrastructure failure rate | < 20% | ~0% — PASS |
+
+**Status: Alpha criteria MET as of 2026-03-20**
+
+---
+
+### Beta: External Preview
+
+| Metric | Threshold | Current State |
+|--------|-----------|---------------|
+| `judged_pass_rate` | ≥ 85% | 84% — 1 pp short |
+| `avg_score` | ≥ 8.0 | 8.61 — PASS |
+| `STABLE_FAIL` scenarios | Zero | Not measurable yet (G-01 open) |
+| Exercisable scenario fraction | ≥ 60% | Not measured (G-04 open) |
+| No category avg below 6.0 | Required | `rag_quality` at 6.96 — marginal |
+
+**Status: Beta criteria NOT YET MET. Gap: 1 pp on pass rate; 3 open P1 gaps; rag_quality marginal.**
+
+---
+
+### Production
+
+| Metric | Threshold | Current State |
+|--------|-----------|---------------|
+| `judged_pass_rate` | ≥ 95% | 84% — 11 pp short |
+| `avg_score` | ≥ 8.5 | 8.61 — PASS |
+| `STABLE_FAIL` scenarios | Zero | Not measurable |
+| `FLAKY_FAIL` scenarios | Zero | 3 known candidates |
+| Exercisable fraction | ≥ 80% | Not measured |
+| No category avg below 7.0 | Required | `rag_quality` at 6.96 — below |
+| Automated CI gate | Required | Not implemented (G-07 open) |
+
+**Status: Production criteria NOT MET. Estimated gap: 6-12 months of engineering work on rag_quality, flakiness measurement, and CI integration.**
+
+---
+
+## Slide 9: Engineering Roadmap
+
+### P0: Unblock Reliable Measurement (Q2 2026)
+
+<Steps>
+  <Step title="Implement multi-pass flakiness detection (G-01)">
+    Add `--runs N` to `gaia eval agent`. Classify scenarios as STABLE_PASS / FLAKY_PASS / FLAKY_FAIL / STABLE_FAIL using median and min score thresholds (see `eval/ARCHITECTURE_ANALYSIS.md §2.6` for the proposed 3-pass `MultiPassEvaluator` design). Target: 3-pass measurement per scenario in CI weekly job.
+  </Step>
+  <Step title="Investigate and fix rag_quality failures">
+    Three structural issues to fix: (1) Add `analyze_data_file` GROUP BY aggregation for CSV queries. (2) Enforce session-scoped document indexing in eval runner. (3) Validate `query_specific_file` path against session document list.
+  </Step>
+</Steps>
+
+### P1: Strengthen Instrumentation (Q3 2026)
+
+<Steps>
+  <Step title="Add chunk_count to scorecard (G-03)">
+    Surface RAG data coverage failures at the scorecard level so CSV/large-doc gaps are immediately visible without reading individual traces.
+  </Step>
+  <Step title="Define and enforce latency SLA (G-02)">
+    Target: p90 scenario runtime ≤ 5 minutes for 1-3 turn scenarios. Add `p90_elapsed_s` to scorecard.
+  </Step>
+  <Step title="Track exercisable scenario fraction (G-04)">
+    Document the real-world corpus acquisition process. Add `exercisable_fraction` metric so CI health is visible without manual scenario-by-scenario review.
+  </Step>
+</Steps>
+
+### P2: Production Gate Infrastructure (Q4 2026)
+
+<Steps>
+  <Step title="Automated CI regression gate (G-07)">
+    GitHub Actions workflow running eval nightly. FAIL the build if any scenario regresses from PASS to FAIL vs. baseline. Cost: ~$3.15/nightly run (actual baseline cost).
+  </Step>
+  <Step title="Cross-run trend tracking (G-05)">
+    Persist `metrics.jsonl` with per-run aggregates. Build minimal trend view showing judged_pass_rate and avg_score over time.
+  </Step>
+  <Step title="Pin judge model version (G-06)">
+    Record exact judge model API version in scorecard. Warn on comparison when versions differ.
+  </Step>
+</Steps>
+
+### P3: Coverage Completeness (2027)
+
+- Corpus fact coverage metric (G-10)
+- Persona breakdown in scorecard (G-08)
+- Tool call count per turn (G-09)
+
+---
+
+## Slide 10: Cost Model
+
+### Current Cost Structure
+
+| Cost Element | Rate | Notes |
+|---|---|---|
+| Agent inference (Qwen3-Coder-30B) | **$0.00** | Local AMD Radeon 8060S GPU; 51.4 tokens/sec observed |
+| Judge API (claude-sonnet-4-6) | ~$0.13/scenario avg | Empirically observed from 25-scenario baseline run; range $0.00–$0.33 |
+| Budget cap | $2.00/scenario hard cap | Runner sets `--max-budget-usd 2.00` |
+
+> **Cost note:** The $0.00 entries in baseline.json likely reflect scenarios where the eval agent returned a result without incurring a billable judge call (e.g., infrastructure failures or fast exits). The self-reported cost estimates are not verified against actual API billing.
+
+### Full Run Costs
+
+| Scenario Set | Scenarios | Estimated Cost |
+|---|---|---|
+| Core 25-scenario suite | 25 | ~$3.15 (actual baseline) |
+| Extended 54-scenario suite (all categories) | 54 | ~$6.80 (extrapolated at $0.126/scenario) |
+| Nightly CI run (core suite) | 25 | ~$3.15/day = ~$95/month |
+| 3-pass flakiness run (core suite, per ARCHITECTURE_ANALYSIS.md §2.6) | 25 x 3 | ~$9.45/run |
+
+### Multi-Pass Implications
+
+The proposed `MultiPassEvaluator` (see `eval/ARCHITECTURE_ANALYSIS.md §2.6`) uses 3 passes by default. Implementing 3-pass flakiness detection increases per-benchmark cost from ~$3.15 to ~$9.45. For a nightly CI run, this is ~$285/month. Options to manage cost:
+
+<CardGroup cols={2}>
+  <Card title="Tiered Run Strategy" icon="layers">
+    Run single-pass daily (~$3.15/day). Run 3-pass flakiness check weekly (~$9.45/week). Total: ~$135/month.
+  </Card>
+  <Card title="Flaky-Only Multi-Pass" icon="flask">
+    Run 3 passes only for scenarios in the known-flaky list (3 scenarios, ~$1.13 extra). Cost: ~$4.28/run.
+  </Card>
+</CardGroup>
+
+### Cost Scaling with Scenario Growth
+
+The system currently has 54 defined scenarios on disk (25 exercisable in the baseline CI run). As real-world scenarios are added to the exercisable set:
+
+- Each new exercisable scenario adds ~$0.13 to nightly CI cost
+- Reaching 100 exercisable scenarios: ~$12.60/day = ~$380/month
+- Still economically viable for a production quality gate
+
+---
+
+## References
+
+| Document | Location |
+|---|---|
+| KPI Specification (full) | `docs/spec/agent-ui-eval-kpis.md` |
+| Per-turn judge rubric | `eval/prompts/judge_turn.md` |
+| Scenario-level judge instructions | `eval/prompts/judge_scenario.md` |
+| Eval runner implementation | `src/gaia/eval/runner.py` |
+| Scorecard builder | `src/gaia/eval/scorecard.py` |
+| Baseline scorecard | `eval/results/baseline.json` |
+| Full benchmark run report | `eval/eval_run_report.md` |
+| Scenario library | `eval/scenarios/` |
+| Known issues registry | `docs/spec/agent-ui-known-issues.md` |

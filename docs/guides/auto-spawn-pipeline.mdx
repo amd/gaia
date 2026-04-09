@@ -1,0 +1,370 @@
+---
+title: Autonomous Agent Spawning Pipeline
+description: Guide to the GAIA pipeline's autonomous agent spawning capability including GapDetector, Master Ecosystem Creator integration, and standalone deployment options.
+status: Published
+---
+
+# Autonomous Agent Spawning Pipeline
+
+## Overview
+
+The GAIA pipeline now supports **autonomous agent spawning** - automatically detecting missing agents required for a task and generating them on-demand via the Master Ecosystem Creator.
+
+This capability enables true agentic autonomy: provide a high-level objective, and the pipeline will:
+1. Analyze the task domain
+2. Determine what agents are needed
+3. Check which agents already exist
+4. **Automatically generate missing agents**
+5. Execute the complete pipeline
+
+## Prerequisites
+
+**IMPORTANT:** The auto-spawn pipeline's GapDetector invokes `master-ecosystem-creator.md`, a Claude Code subagent. This creates a runtime dependency on the Claude Code environment. Running `PipelineOrchestrator` outside Claude Code will result in silent failures or unhandled exceptions when gaps are detected.
+
+For standalone deployments without Claude Code, either:
+1. Pre-generate required agents manually
+2. Implement an alternative agent generation mechanism
+3. Set `auto_spawn=False` to block pipeline when gaps detected
+
+**Clear Thought MCP:** The pipeline also integrates Clear Thought MCP for sequential thinking at each stage. Ensure the Clear Thought MCP server is available for full strategic analysis capabilities. Without it, the pipeline operates in degraded mode.
+
+## Architecture
+
+### Pipeline Flow
+
+```
+┌─────────────────┐
+│  Task Input     │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 1:        │
+│ DomainAnalyzer  │ → Analyzes task to identify domains
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 2:        │
+│ WorkflowModeler │ → Models workflow + recommends agents
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 3:        │
+│ LoomBuilder     │ → Builds execution topology
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 4:        │
+│ GapDetector     │ → Scans available agents vs required
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │ Gaps?   │
+    └────┬────┘
+      Yes│No
+         │     ┌──────────────────────────┐
+         │     │ Master Ecosystem Creator │
+         └────→│ (Generates missing agents)│
+               └────────────┬─────────────┘
+                            │
+         ▼                  │
+┌─────────────────┐         │
+│ Stage 5:        │◄────────┘
+│ PipelineExec.   │ → Executes complete pipeline
+└─────────────────┘
+```
+
+### Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **GapDetector** | `src/gaia/pipeline/stages/gap_detector.py` | Scans available agents, compares vs recommended, identifies gaps |
+| **PipelineOrchestrator** | `src/gaia/pipeline/orchestrator.py` | Coordinates 5-stage pipeline with auto-spawn |
+| **Master Ecosystem Creator** | `agents/master-ecosystem-creator.md` | Generates missing agents using component-framework templates |
+
+## Usage
+
+### Basic Example
+
+```python
+from gaia.pipeline.orchestrator import run_pipeline
+
+# Run pipeline with auto-spawn enabled
+result = run_pipeline(
+    task_description="Create a data analysis agent that processes CSV files and generates visualizations",
+    auto_spawn=True,  # Automatically generate missing agents
+    model_id="Qwen3.5-35B-A3B-GGUF",
+    debug=False
+)
+
+print(f"Pipeline status: {result['pipeline_status']}")
+print(f"Agents spawned: {result['agents_spawned']}")
+print(f"Execution result: {result['execution_result']}")
+```
+
+### Advanced Example with Clear Thought MCP
+
+```python
+from gaia.pipeline.orchestrator import PipelineOrchestrator
+
+# Create orchestrator with Clear Thought MCP enabled
+orchestrator = PipelineOrchestrator(
+    model_id="Qwen3.5-35B-A3B-GGUF",
+    max_steps=50,
+    debug=True
+)
+
+# Execute full pipeline with Clear Thought strategic analysis
+result = orchestrator.execute_tool(
+    "execute_full_pipeline",
+    {
+        "task_description": "Build a multi-agent system for code review and testing",
+        "auto_spawn": True,      # Generate missing agents
+        "use_clear_thought": True  # Use MCP sequential thinking at each stage
+    }
+)
+
+# Access Clear Thought analyses from each stage
+print("Domain Analysis:", result['clear_thought_analyses']['domain_analysis'])
+print("Workflow Planning:", result['clear_thought_analyses']['workflow_modeling'])
+print("Topology Design:", result['clear_thought_analyses']['loom_building'])
+print("Agent Generation:", result['clear_thought_analyses']['agent_generation'])
+```
+
+### Programmatic Gap Detection
+
+```python
+from gaia.pipeline.stages.gap_detector import GapDetector, detect_agent_gaps
+
+# Detect gaps without running full pipeline
+gap_result = detect_agent_gaps(
+    recommended_agents=["file-processor", "data-analyst", "visualization-expert"],
+    task_objective="Process CSV files and create charts"
+)
+
+print(f"Gaps identified: {gap_result['gap_result']['gaps_identified']}")
+print(f"Missing agents: {gap_result['gap_result']['missing_agents']}")
+print(f"Can proceed: {gap_result['gap_result']['can_proceed']}")
+```
+
+## Clear Thought MCP Integration
+
+The PipelineOrchestrator integrates **Clear Thought MCP sequential thinking** at each stage for strategic analysis:
+
+### Stage 1: Domain Analysis
+
+```python
+def _clear_thought_domain_analysis(self, task_description: str):
+    """Analyzes task domain using sequential thinking."""
+    prompt = f"""
+    TASK: {task_description}
+
+    Step 1: What is the primary domain?
+    Step 2: What secondary domains are involved?
+    Step 3: What are the key entities and actors?
+    Step 4: What are the domain boundaries?
+    Step 5: What is the complexity level?
+    """
+```
+
+### Stage 2: Workflow Planning
+
+```python
+def _clear_thought_workflow_planning(self, domain_blueprint, task_description):
+    """Plans workflow using sequential thinking."""
+    prompt = f"""
+    DOMAIN: {domain_blueprint['primary_domain']}
+
+    Step 1: What workflow pattern fits best?
+    Step 2: What phases are required?
+    Step 3: What agents are needed per phase?
+    Step 4: What are the dependencies?
+    Step 5: What is the critical path?
+    """
+```
+
+### Stage 3: Topology Design
+
+```python
+def _clear_thought_topology_design(self, workflow_model, domain_blueprint):
+    """Designs agent topology using sequential thinking."""
+    prompt = f"""
+    WORKFLOW: {workflow_model['workflow_pattern']}
+
+    Step 1: What agents are required?
+    Step 2: What is the execution order?
+    Step 3: What are the data flow dependencies?
+    Step 4: What tools does each agent need?
+    Step 5: What are the failure modes?
+    """
+```
+
+### Stage 4: Agent Generation Planning
+
+```python
+def _trigger_agent_spawn(self, task_objective):
+    """Plans agent generation using sequential thinking."""
+    clear_thought_prompt = f"""
+    TASK: {task_objective}
+    MISSING AGENTS: {missing_agents}
+
+    Step 1: What capabilities does each agent need?
+    Step 2: What tools must each agent have?
+    Step 3: What are the dependencies between agents?
+    Step 4: What is the optimal generation order?
+    Step 5: What shared components are required?
+    """
+```
+
+## Explicit Tool Calling Pattern
+
+The auto-spawn pipeline uses the **explicit tool calling pattern** (see `docs/guides/explicit-tool-calling.mdx`) to invoke Master Ecosystem Creator:
+
+```tool-call
+CALL: mcp__clear-thought__sequentialthinking -> generation_plan
+purpose: Strategic planning for agent generation
+prompt: |
+  TARGET_DOMAIN: {{task_objective}}
+  AGENTS_TO_GENERATE: {{missing_agents}}
+  Step 1: Analyze required capabilities per agent
+  Step 2: Identify tool requirements
+  Step 3: Determine agent dependencies
+  Step 4: Plan generation order
+  Step 5: Identify shared components
+
+CALL: mcp__master-ecosystem-creator__spawn_agents
+purpose: Generate missing agents for pipeline execution
+depends_on: generation_plan
+prompt: |
+  TARGET_DOMAIN: {{task_objective}}
+  AGENTS_TO_GENERATE: {{missing_agents}}
+  PRIORITY: high
+  BLOCK_UNTIL_COMPLETE: true
+```
+
+## GapDetector Tools
+
+The GapDetector provides these tools:
+
+### `scan_available_agents`
+
+Scans `agents/` and `.claude/agents/` directories for available agents.
+
+```python
+result = detector.execute_tool("scan_available_agents", {
+    "agents_dir": "agents",
+    "claude_agents_dir": ".claude/agents"
+})
+# Returns: {"agents": [...], "total_count": N, "sources": {...}}
+```
+
+### `compare_agents`
+
+Compares available agents against recommended agents.
+
+```python
+result = detector.execute_tool("compare_agents", {
+    "available_agents": [...],
+    "recommended_agents": ["agent-1", "agent-2"]
+})
+# Returns: {"missing_ids": [...], "coverage_rate": 0.67}
+```
+
+### `analyze_gaps`
+
+Analyzes gaps and prepares generation plan.
+
+```python
+result = detector.execute_tool("analyze_gaps", {
+    "missing_agents": ["agent-3"],
+    "task_objective": "Process data"
+})
+# Returns: {"gaps_identified": True, "generation_required": True}
+```
+
+### `trigger_agent_generation`
+
+Triggers Master Ecosystem Creator via MCP tool call.
+
+```python
+result = detector.execute_tool("trigger_agent_generation", {
+    "generation_plan": {...}
+})
+# Returns: {"generation_triggered": True, "mcp_tool_call": "..."}
+```
+
+## Pipeline States
+
+The pipeline tracks state through these stages:
+
+| State | Description |
+|-------|-------------|
+| `not_started` | Pipeline not yet initialized |
+| `domain_analysis_complete` | Stage 1 complete |
+| `workflow_modeling_complete` | Stage 2 complete |
+| `loom_building_complete` | Stage 3 complete |
+| `gap_detection_complete_pending_spawn` | Stage 4 complete, waiting for agent generation |
+| `gap_detection_complete_pending_execution` | Stage 4 complete, ready to execute |
+| `complete` | Pipeline execution finished |
+
+## Error Handling
+
+The pipeline handles these error scenarios:
+
+| Scenario | Behavior |
+|----------|----------|
+| Missing agents, auto_spawn=False | Returns `pipeline_status: "blocked"` |
+| Master Ecosystem Creator fails | Returns `generation_status: "failed"` with error |
+| Pipeline execution fails | Returns `pipeline_status: "failed"` with error details |
+| Clear Thought MCP unavailable | Continues without strategic analysis (degraded mode) |
+
+## Testing
+
+```python
+import pytest
+from gaia.pipeline.orchestrator import run_pipeline
+
+def test_auto_spawn_pipeline():
+    """Test pipeline with auto-spawn enabled."""
+    result = run_pipeline(
+        task_description="Test task requiring new agents",
+        auto_spawn=True,
+        debug=True
+    )
+
+    assert result['pipeline_status'] == 'success'
+    assert 'agents_spawned' in result
+    assert 'execution_result' in result
+
+def test_gap_detection_only():
+    """Test gap detection without full pipeline."""
+    from gaia.pipeline.stages.gap_detector import detect_agent_gaps
+
+    result = detect_agent_gaps(
+        recommended_agents=["existing-agent", "missing-agent"],
+        task_objective="Test"
+    )
+
+    assert result['gap_result']['gaps_identified'] == True
+    assert "missing-agent" in result['gap_result']['missing_ids']
+```
+
+## Related Documentation
+
+- [[docs/guides/explicit-tool-calling.mdx]] - Explicit tool calling pattern reference
+- [[agents/master-ecosystem-creator.md]] - Master Ecosystem Creator agent definition
+- [[docs/sdk/core/agent-system.mdx]] - Agent system architecture
+- [[component-framework/templates/]] - Templates for agent generation
+
+## Future Enhancements
+
+Potential future improvements:
+
+1. **Parallel Agent Generation** - Generate multiple agents concurrently
+2. **Incremental Generation** - Generate agents on-demand as each phase needs them
+3. **Capability-Based Routing** - Route tasks to agents based on capabilities, not IDs
+4. **Agent Versioning** - Support multiple versions of the same agent
+5. **Dynamic Re-spawning** - Re-generate agents that fail during execution

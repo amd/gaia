@@ -21,3 +21,33 @@ Usage:
 """
 
 __version__ = "1.0.0"
+
+# API Standardization components (Phase 3 Sprint 4)
+from gaia.api.openapi import OpenAPIGenerator
+from gaia.api.versioning import (
+    APIVersioning,
+    VersionStrategy,
+    VersionConfig,
+    versioned_route,
+    require_version,
+)
+from gaia.api.deprecation import (
+    DeprecationManager,
+    DeprecationInfo,
+    deprecate_endpoint,
+)
+
+__all__ = [
+    # OpenAPI
+    "OpenAPIGenerator",
+    # Versioning
+    "APIVersioning",
+    "VersionStrategy",
+    "VersionConfig",
+    "versioned_route",
+    "require_version",
+    # Deprecation
+    "DeprecationManager",
+    "DeprecationInfo",
+    "deprecate_endpoint",
+]

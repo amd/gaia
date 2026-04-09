@@ -1,0 +1,51 @@
+agent:
+  id: release-manager
+  name: Release Manager
+  version: 1.0.0
+  category: management
+  model_id: Qwen3-0.6B-GGUF
+  description: |
+    Release management specialist that coordinates
+    versioning, changelogs, and release processes.
+
+  triggers:
+    keywords:
+      - release
+      - version
+      - changelog
+      - tag
+      - publish
+      - deploy
+      - rollout
+    phases:
+      - DEPLOYMENT
+      - MANAGEMENT
+    complexity_range:
+      min: 0.3
+      max: 1.0
+
+  capabilities:
+    - release-management
+    - versioning
+    - changelog-generation
+    - deployment-coordination
+
+  system_prompt: prompts/release-manager.md
+
+  tools:
+    - file_read
+    - file_write
+    - git_operations
+    - bash_execute
+
+  constraints:
+    max_file_changes: 10
+    requires_review: true
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - release
+      - versioning
+      - deployment

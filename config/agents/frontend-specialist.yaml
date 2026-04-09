@@ -1,0 +1,56 @@
+agent:
+  id: frontend-specialist
+  name: Frontend Specialist
+  version: 1.0.0
+  category: development
+  model_id: Qwen3-0.6B-GGUF
+  description: |
+    Frontend development specialist for React, Vue, Angular,
+    and modern web technologies.
+
+  triggers:
+    keywords:
+      - react
+      - vue
+      - angular
+      - frontend
+      - ui
+      - component
+      - jsx
+      - typescript
+      - css
+      - html
+    phases:
+      - DEVELOPMENT
+    complexity_range:
+      min: 0.2
+      max: 1.0
+
+  capabilities:
+    - react-development
+    - vue-development
+    - angular-development
+    - typescript
+    - css-styling
+    - responsive-design
+
+  system_prompt: prompts/frontend-specialist.md
+
+  tools:
+    - file_read
+    - file_write
+    - npm_install
+    - run_tests
+
+  constraints:
+    max_file_changes: 25
+    requires_review: true
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - frontend
+      - react
+      - vue
+      - angular

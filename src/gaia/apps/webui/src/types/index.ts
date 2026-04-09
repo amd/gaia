@@ -313,3 +313,167 @@ export interface StreamEvent {
         total?: number;
     };
 }
+
+// ── Pipeline Template Types ──────────────────────────────────────────────
+
+export interface RoutingRule {
+    condition: string;
+    route_to: string;
+    priority: number;
+    loop_back: boolean;
+    guidance?: string;
+}
+
+export interface PipelineTemplate {
+    name: string;
+    description: string;
+    quality_threshold: number;
+    max_iterations: number;
+    agent_categories: Record<string, string[]>;
+    routing_rules: RoutingRule[];
+    quality_weights: Record<string, number>;
+}
+
+export interface TemplateListResponse {
+    templates: PipelineTemplate[];
+    total: number;
+}
+
+export interface TemplateValidateResponse {
+    valid: boolean;
+    errors: string[];
+    warnings: string[];
+}
+
+export interface TemplateCreateRequest {
+    name: string;
+    description?: string;
+    quality_threshold?: number;
+    max_iterations?: number;
+    agent_categories?: Record<string, string[]>;
+    routing_rules?: RoutingRule[];
+    quality_weights?: Record<string, number>;
+}
+
+export interface TemplateUpdateRequest {
+    description?: string;
+    quality_threshold?: number;
+    max_iterations?: number;
+    agent_categories?: Record<string, string[]>;
+    routing_rules?: RoutingRule[];
+    quality_weights?: Record<string, number>;
+}
+
+// ── Pipeline Metrics Types ───────────────────────────────────────────────
+
+export interface PhaseTiming {
+    phase_name: string;
+    started_at?: string;
+    ended_at?: string;
+    duration_seconds: number;
+    token_count: number;
+    ttft?: number;
+    tps: number;
+}
+
+export interface LoopMetrics {
+    loop_id: string;
+    phase_name: string;
+    iteration_count: number;
+    quality_scores: number[];
+    average_quality?: number;
+    max_quality?: number;
+    defects_by_type: Record<string, number>;
+    started_at?: string;
+    ended_at?: string;
+}
+
+export interface StateTransition {
+    from_state: string;
+    to_state: string;
+    timestamp: string;
+    reason: string;
+    metadata: Record<string, unknown>;
+}
+
+export interface AgentSelection {
+    phase: string;
+    agent_id: string;
+    reason: string;
+    alternatives: string[];
+    timestamp: string;
+}
+
+export interface PipelineMetricsSnapshot {
+    pipeline_id: string;
+    phase_timings: Record<string, PhaseTiming>;
+    loop_metrics: Record<string, LoopMetrics>;
+    state_transitions: StateTransition[];
+    agent_selections: AgentSelection[];
+    quality_scores: [string, string, number][];
+    defects_by_type: Record<string, number>;
+}
+
+export interface PipelineMetricsSummary {
+    pipeline_id: string;
+    total_duration_seconds: number;
+    total_tokens: number;
+    avg_tps: number;
+    avg_ttft: number;
+    total_loops: number;
+    total_iterations: number;
+    total_defects: number;
+    avg_quality_score: number;
+    max_quality_score: number;
+    min_quality_score: number;
+}
+
+export interface PipelineMetricsResponse {
+    success: boolean;
+    pipeline_id: string;
+    summary: PipelineMetricsSummary;
+    phase_breakdown: Record<string, PhaseTiming>;
+    loop_metrics: Record<string, LoopMetrics>;
+    state_transitions: StateTransition[];
+    defects_by_type: Record<string, number>;
+    agent_selections: AgentSelection[];
+}
+
+export interface MetricHistoryPoint {
+    timestamp: string;
+    loop_id: string;
+    phase: string;
+    metric_type: string;
+    value: number;
+    metadata: Record<string, unknown>;
+}
+
+export interface PipelineMetricsHistory {
+    pipeline_id: string;
+    metric_type?: string;
+    start_time?: string;
+    end_time?: string;
+    total_points: number;
+    history: MetricHistoryPoint[];
+}
+
+export interface AggregateMetricStatistics {
+    metric_type: string;
+    count: number;
+    mean: number;
+    median: number;
+    std_dev: number;
+    min_value: number;
+    max_value: number;
+    trend: string;
+    percentiles: Record<string, number>;
+}
+
+export interface PipelineAggregateMetrics {
+    success: boolean;
+    total_pipelines: number;
+    time_range: { start?: string; end?: string };
+    metric_statistics: Record<string, AggregateMetricStatistics>;
+    overall_health: number;
+    recommendations: string[];
+}

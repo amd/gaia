@@ -1,0 +1,336 @@
+# Explicit Tool Calling in Agent Prompts
+
+## Overview
+
+GAIA agents support **explicit tool calling** within agent prompts using structured ```tool-call blocks. This pattern allows agents to invoke specific tools at defined points in their workflow, enabling precise control over agent behavior and systematic execution of complex tasks.
+
+## Syntax
+
+### Basic Tool Call Format
+
+```tool-call
+CALL: tool_name "parameters"
+purpose: Why this tool is called
+capture: variable_name
+```
+
+**Example:**
+```tool-call
+CALL: file_read "src/gaia/agent.py"
+purpose: Read agent source code
+capture: agent_code
+```
+
+### MCP Tool Call Format
+
+For MCP (Model Context Protocol) tools, use the `mcp__server__tool` prefix:
+
+```tool-call
+CALL: mcp__server_name__tool_name "parameters"
+purpose: Why this MCP tool is called
+```
+
+**Example:**
+```tool-call
+CALL: mcp__clear-thought__sequentialthinking
+purpose: Analyze complex problem
+prompt: |
+  Step 1: What is the problem?
+  Step 2: What are possible solutions?
+```
+
+### Tool Call with Multi-line Prompt
+
+```tool-call
+CALL: mcp__server__tool_name
+purpose: Why this tool is called
+prompt: |
+  Line 1 of prompt
+  Line 2 of prompt
+  {{VARIABLE}} substitution supported
+```
+
+### Conditional Tool Call
+
+```tool-call
+IF: condition_expression
+CALL: tool_name "parameters"
+purpose: Why this conditional call
+END IF:
+```
+
+**Example:**
+```tool-call
+IF: code_has_errors
+CALL: mcp__python__fix_code "src/file.py"
+purpose: Fix detected code errors
+END IF:
+```
+
+### Tool Call with Output Capture
+
+```tool-call
+CALL: tool_name "parameters"
+purpose: Why this tool is called
+capture: output_variable
+```
+
+The captured variable can be referenced in subsequent tool calls or prompt sections.
+
+## Usage in Agent Definitions
+
+### Example: Master Ecosystem Creator
+
+The `agents/master-ecosystem-creator.md` demonstrates explicit tool calling throughout its workflow:
+
+```markdown
+### Phase 1: Ecosystem Planning
+
+Analyze the target domain and plan the ecosystem structure.
+
+```tool-call
+CALL: mcp__clear-thought__sequentialthinking -> ecosystem_plan
+purpose: Analyze domain and plan ecosystem structure
+prompt: |
+  Analyze the requirements for the agent ecosystem:
+
+  TARGET_DOMAIN: {{TARGET_DOMAIN}}
+  USE_CASE: {{USE_CASE}}
+  COMPLEXITY: {{COMPLEXITY_LEVEL}}
+
+  Step 1: What agents are required for this domain?
+  Step 2: What components (commands, tasks, checklists) are needed?
+  Step 3: What workflow pattern should be used?
+  Step 4: What knowledge domains must be covered?
+  Step 5: Generate a prioritized generation list with dependencies.
+```
+```
+
+### Example: Component Loading
+
+```markdown
+### Phase 2: Template Loading
+
+Load required templates from the component-framework.
+
+```tool-call
+CALL: component_loader.load_component "templates/agent-definition.md"
+purpose: Load agent definition template
+capture: agent_template
+
+CALL: component_loader.load_component "templates/component-template.md"
+purpose: Load component template
+capture: component_template
+```
+```
+
+### Example: Agent Generation Loop
+
+```markdown
+### Phase 3: Agent Generation Loop
+
+Systematically generate all required agents.
+
+```tool-call
+CALL: template_renderer.render "templates/agent-definition.md" {{AGENT_VARIABLES}}
+purpose: Generate agent definition file
+capture: rendered_agent
+
+CALL: component_loader.save_component "agents/{{AGENT_ID}}.md" {{RENDERED_AGENT}} {{FRONTMATTER}}
+purpose: Save generated agent file
+capture: agent_path
+```
+```
+
+## Integration with Component Framework
+
+Tool calls integrate seamlessly with the component-framework:
+
+### Loading Components
+
+```tool-call
+CALL: component_loader.load_component "personas/specialist-agent.md"
+purpose: Load specialist agent persona
+capture: persona
+```
+
+### Saving Components
+
+```tool-call
+CALL: component_loader.save_component "tasks/new-task.md" {{CONTENT}} {{FRONTMATTER}}
+purpose: Save new task definition
+capture: task_path
+```
+
+### Updating Components
+
+```tool-call
+CALL: component_loader.update_component "knowledge/domain-knowledge.md" {{UPDATES}}
+purpose: Update knowledge base
+capture: updated_path
+```
+
+### Rendering Templates
+
+```tool-call
+CALL: component_loader.render_component "templates/agent-definition.md" {{VARIABLES}}
+purpose: Render agent template with variables
+capture: rendered_agent
+```
+
+## Best Practices
+
+### 1. Purpose Documentation
+
+Always document **why** a tool is called:
+
+```tool-call
+CALL: mcp__python__analyze "src/code.py"
+purpose: Identify code quality issues and suggest improvements  # ✓ Good
+```
+
+```tool-call
+CALL: mcp__python__analyze "src/code.py"  # ✗ Bad - no purpose
+```
+
+### 2. Capture Variables for Chaining
+
+Capture outputs for use in subsequent tool calls:
+
+```tool-call
+CALL: file_read "input.json"
+purpose: Load configuration
+capture: config
+
+CALL: template_renderer.render "template.md" {{config}}
+purpose: Generate output using config
+capture: output
+```
+
+### 3. Use Multi-line Prompts for Complex Tasks
+
+```tool-call
+CALL: mcp__clear-thought__sequentialthinking
+purpose: Complex analysis
+prompt: |
+  Analyze the following aspects:
+  1. Domain requirements
+  2. Technical constraints
+  3. Integration points
+  4. Testing strategy
+
+  Provide structured output in JSON format.
+```
+
+### 4. Conditional Calls for Decision Logic
+
+```tool-call
+IF: validation_failed
+CALL: mcp__python__fix "src/code.py"
+purpose: Fix validation errors
+END IF:
+
+IF: tests_missing
+CALL: mcp__python__generate_tests "src/code.py"
+purpose: Generate missing tests
+END IF:
+```
+
+### 5. Variable Substitution
+
+Use `{{VARIABLE}}` syntax for dynamic values:
+
+```tool-call
+CALL: component_loader.load_component "{{COMPONENT_PATH}}"
+purpose: Load component dynamically
+capture: component
+
+CALL: template_renderer.render "{{TEMPLATE_PATH}}" {{component}}
+purpose: Render with component data
+```
+
+## Advanced Patterns
+
+### Tool Call Chaining
+
+Chain multiple tool calls where each captures output for the next:
+
+```markdown
+```tool-call
+CALL: mcp__github__get_issue "123"
+purpose: Fetch issue details
+capture: issue
+
+CALL: mcp__clear-thought__sequentialthinking
+purpose: Analyze issue requirements
+prompt: |
+  Issue: {{issue.title}}
+  Description: {{issue.body}}
+
+  What components need to be modified?
+capture: analysis
+
+CALL: mcp__python__modify "src/component.py" {{analysis}}
+purpose: Implement required changes
+```
+```
+
+### Parallel Tool Calls
+
+Execute independent tool calls in parallel (when supported):
+
+```markdown
+```tool-call
+CALL: file_read "src/a.py"
+purpose: Load first file
+
+CALL: file_read "src/b.py"
+purpose: Load second file
+
+CALL: file_read "src/c.py"
+purpose: Load third file
+```
+```
+
+### Error Handling with Tool Calls
+
+```tool-call
+CALL: mcp__python__execute "script.py"
+purpose: Run Python script
+capture: result
+
+IF: result.has_error
+CALL: mcp__python__debug "script.py" {{result.error}}
+purpose: Debug the error
+capture: debug_info
+
+CALL: mcp__python__fix "script.py" {{debug_info}}
+purpose: Apply fix based on debug
+END IF:
+```
+
+## Validation
+
+After generating agent definitions with tool calls, validate:
+
+```python
+from gaia.utils.component_loader import ComponentLoader
+
+loader = ComponentLoader()
+
+# Load and validate
+agent = loader.load_component("agents/my-agent.md")
+errors = loader.validate_component("agents/my-agent.md")
+
+if errors:
+    print(f"Validation errors: {errors}")
+else:
+    print(f"Agent validated: {agent['frontmatter']['id']}")
+```
+
+## Related Documentation
+
+- [[component-framework/templates/agent-definition.md]] - Agent definition template
+- [[component-framework/templates/component-template.md]] - Component template
+- [[docs/sdk/core/tools.mdx]] - Tool decorator reference
+- [[docs/sdk/infrastructure/mcp.mdx]] - MCP protocol reference

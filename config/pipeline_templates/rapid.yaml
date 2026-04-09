@@ -1,0 +1,29 @@
+# Rapid Iteration Pipeline Template
+# For prototypes and quick tasks with faster iteration
+
+name: rapid
+description: Rapid iteration for prototypes and quick tasks
+quality_threshold: 0.75
+max_iterations: 5
+default_model: Qwen3-0.6B-GGUF
+
+agent_categories:
+  planning:
+    - planning-analysis-strategist
+  development:
+    - senior-developer
+  quality:
+    - quality-reviewer
+
+routing_rules:
+  - condition: "defect_severity == 'critical'"
+    route_to: QUALITY
+    priority: 1
+    loop_back: true
+
+quality_weights:
+  code_quality: 0.30
+  requirements_coverage: 0.20
+  testing: 0.25
+  documentation: 0.10
+  best_practices: 0.15

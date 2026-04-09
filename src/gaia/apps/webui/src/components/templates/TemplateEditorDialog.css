@@ -1,0 +1,350 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/** TemplateEditorDialog component styles. */
+
+.template-editor-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+  animation: fadeIn 0.2s ease;
+}
+
+.template-editor-dialog {
+  background: var(--card-bg, #ffffff);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 900px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  animation: slideUp 0.3s ease;
+}
+
+.template-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+
+.template-editor-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.template-editor-title h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text-primary, #1e293b);
+}
+
+.template-editor-dirty {
+  font-size: 0.75rem;
+  color: var(--warning-text, #f59e0b);
+  background: var(--warning-bg, #fef3c7);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.template-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.template-editor-toggle {
+  padding: 6px 12px;
+  background: var(--bg-secondary, #f1f5f9);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: var(--text-secondary, #64748b);
+}
+
+.template-editor-toggle.active {
+  background: var(--primary-color, #3b82f6);
+  color: white;
+  border-color: var(--primary-color, #3b82f6);
+}
+
+.template-editor-close {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 6px;
+  color: var(--text-secondary, #64748b);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.template-editor-close:hover {
+  background: var(--bg-secondary, #f1f5f9);
+  color: var(--text-primary, #1e293b);
+}
+
+.template-editor-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 20px 0;
+  padding: 12px 16px;
+  background: var(--error-bg, #fef2f2);
+  border: 1px solid var(--error-border, #fecaca);
+  border-radius: 8px;
+  color: var(--error-text, #dc2626);
+  font-size: 0.875rem;
+}
+
+.template-editor-success {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 20px 0;
+  padding: 12px 16px;
+  background: var(--success-bg, #f0fdf4);
+  border: 1px solid var(--success-border, #bbf7d0);
+  border-radius: 8px;
+  color: var(--success-text, #16a34a);
+  font-size: 0.875rem;
+}
+
+.template-editor-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  gap: 16px;
+  color: var(--text-secondary, #64748b);
+}
+
+.template-editor-yaml {
+  flex: 1;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+
+.template-editor-form {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.template-form-section h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary, #1e293b);
+  margin: 0 0 16px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.template-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.template-form-row {
+  display: flex;
+  gap: 16px;
+}
+
+.template-form-group label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary, #1e293b);
+}
+
+.template-form-group input,
+.template-form-group textarea {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  background: var(--card-bg, #ffffff);
+  color: var(--text-primary, #1e293b);
+}
+
+.template-form-group input:focus,
+.template-form-group textarea:focus {
+  outline: none;
+  border-color: var(--primary-color, #3b82f6);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.template-form-group input:disabled {
+  background: var(--bg-secondary, #f1f5f9);
+  cursor: not-allowed;
+}
+
+.template-form-group textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+.template-form-help {
+  font-size: 0.75rem;
+  color: var(--text-muted, #94a3b8);
+  margin-top: 4px;
+}
+
+.template-form-categories {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.template-category-editor {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.template-category-name-input {
+  width: 150px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  background: var(--bg-secondary, #f1f5f9);
+  color: var(--text-secondary, #64748b);
+}
+
+.template-category-editor input[type="text"] {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 6px;
+  font-size: 0.875rem;
+}
+
+.template-category-remove {
+  padding: 8px 12px;
+  background: var(--error-bg, #fef2f2);
+  border: 1px solid var(--error-border, #fecaca);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: var(--error-text, #dc2626);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.template-category-remove:hover {
+  background: var(--error-text, #dc2626);
+  color: white;
+}
+
+.template-add-category-btn {
+  padding: 10px 16px;
+  background: transparent;
+  border: 1px dashed var(--border-color, #e2e8f0);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: var(--text-secondary, #64748b);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.template-add-category-btn:hover {
+  border-color: var(--primary-color, #3b82f6);
+  color: var(--primary-color, #3b82f6);
+  background: var(--primary-bg, #eff6ff);
+}
+
+.template-editor-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-color, #e2e8f0);
+  background: var(--bg-secondary, #f8fafc);
+  border-radius: 0 0 12px 12px;
+}
+
+.template-editor-footer-left,
+.template-editor-footer-right {
+  display: flex;
+  gap: 8px;
+}
+
+.template-editor-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.template-editor-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.template-editor-btn-validate {
+  background: transparent;
+  border-color: var(--border-color, #e2e8f0);
+  color: var(--text-secondary, #64748b);
+}
+
+.template-editor-btn-validate:hover:not(:disabled) {
+  background: var(--bg-secondary, #f1f5f9);
+  color: var(--text-primary, #1e293b);
+}
+
+.template-editor-btn-reset {
+  background: transparent;
+  border-color: var(--border-color, #e2e8f0);
+  color: var(--text-secondary, #64748b);
+}
+
+.template-editor-btn-reset:hover:not(:disabled) {
+  background: var(--bg-secondary, #f1f5f9);
+  color: var(--text-primary, #1e293b);
+}
+
+.template-editor-btn-cancel {
+  background: transparent;
+  border-color: var(--border-color, #e2e8f0);
+  color: var(--text-primary, #1e293b);
+}
+
+.template-editor-btn-cancel:hover:not(:disabled) {
+  background: var(--bg-secondary, #f1f5f9);
+}
+
+.template-editor-btn-save {
+  background: var(--primary-color, #3b82f6);
+  color: white;
+}
+
+.template-editor-btn-save:hover:not(:disabled) {
+  background: var(--primary-hover, #2563eb);
+}

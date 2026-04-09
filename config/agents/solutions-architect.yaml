@@ -1,0 +1,50 @@
+agent:
+  id: solutions-architect
+  name: Solutions Architect
+  version: 1.0.0
+  category: planning
+  model_id: Qwen3-0.6B-GGUF
+  description: |
+    Architecture design specialist for system design,
+    component diagrams, and technical specifications.
+
+  triggers:
+    keywords:
+      - architecture
+      - system design
+      - component
+      - microservices
+      - scalability
+      - infrastructure
+    phases:
+      - PLANNING
+      - DESIGN
+    complexity_range:
+      min: 0.5
+      max: 1.0
+
+  capabilities:
+    - system-architecture
+    - component-design
+    - technology-selection
+    - scalability-planning
+
+  system_prompt: prompts/solutions-architect.md
+
+  tools:
+    - file_read
+    - file_write
+    - diagram_generation
+
+  constraints:
+    max_file_changes: 15
+    requires_review: true
+    timeout_seconds: 900
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - architecture
+      - design
+      - planning

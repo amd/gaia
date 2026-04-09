@@ -70,9 +70,12 @@
                   "guides/jira",
                   "guides/docker",
                   "guides/routing",
+                  "guides/explicit-tool-calling",
+                  "guides/auto-spawn-pipeline",
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
-                  "guides/mcp/windows-system-health"
+                  "guides/mcp/windows-system-health",
+                  "guides/pipeline"
                 ]
               },
               {
@@ -145,7 +148,8 @@
                     "group": "Infrastructure",
                     "pages": [
                       "sdk/infrastructure/api-server",
-                      "sdk/infrastructure/mcp"
+                      "sdk/infrastructure/mcp",
+                      "sdk/infrastructure/pipeline"
                     ]
                   },
                   {
@@ -225,7 +229,8 @@
               "spec/plugin-registry",
               "spec/test-utilities",
               "spec/api-agent",
-              "spec/api-server"
+              "spec/api-server",
+              "spec/pipeline-engine"
             ]
           },
           {
@@ -276,6 +281,16 @@
               "spec/blender-agent",
               "spec/summarizer-app",
               "spec/component-status"
+            ]
+          },
+          {
+            "group": "Evaluation",
+            "pages": [
+              "spec/agent-ui-eval-kpis",
+              "spec/agent-ui-eval-kpi-slides",
+              "spec/pipeline-metrics-kpi-reference",
+              "spec/pipeline-metrics-competitive-analysis",
+              "spec/gaia-loom-architecture"
             ]
           }
         ]

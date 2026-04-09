@@ -226,11 +226,20 @@ diffusers_*.png
 sdxl_base_*.png
 docs/playbooks/sd-agent/index-backup.mdx
 
-# Claude custom settings
-.claude/settings.local.json
+# Claude Code local configuration (machine-specific, not project files)
+.claude/
+
+# Pipeline runtime outputs (not source code)
+my_outputs/
+test_verify_outputs/
+pipeline_outputs/
 
 # Custom util scripts
 util/custom/*
 
 # Real-world eval corpus documents (sourced from public web, not committed)
 eval/corpus/real_world/
+# Component Framework runtime files
+component-framework/**/*.lock
+component-framework/**/.lock
+component-framework/memory/working-memory.md.lock

@@ -1,0 +1,50 @@
+agent:
+  id: test-coverage-analyzer
+  name: Test Coverage Analyzer
+  version: 1.0.0
+  category: review
+  model_id: Qwen3-0.6B-GGUF
+  description: |
+    Testing specialist that analyzes test coverage,
+    identifies gaps, and suggests test improvements.
+
+  triggers:
+    keywords:
+      - test
+      - coverage
+      - unit test
+      - integration test
+      - test gap
+      - mock
+      - assertion
+    phases:
+      - QUALITY
+      - REVIEW
+    complexity_range:
+      min: 0.0
+      max: 1.0
+
+  capabilities:
+    - coverage-analysis
+    - test-quality-assessment
+    - gap-identification
+    - test-generation
+
+  system_prompt: prompts/test-coverage-analyzer.md
+
+  tools:
+    - file_read
+    - run_tests
+    - coverage_report
+
+  constraints:
+    max_file_changes: 10
+    requires_review: true
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - testing
+      - coverage
+      - quality

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useCallback, useState, useRef } from 'react';
-import { Menu, Smartphone } from 'lucide-react';
+import { Menu, Smartphone, FileText } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { WelcomeScreen } from './components/WelcomeScreen';
@@ -12,6 +12,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { PermissionPrompt } from './components/PermissionPrompt';
+import { PipelineTemplateManager } from './components/templates/PipelineTemplateManager';
 import { useChatStore } from './stores/chatStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
@@ -50,6 +51,8 @@ function AnimatedPresence({ show, children, duration = 250 }: {
     );
 }
 
+type AppView = 'chat' | 'templates';
+
 function App() {
     const {
         currentSessionId,
@@ -68,6 +71,9 @@ function App() {
         setSystemStatus,
         setBackendConnected,
     } = useChatStore();
+
+    // Current view state
+    const [currentView, setCurrentView] = useState<AppView>('chat');
 
     // Mobile gateway state
     const [showMobileAccess, setShowMobileAccess] = useState(false);
@@ -412,22 +418,28 @@ function App() {
                 tunnelActive={tunnelActive}
                 tunnelLoading={tunnelLoading}
                 onMobileToggle={handleMobileToggle}
+                currentView={currentView}
+                onViewChange={setCurrentView}
             />
 
             <div className="main-content">
                 {/* Connection / LLM status banner */}
                 <ConnectionBanner onRetry={checkSystemStatus} />
 
-                <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
-                    {displayedSessionId ? (
-                        <ChatView key={displayedSessionId} sessionId={displayedSessionId} />
-                    ) : (
-                        <WelcomeScreen
-                            onNewTask={handleNewTask}
-                            onSendPrompt={handleNewTaskWithPrompt}
-                        />
-                    )}
-                </div>
+                {currentView === 'templates' ? (
+                    <PipelineTemplateManager />
+                ) : (
+                    <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
+                        {displayedSessionId ? (
+                            <ChatView key={displayedSessionId} sessionId={displayedSessionId} />
+                        ) : (
+                            <WelcomeScreen
+                                onNewTask={handleNewTask}
+                                onSendPrompt={handleNewTaskWithPrompt}
+                            />
+                        )}
+                    </div>
+                )}
             </div>
 
             <AnimatedPresence show={showDocLibrary}>

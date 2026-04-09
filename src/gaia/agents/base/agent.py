@@ -19,7 +19,12 @@ from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
-from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.tools import (
+    _TOOL_REGISTRY,
+    ToolRegistry,
+    ToolAccessDeniedError,
+)
+from gaia.utils.component_loader import ComponentLoader, ComponentLoaderError
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
@@ -97,6 +102,7 @@ class Agent(abc.ABC):
         max_consecutive_repeats: int = 4,
         min_context_size: int = 32768,
         skip_lemonade: bool = False,
+        allowed_tools: Optional[List[str]] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -123,6 +129,29 @@ class Agent(abc.ABC):
                           Use this when connecting to a different OpenAI-compatible backend.
 
         Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
+
+        Args:
+            use_claude: If True, uses Claude API (default: False)
+            use_chatgpt: If True, uses ChatGPT/OpenAI API (default: False)
+            claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-4-20250514")
+            base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:8000/api/v1)
+            model_id: The ID of the model to use with LLM server (default for local)
+            max_steps: Maximum number of steps the agent can take before terminating
+            debug_prompts: If True, includes prompts in the conversation history
+            show_prompts: If True, displays prompts sent to LLM in console (default: False)
+            output_dir: Directory for storing JSON output files (default: current directory)
+            streaming: If True, enables real-time streaming of LLM responses (default: False)
+            show_stats: If True, displays LLM performance stats after each response (default: False)
+            silent_mode: If True, suppresses all console output for JSON-only usage (default: False)
+            debug: If True, enables debug output for troubleshooting (default: False)
+            output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
+            max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
+            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4)
+            min_context_size: Minimum context size required for this agent (default: 32768).
+            skip_lemonade: If True, skip Lemonade server initialization (default: False).
+                          Use this when connecting to a different OpenAI-compatible backend.
+            allowed_tools: Optional list of allowed tool names for scoped access (default: None = all tools).
+                          When specified, only tools in this list can be executed by the agent.
         """
         self.error_history = []  # Store error history for learning
         self.conversation_history = (
@@ -146,6 +175,9 @@ class Agent(abc.ABC):
         # Read base_url from environment if not provided
         if base_url is None:
             base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+
+        # Store skip_lemonade flag so subclasses can short-circuit LLM calls
+        self.skip_lemonade = skip_lemonade
 
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
@@ -178,6 +210,31 @@ class Agent(abc.ABC):
 
         # Register tools for this agent
         self._register_tools()
+
+        # Create tool scope for per-agent tool isolation
+        # This enables allowlist-based tool access control
+        registry = ToolRegistry.get_instance()
+        self._tool_scope = registry.create_scope(
+            agent_id=self.__class__.__name__,
+            allowed_tools=allowed_tools,
+        )
+
+        # Chronicle Integration: Connect to NexusService for state management
+        # This enables event logging to the tamper-proof audit trail
+        self._enable_chronicle = True
+        try:
+            from gaia.state.nexus import NexusService
+            self._nexus = NexusService.get_instance()
+            logger.debug(f"Agent {self.__class__.__name__} connected to Nexus")
+        except Exception as e:
+            logger.warning(f"Failed to connect to Nexus: {e}, Chronicle disabled")
+            self._enable_chronicle = False
+            self._nexus = None
+
+        # Component Framework Integration: Initialize ComponentLoader
+        # This enables agents to read/write/update component templates during execution
+        self._component_loader = ComponentLoader()
+        logger.debug(f"Agent {self.__class__.__name__} ComponentLoader initialized")
 
         # Note: system_prompt is now a lazy @property that composes on first access
         # Tool descriptions and response format are added in _compose_system_prompt()
@@ -383,10 +440,25 @@ You must respond ONLY in valid JSON. No text before { or after }.
         raise NotImplementedError("Subclasses must implement _register_tools")
 
     def _format_tools_for_prompt(self) -> str:
-        """Format the registered tools into a string for the prompt."""
+        """
+        Format available tools for system prompt.
+
+        Uses the agent's tool scope to filter tools based on the allowlist
+        when scoping is enabled. Falls back to global registry for backward
+        compatibility if scope is not available.
+
+        Returns:
+            Formatted tool descriptions for allowed tools only
+        """
         tool_descriptions = []
 
-        for name, tool_info in _TOOL_REGISTRY.items():
+        # Use scoped tools if available, otherwise fall back to global registry
+        if hasattr(self, '_tool_scope') and self._tool_scope:
+            available_tools = self._tool_scope.get_available_tools()
+        else:
+            available_tools = _TOOL_REGISTRY.copy()
+
+        for name, tool_info in available_tools.items():
             params_str = ", ".join(
                 [
                     f"{param_name}{'' if param_info['required'] else '?'}: {param_info['type']}"
@@ -1146,19 +1218,108 @@ You must respond ONLY in valid JSON. No text before { or after }.
             return matches[0]
         return None
 
+    def _commit_chronicle_event(
+        self,
+        event_type: str,
+        payload: Dict[str, Any],
+        phase: Optional[str] = None,
+        loop_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Commit event to Chronicle via NexusService.
+
+        Records state-changing events in the tamper-proof audit log.
+        Gracefully degrades if Chronicle is disabled or Nexus unavailable.
+
+        Args:
+            event_type: Type of event (THOUGHT, TOOL_CALL, TOOL_RESULT, ERROR)
+            payload: Event-specific data dictionary
+            phase: Optional pipeline phase (e.g., "PLANNING", "EXECUTION")
+            loop_id: Optional loop iteration identifier
+
+        Returns:
+            Event ID string if committed, None if Chronicle disabled
+
+        Example:
+            >>> self._commit_chronicle_event(
+            ...     event_type="THOUGHT",
+            ...     payload={"thought": "Need to read the file first"},
+            ...     phase="PLANNING"
+            ... )
+            'evt-xxxxxxxxxxxx'
+        """
+        if not self._enable_chronicle or not self._nexus:
+            return None
+
+        try:
+            return self._nexus.commit(
+                agent_id=self.__class__.__name__,
+                event_type=event_type,
+                payload=payload,
+                phase=phase or getattr(self, 'current_phase', None),
+                loop_id=loop_id,
+            )
+        except Exception as e:
+            logger.error(f"Failed to commit to Chronicle: {e}")
+            return None
+
+    def _summarize_for_chronicle(self, data: Any, max_chars: int = 100) -> str:
+        """
+        Summarize data for Chronicle storage.
+
+        Truncates and formats data to fit within token constraints
+        while preserving essential information.
+
+        Args:
+            data: Data to summarize (dict, str, or other)
+            max_chars: Maximum characters to include
+
+        Returns:
+            Truncated string summary
+        """
+        if isinstance(data, dict):
+            parts = []
+            chars = 0
+            for k, v in list(data.items())[:5]:
+                part = f"{k}={str(v)[:20]}"
+                if chars + len(part) > max_chars:
+                    break
+                parts.append(part)
+                chars += len(part)
+            return ", ".join(parts)
+        elif isinstance(data, str):
+            return data[:max_chars]
+        else:
+            return str(data)[:max_chars]
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
+
+        Uses the agent's tool scope for scoped execution when available.
+        Falls back to global registry for backward compatibility.
 
         Args:
             tool_name: Name of the tool to execute
             tool_args: Arguments to pass to the tool
 
         Returns:
-            Result of the tool execution
+            Result of the tool execution, or error dict if execution fails
         """
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
+        # Use scoped execution if available (enforces allowlist)
+        if hasattr(self, '_tool_scope') and self._tool_scope:
+            try:
+                return self._tool_scope.execute_tool(tool_name, **tool_args)
+            except ToolAccessDeniedError as e:
+                logger.error(f"Tool access denied: {e}")
+                return {"status": "error", "error": str(e)}
+            except Exception as e:
+                logger.exception(f"Tool execution failed via scope: {tool_name}: {e}")
+                return {"status": "error", "error": str(e)}
+
+        # Fallback to global registry for backward compatibility
         if tool_name not in _TOOL_REGISTRY:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
             # when registry has "mcp_time_get_current_time"). Local LLMs often
@@ -1209,12 +1370,32 @@ You must respond ONLY in valid JSON. No text before { or after }.
             logger.debug(f"Tool execution result: {result}")
             return result
         except subprocess.TimeoutExpired as e:
+            # Commit ERROR event to Chronicle
+            self._commit_chronicle_event(
+                event_type="ERROR",
+                payload={
+                    "error_type": "TimeoutExpired",
+                    "tool_name": tool_name,
+                    "message": str(e),
+                },
+            )
+
             # Handle subprocess timeout specifically
             error_msg = f"Tool {tool_name} timed out: {str(e)}"
             logger.error(error_msg)
             self.error_history.append(error_msg)
             return {"status": "error", "error": error_msg, "timeout": True}
         except Exception as e:
+            # Commit ERROR event to Chronicle
+            self._commit_chronicle_event(
+                event_type="ERROR",
+                payload={
+                    "error_type": type(e).__name__,
+                    "tool_name": tool_name,
+                    "message": str(e)[:100],  # Truncate for Chronicle
+                },
+            )
+
             # Format error with full execution trace for debugging
             formatted_error = format_execution_trace(
                 exception=e,
@@ -2995,3 +3176,262 @@ You must respond ONLY in valid JSON. No text before { or after }.
             List of error messages
         """
         return self.error_history
+
+    # ========================================================================
+    # Component Framework Tools
+    # ========================================================================
+
+    def load_component(self, component_path: str) -> Dict[str, Any]:
+        """
+        Load a component template from the component-framework directory.
+
+        This tool enables agents to read component templates during execution.
+        The component is parsed and returned with frontmatter and content separated.
+
+        Args:
+            component_path: Relative path to component (e.g., "tasks/task-breakdown.md")
+
+        Returns:
+            Dictionary with frontmatter and content:
+            {
+                "frontmatter": {...},
+                "content": "...",
+                "full_content": "..."
+            }
+
+        Raises:
+            ComponentLoaderError: If component cannot be loaded
+
+        Example:
+            >>> component = self.load_component("checklists/domain-analysis-checklist.md")
+            >>> print(component["frontmatter"]["template_id"])
+            'domain-analysis-checklist'
+        """
+        try:
+            result = self._component_loader.load_component(component_path)
+            logger.debug(f"Loaded component: {component_path}")
+            return result
+        except ComponentLoaderError as e:
+            logger.error(f"Failed to load component {component_path}: {e}")
+            raise
+
+    def save_component(
+        self,
+        component_path: str,
+        content: str,
+        frontmatter: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Save a component template to the component-framework directory.
+
+        This tool enables agents to create new component templates or update existing ones.
+        If frontmatter is provided, it will be prepended as YAML.
+
+        Args:
+            component_path: Relative path to save component (e.g., "tasks/my-task.md")
+            content: Markdown content for the component body
+            frontmatter: Optional dictionary of frontmatter fields
+
+        Returns:
+            Full path to saved component
+
+        Raises:
+            ComponentLoaderError: If component cannot be saved
+
+        Example:
+            >>> self.save_component(
+            ...     "tasks/generated-task.md",
+            ...     "# Generated Task\\n\\nThis is the content...",
+            ...     {"template_id": "generated-task", "version": "1.0.0"}
+            ... )
+        """
+        try:
+            # Validate frontmatter if provided
+            if frontmatter:
+                required_fields = ["template_id", "template_type", "version"]
+                for field in required_fields:
+                    if field not in frontmatter:
+                        raise ComponentLoaderError(
+                            f"Missing required frontmatter field: {field}",
+                            path=component_path,
+                            cause="validation_error"
+                        )
+
+            full_path = self._component_loader.save_component(
+                component_path, content, frontmatter
+            )
+            logger.info(f"Saved component: {component_path} -> {full_path}")
+            return full_path
+        except Exception as e:
+            logger.error(f"Failed to save component {component_path}: {e}")
+            raise ComponentLoaderError(
+                str(e),
+                path=component_path,
+                cause="save_error"
+            )
+
+    def update_component(
+        self,
+        component_path: str,
+        updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Update a component template in the component-framework directory.
+
+        This tool enables agents to modify existing components.
+        Updates can modify frontmatter fields, content, or both.
+
+        Args:
+            component_path: Relative path to component (e.g., "tasks/task-tracking.md")
+            updates: Dictionary with optional keys:
+                - "frontmatter": Dict of frontmatter fields to update
+                - "content": New content string (replaces entire content)
+                - "append_content": Content to append to existing content
+
+        Returns:
+            Updated component dictionary (same format as load_component)
+
+        Raises:
+            ComponentLoaderError: If component cannot be updated
+
+        Example:
+            >>> self.update_component(
+            ...     "tasks/task-tracking.md",
+            ...     {"append_content": "\\n## Update: Task completed at 2026-04-07"}
+            ... )
+        """
+        try:
+            # Load existing component
+            existing = self._component_loader.load_component(component_path)
+
+            # Apply frontmatter updates
+            if "frontmatter" in updates and updates["frontmatter"]:
+                existing["frontmatter"].update(updates["frontmatter"])
+
+            # Apply content updates
+            if "content" in updates:
+                existing["content"] = updates["content"]
+            elif "append_content" in updates:
+                existing["content"] = existing["content"] + updates["append_content"]
+
+            # Rebuild full content
+            import yaml
+            frontmatter_yaml = yaml.dump(
+                existing["frontmatter"],
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False
+            )
+            existing["full_content"] = f"---\n{frontmatter_yaml}---\n{existing['content']}"
+
+            # Write back to file
+            self._component_loader.save_component(
+                component_path,
+                existing["content"],
+                existing["frontmatter"]
+            )
+
+            logger.info(f"Updated component: {component_path}")
+            return existing
+        except ComponentLoaderError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to update component {component_path}: {e}")
+            raise ComponentLoaderError(
+                str(e),
+                path=component_path,
+                cause="update_error"
+            )
+
+    def list_components(
+        self,
+        component_type: Optional[str] = None,
+        category: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        List available component templates.
+
+        This tool enables agents to discover available components
+        by type, category, or all components.
+
+        Args:
+            component_type: Filter by type (memory, knowledge, tasks, commands, documents, checklists)
+            category: Filter by category field in frontmatter
+
+        Returns:
+            List of component metadata dictionaries:
+            [
+                {
+                    "path": "tasks/task-breakdown.md",
+                    "template_id": "task-breakdown",
+                    "template_type": "tasks",
+                    "description": "...",
+                    "version": "1.0.0"
+                },
+                ...
+            ]
+
+        Example:
+            >>> tasks = self.list_components(component_type="tasks")
+            >>> checklists = self.list_components(category="analysis")
+        """
+        try:
+            return self._component_loader.list_components(
+                component_type=component_type,
+                category=category
+            )
+        except Exception as e:
+            logger.error(f"Failed to list components: {e}")
+            return []
+
+    def render_component(
+        self,
+        component_path: str,
+        variables: Dict[str, str]
+    ) -> str:
+        """
+        Render a component template with variable substitution.
+
+        This tool enables agents to populate templates with dynamic values.
+        Variables use the format {{VARIABLE_NAME}} in the template.
+
+        Args:
+            component_path: Relative path to component template
+            variables: Dictionary of variable substitutions
+                Keys should include the {{}} brackets or they will be added automatically
+
+        Returns:
+            Rendered component content string
+
+        Raises:
+            ComponentLoaderError: If component cannot be loaded or rendered
+
+        Example:
+            >>> rendered = self.render_component(
+            ...     "tasks/task-breakdown.md",
+            ...     {"{{TASK_NAME}}": "Build API", "{{TASK_ID}}": "task-001"}
+            ... )
+        """
+        try:
+            return self._component_loader.render_component(component_path, variables)
+        except ComponentLoaderError as e:
+            logger.error(f"Failed to render component {component_path}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to render component {component_path}: {e}")
+            raise ComponentLoaderError(
+                str(e),
+                path=component_path,
+                cause="render_error"
+            )
+
+    def cleanup(self) -> None:
+        """
+        Release resources on agent shutdown.
+
+        Cleans up the tool scope to release any references and free memory.
+        Call this method when the agent is no longer needed.
+        """
+        if hasattr(self, '_tool_scope') and self._tool_scope:
+            self._tool_scope.cleanup()
+            self._tool_scope = None

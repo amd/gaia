@@ -1,0 +1,51 @@
+agent:
+  id: performance-analyst
+  name: Performance Analyst
+  version: 1.0.0
+  category: review
+  model_id: Qwen3-0.6B-GGUF
+  description: |
+    Performance specialist that identifies bottlenecks,
+    optimization opportunities, and scalability issues.
+
+  triggers:
+    keywords:
+      - performance
+      - optimize
+      - bottleneck
+      - slow
+      - scalability
+      - profiling
+      - benchmark
+    phases:
+      - QUALITY
+      - REVIEW
+      - REFACTORING
+    complexity_range:
+      min: 0.4
+      max: 1.0
+
+  capabilities:
+    - performance-analysis
+    - bottleneck-detection
+    - optimization
+    - benchmarking
+
+  system_prompt: prompts/performance-analyst.md
+
+  tools:
+    - file_read
+    - profiling
+    - benchmark
+
+  constraints:
+    max_file_changes: 0
+    requires_review: true
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - performance
+      - optimization
+      - benchmark

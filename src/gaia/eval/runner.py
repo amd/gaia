@@ -461,9 +461,20 @@ def preflight_check(backend_url):
 
 
 def run_scenario_subprocess(
-    _scenario_path, scenario_data, run_dir, backend_url, model, budget, timeout
+    _scenario_path, scenario_data, run_dir, backend_url, model, budget, timeout, metrics_collector=None
 ):
-    """Invoke claude -p for one scenario. Returns parsed result dict."""
+    """Invoke claude -p for one scenario. Returns parsed result dict.
+
+    Args:
+        _scenario_path: Path to scenario YAML file
+        scenario_data: Parsed scenario data dict
+        run_dir: Directory for run outputs
+        backend_url: Agent UI backend URL
+        model: Model to use for eval
+        budget: Budget limit
+        timeout: Timeout in seconds
+        metrics_collector: Optional EvalMetricsCollector for performance tracking
+    """
     scenario_id = scenario_data["id"]
     manifest_data = json.loads(MANIFEST.read_text(encoding="utf-8"))
     # Merge real-world manifest facts if present, so the eval agent has ground
@@ -798,6 +809,10 @@ def run_scenario_subprocess(
     trace_path.write_text(
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+
+    # Capture metrics if collector provided
+    if metrics_collector is not None:
+        metrics_collector.end_scenario(scenario_id, result)
 
     return result
 
@@ -1251,6 +1266,11 @@ class AgentEvalRunner:
         run_dir = self.results_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        # Initialize metrics collector
+        from gaia.eval.eval_metrics import EvalMetricsCollector
+        metrics_collector = EvalMetricsCollector(run_id=run_id)
+        metrics_collector.start_run()
+
         # Progress tracking
         progress_path = run_dir / ".progress.json"
         completed = {}
@@ -1309,6 +1329,8 @@ class AgentEvalRunner:
                 progress_path.write_text(
                     json.dumps(completed, indent=2), encoding="utf-8"
                 )
+                # Record skipped scenario in metrics
+                metrics_collector.end_scenario(sid, result)
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
@@ -1320,6 +1342,7 @@ class AgentEvalRunner:
                 self.model,
                 self.budget,
                 effective_timeout,
+                metrics_collector,
             )
             results.append(result)
 
@@ -1338,8 +1361,21 @@ class AgentEvalRunner:
         }
         scorecard = aggregate_scorecard(results, run_id, run_dir, config)
 
+        # End metrics collection and save summary
+        metrics_collector.end_run()
+        metrics_summary = metrics_collector.get_run_summary()
+        metrics_path = run_dir / "metrics_summary.json"
+        metrics_path.write_text(
+            json.dumps(metrics_summary, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
         # Print summary
         self._print_summary(scorecard, run_id, run_dir)
+
+        # Print metrics summary
+        print(f"\n[METRICS] Total duration: {metrics_summary['total_duration_seconds']:.1f}s")
+        print(f"[METRICS] Avg scenario duration: {metrics_summary['avg_duration_seconds']:.1f}s")
+        print(f"[METRICS] Estimated total cost: ${metrics_summary['total_cost_usd']:.4f}")
 
         if not fix_mode:
             return scorecard
@@ -1401,6 +1437,7 @@ class AgentEvalRunner:
                     self.model,
                     self.budget,
                     effective_timeout,
+                    metrics_collector,
                 )
                 rerun_results.append(result)
 

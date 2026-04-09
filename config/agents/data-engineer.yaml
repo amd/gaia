@@ -1,0 +1,50 @@
+agent:
+  id: data-engineer
+  name: Data Engineer
+  version: 1.0.0
+  category: development
+  model_id: Qwen3-0.6B-GGUF
+  description: |
+    Data engineering specialist for ETL pipelines,
+    data processing, and analytics infrastructure.
+
+  triggers:
+    keywords:
+      - etl
+      - pipeline
+      - data processing
+      - spark
+      - analytics
+      - data warehouse
+      - streaming
+    phases:
+      - DEVELOPMENT
+    complexity_range:
+      min: 0.4
+      max: 1.0
+
+  capabilities:
+    - etl-development
+    - data-pipeline
+    - spark-processing
+    - data-modeling
+
+  system_prompt: prompts/data-engineer.md
+
+  tools:
+    - file_read
+    - file_write
+    - bash_execute
+
+  constraints:
+    max_file_changes: 15
+    requires_review: true
+
+  metadata:
+    author: GAIA Team
+    created: "2026-03-23"
+    tags:
+      - data
+      - etl
+      - spark
+      - analytics

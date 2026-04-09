@@ -3,6 +3,7 @@
 
 """GAIA utilities."""
 
+from gaia.utils.component_loader import ComponentLoader, ComponentLoaderError
 from gaia.utils.file_watcher import (
     FileChangeHandler,
     FileWatcher,
@@ -10,6 +11,8 @@ from gaia.utils.file_watcher import (
     compute_bytes_hash,
     compute_file_hash,
 )
+from gaia.utils.id_generator import generate_id, generate_pipeline_id
+from gaia.utils.logging import get_logger
 from gaia.utils.parsing import (
     detect_field_changes,
     extract_json_from_text,
@@ -18,6 +21,9 @@ from gaia.utils.parsing import (
 )
 
 __all__ = [
+    # Component loading
+    "ComponentLoader",
+    "ComponentLoaderError",
     # File watching
     "FileChangeHandler",
     "FileWatcher",
@@ -30,4 +36,9 @@ __all__ = [
     "pdf_page_to_image",
     "detect_field_changes",
     "validate_required_fields",
+    # Logging
+    "get_logger",
+    # ID generation
+    "generate_id",
+    "generate_pipeline_id",
 ]

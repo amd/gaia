@@ -1,0 +1,307 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/** MetricsDashboard component styles. */
+
+.metrics-dashboard {
+  padding: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.metrics-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.metrics-title {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.metrics-title-icon {
+  color: var(--primary-color, #3b82f6);
+  flex-shrink: 0;
+}
+
+.metrics-title h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-primary, #1e293b);
+  margin: 0 0 4px 0;
+}
+
+.metrics-title p {
+  font-size: 0.875rem;
+  color: var(--text-secondary, #64748b);
+  margin: 0;
+}
+
+.metrics-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.metrics-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  background: var(--card-bg, #ffffff);
+  color: var(--text-secondary, #64748b);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.metrics-btn:hover:not(:disabled) {
+  background: var(--bg-secondary, #f1f5f9);
+  color: var(--text-primary, #1e293b);
+}
+
+.metrics-btn.active {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: #22c55e;
+  color: #22c55e;
+}
+
+.metrics-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.metrics-btn-refresh {
+  padding: 8px 10px;
+}
+
+.btn-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.metrics-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--error-bg, #fef2f2);
+  border: 1px solid var(--error-border, #fecaca);
+  border-radius: 8px;
+  color: var(--error-text, #dc2626);
+  font-size: 0.875rem;
+  margin-bottom: 24px;
+}
+
+.metrics-charts {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.metrics-chart-row {
+  display: grid;
+  gap: 20px;
+}
+
+.metrics-chart-full {
+  width: 100%;
+}
+
+.metrics-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  gap: 20px;
+}
+
+.metrics-section {
+  background: var(--card-bg, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.metrics-section h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary, #1e293b);
+  margin: 0 0 16px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.metrics-empty {
+  font-size: 0.875rem;
+  color: var(--text-muted, #94a3b8);
+  text-align: center;
+  padding: 20px;
+}
+
+/* State Transitions */
+.state-transitions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.state-transition-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-secondary, #f1f5f9);
+  border-radius: 8px;
+  font-size: 0.875rem;
+}
+
+.state-from {
+  font-family: var(--font-mono, monospace);
+  color: var(--text-secondary, #64748b);
+  font-weight: 500;
+}
+
+.state-arrow {
+  color: var(--primary-color, #3b82f6);
+  font-weight: 600;
+}
+
+.state-to {
+  font-family: var(--font-mono, monospace);
+  color: var(--text-primary, #1e293b);
+  font-weight: 600;
+}
+
+.state-reason {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--text-muted, #94a3b8);
+  font-style: italic;
+}
+
+/* Agent Selections */
+.agent-selections-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-selection-item {
+  padding: 12px;
+  background: var(--bg-secondary, #f1f5f9);
+  border-radius: 8px;
+  border-left: 3px solid var(--primary-color, #3b82f6);
+}
+
+.agent-selection-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.agent-phase {
+  font-size: 0.75rem;
+  color: var(--text-muted, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.agent-id {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary, #1e293b);
+}
+
+.agent-reason {
+  font-size: 0.875rem;
+  color: var(--text-secondary, #64748b);
+  margin: 0 0 6px 0;
+}
+
+.agent-alternatives {
+  font-size: 0.75rem;
+  color: var(--text-muted, #94a3b8);
+  margin: 0;
+}
+
+/* Defects */
+.defects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.defect-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--bg-secondary, #f1f5f9);
+  border-radius: 8px;
+  font-size: 0.875rem;
+}
+
+.defect-type {
+  color: var(--text-secondary, #64748b);
+}
+
+.defect-count {
+  font-weight: 600;
+  color: var(--error-text, #ef4444);
+}
+
+.metrics-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  gap: 16px;
+  color: var(--text-secondary, #64748b);
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .metrics-dashboard {
+    padding: 16px;
+  }
+
+  .metrics-header {
+    flex-direction: column;
+  }
+
+  .metrics-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .metrics-details {
+    grid-template-columns: 1fr;
+  }
+
+  .btn-label {
+    display: none;
+  }
+}
