@@ -61,6 +61,19 @@ MAX_DOCUMENT_UPLOAD_SIZE = 20 * 1024 * 1024  # 20 MB
 # Streaming chunk size for multipart blob upload.
 UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB
 
+# Length of the random hex ID prefixed to managed document filenames.
+# 12 hex chars = 48 bits ≈ 2.8e14 possibilities; collision probability with
+# 1 million concurrent uploads is ~1 in 1.4e14 — effectively zero. Files are
+# also deduped by SHA-256 hash before writing, so identical-content collisions
+# are impossible. 12 chars keeps the on-disk basename well under Windows
+# MAX_PATH limits once combined with the original filename.
+MANAGED_ID_LEN = 12
+
+
+def _short_id() -> str:
+    """Return a short random hex identifier for managed document filenames."""
+    return uuid.uuid4().hex[:MANAGED_ID_LEN]
+
 
 def _server_mod():
     """Lazily resolve ``gaia.ui.server`` for patchable function access."""
@@ -317,7 +330,7 @@ async def upload_document_blob(
     # 4. Stream-write to a .partial file, hashing as we go, aborting on
     # oversize. try/finally ensures the partial is cleaned up on any exit
     # path (including ClientDisconnect and CancelledError).
-    partial_path: Path | None = MANAGED_DOCS_DIR / f"{uuid.uuid4()}.partial"
+    partial_path: Path | None = MANAGED_DOCS_DIR / f"{_short_id()}.partial"
     final_path: Path | None = None
     hasher = hashlib.sha256()
     bytes_written = 0
@@ -372,7 +385,7 @@ async def upload_document_blob(
         # `partial_path` is cleared so the finally block won't unlink our
         # now-final file.
         safe_stem = _sanitize_stem(Path(display_name).stem)
-        final_path = MANAGED_DOCS_DIR / f"{uuid.uuid4()}_{safe_stem}{ext}"
+        final_path = MANAGED_DOCS_DIR / f"{_short_id()}_{safe_stem}{ext}"
         try:
             os.replace(partial_path, final_path)
         except OSError as e:
