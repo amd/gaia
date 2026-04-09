@@ -86,7 +86,7 @@ curl -fsSL https://amd-gaia.ai/install.sh | sh
 **Script Structure:**
 
 ```text
-# scripts/install.ps1
+# installer/scripts/install.ps1
 $ErrorActionPreference = "Stop"
 $GAIA_HOME = "$env:USERPROFILE\.gaia"
 $GAIA_VENV = "$GAIA_HOME\venv"
@@ -170,8 +170,8 @@ main "$@"
 
 | File | Description |
 |------|-------------|
-| `scripts/install.ps1` | Windows PowerShell installer |
-| `scripts/install.sh` | Linux bash installer |
+| `installer/scripts/install.ps1` | Windows PowerShell installer |
+| `installer/scripts/install.sh` | Linux bash installer |
 
 ---
 
@@ -448,8 +448,8 @@ gaia uninstall --purge  # Remove everything including models
 ### Phase 1: Install Scripts (Priority: High)
 
 **Deliverables:**
-- `scripts/install.ps1` - Windows PowerShell installer
-- `scripts/install.sh` - Linux bash installer
+- `installer/scripts/install.ps1` - Windows PowerShell installer
+- `installer/scripts/install.sh` - Linux bash installer
 - Host scripts (GitHub raw initially, amd-gaia.ai later)
 - Update quickstart documentation
 
@@ -519,7 +519,7 @@ These questions should be resolved before implementation begins.
 
 **Options:**
 - **A:** `https://amd-gaia.ai/install.ps1` - Requires DNS/hosting setup
-- **B:** `https://raw.githubusercontent.com/amd/gaia/main/scripts/install.ps1` - Works immediately
+- **B:** `https://raw.githubusercontent.com/amd/gaia/main/installer/scripts/install.ps1` - Works immediately
 
 **Recommendation:** Start with GitHub raw (B), migrate to amd-gaia.ai later.
 
