@@ -1,12 +1,50 @@
 #!/bin/sh
 # GAIA Agent UI — Debian post-remove script.
 #
-# PLACEHOLDER committed during Phase C of the desktop-installer plan so
-# electron-builder's DEB target has a valid script to reference. Phase E
-# replaces this with logic that calls `gaia uninstall --purge --yes` on
-# `apt purge`. For `apt remove` (Tier 1) we leave user data in place.
+# On `apt remove` we leave user data in place (tier 1 — default per
+# plan §5). On `apt purge` we additionally invoke `gaia uninstall
+# --purge --yes` to perform tier 3 cleanup of `~/.gaia/` (see plan
+# §5 / §5.1).
 #
-# See desktop-installer.mdx §5.1 for the per-platform uninstall flow.
+# See docs/plans/desktop-installer.mdx §5.1 and §7 Phase E.
 
 set -e
+
+case "$1" in
+    purge)
+        # Refresh the desktop database + icon cache after the files have
+        # been removed so stale entries disappear from menus.
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+        fi
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -t /usr/share/icons/hicolor || true
+        fi
+
+        # Tier 3 cleanup: call the `gaia uninstall --purge` CLI (Phase D)
+        # to remove `~/.gaia/venv`, `~/.gaia/chat`, `~/.gaia/documents`,
+        # `~/.gaia/electron-config.json`, and `~/.gaia/electron-install*`.
+        #
+        # Best-effort only:
+        #   - If the gaia CLI is not on PATH (e.g. Python venv already
+        #     removed manually), skip silently.
+        #   - If SUDO_USER is set (apt purge is normally run via sudo)
+        #     we run the cleanup as that user so it targets their
+        #     $HOME/.gaia rather than root's.
+        if [ -n "$SUDO_USER" ] && command -v sudo >/dev/null 2>&1; then
+            sudo -u "$SUDO_USER" -H sh -c 'command -v gaia >/dev/null 2>&1 && gaia uninstall --purge --yes' 2>/dev/null || true
+        elif command -v gaia >/dev/null 2>&1; then
+            gaia uninstall --purge --yes 2>/dev/null || true
+        fi
+        ;;
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
 exit 0

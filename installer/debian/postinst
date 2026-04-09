@@ -1,11 +1,35 @@
 #!/bin/sh
 # GAIA Agent UI — Debian post-install script.
 #
-# PLACEHOLDER committed during Phase C of the desktop-installer plan so
-# electron-builder's DEB target has a valid script to reference. Phase E
-# replaces this with the real content (lintian-clean, xdg-mime
-# registration, icon cache refresh, etc. — see desktop-installer.mdx
-# §7 Phase E).
+# Registers the application with the desktop environment. Auto-start at
+# login is OFF by default (Debian convention, per plan §4.1); users enable
+# it via the in-app settings which writes ~/.config/autostart/gaia-ui.desktop.
+#
+# See docs/plans/desktop-installer.mdx §7 Phase E.
 
 set -e
+
+case "$1" in
+    configure)
+        # Refresh the desktop database so the installed .desktop entry is
+        # picked up by menus, launchers, and file associations.
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+        fi
+        # Refresh the hicolor icon theme cache so the GAIA icon renders in
+        # the launcher immediately after install.
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -t /usr/share/icons/hicolor || true
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
 exit 0

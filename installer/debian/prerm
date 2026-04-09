@@ -1,10 +1,35 @@
 #!/bin/sh
 # GAIA Agent UI — Debian pre-remove script.
 #
-# PLACEHOLDER committed during Phase C of the desktop-installer plan so
-# electron-builder's DEB target has a valid script to reference. Phase E
-# replaces this with logic that stops the Electron app process (but NOT
-# the user's `gaia chat --ui` backend; see desktop-installer.mdx §5.1).
+# Stops ONLY the GAIA Agent UI Electron process. Per plan §5.1 we
+# deliberately do NOT touch the user-launched `gaia chat --ui` backend
+# — the user may want to keep that running independently of the
+# desktop app.
+#
+# See docs/plans/desktop-installer.mdx §5.1 and §7 Phase E.
 
 set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        # Stop the GAIA Agent UI Electron process if it's running.
+        # Match on the exact binary name AND on the product name (the
+        # ProductName from electron-builder.yml) so we catch both the
+        # executable and its renderer/helper processes without touching
+        # any `gaia` CLI processes the user may have spawned.
+        if command -v pkill >/dev/null 2>&1; then
+            pkill -x "gaia-ui" 2>/dev/null || true
+            pkill -f "GAIA Agent UI" 2>/dev/null || true
+        fi
+        ;;
+    failed-upgrade)
+        ;;
+    *)
+        echo "prerm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
 exit 0
