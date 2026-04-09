@@ -237,87 +237,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                     model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False
                 )
 
-        def _warmup_prompt_cache():
-            """Send a warmup inference to populate Lemonade's prompt cache.
-
-            Constructs a GaiaAgent (lean ~1,500-token prompt) to warm the
-            cache instead of ChatAgent (~7,400 tokens), dramatically reducing
-            boot warmup time on AMD iGPU hardware.
-
-            Safe to import here because _load_model has already completed
-            (dependency chain enforced by DispatchQueue).
-            """
-            from gaia.llm.lemonade_client import LemonadeClient
-            from gaia.ui.routers.system import _DEFAULT_MODEL_NAME
-
-            model_id = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
-
-            agent = None
-            system_prompt = None
-            try:
-                from gaia.agents.gaia.agent import GaiaAgent, GaiaAgentConfig
-
-                agent = GaiaAgent(
-                    GaiaAgentConfig(
-                        model_id=model_id,
-                        streaming=False,
-                        silent_mode=True,
-                        debug=False,
-                    )
-                )
-                system_prompt = agent.system_prompt
-                logger.info("server: Warmup using GaiaAgent (~1,500-token prompt)")
-            except Exception as _warmup_err:
-                logger.warning(
-                    "server: GaiaAgent warmup failed (%s), falling back to ChatAgent",
-                    _warmup_err,
-                )
-                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-                agent = ChatAgent(
-                    ChatAgentConfig(
-                        model_id=model_id,
-                        streaming=False,
-                        silent_mode=True,
-                        debug=False,
-                        rag_documents=[],
-                    )
-                )
-                system_prompt = agent.system_prompt
-                logger.info("server: Warmup using ChatAgent (fallback)")
-
-            try:
-                LemonadeClient(verbose=False).chat_completions(
-                    model=model_id,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": "Hi"},
-                    ],
-                    max_completion_tokens=1,
-                    stream=False,
-                )
-            finally:
-                if hasattr(agent, "_mcp_manager") and agent._mcp_manager:
-                    agent._mcp_manager.disconnect_all()
-
         # Dispatch startup tasks.  Jobs A and B run in parallel; Job C
-        # waits for A (needs Lemonade reachable) before loading the model;
-        # Job D waits for C before warming the prompt cache.
+        # waits for A (needs Lemonade reachable) before loading the model.
         lemonade_id = queue.dispatch(
             "Checking LLM server", _check_lemonade, visible=True
         )
         queue.dispatch("Loading ML libraries", _import_modules, visible=True)
-        load_model_id = queue.dispatch(
+        queue.dispatch(
             "Loading AI model",
             _load_model,
             visible=True,
             depends_on=lemonade_id,
-        )
-        queue.dispatch(
-            "Preparing AI assistant",
-            _warmup_prompt_cache,
-            visible=True,
-            depends_on=load_model_id,
         )
 
         # Start document file monitor for auto re-indexing

@@ -127,28 +127,13 @@ def test_status_init_tasks_has_no_error_field(client):
 
 
 def test_startup_dispatches_visible_tasks(app):
-    """The lifespan dispatches at least 4 visible startup tasks."""
+    """The lifespan dispatches at least 3 visible startup tasks."""
     with TestClient(app):
         queue = app.state.dispatch_queue
         visible = queue.get_visible_jobs()
-        assert len(visible) >= 4
+        assert len(visible) >= 3
 
         names = {j.name for j in visible}
         assert "Checking LLM server" in names
         assert "Loading ML libraries" in names
         assert "Loading AI model" in names
-        assert "Preparing AI assistant" in names
-
-
-def test_startup_warmup_depends_on_model_load(app):
-    """The warmup task depends on the model load task."""
-    with TestClient(app):
-        queue = app.state.dispatch_queue
-        visible = queue.get_visible_jobs()
-
-        warmup = next((j for j in visible if j.name == "Preparing AI assistant"), None)
-        load_model = next((j for j in visible if j.name == "Loading AI model"), None)
-
-        assert warmup is not None, "Warmup task not found"
-        assert load_model is not None, "Load model task not found"
-        assert warmup.depends_on == load_model.id

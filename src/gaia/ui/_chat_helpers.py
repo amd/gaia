@@ -583,8 +583,8 @@ async def _get_chat_response(
             val = result.get("result")
             return val if val is not None else result.get("answer", "")
         result_str = str(result) if result else ""
-        # Strip JSON envelope (e.g. {"answer": "..."}) emitted by GaiaAgent
-        # and manifest agents whose system prompt requires JSON output format.
+        # Strip JSON envelope (e.g. {"answer": "..."}) emitted by agents
+        # whose system prompt requires JSON output format.
         return _clean_answer_json(result_str)
 
     try:

@@ -136,7 +136,7 @@ class AgentRegistry:
     # ------------------------------------------------------------------
 
     def _register_builtin_agents(self) -> None:
-        """Register ChatAgent and GaiaAgent as built-in agents."""
+        """Register built-in agents (ChatAgent, BuilderAgent, etc.)."""
 
         # --- ChatAgent ---
         def chat_factory(**kwargs):
@@ -165,40 +165,6 @@ class AgentRegistry:
             )
         )
         logger.info("registry: Registered built-in agent: chat (ChatAgent)")
-
-        # --- GaiaAgent (may not be available yet) ---
-        try:
-            from gaia.agents.gaia.agent import GaiaAgent, GaiaAgentConfig
-
-            def gaia_factory(**kwargs):
-                valid_fields = {f.name for f in dataclasses.fields(GaiaAgentConfig)}
-                config = GaiaAgentConfig(
-                    **{k: v for k, v in kwargs.items() if k in valid_fields}
-                )
-                return GaiaAgent(config=config)
-
-            self._register(
-                AgentRegistration(
-                    id="gaia",
-                    name="GAIA",
-                    description="Fast, lightweight AI assistant with document Q&A and file tools",
-                    source="builtin",
-                    conversation_starters=[
-                        "What can you help me with?",
-                        "Search my documents",
-                        "Find files on my computer",
-                    ],
-                    factory=gaia_factory,
-                    agent_dir=None,
-                    models=[],
-                    hidden=True,
-                )
-            )
-            logger.info("registry: Registered built-in agent: gaia (GaiaAgent)")
-        except ImportError:
-            logger.debug(
-                "registry: GaiaAgent not available, skipping built-in registration"
-            )
 
         # --- BuilderAgent ---
         try:
@@ -426,8 +392,7 @@ class AgentRegistry:
                 if hasattr(self_inner, register_method):
                     getattr(self_inner, register_method)()
             # Load MCP tools after Python tools so they aren't wiped by the clear above.
-            # Mirrors GaiaAgent._register_tools which calls load_mcp_servers_from_config()
-            # at the end of _register_tools so MCP tools survive the TOOL_REGISTRY.clear().
+            # Load MCP tools last so they survive the TOOL_REGISTRY.clear() above.
             if getattr(self_inner, "_mcp_manager", None) is not None:
                 self_inner.load_mcp_servers_from_config()
 
@@ -453,11 +418,11 @@ class AgentRegistry:
         )
 
         # Define __init__ after agent_class exists so super(agent_class, ...) is safe.
-        # Mirrors the pattern used by GaiaAgent: manually initialize _mcp_manager
-        # BEFORE super().__init__() because Agent.__init__ calls _register_tools()
-        # which may reference self._mcp_manager.  MCPClientMixin.__init__ is never
-        # called implicitly here (Agent.__init__ doesn't propagate super() through
-        # the full MRO), so we set up the manager directly.
+        # Manually initialize _mcp_manager BEFORE super().__init__() because
+        # Agent.__init__ calls _register_tools() which may reference
+        # self._mcp_manager.  MCPClientMixin.__init__ is never called implicitly
+        # here (Agent.__init__ doesn't propagate super() through the full MRO),
+        # so we set up the manager directly.
         def __init__(self_inner, _cls=agent_class, **kwargs):
             if merged_config_path_str:
                 try:

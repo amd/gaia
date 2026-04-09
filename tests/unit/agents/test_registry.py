@@ -84,14 +84,6 @@ class TestBuiltinRegistration:
         reg = registry.get("chat")
         assert len(reg.conversation_starters) > 0
 
-    def test_gaia_registered_when_importable(self):
-        registry = AgentRegistry()
-        registry.discover()
-        # GaiaAgent should be importable since it's in the codebase
-        reg = registry.get("gaia")
-        assert reg is not None
-        assert reg.source == "builtin"
-
     def test_list_returns_all_builtins(self):
         registry = AgentRegistry()
         registry.discover()
