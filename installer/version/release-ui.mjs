@@ -9,7 +9,7 @@
  * The CI pipeline handles the rest (build, test, publish to npm).
  *
  * Usage:
- *   node scripts/release-ui.mjs
+ *   node installer/version/release-ui.mjs
  *
  * The version comes from src/gaia/version.py (single source of truth for all of GAIA).
  */
@@ -20,7 +20,8 @@ import { fileURLToPath } from "url";
 import { execSync } from "child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const rootDir = resolve(__dirname, "..");
+// Script lives in installer/version/, so repo root is two levels up.
+const rootDir = resolve(__dirname, "..", "..");
 
 const VERSION_PY = resolve(rootDir, "src", "gaia", "version.py");
 const PACKAGE_PATH = resolve(
