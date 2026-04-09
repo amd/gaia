@@ -103,7 +103,7 @@ jobs:
           fi
           if [ "$FAIL" -eq 1 ]; then
             echo ""
-            echo 'Fix: update version.py and run "node scripts/bump-ui-version.mjs", commit, and re-tag.'
+            echo 'Fix: update version.py and run "node installer/version/bump-ui-version.mjs", commit, and re-tag.'
             exit 1
           fi
           echo "All versions match: v$TAG_VERSION"
