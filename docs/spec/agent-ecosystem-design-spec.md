@@ -46,7 +46,7 @@ The new `.md` agent format is designed as a strict superset of PR #720's `AgentM
 
 2. **Formal tool invocation syntax — DELIVERED (Phase 5).** The `tool-call` fenced block syntax is now formally specified in `docs/guides/explicit-tool-calling.mdx` (commit `e952716`) and demonstrated in `component-framework/templates/agent-definition.md`. The syntax covers basic CALL, MCP CALL, CALL with prompt, and conditional IF/END IF blocks. No runtime parser exists yet (LLM-evaluated in Phase 1 scope); machine-parseable evaluation remains Phase 2 work as specified in Section 4.4 Scope Boundary.
 
-3. **Pipeline stages — PARTIALLY DELIVERED (Phase 5) with architectural deviation.** Phase 5 delivered Python-class implementations of Stages 1–4 plus GapDetector (Stage 4) and PipelineExecutor (Stage 5):
+3. **Pipeline stages — DELIVERED (Phase 5) with architectural deviation.** Phase 5 delivered Python-class implementations of all 5 pipeline stages plus the orchestrator, all with passing tests (Quality Gate 7: 18/18 passing, 100%):
    - Stage 1: `src/gaia/pipeline/stages/domain_analyzer.py` (`DomainAnalyzer(Agent)`) [IMPLEMENTED — `8d6ffdd`]
    - Stage 2: `src/gaia/pipeline/stages/workflow_modeler.py` (`WorkflowModeler(Agent)`) [IMPLEMENTED — `a32187c`]
    - Stage 3: `src/gaia/pipeline/stages/loom_builder.py` (`LoomBuilder(Agent)`) [IMPLEMENTED — `8dd22c1`]
@@ -56,9 +56,11 @@ The new `.md` agent format is designed as a strict superset of PR #720's `AgentM
 
    **Architectural deviation:** This spec anticipated MD-format agent config files in `config/agents/` (e.g., `workflow-modeler.md`). Phase 5 built Python subclasses of `Agent` instead. The MD-format "Ecosystem Builder" (`config/agents/ecosystem-builder.md`) — Stage 4 as originally designed — has not been built. The `master-ecosystem-creator.md` file serves a related but distinct role (Claude Code subagent for on-demand spawning). The MD-format pipeline described in Sections 5.3–5.5 remains as Phase 2 work for the registry-loadable agent definition system.
 
-4. **Frontmatter parser delivered; registry MD loading still pending.** Phase 5 delivered `src/gaia/utils/frontmatter_parser.py` (410 LOC, commit `57ee63d`) — a complete frontmatter-aware Markdown parser with 493 unit tests. The `ComponentLoader` (`src/gaia/utils/component_loader.py`) uses it for template loading. However, `src/gaia/agents/registry.py` has NOT been updated to call `_load_md_agent()`. The `senior-dev-work-order.md` Task 2 (add `_load_md_agent()` to registry) remains unexecuted. Status: parser infrastructure delivered; registry integration pending. **[INFRASTRUCTURE IMPLEMENTED in Phase 5 — `57ee63d`; REGISTRY WIRING PENDING]**
+   **Phase 6 update (commit `41ee396`):** ADR-001 hybrid pattern adopted — Python classes for executable behavior, MD-format configs (`config/agents/domain-analyzer.md`, `workflow-modeler.md`, `loom-builder.md`, `gap-detector.md`, `pipeline-executor.md`) for registry discovery with `pipeline.entrypoint` fields pointing to Python classes.
 
-5. **Capability vocabulary is not standardized.** Open Item 4 from the PR #720 analysis: the 18 YAML files use freeform capability strings with no validation against `src/gaia/core/capabilities.py`.
+4. **Frontmatter parser delivered; registry MD loading — RESOLVED (Phase 6 via ADR-001).** Phase 5 delivered `src/gaia/utils/frontmatter_parser.py` (410 LOC, commit `57ee63d`) — a complete frontmatter-aware Markdown parser with 493 unit tests. The `ComponentLoader` (`src/gaia/utils/component_loader.py`) uses it for template loading. Phase 6 (commit `41ee396`) resolved the registry integration via ADR-001 hybrid pattern: MD config files in `config/agents/` with `pipeline.entrypoint` fields pointing to Python classes, enabling `AgentRegistry` discovery without requiring full MD-body prompt loading. Status: RESOLVED per ADR-001 hybrid pattern.
+
+5. **Capability vocabulary — PARTIALLY RESOLVED (Phase 6).** `docs/spec/unified-capability-model.md` (v1.0.0, 434 lines) defines the unified capability vocabulary in commit `41ee396`. The 5 Python pipeline stage MD configs use the unified vocabulary. The 18 legacy YAML files in `config/agents/` still use the original vocabulary. Risk reduced from HIGH to MEDIUM — clear migration path exists.
 
 ### 2.3 What Is Aspirational
 
