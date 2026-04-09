@@ -24,6 +24,7 @@ const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
 const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
+const autoUpdater = require("./services/auto-updater.cjs");
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -434,6 +435,19 @@ app.whenReady().then(async () => {
   // Initialize services (tray, agent manager, notifications)
   initializeServices();
 
+  // Phase F: start the auto-updater (non-blocking). First check runs on
+  // a 10s delay inside the module so it never competes with app launch.
+  // Any failure here is logged and swallowed — the app continues to run
+  // even if auto-update is unavailable.
+  try {
+    autoUpdater.init(mainWindow);
+  } catch (err) {
+    console.error(
+      "[main] Failed to init auto-updater:",
+      err && err.message ? err.message : err
+    );
+  }
+
   // Setup Windows Jump List (T11)
   setupJumpList();
 
@@ -526,6 +540,16 @@ app.on("will-quit", (event) => {
 });
 
 async function cleanup() {
+  // Phase F: tear down auto-updater timers and IPC handlers.
+  try {
+    autoUpdater.destroy();
+  } catch (err) {
+    console.error(
+      "[main] Error tearing down auto-updater:",
+      err && err.message ? err.message : err
+    );
+  }
+
   // Clean up notification timers
   if (notificationService) {
     notificationService.destroy();
