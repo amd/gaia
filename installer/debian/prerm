@@ -1,0 +1,10 @@
+#!/bin/sh
+# GAIA Agent UI — Debian pre-remove script.
+#
+# PLACEHOLDER committed during Phase C of the desktop-installer plan so
+# electron-builder's DEB target has a valid script to reference. Phase E
+# replaces this with logic that stops the Electron app process (but NOT
+# the user's `gaia chat --ui` backend; see desktop-installer.mdx §5.1).
+
+set -e
+exit 0

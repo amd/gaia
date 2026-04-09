@@ -410,14 +410,10 @@ async function bootstrapBackend() {
 
 // ── App Lifecycle ──────────────────────────────────────────────────────────
 
-// Handle creating/removing shortcuts on Windows when installing/uninstalling
-try {
-  if (require("electron-squirrel-startup")) {
-    app.quit();
-  }
-} catch {
-  // electron-squirrel-startup not available
-}
+// Note: electron-squirrel-startup was removed in Phase C of the
+// desktop-installer plan. electron-builder's NSIS target does not need
+// Squirrel's first-run shortcut bookkeeping — NSIS creates the Start Menu
+// and Desktop shortcuts itself at install time.
 
 app.whenReady().then(async () => {
   // Phase A: ensure the Python backend is installed BEFORE creating the

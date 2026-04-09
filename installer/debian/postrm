@@ -1,0 +1,12 @@
+#!/bin/sh
+# GAIA Agent UI — Debian post-remove script.
+#
+# PLACEHOLDER committed during Phase C of the desktop-installer plan so
+# electron-builder's DEB target has a valid script to reference. Phase E
+# replaces this with logic that calls `gaia uninstall --purge --yes` on
+# `apt purge`. For `apt remove` (Tier 1) we leave user data in place.
+#
+# See desktop-installer.mdx §5.1 for the per-platform uninstall flow.
+
+set -e
+exit 0

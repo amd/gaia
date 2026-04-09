@@ -1,0 +1,11 @@
+#!/bin/sh
+# GAIA Agent UI — Debian post-install script.
+#
+# PLACEHOLDER committed during Phase C of the desktop-installer plan so
+# electron-builder's DEB target has a valid script to reference. Phase E
+# replaces this with the real content (lintian-clean, xdg-mime
+# registration, icon cache refresh, etc. — see desktop-installer.mdx
+# §7 Phase E).
+
+set -e
+exit 0
