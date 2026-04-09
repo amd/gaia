@@ -1071,34 +1071,38 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Drag & drop — uploads the file blob directly rather than relying on
     // File.path (which is browser-undefined and was removed in Electron 32+).
-    // See issue #728.
+    // Dropped files index quietly and auto-attach to the current session;
+    // the Document Library panel is NOT forced open so the drop doesn't
+    // interrupt the chat view. Users can still open the library manually
+    // to see progress for large files. See issue #728.
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDragOver(false);
-        if (e.dataTransfer.files.length > 0) {
-            setShowDocLibrary(true);
-            for (const file of Array.from(e.dataTransfer.files)) {
-                try {
-                    const doc = await api.uploadDocumentBlob(file);
-                    if (sessionId && doc?.id) {
-                        try {
-                            await api.attachDocument(sessionId, doc.id);
-                            const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
-                            const existing = freshSession?.document_ids ?? [];
-                            if (!existing.includes(doc.id)) {
-                                updateSessionInList(sessionId, { document_ids: [...existing, doc.id] });
-                            }
-                        } catch (attachErr) {
-                            log.doc.warn(`Could not attach dropped document to session: ${attachErr}`);
+        if (e.dataTransfer.files.length === 0) return;
+
+        for (const file of Array.from(e.dataTransfer.files)) {
+            log.doc.info(`Dropped on chat view: ${file.name}`);
+            try {
+                const doc = await api.uploadDocumentBlob(file);
+                if (sessionId && doc?.id) {
+                    try {
+                        await api.attachDocument(sessionId, doc.id);
+                        const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
+                        const existing = freshSession?.document_ids ?? [];
+                        if (!existing.includes(doc.id)) {
+                            updateSessionInList(sessionId, { document_ids: [...existing, doc.id] });
                         }
+                        log.doc.info(`Auto-attached "${file.name}" to session ${sessionId}`);
+                    } catch (attachErr) {
+                        log.doc.warn(`Could not attach dropped document to session: ${attachErr}`);
                     }
-                } catch (err) {
-                    log.doc.error(`Upload failed: ${file.name}`, err);
                 }
+            } catch (err) {
+                log.doc.error(`Upload failed: ${file.name}`, err);
             }
         }
-    }, [sessionId, updateSessionInList, setShowDocLibrary]);
+    }, [sessionId, updateSessionInList]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
