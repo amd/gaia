@@ -29,7 +29,7 @@ const autoUpdater = require("./services/auto-updater.cjs");
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
-const APP_NAME = "GAIA Agent UI";
+const APP_NAME = "GAIA";
 const BACKEND_PORT = 4200;
 const HEALTH_CHECK_URL = `http://localhost:${BACKEND_PORT}/api/health`;
 const STARTUP_TIMEOUT = 30000;

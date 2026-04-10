@@ -4,7 +4,7 @@ description: 'Common install failure modes and how to fix them.'
 icon: 'wrench'
 ---
 
-This guide covers common problems people encounter when installing GAIA Agent UI. If your issue isn't listed here, please [open a GitHub issue](https://github.com/amd/gaia/issues/new) and attach `~/.gaia/electron-install.log`.
+This guide covers common problems people encounter when installing GAIA. If your issue isn't listed here, please [open a GitHub issue](https://github.com/amd/gaia/issues/new) and attach `~/.gaia/electron-install.log`.
 
 ## Windows: SmartScreen blocks the installer {#smartscreen}
 
@@ -16,11 +16,11 @@ This guide covers common problems people encounter when installing GAIA Agent UI
 
 ## macOS: Gatekeeper blocks the app {#gatekeeper}
 
-**Symptom**: "GAIA Agent UI cannot be opened because the developer cannot be verified."
+**Symptom**: "GAIA cannot be opened because the developer cannot be verified."
 
 **Cause**: The DMG is unsigned (we're working on Apple notarization — see [#530](https://github.com/amd/gaia/issues/530)).
 
-**Fix**: Right-click GAIA Agent UI in Applications and choose **Open**. In the dialog that appears, click **Open**. macOS remembers this choice for future launches.
+**Fix**: Right-click GAIA in Applications and choose **Open**. In the dialog that appears, click **Open**. macOS remembers this choice for future launches.
 
 If that doesn't work:
 ```bash
@@ -33,9 +33,9 @@ The Electron app launches but the backend install fails with an error dialog. Co
 
 ### Insufficient disk space
 
-**Symptom**: Error dialog says "Not enough free disk space (X GB available, 3 GB required)".
+**Symptom**: Error dialog says "Not enough free disk space (X GB available, 5 GB required)".
 
-**Fix**: Free at least 3 GB of disk space and click **Retry**. The Python environment + minimal model needs ~3 GB.
+**Fix**: Free at least 5 GB of disk space and click **Retry**. The Python environment + minimal model needs ~5 GB.
 
 ### No internet connection
 
@@ -59,14 +59,14 @@ Subsequent launches work fully offline.
 **Windows (PowerShell)**:
 ```powershell
 $env:HTTPS_PROXY = "http://proxy.example.com:8080"
-& "$env:LOCALAPPDATA\Programs\gaia-agent-ui\gaia-agent-ui.exe"
+& "$env:LOCALAPPDATA\Programs\gaia-desktop\gaia-desktop.exe"
 ```
 
 **macOS/Linux**:
 ```bash
-HTTPS_PROXY=http://proxy.example.com:8080 open -a "GAIA Agent UI"
+HTTPS_PROXY=http://proxy.example.com:8080 open -a "GAIA"
 # or just (Linux .deb / AppImage):
-HTTPS_PROXY=http://proxy.example.com:8080 gaia-agent-ui
+HTTPS_PROXY=http://proxy.example.com:8080 gaia-desktop
 ```
 
 ### Antivirus interference
@@ -127,6 +127,6 @@ Add `--purge-lemonade` to also uninstall Lemonade Server, or `--purge-models` to
 
 ## See also
 
-- [Installation guide](/guides/install) — how to download and install GAIA Agent UI
+- [Installation guide](/guides/install) — how to download and install GAIA
 - [FAQ](/reference/faq) — common questions
 - [General troubleshooting](/reference/troubleshooting) — runtime issues after install

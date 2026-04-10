@@ -172,13 +172,13 @@ linux:
   maintainer: GAIA maintainers <gaia@amd.com>
   desktop:
     entry:
-      Name: GAIA Agent UI
+      Name: GAIA
       Comment: Privacy-first agentic AI interface for AMD Ryzen AI
       Categories: Development;Utility;
       # StartupWMClass must match the X11 WM_CLASS the app reports at
       # runtime. Electron derives WM_CLASS from the executable basename
-      # by default, so with executableName: gaia-agent-ui this becomes
-      # "gaia-agent-ui". Getting this wrong breaks taskbar icon grouping.
+      # by default, so with executableName: gaia-desktop this becomes
+      # "gaia-desktop". Getting this wrong breaks taskbar icon grouping.
       StartupWMClass: gaia-desktop
 
 deb:

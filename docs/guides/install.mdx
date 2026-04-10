@@ -1,11 +1,11 @@
 ---
-title: 'Install GAIA Agent UI'
-description: 'Download and install GAIA Agent UI on Windows, macOS, or Linux. The recommended way to get GAIA running on your machine.'
+title: 'Install GAIA'
+description: 'Download and install GAIA on Windows, macOS, or Linux. The recommended way to get GAIA running on your machine.'
 icon: 'download'
 ---
 
 <Note>
-GAIA Agent UI is a desktop chat application that runs AI agents locally on your machine. This is the recommended install method for most users. For the developer / CLI install path, see the [Python CLI install plan](/plans/installer).
+GAIA is a desktop chat application that runs AI agents locally on your machine. This is the recommended install method for most users. For the developer / CLI install path, see the [Python CLI install plan](/plans/installer).
 </Note>
 
 ## What you'll need
@@ -23,7 +23,7 @@ GAIA Agent UI is a desktop chat application that runs AI agents locally on your 
     2. Download **`gaia-agent-ui-X.Y.Z-x64-setup.exe`**
     3. Double-click to run the installer
     4. Follow the wizard. Default options work for most users.
-    5. GAIA will start automatically when you sign in to Windows, matching the Slack/Discord/Zoom convention. To disable, open Task Manager → Startup tab → disable "GAIA Agent UI", or use the in-app tray menu after first launch.
+    5. GAIA will start automatically when you sign in to Windows, matching the Slack/Discord/Zoom convention. To disable, open Task Manager → Startup tab → disable "GAIA", or use the in-app tray menu after first launch.
     6. Click **Finish** and launch GAIA from the Start Menu or desktop shortcut.
 
     <Warning>
@@ -35,11 +35,11 @@ GAIA Agent UI is a desktop chat application that runs AI agents locally on your 
     1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
     2. Download **`gaia-agent-ui-X.Y.Z-arm64.dmg`** (Apple Silicon only)
     3. Double-click the DMG to open it
-    4. Drag **GAIA Agent UI** to the Applications folder
+    4. Drag **GAIA** to the Applications folder
     5. Eject the DMG and launch GAIA from Applications
 
     <Warning>
-    On first launch, macOS Gatekeeper may show "GAIA Agent UI cannot be opened because the developer cannot be verified." Right-click the app and choose **Open**, then click **Open** in the dialog. (We're working on Apple notarization — see [troubleshooting](/reference/install-troubleshooting#gatekeeper).)
+    On first launch, macOS Gatekeeper may show "GAIA cannot be opened because the developer cannot be verified." Right-click the app and choose **Open**, then click **Open** in the dialog. (We're working on Apple notarization — see [troubleshooting](/reference/install-troubleshooting#gatekeeper).)
     </Warning>
 
     Intel Macs are not currently supported.
@@ -52,7 +52,7 @@ GAIA Agent UI is a desktop chat application that runs AI agents locally on your 
        ```bash
        sudo apt install ./gaia-agent-ui-X.Y.Z-amd64.deb
        ```
-    4. Launch GAIA from your application menu, or run `gaia-agent-ui` from a terminal
+    4. Launch GAIA from your application menu, or run `gaia-desktop` from a terminal
 
     Or install via the GUI: double-click the `.deb` file and your software center will install it.
   </Tab>
@@ -100,7 +100,7 @@ See the [installation troubleshooting guide](/reference/install-troubleshooting)
 
 ## Updating GAIA
 
-GAIA Agent UI checks for updates automatically:
+GAIA checks for updates automatically:
 - 10 seconds after launch
 - Every 4 hours while running
 
@@ -110,10 +110,10 @@ To disable auto-updates, set the environment variable `GAIA_DISABLE_UPDATE=1` be
 
 ## Uninstalling
 
-GAIA Agent UI follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
+GAIA follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
 
 ### Windows
-**Settings → Apps → Installed apps → GAIA Agent UI → Uninstall**
+**Settings → Apps → Installed apps → GAIA → Uninstall**
 
 This removes the app, the Start Menu / Desktop shortcuts, and the autostart registry entry. It does **not** touch `~/.gaia/`. To also remove your data, open a terminal (PowerShell or `cmd`) and run:
 ```powershell
@@ -121,7 +121,7 @@ This removes the app, the Start Menu / Desktop shortcuts, and the autostart regi
 ```
 
 ### macOS
-Drag the **GAIA Agent UI** app from Applications to the Trash. Empty the Trash.
+Drag the **GAIA** app from Applications to the Trash. Empty the Trash.
 
 To also remove your data, run from a terminal:
 ```bash
@@ -130,12 +130,12 @@ To also remove your data, run from a terminal:
 
 ### Linux (Debian/Ubuntu)
 ```bash
-sudo apt remove gaia-agent-ui
+sudo apt remove gaia-desktop
 ```
 
 To also remove your data, use `apt purge` instead:
 ```bash
-sudo apt purge gaia-agent-ui
+sudo apt purge gaia-desktop
 ```
 
 ### Linux (AppImage)
@@ -160,7 +160,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 
 | What | Location |
 |---|---|
-| Electron app | Platform-specific (Program Files / /Applications / /usr/lib/gaia-agent-ui) |
+| Electron app | Platform-specific (Program Files / /Applications / /opt/GAIA) |
 | Python environment | `~/.gaia/venv/` |
 | Chat database | `~/.gaia/chat/chat.db` |
 | Uploaded documents | `~/.gaia/documents/` |

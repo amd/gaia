@@ -4765,7 +4765,7 @@ Let me know your answer!
                     print(f"GAIA expects v{LEMONADE_VERSION}+")
                     print("")
                     print("To update, run:")
-                    print("  gaia uninstall --lemonade")
+                    print("  gaia uninstall --purge --purge-lemonade")
                     print("  gaia install --lemonade")
                     sys.exit(1)
 
