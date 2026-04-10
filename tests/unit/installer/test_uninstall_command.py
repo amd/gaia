@@ -30,6 +30,7 @@ def _ns(**kwargs) -> argparse.Namespace:
         purge=False,
         purge_lemonade=False,
         purge_models=False,
+        purge_hf_cache=False,
         dry_run=False,
         yes=False,
     )
@@ -321,14 +322,20 @@ class TestValidationErrors:
     def test_purge_lemonade_without_purge_errors(self, fake_home):
         captured = _Capture()
         exit_code = uc.run(_ns(purge_lemonade=True, yes=True), printer=captured)
-        assert exit_code == uc.EXIT_FS_ERROR
+        assert exit_code == uc.EXIT_USAGE
         assert "--purge-lemonade requires --purge" in captured.text
 
     def test_purge_models_without_purge_errors(self, fake_home):
         captured = _Capture()
         exit_code = uc.run(_ns(purge_models=True, yes=True), printer=captured)
-        assert exit_code == uc.EXIT_FS_ERROR
+        assert exit_code == uc.EXIT_USAGE
         assert "--purge-models requires --purge" in captured.text
+
+    def test_purge_hf_cache_without_purge_errors(self, fake_home):
+        captured = _Capture()
+        exit_code = uc.run(_ns(purge_hf_cache=True, yes=True), printer=captured)
+        assert exit_code == uc.EXIT_USAGE
+        assert "--purge-hf-cache requires --purge" in captured.text
 
 
 # ---------------------------------------------------------------------------
@@ -514,3 +521,246 @@ class TestCrossPlatform:
         monkeypatch.setattr("sys.platform", "linux")
         p = uc._lemonade_models_dir(home=Path("/home/tester"))
         assert p == Path("/home/tester/.cache/lemonade/models")
+
+
+# ---------------------------------------------------------------------------
+# Containment guard: _remove_path refuses anything outside allowed roots
+# ---------------------------------------------------------------------------
+
+
+class TestContainmentGuard:
+    """Defense-in-depth: even if a plan construction bug produced a path
+    outside ~/.gaia, _remove_path must refuse to touch it.
+    """
+
+    def test_refuses_delete_outside_allowed_roots(self, fake_home):
+        # Forge a path OUTSIDE ~/.gaia and confirm _remove_path raises
+        # rather than silently deleting it.
+        outside = fake_home / "not-gaia" / "important.txt"
+        outside.parent.mkdir(parents=True, exist_ok=True)
+        outside.write_text("do not delete me")
+
+        allowed = uc._safe_roots(home=fake_home)
+        with pytest.raises(RuntimeError, match="outside allowed roots"):
+            uc._remove_path(outside, allowed_roots=allowed)
+
+        assert outside.exists(), "file outside allowed roots must be preserved"
+
+    def test_refuses_delete_at_root_via_traversal(self, fake_home):
+        # Classic traversal: path that resolves outside the allowed tree.
+        sneaky = fake_home / ".gaia" / ".." / "elsewhere"
+        (fake_home / "elsewhere").mkdir(parents=True, exist_ok=True)
+        (fake_home / "elsewhere" / "data").write_text("keep")
+
+        allowed = uc._safe_roots(home=fake_home)
+        with pytest.raises(RuntimeError, match="outside allowed roots"):
+            uc._remove_path(sneaky, allowed_roots=allowed)
+
+        assert (fake_home / "elsewhere" / "data").exists()
+
+    def test_allows_delete_inside_gaia_home(self, fake_home):
+        _seed_gaia_tree(fake_home)
+        target = fake_home / ".gaia" / "venv"
+        allowed = uc._safe_roots(home=fake_home)
+
+        ok = uc._remove_path(target, allowed_roots=allowed)
+        assert ok
+        assert not target.exists()
+
+    def test_safe_roots_returns_expected_roots(self, fake_home, monkeypatch):
+        monkeypatch.delenv("HF_HOME", raising=False)
+        monkeypatch.delenv("GAIA_HOME", raising=False)
+        roots = uc._safe_roots(home=fake_home)
+        joined = " ".join(str(r) for r in roots)
+        assert ".gaia" in joined
+        assert "lemonade" in joined
+        assert "huggingface" in joined
+
+
+# ---------------------------------------------------------------------------
+# Silent-purge safety: --purge on non-TTY must require an explicit --yes
+# ---------------------------------------------------------------------------
+
+
+class TestSilentPurgeRefusal:
+    """Tier-2 auto-skips confirmation on non-TTY stdin so silent NSIS
+    uninstall flows work. Tier-3 (--purge) must NOT auto-skip — cron or a
+    misconfigured pipe could otherwise silently nuke ~/.gaia/chat.
+    """
+
+    def test_purge_without_yes_on_non_tty_refuses(self, fake_home, monkeypatch):
+        _seed_gaia_tree(fake_home)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(purge=True, yes=False), printer=captured)
+
+        assert exit_code == uc.EXIT_ABORTED, captured.text
+        assert "Refusing to --purge" in captured.text
+        # All tier-3 paths must still exist.
+        gaia = fake_home / ".gaia"
+        assert (gaia / "venv" / "bin" / "python").exists()
+        assert (gaia / "chat" / "history.db").exists()
+        assert (gaia / "documents" / "note.txt").exists()
+
+    def test_purge_with_yes_on_non_tty_proceeds(self, fake_home, monkeypatch):
+        _seed_gaia_tree(fake_home)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert not (fake_home / ".gaia" / "venv").exists()
+
+    def test_dry_run_purge_without_yes_on_non_tty_is_allowed(
+        self, fake_home, monkeypatch
+    ):
+        """Dry-run is read-only, so the --yes guardrail doesn't apply."""
+        _seed_gaia_tree(fake_home)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        captured = _Capture()
+        exit_code = uc.run(
+            _ns(purge=True, yes=False, dry_run=True), printer=captured
+        )
+        assert exit_code == uc.EXIT_OK, captured.text
+        # Nothing removed.
+        assert (fake_home / ".gaia" / "venv").exists()
+
+    def test_venv_tier2_still_auto_skips_on_non_tty(self, fake_home, monkeypatch):
+        """Regression guard: the new --purge guardrail must not break the
+        existing Tier-2 silent-uninstall path relied on by NSIS postrm.
+        """
+        _seed_gaia_tree(fake_home)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        captured = _Capture()
+        exit_code = uc.run(_ns(venv=True, yes=False), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert not (fake_home / ".gaia" / "venv").exists()
+
+
+# ---------------------------------------------------------------------------
+# GAIA_HOME environment variable override
+# ---------------------------------------------------------------------------
+
+
+class TestGaiaHomeEnvVar:
+    def test_env_var_overrides_home(self, fs, monkeypatch):
+        alt = Path("/srv/gaia-alt")
+        fs.create_dir(alt)
+        monkeypatch.setenv("GAIA_HOME", str(alt))
+        monkeypatch.setattr(Path, "home", lambda: Path("/fake/home/user"))
+
+        resolved = uc._gaia_home()
+        assert Path(resolved) == alt
+
+    def test_env_var_unset_uses_home_dot_gaia(self, fs, monkeypatch):
+        monkeypatch.delenv("GAIA_HOME", raising=False)
+        home = Path("/fake/home/user")
+        fs.create_dir(home)
+        monkeypatch.setattr(Path, "home", lambda: home)
+
+        assert uc._gaia_home() == home / ".gaia"
+
+
+# ---------------------------------------------------------------------------
+# Log handler cleanup before purge (Windows data-loss guard)
+# ---------------------------------------------------------------------------
+
+
+class TestLogHandlerCleanup:
+    """On Windows, leaving gaia.log held open by a FileHandler causes
+    shutil.rmtree to raise PermissionError mid-delete. ``_close_gaia_log_handlers``
+    detaches and closes any FileHandler pointing inside ~/.gaia before
+    the purge begins.
+    """
+
+    def test_closes_filehandler_inside_gaia_home(self, fake_home):
+        import logging
+
+        _seed_gaia_tree(fake_home)
+        log_path = fake_home / ".gaia" / "gaia.log"
+
+        handler = logging.FileHandler(str(log_path), mode="a", encoding="utf-8")
+        root = logging.getLogger()
+        root.addHandler(handler)
+
+        try:
+            uc._close_gaia_log_handlers(home=fake_home)
+        finally:
+            # Keep the logger clean regardless of assertion outcome.
+            if handler in root.handlers:
+                root.removeHandler(handler)
+
+        assert handler not in logging.getLogger().handlers
+        # Underlying stream must be closed.
+        stream = getattr(handler, "stream", None)
+        assert stream is None or stream.closed
+
+    def test_leaves_external_filehandler_alone(self, fake_home):
+        import logging
+
+        # A handler pointing OUTSIDE ~/.gaia/ — must be preserved.
+        external_log = fake_home / "other" / "app.log"
+        external_log.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(str(external_log), mode="a", encoding="utf-8")
+        root = logging.getLogger()
+        root.addHandler(handler)
+
+        try:
+            uc._close_gaia_log_handlers(home=fake_home)
+            assert handler in logging.getLogger().handlers
+        finally:
+            root.removeHandler(handler)
+            handler.close()
+
+
+# ---------------------------------------------------------------------------
+# Lemonade Python interpreter resolution
+# ---------------------------------------------------------------------------
+
+
+class TestLemonadePythonResolution:
+    """When called from the GAIA installer bundle, ``sys.executable`` is
+    the GAIA venv, NOT where Lemonade was installed — so pip-uninstalling
+    against it is a no-op. ``_resolve_lemonade_python`` locates the real
+    interpreter by inspecting the lemonade-server console script.
+    """
+
+    def test_resolves_direct_shebang_posix(self, fake_home, monkeypatch):
+        lemonade = fake_home / "bin" / "lemonade-server"
+        lemonade.parent.mkdir(parents=True, exist_ok=True)
+        lemonade.write_bytes(b"#!/opt/venvs/lemon/bin/python\n# rest\n")
+
+        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
+
+        assert uc._resolve_lemonade_python() == "/opt/venvs/lemon/bin/python"
+
+    def test_resolves_env_shebang_posix(self, fake_home, monkeypatch):
+        lemonade = fake_home / "bin" / "lemonade-server"
+        lemonade.parent.mkdir(parents=True, exist_ok=True)
+        lemonade.write_bytes(b"#!/usr/bin/env python3\n# rest\n")
+
+        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
+
+        assert uc._resolve_lemonade_python() == "python3"
+
+    def test_not_on_path_returns_none(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr(uc.shutil, "which", lambda name: None)
+        assert uc._resolve_lemonade_python() is None
+
+    def test_script_without_shebang_returns_none(self, fake_home, monkeypatch):
+        lemonade = fake_home / "bin" / "lemonade-server"
+        lemonade.parent.mkdir(parents=True, exist_ok=True)
+        lemonade.write_bytes(b"# no shebang here\nprint('hi')\n")
+
+        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
+
+        assert uc._resolve_lemonade_python() is None
