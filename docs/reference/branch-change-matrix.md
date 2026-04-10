@@ -7,7 +7,7 @@
 **Target Branch:** `main`
 **Document Status:** Draft — complete, all sections present
 **Produced by:** software-program-manager
-**Date:** 2026-04-08
+**Date:** 2026-04-09
 
 ---
 
@@ -27,12 +27,12 @@ The matrix is organized by system category rather than by commit order. Each ent
 | Lines inserted | 306,247 |
 | Lines deleted | 13,447 |
 | Net lines added | 292,800 |
-| Branch-specific commits | 73 |
+| Branch-specific commits | 74 |
 | Oldest commit date | 2026-03-16 |
-| Most recent commit date | 2026-04-08 |
+| Most recent commit date | 2026-04-09 |
 | Delivery phases represented | P1, P2, P3-S1, P3-S2, P3-S3, P3-S4, P4-W1, P4-W2, P4-W3, BAIBEL, P5, P6, Session |
 
-Note: The planning strategist summary cited 30 branch-specific commits. A full `git log main..HEAD --no-merges` enumeration on 2026-04-07 produced 58 commits; updated enumeration on 2026-04-08 after Phase 5 pull produces 72 commits; updated enumeration on 2026-04-08 after Phase 6 pull (commit `41ee396`) produces 73 commits. The 73-commit figure is used throughout this document as the accurate figure. The original discrepancy reflected the strategist counting only pipeline-scoped commits and excluding Agent UI, CI/CD, and pre-existing main-branch backports.
+Note: The planning strategist summary cited 30 branch-specific commits. A full `git log main..HEAD --no-merges` enumeration on 2026-04-07 produced 58 commits; updated enumeration on 2026-04-08 after Phase 5 pull produces 72 commits; updated enumeration on 2026-04-08 after Phase 6 pull (commit `41ee396`) produces 73 commits; updated enumeration on 2026-04-09 after Phase 6 docs pull (commit `e28a922`) produces 74 commits. The 74-commit figure is used throughout this document as the accurate figure. The original discrepancy reflected the strategist counting only pipeline-scoped commits and excluding Agent UI, CI/CD, and pre-existing main-branch backports.
 
 ---
 
@@ -112,7 +112,7 @@ The `feature/pipeline-orchestration-v1` branch was initiated to deliver a self-c
 
 The scope expanded substantially over the development period to encompass six distinct programs of work: the core pipeline engine, the quality gate system, a parallel conversation-compaction framework (BAIBEL, Phases 0–3 complete), an Enterprise Infrastructure Program (Phase 3: four sprints of modular architecture, DI+performance, caching+config, and observability+API), a Production Hardening Program (Phase 4: three weeks of health monitoring, resilience patterns, and data protection+performance profiling), and ongoing Agent UI feature delivery. These programs ran concurrently on the same branch. The result is a branch that delivers both a new top-level capability and a significant restructuring of GAIA's internal infrastructure.
 
-The branch spans 984 changed files, 306,247 inserted lines, 13,447 deleted lines, and 73 commits across a 23-day window from 2026-03-16 to 2026-04-08. The Phase 5 program (9 commits, ~33,567 net lines) was added after the initial matrix publication. The Phase 6 pull (commit `41ee396`, 2026-04-08) added a further 14 changed files and ~5,965 inserted lines.
+The branch spans 984 changed files, 306,247 inserted lines, 13,447 deleted lines, and 74 commits across a 24-day window from 2026-03-16 to 2026-04-09. The Phase 5 program (9 commits, ~33,567 net lines) was added after the initial matrix publication. The Phase 6 pull (commit `41ee396`, 2026-04-08) added a further 14 changed files and ~5,965 inserted lines. A second Phase 6 docs commit (`e28a922`, 2026-04-09) added 2 files and 6 insertions resolving OI-5 (design spec coherence).
 
 A seventh concurrent program — Phase 5: Autonomous Agent Ecosystem Creation — was added after the initial branch-change-matrix publication. Phase 5 delivers a five-stage self-building pipeline (`DomainAnalyzer` → `WorkflowModeler` → `LoomBuilder` → `GapDetector` → `PipelineExecutor`) with automatic agent spawning via `GapDetector` and integration of the Clear Thought MCP for sequential reasoning at each stage. Phase 5 passed Quality Gate 7 (13/13 criteria, 100%) and introduced the `component-framework/` meta-template library (24+ templates across 6 categories) and `ComponentLoader` utility. It is documented in `docs/spec/phase5_multi_stage_pipeline.md` and guided by `docs/reference/phase5-implementation-plan.md`.
 
@@ -183,7 +183,7 @@ The following previously-existing GAIA modules were modified on this branch. The
 
 ### Open Items: Incomplete Work on This Branch
 
-The following items were identified as incomplete or deferred at the time of the most recent commit (2026-04-08). They represent work that was planned within the scope of this branch but was not completed before the branch was prepared for review. Each item should be evaluated by the merge review team to determine whether it must be completed before merge, can be tracked as a post-merge issue, or has been intentionally deferred.
+The following items were identified as incomplete or deferred at the time of the most recent commit (2026-04-09). They represent work that was planned within the scope of this branch but was not completed before the branch was prepared for review. Each item should be evaluated by the merge review team to determine whether it must be completed before merge, can be tracked as a post-merge issue, or has been intentionally deferred.
 
 1. **AgentOrchestrator not built (routing level) — RoutingAgent retains hardcoded CodeAgent default.** The `PipelineOrchestrator` (`src/gaia/pipeline/orchestrator.py`, Phase 5, commit `fa3ef98`) delivers five-stage orchestration with gap detection and is architecturally more capable than the originally-scoped AgentOrchestrator. However, the RoutingAgent's hardcoded CodeAgent fallback has not been removed. The two issues are now decoupled: pipeline-level orchestration is resolved; routing-agent-level dynamic selection remains open. Status: routing default open; pipeline orchestration resolved.
 
@@ -213,8 +213,6 @@ The following items were identified as incomplete or deferred at the time of the
    (Phase 5 — 2026-04-08 — confirmed: original 6 files unchanged. Phase 5 added 3 more files without frontmatter, bringing total to 9.)
 
 8. **GapDetector MCP runtime dependency — DOCUMENTED.** The GapDetector invokes `master-ecosystem-creator.md` (a Claude Code subagent) when gaps are detected. This creates a runtime dependency on the MCP environment. Phase 5 added: (1) runtime MCP availability check (`check_mcp_availability()` tool), (2) documentation in `config/agents/gap-detector.md` with "Runtime MCP Availability Check" section, and (3) prerequisites warning in `docs/guides/auto-spawn-pipeline.mdx`. For standalone deployments, options are: (a) pre-generate required agents manually, (b) set `auto_spawn=False` to block pipeline when gaps detected, or (c) implement alternative agent generation mechanism. Status: DOCUMENTED with graceful degradation. (Phase 6 — 2026-04-08 — CLOSED: Five MD-frontmatter registry config files added in commit 41ee396: config/agents/domain-analyzer.md, gap-detector.md, loom-builder.md, pipeline-executor.md, workflow-modeler.md. GapDetector Claude Code prerequisite documented in docs/guides/auto-spawn-pipeline.mdx.)
-
-9. **Python stage agents missing registry metadata — RESOLVED.** The 5 Python pipeline stage agents (`DomainAnalyzer`, `WorkflowModeler`, `LoomBuilder`, `PipelineExecutor`, `GapDetector`) had no MD config files for `AgentRegistry` discovery. Phase 5 update (2026-04-08) created MD config files in `config/agents/` for all 5 stages with `pipeline.entrypoint` fields pointing to Python classes and `capabilities` aligned with Python tool names. The AgentRegistry can now discover Python stage agents via MD configs. Status: RESOLVED per ADR-001 hybrid pattern.
 
 9. **Absorb PR #606 HIGH-severity conflicts during rebase (post-PR #606 merge to main).** Four HIGH-severity collision files must be manually resolved when we rebase `feature/pipeline-orchestration-v1` onto main after PR amd/gaia#606 merges: (C-1) absorb `_register_agent_memory_ops()` into our 1,144-line `_chat_helpers.py`; (C-2) absorb memory schema columns (`embedding BLOB`, `superseded_by TEXT`, `consolidated_at TEXT`) into our 787-line `database.py` `SCHEMA_SQL` constant; (C-3) absorb `AgentLoop` SSE event handlers into our 950-line `sse_handler.py`; (C-4) merge PR #606's MCP health/tool/control endpoints (+206 lines) alongside our 425-line MCP catalog router. All four follow the same resolution pattern: accept our larger module as base, absorb PR's targeted additions. Estimated effort: 3.5 engineer-hours. Owner: [us]. Status: open, blocked on PR #606 merge. See `docs/reference/pr606-integration-analysis.md` Section 4 and Section 9 P1 steps 7–10. (2026-04-08)
 
@@ -844,7 +842,7 @@ Risk levels in this document are assigned using the following criteria:
 
 ### 7.1 Commit Index
 
-All 73 branch-specific commits (`git log main..HEAD --no-merges`) are listed below in reverse chronological order (most recent first). Commits are classified by the primary category they belong to and the delivery phase they represent.
+All 74 branch-specific commits (`git log main..HEAD --no-merges`) are listed below in reverse chronological order (most recent first). Commits are classified by the primary category they belong to and the delivery phase they represent.
 
 The Phase column uses the following abbreviations:
 - **P1**: Pipeline Phase 1 — core engine foundations
@@ -861,6 +859,7 @@ The Phase column uses the following abbreviations:
 
 | Short SHA | Commit Title | Category | Phase |
 |---|---|---|---|
+| `e28a922` | docs: Resolve Open Item 5 — Update design spec coherence for Phase 5/6 | Documentation | P6 |
 | `41ee396` | feat(phase5): Complete five-stage auto-spawn pipeline implementation | Pipeline Orchestration + Documentation + Testing | P6 |
 | `fa3ef98` | feat(pipeline): add autonomous agent spawning with GapDetector | Pipeline Orchestration | P5 |
 | `f57e5ba` | test(phase5): Add Quality Gate 7 validation tests and report | Testing Infrastructure | P5 |
@@ -952,7 +951,7 @@ File counts below reflect changed or added source files as reported by `git diff
 | 11. Testing Infrastructure | `tests/` | 162 | New unit tests for all Phase 3 and Phase 4 modules; integration test fixes; MCP isolation fix; eval benchmark framework tests |
 | 12. Build, CI/CD, and Packaging | `.github/workflows/`, `util/lint.py`, `util/lint.ps1`, `pyproject.toml`, package.json files | 27 | OIDC publishing migration, merge queue fix, lint tooling for Windows, `gaia init` frontend build integration |
 
-**Total tracked in matrix:** 984 files (matches `git diff --stat` summary; includes Phase 5 and Phase 6 additions: 306,247 insertions, 73 commits)
+**Total tracked in matrix:** 984 files (matches `git diff --stat` summary; includes Phase 5 and Phase 6 additions: 306,247 insertions, 74 commits)
 
 ---
 
@@ -1040,4 +1039,4 @@ One of the six cross-cutting architectural themes in this branch. The SPC descri
 
 ---
 
-*End of document. All seven sections present: Section 1 (Header), Section 2 (Executive Summary), Section 3 (Change Matrix by Category), Section 4 (Cross-Cutting Concerns), Section 5 (Bug Fixes and Regressions Addressed), Section 6 (Risk Assessment Summary), Section 7 (Appendix). Open Items: 15 items (1–8 original; 9–15 added 2026-04-08 from PR amd/gaia#606 integration analysis); OI-7 CLOSED and OI-8 CLOSED in Phase 6 commit 41ee396 (2026-04-08); OI-4 risk reduced from HIGH to MEDIUM. Branch stats updated to 984 files, 306,247 insertions, 73 commits. See `docs/reference/pr606-integration-analysis.md` for full analysis.*
+*End of document. All seven sections present: Section 1 (Header), Section 2 (Executive Summary), Section 3 (Change Matrix by Category), Section 4 (Cross-Cutting Concerns), Section 5 (Bug Fixes and Regressions Addressed), Section 6 (Risk Assessment Summary), Section 7 (Appendix). Open Items: 15 items (1–8 original; 9–15 added 2026-04-08 from PR amd/gaia#606 integration analysis); OI-5 CLOSED in commit e28a922 (2026-04-09); OI-7 CLOSED and OI-8 CLOSED in Phase 6 commit 41ee396 (2026-04-08); OI-4 risk reduced from HIGH to MEDIUM. Branch stats updated to 984 files, 306,247 insertions, 74 commits (updated 2026-04-09). See `docs/reference/pr606-integration-analysis.md` for full analysis.*
