@@ -236,11 +236,14 @@ jobs:
       - name: Verify CLI entry point
         working-directory: src/gaia/apps/webui
         run: |
-          if [ ! -f bin/gaia-ui.mjs ]; then
-            echo "ERROR: bin/gaia-ui.mjs not found"
+          # Phase A renamed the CLI entry point from .mjs to .cjs so that
+          # both the bin entry and main.cjs can `require()` the shared
+          # services/backend-installer.cjs module (ESM/CJS can't mix).
+          if [ ! -f bin/gaia-ui.cjs ]; then
+            echo "ERROR: bin/gaia-ui.cjs not found"
             exit 1
           fi
-          node --check bin/gaia-ui.mjs
+          node --check bin/gaia-ui.cjs
           echo "CLI entry point verified"
 
       - name: Verify built app version
@@ -423,9 +426,9 @@ jobs:
 
 Download the installer for your platform from the assets below:
 
-- **Windows** — `GAIA Agent UI-*-x64-Setup.exe` (NSIS installer with auto-start option)
-- **macOS** — `GAIA Agent UI-*-arm64.dmg` (drag to Applications, Apple Silicon only)
-- **Linux** — `GAIA Agent UI-*-amd64.deb` (Debian/Ubuntu) or `GAIA Agent UI-*-x86_64.AppImage` (any distro)
+- **Windows** — `gaia-agent-ui-*-x64-setup.exe` (NSIS installer, autostart on by default)
+- **macOS** — `gaia-agent-ui-*-arm64.dmg` (drag to Applications, Apple Silicon only)
+- **Linux** — `gaia-agent-ui-*-amd64.deb` (Debian/Ubuntu) or `gaia-agent-ui-*-x86_64.AppImage` (any distro)
 
 On first launch the app sets up its Python backend automatically (~5–10 minutes for the minimal profile, depends on your internet speed).
 

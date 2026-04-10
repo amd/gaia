@@ -20,10 +20,10 @@ GAIA Agent UI is a desktop chat application that runs AI agents locally on your 
 <Tabs>
   <Tab title="Windows">
     1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
-    2. Download **`GAIA Agent UI-X.Y.Z-x64-Setup.exe`**
+    2. Download **`gaia-agent-ui-X.Y.Z-x64-setup.exe`**
     3. Double-click to run the installer
     4. Follow the wizard. Default options work for most users.
-    5. **Recommended**: leave the *"Start GAIA Agent UI when I sign in to Windows"* checkbox ON so GAIA is always available in the system tray.
+    5. GAIA will start automatically when you sign in to Windows, matching the Slack/Discord/Zoom convention. To disable, open Task Manager → Startup tab → disable "GAIA Agent UI", or use the in-app tray menu after first launch.
     6. Click **Finish** and launch GAIA from the Start Menu or desktop shortcut.
 
     <Warning>
@@ -33,7 +33,7 @@ GAIA Agent UI is a desktop chat application that runs AI agents locally on your 
 
   <Tab title="macOS">
     1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
-    2. Download **`GAIA Agent UI-X.Y.Z-arm64.dmg`** (Apple Silicon only)
+    2. Download **`gaia-agent-ui-X.Y.Z-arm64.dmg`** (Apple Silicon only)
     3. Double-click the DMG to open it
     4. Drag **GAIA Agent UI** to the Applications folder
     5. Eject the DMG and launch GAIA from Applications
@@ -47,26 +47,26 @@ GAIA Agent UI is a desktop chat application that runs AI agents locally on your 
 
   <Tab title="Linux (Debian/Ubuntu)">
     1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
-    2. Download **`GAIA Agent UI-X.Y.Z-amd64.deb`**
+    2. Download **`gaia-agent-ui-X.Y.Z-amd64.deb`**
     3. Install with apt:
        ```bash
-       sudo apt install ./GAIA\ Agent\ UI-X.Y.Z-amd64.deb
+       sudo apt install ./gaia-agent-ui-X.Y.Z-amd64.deb
        ```
-    4. Launch GAIA from your application menu, or run `gaia-ui` from a terminal
+    4. Launch GAIA from your application menu, or run `gaia-agent-ui` from a terminal
 
     Or install via the GUI: double-click the `.deb` file and your software center will install it.
   </Tab>
 
   <Tab title="Linux (other distros)">
     1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
-    2. Download **`GAIA Agent UI-X.Y.Z-x86_64.AppImage`**
+    2. Download **`gaia-agent-ui-X.Y.Z-x86_64.AppImage`**
     3. Make it executable:
        ```bash
-       chmod +x GAIA\ Agent\ UI-X.Y.Z-x86_64.AppImage
+       chmod +x gaia-agent-ui-X.Y.Z-x86_64.AppImage
        ```
     4. Double-click the AppImage to run, or run from terminal:
        ```bash
-       ./GAIA\ Agent\ UI-X.Y.Z-x86_64.AppImage
+       ./gaia-agent-ui-X.Y.Z-x86_64.AppImage
        ```
 
     AppImages are self-contained and require no installation. Move it anywhere convenient (e.g., `~/Applications/`).

@@ -3,7 +3,7 @@
 #
 # Registers the application with the desktop environment. Auto-start at
 # login is OFF by default (Debian convention, per plan §4.1); users enable
-# it via the in-app settings which writes ~/.config/autostart/gaia-ui.desktop.
+# it via the in-app settings which writes ~/.config/autostart/gaia-agent-ui.desktop.
 #
 # See docs/plans/desktop-installer.mdx §7 Phase E.
 

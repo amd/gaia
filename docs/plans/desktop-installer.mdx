@@ -167,9 +167,9 @@ The Electron app already runs as a tray application via `services/tray-manager.c
 
 | Platform | Mechanism | Default |
 |---|---|---|
-| **Windows NSIS** | `customInstall` hook writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing at `gaia-ui.exe --minimized`. No finish-page checkbox — MUI_FINISHPAGE_SHOWREADME is incompatible with electron-builder's shared install/uninstall page flow (breaks the build). Users can disable autostart via the tray menu → Settings → "Launch at login", Task Manager → Startup, or regedit. | **ON** (matches Slack/Discord/Zoom convention) |
+| **Windows NSIS** | `customInstall` hook writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing at `gaia-agent-ui.exe --minimized`. No finish-page checkbox — MUI_FINISHPAGE_SHOWREADME is incompatible with electron-builder's shared install/uninstall page flow (breaks the build). Users can disable autostart via the tray menu → Settings → "Launch at login", Task Manager → Startup, or regedit. | **ON** (matches Slack/Discord/Zoom convention) |
 | **macOS DMG** | No installer-time hook (DMG is just a copy). Default OFF; after first successful launch, the app shows a non-blocking banner: *"GAIA can start when you sign in. Enable in Settings."* User can dismiss or enable via in-app Settings → `app.setLoginItemSettings({ openAtLogin: true })`. | OFF (in-app prompt on second launch) |
-| **Linux DEB** | `postinst` does NOT write autostart by default (Debian convention). Setting available in-app, writes `~/.config/autostart/gaia-ui.desktop`. | OFF (in-app setting) |
+| **Linux DEB** | `postinst` does NOT write autostart by default (Debian convention). Setting available in-app, writes `~/.config/autostart/gaia-agent-ui.desktop`. | OFF (in-app setting) |
 | **Linux AppImage** | No installer-time hook. In-app setting only. | OFF (in-app setting) |
 
 **Why per-platform defaults differ:** Windows users expect tray apps to auto-start (Slack, Discord, Zoom). Mac users are more privacy-conscious and resent surprise auto-launch (and Apple Login Items has friction in System Settings). Debian convention frowns on packages writing to `~/.config/autostart`. The tray-app pattern still works because the user can enable it on any platform — we just don't surprise them on macOS or Linux.
@@ -221,7 +221,7 @@ Three tiers, default to keeping user data.
 |---|---|---|
 | **Windows NSIS** | Standard "Add or Remove Programs" entry. NSIS uninstaller wizard with optional "Also remove user data" checkbox that maps to `gaia uninstall --purge` | Wizard checkbox + silent flag `/PURGE=1` |
 | **macOS DMG** | **Drag the GAIA app from `/Applications` to the Trash.** This is what users already know how to do — the most familiar Mac UX. User data in `~/.gaia/` is left behind (same as every other Mac app). | Documented one-liner in README, FAQ, and release notes: `~/.gaia/venv/bin/gaia uninstall --purge` |
-| **Linux DEB** | `apt remove gaia-ui` → tier 1; `apt purge gaia-ui` → tier 3. `prerm` script stops the GAIA Agent UI Electron process only (does NOT kill the user-launched `gaia chat --ui` backend, which the user may want to keep running). `postrm` handles purge cleanup. | Native `apt purge` |
+| **Linux DEB** | `apt remove gaia-agent-ui` → tier 1; `apt purge gaia-agent-ui` → tier 3. `prerm` script stops the GAIA Agent UI Electron process only (does NOT kill the user-launched `gaia chat --ui` backend, which the user may want to keep running). `postrm` handles purge cleanup. | Native `apt purge` |
 | **Linux AppImage** | Delete the `.AppImage` file. User data orphaned (consistent with how all AppImages work). | `~/.gaia/venv/bin/gaia uninstall --purge` from CLI |
 
 ### §5.2 The unifying piece: `gaia uninstall` CLI

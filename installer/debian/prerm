@@ -13,13 +13,13 @@ set -e
 case "$1" in
     remove|upgrade|deconfigure)
         # Stop the GAIA Agent UI Electron process if it's running.
-        # Match on the exact binary name AND on the product name (the
-        # ProductName from electron-builder.yml) so we catch both the
-        # executable and its renderer/helper processes without touching
+        # Match on the binary name (gaia-agent-ui) — this catches both
+        # the main process and its renderer/helper processes (which are
+        # just re-execs of the same binary with different --type flags).
+        # We deliberately do NOT match on "gaia" alone to avoid killing
         # any `gaia` CLI processes the user may have spawned.
         if command -v pkill >/dev/null 2>&1; then
-            pkill -x "gaia-ui" 2>/dev/null || true
-            pkill -f "GAIA Agent UI" 2>/dev/null || true
+            pkill -x "gaia-agent-ui" 2>/dev/null || true
         fi
         ;;
     failed-upgrade)

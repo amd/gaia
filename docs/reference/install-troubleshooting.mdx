@@ -59,14 +59,14 @@ Subsequent launches work fully offline.
 **Windows (PowerShell)**:
 ```powershell
 $env:HTTPS_PROXY = "http://proxy.example.com:8080"
-& "$env:LOCALAPPDATA\Programs\gaia-agent-ui\GAIA Agent UI.exe"
+& "$env:LOCALAPPDATA\Programs\gaia-agent-ui\gaia-agent-ui.exe"
 ```
 
 **macOS/Linux**:
 ```bash
 HTTPS_PROXY=http://proxy.example.com:8080 open -a "GAIA Agent UI"
-# or just:
-HTTPS_PROXY=http://proxy.example.com:8080 gaia-ui
+# or just (Linux .deb / AppImage):
+HTTPS_PROXY=http://proxy.example.com:8080 gaia-agent-ui
 ```
 
 ### Antivirus interference

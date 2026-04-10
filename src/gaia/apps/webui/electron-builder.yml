@@ -11,7 +11,10 @@
 # See docs/plans/desktop-installer.mdx §7 Phase C for context.
 
 appId: ai.amd.gaia
-productName: GAIA Agent UI
+productName: GAIA Agent UI         # User-facing display name (Applications folder, Start Menu, dock, title bar)
+executableName: gaia-agent-ui      # Actual binary name — lowercase, hyphenated, no spaces
+                                   # Affects: .app/Contents/MacOS/gaia-agent-ui, gaia-agent-ui.exe,
+                                   # /usr/bin/gaia-agent-ui, deb package name, AppImage binary name
 copyright: Copyright © 2026 Advanced Micro Devices, Inc.
 
 directories:
@@ -76,7 +79,10 @@ win:
       arch:
         - x64
   icon: ../../../../installer/nsis/icon.ico
-  artifactName: ${productName}-${version}-${arch}-Setup.${ext}
+  # Lowercase, hyphenated, no spaces — avoids shell quoting pain and matches
+  # the gaia-agent-ui binary name. Display name in Add/Remove Programs is
+  # still driven by productName ("GAIA Agent UI").
+  artifactName: gaia-agent-ui-${version}-${arch}-setup.${ext}
 
 nsis:
   oneClick: false
@@ -106,7 +112,11 @@ mac:
         - arm64
   icon: ../../../../installer/macos/icon.icns
   category: public.app-category.developer-tools
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  # Lowercase filename for the .dmg — matches the gaia-agent-ui binary
+  # naming. The .app bundle INSIDE the DMG keeps its display name
+  # "GAIA Agent UI.app" from productName, so Finder / Applications folder
+  # still show the pretty name.
+  artifactName: gaia-agent-ui-${version}-${arch}.${ext}
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: ../../../../installer/macos/entitlements.mac.plist
@@ -140,21 +150,27 @@ linux:
     - target: AppImage
       arch:
         - x64
-  icon: ../../../../installer/linux/gaia-ui.png
+  icon: ../../../../installer/linux/gaia-agent-ui.png
   category: Development
+  # Lowercase hyphenated artifact name — matches gaia-agent-ui binary
+  # and the .deb package name Debian will register.
+  artifactName: gaia-agent-ui-${version}-${arch}.${ext}
   # Maintainer is required by electron-builder for .deb packages (fpm
   # propagates this into the Debian control file). Falls back to
   # `author.email` in package.json if not set, which we don't have — so
   # it must be set explicitly here. Use a project-scoped address rather
   # than a real inbox so we don't leak individual maintainer emails.
   maintainer: GAIA maintainers <gaia@amd.com>
-  artifactName: ${productName}-${version}-${arch}.${ext}
   desktop:
     entry:
       Name: GAIA Agent UI
       Comment: Privacy-first agentic AI interface for AMD Ryzen AI
       Categories: Development;Utility;
-      StartupWMClass: GAIA Agent UI
+      # StartupWMClass must match the X11 WM_CLASS the app reports at
+      # runtime. Electron derives WM_CLASS from the executable basename
+      # by default, so with executableName: gaia-agent-ui this becomes
+      # "gaia-agent-ui". Getting this wrong breaks taskbar icon grouping.
+      StartupWMClass: gaia-agent-ui
 
 deb:
   depends:
@@ -176,4 +192,4 @@ deb:
     - "--after-remove=../../../../installer/debian/postrm"
 
 appImage:
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: gaia-agent-ui-${version}-${arch}.${ext}

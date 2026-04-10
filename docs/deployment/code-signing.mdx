@@ -98,7 +98,7 @@ The `build-installers.yml` workflow's signing step is gated on **both** secrets 
 3. Watch for the **Sign Windows installer (SignPath)** step — it should now upload the `.exe` to SignPath, wait for signing, and download the signed artifact back
 4. Download the artifact and verify it's signed:
    ```powershell
-   signtool verify /pa /v "GAIA Agent UI-0.17.2-rc.1-x64-Setup.exe"
+   signtool verify /pa /v gaia-agent-ui-0.17.2-rc.1-x64-setup.exe
    ```
 
 ## macOS: Apple Developer ID setup
@@ -171,8 +171,8 @@ When `notarize` is `true` (or unset) and the Apple credentials are present, elec
 3. Download the signed `.dmg`
 4. Verify it's signed and notarized:
    ```bash
-   spctl --assess -vv "GAIA Agent UI-0.17.2-rc.1-arm64.dmg"
-   # Should print: GAIA Agent UI-0.17.2-rc.1-arm64.dmg: accepted
+   spctl --assess -vv gaia-agent-ui-0.17.2-rc.1-arm64.dmg
+   # Should print: gaia-agent-ui-0.17.2-rc.1-arm64.dmg: accepted
    #               source=Notarized Developer ID
    ```
 
