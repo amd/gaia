@@ -5,6 +5,10 @@ description: One-command installation and self-update system for GAIA
 
 # GAIA Installer & Update System
 
+<Note>
+**See also:** [`desktop-installer.mdx`](./desktop-installer) for the Electron desktop app installer (the recommended install path for end users). This document covers the Python CLI install path for developers and headless deployments.
+</Note>
+
 <Info>
 **Status:** In Progress
 `gaia init` implemented • Install scripts & `gaia update` planned
@@ -86,7 +90,7 @@ curl -fsSL https://amd-gaia.ai/install.sh | sh
 **Script Structure:**
 
 ```text
-# scripts/install.ps1
+# installer/scripts/install.ps1
 $ErrorActionPreference = "Stop"
 $GAIA_HOME = "$env:USERPROFILE\.gaia"
 $GAIA_VENV = "$GAIA_HOME\venv"
@@ -170,8 +174,8 @@ main "$@"
 
 | File | Description |
 |------|-------------|
-| `scripts/install.ps1` | Windows PowerShell installer |
-| `scripts/install.sh` | Linux bash installer |
+| `installer/scripts/install.ps1` | Windows PowerShell installer |
+| `installer/scripts/install.sh` | Linux bash installer |
 
 ---
 
@@ -414,6 +418,38 @@ gaia_1.0.0-1_amd64.deb
 
 ---
 
+## Additional Commands
+
+### `gaia uninstall` (Implemented)
+
+**Status:** Implemented in `src/gaia/installer/uninstall_command.py`.
+**Used by:** every desktop installer platform (NSIS uninstaller, macOS drag-to-Trash
+helper docs, Debian `postrm`, AppImage docs) delegates its Python-side cleanup to
+this single command. See [`docs/plans/desktop-installer.mdx`](./desktop-installer.mdx) §5.2.
+
+Tiered cleanup of the GAIA Python install. The command intentionally does nothing
+without a flag — the Electron app uninstaller is responsible for removing the app
+binaries and shortcuts (Tier 1); this CLI only owns the shared Python state under
+`~/.gaia/` and the Lemonade cache.
+
+```bash
+gaia uninstall                    # Tier 1: print what we'd remove (no-op without flags)
+gaia uninstall --venv             # Tier 2: also remove ~/.gaia/venv/
+gaia uninstall --purge            # Tier 3: remove venv + chat + documents + electron config + install logs
+gaia uninstall --purge --purge-lemonade   # Also uninstall Lemonade Server (opt-in, best-effort)
+gaia uninstall --purge --purge-models     # Also remove ~/.cache/lemonade/models/ (opt-in)
+gaia uninstall --dry-run --purge  # Preview every path that would be deleted, touch nothing
+gaia uninstall --purge --yes      # Skip confirmation (CI / scripted / silent NSIS uninstall)
+```
+
+Behavior details:
+- Confirmation prompts are skipped automatically when stdin is not a TTY, so silent
+  NSIS uninstall and Debian `postrm` flows work without passing `--yes`.
+- `--purge-lemonade` and `--purge-models` require `--purge`; using them alone errors out.
+- `~/.gaia/` itself is never removed (other tools store config there).
+- `~/.cache/lemonade/` itself is never removed (only the `models/` subdirectory).
+- Exit codes: `0` success / dry-run / no-op, `1` user abort, `2` filesystem error.
+
 ## Additional Commands (Future)
 
 ### `gaia doctor`
@@ -434,13 +470,6 @@ GAIA System Diagnostics
 All checks passed!
 ```
 
-### `gaia uninstall`
-
-```bash
-gaia uninstall          # Remove GAIA (keep data)
-gaia uninstall --purge  # Remove everything including models
-```
-
 ---
 
 ## Implementation Order
@@ -448,8 +477,8 @@ gaia uninstall --purge  # Remove everything including models
 ### Phase 1: Install Scripts (Priority: High)
 
 **Deliverables:**
-- `scripts/install.ps1` - Windows PowerShell installer
-- `scripts/install.sh` - Linux bash installer
+- `installer/scripts/install.ps1` - Windows PowerShell installer
+- `installer/scripts/install.sh` - Linux bash installer
 - Host scripts (GitHub raw initially, amd-gaia.ai later)
 - Update quickstart documentation
 
@@ -489,11 +518,12 @@ gaia uninstall --purge  # Remove everything including models
 
 **Deliverables:**
 - `gaia doctor` - System diagnostics
-- `gaia uninstall` - Clean removal
 - Homebrew formula (cross-platform)
 - Scoop manifest (Windows developers)
 
 **Dependencies:** Phases 1-4
+
+**Note:** `gaia uninstall` was promoted to "Implemented" in the section above as part of the desktop installer plan ([`desktop-installer.mdx`](./desktop-installer.mdx)).
 
 ---
 
@@ -519,7 +549,7 @@ These questions should be resolved before implementation begins.
 
 **Options:**
 - **A:** `https://amd-gaia.ai/install.ps1` - Requires DNS/hosting setup
-- **B:** `https://raw.githubusercontent.com/amd/gaia/main/scripts/install.ps1` - Works immediately
+- **B:** `https://raw.githubusercontent.com/amd/gaia/main/installer/scripts/install.ps1` - Works immediately
 
 **Recommendation:** Start with GitHub raw (B), migrate to amd-gaia.ai later.
 

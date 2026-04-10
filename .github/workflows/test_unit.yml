@@ -55,7 +55,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system pytest pytest-cov pytest-asyncio
+          # pyfakefs is required by tests/unit/installer/test_uninstall_command.py
+          # which uses the `fs` fixture to build a fake filesystem for testing
+          # tiered uninstall logic cross-platform without touching the real FS.
+          uv pip install --system pytest pytest-cov pytest-asyncio pyfakefs
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity

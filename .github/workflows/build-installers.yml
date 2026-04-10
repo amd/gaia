@@ -1,0 +1,374 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Builds desktop installers (NSIS .exe, DMG, DEB, AppImage) on release tags
+# and uploads them to the GitHub Release.
+#
+# Trigger: tag push (v*), manual workflow_dispatch, or reusable workflow_call
+# from publish.yml (after the single approval gate — integration TBD).
+#
+# Per docs/plans/desktop-installer.mdx §7 Phase G and §9 output matrix.
+#
+# Design notes:
+#   • Runs WITHOUT any secrets — produces unsigned installers for free.
+#   • Code signing is opt-in via secret presence (env-driven).
+#     - Windows: SignPath (Phase H) via SIGNPATH_API_TOKEN.
+#     - macOS:   Apple Developer ID via APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD
+#                + APPLE_TEAM_ID + CSC_LINK + CSC_KEY_PASSWORD.
+#   • macos-latest is Apple Silicon (arm64). Intel requires macos-13 or older.
+#   • fail-fast is disabled so one platform failure doesn't abort the others.
+#   • concurrency.cancel-in-progress=false — mid-build cancels waste CI minutes.
+#   • latest*.yml + .blockmap files are uploaded alongside installers so
+#     electron-updater can detect updates and apply delta patches.
+#   • When triggered by a direct tag push, the GitHub Release is created as
+#     DRAFT to avoid leaking releases before publish.yml's single approval
+#     gate passes. The publish.yml integration (follow-up PR) will promote
+#     the draft to a non-draft release once approval completes.
+
+name: Build Installers
+
+on:
+  # Note: there is intentionally NO `push: tags: v*` trigger.
+  # `publish.yml` is the canonical entry point for tagged releases — it
+  # invokes this workflow via `workflow_call` after the validate step,
+  # then gates publishing on a single approval. Adding a direct `push`
+  # trigger here would cause two concurrent runs of this workflow on
+  # every tag push (one direct, one from publish.yml), racing on the
+  # same draft GitHub Release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (leave blank to build HEAD without publishing to a release)'
+        required: false
+        default: ''
+      publish_to_release:
+        description: 'Upload artifacts to the GitHub Release matching the tag'
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Tag to build'
+        required: false
+        type: string
+        default: ''
+      publish_to_release:
+        description: 'Upload artifacts to the GitHub Release matching the tag'
+        required: false
+        type: boolean
+        default: false
+    # Explicit secret declarations. Callers (publish.yml) must forward
+    # each one explicitly via `secrets:` — we intentionally do NOT use
+    # `secrets: inherit` on the caller side so forks / PRs can't leak
+    # unrelated repo secrets into this reusable workflow. Each secret
+    # is optional; missing secrets degrade to an unsigned build.
+    secrets:
+      SIGNPATH_API_TOKEN:
+        required: false
+      SIGNPATH_ORG_ID:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      CSC_LINK:
+        required: false
+      CSC_KEY_PASSWORD:
+        required: false
+  # Validate installer builds on any PR that touches installer-related files.
+  # Gated on paths so normal PRs don't pay the ~15min cross-platform build cost.
+  # This catches electron-builder config drift, entitlement breakage, NSIS
+  # script errors, etc. BEFORE they land on main.
+  pull_request:
+    paths:
+      - '.github/workflows/build-installers.yml'
+      - 'installer/**'
+      - 'src/gaia/apps/webui/electron-builder.yml'
+      - 'src/gaia/apps/webui/package.json'
+      - 'src/gaia/apps/webui/package-lock.json'
+      - 'src/gaia/apps/webui/main.cjs'
+      - 'src/gaia/apps/webui/bin/**'
+      - 'src/gaia/apps/webui/services/**'
+
+# Least-privilege default. Only the release-upload step needs `contents:
+# write`, and it's gated behind `inputs.publish_to_release` — which is
+# false for PR triggers, so fork PRs can never get elevated write access
+# via this workflow. The `build` job below redeclares `contents: read`
+# explicitly for clarity; `id-token: write` stays because SignPath's
+# OIDC handshake needs it even on unsigned PR builds (the step itself
+# is still gated on secret presence).
+permissions:
+  contents: read
+  id-token: write  # SignPath OIDC (Phase H)
+
+concurrency:
+  # PR runs should cancel-in-progress to avoid burning ~45 CI minutes per
+  # push on stale builds. Tag/release runs and manual dispatches must
+  # NOT cancel — a mid-build cancel on a release tag leaves the draft
+  # release in a partial state.
+  group: build-installers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }} installer
+    runs-on: ${{ matrix.runner }}
+    # Build job is strictly read-only — it produces workflow-run artifacts
+    # that callers (publish.yml) download and re-upload. The opt-in
+    # GitHub Release upload step elevates with a per-step token (see the
+    # `softprops/action-gh-release` step and its `inputs.publish_to_release`
+    # gate, which is false for any PR trigger).
+    permissions:
+      contents: read
+      id-token: write  # SignPath OIDC — step is still secret-gated
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-latest
+            npm_script: package:win
+            artifacts: |
+              src/gaia/apps/webui/dist-app/*.exe
+              src/gaia/apps/webui/dist-app/*.exe.blockmap
+              src/gaia/apps/webui/dist-app/latest.yml
+          - platform: macos
+            runner: macos-latest  # Apple Silicon (arm64)
+            npm_script: package:mac
+            artifacts: |
+              src/gaia/apps/webui/dist-app/*.dmg
+              src/gaia/apps/webui/dist-app/*.dmg.blockmap
+              src/gaia/apps/webui/dist-app/latest-mac.yml
+          - platform: linux
+            runner: ubuntu-latest
+            npm_script: package:linux
+            artifacts: |
+              src/gaia/apps/webui/dist-app/*.deb
+              src/gaia/apps/webui/dist-app/*.AppImage
+              src/gaia/apps/webui/dist-app/*.blockmap
+              src/gaia/apps/webui/dist-app/latest-linux.yml
+
+    # Job-level env so that step-level `if:` conditions can reference
+    # secret-derived values (secrets cannot be used in `if:` directly,
+    # and step-level `env:` is NOT visible to that step's own `if:` —
+    # only workflow- and job-level env are). Any secret that gates a
+    # step via `env.X != ''` MUST be declared here. Empty strings are
+    # fine when the secret is not set — the step is then silently
+    # skipped, which is the intended opt-in-by-secret-presence behavior.
+    env:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # full history for any version calculations
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/gaia/apps/webui/package-lock.json
+
+      # electron + electron-builder download sizeable binaries (Electron runtime,
+      # code-signing helpers, etc.). Caching them saves ~1–2 min per run per
+      # platform. Cross-runner cache paths are listed together — actions/cache
+      # silently skips paths that don't exist on the current runner.
+      - name: Cache electron + electron-builder
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: ${{ matrix.platform }}-electron-${{ hashFiles('src/gaia/apps/webui/package-lock.json') }}
+          restore-keys: |
+            ${{ matrix.platform }}-electron-
+
+      - name: Install npm dependencies
+        working-directory: src/gaia/apps/webui
+        shell: bash
+        run: npm ci
+
+      - name: Build frontend (Vite)
+        working-directory: src/gaia/apps/webui
+        shell: bash
+        run: npm run build
+
+      # ─── Code signing config (opt-in by secret presence) ─────────────
+      - name: Detect Windows code signing
+        if: matrix.platform == 'windows' && env.SIGNPATH_API_TOKEN != ''
+        shell: bash
+        run: |
+          echo "SignPath token detected — Windows installer will be signed."
+          echo "NOTE: SignPath action integration lands in Phase H."
+
+      - name: Detect macOS code signing
+        if: matrix.platform == 'macos' && env.APPLE_ID != ''
+        shell: bash
+        run: |
+          echo "Apple Developer ID detected — electron-builder will sign + notarize."
+          echo "CSC_LINK / CSC_KEY_PASSWORD are read automatically by electron-builder."
+
+      # ─── Build the installer ────────────────────────────────────────
+      - name: Build installer
+        working-directory: src/gaia/apps/webui
+        shell: bash
+        env:
+          # GH_TOKEN is needed by electron-builder's publish step when the
+          # `publish` field is set in electron-builder.yml. We pass the
+          # workflow token but DO NOT publish here — we upload via
+          # softprops/action-gh-release in a later step. `publish: never`
+          # is implied by the CLI flag below.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # On macOS, only auto-discover signing identity when APPLE_ID is set.
+          # Otherwise force-disable auto-discovery so electron-builder doesn't
+          # try to sign with a random keychain cert on CI runners.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ env.APPLE_ID != '' && 'true' || 'false' }}
+        # --publish never: we upload artifacts ourselves via action-gh-release.
+        run: npm run ${{ matrix.npm_script }} -- --publish never
+
+      # ─── Inspect build output ───────────────────────────────────────
+      - name: List build artifacts
+        if: always()
+        working-directory: src/gaia/apps/webui
+        shell: bash
+        run: |
+          echo "=== dist-app/ contents ==="
+          if [ -d dist-app ]; then
+            ls -lh dist-app/ || true
+            echo ""
+            echo "=== Artifact sizes ==="
+            find dist-app -maxdepth 1 -type f \
+              \( -name "*.exe" -o -name "*.dmg" -o -name "*.deb" \
+                 -o -name "*.AppImage" -o -name "*.blockmap" \
+                 -o -name "*.yml" \) \
+              -exec ls -lh {} \; || true
+          else
+            echo "(dist-app/ does not exist — build may have failed)"
+          fi
+
+      # ─── Upload to workflow run (always, for debugging) ─────────────
+      # NOTE: this step MUST run before the SignPath step below, because
+      # SignPath references its artifact-id output (`steps.upload-artifacts.
+      # outputs.artifact-id`) to know which artifact to fetch, sign, and
+      # write back. Reordering these two steps will silently break Windows
+      # signing.
+      - name: Upload artifacts to workflow run
+        id: upload-artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.platform }}-installer
+          path: ${{ matrix.artifacts }}
+          retention-days: 14
+          if-no-files-found: error
+
+      # ─── SignPath signing (Phase H — opt-in via secrets) ────────────
+      # This step uploads the unsigned NSIS .exe to SignPath for code
+      # signing, then downloads the signed artifact back over the same
+      # filename. SignPath OSS is free for open-source projects:
+      # https://signpath.io/solutions/open-source-community
+      #
+      # Required GitHub Action secrets (set up once via SignPath onboarding):
+      #   SIGNPATH_API_TOKEN  — issued by SignPath after OSS approval
+      #   SIGNPATH_ORG_ID     — your SignPath organization UUID
+      #
+      # Until both secrets are set, this step is silently skipped and the
+      # NSIS installer ships unsigned. End-users see a SmartScreen
+      # warning the first time they run an unsigned installer; the
+      # troubleshooting guide documents the bypass step.
+      #
+      # Ordering: this step runs AFTER `Upload artifacts to workflow run`
+      # so that step's `id: upload-artifacts` output is populated before
+      # we read `steps.upload-artifacts.outputs.artifact-id`.
+      - name: Sign Windows installer (SignPath)
+        # Both env vars are sourced from the job-level env: block (which
+        # reads the secrets). GitHub Actions only exposes workflow- and
+        # job-level env to a step's `if:` expression — step-level env is
+        # evaluated AFTER `if:`, which is why we can't inline the secret
+        # forwarding here.
+        if: matrix.platform == 'windows' && env.SIGNPATH_API_TOKEN != '' && env.SIGNPATH_ORG_ID != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ env.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORG_ID }}
+          project-slug: gaia-agent-ui
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: gaia-installer
+          github-artifact-id: ${{ steps.upload-artifacts.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: src/gaia/apps/webui/dist-app/
+
+  # ─── Publish job (opt-in, non-PR only) ──────────────────────────────
+  # Split out from the build job so `contents: write` can be granted at
+  # the job level to ONLY this job. Fork PRs never reach this job:
+  #   1. `inputs.publish_to_release` is false for any workflow_call from
+  #      publish.yml, and a pull_request trigger can't set workflow_call
+  #      inputs at all.
+  #   2. The event-type gate below blocks pull_request runs outright as
+  #      a defense-in-depth measure.
+  # The previous in-build step required a job-wide `contents: write`
+  # grant that then applied to every PR matrix run, which is what we're
+  # fixing here.
+  publish-release-assets:
+    name: Publish assets for ${{ matrix.platform }}
+    needs: build
+    if: >-
+      github.event_name != 'pull_request' &&
+      inputs.publish_to_release == true &&
+      inputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows, macos, linux]
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ matrix.platform }}-installer
+          path: release-assets
+      - name: Upload to GitHub Release (draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          draft: true
+          prerelease: ${{ contains(inputs.tag, '-rc.') || contains(inputs.tag, '-beta.') }}
+
+  # ─── Gate job ───────────────────────────────────────────────────────
+  # Final job that confirms all platform builds succeeded. This is the
+  # single dependency that publish.yml (or any caller) should wait on.
+  build-complete:
+    name: Build complete
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+    steps:
+      - name: Verify all platform builds succeeded
+        shell: bash
+        run: |
+          result="${{ needs.build.result }}"
+          echo "Matrix build result: $result"
+          if [ "$result" != "success" ]; then
+            echo "::error::One or more platform installer builds failed"
+            exit 1
+          fi
+          echo "All platform installers built successfully."

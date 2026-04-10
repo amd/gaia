@@ -12,7 +12,7 @@ interface WelcomeScreenProps {
     onCreateAgent?: () => void;
 }
 
-const TITLE_TEXT = 'GAIA Agent UI';
+const TITLE_TEXT = 'GAIA';
 const SUBTITLE_TEXT = 'Your private AI assistant, running 100% locally on AMD Ryzen AI';
 const TITLE_SPEED = 65; // ms per character
 const TITLE_SUBTITLE_PAUSE = 350; // ms pause between title and subtitle

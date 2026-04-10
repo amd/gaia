@@ -1,0 +1,180 @@
+---
+title: 'Install GAIA'
+description: 'Download and install GAIA on Windows, macOS, or Linux. The recommended way to get GAIA running on your machine.'
+icon: 'download'
+---
+
+<Note>
+GAIA is a desktop chat application that runs AI agents locally on your machine. This is the recommended install method for most users. For the developer / CLI install path, see the [Python CLI install plan](/plans/installer).
+</Note>
+
+## What you'll need
+
+- A computer running **Windows 10/11**, **macOS 14+** (Apple Silicon), or **Linux** (Debian/Ubuntu/Fedora/Arch)
+- **5 GB** of free disk space (for the app + Python environment + minimal model)
+- An **internet connection** for the first launch (the app downloads its Python backend automatically)
+- About **10 minutes** total: ~30 seconds to download, ~10 seconds to install, ~5–10 minutes for the first-launch backend setup
+
+## Download
+
+<Tabs>
+  <Tab title="Windows">
+    1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
+    2. Download **`gaia-agent-ui-X.Y.Z-x64-setup.exe`**
+    3. Double-click to run the installer
+    4. Follow the wizard. Default options work for most users.
+    5. GAIA will start automatically when you sign in to Windows, matching the Slack/Discord/Zoom convention. To disable, open Task Manager → Startup tab → disable "GAIA", or use the in-app tray menu after first launch.
+    6. Click **Finish** and launch GAIA from the Start Menu or desktop shortcut.
+
+    <Warning>
+    The first time you run an unsigned installer, Windows SmartScreen may show a "Windows protected your PC" warning. Click **More info** → **Run anyway**. (We're working on Windows code signing — see [troubleshooting](/reference/install-troubleshooting#smartscreen).)
+    </Warning>
+  </Tab>
+
+  <Tab title="macOS">
+    1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
+    2. Download **`gaia-agent-ui-X.Y.Z-arm64.dmg`** (Apple Silicon only)
+    3. Double-click the DMG to open it
+    4. Drag **GAIA** to the Applications folder
+    5. Eject the DMG and launch GAIA from Applications
+
+    <Warning>
+    On first launch, macOS Gatekeeper may show "GAIA cannot be opened because the developer cannot be verified." Right-click the app and choose **Open**, then click **Open** in the dialog. (We're working on Apple notarization — see [troubleshooting](/reference/install-troubleshooting#gatekeeper).)
+    </Warning>
+
+    Intel Macs are not currently supported.
+  </Tab>
+
+  <Tab title="Linux (Debian/Ubuntu)">
+    1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
+    2. Download **`gaia-agent-ui-X.Y.Z-amd64.deb`**
+    3. Install with apt:
+       ```bash
+       sudo apt install ./gaia-agent-ui-X.Y.Z-amd64.deb
+       ```
+    4. Launch GAIA from your application menu, or run `gaia-desktop` from a terminal
+
+    Or install via the GUI: double-click the `.deb` file and your software center will install it.
+  </Tab>
+
+  <Tab title="Linux (other distros)">
+    1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
+    2. Download **`gaia-agent-ui-X.Y.Z-x86_64.AppImage`**
+    3. Make it executable:
+       ```bash
+       chmod +x gaia-agent-ui-X.Y.Z-x86_64.AppImage
+       ```
+    4. Double-click the AppImage to run, or run from terminal:
+       ```bash
+       ./gaia-agent-ui-X.Y.Z-x86_64.AppImage
+       ```
+
+    AppImages are self-contained and require no installation. Move it anywhere convenient (e.g., `~/Applications/`).
+  </Tab>
+</Tabs>
+
+## First-launch setup
+
+The first time you launch GAIA, it automatically sets up its Python backend. You'll see a progress dialog with these stages:
+
+1. **Pre-flight checks** (~5 seconds) — verifies free disk space and network connectivity
+2. **Download `uv`** (~30 seconds) — installs the `uv` Python package manager
+3. **Create Python environment** (~30 seconds) — downloads Python 3.12 and creates a virtualenv at `~/.gaia/venv/`
+4. **Install GAIA backend** (~3-5 minutes) — installs the `amd-gaia[ui]` Python package and its dependencies
+5. **Download minimal model** (~2-3 minutes) — fetches the Qwen3-0.6B model via Lemonade Server
+6. **Verify** (~5 seconds) — runs a quick test to confirm everything works
+
+Total: about 5-10 minutes the first time, depending on your internet speed. **Subsequent launches are instant** — the app reuses the installed environment.
+
+### What if it fails?
+
+If the install fails, you'll see an error dialog with:
+- A short explanation of what went wrong
+- A **Retry** button
+- A **Manual install instructions** link to the troubleshooting guide
+- A **Quit** button
+
+The full install log is at `~/.gaia/electron-install.log` — attach it when reporting issues.
+
+See the [installation troubleshooting guide](/reference/install-troubleshooting) for common failure modes.
+
+## Updating GAIA
+
+GAIA checks for updates automatically:
+- 10 seconds after launch
+- Every 4 hours while running
+
+When an update is available, you'll see a small "update available" indicator in the status bar. The update downloads silently in the background. When ready, GAIA prompts you to **Restart now** or **Later**. Your chat history is preserved across updates.
+
+To disable auto-updates, set the environment variable `GAIA_DISABLE_UPDATE=1` before launching.
+
+## Uninstalling
+
+GAIA follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
+
+### Windows
+**Settings → Apps → Installed apps → GAIA → Uninstall**
+
+This removes the app, the Start Menu / Desktop shortcuts, and the autostart registry entry. It does **not** touch `~/.gaia/`. To also remove your data, open a terminal (PowerShell or `cmd`) and run:
+```powershell
+~\.gaia\venv\Scripts\gaia uninstall --purge
+```
+
+### macOS
+Drag the **GAIA** app from Applications to the Trash. Empty the Trash.
+
+To also remove your data, run from a terminal:
+```bash
+~/.gaia/venv/bin/gaia uninstall --purge
+```
+
+### Linux (Debian/Ubuntu)
+```bash
+sudo apt remove gaia-desktop
+```
+
+To also remove your data, use `apt purge` instead:
+```bash
+sudo apt purge gaia-desktop
+```
+
+### Linux (AppImage)
+Delete the `.AppImage` file. To also remove your data:
+```bash
+~/.gaia/venv/bin/gaia uninstall --purge
+```
+
+### Tiered cleanup with `gaia uninstall`
+
+The CLI lets you escalate cleanup as far as you want — useful for reclaiming disk or fully resetting:
+```bash
+gaia uninstall --dry-run                    # Preview what would be removed
+gaia uninstall --venv                       # Just the Python env
+gaia uninstall --purge                      # Venv + chats + documents + config
+gaia uninstall --purge --purge-lemonade     # Also remove Lemonade Server install
+gaia uninstall --purge --purge-models       # Also remove downloaded Lemonade models
+gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
+```
+
+## Where things live
+
+| What | Location |
+|---|---|
+| Electron app | Platform-specific (Program Files / /Applications / /opt/GAIA) |
+| Python environment | `~/.gaia/venv/` |
+| Chat database | `~/.gaia/chat/chat.db` |
+| Uploaded documents | `~/.gaia/documents/` |
+| Configuration | `~/.gaia/electron-config.json` |
+| Logs | `~/.gaia/gaia.log`, `~/.gaia/electron-install.log` |
+| Models (managed by Lemonade) | `~/.cache/lemonade/models/` |
+
+## Privacy
+
+GAIA runs entirely on your machine. **No data is sent externally** beyond the package downloads during install. There is no telemetry, no crash reporting, no usage analytics. See the [FAQ](/reference/faq) for more.
+
+## Next steps
+
+- [Quickstart](/quickstart) — your first conversation with a GAIA agent
+- [Chat with your documents](/guides/chat) — RAG-powered Q&A
+- [Troubleshooting](/reference/install-troubleshooting) — install failure modes and fixes
+- [FAQ](/reference/faq) — common questions

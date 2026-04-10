@@ -424,7 +424,7 @@ std::string LemonadeClient::chatCompletions(const json& requestBody, int timeout
                         "  Restart Lemonade with a larger context:\n" +
                         "    lemonade-server serve --ctx-size 32768\n" +
                         "  or via the helper script:\n" +
-                        "    .\\scripts\\start-lemonade.ps1 -CtxSize 32768";
+                        "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
                 } else if (!msg.empty()) {
                     errMsg = msg;
                 }
@@ -561,7 +561,7 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
                             "  Restart Lemonade with a larger context:\n" +
                             "    lemonade-server serve --ctx-size 32768\n" +
                             "  or via the helper script:\n" +
-                            "    .\\scripts\\start-lemonade.ps1 -CtxSize 32768";
+                            "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
                     } else if (!msg.empty()) {
                         errMsg = msg;
                     }

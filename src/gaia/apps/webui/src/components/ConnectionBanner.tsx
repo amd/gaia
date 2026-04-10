@@ -95,7 +95,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                     <WifiOff size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    Cannot connect to GAIA Agent UI server.{' '}
+                    Cannot connect to GAIA server.{' '}
                     <span className="connection-banner__hint">
                         Start it with: <code>gaia chat --ui</code>
                     </span>

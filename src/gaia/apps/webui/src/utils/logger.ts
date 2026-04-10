@@ -117,7 +117,7 @@ export const log = {
 /** Log app startup banner */
 export function logBanner(version: string) {
     console.log(
-        '%c GAIA Agent UI %c v' + version + ' %c Local AI Desktop',
+        '%c GAIA %c v' + version + ' %c Local AI Desktop',
         'background: #E23C40; color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px 0 0 4px;',
         'background: #333; color: #fff; padding: 4px 8px;',
         'background: #1a1a1a; color: #888; padding: 4px 8px; border-radius: 0 4px 4px 0;',

@@ -949,7 +949,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         'Then try sending your message again.' + issueFooter;
                 } else if (err instanceof TypeError || msg.includes('fetch') || msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
                     errorContent =
-                        'Cannot connect to the GAIA Agent UI server. Make sure the backend is running:\n\n' +
+                        'Cannot connect to the GAIA server. Make sure the backend is running:\n\n' +
                         '```\ngaia chat --ui\n```' + issueFooter;
                 } else if (msg.includes('500')) {
                     errorContent =
