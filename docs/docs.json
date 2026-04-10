@@ -55,6 +55,7 @@
             "pages": [
               "setup",
               "quickstart",
+              "guides/install",
               "guides/agent-ui",
               {
                 "group": "User Guides",
@@ -314,6 +315,7 @@
             "pages": [
               "glossary",
               "reference/faq",
+              "reference/install-troubleshooting",
               "reference/troubleshooting"
             ]
           }
@@ -353,6 +355,7 @@
             "pages": [
               "plans/agent-hub",
               "plans/installer",
+              "plans/desktop-installer",
               "plans/agent-ui",
               "plans/mcp-client",
               "plans/cua",
