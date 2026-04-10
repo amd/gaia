@@ -110,10 +110,15 @@ To disable auto-updates, set the environment variable `GAIA_DISABLE_UPDATE=1` be
 
 ## Uninstalling
 
+GAIA Agent UI follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
+
 ### Windows
 **Settings → Apps → Installed apps → GAIA Agent UI → Uninstall**
 
-The uninstaller offers an optional checkbox to also remove your data (chats, documents, settings).
+This removes the app, the Start Menu / Desktop shortcuts, and the autostart registry entry. It does **not** touch `~/.gaia/`. To also remove your data, open a terminal (PowerShell or `cmd`) and run:
+```powershell
+~\.gaia\venv\Scripts\gaia uninstall --purge
+```
 
 ### macOS
 Drag the **GAIA Agent UI** app from Applications to the Trash. Empty the Trash.
@@ -125,12 +130,12 @@ To also remove your data, run from a terminal:
 
 ### Linux (Debian/Ubuntu)
 ```bash
-sudo apt remove gaia-ui
+sudo apt remove gaia-agent-ui
 ```
 
 To also remove your data, use `apt purge` instead:
 ```bash
-sudo apt purge gaia-ui
+sudo apt purge gaia-agent-ui
 ```
 
 ### Linux (AppImage)
@@ -139,11 +144,23 @@ Delete the `.AppImage` file. To also remove your data:
 ~/.gaia/venv/bin/gaia uninstall --purge
 ```
 
+### Tiered cleanup with `gaia uninstall`
+
+The CLI lets you escalate cleanup as far as you want — useful for reclaiming disk or fully resetting:
+```bash
+gaia uninstall --dry-run                    # Preview what would be removed
+gaia uninstall --venv                       # Just the Python env
+gaia uninstall --purge                      # Venv + chats + documents + config
+gaia uninstall --purge --purge-lemonade     # Also remove Lemonade Server install
+gaia uninstall --purge --purge-models       # Also remove downloaded Lemonade models
+gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
+```
+
 ## Where things live
 
 | What | Location |
 |---|---|
-| Electron app | Platform-specific (Program Files / /Applications / /usr/lib/gaia-ui) |
+| Electron app | Platform-specific (Program Files / /Applications / /usr/lib/gaia-agent-ui) |
 | Python environment | `~/.gaia/venv/` |
 | Chat database | `~/.gaia/chat/chat.db` |
 | Uploaded documents | `~/.gaia/documents/` |

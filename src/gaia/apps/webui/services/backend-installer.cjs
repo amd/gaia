@@ -52,9 +52,50 @@ const GAIA_PYTHON_BIN = IS_WINDOWS
 const STATE_FILE = path.join(GAIA_HOME, "electron-install-state.json");
 const LOG_FILE = path.join(GAIA_HOME, "electron-install.log");
 
-const MIN_DISK_SPACE_BYTES = 3 * 1024 * 1024 * 1024; // 3 GB
-const NETWORK_CHECK_URL = "https://astral.sh";
+// 5 GB — PyTorch wheels have grown significantly and `gaia init` downloads
+// additional model data on first run; 3 GB is no longer enough headroom.
+const MIN_DISK_SPACE_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
+const NETWORK_CHECK_HOSTS = Object.freeze([
+  "https://pypi.org/simple/",
+  "https://astral.sh",
+]);
 const NETWORK_CHECK_TIMEOUT_MS = 5000;
+
+// ── Pinned uv release ────────────────────────────────────────────────────────
+//
+// We download a specific uv release tarball/zip from GitHub and verify its
+// SHA256 against the list published in the release's `sha256.sum` file.
+// This avoids piping an unversioned `astral.sh/uv/install.{ps1,sh}` script
+// straight to a shell on first run — matching how GAIA pins every other
+// dependency. SHA256s below were taken from:
+//   https://github.com/astral-sh/uv/releases/download/0.11.6/sha256.sum
+//
+// To update: bump UV_PINNED_VERSION, re-run that URL, and paste the new
+// hashes here. Keep the target names aligned with uv's asset naming
+// (see https://github.com/astral-sh/uv/releases).
+const UV_PINNED_VERSION = "0.11.6";
+
+/**
+ * Map of `<rust-target>` → SHA256 of the corresponding release asset
+ * (tar.gz on POSIX, zip on Windows). Only targets we actively support
+ * from the Electron app are listed; extend as needed.
+ */
+const UV_ASSET_SHA256 = Object.freeze({
+  "aarch64-apple-darwin":
+    "4b69a4e366ec38cd5f305707de95e12951181c448679a00dce2a78868dfc9f5b",
+  "x86_64-apple-darwin":
+    "8e0ed5035eaa28c7c8cd2a46b5b9a05bfff1ef01dbdc090a010eb8fdf193a457",
+  "x86_64-unknown-linux-gnu":
+    "0c6bab77a67a445dc849ed5e8ee8d3cb333b6e2eba863643ce1e228075f27943",
+  "aarch64-unknown-linux-gnu":
+    "d5be4bf7015ea000378cb3c3aba53ba81a8673458ace9c7fa25a0be005b74802",
+  "x86_64-pc-windows-msvc":
+    "99aa60edd017a256dbf378f372d1cff3292dbc6696e0ea01716d9158d773ab77",
+  "aarch64-pc-windows-msvc":
+    "bee7b25a7a999f17291810242b47565c3ef2b9205651a0fd02a086f261a7e167",
+});
+
+const UV_TOOLS_DIR = path.join(GAIA_HOME, "tools", "uv");
 
 const STATES = Object.freeze({
   IDLE: "idle",
@@ -97,6 +138,16 @@ const STAGE_ORDER = [
 
 let logStream = null;
 
+/**
+ * Log rotation is a session-level concern: we want a fresh log on the first
+ * `ensureBackend` call of a given process, but NOT on subsequent retries
+ * within the same session, because the original failure log is what the
+ * user needs to attach to a bug report after clicking Retry. Flipping this
+ * to `true` is a one-way operation; subsequent `openLog({ truncate: true })`
+ * calls turn into plain appends.
+ */
+let logRotatedThisSession = false;
+
 function ensureGaiaHome() {
   try {
     if (!fs.existsSync(GAIA_HOME)) {
@@ -127,7 +178,19 @@ function openLog({ truncate = false } = {}) {
       }
       logStream = null;
     }
-    if (truncate) {
+    // Honor `truncate` only once per process. Multiple retries within the
+    // same session (user clicks "Retry" twice) must NOT destroy the
+    // original failure log — that's the log the user needs to share.
+    const shouldRotate = truncate && !logRotatedThisSession;
+    if (truncate && logRotatedThisSession) {
+      // no-op, but make it visible in the new log that we intentionally
+      // kept the previous attempt's data.
+      // eslint-disable-next-line no-console
+      console.log(
+        "[backend-installer] openLog: retry within same session — appending (no rotation)"
+      );
+    }
+    if (shouldRotate) {
       // Rotate: move the existing log aside (overwriting any older .prev)
       // before opening the new log. This preserves the previous attempt
       // for bug reports while keeping disk usage bounded to two log files.
@@ -153,6 +216,9 @@ function openLog({ truncate = false } = {}) {
       } catch {
         // ignore — rotation is best-effort
       }
+      // Mark the session as rotated so future retries append instead of
+      // rotating again (preserving the original failure log for bug reports).
+      logRotatedThisSession = true;
     }
     logStream = fs.createWriteStream(LOG_FILE, {
       flags: "a",  // always append now (rotation handled above)

@@ -416,6 +416,49 @@ async function bootstrapBackend() {
 // Squirrel's first-run shortcut bookkeeping — NSIS creates the Start Menu
 // and Desktop shortcuts itself at install time.
 
+// ── Single-instance lock ─────────────────────────────────────────────────
+//
+// GAIA Agent UI is a desktop app that the user may inadvertently launch
+// twice (double-click in Finder, second click on the dock icon, second
+// click in the Start Menu, autostart firing while the user already has
+// the app open, etc.). Without a lock, two Electron instances would race:
+//
+//   • Both call backend-installer.cjs concurrently — interleaved log
+//     writes, state file (~/.gaia/electron-install-state.json) flapping
+//     between INSTALLING records, possibly half-installed venvs.
+//   • Both spawn the Python backend on port 4200 — second crashes.
+//   • Both register IPC handlers via ipcMain.handle(...) — Electron
+//     throws "Attempted to register a second handler" and the second
+//     instance dies.
+//   • Two tray icons, two auto-updater singletons.
+//
+// requestSingleInstanceLock() is the standard Electron pattern: the first
+// process to call it gets `true`, every subsequent launch on the same
+// machine gets `false` and should immediately quit. The first instance
+// receives a `second-instance` event and surfaces its window.
+const gotTheSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotTheSingleInstanceLock) {
+  console.log("[main] Another GAIA Agent UI instance is already running — quitting");
+  app.quit();
+  // Use process.exit so we bail BEFORE app.whenReady() fires below.
+  // app.quit() alone is async and the rest of this file would still
+  // execute, racing with the first instance.
+  process.exit(0);
+}
+
+app.on("second-instance", (_event, _argv, _cwd) => {
+  // A second launch happened while we were running. Surface our window
+  // (the user almost certainly wanted to see it). mainWindow may be null
+  // if we're still in the bootstrap phase — in that case the first
+  // instance is already showing the install progress dialog and there's
+  // nothing else to do.
+  if (typeof mainWindow !== "undefined" && mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+  }
+});
+
 app.whenReady().then(async () => {
   // Phase A: ensure the Python backend is installed BEFORE creating the
   // main window. The progress dialog owns the UI during this phase.

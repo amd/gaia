@@ -58,6 +58,26 @@ on:
         required: false
         type: boolean
         default: false
+    # Explicit secret declarations. Callers (publish.yml) must forward
+    # each one explicitly via `secrets:` — we intentionally do NOT use
+    # `secrets: inherit` on the caller side so forks / PRs can't leak
+    # unrelated repo secrets into this reusable workflow. Each secret
+    # is optional; missing secrets degrade to an unsigned build.
+    secrets:
+      SIGNPATH_API_TOKEN:
+        required: false
+      SIGNPATH_ORG_ID:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      CSC_LINK:
+        required: false
+      CSC_KEY_PASSWORD:
+        required: false
   # Validate installer builds on any PR that touches installer-related files.
   # Gated on paths so normal PRs don't pay the ~15min cross-platform build cost.
   # This catches electron-builder config drift, entitlement breakage, NSIS
@@ -73,18 +93,37 @@ on:
       - 'src/gaia/apps/webui/bin/**'
       - 'src/gaia/apps/webui/services/**'
 
+# Least-privilege default. Only the release-upload step needs `contents:
+# write`, and it's gated behind `inputs.publish_to_release` — which is
+# false for PR triggers, so fork PRs can never get elevated write access
+# via this workflow. The `build` job below redeclares `contents: read`
+# explicitly for clarity; `id-token: write` stays because SignPath's
+# OIDC handshake needs it even on unsigned PR builds (the step itself
+# is still gated on secret presence).
 permissions:
-  contents: write  # softprops/action-gh-release needs this to upload assets
+  contents: read
   id-token: write  # SignPath OIDC (Phase H)
 
 concurrency:
-  group: build-installers-${{ github.ref }}
-  cancel-in-progress: false
+  # PR runs should cancel-in-progress to avoid burning ~45 CI minutes per
+  # push on stale builds. Tag/release runs and manual dispatches must
+  # NOT cancel — a mid-build cancel on a release tag leaves the draft
+  # release in a partial state.
+  group: build-installers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     name: Build ${{ matrix.platform }} installer
     runs-on: ${{ matrix.runner }}
+    # Build job is strictly read-only — it produces workflow-run artifacts
+    # that callers (publish.yml) download and re-upload. The opt-in
+    # GitHub Release upload step elevates with a per-step token (see the
+    # `softprops/action-gh-release` step and its `inputs.publish_to_release`
+    # gate, which is false for any PR trigger).
+    permissions:
+      contents: read
+      id-token: write  # SignPath OIDC — step is still secret-gated
     strategy:
       fail-fast: false
       matrix:
@@ -113,10 +152,15 @@ jobs:
               src/gaia/apps/webui/dist-app/latest-linux.yml
 
     # Job-level env so that step-level `if:` conditions can reference
-    # secret-derived values (secrets cannot be used in `if:` directly).
-    # Empty strings are fine when the secret is not set.
+    # secret-derived values (secrets cannot be used in `if:` directly,
+    # and step-level `env:` is NOT visible to that step's own `if:` —
+    # only workflow- and job-level env are). Any secret that gates a
+    # step via `env.X != ''` MUST be declared here. Empty strings are
+    # fine when the secret is not set — the step is then silently
+    # skipped, which is the intended opt-in-by-secret-presence behavior.
     env:
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -198,36 +242,6 @@ jobs:
         # --publish never: we upload artifacts ourselves via action-gh-release.
         run: npm run ${{ matrix.npm_script }} -- --publish never
 
-      # ─── SignPath signing (Phase H — opt-in via secrets) ────────────
-      # This step uploads the unsigned NSIS .exe to SignPath for code
-      # signing, then downloads the signed artifact back over the same
-      # filename. SignPath OSS is free for open-source projects:
-      # https://signpath.org/products/foundation
-      #
-      # Required GitHub Action secrets (set up once via SignPath onboarding):
-      #   SIGNPATH_API_TOKEN  — issued by SignPath after OSS approval
-      #   SIGNPATH_ORG_ID     — your SignPath organization UUID
-      #
-      # Until both secrets are set, this step is silently skipped and the
-      # NSIS installer ships unsigned. End-users see a SmartScreen
-      # warning the first time they run an unsigned installer; the
-      # troubleshooting guide documents the bypass step.
-      - name: Sign Windows installer (SignPath)
-        if: matrix.platform == 'windows' && env.SIGNPATH_API_TOKEN != '' && env.SIGNPATH_ORG_ID != ''
-        env:
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
-        uses: signpath/github-action-submit-signing-request@v1
-        with:
-          api-token: ${{ env.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ env.SIGNPATH_ORG_ID }}
-          project-slug: gaia-agent-ui
-          signing-policy-slug: release-signing
-          artifact-configuration-slug: gaia-installer
-          github-artifact-id: ${{ steps.upload-artifacts.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: src/gaia/apps/webui/dist-app/
-
       # ─── Inspect build output ───────────────────────────────────────
       - name: List build artifacts
         if: always()
@@ -249,7 +263,13 @@ jobs:
           fi
 
       # ─── Upload to workflow run (always, for debugging) ─────────────
+      # NOTE: this step MUST run before the SignPath step below, because
+      # SignPath references its artifact-id output (`steps.upload-artifacts.
+      # outputs.artifact-id`) to know which artifact to fetch, sign, and
+      # write back. Reordering these two steps will silently break Windows
+      # signing.
       - name: Upload artifacts to workflow run
+        id: upload-artifacts
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.platform }}-installer
@@ -257,19 +277,78 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-      # ─── Upload to GitHub Release (draft, opt-in only) ──────────────
-      # Only runs when explicitly opted in via `inputs.publish_to_release`.
-      # The normal publish flow goes through publish.yml, which downloads
-      # the workflow artifacts (uploaded above) and includes them in the
-      # final release after the approval gate. This step is only useful
-      # for ad-hoc workflow_dispatch runs that want to push a build to
-      # an existing release tag without going through publish.yml.
-      - name: Upload to GitHub Release (draft, manual dispatch only)
-        if: ${{ inputs.publish_to_release == true && inputs.tag != '' }}
+      # ─── SignPath signing (Phase H — opt-in via secrets) ────────────
+      # This step uploads the unsigned NSIS .exe to SignPath for code
+      # signing, then downloads the signed artifact back over the same
+      # filename. SignPath OSS is free for open-source projects:
+      # https://signpath.io/solutions/open-source-community
+      #
+      # Required GitHub Action secrets (set up once via SignPath onboarding):
+      #   SIGNPATH_API_TOKEN  — issued by SignPath after OSS approval
+      #   SIGNPATH_ORG_ID     — your SignPath organization UUID
+      #
+      # Until both secrets are set, this step is silently skipped and the
+      # NSIS installer ships unsigned. End-users see a SmartScreen
+      # warning the first time they run an unsigned installer; the
+      # troubleshooting guide documents the bypass step.
+      #
+      # Ordering: this step runs AFTER `Upload artifacts to workflow run`
+      # so that step's `id: upload-artifacts` output is populated before
+      # we read `steps.upload-artifacts.outputs.artifact-id`.
+      - name: Sign Windows installer (SignPath)
+        # Both env vars are sourced from the job-level env: block (which
+        # reads the secrets). GitHub Actions only exposes workflow- and
+        # job-level env to a step's `if:` expression — step-level env is
+        # evaluated AFTER `if:`, which is why we can't inline the secret
+        # forwarding here.
+        if: matrix.platform == 'windows' && env.SIGNPATH_API_TOKEN != '' && env.SIGNPATH_ORG_ID != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ env.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORG_ID }}
+          project-slug: gaia-agent-ui
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: gaia-installer
+          github-artifact-id: ${{ steps.upload-artifacts.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: src/gaia/apps/webui/dist-app/
+
+  # ─── Publish job (opt-in, non-PR only) ──────────────────────────────
+  # Split out from the build job so `contents: write` can be granted at
+  # the job level to ONLY this job. Fork PRs never reach this job:
+  #   1. `inputs.publish_to_release` is false for any workflow_call from
+  #      publish.yml, and a pull_request trigger can't set workflow_call
+  #      inputs at all.
+  #   2. The event-type gate below blocks pull_request runs outright as
+  #      a defense-in-depth measure.
+  # The previous in-build step required a job-wide `contents: write`
+  # grant that then applied to every PR matrix run, which is what we're
+  # fixing here.
+  publish-release-assets:
+    name: Publish assets for ${{ matrix.platform }}
+    needs: build
+    if: >-
+      github.event_name != 'pull_request' &&
+      inputs.publish_to_release == true &&
+      inputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows, macos, linux]
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ matrix.platform }}-installer
+          path: release-assets
+      - name: Upload to GitHub Release (draft)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag }}
-          files: ${{ matrix.artifacts }}
+          files: release-assets/*
           fail_on_unmatched_files: true
           draft: true
           prerelease: ${{ contains(inputs.tag, '-rc.') || contains(inputs.tag, '-beta.') }}
