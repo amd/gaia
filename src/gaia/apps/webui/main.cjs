@@ -16,6 +16,7 @@
 const { app, BrowserWindow, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const { spawn } = require("child_process");
 
 // Services (loaded after app.whenReady)
@@ -100,6 +101,7 @@ function startBackend() {
     gaiaCmd,
     ["chat", "--ui", "--ui-port", String(BACKEND_PORT)],
     {
+      cwd: os.homedir(),  // Electron's cwd is "/" on macOS when launched from Finder
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env },
       detached: false,
@@ -235,17 +237,9 @@ async function loadApp() {
   const distPath = findDistPath();
 
   if (distPath) {
-    // Load the built frontend directly (for when backend serves it)
-    // First try loading from the backend URL
-    try {
-      await mainWindow.loadURL(`http://localhost:${BACKEND_PORT}`);
-      console.log("Loaded app from backend server");
-      return;
-    } catch {
-      // Fall through to loading from file
-    }
-
-    // Load from built files
+    // Always load the bundled frontend from the asar. The backend only
+    // serves the API (no frontend files in the pip package), so loading
+    // http://localhost:4200/ would show raw JSON instead of the UI.
     const indexPath = path.join(distPath, "index.html");
     console.log("Loading app from:", indexPath);
     await mainWindow.loadFile(indexPath);
@@ -497,19 +491,17 @@ app.whenReady().then(async () => {
   // Show loading state
   await loadApp();
 
-  // Wait for backend to be ready, then reload
+  // Wait for backend API to be reachable. The bundled frontend
+  // (loaded from dist/index.html in the asar) auto-detects when the
+  // API becomes available and dismisses its "Cannot connect" banner.
+  // We do NOT reload the window with http://localhost:4200/ because
+  // the pip-installed backend has no frontend files — only the API.
   if (backendProcess) {
     console.log("Waiting for backend to start...");
     const ready = await waitForBackend(STARTUP_TIMEOUT);
-
-    if (ready && mainWindow && !mainWindow.isDestroyed()) {
-      console.log("Backend is ready! Loading app...");
-      try {
-        await mainWindow.loadURL(`http://localhost:${BACKEND_PORT}`);
-      } catch (error) {
-        console.error("Failed to load from backend:", error.message);
-      }
-    } else if (!ready) {
+    if (ready) {
+      console.log("Backend API is ready on port", BACKEND_PORT);
+    } else {
       console.warn("Backend did not respond within timeout.");
     }
   }

@@ -412,6 +412,7 @@ function runCommand(cmd, args, { env, stageLabel } = {}) {
     let proc;
     try {
       proc = spawn(cmd, args, {
+        cwd: os.homedir(),  // Electron's cwd is "/" on macOS when launched from Finder
         env: env || process.env,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
@@ -533,7 +534,7 @@ function checkDiskSpace() {
  * Best-effort network reachability check. Performs a HEAD request to
  * https://astral.sh (where the uv installer lives). Resolves { ok, message? }.
  */
-function checkNetwork() {
+function _checkOneHost(url) {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (result) => {
@@ -544,7 +545,7 @@ function checkNetwork() {
 
     try {
       const req = https.request(
-        NETWORK_CHECK_URL,
+        url,
         {
           method: "HEAD",
           timeout: NETWORK_CHECK_TIMEOUT_MS,
@@ -560,23 +561,41 @@ function checkNetwork() {
         req.destroy();
         finish({
           ok: false,
-          message: `Network check timed out after ${NETWORK_CHECK_TIMEOUT_MS / 1000}s`,
+          message: `${url}: timed out after ${NETWORK_CHECK_TIMEOUT_MS / 1000}s`,
         });
       });
       req.on("error", (err) => {
         finish({
           ok: false,
-          message: `Network check failed: ${err.message}`,
+          message: `${url}: ${err.message}`,
         });
       });
       req.end();
     } catch (err) {
       finish({
         ok: false,
-        message: `Network check threw: ${err.message}`,
+        message: `${url}: ${err.message}`,
       });
     }
   });
+}
+
+/**
+ * Probe each host in ``NETWORK_CHECK_HOSTS`` sequentially. Succeed as
+ * soon as ANY host responds (even 3xx/4xx counts — it proves
+ * connectivity). Only fail if ALL hosts are unreachable.
+ */
+async function checkNetwork() {
+  const errors = [];
+  for (const url of NETWORK_CHECK_HOSTS) {
+    const result = await _checkOneHost(url);
+    if (result.ok) return result;
+    errors.push(result.message);
+  }
+  return {
+    ok: false,
+    message: `Network check failed for all hosts: ${errors.join("; ")}`,
+  };
 }
 
 /**
@@ -977,7 +996,7 @@ async function ensureBackend(opts = {}) {
     // Network check failure: fatal, surface as InstallError.
     if (!preChecks.network.ok) {
       const err = new InstallError(
-        `Could not reach ${NETWORK_CHECK_URL}. You appear to be offline.`,
+        `You appear to be offline. ${preChecks.network.message || "Could not reach any network host."}`,
         {
           stage: STAGES.PRE_CHECKS,
           suggestion:

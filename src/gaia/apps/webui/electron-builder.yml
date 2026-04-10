@@ -11,10 +11,10 @@
 # See docs/plans/desktop-installer.mdx §7 Phase C for context.
 
 appId: ai.amd.gaia
-productName: GAIA Agent UI         # User-facing display name (Applications folder, Start Menu, dock, title bar)
-executableName: gaia-agent-ui      # Actual binary name — lowercase, hyphenated, no spaces
-                                   # Affects: .app/Contents/MacOS/gaia-agent-ui, gaia-agent-ui.exe,
-                                   # /usr/bin/gaia-agent-ui, deb package name, AppImage binary name
+productName: GAIA                   # User-facing display name (Applications folder, Start Menu, dock, title bar)
+executableName: gaia               # Actual binary name — lowercase
+                                   # Affects: .app/Contents/MacOS/gaia, gaia.exe,
+                                   # /usr/bin/gaia, deb package name, AppImage binary name
 copyright: Copyright © 2026 Advanced Micro Devices, Inc.
 
 directories:
@@ -91,7 +91,7 @@ nsis:
   allowElevation: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: GAIA Agent UI
+  shortcutName: GAIA
   installerIcon: ../../../../installer/nsis/icon.ico
   uninstallerIcon: ../../../../installer/nsis/icon.ico
   installerHeaderIcon: ../../../../installer/nsis/icon.ico
@@ -129,12 +129,16 @@ mac:
 dmg:
   background: ../../../../installer/macos/dmg-background.png
   iconSize: 80
+  # Coordinates MUST match ICON_APP_CENTER / ICON_APPS_CENTER in
+  # installer/macos/generate-dmg-background.py — the background art
+  # draws drop-target halos at these exact points. If you move one,
+  # move both; otherwise the icons float off-target at install time.
   contents:
-    - x: 130
-      y: 220
+    - x: 160
+      y: 200
       type: file
-    - x: 410
-      y: 220
+    - x: 500
+      y: 200
       type: link
       path: /Applications
   window:
