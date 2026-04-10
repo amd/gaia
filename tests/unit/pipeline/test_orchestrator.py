@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.pipeline.orchestrator import PipelineOrchestrator
+from gaia.pipeline.stages.domain_analyzer import DomainAnalyzer
 
 
 @pytest.fixture
@@ -385,6 +386,53 @@ class TestPipelineStateManagement:
                             assert orchestrator._loom_topology != {}
                             assert orchestrator._gap_analysis != {}
                             assert orchestrator._execution_result != {}
+
+
+class TestRealCodePath:
+    """
+    Tests that exercise the real execute_tool dispatch path without mocking
+    execute_tool itself or the tool registry.
+
+    Purpose: Prove that the tool_fn(self, **args) -> tool_fn(**args) fix is
+    working. Before the fix, the closure-captured tools in _register_tools()
+    already had `self` bound; passing it again as a positional arg raised
+    TypeError. These tests catch that regression by going through the real
+    dispatch path.
+    """
+
+    def test_execute_tool_real_dispatch_no_double_self(self):
+        """
+        Call DomainAnalyzer.execute_tool('identify_domains', ...) through the
+        real dispatch path (not mocked). Only the LLM call is mocked.
+
+        Regression guard: before the fix, tool_fn(self, **tool_args) would pass
+        `self` as a positional arg to a closure that already captured it,
+        raising TypeError. After the fix, tool_fn(**tool_args) works correctly.
+        """
+        analyzer = DomainAnalyzer(skip_lemonade=True)
+
+        # Build a mock response object that _analyze_with_llm can parse.
+        # It expects an object with a .text attribute containing a JSON string.
+        mock_response = MagicMock()
+        mock_response.text = (
+            '{"primary_domain": "data-analysis", '
+            '"secondary_domains": ["visualization"], '
+            '"domain_descriptions": {"data-analysis": "Processing CSV data"}}'
+        )
+
+        # Mock ONLY the LLM call — do NOT mock execute_tool or the registry.
+        with patch.object(analyzer.chat, "send_messages", return_value=mock_response):
+            result = analyzer.execute_tool(
+                "identify_domains", {"task_description": "test task for regression"}
+            )
+
+        # The real dispatch must return a dict, not raise TypeError.
+        assert isinstance(result, dict), (
+            f"Expected dict from execute_tool dispatch, got {type(result)}: {result}"
+        )
+        # Verify the mocked LLM response was parsed and returned correctly.
+        assert result.get("primary_domain") == "data-analysis"
+        assert "secondary_domains" in result
 
 
 if __name__ == "__main__":

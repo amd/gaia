@@ -488,7 +488,7 @@ Provide a structured topology design."""
         Returns:
             Pipeline execution result
         """
-        return self.execute_tool(
+        return self._execute_tool(
             "execute_full_pipeline",
             {"task_description": task_description, "auto_spawn": auto_spawn},
         )

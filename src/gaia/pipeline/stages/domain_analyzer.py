@@ -383,4 +383,4 @@ Return JSON:
             return {"error": f"Tool {tool_name} not registered"}
 
         tool_fn = _TOOL_REGISTRY[tool_name]["function"]
-        return tool_fn(self, **tool_args)
+        return tool_fn(**tool_args)
