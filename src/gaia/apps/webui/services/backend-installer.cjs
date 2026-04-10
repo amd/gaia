@@ -111,8 +111,10 @@ function ensureGaiaHome() {
 }
 
 /**
- * Open the log file for append. By default, truncates on a fresh install
- * attempt so the log doesn't grow unbounded.
+ * Open the log file for append. When `truncate` is true (i.e. on a fresh
+ * install attempt), the existing log is rotated to `${LOG_FILE}.prev` rather
+ * than deleted, so the user can still attach the previous attempt to a bug
+ * report after clicking Retry. Only the most recent prior attempt is kept.
  */
 function openLog({ truncate = false } = {}) {
   ensureGaiaHome();
@@ -125,8 +127,35 @@ function openLog({ truncate = false } = {}) {
       }
       logStream = null;
     }
+    if (truncate) {
+      // Rotate: move the existing log aside (overwriting any older .prev)
+      // before opening the new log. This preserves the previous attempt
+      // for bug reports while keeping disk usage bounded to two log files.
+      try {
+        if (fs.existsSync(LOG_FILE)) {
+          const prevLog = `${LOG_FILE}.prev`;
+          // Use renameSync (atomic on POSIX, near-atomic on Windows)
+          try {
+            if (fs.existsSync(prevLog)) {
+              fs.unlinkSync(prevLog);
+            }
+            fs.renameSync(LOG_FILE, prevLog);
+          } catch (rotateErr) {
+            // If rotation fails (e.g. permissions), fall back to truncation
+            // so we don't block the install on log housekeeping.
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[backend-installer] Could not rotate log to .prev:`,
+              rotateErr.message
+            );
+          }
+        }
+      } catch {
+        // ignore — rotation is best-effort
+      }
+    }
     logStream = fs.createWriteStream(LOG_FILE, {
-      flags: truncate ? "w" : "a",
+      flags: "a",  // always append now (rotation handled above)
     });
     log(`──── backend-installer opened (${new Date().toISOString()}) ────`);
     log(`platform=${process.platform} arch=${process.arch} node=${process.version}`);
@@ -583,14 +612,21 @@ async function ensureUv({ onProgress } = {}) {
   }
 
   // On some shells, PATH isn't refreshed for the current process. Re-check
-  // after adding the default uv install dir.
+  // after adding the default uv install dirs. uv has shipped under both
+  // ~/.cargo/bin and ~/.local/bin at different times — most notably the
+  // Windows installer migrated from .cargo/bin to %USERPROFILE%\.local\bin
+  // in early 2025. Try BOTH paths on every platform to be robust against
+  // installer version drift.
   if (!commandExists("uv")) {
-    const uvDir = IS_WINDOWS
-      ? path.join(os.homedir(), ".cargo", "bin")
-      : path.join(os.homedir(), ".local", "bin");
-    if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
-      process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
-      log(`Added ${uvDir} to PATH for this process`);
+    const candidates = [
+      path.join(os.homedir(), ".local", "bin"),
+      path.join(os.homedir(), ".cargo", "bin"),
+    ];
+    for (const uvDir of candidates) {
+      if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
+        process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
+        log(`Added ${uvDir} to PATH for this process`);
+      }
     }
   }
 

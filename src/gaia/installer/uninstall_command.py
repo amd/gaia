@@ -21,6 +21,8 @@ Tiers:
 Opt-in extras (only valid alongside ``--purge``):
     * ``--purge-lemonade`` — best-effort Lemonade Server removal.
     * ``--purge-models``   — remove ``~/.cache/lemonade/models/``.
+    * ``--purge-hf-cache`` — remove the HuggingFace hub cache (restores the
+      legacy ``gaia uninstall --models`` cleanup capability).
 
 Flags:
     * ``--dry-run`` — print paths that would be removed, touch nothing.
@@ -85,6 +87,31 @@ def _lemonade_models_dir(home: Optional[Path] = None) -> Path:
     return base / ".cache" / "lemonade" / "models"
 
 
+def _huggingface_cache_dir(home: Optional[Path] = None) -> Path:
+    """Return the HuggingFace hub cache directory.
+
+    Many GAIA models (sentence-transformers, embedding models, etc.) are
+    downloaded into the standard HuggingFace cache rather than Lemonade's
+    cache. The location follows the HF convention:
+
+      * ``HF_HOME/hub`` if ``HF_HOME`` is set
+      * Otherwise ``~/.cache/huggingface/hub`` on POSIX and macOS
+      * Otherwise ``%LOCALAPPDATA%\\huggingface\\hub`` on Windows when set
+
+    Restoring the cleanup capability that the legacy
+    ``gaia uninstall --models`` flag provided before Phase D's refactor.
+    """
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return Path(hf_home) / "hub"
+    if sys.platform.startswith("win"):
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data) / "huggingface" / "hub"
+    base = home if home is not None else Path.home()
+    return base / ".cache" / "huggingface" / "hub"
+
+
 def _venv_paths(home: Optional[Path] = None) -> List[Path]:
     """Paths that belong to Tier 2 (``--venv``)."""
     gaia = _gaia_home(home)
@@ -125,6 +152,7 @@ class UninstallPlan:
     tiered_paths: List[tuple] = field(default_factory=list)
     purge_lemonade: bool = False
     purge_models_path: Optional[Path] = None
+    purge_hf_cache_path: Optional[Path] = None
 
     def unique_paths(self) -> List[Path]:
         """Return deduplicated paths preserving the order they were added."""
@@ -142,6 +170,7 @@ class UninstallPlan:
             not self.tiered_paths
             and not self.purge_lemonade
             and self.purge_models_path is None
+            and self.purge_hf_cache_path is None
         )
 
 
@@ -151,13 +180,14 @@ def build_plan(
     purge: bool,
     purge_lemonade: bool,
     purge_models: bool,
+    purge_hf_cache: bool = False,
     home: Optional[Path] = None,
 ) -> UninstallPlan:
     """Build an :class:`UninstallPlan` from the parsed flag set.
 
     Assumes validation has already happened (``--purge-lemonade`` /
-    ``--purge-models`` must come with ``--purge``). ``--purge`` wins over
-    ``--venv`` if both are passed.
+    ``--purge-models`` / ``--purge-hf-cache`` must come with ``--purge``).
+    ``--purge`` wins over ``--venv`` if both are passed.
     """
     plan = UninstallPlan()
 
@@ -173,6 +203,9 @@ def build_plan(
 
     if purge_models:
         plan.purge_models_path = _lemonade_models_dir(home)
+
+    if purge_hf_cache:
+        plan.purge_hf_cache_path = _huggingface_cache_dir(home)
 
     return plan
 
@@ -205,6 +238,7 @@ def _print_no_flags_help(printer: Callable[[str], None] = print) -> None:
         "Optional extras (must be combined with --purge):",
         "  --purge-lemonade                 Also uninstall Lemonade Server",
         "  --purge-models                   Also remove Lemonade's models cache",
+        "  --purge-hf-cache                 Also remove the HuggingFace hub cache",
         "",
         "Safety:",
         "  --dry-run                        Show what would be removed, touch nothing",
@@ -233,6 +267,11 @@ def _print_plan(
     if plan.purge_models_path is not None:
         _print(
             f"  (--purge-models) {plan.purge_models_path}",
+            printer=printer,
+        )
+    if plan.purge_hf_cache_path is not None:
+        _print(
+            f"  (--purge-hf-cache) {plan.purge_hf_cache_path}",
             printer=printer,
         )
     _print(printer=printer)
@@ -402,6 +441,10 @@ def execute_plan(
         if not _remove_path(plan.purge_models_path, printer=printer):
             all_ok = False
 
+    if plan.purge_hf_cache_path is not None:
+        if not _remove_path(plan.purge_hf_cache_path, printer=printer):
+            all_ok = False
+
     if plan.purge_lemonade:
         _remove_lemonade(printer=printer)
 
@@ -438,6 +481,7 @@ def run(
     purge: bool = bool(getattr(args, "purge", False))
     purge_lemonade: bool = bool(getattr(args, "purge_lemonade", False))
     purge_models: bool = bool(getattr(args, "purge_models", False))
+    purge_hf_cache: bool = bool(getattr(args, "purge_hf_cache", False))
     dry_run: bool = bool(getattr(args, "dry_run", False))
     yes: bool = bool(getattr(args, "yes", False))
 
@@ -464,9 +508,22 @@ def run(
         )
         return EXIT_FS_ERROR
 
+    if purge_hf_cache and not purge:
+        _print(
+            "error: --purge-hf-cache requires --purge.",
+            printer=printer,
+        )
+        _print(
+            "       Re-run as: gaia uninstall --purge --purge-hf-cache",
+            printer=printer,
+        )
+        return EXIT_FS_ERROR
+
     # No flags at all → friendly help (always exit 0, never crash even when
     # stdin is closed).
-    if not (venv or purge or purge_lemonade or purge_models or dry_run):
+    if not (
+        venv or purge or purge_lemonade or purge_models or purge_hf_cache or dry_run
+    ):
         _print_no_flags_help(printer=printer)
         return EXIT_OK
 
@@ -475,6 +532,7 @@ def run(
         purge=purge,
         purge_lemonade=purge_lemonade,
         purge_models=purge_models,
+        purge_hf_cache=purge_hf_cache,
         home=home,
     )
 
@@ -546,6 +604,17 @@ def register_subparser(
         help="Also remove the Lemonade models cache (requires --purge).",
     )
     parser.add_argument(
+        "--purge-hf-cache",
+        action="store_true",
+        dest="purge_hf_cache",
+        help=(
+            "Also remove the HuggingFace hub cache "
+            "(~/.cache/huggingface/hub or $HF_HOME/hub). Requires --purge. "
+            "Restores the cleanup behavior of the legacy "
+            "`gaia uninstall --models` flag from before v0.17.2."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         dest="dry_run",
@@ -573,6 +642,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--purge", action="store_true")
     parser.add_argument("--purge-lemonade", action="store_true", dest="purge_lemonade")
     parser.add_argument("--purge-models", action="store_true", dest="purge_models")
+    parser.add_argument("--purge-hf-cache", action="store_true", dest="purge_hf_cache")
     parser.add_argument("--dry-run", action="store_true", dest="dry_run")
     parser.add_argument("--yes", "-y", action="store_true")
     args = parser.parse_args(argv)
