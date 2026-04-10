@@ -28,9 +28,13 @@
 name: Build Installers
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # Note: there is intentionally NO `push: tags: v*` trigger.
+  # `publish.yml` is the canonical entry point for tagged releases — it
+  # invokes this workflow via `workflow_call` after the validate step,
+  # then gates publishing on a single approval. Adding a direct `push`
+  # trigger here would cause two concurrent runs of this workflow on
+  # every tag push (one direct, one from publish.yml), racing on the
+  # same draft GitHub Release.
   workflow_dispatch:
     inputs:
       tag:
@@ -53,7 +57,7 @@ on:
         description: 'Upload artifacts to the GitHub Release matching the tag'
         required: false
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: write  # softprops/action-gh-release needs this to upload assets
@@ -239,25 +243,22 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-      # ─── Upload to GitHub Release ───────────────────────────────────
-      # Runs on tag push OR when workflow_dispatch / workflow_call supplies
-      # a tag AND publish_to_release=true.
-      # Always upload as DRAFT to avoid leaking a published release before
-      # publish.yml's single approval gate passes. The publish.yml integration
-      # follow-up will run its own softprops/action-gh-release step AFTER this
-      # workflow completes and AFTER approval — that step promotes the draft
-      # to a published release by re-uploading the same tag with draft=false.
-      - name: Upload to GitHub Release (draft)
-        if: |
-          startsWith(github.ref, 'refs/tags/v') ||
-          (inputs.tag != '' && inputs.publish_to_release)
+      # ─── Upload to GitHub Release (draft, opt-in only) ──────────────
+      # Only runs when explicitly opted in via `inputs.publish_to_release`.
+      # The normal publish flow goes through publish.yml, which downloads
+      # the workflow artifacts (uploaded above) and includes them in the
+      # final release after the approval gate. This step is only useful
+      # for ad-hoc workflow_dispatch runs that want to push a build to
+      # an existing release tag without going through publish.yml.
+      - name: Upload to GitHub Release (draft, manual dispatch only)
+        if: ${{ inputs.publish_to_release == true && inputs.tag != '' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag }}
           files: ${{ matrix.artifacts }}
           fail_on_unmatched_files: true
           draft: true
-          prerelease: ${{ contains(github.ref_name, '-rc.') || contains(github.ref_name, '-beta.') || contains(inputs.tag, '-rc.') || contains(inputs.tag, '-beta.') }}
+          prerelease: ${{ contains(inputs.tag, '-rc.') || contains(inputs.tag, '-beta.') }}
 
   # ─── Gate job ───────────────────────────────────────────────────────
   # Final job that confirms all platform builds succeeded. This is the

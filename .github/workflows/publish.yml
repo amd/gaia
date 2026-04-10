@@ -272,27 +272,51 @@ jobs:
     needs: validate
     uses: ./.github/workflows/build-electron-apps.yml
 
+  # Build the GAIA Agent UI desktop installers (NSIS / DMG / DEB / AppImage)
+  # via the reusable build-installers workflow. The reusable workflow uploads
+  # each platform's artifacts to a workflow-run artifact named
+  # "<platform>-installer". The github-release job below downloads those
+  # artifacts and includes them in the published release.
+  #
+  # We pass publish_to_release=false so build-installers does NOT create its
+  # own draft release — publish.yml's github-release job is the single
+  # source of truth for what gets published, gated on the approval step.
+  build-desktop-installers:
+    name: Build Desktop Installers
+    needs: validate
+    permissions:
+      contents: write   # build-installers uploads workflow artifacts
+      id-token: write   # for SignPath OIDC (Phase H — opt-in via secret)
+    secrets: inherit
+    uses: ./.github/workflows/build-installers.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag_name }}
+      publish_to_release: false
+
   # ── Stage 3: Approve (single manual gate) ───────────────────────────
-  # All three builds must pass before the approval prompt appears.
+  # All four builds must pass before the approval prompt appears.
   # Configure the "publish" GitHub environment with required reviewers.
 
   approve-publish:
     name: Approve Publishing
-    needs: [build-pypi, build-npm, build-electron]
-    # Override default skip-on-failure: electron may be skipped (no apps found)
+    needs: [build-pypi, build-npm, build-electron, build-desktop-installers]
+    # Override default skip-on-failure: electron may be skipped (no apps found).
+    # Desktop installers are required (they're the primary install path).
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
-      (needs.build-electron.result == 'success' || needs.build-electron.result == 'skipped')
+      (needs.build-electron.result == 'success' || needs.build-electron.result == 'skipped') &&
+      needs.build-desktop-installers.result == 'success'
     runs-on: ubuntu-latest
     environment: publish
     steps:
       - run: |
           echo "=== Build Results ==="
-          echo "  PyPI:     ${{ needs.build-pypi.result }}"
-          echo "  npm:      ${{ needs.build-npm.result }}"
-          echo "  Electron: ${{ needs.build-electron.result }}"
+          echo "  PyPI:               ${{ needs.build-pypi.result }}"
+          echo "  npm:                ${{ needs.build-npm.result }}"
+          echo "  Electron Apps:      ${{ needs.build-electron.result }}"
+          echo "  Desktop Installers: ${{ needs.build-desktop-installers.result }}"
           echo ""
           echo "All builds passed. Publishing approved."
 
@@ -353,12 +377,15 @@ jobs:
 
   github-release:
     name: GitHub Release
-    needs: [validate, publish-pypi, publish-npm, build-electron]
-    # Run after both publishes succeed; don't block on electron artifacts
+    needs: [validate, publish-pypi, publish-npm, build-electron, build-desktop-installers]
+    # Run after both publishes succeed; don't block on electron artifacts.
+    # Desktop installers are required since they're the primary install path
+    # — if they failed, the release shouldn't ship.
     if: >-
       !cancelled() &&
       needs.publish-pypi.result == 'success' &&
-      needs.publish-npm.result == 'success'
+      needs.publish-npm.result == 'success' &&
+      needs.build-desktop-installers.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -392,6 +419,20 @@ jobs:
 
 ## Installation
 
+### Desktop installer (recommended for end users)
+
+Download the installer for your platform from the assets below:
+
+- **Windows** — `GAIA Agent UI-*-x64-Setup.exe` (NSIS installer with auto-start option)
+- **macOS** — `GAIA Agent UI-*-arm64.dmg` (drag to Applications, Apple Silicon only)
+- **Linux** — `GAIA Agent UI-*-amd64.deb` (Debian/Ubuntu) or `GAIA Agent UI-*-x86_64.AppImage` (any distro)
+
+On first launch the app sets up its Python backend automatically (~5–10 minutes for the minimal profile, depends on your internet speed).
+
+See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/install.mdx) for setup details and troubleshooting.
+
+### Developer install (Python CLI)
+
 Install GAIA using pip:
 ```bash
 pip install amd-gaia
@@ -400,6 +441,11 @@ pip install amd-gaia
 Or using uv:
 ```bash
 uv pip install amd-gaia
+```
+
+Or via npm:
+```bash
+npm install -g @amd-gaia/agent-ui
 ```
 EOF
           echo "Release body generated: $(wc -l < RELEASE_BODY.md) lines"
@@ -420,6 +466,32 @@ EOF
           pattern: "*-linux-${{ github.sha }}"
           path: release-assets
           merge-multiple: true
+        continue-on-error: true
+
+      # ── Desktop installers (Phase G/I integration) ─────────────────
+      # The reusable build-installers workflow uploaded each platform's
+      # artifacts to "<platform>-installer" workflow-run artifacts. Pull
+      # them here and add to release-assets/ so the softprops step
+      # below includes them in the published release.
+      - name: Download Desktop Installer (Windows NSIS)
+        uses: actions/download-artifact@v6
+        with:
+          name: windows-installer
+          path: release-assets
+        continue-on-error: true
+
+      - name: Download Desktop Installer (macOS DMG)
+        uses: actions/download-artifact@v6
+        with:
+          name: macos-installer
+          path: release-assets
+        continue-on-error: true
+
+      - name: Download Desktop Installer (Linux DEB + AppImage)
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-installer
+          path: release-assets
         continue-on-error: true
 
       - name: Create GitHub Release
