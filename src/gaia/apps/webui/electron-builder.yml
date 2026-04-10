@@ -86,7 +86,7 @@ win:
   icon: ../../../../installer/nsis/icon.ico
   # Lowercase, hyphenated, no spaces — avoids shell quoting pain and matches
   # the gaia-agent-ui binary name. Display name in Add/Remove Programs is
-  # still driven by productName ("GAIA Agent UI").
+  # still driven by productName ("GAIA").
   artifactName: gaia-agent-ui-${version}-${arch}-setup.${ext}
 
 nsis:
@@ -119,7 +119,7 @@ mac:
   category: public.app-category.developer-tools
   # Lowercase filename for the .dmg — matches the gaia-agent-ui binary
   # naming. The .app bundle INSIDE the DMG keeps its display name
-  # "GAIA Agent UI.app" from productName, so Finder / Applications folder
+  # "GAIA.app" from productName, so Finder / Applications folder
   # still show the pretty name.
   artifactName: gaia-agent-ui-${version}-${arch}.${ext}
   hardenedRuntime: true
