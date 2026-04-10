@@ -18,6 +18,16 @@
 
 ---
 
+## Download
+
+[![Download for Windows](https://img.shields.io/badge/Download-Windows-0078d4?style=for-the-badge&logo=windows)](https://github.com/amd/gaia/releases/latest)
+[![Download for macOS](https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple)](https://github.com/amd/gaia/releases/latest)
+[![Download for Linux](https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/amd/gaia/releases/latest)
+
+See the [installation guide](https://amd-gaia.ai/guides/install) for setup instructions.
+
+---
+
 ## Why GAIA?
 
 | Feature | Description |
