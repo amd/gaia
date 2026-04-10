@@ -56,7 +56,7 @@ SignPath provides free Windows code signing for open-source projects via their [
 
 ### Step 1: Apply for SignPath OSS
 
-1. Go to <https://signpath.org/products/foundation>
+1. Go to [https://signpath.org/products/foundation](https://signpath.org/products/foundation)
 2. Click **Apply for free signing**
 3. Fill out the form pointing at `https://github.com/amd/gaia`
 4. Reference the GAIA project description and link to this docs page
@@ -109,14 +109,14 @@ macOS signing uses Apple's standard Developer ID + notarization flow via `electr
 
 If AMD doesn't already have a Developer Program enrollment for the GAIA team:
 
-1. Enroll at <https://developer.apple.com/programs/enroll/>
+1. Enroll at [https://developer.apple.com/programs/enroll/](https://developer.apple.com/programs/enroll/)
 2. Choose **Organization** (not individual)
 3. Provide AMD's D-U-N-S number
 4. Wait for Apple to verify the organization
 
 ### Step 2: Generate a Developer ID Application certificate
 
-1. Sign in to <https://developer.apple.com/account/resources/certificates>
+1. Sign in to [https://developer.apple.com/account/resources/certificates](https://developer.apple.com/account/resources/certificates)
 2. Click **+** → **Developer ID Application**
 3. Generate a CSR via Keychain Access
 4. Download the `.cer` and double-click to install in Keychain
@@ -128,7 +128,7 @@ If AMD doesn't already have a Developer Program enrollment for the GAIA team:
 
 ### Step 3: Create an app-specific password for notarization
 
-1. Sign in to <https://appleid.apple.com>
+1. Sign in to [https://appleid.apple.com](https://appleid.apple.com)
 2. **Security** → **App-Specific Passwords** → **Generate**
 3. Label it `gaia-agent-ui-notarize`
 4. Copy the password (you can't view it again)
@@ -223,8 +223,8 @@ For Windows, SignPath's OSS tier is GitHub-only — you can't sign locally. Use 
 
 ## References
 
-- SignPath OSS Foundation: <https://signpath.org/products/foundation>
-- SignPath GitHub Action: <https://github.com/signpath/github-action-submit-signing-request>
-- Apple notarization docs: <https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution>
-- electron-builder code signing: <https://www.electron.build/code-signing>
+- SignPath OSS Foundation: [https://signpath.org/products/foundation](https://signpath.org/products/foundation)
+- SignPath GitHub Action: [https://github.com/signpath/github-action-submit-signing-request](https://github.com/signpath/github-action-submit-signing-request)
+- Apple notarization docs: [https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)
+- electron-builder code signing: [https://www.electron.build/code-signing](https://www.electron.build/code-signing)
 - GAIA desktop installer plan: [`docs/plans/desktop-installer.mdx`](../plans/desktop-installer)
