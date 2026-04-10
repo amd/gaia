@@ -1,0 +1,121 @@
+---
+title: "v0.17.2"
+description: "One-click desktop installers, customizable agents, and MCP tool visibility"
+---
+
+# GAIA v0.17.2 Release Notes
+
+GAIA v0.17.2 makes GAIA a real desktop app. Download a one-click installer for Windows, macOS, or Linux — no Python, no `pip`, no terminal. Build your own agents by chatting with GAIA. And see exactly which MCP server ran which tool, with latency and filtering, right in the Agent Activity panel.
+
+**Why upgrade:**
+- **Install in one click, no terminal required** — One-click `.exe` / `.dmg` / `.deb` / `.AppImage` installers with automatic backend setup on first launch, background auto-updates, and native uninstall. The primary path for non-developer users.
+- **Build your own agents by chatting with GAIA** — The new Builder Agent walks you through creating a custom agent and generates an `agent.py` for you. Drop Python or YAML agents into `~/.gaia/agents/` and switch between them per conversation.
+- **See what your MCP tools are actually doing** — The Agent Activity panel now shows a "via {server}" badge on every MCP tool call, per-tool latency, and a filter bar to search or filter by status.
+- **Trust your RAG cache** — Cached document indexes are now verified before loading, so a corrupted or tampered cache triggers a clean re-index instead of crashing the RAG system.
+- **Drag-and-drop uploads work in any browser** — Document drops now work in Chrome, Safari, Firefox, and the packaged Electron app — no more "Not found" errors.
+
+---
+
+## What's New
+
+### One-Click Desktop Installers
+
+GAIA now ships as a native desktop app for every platform (PR #731). Download the installer and double-click — no Python, no `pip`, no terminal required.
+
+**What you can do:**
+- Download `gaia-agent-ui-*.exe` (Windows), `.dmg` (macOS), `.deb` or `.AppImage` (Linux) from [GitHub Releases](https://github.com/amd/gaia/releases/tag/v0.17.2)
+- On first launch, the app downloads `uv`, creates a Python venv, installs the GAIA backend, and starts Lemonade Server automatically
+- When a new version is available, you'll see a "Restart to update" prompt — same flow as Slack or VS Code
+- Uninstall via Add/Remove Programs, drag-to-Trash, or `apt remove`; user data in `~/.gaia/` is preserved unless you explicitly purge it with `gaia uninstall`
+
+**Under the hood:**
+- Electron shell with first-launch bootstrap: `uv` + venv + `gaia init --yes` + Lemonade Server
+- Code-signing scaffolding is in place for SignPath (Windows) and Apple Developer ID (macOS) — activates when signing secrets are configured, with zero code changes
+- `gaia uninstall` CLI offers tiered cleanup: `--venv`, `--purge`, `--purge-lemonade`, `--purge-models`, `--purge-hf-cache`, `--dry-run`
+- 42 unit tests for `gaia uninstall`; cross-platform CI via the new `build-installers.yml` workflow
+
+> **Note:** Windows users may see a SmartScreen prompt and macOS users may see a Gatekeeper dialog on first launch while code-signing is being finalized. Click **More info → Run anyway** (Windows) or **right-click → Open** (macOS).
+
+---
+
+### Customizable Agents + Builder Agent
+
+GAIA now supports per-session agent selection, and you can create your own agents by chatting with the Builder Agent (PR #720).
+
+**What you can do:**
+- Pick your agent from the selector in the chat footer or WelcomeScreen — switching mid-conversation starts a new session; switching on an empty session updates in place
+- Click the "+" button to open the Builder Agent, which asks what you want your agent to do and generates `agent.py` (with optional MCP scaffolding) — it appears in the selector immediately, no server restart needed
+- Drop a Python module (`~/.gaia/agents/*/agent.py`) or YAML manifest (`~/.gaia/agents/*/agent.yaml`) in place and it's discovered on the next server restart
+- YAML manifests support MCP servers, model preferences, and conversation starters
+- The message header shows "GAIA {Agent Name} | Thinking" during streaming and "GAIA {Agent Name} | 3m ago" after completion
+
+**Under the hood:**
+- `AgentRegistry` discovers agents at boot from built-in Python agents, custom Python modules, and YAML manifests
+- `DispatchQueue` boot orchestration runs `_check_lemonade` and `_import_modules` in parallel; `_load_model` runs after Lemonade is ready; all tasks report progress to the frontend
+- Sessions store `agent_type`; the correct agent is instantiated on cache miss
+- New guide: `docs/guides/custom-agent.mdx`
+- Closes #612, #713
+
+---
+
+### MCP Tool Execution Visibility
+
+The Agent Activity panel now shows exactly which MCP server handled each tool call, how long it took, and lets you filter through long tool traces (PR #717).
+
+**What you can do:**
+- See a purple **"via {server}"** badge on every MCP tool call, identifying the server that handled it
+- See per-tool latency (in ms) in the collapsed tool header
+- Use the filter bar — appears when 2+ tool steps exist — to search by tool name or filter by status (All / Success / Error)
+- MCP tool cards start collapsed by default to reduce noise; native tools still auto-expand
+
+**Under the hood:**
+- `mcp_server` added to `tool_start` SSE events; `latency_ms` measured at the SSE handler layer via `time.monotonic()`
+- Server name resolved via `_TOOL_REGISTRY` lookup — no fragile prefix parsing
+- No new SSE event types, no DB migration, no new API endpoints
+- 11 new unit tests
+- Closes #712
+
+---
+
+## Security
+
+### RAG Cache Integrity Verification
+
+Fixes a cache-deserialization issue where a corrupted or tampered RAG cache file on disk could cause the RAG system to crash or load untrusted data (PR #722, closes #447).
+
+GAIA now verifies an integrity header before loading cached document indexes. If the check fails — corrupted file, wrong format, or oversized data — the cache is deleted automatically and documents are re-indexed on the next query. Old-format caches from previous GAIA versions are migrated transparently on first load.
+
+---
+
+## Bug Fixes
+
+- **Drag-and-drop document upload works in any browser** (PR #729, closes #728) — A new `POST /api/documents/upload` endpoint accepts file content as multipart form data and works in Chrome, Safari, Firefox, and the packaged Electron 40 app. The previous implementation relied on `file.path`, an Electron-only property removed in Electron 32. Files are deduplicated by content hash and capped at 20 MB.
+- **Linux installer: chrome-sandbox SUID bit and non-interactive setup** (PR #743) — `chrome-sandbox` now has its SUID bit set during `apt install` (fixes immediate crash on Ubuntu 24.04 after package install). `gaia init` now accepts `--yes` to auto-answer prompts when invoked by the desktop installer's non-interactive bootstrap (fixes silent model-skip that caused the app to crash on first message).
+
+---
+
+## Release & CI
+
+- **Unified publish workflow** (PR #715) — Consolidated `publish_installer.yml`, `publish-npm-ui.yml`, and PyPI publishing into a single `publish.yml` workflow with one approval gate; PyPI and npm publish in parallel after approval.
+- **Claude review on fork PRs** (PR #685) — Fixed `fatal: a branch named 'main' already exists` when reviewing fork PRs whose head branch is `main`.
+- **npm OIDC publishing** (PR #683) — Upgraded npm to 11.5.1+ to enable OIDC trusted publishing (npm 10.9.4 returned `ENEEDAUTH`).
+- **webui package.json version sync** (PR #682) — Removed `-rc.1` suffix from `package.json` to match the v0.17.1 tag.
+
+---
+
+## Full Changelog
+
+**10 commits** since v0.17.1:
+
+- `83f5148b` — feat: MCP tool execution visualization in activity history (#717)
+- `df7a0ae4` — fix(linux): chrome-sandbox SUID and gaia init non-interactive mode (#743)
+- `f5b0d396` — feat: desktop installer for GAIA Agent UI (#530) (#731)
+- `d2ffb967` — fix: drag-and-drop document upload in browser mode (#728) (#729)
+- `69155281` — fix: add integrity verification to RAG cache pickle loading (#447) (#722)
+- `4d24071a` — feat: agent registry with per-session agent selection (#720)
+- `e4c7a5ef` — feat: unified publish workflow with single approval gate (#715)
+- `3f52582d` — fix: Claude workflow fails on fork PRs when head branch is 'main' (#685)
+- `4fe04417` — fix: upgrade npm to 11.5.1+ for OIDC trusted publishing (#683)
+- `b19d8126` — fix: bump webui package.json version to 0.17.1 (#682)
+
+Full Changelog: [v0.17.1...v0.17.2](https://github.com/amd/gaia/compare/v0.17.1...v0.17.2)
