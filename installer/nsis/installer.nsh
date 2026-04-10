@@ -69,4 +69,21 @@
 !macro customUnInstall
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
       "${PRODUCT_NAME}"
+  ; Also clean up the old pre-rename autostart key in case the user
+  ; is uninstalling without ever having upgraded through the rename.
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
+      "GAIA Agent UI"
+
+  ; Offer to remove user data (~/.gaia/) — chats, documents, Python venv,
+  ; config, and logs. Default is "No" so users keep their data unless they
+  ; explicitly opt in. /SD IDNO makes silent uninstalls (GPO/SCCM) keep
+  ; data by default.
+  ;
+  ; Uses a relative jump (IDNO +2) instead of named labels to avoid
+  ; label-collision risk if electron-builder ever expands this macro
+  ; more than once.
+  MessageBox MB_YESNO|MB_ICONQUESTION \
+      "Also remove your GAIA data (chats, documents, Python environment)?$\r$\n$\r$\nThis cannot be undone." \
+      /SD IDNO IDNO +2
+  RmDir /r "$PROFILE\.gaia"
 !macroend
