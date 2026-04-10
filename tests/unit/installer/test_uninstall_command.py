@@ -621,9 +621,7 @@ class TestSilentPurgeRefusal:
         monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
         captured = _Capture()
-        exit_code = uc.run(
-            _ns(purge=True, yes=False, dry_run=True), printer=captured
-        )
+        exit_code = uc.run(_ns(purge=True, yes=False, dry_run=True), printer=captured)
         assert exit_code == uc.EXIT_OK, captured.text
         # Nothing removed.
         assert (fake_home / ".gaia" / "venv").exists()

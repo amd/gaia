@@ -245,7 +245,7 @@ function wireAutoUpdaterEvents() {
           defaultId: 0,
           cancelId: 1,
           title: "Update ready",
-          message: `GAIA Agent UI ${info && info.version ? info.version : ""} has been downloaded.`,
+          message: `GAIA ${info && info.version ? info.version : ""} has been downloaded.`,
           detail:
             "Restart the app to apply the update. Your chat history will be preserved.",
         }
