@@ -54,6 +54,11 @@
 ; — we're a per-user install, so per-user autostart is correct.
 
 !macro customInstall
+  ; Clean up the old autostart key from pre-rename installs so users
+  ; who upgrade from "GAIA Agent UI" don't end up with an orphaned
+  ; Run entry pointing at a binary path that no longer exists.
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "GAIA Agent UI"
+
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
       "${PRODUCT_NAME}" \
       '"$INSTDIR\${PRODUCT_FILENAME}.exe" --minimized'

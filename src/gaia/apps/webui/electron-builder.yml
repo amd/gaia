@@ -12,9 +12,14 @@
 
 appId: ai.amd.gaia
 productName: GAIA                   # User-facing display name (Applications folder, Start Menu, dock, title bar)
-executableName: gaia               # Actual binary name — lowercase
-                                   # Affects: .app/Contents/MacOS/gaia, gaia.exe,
-                                   # /usr/bin/gaia, deb package name, AppImage binary name
+executableName: gaia-desktop       # Actual binary name — must NOT collide with the Python
+                                   # CLI `gaia` (console_scripts entry in setup.py). Using
+                                   # `gaia-desktop` avoids a recursive-launch risk on Linux
+                                   # where findGaiaBin()'s commandExists("gaia") fallback
+                                   # could find /usr/bin/gaia-desktop instead of the venv's
+                                   # Python gaia binary.
+                                   # Affects: .app/Contents/MacOS/gaia-desktop, gaia-desktop.exe,
+                                   # /usr/bin/gaia-desktop, deb package name, AppImage binary name
 copyright: Copyright © 2026 Advanced Micro Devices, Inc.
 
 directories:
@@ -174,7 +179,7 @@ linux:
       # runtime. Electron derives WM_CLASS from the executable basename
       # by default, so with executableName: gaia-agent-ui this becomes
       # "gaia-agent-ui". Getting this wrong breaks taskbar icon grouping.
-      StartupWMClass: gaia-agent-ui
+      StartupWMClass: gaia-desktop
 
 deb:
   depends:
