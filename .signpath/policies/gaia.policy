@@ -1,0 +1,45 @@
+# SignPath signing policy for GAIA Agent UI
+# Reference: https://about.signpath.io/documentation/projects/policies
+#
+# This file declares the project-level policy that SignPath enforces when
+# `.github/workflows/build-installers.yml` submits a signing request. It is
+# checked into source control so the policy is auditable alongside the code
+# it signs. SignPath enforces this policy server-side at signing time.
+#
+# Per docs/plans/desktop-installer.mdx §7 Phase H.
+
+policy:
+  name: GAIA Agent UI Release Signing
+  slug: release-signing
+
+  description: |
+    Code signing policy for GAIA Agent UI release installers (NSIS .exe).
+    Signing is restricted to release tags (v*) on the amd/gaia repository
+    via the build-installers.yml workflow. PR builds and forks cannot
+    trigger this policy.
+
+  # Allowed signing inputs — only the official build-installers workflow on
+  # the amd/gaia repo, only when triggered by a release tag, can submit a
+  # request that matches this policy.
+  trusted_build_systems:
+    - github
+  github:
+    repository: amd/gaia
+    workflow_path: .github/workflows/build-installers.yml
+    workflow_name: Build Installers
+    branch_or_tag_pattern: 'refs/tags/v*'
+
+  # Artifact configuration: NSIS .exe installer + its block map.
+  # SignPath signs the .exe in place and re-emits both files unchanged.
+  artifact_types:
+    - nsis-installer
+  signing_certificate:
+    type: code-signing
+    # Issued by the SignPath Foundation CA — automatically trusted by
+    # Windows after a few thousand downloads (SmartScreen reputation).
+
+  # Approval mode: 'automatic' for the OSS Foundation tier — every signing
+  # request submitted by a workflow that matches the trust criteria above
+  # is signed without manual approval. This is the default for OSS projects.
+  approval:
+    mode: automatic

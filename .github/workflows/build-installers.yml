@@ -180,22 +180,35 @@ jobs:
         # --publish never: we upload artifacts ourselves via action-gh-release.
         run: npm run ${{ matrix.npm_script }} -- --publish never
 
-      # ─── SignPath signing (Phase H placeholder) ─────────────────────
-      # Until Phase H lands, this step is a no-op. When Phase H lands, replace
-      # the body with `uses: signpath/github-action-submit-signing-request@v1`
-      # configured against the signed artifact in dist-app/.
-      - name: Sign Windows installer (SignPath — Phase H)
-        if: matrix.platform == 'windows' && env.SIGNPATH_API_TOKEN != ''
-        shell: bash
-        run: |
-          echo "TODO(Phase H): wire signpath/github-action-submit-signing-request@v1"
-          echo "  inputs:"
-          echo "    api-token: \${{ env.SIGNPATH_API_TOKEN }}"
-          echo "    organization-id: \${{ secrets.SIGNPATH_ORG_ID }}"
-          echo "    project-slug: gaia-agent-ui"
-          echo "    signing-policy-slug: release-signing"
-          echo "    github-artifact-name: windows-installer"
-          echo "    wait-for-completion: true"
+      # ─── SignPath signing (Phase H — opt-in via secrets) ────────────
+      # This step uploads the unsigned NSIS .exe to SignPath for code
+      # signing, then downloads the signed artifact back over the same
+      # filename. SignPath OSS is free for open-source projects:
+      # https://signpath.org/products/foundation
+      #
+      # Required GitHub Action secrets (set up once via SignPath onboarding):
+      #   SIGNPATH_API_TOKEN  — issued by SignPath after OSS approval
+      #   SIGNPATH_ORG_ID     — your SignPath organization UUID
+      #
+      # Until both secrets are set, this step is silently skipped and the
+      # NSIS installer ships unsigned. End-users see a SmartScreen
+      # warning the first time they run an unsigned installer; the
+      # troubleshooting guide documents the bypass step.
+      - name: Sign Windows installer (SignPath)
+        if: matrix.platform == 'windows' && env.SIGNPATH_API_TOKEN != '' && env.SIGNPATH_ORG_ID != ''
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ env.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORG_ID }}
+          project-slug: gaia-agent-ui
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: gaia-installer
+          github-artifact-id: ${{ steps.upload-artifacts.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: src/gaia/apps/webui/dist-app/
 
       # ─── Inspect build output ───────────────────────────────────────
       - name: List build artifacts

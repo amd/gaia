@@ -1,0 +1,230 @@
+---
+title: 'Code Signing'
+description: 'How GAIA Agent UI installers are code-signed for Windows and macOS, and how to set it up for the first time.'
+icon: 'shield-check'
+---
+
+<Note>
+This is an **administrator / operations guide**. End users don't need to read this — they just download a signed installer from [GitHub Releases](https://github.com/amd/gaia/releases/latest). This document explains how the signing infrastructure is wired up and what credentials need to exist for signing to actually happen.
+</Note>
+
+## Why we sign
+
+Every GAIA Agent UI release ships installers for Windows (NSIS `.exe`), macOS (DMG), and Linux (DEB + AppImage). On Windows and macOS, **unsigned** installers trigger scary OS warnings:
+
+- **Windows SmartScreen**: *"Windows protected your PC"* — the user has to click *More info* → *Run anyway*
+- **macOS Gatekeeper**: *"GAIA Agent UI cannot be opened because the developer cannot be verified"* — the user has to right-click → *Open* → *Open*
+
+Both of these are **the leading cause of install abandonment** for unsigned consumer apps. Code signing eliminates them.
+
+Linux artifacts (DEB + AppImage) are GPG-signed via electron-builder's standard mechanism — no extra setup beyond the GitHub-managed signing key.
+
+## Architecture
+
+```
+                    ┌──────────────────────────┐
+                    │ build-installers.yml     │
+                    │ (GitHub Actions)         │
+                    └─────────┬────────────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              │               │               │
+              ▼               ▼               ▼
+        ┌──────────┐    ┌──────────┐    ┌──────────┐
+        │ Windows  │    │  macOS   │    │  Linux   │
+        │ NSIS exe │    │   DMG    │    │ DEB+App  │
+        └────┬─────┘    └────┬─────┘    └────┬─────┘
+             │               │               │
+             ▼               ▼               ▼
+        ┌──────────┐    ┌──────────────┐  ┌──────────┐
+        │ SignPath │    │ Apple        │  │ GPG      │
+        │   OSS    │    │ Developer ID │  │ key      │
+        │  (free)  │    │ + notarize   │  │          │
+        └──────────┘    └──────────────┘  └──────────┘
+```
+
+| Platform | Signing service | Credential type | Cost |
+|---|---|---|---|
+| **Windows** | [SignPath OSS Foundation](https://signpath.org/products/foundation) | API token | **Free** for OSS |
+| **macOS** | Apple Developer ID + notarytool | `.p12` cert + Apple ID | $99/yr (Apple Developer Program) |
+| **Linux DEB** | electron-builder GPG | GPG private key | Free |
+| **Linux AppImage** | electron-builder GPG | GPG private key | Free |
+
+## Windows: SignPath setup
+
+SignPath provides free Windows code signing for open-source projects via their [Foundation tier](https://signpath.org/products/foundation). One-time setup, takes ~1 week for OSS approval.
+
+### Step 1: Apply for SignPath OSS
+
+1. Go to <https://signpath.org/products/foundation>
+2. Click **Apply for free signing**
+3. Fill out the form pointing at `https://github.com/amd/gaia`
+4. Reference the GAIA project description and link to this docs page
+5. Wait ~1 week for the SignPath team to review and approve
+
+### Step 2: Configure the project in SignPath
+
+After approval, SignPath gives you access to a project dashboard. Create:
+
+| Setting | Value |
+|---|---|
+| Project slug | `gaia-agent-ui` |
+| Signing policy slug | `release-signing` |
+| Artifact configuration slug | `gaia-installer` |
+| Trusted build system | GitHub |
+| Repository | `amd/gaia` |
+| Workflow path | `.github/workflows/build-installers.yml` |
+| Workflow name | `Build Installers` |
+| Branch/tag pattern | `refs/tags/v*` |
+| Approval mode | Automatic |
+
+These match the values in `.signpath/policies/gaia.policy` (checked into the repo for auditability).
+
+### Step 3: Add GitHub Action secrets
+
+In the `amd/gaia` repository settings → Secrets and variables → Actions → New repository secret, add:
+
+| Secret name | Value |
+|---|---|
+| `SIGNPATH_API_TOKEN` | API token from SignPath dashboard |
+| `SIGNPATH_ORG_ID` | Your SignPath organization UUID |
+
+The `build-installers.yml` workflow's signing step is gated on **both** secrets being present — until they're both set, the workflow ships an unsigned NSIS installer and the troubleshooting guide tells users how to bypass SmartScreen.
+
+### Step 4: Test the integration
+
+1. Push a release candidate tag: `git tag v0.17.2-rc.1 && git push --tags`
+2. The `Build Installers` workflow runs
+3. Watch for the **Sign Windows installer (SignPath)** step — it should now upload the `.exe` to SignPath, wait for signing, and download the signed artifact back
+4. Download the artifact and verify it's signed:
+   ```powershell
+   signtool verify /pa /v "GAIA Agent UI-0.17.2-rc.1-x64-Setup.exe"
+   ```
+
+## macOS: Apple Developer ID setup
+
+macOS signing uses Apple's standard Developer ID + notarization flow via `electron-builder` and `notarytool`. Requires an Apple Developer Program membership ($99/yr).
+
+### Step 1: Apple Developer Program
+
+If AMD doesn't already have a Developer Program enrollment for the GAIA team:
+
+1. Enroll at <https://developer.apple.com/programs/enroll/>
+2. Choose **Organization** (not individual)
+3. Provide AMD's D-U-N-S number
+4. Wait for Apple to verify the organization
+
+### Step 2: Generate a Developer ID Application certificate
+
+1. Sign in to <https://developer.apple.com/account/resources/certificates>
+2. Click **+** → **Developer ID Application**
+3. Generate a CSR via Keychain Access
+4. Download the `.cer` and double-click to install in Keychain
+5. Export the **private key + certificate** as a `.p12` file with a strong password
+6. Base64-encode the `.p12` for storage in GitHub Secrets:
+   ```bash
+   base64 -i GAIA-Developer-ID.p12 | pbcopy
+   ```
+
+### Step 3: Create an app-specific password for notarization
+
+1. Sign in to <https://appleid.apple.com>
+2. **Security** → **App-Specific Passwords** → **Generate**
+3. Label it `gaia-agent-ui-notarize`
+4. Copy the password (you can't view it again)
+
+### Step 4: Add GitHub Action secrets
+
+In repository settings → Secrets and variables → Actions, add:
+
+| Secret name | Value |
+|---|---|
+| `CSC_LINK` | Base64-encoded `.p12` file from Step 2 |
+| `CSC_KEY_PASSWORD` | The password you set on the `.p12` |
+| `APPLE_ID` | Apple Developer Program email |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password from Step 3 |
+| `APPLE_TEAM_ID` | 10-character team ID from Apple Developer dashboard |
+
+The `build-installers.yml` workflow auto-detects these via `if: env.APPLE_ID != ''`. Until they're set, the workflow ships an unsigned `.dmg` and the troubleshooting guide tells users how to bypass Gatekeeper.
+
+### Step 5: Enable notarization
+
+In `src/gaia/apps/webui/electron-builder.yml`, change:
+
+```yaml
+mac:
+  notarize: false  # ← change to true (or remove the line entirely)
+```
+
+When `notarize` is `true` (or unset) and the Apple credentials are present, electron-builder will:
+
+1. Sign the `.app` bundle
+2. Create the `.dmg`
+3. Upload to Apple's notarization service
+4. Wait for notarization to complete (usually < 5 minutes)
+5. Staple the notarization ticket to the `.dmg`
+
+### Step 6: Test the integration
+
+1. Push a release candidate tag
+2. Watch the macOS job — look for `notarytool history` and the staple step
+3. Download the signed `.dmg`
+4. Verify it's signed and notarized:
+   ```bash
+   spctl --assess -vv "GAIA Agent UI-0.17.2-rc.1-arm64.dmg"
+   # Should print: GAIA Agent UI-0.17.2-rc.1-arm64.dmg: accepted
+   #               source=Notarized Developer ID
+   ```
+
+## Linux: GPG signing
+
+`electron-builder` signs `.deb` packages with a GPG key automatically. The Linux runner needs:
+
+| Secret name | Value |
+|---|---|
+| `GPG_PRIVATE_KEY` | ASCII-armored private key block |
+| `GPG_KEY_PASSPHRASE` | Passphrase for the key |
+
+These are picked up by electron-builder via env vars. The corresponding public key should be published to a keyserver and listed in the docs so users can verify the signatures.
+
+For AppImages, signing is GPG-based via `appimagetool --sign`. Same key works for both.
+
+## Troubleshooting
+
+### "SignPath approval is taking forever"
+
+The OSS approval queue is sometimes 1–2 weeks. **Don't block release on it** — ship unsigned, have the troubleshooting guide ready, and backfill signing when approval comes through. The unsigned `.exe` works; users just see the SmartScreen warning.
+
+### "macOS notarization fails on every build"
+
+Check the notarization log:
+
+```bash
+xcrun notarytool log <submission-id> --keychain-profile AC_PASSWORD
+```
+
+Common causes:
+
+- **Hardened runtime entitlements wrong** — verify `installer/macos/entitlements.mac.plist` has all 5 entitlements (jit, allow-unsigned-executable-memory, disable-library-validation, allow-dyld-environment-variables, inherit). Without these, the notarized `.app` will install but **crash on first launch when it tries to spawn `uv`**.
+- **Helper apps not signed** — Electron's framework helpers must be signed too; electron-builder handles this automatically but it can fail if the `.p12` is missing intermediate certificates.
+- **Apple Developer ID expired** — they expire every 5 years. Re-generate and re-upload to GitHub Secrets.
+
+### "I need to revoke a signing key"
+
+For SignPath: contact SignPath support to invalidate the project token. The next build will produce an unsigned installer.
+
+For Apple Developer ID: revoke the cert in the Apple Developer dashboard. **Existing notarized `.dmg`s remain valid** because notarization tickets are stapled at build time, but new builds will fail until you generate a new cert.
+
+### "Can I test signing locally?"
+
+Yes for macOS — if you have a Developer ID cert in your local Keychain, electron-builder picks it up automatically when you run `npm run package:mac` locally. Set `notarize: false` in `electron-builder.yml` for local builds (notarization requires the credentials).
+
+For Windows, SignPath's OSS tier is GitHub-only — you can't sign locally. Use unsigned local builds for development and let CI sign release tags.
+
+## References
+
+- SignPath OSS Foundation: <https://signpath.org/products/foundation>
+- SignPath GitHub Action: <https://github.com/signpath/github-action-submit-signing-request>
+- Apple notarization docs: <https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution>
+- electron-builder code signing: <https://www.electron.build/code-signing>
+- GAIA desktop installer plan: [`docs/plans/desktop-installer.mdx`](../plans/desktop-installer)
