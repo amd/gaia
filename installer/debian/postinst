@@ -11,6 +11,13 @@ set -e
 
 case "$1" in
     configure)
+        # Chromium's SUID sandbox helper must be owned by root and have mode
+        # 4755. electron-builder packages it as 755; we fix it here so the
+        # app can start without --no-sandbox.
+        if [ -f /opt/GAIA/chrome-sandbox ]; then
+            chown root:root /opt/GAIA/chrome-sandbox
+            chmod 4755 /opt/GAIA/chrome-sandbox
+        fi
         # Refresh the desktop database so the installed .desktop entry is
         # picked up by menus, launchers, and file associations.
         if command -v update-desktop-database >/dev/null 2>&1; then

@@ -840,7 +840,7 @@ async function installBackend(opts = {}) {
 
     const initResult = await runCommand(
       GAIA_BIN,
-      ["init", "--profile", "minimal"],
+      ["init", "--profile", "minimal", "--yes"],
       { stageLabel: "gaia-init" }
     );
 
