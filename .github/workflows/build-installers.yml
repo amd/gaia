@@ -58,6 +58,20 @@ on:
         required: false
         type: boolean
         default: false
+  # Validate installer builds on any PR that touches installer-related files.
+  # Gated on paths so normal PRs don't pay the ~15min cross-platform build cost.
+  # This catches electron-builder config drift, entitlement breakage, NSIS
+  # script errors, etc. BEFORE they land on main.
+  pull_request:
+    paths:
+      - '.github/workflows/build-installers.yml'
+      - 'installer/**'
+      - 'src/gaia/apps/webui/electron-builder.yml'
+      - 'src/gaia/apps/webui/package.json'
+      - 'src/gaia/apps/webui/package-lock.json'
+      - 'src/gaia/apps/webui/main.cjs'
+      - 'src/gaia/apps/webui/bin/**'
+      - 'src/gaia/apps/webui/services/**'
 
 permissions:
   contents: write  # softprops/action-gh-release needs this to upload assets
