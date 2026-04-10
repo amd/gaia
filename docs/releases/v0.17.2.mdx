@@ -23,7 +23,7 @@ GAIA v0.17.2 makes GAIA a real desktop app. Download a one-click installer for W
 GAIA now ships as a native desktop app for every platform (PR #731). Download the installer and double-click — no Python, no `pip`, no terminal required.
 
 **What you can do:**
-- Download `gaia-agent-ui-*.exe` (Windows), `.dmg` (macOS), `.deb` or `.AppImage` (Linux) from [GitHub Releases](https://github.com/amd/gaia/releases/tag/v0.17.2)
+- Download `gaia-agent-ui-*.exe` (Windows), `.dmg` (macOS), `.deb` or `.AppImage` (Linux) from [GitHub Releases](https://github.com/amd/gaia/releases)
 - On first launch, the app downloads `uv`, creates a Python venv, installs the GAIA backend, and starts Lemonade Server automatically
 - When a new version is available, you'll see a "Restart to update" prompt — same flow as Slack or VS Code
 - Uninstall via Add/Remove Programs, drag-to-Trash, or `apt remove`; user data in `~/.gaia/` is preserved unless you explicitly purge it with `gaia uninstall`
@@ -47,7 +47,7 @@ GAIA now supports per-session agent selection, and you can create your own agent
 - Click the "+" button to open the Builder Agent, which asks what you want your agent to do and generates `agent.py` (with optional MCP scaffolding) — it appears in the selector immediately, no server restart needed
 - Drop a Python module (`~/.gaia/agents/*/agent.py`) or YAML manifest (`~/.gaia/agents/*/agent.yaml`) in place and it's discovered on the next server restart
 - YAML manifests support MCP servers, model preferences, and conversation starters
-- The message header shows "GAIA {Agent Name} | Thinking" during streaming and "GAIA {Agent Name} | 3m ago" after completion
+- The message header shows the agent name — "GAIA My Agent | Thinking" during streaming and "GAIA My Agent | 3m ago" after completion
 
 **Under the hood:**
 - `AgentRegistry` discovers agents at boot from built-in Python agents, custom Python modules, and YAML manifests
