@@ -1,0 +1,132 @@
+---
+title: 'Installation Troubleshooting'
+description: 'Common install failure modes and how to fix them.'
+icon: 'wrench'
+---
+
+This guide covers common problems people encounter when installing GAIA Agent UI. If your issue isn't listed here, please [open a GitHub issue](https://github.com/amd/gaia/issues/new) and attach `~/.gaia/electron-install.log`.
+
+## Windows: SmartScreen blocks the installer {#smartscreen}
+
+**Symptom**: Running the `.exe` installer shows "Windows protected your PC".
+
+**Cause**: The installer is unsigned (we're working on Windows code signing — see [#530](https://github.com/amd/gaia/issues/530)).
+
+**Fix**: Click **More info** → **Run anyway**. The installer is safe — you can verify by checking the SHA-256 hash against the [GitHub Release page](https://github.com/amd/gaia/releases/latest).
+
+## macOS: Gatekeeper blocks the app {#gatekeeper}
+
+**Symptom**: "GAIA Agent UI cannot be opened because the developer cannot be verified."
+
+**Cause**: The DMG is unsigned (we're working on Apple notarization — see [#530](https://github.com/amd/gaia/issues/530)).
+
+**Fix**: Right-click GAIA Agent UI in Applications and choose **Open**. In the dialog that appears, click **Open**. macOS remembers this choice for future launches.
+
+If that doesn't work:
+```bash
+xattr -d com.apple.quarantine /Applications/GAIA\ Agent\ UI.app
+```
+
+## First-launch backend install fails
+
+The Electron app launches but the backend install fails with an error dialog. Common causes:
+
+### Insufficient disk space
+
+**Symptom**: Error dialog says "Not enough free disk space (X GB available, 3 GB required)".
+
+**Fix**: Free at least 3 GB of disk space and click **Retry**. The Python environment + minimal model needs ~3 GB.
+
+### No internet connection
+
+**Symptom**: Error dialog says "You appear to be offline".
+
+**Fix**: Connect to the internet and click **Retry**. The first launch needs to download:
+- `uv` (~30 MB)
+- Python 3.12 (~100 MB)
+- amd-gaia + dependencies (~1.5 GB)
+- Lemonade Server (~50 MB)
+- Minimal model (~400 MB)
+
+Subsequent launches work fully offline.
+
+### Corporate proxy / firewall
+
+**Symptom**: Install fails with network errors during `uv` or `pip install`.
+
+**Fix**: Set the `HTTPS_PROXY` environment variable before launching GAIA:
+
+**Windows (PowerShell)**:
+```powershell
+$env:HTTPS_PROXY = "http://proxy.example.com:8080"
+& "$env:LOCALAPPDATA\Programs\gaia-agent-ui\GAIA Agent UI.exe"
+```
+
+**macOS/Linux**:
+```bash
+HTTPS_PROXY=http://proxy.example.com:8080 open -a "GAIA Agent UI"
+# or just:
+HTTPS_PROXY=http://proxy.example.com:8080 gaia-ui
+```
+
+### Antivirus interference
+
+**Symptom**: Install gets stuck or fails midway.
+
+**Fix**: Some antivirus products quarantine the `uv` binary or Python downloads. Add an exclusion for `~/.gaia/` and re-run the install.
+
+### Missing C++ build tools (Windows, rare)
+
+**Symptom**: `pip install` fails with "Microsoft Visual C++ 14.0 or greater is required".
+
+**Cause**: Some Python packages have native extensions that need a C++ compiler. We use uv which prefers prebuilt wheels, but in rare cases this falls through.
+
+**Fix**: Install Microsoft Visual Studio Build Tools from <https://visualstudio.microsoft.com/visual-cpp-build-tools/>. Restart and click **Retry**.
+
+## App installs but won't start
+
+### Backend not found
+**Symptom**: App opens to a blank window or shows "Backend not found".
+
+**Fix**: Check `~/.gaia/electron-install.log` for the actual error. The most common cause is a partial install — delete `~/.gaia/venv/` and relaunch GAIA to trigger a fresh install.
+
+### Tray icon missing
+**Symptom**: App launches but no tray icon appears.
+
+**Fix**: On Linux, ensure your desktop environment supports system tray icons (KDE/XFCE work; some GNOME setups need an extension). On Windows, check if the icon is hidden — click the **^** in the system tray to expand hidden icons.
+
+## Update isn't being detected
+
+**Symptom**: A new version is published on GitHub Releases but GAIA doesn't notify you.
+
+**Fix**:
+1. Check that `GAIA_DISABLE_UPDATE` is NOT set in your environment
+2. The check runs 10 seconds after launch and every 4 hours — be patient or restart the app
+3. Check `~/.gaia/electron-updater.log` for any errors
+4. As a last resort, download the new installer manually from GitHub Releases
+
+## Uninstall doesn't remove all data
+
+**Symptom**: After uninstalling, data still exists in `~/.gaia/`.
+
+**Cause**: This is intentional — the default uninstall keeps your data so reinstalling preserves your chats and documents.
+
+**Fix**: To fully remove all GAIA data, run:
+```bash
+~/.gaia/venv/bin/gaia uninstall --purge
+```
+
+Add `--purge-lemonade` to also uninstall Lemonade Server, or `--purge-models` to also remove downloaded models.
+
+## How to attach the install log to a bug report
+
+1. Open the install log with your text editor: `~/.gaia/electron-install.log`
+2. Copy the contents (or attach the file)
+3. Open a new issue at <https://github.com/amd/gaia/issues/new>
+4. Paste the log into the issue body, surrounded by triple backticks
+
+## See also
+
+- [Installation guide](/guides/install) — how to download and install GAIA Agent UI
+- [FAQ](/reference/faq) — common questions
+- [General troubleshooting](/reference/troubleshooting) — runtime issues after install
