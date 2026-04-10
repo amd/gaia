@@ -167,7 +167,7 @@ The Electron app already runs as a tray application via `services/tray-manager.c
 
 | Platform | Mechanism | Default |
 |---|---|---|
-| **Windows NSIS** | Wizard checkbox: "Start GAIA when I sign in to Windows" → writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing at `gaia-ui.exe --minimized` | **ON** (matches Slack/Discord/Zoom convention) |
+| **Windows NSIS** | `customInstall` hook writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing at `gaia-ui.exe --minimized`. No finish-page checkbox — MUI_FINISHPAGE_SHOWREADME is incompatible with electron-builder's shared install/uninstall page flow (breaks the build). Users can disable autostart via the tray menu → Settings → "Launch at login", Task Manager → Startup, or regedit. | **ON** (matches Slack/Discord/Zoom convention) |
 | **macOS DMG** | No installer-time hook (DMG is just a copy). Default OFF; after first successful launch, the app shows a non-blocking banner: *"GAIA can start when you sign in. Enable in Settings."* User can dismiss or enable via in-app Settings → `app.setLoginItemSettings({ openAtLogin: true })`. | OFF (in-app prompt on second launch) |
 | **Linux DEB** | `postinst` does NOT write autostart by default (Debian convention). Setting available in-app, writes `~/.config/autostart/gaia-ui.desktop`. | OFF (in-app setting) |
 | **Linux AppImage** | No installer-time hook. In-app setting only. | OFF (in-app setting) |
@@ -406,7 +406,7 @@ Replace `forge.config.cjs` with electron-builder's `build` section. **The existi
 - **Remove `electron-squirrel-startup`** from `dependencies` and from `main.cjs`
 - Move locale-pruning logic to `installer/scripts/after-pack.cjs` (electron-builder `afterPack` hook)
 - Move 4-part → 3-part SemVer normalizer to `installer/version/normalize.mjs`
-- NSIS installer template at `installer/nsis/installer.nsh` — custom pages for license acceptance and the auto-start checkbox
+- NSIS installer template at `installer/nsis/installer.nsh` — `customInstall` / `customUnInstall` hooks that write and remove the autostart HKCU Run key
 - **No Squirrel migration code.** Release notes document the manual uninstall step for v0.17.1 users.
 
 **Acceptance:**
@@ -571,7 +571,7 @@ Apply for SignPath OSS for Windows; configure Apple Developer ID for macOS. Part
 installer/
 ├── README.md                          # How to build installers locally; Lemonade reference notes
 ├── nsis/
-│   ├── installer.nsh                  # Custom NSIS pages (license, auto-start checkbox)
+│   ├── installer.nsh                  # customInstall/customUnInstall hooks (autostart Run key)
 │   ├── installer-banner.bmp
 │   ├── installer-sidebar.bmp
 │   └── icon.ico
@@ -695,7 +695,7 @@ scripts/bump-ui-version.mjs
 
 | Platform | Format | Auto-Update | Shortcut | Delta Updates | Code Signed | Auto-start | Size (est.) |
 |----------|--------|-------------|----------|---------------|-------------|------------|-------------|
-| Windows x64 | `.exe` (NSIS) | Yes | Start Menu + Desktop | Yes (`.blockmap`) | Yes (SignPath) | Wizard checkbox (default ON) | ~85 MB |
+| Windows x64 | `.exe` (NSIS) | Yes | Start Menu + Desktop | Yes (`.blockmap`) | Yes (SignPath) | Unconditional via `customInstall` (default ON, disable via tray menu / Task Manager) | ~85 MB |
 | macOS Apple Silicon | `.dmg` | Yes | `/Applications` | Yes (`.blockmap`) | Yes (Apple Developer ID + notarized) | In-app prompt on second launch (default OFF) | ~95 MB |
 | Linux x64 | `.AppImage` | Yes | Manual `.desktop` | Yes (`.blockmap`) | GPG-signed only | In-app setting (default OFF) | ~90 MB |
 | Linux x64 | `.deb` | No (apt) | Yes (`.desktop`) | No | GPG-signed | In-app setting (default OFF) | ~85 MB |
@@ -770,7 +770,7 @@ A non-developer user can:
 - [ ] See a clear progress dialog while the Python backend (uv + venv + amd-gaia + Lemonade + minimal model) installs automatically on first launch
 - [ ] If the install fails, see an error dialog with a Retry button, a "Manual install instructions" link, and a log file path
 - [ ] Send their first prompt within 10 minutes of starting the download (assuming minimal profile and reasonable connection)
-- [ ] On Windows, opt into auto-start at sign-in via the wizard checkbox (default ON)
+- [ ] On Windows, get auto-start at sign-in configured automatically (default ON via `customInstall`, can be disabled via Task Manager → Startup or the in-app tray menu)
 - [ ] Get a notification when a new version is available
 - [ ] Click "Restart to update" and have the app update without losing chat history
 - [ ] Uninstall via the OS-native flow (Add or Remove Programs / drag to Trash / `apt remove`) and have the app cleanly removed
@@ -836,7 +836,7 @@ Every release candidate must pass this matrix on a clean machine before announce
 | **User antivirus flags unsigned NSIS as a threat** | High | High | Sign as soon as SignPath is approved; document SmartScreen bypass in troubleshooting; consider delaying public announcement until signed |
 | **Backend install fails due to missing C++ build tools (rare with uv prebuilt wheels but possible)** | Low | Medium | Document recommendation to install Visual Studio Build Tools in troubleshooting; uv typically uses prebuilt wheels |
 | **Disk space exhaustion mid-install on small SSDs** | Medium | Medium | Pre-check 3 GB free at install start; friendly dialog if insufficient |
-| **Auto-start ON default upsets some Windows users** | Low | Low | Wizard checkbox is highly visible; in-app setting easy to find; matches Slack/Discord/Zoom convention |
+| **Auto-start ON default upsets some Windows users** | Low | Low | In-app tray menu lets users disable it; Task Manager → Startup is the Windows-standard opt-out; matches Slack/Discord/Zoom convention |
 | **User installs via npm AND via desktop installer simultaneously** | Medium | Low | Both share `~/.gaia/venv/`; they don't conflict; documented in FAQ |
 | **NSIS scripting learning curve blocks Phase C** | Medium | Medium | Allocate explicit learning time; reference electron-builder examples + community templates; NSIS is well-documented |
 | **macOS hardened runtime entitlements wrong → app crashes on first launch when spawning child processes** | Medium | High | Explicit entitlements list in Phase E; manual cross-platform test required (§11.1) before signing rollout |

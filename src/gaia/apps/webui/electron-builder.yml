@@ -142,6 +142,12 @@ linux:
         - x64
   icon: ../../../../installer/linux/gaia-ui.png
   category: Development
+  # Maintainer is required by electron-builder for .deb packages (fpm
+  # propagates this into the Debian control file). Falls back to
+  # `author.email` in package.json if not set, which we don't have — so
+  # it must be set explicitly here. Use a project-scoped address rather
+  # than a real inbox so we don't leak individual maintainer emails.
+  maintainer: GAIA maintainers <gaia@amd.com>
   artifactName: ${productName}-${version}-${arch}.${ext}
   desktop:
     entry:
