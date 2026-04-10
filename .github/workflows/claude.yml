@@ -245,15 +245,16 @@ jobs:
             - Make it easy for maintainers to accept suggestions with one click
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
+  #
+  # NOTE: No concurrency group - each @claude mention runs its own independent job in parallel
+  # so that burst of comments on different topics all get answered. Safe because this job
+  # only reads the PR diff and posts comments (no commits to the branch).
   pr-comment:
     if: |
       github.event_name == 'pull_request_review_comment' &&
       contains(github.event.comment.body, '@claude') &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    concurrency:
-      group: claude-pr-comment-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v6
         with:
@@ -330,15 +331,16 @@ jobs:
             Maintain a helpful, professional tone.
 
   # Respond to new issues or @claude mentions in PR conversations (including forks)
+  #
+  # NOTE: No concurrency group - each @claude mention runs its own independent job in parallel
+  # so that burst of comments on different topics all get answered. Safe because this job
+  # only reads the PR diff and posts comments (no commits to the branch).
   issue-handler:
     if: |
       github.event_name == 'issues' ||
       (github.event_name == 'issue_comment' &&
        contains(github.event.comment.body, '@claude'))
     runs-on: ubuntu-latest
-    concurrency:
-      group: claude-issue-${{ github.event.issue.number }}
-      cancel-in-progress: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6

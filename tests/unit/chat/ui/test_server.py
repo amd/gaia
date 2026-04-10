@@ -1437,9 +1437,24 @@ class TestValidateFilePath:
     def test_allows_document_extensions(self):
         from pathlib import Path
 
-        for ext in [".pdf", ".doc", ".docx", ".csv", ".json", ".yaml"]:
+        # Only list extensions that have real extractors in
+        # src/gaia/rag/sdk.py::_extract_text_from_file. See
+        # ``ALLOWED_EXTENSIONS`` in src/gaia/ui/utils.py for the canonical list.
+        for ext in [".pdf", ".txt", ".md", ".csv", ".json", ".xlsx", ".yaml"]:
             # Should not raise
             _validate_file_path(Path(f"/home/user/file{ext}").resolve())
+
+    def test_rejects_legacy_office_extensions(self):
+        """Office formats without extractors must be rejected, not silently
+        indexed as binary garbage. Regression test for the allowlist cleanup
+        that removed .doc/.docx/.ppt/.pptx/.xls — GAIA does not currently
+        ship python-docx/python-pptx/xlrd so these would produce garbage."""
+        from pathlib import Path
+
+        for ext in [".doc", ".docx", ".ppt", ".pptx", ".xls"]:
+            with pytest.raises(Exception) as exc_info:
+                _validate_file_path(Path(f"/home/user/file{ext}").resolve())
+            assert exc_info.value.status_code == 400
 
     @patch("gaia.ui.server._index_document")
     def test_upload_rejects_unsafe_extension(self, mock_index, client):
