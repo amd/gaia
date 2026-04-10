@@ -45,18 +45,18 @@ Linux artifacts (DEB + AppImage) are GPG-signed via electron-builder's standard 
 
 | Platform | Signing service | Credential type | Cost |
 |---|---|---|---|
-| **Windows** | [SignPath OSS Foundation](https://signpath.org/products/foundation) | API token | **Free** for OSS |
+| **Windows** | [SignPath OSS Foundation](https://signpath.io/solutions/open-source-community) | API token | **Free** for OSS |
 | **macOS** | Apple Developer ID + notarytool | `.p12` cert + Apple ID | $99/yr (Apple Developer Program) |
 | **Linux DEB** | electron-builder GPG | GPG private key | Free |
 | **Linux AppImage** | electron-builder GPG | GPG private key | Free |
 
 ## Windows: SignPath setup
 
-SignPath provides free Windows code signing for open-source projects via their [Foundation tier](https://signpath.org/products/foundation). One-time setup, takes ~1 week for OSS approval.
+SignPath provides free Windows code signing for open-source projects via their [Foundation tier](https://signpath.io/solutions/open-source-community). One-time setup, takes ~1 week for OSS approval.
 
 ### Step 1: Apply for SignPath OSS
 
-1. Go to [https://signpath.org/products/foundation](https://signpath.org/products/foundation)
+1. Go to [https://signpath.io/solutions/open-source-community](https://signpath.io/solutions/open-source-community)
 2. Click **Apply for free signing**
 3. Fill out the form pointing at `https://github.com/amd/gaia`
 4. Reference the GAIA project description and link to this docs page
@@ -223,7 +223,7 @@ For Windows, SignPath's OSS tier is GitHub-only — you can't sign locally. Use 
 
 ## References
 
-- SignPath OSS Foundation: [https://signpath.org/products/foundation](https://signpath.org/products/foundation)
+- SignPath OSS Foundation: [https://signpath.io/solutions/open-source-community](https://signpath.io/solutions/open-source-community)
 - SignPath GitHub Action: [https://github.com/signpath/github-action-submit-signing-request](https://github.com/signpath/github-action-submit-signing-request)
 - Apple notarization docs: [https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)
 - electron-builder code signing: [https://www.electron.build/code-signing](https://www.electron.build/code-signing)
