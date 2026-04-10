@@ -20,6 +20,7 @@ Pipeline Flow:
 6. PipelineExecutor → Agent sequence execution
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -474,6 +475,39 @@ Provide a structured topology design."""
                 return "gap_detection_complete_pending_execution"
         else:
             return "complete"
+
+    def _analyze_with_llm(self, query: str, system_prompt: str = "") -> Dict[str, Any]:
+        """Helper method to analyze with LLM and parse JSON response."""
+        import re
+
+        try:
+            messages = [{"role": "user", "content": query}]
+            response = self.chat.send_messages(messages, system_prompt=system_prompt)
+            response_text = (
+                response.text if hasattr(response, "text") else str(response)
+            )
+
+            if isinstance(response_text, str):
+                json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
+                if json_match:
+                    return json.loads(json_match.group())
+                else:
+                    logger.warning(
+                        f"LLM returned prose (no JSON block) — pipeline stage will "
+                        f"degrade. First 200 chars: {response_text[:200]!r}"
+                    )
+                    return {"raw_response": response_text}
+            elif isinstance(response, dict):
+                return response
+            else:
+                return {"raw_response": response_text}
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse LLM response as JSON: {e}")
+            return {"error": f"JSON parse error: {e}"}
+        except Exception as e:
+            logger.error(f"LLM analysis failed: {e}")
+            return {"error": str(e)}
 
     def run_pipeline(
         self, task_description: str, auto_spawn: bool = True

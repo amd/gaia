@@ -232,7 +232,7 @@ Return JSON:
             return gaps_result
 
         @tool
-        def load_component_template(component_path: str) -> Dict[str, Any]:
+        def load_component_template_loom(component_path: str) -> Dict[str, Any]:
             """
             Load a component template from component-framework.
 

@@ -275,9 +275,9 @@ prompt: |
             try:
                 # Attempt to access MCP registry - this is a stub that will be
                 # replaced with actual MCP connection checking in production
-                from gaia.mcp.mcp_bridge import MCPBridge
+                from gaia.mcp.mcp_bridge import GAIAMCPBridge
 
-                bridge = MCPBridge()
+                bridge = GAIAMCPBridge()
                 available = bridge.get_available_servers()
 
                 for server in required_servers:

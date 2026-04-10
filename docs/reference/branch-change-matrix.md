@@ -5,9 +5,9 @@
 **Document Type:** Program-Level Change Reference
 **Branch:** `feature/pipeline-orchestration-v1`
 **Target Branch:** `main`
-**Document Status:** Draft — complete, all sections present
-**Produced by:** software-program-manager
-**Date:** 2026-04-09
+**Document Status:** Draft — active, updated 2026-04-10 with Session-2 bug fixes, P0 fixes, and integration test
+**Produced by:** software-program-manager + recursive agent pipeline (planning-analysis-strategist → software-program-manager → senior-developer → enhanced-senior-developer → quality-reviewer → testing-quality-specialist → technical-writer-expert)
+**Date:** 2026-04-10
 
 ---
 
@@ -27,12 +27,12 @@ The matrix is organized by system category rather than by commit order. Each ent
 | Lines inserted | 306,247 |
 | Lines deleted | 13,447 |
 | Net lines added | 292,800 |
-| Branch-specific commits | 74 |
+| Branch-specific commits | 78 committed + 11 files modified / 1 file added pending commit (Session-2, 2026-04-10) |
 | Oldest commit date | 2026-03-16 |
-| Most recent commit date | 2026-04-09 |
-| Delivery phases represented | P1, P2, P3-S1, P3-S2, P3-S3, P3-S4, P4-W1, P4-W2, P4-W3, BAIBEL, P5, P6, Session |
+| Most recent commit date | 2026-04-10 (pending commit of Session-2 changes) |
+| Delivery phases represented | P1, P2, P3-S1, P3-S2, P3-S3, P3-S4, P4-W1, P4-W2, P4-W3, BAIBEL, P5, P6, Session, Session-2 |
 
-Note: The planning strategist summary cited 30 branch-specific commits. A full `git log main..HEAD --no-merges` enumeration on 2026-04-07 produced 58 commits; updated enumeration on 2026-04-08 after Phase 5 pull produces 72 commits; updated enumeration on 2026-04-08 after Phase 6 pull (commit `41ee396`) produces 73 commits; updated enumeration on 2026-04-09 after Phase 6 docs pull (commit `e28a922`) produces 74 commits. The 74-commit figure is used throughout this document as the accurate figure. The original discrepancy reflected the strategist counting only pipeline-scoped commits and excluding Agent UI, CI/CD, and pre-existing main-branch backports.
+Note: The planning strategist summary cited 30 branch-specific commits. A full `git log main..HEAD --no-merges` enumeration on 2026-04-07 produced 58 commits; updated enumeration on 2026-04-08 after Phase 5 pull produces 72 commits; updated enumeration on 2026-04-08 after Phase 6 pull (commit `41ee396`) produces 73 commits; updated enumeration on 2026-04-09 after Phase 6 docs pull (commit `e28a922`) produces 74 commits; updated enumeration on 2026-04-09 after matrix dedup commit (`52df806`) and B1-A/B1-B dispatch bug fix commit (`242e380`) produces 78 commits. Session-2 (2026-04-10) introduced 11 modified files and 1 new integration test file, pending commit. The 78-commit figure is used throughout this document as the accurate committed-count. The original discrepancy reflected the strategist counting only pipeline-scoped commits and excluding Agent UI, CI/CD, and pre-existing main-branch backports.
 
 ---
 
@@ -93,6 +93,13 @@ The change matrix in Section 3 uses the following column schema. All reviewers s
   - [BF-04: Pipeline Engine Wiring Bugs — Component Initialization Order](#bf-04-pipeline-engine-wiring-bugs--component-initialization-order)
   - [BF-05: ConfigurableAgent RC#6 and RC#8 — Tool Isolation and Output Propagation Regressions](#bf-05-configurableagent-rc6-and-rc8--tool-isolation-and-output-propagation-regressions)
   - [BF-06: Phase 3 Sprint 4 Integration Test Failures — Fixture Ordering](#bf-06-phase-3-sprint-4-integration-test-failures--fixture-ordering)
+  - [BF-07: B1-A — execute_tool() AttributeError on Every Pipeline Run](#bf-07-b1-a--pipelineorchestratorexecute_tool-attributeerror-on-every-pipeline-run) *(Session-2)*
+  - [BF-08: B1-B — tool_fn(self) TypeError in Five Stage Files](#bf-08-b1-b--tool_fnself-tool_args-typeerror-in-five-stage-files) *(Session-2)*
+  - [BF-09: B2-A — _analyze_with_llm() Missing from PipelineOrchestrator](#bf-09-b2-a--_analyze_with_llm-missing-from-pipelineorchestrator) *(Session-2)*
+  - [BF-10: B3-A — GapDetector Imported Non-Existent MCPBridge Class](#bf-10-b3-a--gapdetector-imported-non-existent-mcpbridge-class) *(Session-2)*
+  - [BF-11: P0-A — Integration Test Fixture Used Wrong Lemonade Default Port](#bf-11-p0-a--integration-test-fixture-used-wrong-lemonade-default-port) *(Session-2)*
+  - [BF-12: P0-B — gaia pipeline CLI Had No Lemonade Readiness Check](#bf-12-p0-b--gaia-pipeline-cli-had-no-lemonade-readiness-check) *(Session-2)*
+  - [BF-13: P0-C — load_component_template Tool Name Collision Across Four Stage Modules](#bf-13-p0-c--load_component_template-tool-name-collision-across-four-stage-modules) *(Session-2)*
 - [Section 6 — Risk Assessment Summary](#section-6--risk-assessment-summary)
   - [High Risk Items](#high-risk-items)
   - [Medium Risk Items](#medium-risk-items)
@@ -176,7 +183,7 @@ The following previously-existing GAIA modules were modified on this branch. The
 | CodeAgent | `src/gaia/agents/code/agent.py` and orchestration files | EXTENDED | Orchestrator, checklist generator, and checklist executor added under `code/orchestration/`. Schema inference added. |
 | MCP Integration | `src/gaia/mcp/` | MODIFIED | Unit test isolation fix applied (tests no longer read `~/.gaia/mcp_servers.json`). Runtime status reporting added. |
 | LLM Backend | `src/gaia/llm/` | MODIFIED | Lemonade version mismatch warning added. Performance tracking hooks added for eval integration. |
-| CLI Entry Point | `src/gaia/cli.py` | EXTENDED | Pipeline CLI stub (`gaia pipeline`) added. |
+| CLI Entry Point | `src/gaia/cli.py` | EXTENDED | Pipeline CLI stub (`gaia pipeline`) added. **Session-2 (2026-04-10, pending commit):** CLI handler fully wired — `gaia pipeline "task" [--model MODEL] [--no-spawn]` invokes `run_pipeline()` with Lemonade readiness check via `initialize_lemonade_for_agent("pipeline")`. `"pipeline": 32768` added to `agent_context_sizes`. Handler gracefully prints stage diagram when no task given. |
 | Build and CI/CD | `.github/workflows/`, `pyproject.toml`, `util/lint.py`, `util/lint.ps1` | MODIFIED | OIDC trusted publishing migration, npm version bump, Agent UI frontend build integration into `gaia init`, merge queue phantom failure fix, webui build test added. |
 
 ---
@@ -212,7 +219,7 @@ The following items were identified as incomplete or deferred at the time of the
 
    (Phase 5 — 2026-04-08 — confirmed: original 6 files unchanged. Phase 5 added 3 more files without frontmatter, bringing total to 9.)
 
-8. **GapDetector MCP runtime dependency — DOCUMENTED.** The GapDetector invokes `master-ecosystem-creator.md` (a Claude Code subagent) when gaps are detected. This creates a runtime dependency on the MCP environment. Phase 5 added: (1) runtime MCP availability check (`check_mcp_availability()` tool), (2) documentation in `config/agents/gap-detector.md` with "Runtime MCP Availability Check" section, and (3) prerequisites warning in `docs/guides/auto-spawn-pipeline.mdx`. For standalone deployments, options are: (a) pre-generate required agents manually, (b) set `auto_spawn=False` to block pipeline when gaps detected, or (c) implement alternative agent generation mechanism. Status: DOCUMENTED with graceful degradation. (Phase 6 — 2026-04-08 — CLOSED: Five MD-frontmatter registry config files added in commit 41ee396: config/agents/domain-analyzer.md, gap-detector.md, loom-builder.md, pipeline-executor.md, workflow-modeler.md. GapDetector Claude Code prerequisite documented in docs/guides/auto-spawn-pipeline.mdx.)
+8. **GapDetector MCP runtime dependency — DOCUMENTED.** The GapDetector invokes `master-ecosystem-creator.md` (a Claude Code subagent) when gaps are detected. This creates a runtime dependency on the MCP environment. Phase 5 added: (1) runtime MCP availability check (`check_mcp_availability()` tool), (2) documentation in `config/agents/gap-detector.md` with "Runtime MCP Availability Check" section, and (3) prerequisites warning in `docs/guides/auto-spawn-pipeline.mdx`. For standalone deployments, options are: (a) pre-generate required agents manually, (b) set `auto_spawn=False` to block pipeline when gaps detected, or (c) implement alternative agent generation mechanism. Status: DOCUMENTED with graceful degradation. (Phase 6 — 2026-04-08 — CLOSED: Five MD-frontmatter registry config files added in commit 41ee396: config/agents/domain-analyzer.md, gap-detector.md, loom-builder.md, pipeline-executor.md, workflow-modeler.md. GapDetector Claude Code prerequisite documented in docs/guides/auto-spawn-pipeline.mdx.) (Session-2 — 2026-04-10 — **B3-A FIXED**: `GapDetector.check_mcp_availability()` was importing `MCPBridge` (non-existent name) instead of `GAIAMCPBridge` (the actual class in `src/gaia/mcp/mcp_bridge.py:116`). The `ImportError` was silently caught by the `except ImportError` handler, masking the bug. Fixed in `src/gaia/pipeline/stages/gap_detector.py:278`. The `get_available_servers()` method does not exist on `GAIAMCPBridge`, so the `except Exception` graceful fallback still applies — `mcp_available: False` is the runtime result. Full MCP availability checking requires a future sprint to wire `GAIAMCPBridge` correctly. Status: IMPORT FIXED, functional fallback confirmed.)
 
 9. **Absorb PR #606 HIGH-severity conflicts during rebase (post-PR #606 merge to main).** Four HIGH-severity collision files must be manually resolved when we rebase `feature/pipeline-orchestration-v1` onto main after PR amd/gaia#606 merges: (C-1) absorb `_register_agent_memory_ops()` into our 1,144-line `_chat_helpers.py`; (C-2) absorb memory schema columns (`embedding BLOB`, `superseded_by TEXT`, `consolidated_at TEXT`) into our 787-line `database.py` `SCHEMA_SQL` constant; (C-3) absorb `AgentLoop` SSE event handlers into our 950-line `sse_handler.py`; (C-4) merge PR #606's MCP health/tool/control endpoints (+206 lines) alongside our 425-line MCP catalog router. All four follow the same resolution pattern: accept our larger module as base, absorb PR's targeted additions. Estimated effort: 3.5 engineer-hours. Owner: [us]. Status: open, blocked on PR #606 merge. See `docs/reference/pr606-integration-analysis.md` Section 4 and Section 9 P1 steps 7–10. (2026-04-08)
 
@@ -227,6 +234,14 @@ The following items were identified as incomplete or deferred at the time of the
 14. **BU-5: GapDetector memory caching with MemoryStore supersession (Phase 6, requires OI-10).** `GapDetector` should cache gap scan results in `MemoryStore` with a configurable TTL. When a gap is filled, call `update_memory()` with the `supersedes` parameter to mark the gap record resolved while preserving audit history via `knowledge.superseded_by` lineage. Eliminates redundant filesystem scans in large workspaces. Requires PR #606 on main and Open Item 10 complete. Owner: [us]. Status: post-merge, Phase 6. (2026-04-08)
 
 15. **BU-6: Declarative memory tool invocations in component-framework templates (Phase 6/7, design session required).** The `component-framework` tool-call fenced block syntax should be extended to recognize PR #606's five memory tools (`remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`) as first-class declarative invocations in agent templates. Requires a joint design session with kovtcharov before implementation. Owner: [joint]. Status: design session required before implementation, Phase 6/7. (2026-04-08)
+
+16. **B2-A FIXED — `PipelineOrchestrator._analyze_with_llm()` missing (Session-2, 2026-04-10, pending commit).** The `PipelineOrchestrator._clear_thought_domain_analysis()`, `_clear_thought_workflow_planning()`, `_clear_thought_topology_design()`, and `_trigger_agent_spawn()` methods all called `self._analyze_with_llm()`, but that method only existed on the five stage classes — not on `PipelineOrchestrator` or its parent `Agent`. Every real `run_pipeline()` invocation hit `AttributeError`, caught by the top-level `except Exception` handler, and returned `pipeline_status: "failed"`. Fix: `_analyze_with_llm(self, query: str, system_prompt: str = "") -> Dict[str, Any]` added to `PipelineOrchestrator` at `src/gaia/pipeline/orchestrator.py:478`. Regression test `test_analyze_with_llm_exists_on_orchestrator` added to `tests/unit/pipeline/test_orchestrator.py`. Status: **FIXED, pending commit.** (2026-04-10)
+
+17. **P0-C FIXED — `load_component_template` tool name collision across four stage modules (Session-2, 2026-04-10, pending commit).** `DomainAnalyzer`, `WorkflowModeler`, `LoomBuilder`, and `PipelineExecutor` each registered a `@tool` named `load_component_template` in the global `ToolRegistry` singleton. The singleton's `register()` method performs `self._tools[name] = {...}` with no collision guard — last writer wins. When `PipelineOrchestrator` instantiated all five stages in sequence, each stage's `load_component_template` closure (capturing that stage's `self`) was overwritten by the next stage's registration. `DomainAnalyzer.execute_tool("load_component_template", ...)` would end up invoking `PipelineExecutor`'s closure, corrupting Stage 1 results with Stage 5 behavior. Fix: renamed to stage-scoped names: `load_component_template_domain` (domain_analyzer.py), `load_component_template_workflow` (workflow_modeler.py), `load_component_template_loom` (loom_builder.py), `load_component_template_executor` (pipeline_executor.py). Status: **FIXED, pending commit.** (2026-04-10)
+
+18. **P0-A FIXED — `require_lemonade` fixture pinged wrong default Lemonade port (Session-2, 2026-04-10, pending commit).** `tests/conftest.py:200` defaulted `--lemonade-url` to `http://localhost:11434` (Ollama's port). Lemonade Server defaults to port `8000` (per `src/gaia/llm/lemonade_client.py` `DEFAULT_PORT = 8000`). This caused every `pytest --integration` run to auto-skip all Lemonade-gated integration tests even when Lemonade was running on port 8000. Fix: `tests/conftest.py:200` changed to `default="http://localhost:8000"`. Status: **FIXED, pending commit.** (2026-04-10)
+
+19. **B3-C OPEN — Agent UI has zero pipeline integration (new OI, Session-2, 2026-04-10).** The `gaia pipeline` CLI is fully wired and `gaia.pipeline.orchestrator.run_pipeline()` is callable programmatically. However, the Agent UI (`gaia chat --ui`) has no route, widget, or chat-tool integration for the pipeline. A user interacting with the browser chat panel cannot invoke `run_pipeline()`. Additionally, `RoutingAgent` (OI-1) does not route to the pipeline, so natural-language pipeline requests via chat are silently routed to CodeAgent. The minimal implementation path is: (a) add `POST /pipeline/run` SSE endpoint in `src/gaia/ui/routers/pipeline.py`, (b) mount it in `src/gaia/ui/server.py`, (c) add a pipeline panel component in `src/gaia/apps/webui/`. Owner: [us]. Priority: P1 before any Agent UI demonstration. Status: **OPEN.** (2026-04-10)
 
 ---
 
@@ -554,7 +569,7 @@ Total branch test count: 1,245+ tests at a reported 99.9% pass rate (one pre-exi
 | `pipeline/stages/loom_builder.py` | NEW | 1 | 426 | P5 | `8dd22c1` | `agents/base/agent.py`, `agents/base/tools.py`, `utils/component_loader.py` | `pipeline/orchestrator.py` | BOTH (QG7: GENERATION-003, ORCHESTRATION-001 PASS) | PARTIAL | LOW |
 | `pipeline/stages/pipeline_executor.py` | NEW | 1 | 488 | P5 | `0c5f294` | `agents/base/agent.py`, `agents/base/tools.py`, `utils/component_loader.py` | `pipeline/orchestrator.py` | BOTH (QG7: ORCHESTRATION-002/003 PASS) | PARTIAL | LOW |
 | `pipeline/stages/gap_detector.py` | NEW | 1 | 419 | P5 | `fa3ef98` | `agents/base/agent.py`, `agents/base/tools.py` | `pipeline/orchestrator.py` | BOTH (QG7: INTEGRATION-001/002 PASS) | PARTIAL | MEDIUM |
-| `pipeline/orchestrator.py` | NEW | 1 | 518 | P5 | `fa3ef98` | All five stage classes, `agents/base/agent.py`, `agents/base/tools.py` | CLI (future), demo scripts | BOTH (QG7: THREAD-007 PASS — 100 threads) | YES (`docs/guides/auto-spawn-pipeline.mdx`) | MEDIUM |
+| `pipeline/orchestrator.py` | NEW + EXTENDED | 1 | 518 → ~580 | P5 + Session-2 | `fa3ef98` + pending | All five stage classes, `agents/base/agent.py`, `agents/base/tools.py` | `cli.py` (`gaia pipeline`), integration tests, demo scripts | BOTH (QG7: THREAD-007 PASS — 100 threads; Session-2 adds `test_analyze_with_llm_exists_on_orchestrator` regression test) | YES (`docs/guides/auto-spawn-pipeline.mdx`) | MEDIUM→LOW (B1-A, B2-A fixed; all hard stops resolved) |
 | `agents/base/agent.py` | EXTENDED | 1 | 254 | P5 | `520bea3` | `utils/component_loader.py` | All agent subclasses (blast radius: every agent in GAIA) | UNIT | PARTIAL | MEDIUM |
 | `pipeline/engine.py` | EXTENDED | 1 | 6 | P5 | `8d6ffdd` | `utils/component_loader.py` | All pipeline engine consumers | SMOKE | PARTIAL | LOW |
 | `component-framework/` (templates, commands, checklists, documents, knowledge, memory, tasks, personas, workflows) | NEW | 74 | ~8,000 | P5 | `57ee63d`, `e952716` | — | `utils/component_loader.py` (loads these as templates) | UNIT (component_loader tests cover load/render paths) | PARTIAL | LOW |
@@ -779,6 +794,109 @@ Note: The RC#2 tool package was created under `src/gaia/tools/` (not `src/gaia/a
 
 ---
 
+### BF-07: B1-A — `PipelineOrchestrator.execute_tool()` AttributeError on Every Pipeline Run
+
+**Symptom:** Every call to `PipelineOrchestrator.run_pipeline()` returned `pipeline_status: "failed"`. Inspection of the top-level exception handler revealed `AttributeError: 'PipelineOrchestrator' object has no attribute 'execute_tool'`.
+
+**Root cause:** `orchestrator.py:491` (pre-fix) called `return self.execute_tool(...)`. The base `Agent` class exposes `_execute_tool` (private, name-mangled with single underscore). No public `execute_tool` exists on `Agent` or `PipelineOrchestrator`. The test suite did not catch this because `test_orchestrator.py` exercised `orchestrator._execute_tool()` directly, bypassing `run_pipeline()`.
+
+**Fix:** Single character change — `self.execute_tool(` → `self._execute_tool(` at `src/gaia/pipeline/orchestrator.py:491`. `TestRealCodePath` class added to `tests/unit/pipeline/test_orchestrator.py` to exercise the real dispatch path without mocking `execute_tool` or the registry.
+
+**Files changed:** `src/gaia/pipeline/orchestrator.py`, `tests/unit/pipeline/test_orchestrator.py`
+
+**Verifying commit:** `242e380`
+
+---
+
+### BF-08: B1-B — `tool_fn(self, **tool_args)` TypeError in Five Stage Files
+
+**Symptom:** Calling `execute_tool()` on any of the five pipeline stage classes with a valid tool name and args raised `TypeError: got multiple values for argument 'task_description'` (or equivalent parameter name).
+
+**Root cause:** Each stage's `_register_tools(self)` defines `@tool` closures that capture `self` lexically. These closures have NO `self` parameter in their signature — `self` is already bound via the closure. The `execute_tool` dispatch called `tool_fn(self, **tool_args)`, passing `self` as a positional argument to a function that had already captured `self`. The first parameter (e.g., `task_description`) received the `self` object as its value, and then `**tool_args` also provided `task_description`, causing the `TypeError`. The e2e tests replaced `stage.execute_tool` with `Mock()` before dispatch, and unit tests `@patch`ed entire stage classes with `MagicMock` — neither exercised the real `_TOOL_REGISTRY` dispatch path.
+
+**Fix:** Removed `self` from the dispatch call — `return tool_fn(self, **tool_args)` → `return tool_fn(**tool_args)` — in all five stage files: `domain_analyzer.py:386`, `workflow_modeler.py:400`, `loom_builder.py:451`, `gap_detector.py:405`, `pipeline_executor.py:521`.
+
+**Files changed:** `src/gaia/pipeline/stages/domain_analyzer.py`, `src/gaia/pipeline/stages/workflow_modeler.py`, `src/gaia/pipeline/stages/loom_builder.py`, `src/gaia/pipeline/stages/gap_detector.py`, `src/gaia/pipeline/stages/pipeline_executor.py`
+
+**Verifying commit:** `242e380`
+
+---
+
+### BF-09: B2-A — `_analyze_with_llm()` Missing from `PipelineOrchestrator`
+
+**Symptom:** `run_pipeline()` returned `pipeline_status: "failed"` even after BF-07 and BF-08 were fixed. Root cause was a second `AttributeError: 'PipelineOrchestrator' object has no attribute '_analyze_with_llm'`, again caught silently by the top-level handler.
+
+**Root cause:** `PipelineOrchestrator._clear_thought_domain_analysis()` (line ~388), `_clear_thought_workflow_planning()` (~421), `_clear_thought_topology_design()` (~454), and `_trigger_agent_spawn()` (~300) all called `self._analyze_with_llm()`. This method existed on all five stage classes (e.g., `domain_analyzer.py:210`) but was never added to `PipelineOrchestrator` or the base `Agent` class. The method was a stage-level implementation detail that was accidentally depended on by the orchestrator. Discoverable only after BF-07 and BF-08 were fixed, because the earlier bugs caused an earlier exit.
+
+**Fix:** `_analyze_with_llm(self, query: str, system_prompt: str = "") -> Dict[str, Any]` added to `PipelineOrchestrator` at line 478, immediately before `run_pipeline()`. Implementation delegates to `self.chat.send_messages()` (inherited from `Agent`), extracts JSON via regex, and returns a typed dict or graceful fallback. `json` module added to `orchestrator.py` top-level imports. Regression test `test_analyze_with_llm_exists_on_orchestrator` added.
+
+**Files changed:** `src/gaia/pipeline/orchestrator.py`, `tests/unit/pipeline/test_orchestrator.py`
+
+**Verifying commit:** Pending — Session-2 (2026-04-10)
+
+---
+
+### BF-10: B3-A — `GapDetector` Imported Non-Existent `MCPBridge` Class
+
+**Symptom:** `GapDetector.check_mcp_availability()` always returned `mcp_available: False` and logged "MCP bridge not available — agent spawning will be disabled". No `ImportError` was surfaced.
+
+**Root cause:** `src/gaia/pipeline/stages/gap_detector.py:278` imported `from gaia.mcp.mcp_bridge import MCPBridge`. The actual class name in `src/gaia/mcp/mcp_bridge.py` is `GAIAMCPBridge` (line 116). `MCPBridge` does not exist, so the import raised `ImportError`, which was caught by the `except ImportError` block at line 287 — exactly matching the graceful degradation path. This made the bug invisible to users and tests alike.
+
+**Fix:** `from gaia.mcp.mcp_bridge import MCPBridge` → `from gaia.mcp.mcp_bridge import GAIAMCPBridge` and `bridge = MCPBridge()` → `bridge = GAIAMCPBridge()`. Note: `GAIAMCPBridge` does not implement `get_available_servers()`, so the `except Exception` handler at line 293 still applies. MCP availability checking remains a graceful-fallback path; functional wiring is deferred.
+
+**Files changed:** `src/gaia/pipeline/stages/gap_detector.py`
+
+**Verifying commit:** Pending — Session-2 (2026-04-10)
+
+---
+
+### BF-11: P0-A — Integration Test Fixture Used Wrong Lemonade Default Port
+
+**Symptom:** Running `pytest tests/integration/` against a live Lemonade server caused all Lemonade-gated integration tests to auto-skip with "Lemonade server not available at http://localhost:11434", even though Lemonade was running normally on port 8000.
+
+**Root cause:** `tests/conftest.py:200` set `default="http://localhost:11434"`. This is Ollama's default port, not Lemonade's. Lemonade Server defaults to port 8000 (documented in `src/gaia/llm/lemonade_client.py` as `DEFAULT_PORT = 8000`). The `require_lemonade` fixture pings `{url}/api/tags` — the ping reached the wrong port, got a connection refused, and auto-skipped all tests. Developers would need to pass `--lemonade-url http://localhost:8000` explicitly, which is undiscoverable without reading the source.
+
+**Fix:** `tests/conftest.py:200` changed to `default="http://localhost:8000"`.
+
+**Files changed:** `tests/conftest.py`
+
+**Verifying commit:** Pending — Session-2 (2026-04-10)
+
+---
+
+### BF-12: P0-B — `gaia pipeline` CLI Had No Lemonade Readiness Check
+
+**Symptom:** Running `gaia pipeline "task"` when Lemonade was not running produced a confusing Python traceback ending in `ConnectionRefusedError` rather than a helpful error message.
+
+**Root cause:** The `gaia pipeline` CLI handler (added Session-2, previously a stub) called `run_pipeline()` directly without invoking `initialize_lemonade_for_agent()`, which is the standard GAIA pattern for all agent CLI commands (used by `gaia chat`, `gaia code`, `gaia blender`, etc.). The `run_pipeline()` function instantiates `PipelineOrchestrator(model_id=...)`, which calls `Agent.__init__` with `skip_lemonade=False` (default), which immediately tries to connect to Lemonade — failing with a bare `ConnectionRefusedError` if the server is not running.
+
+**Fix:** Added `"pipeline": 32768` to the `agent_context_sizes` dict at `src/gaia/cli.py:159`, and added `success, base_url = initialize_lemonade_for_agent("pipeline")` + `if not success: raise SystemExit(1)` before the `run_pipeline()` import and call in the pipeline handler.
+
+**Files changed:** `src/gaia/cli.py`
+
+**Verifying commit:** Pending — Session-2 (2026-04-10)
+
+---
+
+### BF-13: P0-C — `load_component_template` Tool Name Collision Across Four Stage Modules
+
+**Symptom:** Non-deterministic pipeline behavior when all five stage agents were instantiated within a single `PipelineOrchestrator.run_pipeline()` call. Stage 1 (`DomainAnalyzer`) `execute_tool("load_component_template", ...)` would invoke the closure from whichever stage was instantiated last (typically `PipelineExecutor`), which had captured `PipelineExecutor`'s `self` — returning executor-context template content rather than domain-analysis-context template content.
+
+**Root cause:** The global `ToolRegistry` singleton (`src/gaia/agents/base/tools.py:886`) stores tools by name in `self._tools[name]` with no collision guard. Four stage classes (`DomainAnalyzer`, `WorkflowModeler`, `LoomBuilder`, `PipelineExecutor`) each registered a `@tool` named `load_component_template` in their `_register_tools(self)` methods. When `PipelineOrchestrator` instantiated all five stages in sequence, each stage's `_register_tools()` call overwrote the previous registration. Because closures capture `self` at definition time, the winning registration was always the last stage instantiated. This made `DomainAnalyzer.execute_tool("load_component_template")` silently delegate to `PipelineExecutor`'s component loader context.
+
+**Fix:** Renamed each stage's `load_component_template` to a stage-scoped name:
+- `domain_analyzer.py`: `load_component_template_domain`
+- `workflow_modeler.py`: `load_component_template_workflow`
+- `loom_builder.py`: `load_component_template_loom`
+- `pipeline_executor.py`: `load_component_template_executor`
+(`GapDetector` and `WorkflowModeler`'s other tools already had unique names; no rename needed there.)
+
+**Files changed:** `src/gaia/pipeline/stages/domain_analyzer.py`, `src/gaia/pipeline/stages/workflow_modeler.py`, `src/gaia/pipeline/stages/loom_builder.py`, `src/gaia/pipeline/stages/pipeline_executor.py`
+
+**Verifying commit:** Pending — Session-2 (2026-04-10)
+
+---
+
 ## Section 6 — Risk Assessment Summary
 
 ### Classification Criteria
@@ -799,7 +917,8 @@ Risk levels in this document are assigned using the following criteria:
 | `src/gaia/agents/routing/agent.py` | Routing agent modified to accept capability-based requests but AgentOrchestrator not implemented. | The RoutingAgent is the entry point for multi-agent dispatch. The incomplete AgentOrchestrator means that capability-based routing silently falls back to CodeAgent for unmatched requests, producing incorrect behavior that is not surfaced as an error. | Document the fallback behavior in release notes. Add an explicit warning log when the fallback is triggered. Block use of the pipeline engine's dynamic routing in production until AgentOrchestrator is delivered. |
 | `src/gaia/eval/` (8 files modified) | Eval framework extended with pipeline metrics integration. `eval.py`, `batch_experiment.py`, `runner.py`, `groundtruth.py` all modified. | The eval framework is a shared quality gate for all agents and is used in CI. Regressions in the eval framework can cause CI to produce incorrect pass/fail signals for unrelated changes. | New `eval_metrics.py` and `scorecard.py` are additive. Modifications to existing files are limited to adding metric collection hooks. Existing eval tests should be run in isolation before merge to confirm no behavioral change. |
 | `src/gaia/agents/base/context.py` (new file in base package) | New context integration module added to the base agent package. | Because this file is in the `base/` package, it is imported alongside all other base agent components. An import error or circular import in this file will break all agents at startup. | File is new and has no existing callers outside of tests. Import chain should be verified with a clean environment install before merge. |
-| Security boundary gap: resilience primitives not wired into `pipeline/engine.py` | `CircuitBreaker`, `Bulkhead`, and `Retry` are implemented but not integrated at pipeline call sites. | A pipeline run that encounters repeated agent failures will not trip a circuit breaker, will not enforce concurrency limits at the agent boundary, and will not apply backoff before retry. This means a misbehaving agent can cause the pipeline engine to exhaust all iterations without the protective behavior that the resilience module was designed to provide. | Document as a known limitation. Do not expose pipeline orchestration as a production feature until wiring is complete. Treat the resilience module as delivered-but-not-integrated. |
+| Security boundary gap: resilience primitives not wired into `pipeline/engine.py` | `CircuitBreaker`, `Bulkhead`, and `Retry` are implemented but not integrated at pipeline call sites. | A pipeline run that encounters repeated agent failures will not trip a circuit breaker, will not enforce concurrency limits at the agent boundary, and will not apply backoff before retry. This means a misbehaving agent can cause the pipeline engine to exhaust all iterations without the protective behavior that the resilience module was designed to provide. | Document as a known limitation. Do not expose pipeline orchestration as a production feature until wiring is complete. Treat the resilience module as delivered-but-not-integrated. **Status: STILL OPEN as of 2026-04-10 (OI-3).** |
+| `ToolRegistry` global singleton collision across stage instances | (Session-2, 2026-04-10) Four stage modules registered tools under the same name `load_component_template` in the global singleton. Last-writer-wins semantics caused Stage 1 to silently invoke Stage 5's closure. | Non-deterministic pipeline output corruption when multiple stages instantiated in sequence. Silent — no exception, no log warning. Undetectable by mock-based unit tests. | **RESOLVED — BF-13 (Session-2, 2026-04-10, pending commit).** Stage-scoped tool names applied: `load_component_template_domain`, `_workflow`, `_loom`, `_executor`. Long-term mitigation: instance-scoped `ToolRegistry` per `Agent` (P2-C, future sprint). |
 
 ---
 
@@ -856,9 +975,31 @@ The Phase column uses the following abbreviations:
 - **SESSION**: Session work — dataclass fixes, shadow module removal, housekeeping
 - **P5**: Phase 5 — Autonomous Agent Ecosystem Creation (DomainAnalyzer → WorkflowModeler → LoomBuilder → GapDetector → PipelineExecutor + ComponentLoader + component-framework templates)
 - **P6**: Phase 6 — Pipeline completion: MD registry configs, stage agent refactors, spec frontmatter, unified capability model, ADR-001, unit tests, e2e expansion
+- **Session**: Inline session fixes committed during review (B1-A, B1-B dispatch bugs — commit `242e380`)
+- **Session-2**: 2026-04-10 — recursive agent pipeline pass: B2-A, B3-A, P0-A, P0-B, P0-C fixes + CLI wiring + PyPI exports + integration test (pending commit)
+
+**Session-2 Pending Commit (2026-04-10) — not yet in git log:**
+
+| Files Modified | Description | Category | Phase |
+|---|---|---|---|
+| `src/gaia/pipeline/orchestrator.py` | B2-A fix: add `_analyze_with_llm()` + `json` import + P1-B enhanced warning log | Pipeline Orchestration | Session-2 |
+| `src/gaia/pipeline/stages/gap_detector.py` | B3-A fix: `MCPBridge` → `GAIAMCPBridge` import | Pipeline Orchestration | Session-2 |
+| `src/gaia/pipeline/stages/domain_analyzer.py` | P0-C fix: `load_component_template` → `load_component_template_domain` | Pipeline Orchestration | Session-2 |
+| `src/gaia/pipeline/stages/workflow_modeler.py` | P0-C fix: `load_component_template` → `load_component_template_workflow` | Pipeline Orchestration | Session-2 |
+| `src/gaia/pipeline/stages/loom_builder.py` | P0-C fix: `load_component_template` → `load_component_template_loom` | Pipeline Orchestration | Session-2 |
+| `src/gaia/pipeline/stages/pipeline_executor.py` | P0-C fix: `load_component_template` → `load_component_template_executor` | Pipeline Orchestration | Session-2 |
+| `src/gaia/cli.py` | CLI wired: `gaia pipeline "task"` fully functional; P0-B Lemonade readiness check; `"pipeline": 32768` in `agent_context_sizes` | CLI + Pipeline Orchestration | Session-2 |
+| `src/gaia/pipeline/__init__.py` | PyPI exports: `PipelineOrchestrator` and `run_pipeline` added to lazy loader and `__all__` | Pipeline Orchestration | Session-2 |
+| `tests/conftest.py` | P0-A fix: `localhost:11434` → `localhost:8000` as default `require_lemonade` URL | Testing Infrastructure | Session-2 |
+| `tests/unit/pipeline/test_orchestrator.py` | B2-A regression test: `test_analyze_with_llm_exists_on_orchestrator` | Testing Infrastructure | Session-2 |
+| `tests/integration/test_pipeline_lemonade.py` | NEW: real-Lemonade integration tests with `require_lemonade` fixture (auto-skip if server not running) | Testing Infrastructure | Session-2 |
+
+---
 
 | Short SHA | Commit Title | Category | Phase |
 |---|---|---|---|
+| `242e380` | fix(pipeline): fix execute_tool dispatch bugs blocking real pipeline runs (BF-07 B1-A + BF-08 B1-B) | Pipeline Orchestration + Testing | Session |
+| `52df806` | docs: update matrix for Phase 6 pull (984 files, 74 commits) + dedup OI-9 | Documentation | P6 |
 | `e28a922` | docs: Resolve Open Item 5 — Update design spec coherence for Phase 5/6 | Documentation | P6 |
 | `41ee396` | feat(phase5): Complete five-stage auto-spawn pipeline implementation | Pipeline Orchestration + Documentation + Testing | P6 |
 | `fa3ef98` | feat(pipeline): add autonomous agent spawning with GapDetector | Pipeline Orchestration | P5 |

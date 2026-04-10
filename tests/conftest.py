@@ -197,7 +197,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--lemonade-url",
         action="store",
-        default="http://localhost:11434",
+        default="http://localhost:8000",
         help="Lemonade server base URL",
     )
 

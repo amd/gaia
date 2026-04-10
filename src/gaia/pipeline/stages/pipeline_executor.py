@@ -276,7 +276,7 @@ Return JSON:
             return completion_status
 
         @tool
-        def load_component_template(component_path: str) -> Dict[str, Any]:
+        def load_component_template_executor(component_path: str) -> Dict[str, Any]:
             """
             Load a component template from component-framework.
 

@@ -435,5 +435,35 @@ class TestRealCodePath:
         assert "secondary_domains" in result
 
 
+    def test_analyze_with_llm_exists_on_orchestrator(self):
+        """
+        B2-A regression guard: PipelineOrchestrator._analyze_with_llm() must
+        exist and be callable. Before the fix, calling run_pipeline() would hit
+        AttributeError inside _clear_thought_domain_analysis() / _workflow_planning()
+        / _topology_design() / _trigger_agent_spawn(), all silently caught by the
+        top-level handler and returned as pipeline_status: failed.
+        """
+        orchestrator = PipelineOrchestrator(skip_lemonade=True)
+
+        # Method must exist on the instance — not just on stage classes.
+        assert hasattr(orchestrator, "_analyze_with_llm"), (
+            "PipelineOrchestrator missing _analyze_with_llm — B2-A bug not fixed"
+        )
+        assert callable(orchestrator._analyze_with_llm)
+
+        # Calling it with a mocked LLM must return a dict, not raise AttributeError.
+        mock_response = MagicMock()
+        mock_response.text = '{"result": "ok", "domains": ["test"]}'
+
+        with patch.object(orchestrator.chat, "send_messages", return_value=mock_response):
+            result = orchestrator._analyze_with_llm(
+                query="test query",
+                system_prompt="test system prompt",
+            )
+
+        assert isinstance(result, dict)
+        assert result.get("result") == "ok"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

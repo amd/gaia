@@ -121,6 +121,14 @@ def __getattr__(name):
         from gaia.pipeline.recursive_template import get_recursive_template
 
         return get_recursive_template
+    elif name == "PipelineOrchestrator":
+        from gaia.pipeline.orchestrator import PipelineOrchestrator
+
+        return PipelineOrchestrator
+    elif name == "run_pipeline":
+        from gaia.pipeline.orchestrator import run_pipeline
+
+        return run_pipeline
     raise AttributeError(f"module {__name__} has no attribute {name}")
 
 
@@ -188,4 +196,7 @@ __all__ = [
     # P6 additions - agent category enum and template lookup helper
     "AgentCategory",
     "get_recursive_template",
+    # Orchestrator (five-stage auto-spawn pipeline)
+    "PipelineOrchestrator",
+    "run_pipeline",
 ]
