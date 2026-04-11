@@ -418,39 +418,39 @@ jobs:
 
           cat >> RELEASE_BODY.md << 'EOF'
 
----
+          ---
 
-## Installation
+          ## Installation
 
-### Desktop installer (recommended for end users)
+          ### Desktop installer (recommended for end users)
 
-Download the installer for your platform from the assets below:
+          Download the installer for your platform from the assets below:
 
-- **Windows** — `gaia-agent-ui-*-x64-setup.exe` (NSIS installer, autostart on by default)
-- **macOS** — `gaia-agent-ui-*-arm64.dmg` (drag to Applications, Apple Silicon only)
-- **Linux** — `gaia-agent-ui-*-amd64.deb` (Debian/Ubuntu) or `gaia-agent-ui-*-x86_64.AppImage` (any distro)
+          - **Windows** — `gaia-agent-ui-*-x64-setup.exe` (NSIS installer, autostart on by default)
+          - **macOS** — `gaia-agent-ui-*-arm64.dmg` (drag to Applications, Apple Silicon only)
+          - **Linux** — `gaia-agent-ui-*-amd64.deb` (Debian/Ubuntu) or `gaia-agent-ui-*-x86_64.AppImage` (any distro)
 
-On first launch the app sets up its Python backend automatically (~5–10 minutes for the minimal profile, depends on your internet speed).
+          On first launch the app sets up its Python backend automatically (~5–10 minutes for the minimal profile, depends on your internet speed).
 
-See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/install.mdx) for setup details and troubleshooting.
+          See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/install.mdx) for setup details and troubleshooting.
 
-### Developer install (Python CLI)
+          ### Developer install (Python CLI)
 
-Install GAIA using pip:
-```bash
-pip install amd-gaia
-```
+          Install GAIA using pip:
+          ```bash
+          pip install amd-gaia
+          ```
 
-Or using uv:
-```bash
-uv pip install amd-gaia
-```
+          Or using uv:
+          ```bash
+          uv pip install amd-gaia
+          ```
 
-Or via npm:
-```bash
-npm install -g @amd-gaia/agent-ui
-```
-EOF
+          Or via npm:
+          ```bash
+          npm install -g @amd-gaia/agent-ui
+          ```
+          EOF
           echo "Release body generated: $(wc -l < RELEASE_BODY.md) lines"
 
       - name: Download Electron artifacts (Windows)
