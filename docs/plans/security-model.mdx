@@ -1,0 +1,809 @@
+---
+title: "Security Model"
+description: "Unified security architecture — guardrails, audit trail, credential vault, and messaging security"
+icon: "shield"
+---
+
+# GAIA Security Model
+
+> **Date:** 2026-04-01
+>
+> **Status:** Planning
+>
+> **Milestones:** v0.17.2, v0.18.2, v0.21.0, v0.23.0
+>
+> **Related issues:** #94, #438, #447, #459, #461, #559
+>
+> **Prerequisites:** None (security is cross-cutting)
+
+---
+
+## 1. Executive Summary
+
+This document unifies all security concerns scattered across the GAIA roadmap into a
+single plan. GAIA enforces a defense-in-depth model: localhost-only communication,
+sandboxed tool execution, confirmation gates for destructive operations, and a
+complete audit trail.
+
+The plan is organized into ten security domains, each mapped to a specific milestone
+and GitHub issue. Implementation is phased: foundational guardrails ship in v0.18.2,
+browser and desktop controls in v0.21.0, and autonomous execution safety in v0.23.0.
+
+---
+
+## 2. Threat Model
+
+### 2.1 Attack Surface
+
+| Surface | Threat | Current State | Target State |
+|---------|--------|---------------|--------------|
+| Network ports | Remote exploitation | MCP bridge on `:8765`, API on `:8080` (localhost only) | Remain localhost-only; firewall rules enforced |
+| MCP tool execution | Malicious or unverified tools | No classification; all tools execute freely | Tiered classification: auto-approve, confirm, deny |
+| Shell commands | Arbitrary code execution | Whitelist in ShellToolsMixin (`ALLOWED_COMMANDS`) | Retain whitelist; extend to all agent types |
+| RAG cache | Pickle deserialization (RCE) | `pickle.load()` on cached data (`src/gaia/rag/sdk.py`) | Migrate to safe serialization (#447) |
+| Credentials | Secret leakage via logs/env | Env vars (`ATLASSIAN_SITE_URL`, `GITHUB_TOKEN`, etc.) | Encrypted credential vault |
+| Browser automation | Navigation to malicious URLs | No URL restrictions on Playwright MCP | URL allowlist + domain restrictions (#459) |
+| Desktop control | Unauthorized system modification | Not yet implemented | Opt-in model with screenshot permissions (#461) |
+| Messaging adapters | Prompt injection from untrusted input | Not yet implemented | Restricted tool set, input sanitization (#635) |
+| Skill marketplace | Malicious third-party skills | No marketplace yet | Code signing + declared permissions |
+
+### 2.2 Trust Boundaries
+
+```
++-----------------------------------------------------------+
+|  TRUSTED: Local User Session                              |
+|  - Desktop UI (Electron IPC)                              |
+|  - CLI (gaia chat, gaia-code)                             |
+|  - Local filesystem                                       |
+|                                                           |
+|  +-----------------------------------------------------+ |
+|  |  SEMI-TRUSTED: MCP Servers (localhost)               | |
+|  |  - Playwright, Brave Search, Fetch                   | |
+|  |  - User-configured servers from ~/.gaia/mcp.json     | |
+|  |  - npm packages (verified via checksum)              | |
+|  +-----------------------------------------------------+ |
+|                                                           |
+|  +-----------------------------------------------------+ |
+|  |  UNTRUSTED: External Inputs                          | |
+|  |  - Messaging adapters (Discord, Slack, Telegram)     | |
+|  |  - Web content fetched via Fetch/Playwright          | |
+|  |  - Third-party skills from marketplace               | |
+|  |  - User-uploaded documents (PDF, DOCX)               | |
+|  +-----------------------------------------------------+ |
++-----------------------------------------------------------+
+```
+
+---
+
+## 3. Security Architecture Overview
+
+### 3.1 Localhost-Only Communication
+
+All GAIA services bind exclusively to `127.0.0.1`. No public ports are opened.
+
+| Service | Default Bind | Port | Configurable |
+|---------|-------------|------|-------------|
+| Lemonade Server | `127.0.0.1` | 8000 | Yes (host/port) |
+| MCP Bridge | `127.0.0.1` | 8765 | Yes (env: `GAIA_MCP_HOST`, `GAIA_MCP_PORT`) |
+| API Server | `127.0.0.1` | 8080 | Yes |
+| Electron UI | IPC (no network) | N/A | No |
+
+Enforcement:
+
+- The MCP bridge (`src/gaia/mcp/mcp_bridge.py`) and API server (`src/gaia/api/`) must
+  reject non-loopback bind addresses unless `--dangerous-allow-remote` is explicitly
+  passed (v0.23.0).
+- The Windows installer and setup wizard should configure Windows Firewall to block
+  inbound connections to GAIA ports.
+
+### 3.2 Defense in Depth
+
+```
+Layer 1: Network isolation (localhost-only, no public ports)
+    |
+Layer 2: Tool classification (auto-approve / confirm / deny)
+    |
+Layer 3: Input validation (command whitelist, URL allowlist, sanitization)
+    |
+Layer 4: Execution sandboxing (subprocess isolation, timeout, resource limits)
+    |
+Layer 5: Audit trail (all tool executions logged to SQLite)
+    |
+Layer 6: Credential isolation (encrypted vault, never logged)
+```
+
+---
+
+## 4. Tool Execution Guardrails
+
+**GitHub issues:** #438 (v0.18.2), #559 (v0.23.0)
+
+### 4.1 Tool Classification Tiers
+
+Every tool registered in `_TOOL_REGISTRY` (see `src/gaia/agents/base/tools.py`) is
+assigned a risk tier:
+
+| Tier | Behavior | Examples |
+|------|----------|---------|
+| **READ** | Auto-approve, no confirmation | `search_web`, `read_file`, `run_shell_command` (read-only whitelist), `git status` |
+| **WRITE** | Confirm-first popup in UI, y/n in CLI | `write_file`, `run_cli_command` (unrestricted), `browser_click` |
+| **DESTRUCTIVE** | Confirm-first with warning banner | `delete_file`, `git reset`, shell `rm` |
+| **DENIED** | Always blocked, cannot be overridden | `os.system`, `eval`, `exec`, `subprocess.Popen` (direct) |
+
+### 4.2 MCP Tool Classification
+
+MCP tools from external servers are classified by name. The whitelists below apply to
+the three pre-configured MCP servers (Playwright, Brave Search, Fetch).
+
+```python
+# Proposed location: src/gaia/agents/base/security.py
+
+MCP_AUTO_APPROVE = {
+    # Playwright -- read-only browser operations
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_console_messages",
+    "browser_network_requests",
+    "browser_tabs",
+    "browser_wait_for",
+    "browser_evaluate",
+    "browser_navigate_back",
+    "browser_close",
+    # Brave Search -- all operations are read-only
+    "brave_web_search",
+    "brave_local_search",
+    # Fetch -- read-only HTTP
+    "fetch",
+}
+
+MCP_ALWAYS_CONFIRM = {
+    # Playwright -- write operations (mutate page state)
+    "browser_click",
+    "browser_fill_form",
+    "browser_file_upload",
+    "browser_type",
+    "browser_select_option",
+    "browser_press_key",
+    "browser_drag",
+    "browser_hover",
+}
+
+# Any MCP tool not in either set --> CONFIRM by default.
+# Unknown tools from newly connected MCP servers always require confirmation
+# until the user explicitly promotes them to auto-approve via config.
+```
+
+### 4.3 Confirmation Flow
+
+**Desktop UI (Electron):**
+
+1. Agent requests tool execution via SSE event.
+2. UI displays a modal: tool name, arguments (truncated), risk tier.
+3. User clicks "Allow" or "Deny".
+4. Result sent back via MCP bridge POST.
+5. If denied, agent receives `{"status": "denied", "reason": "user_rejected"}` and
+   must replan without that tool.
+
+**CLI:**
+
+1. Agent prints tool name and arguments to console.
+2. Prompt: `Execute [tool_name]? (y/n/always): `
+3. "always" adds the tool to session-level auto-approve (not persisted).
+
+### 4.4 Implementation: `@tool` Decorator Extension
+
+```python
+# Extension to src/gaia/agents/base/tools.py
+
+@tool(risk_tier="write")
+def write_file(path: str, content: str) -> dict:
+    """Write content to a file."""
+    ...
+
+@tool(risk_tier="read")
+def read_file(path: str) -> dict:
+    """Read a file and return its contents."""
+    ...
+```
+
+The `risk_tier` parameter is stored in `_TOOL_REGISTRY[tool_name]["risk_tier"]`.
+The `_execute_tool` method in `src/gaia/agents/base/agent.py` checks the tier
+before execution and gates on confirmation if required.
+
+---
+
+## 5. MCP Security
+
+**GitHub issue:** #94 (v0.18.2)
+
+### 5.1 Sandboxed Execution
+
+MCP servers run as child processes (`subprocess.run` in `src/gaia/mcp/external_services.py`).
+The following hardening applies:
+
+| Control | Implementation | Milestone |
+|---------|---------------|-----------|
+| Process isolation | Each MCP server runs in its own subprocess | Existing |
+| Timeout enforcement | `subprocess.run(..., timeout=30)` | Existing |
+| Resource limits | CPU and memory cgroup limits (Linux); Job Objects (Windows) | v0.18.2 |
+| Filesystem sandbox | MCP servers can only access `~/.gaia/mcp/<server>/` | v0.18.2 |
+| Network restriction | MCP servers inherit localhost-only binding | Existing |
+| Stderr capture | All stderr logged for audit | v0.18.2 |
+
+### 5.2 Unknown Tool Default
+
+When a user connects a new MCP server via the MCP Settings UI or `~/.gaia/mcp.json`:
+
+1. GAIA calls `tools/list` on the server to discover available tools.
+2. All discovered tools are classified as **CONFIRM** by default.
+3. The user can promote individual tools to **AUTO-APPROVE** via the Settings UI.
+4. Promoted tools are stored in `~/.gaia/config.json` under `mcp.trusted_tools`.
+
+```json
+{
+  "mcp": {
+    "trusted_tools": {
+      "github": ["list_repos", "get_issue", "search_code"],
+      "context7": ["resolve_library_id", "get_library_docs"]
+    }
+  }
+}
+```
+
+### 5.3 npm Package Verification
+
+MCP servers installed via `npx` must be verified:
+
+1. Package name must be scoped (`@modelcontextprotocol/server-*` or `@anthropic/*`).
+2. Package integrity is checked via npm's `--prefer-offline` and lockfile hashes.
+3. Unscoped packages display a warning: "This MCP server is from an unverified
+   publisher. Proceed?"
+4. A future AMD Verified badge (v0.24.0) will indicate code-signed packages.
+
+---
+
+## 6. Audit Trail
+
+**Cross-cutting concern; no single GitHub issue.**
+
+### 6.1 What is Logged
+
+Every tool execution produces an audit record:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp` | ISO 8601 | When the tool was invoked |
+| `session_id` | UUID | Conversation session identifier |
+| `tool_name` | string | Registry name of the tool |
+| `tool_source` | enum | `native`, `mcp:<server>`, `skill:<name>` |
+| `risk_tier` | enum | `read`, `write`, `destructive`, `denied` |
+| `arguments` | JSON | Tool arguments (secrets redacted) |
+| `result_status` | enum | `success`, `error`, `denied`, `timeout` |
+| `result_summary` | string | Truncated result (max 500 chars) |
+| `user_confirmed` | bool | Whether user confirmation was required and granted |
+| `duration_ms` | int | Execution wall-clock time |
+| `input_channel` | enum | `cli`, `desktop_ui`, `api`, `messaging:<platform>` |
+
+### 6.2 Storage
+
+Audit logs are stored in SQLite using the existing `DatabaseMixin` pattern
+(`src/gaia/database/mixin.py`):
+
+```python
+# Location: ~/.gaia/audit.db
+
+CREATE TABLE tool_executions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+    session_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    tool_source TEXT NOT NULL,
+    risk_tier TEXT NOT NULL,
+    arguments TEXT,          -- JSON, secrets redacted
+    result_status TEXT NOT NULL,
+    result_summary TEXT,
+    user_confirmed INTEGER DEFAULT 0,
+    duration_ms INTEGER,
+    input_channel TEXT NOT NULL DEFAULT 'cli'
+);
+
+CREATE INDEX idx_tool_executions_session ON tool_executions(session_id);
+CREATE INDEX idx_tool_executions_timestamp ON tool_executions(timestamp);
+CREATE INDEX idx_tool_executions_tool ON tool_executions(tool_name);
+```
+
+### 6.3 UI Integration
+
+The Electron UI displays the audit trail in a dedicated "Activity" panel:
+
+- Filterable by session, tool, risk tier, date range.
+- Exportable as CSV or JSON.
+- Destructive/denied actions are highlighted.
+
+CLI access:
+
+```bash
+gaia audit list                    # Last 50 entries
+gaia audit list --tool write_file  # Filter by tool
+gaia audit list --risk destructive # Filter by risk tier
+gaia audit export --format json    # Export full audit log
+```
+
+### 6.4 Secret Redaction
+
+Before writing to the audit log, arguments are scrubbed:
+
+- Any value matching a known credential pattern (API keys, tokens, passwords) is
+  replaced with `[REDACTED]`.
+- Fields named `password`, `token`, `secret`, `api_key`, `auth`, `credential` are
+  always redacted regardless of value.
+- The redaction function lives in `src/gaia/agents/base/security.py`.
+
+---
+
+## 7. Credential Management
+
+**Strategy doc requirement; no dedicated GitHub issue yet.**
+
+### 7.1 Current State (Insecure)
+
+Credentials are stored as environment variables or in plaintext config files:
+
+- `ATLASSIAN_SITE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` (Jira)
+- `GITHUB_TOKEN` (GitHub MCP)
+- `BRAVE_API_KEY` (Brave Search MCP)
+- `PERPLEXITY_API_KEY` (web search fallback)
+- `DISCORD_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `TELEGRAM_BOT_TOKEN` (messaging)
+
+Problems: env vars are visible in `/proc/<pid>/environ` (Linux), `Get-Process`
+(Windows), and can leak into logs, crash reports, or child process environments.
+
+### 7.2 Target: Encrypted Credential Vault
+
+Location: `~/.gaia/credentials.db` (SQLite with encrypted values).
+
+```python
+# Location: src/gaia/security/credential_vault.py
+
+class CredentialVault:
+    """Encrypted credential storage for GAIA."""
+
+    def __init__(self, path: str = "~/.gaia/credentials.db"):
+        ...
+
+    def store(self, service: str, key: str, value: str) -> None:
+        """Encrypt and store a credential."""
+        ...
+
+    def retrieve(self, service: str, key: str) -> str:
+        """Retrieve and decrypt a credential."""
+        ...
+
+    def delete(self, service: str, key: str) -> None:
+        """Remove a credential."""
+        ...
+
+    def list_services(self) -> List[str]:
+        """List services with stored credentials (not the values)."""
+        ...
+```
+
+Encryption: AES-256-GCM. Key derivation: PBKDF2 from machine-specific entropy
+(Windows DPAPI on Windows, Keychain on macOS, Secret Service on Linux).
+
+### 7.3 Migration Path
+
+1. v0.18.2: Introduce `CredentialVault` class, support both env vars and vault.
+2. v0.21.0: UI for managing credentials (add/remove/rotate).
+3. v0.23.0: Deprecate env var credentials with warning; vault is primary.
+4. v0.24.0: Env var credentials removed from documentation.
+
+### 7.4 Logging Rules
+
+- Credentials MUST NEVER appear in log output, audit trail, error messages, or
+  crash reports.
+- The `format_execution_trace` function in `src/gaia/agents/base/errors.py` must
+  scrub tool arguments before formatting.
+- MCP server configs with `env` keys containing `TOKEN`, `KEY`, `SECRET`, `PASSWORD`,
+  or `CREDENTIAL` must mask values in all debug output.
+
+---
+
+## 8. Browser Security
+
+**GitHub issue:** #459 (v0.21.0)
+
+### 8.1 URL Allowlist
+
+Playwright MCP browser operations are restricted to an allowlist of domains:
+
+```json
+{
+  "browser_security": {
+    "mode": "allowlist",
+    "allowed_domains": [
+      "*.google.com",
+      "*.github.com",
+      "*.stackoverflow.com",
+      "*.wikipedia.org",
+      "*.python.org",
+      "*.npmjs.com",
+      "*.docs.rs",
+      "*.developer.mozilla.org"
+    ],
+    "blocked_domains": [
+      "*.onion",
+      "localhost",
+      "127.0.0.1",
+      "0.0.0.0",
+      "*.local"
+    ],
+    "max_concurrent_tabs": 3,
+    "navigation_timeout_ms": 30000,
+    "allow_downloads": false,
+    "allow_file_protocol": false
+  }
+}
+```
+
+### 8.2 Domain Restriction Enforcement
+
+The Playwright MCP tool wrapper intercepts `browser_navigate` calls:
+
+1. Parse the target URL.
+2. Check domain against `allowed_domains` (glob matching).
+3. Check domain against `blocked_domains` (always takes precedence).
+4. If domain is not in either list, prompt user for confirmation.
+5. `file://`, `javascript:`, `data:` protocols are always blocked.
+
+### 8.3 Content Security
+
+- Pages that attempt to open new windows or popups are blocked.
+- JavaScript `alert()`, `confirm()`, `prompt()` dialogs are auto-dismissed.
+- Downloaded files are quarantined to `~/.gaia/downloads/` and never auto-executed.
+- Cookie and localStorage data is isolated per session (no persistence across
+  agent restarts).
+
+---
+
+## 9. Desktop Control Security
+
+**GitHub issue:** #461 (v0.21.0)
+
+### 9.1 Opt-In Model
+
+Desktop control (CUA) capabilities are disabled by default. Users must explicitly
+enable them:
+
+```bash
+# CLI opt-in
+gaia config set desktop_control.enabled true
+
+# Or via Electron UI: Settings > Security > Desktop Control > Enable
+```
+
+### 9.2 Permission Tiers
+
+| Permission | Description | Default | Requires Confirmation |
+|-----------|-------------|---------|----------------------|
+| `screenshot` | Capture screen regions | Off | Yes (first time) |
+| `mouse_move` | Move mouse cursor | Off | Yes (per session) |
+| `mouse_click` | Click at coordinates | Off | Yes (per action) |
+| `keyboard_type` | Type text | Off | Yes (per action) |
+| `keyboard_shortcut` | Press key combinations | Off | Yes (per action) |
+| `window_manage` | Resize, move, close windows | Off | Yes (per action) |
+
+### 9.3 Screenshot Permissions
+
+Screenshots capture potentially sensitive information. Controls:
+
+- Screenshots are stored in `~/.gaia/screenshots/` with session-scoped filenames.
+- Screenshots are auto-deleted after session ends (configurable retention).
+- Screenshots are never sent to external services (processed locally via VLM).
+- The Electron UI displays a persistent indicator when screenshot capture is active.
+
+### 9.4 Safety Constraints
+
+- Desktop control actions execute with a minimum 500ms delay between actions
+  (prevents runaway automation).
+- A global kill switch: pressing `Escape` three times rapidly cancels all pending
+  desktop control actions.
+- Desktop control is not available over messaging adapters (CLI and desktop UI only).
+- CUA sessions are time-bounded (default: 5 minutes, configurable).
+
+---
+
+## 10. Dangerous Mode
+
+**GitHub issue:** #559 (v0.23.0)
+
+### 10.1 Purpose
+
+Dangerous mode is an explicit opt-in that bypasses tool confirmation gates for
+autonomous execution. It is designed for advanced users running unattended workflows
+(scheduled tasks, CI pipelines, batch processing).
+
+### 10.2 Activation
+
+Dangerous mode requires a deliberate multi-step activation:
+
+```bash
+# CLI activation -- requires typing the full flag
+gaia chat --dangerous-mode
+
+# Confirmation prompt (cannot be suppressed)
+# WARNING: Dangerous mode bypasses all tool confirmation gates.
+# All tool executions will proceed without asking for approval.
+# Audit logging remains active.
+#
+# Type "I understand the risks" to continue:
+```
+
+Dangerous mode CANNOT be:
+- Enabled via config file (must be per-session, explicit).
+- Activated over messaging adapters (Discord, Slack, Telegram).
+- Activated via the API server (only CLI and desktop UI).
+- Combined with desktop control permissions (CUA always requires confirmation).
+
+### 10.3 What Changes in Dangerous Mode
+
+| Behavior | Normal Mode | Dangerous Mode |
+|----------|------------|----------------|
+| READ tools | Auto-approve | Auto-approve (no change) |
+| WRITE tools | Confirm-first | Auto-approve |
+| DESTRUCTIVE tools | Confirm-first + warning | Auto-approve + warning logged |
+| DENIED tools | Always blocked | Still blocked |
+| Audit logging | Active | Active (cannot be disabled) |
+| Desktop control | Per-action confirmation | Still per-action (no bypass) |
+| MCP unknown tools | Confirm | Auto-approve (with audit) |
+
+### 10.4 Visual Indicators
+
+- CLI: Red banner `[DANGEROUS MODE]` in prompt.
+- Desktop UI: Red border on chat window, persistent warning badge.
+- Audit log: All entries during dangerous mode are tagged `dangerous_mode: true`.
+
+---
+
+## 11. Skill/Plugin Security
+
+**Prerequisites for #647 (skill marketplace).**
+
+The SKILL.md format specification, permission model, security tiers, and sandboxing
+architecture are defined in [skill-format.mdx](skill-format.mdx) — the canonical
+reference for all skill/plugin security. Key security properties:
+
+- Skills declare permissions in YAML frontmatter using domain-scoped syntax
+  (`filesystem:read`, `network:write`, etc.)
+- Three security tiers: AMD Verified, Community Reviewed, Experimental
+- Skills run in isolated context with restricted `_TOOL_REGISTRY` access
+- Dedicated working directory per skill: `~/.gaia/skills/<skill_name>/`
+- Code signing infrastructure planned for v0.24.0 (#462-#465)
+
+---
+
+## 12. Messaging Security
+
+**Related issues:** #635 (messaging adapters), #559 (dangerous mode exclusion)
+
+### 12.1 Threat: Untrusted Input
+
+Messaging platforms (Discord, Slack, Telegram) introduce untrusted external input
+from potentially hostile users. This is fundamentally different from the desktop UI
+where the local user is trusted.
+
+### 12.2 Restricted Default Tool Set
+
+Messaging adapters operate with a restricted tool set by default:
+
+```python
+MESSAGING_ALLOWED_TOOLS = {
+    # Read-only tools only
+    "search_web",
+    "brave_web_search",
+    "brave_local_search",
+    "fetch",
+    "read_file",          # Read-only, within allowed paths
+    "search_documents",   # RAG search
+    "list_documents",     # RAG listing
+}
+
+MESSAGING_DENIED_TOOLS = {
+    # Never available over messaging
+    "write_file",
+    "delete_file",
+    "run_cli_command",
+    "browser_click",
+    "browser_fill_form",
+    "browser_type",
+    # All desktop control tools
+    "screenshot",
+    "mouse_click",
+    "keyboard_type",
+}
+```
+
+### 12.3 Input Sanitization
+
+All messages from external platforms are sanitized before reaching the agent:
+
+1. **Length limit:** Messages exceeding 4,000 characters are truncated.
+2. **Injection filtering:** Known prompt injection patterns are detected and blocked
+   (e.g., "ignore previous instructions", "system prompt:", role-switching attempts).
+3. **PII filtering:** Outbound responses are scanned for potential PII leakage
+   (email addresses, phone numbers, SSNs). Detected PII is replaced with
+   `[PII REDACTED]` in responses sent back to the messaging platform.
+4. **Rate limiting:** Per-user, per-channel, and global rate limits (see
+   `messaging-integrations-plan.mdx` Section 7 for configuration).
+
+### 12.4 Identity Isolation
+
+Each messaging platform user maps to an isolated GAIA session:
+
+- Sessions are keyed by `(platform, user_id, channel_id)`.
+- No cross-session data leakage.
+- Sessions have a configurable TTL (default: 24 hours).
+- Session history is stored in `~/.gaia/messaging/sessions.db`, separate from
+  the main audit log.
+
+---
+
+## 13. Pickle Deserialization Vulnerability
+
+**GitHub issue:** #447 (v0.17.2)
+
+### 13.1 Current Vulnerability
+
+The RAG SDK (`src/gaia/rag/sdk.py`) uses `pickle.load()` to deserialize cached
+document indexes. Pickle deserialization of untrusted data can lead to
+arbitrary code execution.
+
+Attack vector: A malicious PDF is indexed, the resulting cache file is tampered with
+(or a crafted `.pkl` file is placed in `~/.gaia/cache/`), and the next time the RAG
+SDK loads the cache, arbitrary code executes.
+
+### 13.2 Remediation
+
+1. **Immediate (v0.17.2):** Replace `pickle.dump`/`pickle.load` with `json` for
+   the cache data structure. The cached data (`chunks`, `full_text`, `metadata`)
+   is JSON-serializable.
+
+2. **If JSON is insufficient** (e.g., numpy arrays in embeddings): Use
+   `numpy.save`/`numpy.load` with `allow_pickle=False` for embedding vectors,
+   and JSON for metadata.
+
+3. **Cache integrity:** Add HMAC-SHA256 verification to cache files. The HMAC key
+   is derived from the file content hash, ensuring tampered caches are rejected.
+
+```python
+# Before (vulnerable):
+with open(cache_path, "rb") as f:
+    cached_data = pickle.load(f)
+
+# After (safe):
+with open(cache_path, "r") as f:
+    cached_data = json.load(f)
+# Verify HMAC before using cached_data
+```
+
+4. **Migration:** Existing `.pkl` cache files are invalidated on upgrade. Users
+   will see a one-time re-indexing of their documents.
+
+---
+
+## 14. Phased Rollout
+
+### Phase 1: v0.17.2 -- Critical Fixes
+
+| Item | Issue | Priority | Effort |
+|------|-------|----------|--------|
+| Fix pickle deserialization in RAG cache | #447 | P0 | 1 day |
+| Cache integrity verification (HMAC) | #447 | P0 | 0.5 day |
+
+### Phase 2: v0.18.2 -- Foundation Guardrails
+
+| Item | Issue | Priority | Effort |
+|------|-------|----------|--------|
+| Tool risk tier classification system | #438 | P0 | 2 days |
+| `@tool(risk_tier=...)` decorator extension | #438 | P0 | 1 day |
+| MCP tool classification (auto-approve/confirm/deny) | #94, #438 | P0 | 2 days |
+| Confirmation flow (CLI + desktop UI) | #438 | P0 | 3 days |
+| Audit trail SQLite schema + logging | -- | P1 | 2 days |
+| `gaia audit` CLI commands | -- | P1 | 1 day |
+| Secret redaction in logs and audit trail | -- | P1 | 1 day |
+| MCP server resource limits (timeout, filesystem sandbox) | #94 | P1 | 2 days |
+| npm package verification for MCP servers | #94 | P2 | 1 day |
+| Credential vault (initial, alongside env vars) | -- | P2 | 3 days |
+
+### Phase 3: v0.21.0 -- Browser and Desktop
+
+| Item | Issue | Priority | Effort |
+|------|-------|----------|--------|
+| Browser URL allowlist | #459 | P0 | 2 days |
+| Domain restriction enforcement for Playwright | #459 | P0 | 1 day |
+| Protocol blocking (file://, javascript:, data:) | #459 | P0 | 0.5 day |
+| Desktop control opt-in model | #461 | P0 | 2 days |
+| Screenshot permission system | #461 | P1 | 1 day |
+| Desktop control safety constraints (delay, kill switch) | #461 | P1 | 1 day |
+| Credential vault UI (add/remove/rotate) | -- | P1 | 2 days |
+| Content security (popup blocking, download quarantine) | #459 | P2 | 1 day |
+
+### Phase 4: v0.23.0 -- Autonomous Execution
+
+| Item | Issue | Priority | Effort |
+|------|-------|----------|--------|
+| Dangerous mode (CLI + desktop UI) | #559 | P0 | 2 days |
+| Dangerous mode exclusions (messaging, API, CUA) | #559 | P0 | 1 day |
+| Messaging adapter restricted tool set | #635 | P0 | 1 day |
+| Input sanitization for messaging | #635 | P1 | 2 days |
+| PII filtering for outbound messaging responses | #635 | P1 | 2 days |
+| Prompt injection detection | #635 | P1 | 2 days |
+| Deprecate env var credentials (vault primary) | -- | P2 | 1 day |
+| `--dangerous-allow-remote` bind flag | -- | P2 | 0.5 day |
+
+### Phase 5: v0.24.0 -- Marketplace Security
+
+| Item | Issue | Priority | Effort |
+|------|-------|----------|--------|
+| SKILL.md manifest specification | -- | P0 | 2 days |
+| Permission enforcement for skills | -- | P0 | 3 days |
+| Code signing infrastructure (AMD Verified) | -- | P1 | 5 days |
+| Skill sandbox (filesystem isolation, registry validation) | -- | P1 | 3 days |
+| AMD Verified badge in Agent Hub UI | #462-#465 | P2 | 1 day |
+
+---
+
+## 15. GitHub Issue Cross-References
+
+| Issue | Title | Milestone | Security Domain |
+|-------|-------|-----------|----------------|
+| #94 | MCP security vulnerabilities | v0.18.2 | MCP sandboxing, tool classification |
+| #438 | Tool execution guardrails | v0.18.2 | Risk tiers, confirmation flow |
+| #447 | Pickle deserialization vulnerability in RAG cache | v0.17.2 | Serialization safety |
+| #459 | Browser use security policy and URL allowlisting | v0.21.0 | Browser domain restrictions |
+| #461 | Desktop control security policy and opt-in model | v0.21.0 | CUA permissions |
+| #559 | Dangerous mode -- opt-in guardrail bypass | v0.23.0 | Autonomous execution |
+| #612 | Agent registry | v0.18.2 | Tool discovery trust |
+| #635 | Messaging adapters | v0.23.0 | Input sanitization, restricted tools |
+| #647 | Skill marketplace | v0.24.0 | Code signing, sandboxed skills |
+
+---
+
+## 16. Existing Security Measures
+
+The following security measures are already implemented in the codebase:
+
+| Measure | Location | Description |
+|---------|----------|-------------|
+| Shell command whitelist | `src/gaia/agents/chat/tools/shell_tools.py` | `ALLOWED_COMMANDS` set restricts CLI tool to read-only commands |
+| Git command whitelist | `src/gaia/agents/chat/tools/shell_tools.py` | Only read-only git subcommands (`status`, `log`, `diff`, etc.) |
+| Localhost-only MCP bridge | `src/gaia/mcp/mcp.json` | `GAIA_MCP_HOST` defaults to `localhost` |
+| Subprocess timeout | `src/gaia/mcp/external_services.py` | `timeout=30` on MCP subprocess calls |
+| Tool registry validation | `src/gaia/agents/base/agent.py` | Rejects unregistered tool names |
+| Required argument checking | `src/gaia/agents/base/agent.py` | Validates tool arguments before execution |
+
+These provide a baseline. This plan builds on them systematically.
+
+---
+
+## 17. Open Questions
+
+1. **Credential vault key management:** Should the vault encryption key be
+   hardware-backed (TPM/fTPM on AMD platforms) or software-derived (DPAPI/Keychain)?
+   TPM provides stronger security but adds platform-specific complexity.
+
+2. **Prompt injection detection:** What detection model should be used? Options
+   range from regex heuristics to a dedicated classifier model. The classifier
+   approach is more robust but adds latency and model dependency.
+
+3. **Skill sandboxing depth:** Should skills run in a separate Python subprocess
+   (strong isolation, high overhead) or in-process with restricted globals (weaker
+   isolation, low overhead)?
+
+4. **Audit log retention:** What is the default retention period? Options: 30 days,
+   90 days, unlimited. Unlimited is safest for compliance but grows the database.
+
+5. **Browser allowlist management:** Should the default allowlist be permissive
+   (allow all, block known-bad) or restrictive (block all, allow known-good)?
+   The current proposal is restrictive, which is safer but may frustrate users
+   who browse diverse sites.

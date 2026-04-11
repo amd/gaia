@@ -489,24 +489,18 @@ class AutoIndexAgent(Agent):
 
 ## Implementation Details
 
-### Extract from ChatAgent
+### Extraction from ChatAgent (Completed)
 
-**Current location:** `src/gaia/agents/chat/agent.py` (around line 70)
+`FileChangeHandler` was originally embedded in `src/gaia/agents/chat/agent.py` as a tightly-coupled inner class. It has been extracted to `src/gaia/utils/file_watcher.py` as a generic, callback-based implementation. ChatAgent now imports it from there:
 
 ```python
-# Current (tightly coupled)
-class FileChangeHandler(FileSystemEventHandler):
-    def __init__(self, agent):
-        self.agent = agent  # ❌ Coupled to specific agent
-
-    def on_created(self, event):
-        self.agent.reindex()  # ❌ Calls agent method
+from gaia.utils.file_watcher import FileChangeHandler
 ```
 
-**Target (generic):**
+The callback-based design decouples the handler from any specific agent:
 
 ```python
-# Generic (callback-based)
+# Generic (callback-based) — current implementation
 class FileChangeHandler(FileSystemEventHandler):
     def __init__(self, on_created=None, ...):
         self._on_created = on_created  # ✅ Generic callback
@@ -583,7 +577,7 @@ import logging
 
 ## Documentation Updates Required
 
-### SDK.md
+### docs/sdk/core/agent-system.mdx
 
 Add new section after Tool Mixins:
 
@@ -647,8 +641,8 @@ Replace manual file watching with FileChangeHandler in medical-intake-build-guid
 ### Step 5: Export & Document
 - [ ] Add to `src/gaia/__init__.py`
 - [ ] Add to `__all__` list
-- [ ] Update SDK.md
-- [ ] Add examples to SDK.md
+- [ ] Update docs/sdk/core/agent-system.mdx
+- [ ] Add examples to docs/sdk/core/agent-system.mdx
 
 ### Step 6: Validate
 - [ ] Can import: `from gaia import FileChangeHandler`

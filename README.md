@@ -69,11 +69,12 @@ print(result)
 ## Key Capabilities
 
 - **Agent Framework** — Base class with tool orchestration, state management, and error recovery
-- **RAG System** — Document indexing and semantic search for Q&A
-- **Voice Integration** — Whisper ASR + Kokoro TTS for speech interaction
+- **Agent UI** — Privacy-first desktop app with chat, file browser, document indexing, and tool execution
+- **RAG System** — Document indexing and semantic search for Q&A over 50+ file formats
+- **Voice Integration** — Whisper ASR + Kokoro TTS for speech interaction (P0 enabling technology)
 - **Vision Models** — Extract text from images with Qwen3-VL-4B
+- **MCP Integration** — Connect to any MCP server for external tool access
 - **Plugin System** — Distribute agents via PyPI with auto-discovery
-- **Web UI Packaging** — Generate modern interfaces for your agents
 
 ---
 
@@ -171,5 +172,5 @@ We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for deta
 
 [MIT License](./LICENSE.md)
 
-Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT

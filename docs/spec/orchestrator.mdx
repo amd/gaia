@@ -105,7 +105,7 @@ class Orchestrator:
 
         Args:
             tool_executor: Function to execute tools (name, args) -> result
-            llm_client: Chat SDK for checklist generation (required)
+            llm_client: Agent SDK for checklist generation (required)
             llm_fixer: Optional LLM-based code fixer for escalation
             progress_callback: Optional callback(phase, step, current, total)
             console: Optional console for displaying output

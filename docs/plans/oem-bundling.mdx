@@ -1,0 +1,159 @@
+---
+title: "OEM Bundling"
+description: "Hardware SKU pre-configuration for AMD OEM partners"
+icon: "box"
+---
+
+# OEM Bundling Framework -- Pre-Configuration for Hardware SKUs
+
+> **Date:** 2026-04-01
+>
+> **Status:** Planning
+>
+> **Target Milestone:** v0.24.0
+>
+> **Priority:** P1 -- drives OEM adoption of GAIA on Ryzen AI devices
+>
+> **Related Issues:**
+> - [#648](https://github.com/amd/gaia/issues/648) -- OEM bundling framework: pre-configuration for hardware SKUs
+> - [#649](https://github.com/amd/gaia/issues/649) -- Cost savings telemetry: show users what they save by running locally
+> - [#644](https://github.com/amd/gaia/issues/644) -- Model Manager UI: download, switch, and update models from the desktop app
+> - [#615](https://github.com/amd/gaia/issues/615) -- App Store and Distribution Channel Packaging
+>
+> **Related Plans:**
+> - [installer.mdx](installer.mdx) -- Install scripts, `gaia init`, model download tiers
+> - [agent-hub.mdx](agent-hub.mdx) -- Agent registry and marketplace
+> - [Agent UI](agent-ui.mdx) -- Phases A-D overview
+
+---
+
+## 1. Overview
+
+AMD's Ryzen AI 400-series is shipping across six major OEM partners: **Acer, ASUS, Dell, HP, GIGABYTE, and Lenovo**. Each partner ships devices with different memory configurations, NPU capabilities, and target audiences. The OEM bundling framework gives these partners a standardized way to pre-configure GAIA so that end users experience zero-touch deployment: plug in the device, and a private AI agent works immediately with no setup required. The first showcase device is the AMD Agent Computer (Halo Box), powered by Ryzen AI MAX+ 395 with 128GB unified memory.
+
+---
+
+## 2. OEM Configuration Manifest
+
+Each OEM provides a YAML manifest placed at a well-known path during factory image creation. GAIA checks for this manifest before running its standard first-boot flow. Invalid manifests fall back to the standard `gaia init` flow with a warning.
+
+Required fields: `schema_version`, `oem.name`, `hardware.sku`, `models.default`.
+
+```yaml
+# oem-config.yaml -- OEM Bundling Manifest for GAIA
+schema_version: "1.0"
+
+oem:
+  name: "ASUS"
+  display_name: "ASUS AI Suite"
+  support_url: "https://support.asus.com/ai"
+
+hardware:
+  sku: "ASUS-ProArt-PX13-HX370"
+  processor: "AMD Ryzen AI 9 HX 370"
+  npu_tops: 50
+  gpu_compute_units: 12
+  ram_gb: 32
+
+models:
+  default: "Qwen3.5-35B-A3B-GGUF"
+  preinstalled:
+    - id: "Qwen3-0.6B-GGUF"
+      size_gb: 0.4
+      purpose: "lightweight-chat"
+    - id: "Qwen3.5-35B-A3B-GGUF"
+      size_gb: 18.0
+      purpose: "agent-reasoning"
+    - id: "nomic-embed-text-v1.5-GGUF"
+      size_gb: 0.3
+      purpose: "rag-embedding"
+
+skills:
+  bundle: "consumer"    # consumer | developer | enterprise | creative
+  enabled: ["chat", "rag", "talk", "summarize"]
+
+settings:
+  temperature: 0.7
+  ctx_size: 32768
+  first_run:
+    skip_model_download: true
+    skip_hardware_detection: true
+```
+
+---
+
+## 3. Hardware Profiles
+
+The framework maps hardware SKUs to model recommendations. OEMs select from predefined profiles or define custom ones in their manifest.
+
+| Profile Tier | Representative SKU | NPU TOPS | GPU CUs | RAM | Max Model Size | Recommended Default Model |
+|---|---|---|---|---|---|---|
+| **Halo Max+** | Ryzen AI MAX+ 395 (Agent Computer) | 50 | 40 | 128 GB | ~200B (FP4) | Qwen3.5-35B |
+| **Halo** | Ryzen AI MAX 390 | 50 | 32 | 64 GB | ~70B (FP4) | Qwen3.5-35B |
+| **High** | Ryzen AI 9 HX 370 | 50 | 12 | 32 GB | ~30B (Q4) | Qwen3.5-35B |
+| **Mid** | Ryzen AI 7 340 | 39 | 8 | 16 GB | ~7B (Q4) | Qwen3-8B-Instruct-GGUF |
+| **Entry** | Ryzen AI 5 320 | 16 | 4 | 16 GB | ~4B (Q4) | Qwen3-4B-Instruct-GGUF |
+
+GAIA validates that a model fits the hardware at boot time. If the default model exceeds available memory (RAM minus ~4 GB OS overhead, with 15% model overhead for KV cache), GAIA falls back to the next smaller preinstalled model.
+
+---
+
+## 4. Pre-Installed Model Packages
+
+OEMs bundle models onto the factory image or a companion USB drive. Three predefined tiers cover common deployment scenarios.
+
+| Tier | Models Included | Total Disk | Target Audience |
+|---|---|---|---|
+| **Minimal** | Qwen3-0.6B-GGUF | ~400 MB | Entry-level devices, demo units |
+| **Standard** | Qwen3-0.6B + Qwen3.5-35B + nomic-embed-text-v1.5 | ~19 GB | Consumer laptops (32+ GB RAM) |
+| **Full** | Standard + Qwen3-VL-4B + Qwen3-8B | ~25 GB | Developer and Halo-class devices |
+
+Pre-installed models are placed at `C:\AMD\GAIA\models\` and symlinked into the user's `~/.gaia/models/` directory on first boot.
+
+---
+
+## 5. OEM Skill Bundles
+
+Skill bundles define which GAIA capabilities are enabled out of the box. OEMs pick a predefined bundle (consumer, developer, enterprise, creative) or define a custom list in the manifest. Skills not in the active bundle are hidden from the UI but remain installed -- users can enable additional skills from the Model Manager UI ([#644](https://github.com/amd/gaia/issues/644)) at any time.
+
+---
+
+## 6. Distribution Channels
+
+| Channel | Package Format | Auto-Update | Target |
+|---|---|---|---|
+| **Windows Store** | MSIX | Via Store | Consumer retail |
+| **Pre-installed image** | Embedded in OEM Windows image | Via GAIA update channel | Factory install |
+| **USB provisioning** | ZIP + PowerShell bootstrap | Manual / `gaia update` | IT deployment |
+| **Enterprise MDM** | MSI + Group Policy template | Via MDM policy | Fleet management |
+| **winget** | winget manifest | Via winget upgrade | Developer self-install |
+
+---
+
+## 7. Cost Savings Telemetry
+
+A key benefit of local AI is cost savings versus cloud APIs. The telemetry module ([#649](https://github.com/amd/gaia/issues/649)) tracks tokens generated and processed locally, then calculates equivalent cloud API costs using published pricing (OpenAI, Anthropic, Google). All data is stored locally in SQLite — nothing leaves the device unless the user explicitly opts into anonymous aggregate reporting. The Agent UI displays a savings summary card showing monthly and lifetime savings.
+
+---
+
+## 8. Phased Rollout
+
+- **Phase 1 (v0.24.0):** Ship the Agent Computer (Halo Box) with a production-ready reference OEM config, manifest schema v1.0, bootstrap loader in `gaia init`, cost savings telemetry v1, and Model Manager UI v1.
+- **Phase 2 (v0.25.0):** Provide OEM partners with a toolkit -- `gaia oem validate` and `gaia oem preview` CLI commands, OEM integration guide, model packaging tools, and an automated test suite for manifest loading.
+- **Phase 3 (v0.26.0+):** Ship GAIA on all six OEM partner devices through standard distribution channels (Microsoft Store, MDM, winget), with enterprise fleet management tooling and a partner certification program.
+
+---
+
+## 9. GitHub Issue Cross-References
+
+| Issue | Title | Relevance |
+|---|---|---|
+| [#648](https://github.com/amd/gaia/issues/648) | OEM bundling framework | Primary issue -- this plan is the design document |
+| [#649](https://github.com/amd/gaia/issues/649) | Cost savings telemetry | Savings calculator and dashboard |
+| [#644](https://github.com/amd/gaia/issues/644) | Model Manager UI | Hardware-aware model recommendations |
+| [#615](https://github.com/amd/gaia/issues/615) | App Store and Distribution Channel Packaging | MSIX, winget, Store distribution |
+| #597 | Setup wizard | First-boot flow that OEM manifest can skip or customize |
+| #612 | Agent registry | Skill bundles map to registered agents |
+| #643 | System tray | OEM branding in tray icon and tooltip |
+| #634 | Always-on agent (heartbeat) | Enterprise fleet health monitoring |
+| #474 | MCP auto-install | Enterprise MCP server provisioning via manifest |

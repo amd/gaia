@@ -8,13 +8,13 @@ description: Implementation plan for a Computer Use Agent (CUA) that enables des
 <Info>
 **Status:** Planning
 **Priority:** High
-**Target:** January 30, 2026
+**Target:** v0.21.0
 [Vote with 👍](https://github.com/amd/gaia/issues/224)
 </Info>
 
 ## Executive Summary
 
-Build a **Computer Use Agent (CUA)** that wraps external MCP servers and enables AI-powered desktop control through natural language commands. The agent dynamically discovers tools from the external MCP server and registers them locally, using Lemonade (Qwen-Coder 30B) for intelligent reasoning about which actions to take.
+Build a **Computer Use Agent (CUA)** that wraps external MCP servers and enables AI-powered desktop control through natural language commands. The agent dynamically discovers tools from the external MCP server and registers them locally, using Lemonade (Qwen3.5-35B) for intelligent reasoning about which actions to take.
 
 **Goal:** Let GAIA automate desktop features and system settings through natural language commands.
 
@@ -26,7 +26,7 @@ Build a **Computer Use Agent (CUA)** that wraps external MCP servers and enables
 
 - GAIA SDK v0.16+
 - Python 3.10+
-- Lemonade Server running with Qwen-Coder 30B
+- Lemonade Server running with Qwen3.5-35B
 - External MCP server for desktop control (user-provided)
 
 ### External MCP Server Requirements
@@ -96,7 +96,7 @@ python -m gaia.agents.cua.cli --list-tools
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 graph TD
     A["User CLI<br/>python -m gaia.agents.cua.cli"] --> B["ComputerUseAgent<br/>(inherits from Agent)"]
-    B --> C["Lemonade Server<br/>(Qwen-Coder 30B)"]
+    B --> C["Lemonade Server<br/>(Qwen3.5-35B)"]
     B --> D["External MCP Server<br/>(Desktop Control)"]
 
     C --> E["Reasoning<br/>Tool Selection"]
@@ -221,7 +221,7 @@ python -m gaia.agents.cua.cli --list-tools --verbose
 python -m gaia.agents.cua.cli --mcp-server-url http://localhost:9000 "enable dark mode"
 
 # Use specific LLM model
-python -m gaia.agents.cua.cli --model Qwen3-Coder-30B "check storage status"
+python -m gaia.agents.cua.cli --model Qwen3.5-35B "check storage status"
 ```
 
 ---
