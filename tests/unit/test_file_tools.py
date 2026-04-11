@@ -758,7 +758,9 @@ def search_file_fn():
     return _TOOL_REGISTRY["search_file"]["function"]
 
 
-def test_search_file_count_matches_returned_files(search_file_fn, tmp_path, monkeypatch):
+def test_search_file_count_matches_returned_files(
+    search_file_fn, tmp_path, monkeypatch
+):
     # Ensure the quick CWD search finds >10 matches deterministically.
     for i in range(25):
         (tmp_path / f"file_{i}.txt").write_text("x", encoding="utf-8")
