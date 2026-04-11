@@ -361,7 +361,10 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          # Node 24 ships with npm 11+ which supports OIDC trusted publishing.
+          # Node 22 ships with npm 10.x which does NOT — and `npm install -g
+          # npm@latest` on Node 22 runners corrupts npm's own dependencies.
+          node-version: '24'
       - name: Download validated build
         uses: actions/download-artifact@v6
         with:
