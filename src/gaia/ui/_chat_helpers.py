@@ -1337,6 +1337,12 @@ async def _index_document(filepath: Path) -> int:
 
     Runs the synchronous RAG indexing in a thread pool executor
     to avoid blocking the async event loop.
+
+    Note: A return value of 0 means RAG reported success but produced
+    no chunks. Callers must treat 0 chunks as a failure condition.
+
+    Raises:
+        RuntimeError: If indexing fails for any reason.
     """
 
     def _do_index():
@@ -1349,32 +1355,28 @@ async def _index_document(filepath: Path) -> int:
         rag = RAGSDK(config)
         result = rag.index_document(str(filepath))
         logger.info("RAG index_document result for %s: %s", filepath, result)
-        if isinstance(result, dict):
-            if result.get("error"):
-                logger.warning(
-                    "RAG returned error for %s: %s", filepath, result["error"]
-                )
-            if not result.get("success"):
-                logger.warning(
-                    "RAG indexing unsuccessful for %s (success=False)", filepath
-                )
-            # RAG SDK returns "num_chunks", not "chunk_count"
-            chunks = result.get("num_chunks", 0) or result.get("chunk_count", 0)
-            logger.info(
-                "Indexed %s: %d chunks (success=%s)",
-                filepath,
-                chunks,
-                result.get("success"),
+
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                f"RAG returned unexpected type for {filepath.name}: "
+                f"{type(result).__name__}"
             )
-            return chunks
-        logger.warning(
-            "RAG index_document returned non-dict for %s: %r", filepath, result
-        )
-        return 0
+
+        error = result.get("error")
+        if error:
+            raise RuntimeError(f"RAG indexing failed for {filepath.name}: {error}")
+
+        if not result.get("success"):
+            raise RuntimeError(f"RAG indexing unsuccessful for {filepath.name}")
+
+        chunks = result.get("num_chunks", 0) or result.get("chunk_count", 0)
+        logger.info("Indexed %s: %d chunks", filepath, chunks)
+        return chunks
 
     try:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _do_index)
+    except RuntimeError:
+        raise
     except Exception as e:
-        logger.error("Failed to index document %s: %s", filepath, e, exc_info=True)
-        return 0
+        raise RuntimeError(f"Failed to index {filepath.name}: {e}") from e

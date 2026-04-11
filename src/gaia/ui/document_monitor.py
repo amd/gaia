@@ -220,14 +220,22 @@ class DocumentMonitor:
 
         try:
             chunk_count = await self._index_fn(Path(filepath))
-            self._db.reindex_document(doc_id, new_hash, mtime, chunk_count, size)
-            self._reindex_count += 1
-            logger.info(
-                "Re-indexed %s: %d chunks (doc_id=%s)",
-                filepath,
-                chunk_count,
-                doc_id,
-            )
+            if chunk_count == 0:
+                self._db.update_document_status(doc_id, "failed")
+                logger.warning(
+                    "Re-indexing returned 0 chunks for %s (doc_id=%s)",
+                    filepath,
+                    doc_id,
+                )
+            else:
+                self._db.reindex_document(doc_id, new_hash, mtime, chunk_count, size)
+                self._reindex_count += 1
+                logger.info(
+                    "Re-indexed %s: %d chunks (doc_id=%s)",
+                    filepath,
+                    chunk_count,
+                    doc_id,
+                )
         except Exception:
             self._db.update_document_status(doc_id, "failed")
             logger.exception("Re-indexing failed for %s", filepath)
