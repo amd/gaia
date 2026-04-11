@@ -273,6 +273,8 @@ jobs:
   build-electron:
     name: Build Electron Apps
     needs: validate
+    permissions:
+      contents: write   # build-electron-apps.yml declares contents: write
     uses: ./.github/workflows/build-electron-apps.yml
 
   # Build the GAIA Agent UI desktop installers (NSIS / DMG / DEB / AppImage)
