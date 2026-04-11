@@ -55,6 +55,7 @@
             "pages": [
               "setup",
               "quickstart",
+              "guides/install",
               "guides/agent-ui",
               {
                 "group": "User Guides",
@@ -70,6 +71,7 @@
                   "guides/jira",
                   "guides/docker",
                   "guides/routing",
+                  "guides/custom-agent",
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
@@ -313,6 +315,7 @@
             "pages": [
               "glossary",
               "reference/faq",
+              "reference/install-troubleshooting",
               "reference/troubleshooting"
             ]
           }
@@ -369,7 +372,6 @@
           {
             "group": "Infrastructure",
             "pages": [
-              "plans/installer",
               "plans/mcp-client",
               "plans/cua",
               "plans/docker-containers",
@@ -392,6 +394,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.17.2",
               "releases/v0.17.1",
               "releases/v0.17.0",
               "releases/v0.16.1",
@@ -437,7 +440,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.17.1 \u00b7 Lemonade 10.0.0",
+        "label": "v0.17.2 \u00b7 Lemonade 10.0.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

@@ -245,15 +245,16 @@ jobs:
             - Make it easy for maintainers to accept suggestions with one click
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
+  #
+  # NOTE: No concurrency group - each @claude mention runs its own independent job in parallel
+  # so that burst of comments on different topics all get answered. Safe because this job
+  # only reads the PR diff and posts comments (no commits to the branch).
   pr-comment:
     if: |
       github.event_name == 'pull_request_review_comment' &&
       contains(github.event.comment.body, '@claude') &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    concurrency:
-      group: claude-pr-comment-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v6
         with:
@@ -330,15 +331,16 @@ jobs:
             Maintain a helpful, professional tone.
 
   # Respond to new issues or @claude mentions in PR conversations (including forks)
+  #
+  # NOTE: No concurrency group - each @claude mention runs its own independent job in parallel
+  # so that burst of comments on different topics all get answered. Safe because this job
+  # only reads the PR diff and posts comments (no commits to the branch).
   issue-handler:
     if: |
       github.event_name == 'issues' ||
       (github.event_name == 'issue_comment' &&
        contains(github.event.comment.body, '@claude'))
     runs-on: ubuntu-latest
-    concurrency:
-      group: claude-issue-${{ github.event.issue.number }}
-      cancel-in-progress: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -368,6 +370,10 @@ jobs:
           # Fetch base branch from origin BEFORE any URL changes
           git fetch origin $BASE_BRANCH
 
+          # Save base branch SHA before any origin URL changes (fork fetches can overwrite origin/$BASE_BRANCH)
+          BASE_SHA=$(git rev-parse origin/$BASE_BRANCH)
+          echo "Base SHA: $BASE_SHA"
+
           # Extract branch name first
           HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
 
@@ -385,9 +391,11 @@ jobs:
               exit 1
             }
 
-            git checkout -b $HEAD_REF origin/$HEAD_REF
+            # Use -B to force-create branch (handles case where HEAD_REF matches an existing
+            # branch like 'main' — common when contributors push to their fork's default branch)
+            git checkout -B pr-head origin/$HEAD_REF
 
-            echo "Successfully checked out $HEAD_REF (origin now points to fork)"
+            echo "Successfully checked out $HEAD_REF as pr-head (origin now points to fork)"
           else
             echo "Non-fork PR, fetching from origin"
             git fetch origin $PR_HEAD_SHA
@@ -395,12 +403,13 @@ jobs:
             git checkout -b "$HEAD_REF" $PR_HEAD_SHA 2>/dev/null || git checkout "$HEAD_REF"
           fi
 
-          # Generate diff in repo root (where Claude has access)
-          echo "Generating diff between $BASE_BRANCH and PR head..."
-          git diff origin/$BASE_BRANCH...$PR_HEAD_SHA > pr-diff.txt
+          # Generate diff using saved base SHA (not origin/$BASE_BRANCH which may have been
+          # overwritten when origin was redirected to the fork)
+          echo "Generating diff between base ($BASE_SHA) and PR head ($PR_HEAD_SHA)..."
+          git diff $BASE_SHA...$PR_HEAD_SHA > pr-diff.txt
 
           # Also get list of changed files
-          git diff --name-status origin/$BASE_BRANCH...$PR_HEAD_SHA > pr-files.txt
+          git diff --name-status $BASE_SHA...$PR_HEAD_SHA > pr-files.txt
 
           echo "Diff generated: $(wc -l < pr-diff.txt) lines"
           echo "Files changed: $(wc -l < pr-files.txt) files"

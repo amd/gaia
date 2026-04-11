@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
+from gaia.agents.base.tools import get_tool_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_event: Optional[threading.Event] = None
         self._confirm_result: bool = False
         self._confirm_id: Optional[str] = None
+        self._tool_start_time: Optional[float] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -199,15 +201,24 @@ class SSEOutputHandler(OutputHandler):
     def print_tool_usage(self, tool_name: str):
         self._tool_count += 1
         self._last_tool_name = tool_name
-        self._emit(
-            {
-                "type": "tool_start",
-                "tool": tool_name,
-                "detail": _tool_description(tool_name),
-            }
-        )
+        self._tool_start_time = time.monotonic()
+        event = {
+            "type": "tool_start",
+            "tool": tool_name,
+            "detail": _tool_description(tool_name),
+        }
+        # Attach MCP server name if this is an MCP tool.
+        # _mcp_server is set by MCPTool.to_gaia_format() during registration
+        # in MCPClientMixin._register_mcp_tools() (see mcp/client/mcp_client.py).
+        meta = get_tool_metadata(tool_name)
+        if meta:
+            mcp_server = meta.get("_mcp_server")
+            if mcp_server:
+                event["mcp_server"] = mcp_server
+        self._emit(event)
 
     def print_tool_complete(self):
+        self._tool_start_time = None  # Reset in case tool_result was skipped
         self._emit(
             {
                 "type": "tool_end",
@@ -240,6 +251,12 @@ class SSEOutputHandler(OutputHandler):
                 data.get("status") != "error" if isinstance(data, dict) else True
             ),
         }
+
+        # Attach latency for tool calls (measured from print_tool_usage)
+        if self._tool_start_time is not None:
+            latency_ms = round((time.monotonic() - self._tool_start_time) * 1000, 1)
+            event["latency_ms"] = latency_ms
+            self._tool_start_time = None
 
         # For command execution results, include structured output data
         # so the frontend can render a proper terminal view
@@ -366,6 +383,10 @@ class SSEOutputHandler(OutputHandler):
     ):  # pylint: disable=unused-argument
         if answer:
             answer = _THINK_TAG_SUB_RE.sub("", answer)
+            # Extract answer text from {"thought":..., "answer":...} JSON before
+            # the regex cleaners run.  _THOUGHT_JSON_SUB_RE would otherwise strip
+            # the entire blob (including the answer value) leaving an empty string.
+            answer = _clean_answer_json(answer.strip())
             # Strip any trailing {"answer": "..."} JSON blob that some models
             # append to their plain-text response.
             answer = _ANSWER_JSON_SUB_RE.sub("", answer)
@@ -423,6 +444,10 @@ class SSEOutputHandler(OutputHandler):
                 "message": f"Agent: {agent_name}",
             }
         )
+
+    def print_agent_created(self, agent_id: str) -> None:
+        """Notify the frontend that a new agent is available in the registry."""
+        self._emit({"type": "agent_created", "agent_id": agent_id})
 
     # === Optional Methods (with SSE-friendly implementations) ===
 
@@ -485,16 +510,23 @@ class SSEOutputHandler(OutputHandler):
 
             stripped = self._stream_buffer.strip()
 
-            # Case 0: Buffer starts with "{" but we haven't seen enough to
-            # know if it's an LLM JSON block (e.g., {"answer":...}).  Hold
-            # the buffer for a few more chunks so Cases 1/1b can detect the
-            # pattern.  Without this, a lone "{" token is emitted as text
-            # before "answer"/"tool" appears, breaking downstream filters.
+            # Case 0: Buffer starts with "{" — hold until we can identify the
+            # JSON type (tool call vs final answer).  The LLM outputs either
+            # {"tool": ..., "tool_args": {...}} or {"thought": ..., "answer": ...}.
+            # We MUST see "tool" or "answer" before routing to Case 1/1b.
+            # Releasing early (e.g., on "thought") causes partial JSON to leak
+            # as text chunks and then get stripped by _THOUGHT_JSON_SUB_RE,
+            # producing an empty response.
+            # Hold limit: 8 KB for proper JSON objects ({"...}), 30 bytes for
+            # curly braces in plain text (e.g. "Use {var} in your code").
+            _looks_like_json_obj = bool(re.match(r'^\{\s*"', stripped))
+            _hold_limit = 8192 if _looks_like_json_obj else 30
             if (
                 stripped.startswith("{")
-                and len(stripped) < 30
-                and not any(m in stripped for m in ('"tool"', '"answer"', '"thought"'))
+                and '"tool"' not in stripped
+                and '"answer"' not in stripped
                 and not end_of_stream
+                and len(stripped) < _hold_limit
             ):
                 return  # Wait for more tokens
 

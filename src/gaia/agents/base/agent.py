@@ -77,6 +77,57 @@ class Agent(abc.ABC):
     STATE_ERROR_RECOVERY = "ERROR_RECOVERY"
     STATE_COMPLETION = "COMPLETION"
 
+    # Response format templates — agents select via response_mode attribute.
+    # "planning" (default): JSON-only responses with thought/goal/plan/tool structure.
+    # "conversational": plain text for conversation, JSON only for tool calls.
+    _PLANNING_FORMAT = """
+==== RESPONSE FORMAT ====
+You must respond ONLY in valid JSON. No text before { or after }.
+
+**To call a tool:**
+{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
+
+**To create a multi-step plan:**
+{
+  "thought": "reasoning",
+  "goal": "objective",
+  "plan": [
+    {"tool": "tool1", "tool_args": {"arg": "val"}},
+    {"tool": "tool2", "tool_args": {"arg": "val"}}
+  ],
+  "tool": "tool1",
+  "tool_args": {"arg": "val"}
+}
+
+**Dynamic placeholders in plans:**
+- $PREV.field - reference a field from the previous step's result
+- $STEP_N.field - reference a field from step N's result (0-indexed)
+
+**To provide a final answer:**
+{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
+
+**RULES:**
+1. ALWAYS use tools for real data - NEVER hallucinate
+2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
+3. After tool results, provide an "answer" summarizing them
+"""
+
+    _CONVERSATIONAL_FORMAT = """
+==== RESPONSE FORMAT ====
+Respond in plain text for normal conversation.
+
+When you need to call a tool, output ONLY a JSON object on a single line:
+{"tool": "tool_name", "tool_args": {"arg1": "value1"}}
+
+When responding conversationally (no tool call needed), just write plain text.
+Do NOT wrap conversational replies in JSON.
+"""
+
+    _FORMAT_TEMPLATES = {
+        "planning": _PLANNING_FORMAT,
+        "conversational": _CONVERSATIONAL_FORMAT,
+    }
+
     def __init__(
         self,
         use_claude: bool = False,
@@ -176,40 +227,23 @@ class Agent(abc.ABC):
         # Note: System prompt will be composed after _register_tools()
         # This allows mixins to be initialized first (in subclass __init__)
 
-        # Register tools for this agent
+        # Store response format template BEFORE _register_tools() so that when
+        # _register_tools calls load_mcp_servers_from_config → rebuild_system_prompt,
+        # the template is already available and gets included in the cached prompt.
+        # Subclasses can set self.response_mode before calling super().__init__()
+        # to select "conversational" mode (plain text + JSON tool calls).
+        if not hasattr(self, "response_mode"):
+            self.response_mode = "planning"
+        self._response_format_template = self._FORMAT_TEMPLATES.get(
+            self.response_mode, self._PLANNING_FORMAT
+        )
+
+        # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
+        # _response_format_template must be set above before this call).
         self._register_tools()
 
-        # Note: system_prompt is now a lazy @property that composes on first access
-        # Tool descriptions and response format are added in _compose_system_prompt()
-
-        # Store response format template for use in composition
-        self._response_format_template = """
-==== RESPONSE FORMAT ====
-You must respond ONLY in valid JSON. No text before { or after }.
-
-**To call a tool:**
-{"thought": "reasoning", "goal": "objective", "tool": "tool_name", "tool_args": {"arg1": "value1"}}
-
-**To create a multi-step plan:**
-{
-  "thought": "reasoning",
-  "goal": "objective",
-  "plan": [
-    {"tool": "tool1", "tool_args": {"arg": "val"}},
-    {"tool": "tool2", "tool_args": {"arg": "val"}}
-  ],
-  "tool": "tool1",
-  "tool_args": {"arg": "val"}
-}
-
-**To provide a final answer:**
-{"thought": "reasoning", "goal": "achieved", "answer": "response to user"}
-
-**RULES:**
-1. ALWAYS use tools for real data - NEVER hallucinate
-2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
-3. After tool results, provide an "answer" summarizing them
-"""
+        # Note: system_prompt is now a lazy @property that composes on first access.
+        # Tool descriptions and response format are added in _compose_system_prompt().
 
         # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
@@ -1157,7 +1191,18 @@ You must respond ONLY in valid JSON. No text before { or after }.
         Returns:
             Result of the tool execution
         """
+        if not tool_name:
+            logger.error("Tool name is None or empty")
+            return {
+                "status": "error",
+                "error": "Tool name is missing from LLM response",
+                "error_displayed": True,
+            }
+
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
+
+        if not tool_name:
+            return {"status": "error", "error": "No tool name provided"}
 
         if tool_name not in _TOOL_REGISTRY:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
@@ -1635,7 +1680,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                 if (
                     isinstance(next_step, dict)
-                    and "tool" in next_step
+                    and next_step.get("tool")
                     and "tool_args" in next_step
                 ):
                     # We have a properly formatted step with tool and args
@@ -1682,10 +1727,10 @@ You must respond ONLY in valid JSON. No text before { or after }.
                         tool_name, tool_result, conversation, tool_args
                     )
 
-                    # Display the tool result in real-time (show full result to user)
-                    self.console.print_tool_complete()
-
+                    # Display the tool result in real-time (show full result to user).
+                    # Emit result BEFORE complete so SSE latency is captured.
                     self.console.pretty_print_json(tool_result, "Tool Result")
+                    self.console.print_tool_complete()
 
                     # Store the truncated output for future context
                     previous_outputs.append(
@@ -2241,7 +2286,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 for i, step in enumerate(parsed["plan"]):
                     if not isinstance(step, dict):
                         invalid_steps.append((i, type(step).__name__, step))
-                    elif "tool" not in step:
+                    elif "tool" not in step or not step["tool"]:
                         invalid_steps.append((i, "missing tool field", step))
                     elif "tool_args" not in step:
                         # Auto-add empty tool_args for convenience
@@ -2288,7 +2333,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
                 )
 
             # If the response contains a tool call, execute it
-            if "tool" in parsed and "tool_args" in parsed:
+            if parsed.get("tool") and "tool_args" in parsed:
 
                 # Display the current plan with the current step highlighted
                 if self.current_plan:
@@ -2397,10 +2442,10 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     tool_name, tool_result, conversation, tool_args
                 )
 
-                # Display the tool result in real-time (show full result to user)
-                self.console.print_tool_complete()
-
+                # Display the tool result in real-time (show full result to user).
+                # Emit result BEFORE complete so SSE latency is captured.
                 self.console.pretty_print_json(tool_result, "Result")
+                self.console.print_tool_complete()
 
                 # Store the truncated output for future context
                 previous_outputs.append(

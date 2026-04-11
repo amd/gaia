@@ -11,6 +11,7 @@ import { FileBrowser } from './components/FileBrowser';
 import { SettingsModal } from './components/SettingsModal';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
+import { UpdateIndicator } from './components/UpdateIndicator';
 import { PermissionPrompt } from './components/PermissionPrompt';
 import { useChatStore } from './stores/chatStore';
 import * as api from './services/api';
@@ -65,9 +66,34 @@ function App() {
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
+        systemStatus,
         setSystemStatus,
         setBackendConnected,
+        setAgents,
     } = useChatStore();
+
+    // Load agent list on mount, then poll every 30s.
+    // Fingerprinting avoids re-renders when the list is unchanged.
+    // The SSE stream emits agent_created events for immediate updates;
+    // polling is a safety net for manually created / dropped agents.
+    const lastAgentFingerprintRef = useRef<string>('');
+    const loadAgents = useCallback(async () => {
+        try {
+            const data = await api.listAgents();
+            const agents = data.agents || [];
+            const fp = agents.map((a) => a.id).sort().join(',');
+            if (fp !== lastAgentFingerprintRef.current) {
+                lastAgentFingerprintRef.current = fp;
+                setAgents(agents);
+            }
+        } catch { /* ignore -- agents list is non-critical */ }
+    }, [setAgents]);
+
+    useEffect(() => {
+        loadAgents();
+        const interval = setInterval(loadAgents, 30_000);
+        return () => clearInterval(interval);
+    }, [loadAgents]);
 
     // Mobile gateway state
     const [showMobileAccess, setShowMobileAccess] = useState(false);
@@ -131,14 +157,34 @@ function App() {
         }
     }, [setSystemStatus, setBackendConnected]);
 
-    // Check status on mount, then poll every 15 seconds
+    // Check status on mount, then poll adaptively:
+    // 3s while init_state === 'initializing', 15s otherwise.
+    const currentPollIntervalRef = useRef(3_000);
+
     useEffect(() => {
         checkSystemStatus();
-        statusPollRef.current = setInterval(checkSystemStatus, 15_000);
+        currentPollIntervalRef.current = 3_000; // Start fast during potential init
+        statusPollRef.current = setInterval(checkSystemStatus, 3_000);
         return () => {
             if (statusPollRef.current) clearInterval(statusPollRef.current);
         };
     }, [checkSystemStatus]);
+
+    // Adjust poll interval when init completes.
+    // Keep 3s fast-poll while systemStatus is null (first response pending)
+    // or init_state is 'initializing'. Switch to 15s only after a definitive
+    // 'ready' or 'degraded' state arrives.
+    useEffect(() => {
+        const initState = systemStatus?.init_state;
+        // Stay fast while waiting for first response or during init
+        if (!initState || initState === 'initializing') return;
+        const desiredInterval = 15_000;
+        if (desiredInterval !== currentPollIntervalRef.current) {
+            currentPollIntervalRef.current = desiredInterval;
+            if (statusPollRef.current) clearInterval(statusPollRef.current);
+            statusPollRef.current = setInterval(checkSystemStatus, desiredInterval);
+        }
+    }, [systemStatus?.init_state, checkSystemStatus]);
 
     // Startup banner + load sessions on mount, then poll for changes
     const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -277,7 +323,8 @@ function App() {
         log.chat.info('Creating new task session...');
         setCreateError(null);
         try {
-            const session = await api.createSession({ title: 'New Task' });
+            const { activeAgentId } = useChatStore.getState();
+            const session = await api.createSession({ title: 'New Task', agent_type: activeAgentId });
             log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
             addSession(session);
             setCurrentSession(session.id);
@@ -294,6 +341,12 @@ function App() {
         }
     }, [addSession, setCurrentSession, setMessages, setSidebarOpen, checkSystemStatus]);
 
+    // Switch to a different agent — creates a new session with the chosen agent
+    const handleAgentChange = useCallback(async (newAgentId: string) => {
+        useChatStore.getState().setActiveAgentId(newAgentId);
+        await handleNewTask();
+    }, [handleNewTask]);
+
     // Create task with a pre-filled prompt — stores the prompt in Zustand
     // so ChatView can consume it reliably on mount (no timing race).
     const { setPendingPrompt } = useChatStore();
@@ -302,6 +355,30 @@ function App() {
         setPendingPrompt(prompt);
         await handleNewTask();
     }, [handleNewTask, setPendingPrompt]);
+
+    // Launch the Gaia Builder Agent in a new session.
+    // Uses a dedicated agent_type so the session always gets the builder,
+    // regardless of the user's currently selected agent.
+    const handleNewBuilderTask = useCallback(async () => {
+        log.chat.info('Creating builder agent session...');
+        setCreateError(null);
+        try {
+            setPendingPrompt("Hi, I'd like to create a new custom agent.");
+            const session = await api.createSession({ title: 'New Agent', agent_type: 'builder' });
+            log.chat.info(`Builder session created: id=${session.id}`);
+            addSession(session);
+            setCurrentSession(session.id);
+            setMessages([]);
+            if (window.innerWidth <= 768) setSidebarOpen(false);
+        } catch (err) {
+            // Clear the pending prompt so it doesn't leak into the next session
+            setPendingPrompt(null);
+            log.chat.error('Failed to create builder session', err);
+            checkSystemStatus();
+            setCreateError('Failed to create task. Is the server running?');
+            setTimeout(() => setCreateError(null), 6000);
+        }
+    }, [addSession, setCurrentSession, setMessages, setSidebarOpen, checkSystemStatus, setPendingPrompt]);
 
     // Mobile gateway toggle
     const handleMobileToggle = useCallback(async () => {
@@ -340,6 +417,15 @@ function App() {
             }
         }
     }, [tunnelActive]);
+
+    // Sync agent picker to the selected session's agent_type
+    useEffect(() => {
+        const { sessions, setActiveAgentId } = useChatStore.getState();
+        const session = sessions.find((s) => s.id === currentSessionId);
+        if (session?.agent_type) {
+            setActiveAgentId(session.agent_type);
+        }
+    }, [currentSessionId]);
 
     // Log view transitions
     useEffect(() => {
@@ -420,11 +506,12 @@ function App() {
 
                 <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
                     {displayedSessionId ? (
-                        <ChatView key={displayedSessionId} sessionId={displayedSessionId} />
+                        <ChatView key={displayedSessionId} sessionId={displayedSessionId} onCreateAgent={handleNewBuilderTask} onAgentChange={handleAgentChange} />
                     ) : (
                         <WelcomeScreen
                             onNewTask={handleNewTask}
                             onSendPrompt={handleNewTaskWithPrompt}
+                            onCreateAgent={handleNewBuilderTask}
                         />
                     )}
                 </div>
@@ -453,6 +540,10 @@ function App() {
 
             {/* Tool confirmation popup */}
             <PermissionPrompt />
+
+            {/* Phase F: desktop auto-update status chip (only renders in the
+                Electron app; the hook no-ops when window.gaiaUpdater is absent). */}
+            <UpdateIndicator />
 
             {/* Session creation error toast */}
             {createError && (

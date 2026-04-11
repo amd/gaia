@@ -1,0 +1,899 @@
+---
+title: Desktop Installer Plan
+description: Primary install path for non-developers — one-click desktop installer for the GAIA Agent UI Electron app, with auto-update and a unified backend bootstrap shared with the npm CLI
+---
+
+# Desktop Installer Plan
+
+<Note>
+**Status:** Planning
+**Issue:** [#530](https://github.com/amd/gaia/issues/530) — Desktop installer: one-click install with NSIS, DMG, AppImage + auto-update
+**Branch:** `kalin/desktop-installer` (this plan ships as commit 1; subsequent commits implement it)
+**Approach:** Ground-up implementation using [Lemonade Server's installer](https://github.com/lemonade-sdk/lemonade) as a *reference architecture*. Distributed via GitHub Releases initially; R2 / CDN deferred until the website lands.
+**Companion plan:** [`installer.mdx`](./installer.mdx) covers the **Python CLI** install path. This document covers the **Electron desktop app** installer — which is the **primary install path for non-developer end users**.
+</Note>
+
+---
+
+## §1 Why this plan exists
+
+GAIA today has three distribution channels — and the one most users actually want is the one that doesn't work properly:
+
+| Channel | Audience | Status | First-run install? |
+|---|---|---|---|
+| `pip install amd-gaia` | Python developers | ✅ Working | N/A (developer assumed to manage Python) |
+| `npm install -g @amd-gaia/agent-ui` | End users via Node | ✅ Working | ✅ `bin/gaia-ui.mjs` installs `uv` + Python venv + `amd-gaia[ui]` + `gaia init` |
+| **Desktop installer (current Squirrel `.exe`)** | **End users via download** | **❌ Broken UX** | **❌ No — gives up if `gaia` not on PATH** |
+
+**This is the front door for non-developers and it's broken.** A user who downloads the Squirrel installer, runs it, and double-clicks the GAIA Agent UI shortcut sees:
+
+```js
+// main.cjs:100
+console.warn("Warning: gaia CLI not found. Backend will not start automatically.");
+console.warn("Install with: pip install amd-gaia");
+```
+
+They're then dropped at a non-functional Electron window and told to open a terminal. **For a non-developer, this is the end of the journey.** The npm install path has all the smart bootstrap logic; the desktop installer doesn't.
+
+This plan builds the desktop installer correctly, as the **primary install path for non-developer end users**. The npm and pip paths remain available as developer paths but are no longer the recommended install for new users.
+
+The implications of "primary install path":
+- **Reliability is non-negotiable** — every install failure is a lost user
+- **Polish matters** — first impressions are formed in the first 60 seconds
+- **Documentation is a first-class deliverable**, not an afterthought
+- **Code signing is required**, not nice-to-have — antivirus / SmartScreen / Gatekeeper warnings are the leading cause of install abandonment for unsigned consumer apps
+- **Auto-update must work**, because non-developers won't manually re-download to get fixes
+
+---
+
+## §2 Goals / non-goals
+
+### Goals
+
+- **One double-click install** on Windows / macOS / Linux
+- **Under 10 minutes** from download to first prompt (model download dominates; UX itself is < 1 minute and the rest is unattended progress)
+- **Auto-update** — users get new fixes and features without manual reinstall
+- **Native conventions per platform**: NSIS (Windows), DMG (macOS), DEB + AppImage (Linux)
+- **AMD-branded** wizard with consistent visual identity
+- **Code-signed** installers on Windows + macOS so users don't see scary OS warnings (P0 because this is the primary path)
+- **Auto-start at login** with sensible per-platform defaults so the tray-app pattern actually works
+- **Clean uninstall** with sensible defaults — keep user data unless explicitly purged
+- **Single source of truth** for first-run backend install logic, shared between npm CLI and Electron app
+- **Comprehensive documentation** — quickstart, troubleshooting, FAQ, install/uninstall guides, all updated to lead with the desktop installer as the recommended path
+- **Robust failure recovery** — every failure mode shows a useful error and offers a path forward (retry, manual install, quit), with logs the user can attach to a bug report
+
+### Non-goals
+
+- **Replacing the CLI install path entirely.** `install.ps1`, `install.sh`, `gaia init`, and `gaia update` still exist for developers, CI, headless deployments, and users who explicitly want the developer path. The desktop installer supplements them.
+- **Bundling Python in the installer.** The first-run logic downloads `uv` and creates a Python 3.12 venv on demand. Bundling adds ~50 MB and complicates the upgrade story.
+- **macOS Intel native build.** Apple Silicon only. Intel Macs may work via Rosetta but are unsupported.
+- **Migrating users from the existing v0.17.1 Squirrel installer.** The Squirrel installer is being **removed entirely**. Existing v0.17.1 users uninstall it manually via Apps & Features (release notes step), then install the new NSIS installer. No auto-detection, no migration scripting — that complexity isn't worth the maintenance burden for one transition.
+- **Setting up the code-signing infrastructure itself.** That's a one-time admin task documented separately under `docs/deployment/`.
+- **Designing the visual assets.** Asset *generation* (running `iconutil`, ICO conversion, etc.) is in scope. Visual design is delivered separately by a designer; placeholder assets derived from existing GAIA PNGs are used until then.
+- **R2 / CDN distribution.** Deferred — ships via GitHub Releases. R2 migration becomes a one-line config change in `app.config.json` once the website lands.
+- **In-app behavioral telemetry / crash reporting.** GAIA's privacy-first positioning forbids this. Most consumer apps include opt-out crash reporting; we're consciously breaking from the norm. Download / install metrics from GitHub Releases public stats are fine — they require no in-app code.
+- **A separate React-based first-run wizard UI.** The smart install logic in `bin/gaia-ui.mjs` already covers this functionally. Issue [#597](https://github.com/amd/gaia/issues/597) (polish-the-wizard-UI) stays scoped to its own work.
+- **Implementing the `amd-gaia.ai/download` page.** That's a website project. This plan provides the *content* the download page needs (asset URLs, install instructions per platform) but doesn't touch the website itself. Tracked as a follow-up issue.
+
+---
+
+## §3 The key insight: reuse `bin/gaia-ui.mjs` install logic
+
+`src/gaia/apps/webui/bin/gaia-ui.mjs` (572 lines) is the npm-installed CLI. It already does *everything* the desktop installer's first-run wizard needs:
+
+- **`ensureUv()`** — installs `uv` if missing
+- **`installBackend()`** — creates `~/.gaia/venv` with `uv venv --python 3.12`, installs `amd-gaia[ui]==<pinned-version>`, runs `gaia init --profile minimal`
+- **`getInstalledVersion()` + `ensureBackend()`** — version-aware upgrade flow
+- **Linux CPU-only PyTorch** handling
+- **Detailed error messages** with manual-fallback instructions for every failure mode
+
+`main.cjs` (the Electron app) does **none** of this. It has a 20-line `findGaiaCommand()` that prints "Install with: pip install amd-gaia" and gives up.
+
+**The shape of the fix:** extract the install logic from `bin/gaia-ui.mjs` into a shared module, then have *both* the npm CLI and the Electron `main.cjs` call it.
+
+```
+Before:
+  bin/gaia-ui.mjs ─┐
+                   │  (separate, divergent install logic — only npm path works)
+  main.cjs ────────┤  ← broken: no install logic at all
+                   │
+                   └─→ ~/.gaia/venv/
+
+After:
+  bin/gaia-ui.cjs ─┐
+                   ├─→ services/backend-installer.cjs ─→ ~/.gaia/venv/
+  main.cjs ────────┘   (single source of truth, both call it)
+```
+
+### §3.1 Module format collision: `.mjs` is ESM, `main.cjs` is CommonJS
+
+`bin/gaia-ui.mjs` uses `import` syntax (ES modules). `main.cjs` uses `require` (CommonJS). The shared module needs to work in both contexts.
+
+The cleanest fix: **rename `bin/gaia-ui.mjs` → `bin/gaia-ui.cjs`** and have both the binary entry point and the Electron main process use `require()` to pull from `services/backend-installer.cjs`. The file extension change is invisible to users (the `bin` map in `package.json` is the only public reference). All install logic lives in plain CommonJS.
+
+### §3.2 Install state machine
+
+The install isn't atomic — it has multiple stages, takes 5–10 minutes, and can fail at any point. The Electron app needs to handle:
+
+| State | Meaning | Recovery |
+|---|---|---|
+| `idle` | Backend not yet installed | Trigger install |
+| `installing` | Install in progress | Show progress dialog; persist state |
+| `failed` | Last install attempt failed | Show error dialog with Retry / Manual / Quit |
+| `partial` | Install was interrupted (window closed, app killed) | Detect on next launch; offer to resume or restart from scratch |
+| `ready` | Backend installed and version matches | Launch app normally |
+
+The state is persisted to `~/.gaia/electron-install-state.json` after each stage transition. On launch, the Electron app reads this file before doing anything else.
+
+This eliminates: silent half-installed venvs, force-quit-mid-install confusion, and the "user closes the install dialog and doesn't know what's happening" footgun.
+
+---
+
+## §4 Architecture (three layers)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Layer 1: Desktop App  (this plan)                          │
+│  ├── Windows: NSIS .exe   — graphical wizard, Start Menu    │
+│  ├── macOS:   DMG         — drag-to-Applications            │
+│  └── Linux:   DEB + AppImage — apt + portable single-file   │
+│       │                                                     │
+│       └── electron-builder produces all four artifacts      │
+│           from src/gaia/apps/webui/                         │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 2: Backend Bootstrap  (extracted from bin/gaia-ui)   │
+│  ├── services/backend-installer.cjs                         │
+│  │     • ensureUv()                                         │
+│  │     • installBackend() — venv, pip, gaia init            │
+│  │     • ensureBackend() — version-aware upgrade            │
+│  │     • State machine + recovery (§3.2)                    │
+│  │     • Pre-checks: disk space, network, perms             │
+│  │     • Progress callbacks for UI streaming                │
+│  │     • Logs to ~/.gaia/electron-install.log               │
+│  ├── Called from bin/gaia-ui.cjs (existing path)            │
+│  └── Called from main.cjs       (NEW — Phase A)             │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 3: Auto-update                                       │
+│  ├── electron-updater                                       │
+│  ├── Provider: GitHub Releases (public repo, no auth)       │
+│  ├── Check on launch (10s delay) + every 4 hours            │
+│  └── Download silently → prompt to restart                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### §4.1 Tray and auto-start
+
+The Electron app already runs as a tray application via `services/tray-manager.cjs`. The installer's role is to integrate auto-start at login:
+
+| Platform | Mechanism | Default |
+|---|---|---|
+| **Windows NSIS** | `customInstall` hook writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing at `gaia-agent-ui.exe --minimized`. No finish-page checkbox — MUI_FINISHPAGE_SHOWREADME is incompatible with electron-builder's shared install/uninstall page flow (breaks the build). Users can disable autostart via the tray menu → Settings → "Launch at login", Task Manager → Startup, or regedit. | **ON** (matches Slack/Discord/Zoom convention) |
+| **macOS DMG** | No installer-time hook (DMG is just a copy). Default OFF; after first successful launch, the app shows a non-blocking banner: *"GAIA can start when you sign in. Enable in Settings."* User can dismiss or enable via in-app Settings → `app.setLoginItemSettings({ openAtLogin: true })`. | OFF (in-app prompt on second launch) |
+| **Linux DEB** | `postinst` does NOT write autostart by default (Debian convention). Setting available in-app, writes `~/.config/autostart/gaia-agent-ui.desktop`. | OFF (in-app setting) |
+| **Linux AppImage** | No installer-time hook. In-app setting only. | OFF (in-app setting) |
+
+**Why per-platform defaults differ:** Windows users expect tray apps to auto-start (Slack, Discord, Zoom). Mac users are more privacy-conscious and resent surprise auto-launch (and Apple Login Items has friction in System Settings). Debian convention frowns on packages writing to `~/.config/autostart`. The tray-app pattern still works because the user can enable it on any platform — we just don't surprise them on macOS or Linux.
+
+### §4.2 Versioning across install paths
+
+GAIA ships via three install paths that all need to share a version number:
+
+| Where | What | Source |
+|---|---|---|
+| `src/gaia/version.py` | Python package version | Hand-edited / `bump-ui-version.mjs` |
+| `src/gaia/apps/webui/package.json` | npm package version + Electron app version | Hand-edited / `bump-ui-version.mjs` |
+| NSIS / DMG / DEB metadata | Desktop installer artifact version | Read from `package.json` at build time |
+| `gaia init` / `gaia update` checks | Backend version pin | Read from `package.json` at runtime by `bin/gaia-ui.cjs` |
+
+The single source of truth is `src/gaia/version.py`. `installer/version/bump-ui-version.mjs` propagates it to `package.json`. The Electron app reads `package.json` at runtime to know what backend version to install. The desktop installer build pipeline reads `package.json` to label artifacts.
+
+A release tag `v0.17.2` triggers:
+1. `version.py` is at `0.17.2`
+2. `package.json` is at `0.17.2` (kept in sync by `bump-ui-version.mjs`)
+3. PyPI package `amd-gaia==0.17.2` is published
+4. npm package `@amd-gaia/agent-ui@0.17.2` is published
+5. NSIS / DMG / DEB artifacts at `gaia-0.17.2-<platform>.<ext>` are published to GitHub Releases
+6. The Electron app `0.17.2` knows to install backend `amd-gaia[ui]==0.17.2`
+
+If any of these drift, `bin/gaia-ui.cjs`'s version-check logic catches it on next launch and triggers an upgrade.
+
+---
+
+## §5 Uninstall (parity with install)
+
+Three tiers, default to keeping user data.
+
+| Tier | What's removed | Default? |
+|---|---|---|
+| **1. App-only** | Electron app binaries, shortcuts, registry entries, auto-start hook | **YES — default for all uninstall flows** |
+| **2. App + Python venv** | Tier 1 + `~/.gaia/venv/` | Opt-in checkbox / `--venv` flag |
+| **3. Purge** | Tier 2 + `~/.gaia/chat/`, `~/.gaia/documents/`, `~/.gaia/electron-config.json`, `~/.gaia/electron-install*.{log,json}` | Opt-in checkbox / `--purge` flag |
+
+**Never removed** (even on `--purge`):
+
+- **Lemonade Server** — installed via Lemonade's own installer; treated as a separate package. Opt-in flag `--purge-lemonade` available for users who explicitly want it.
+- **Models** — live in Lemonade's cache (`~/.cache/lemonade/`). Opt-in flag `--purge-models`.
+- **`uv` binary** — system-wide tool that may be used by other apps.
+
+### §5.1 Per-platform implementation
+
+| Platform | Default uninstall flow | Purge access |
+|---|---|---|
+| **Windows NSIS** | Standard "Add or Remove Programs" entry. NSIS uninstaller wizard with optional "Also remove user data" checkbox that maps to `gaia uninstall --purge` | Wizard checkbox + silent flag `/PURGE=1` |
+| **macOS DMG** | **Drag the GAIA app from `/Applications` to the Trash.** This is what users already know how to do — the most familiar Mac UX. User data in `~/.gaia/` is left behind (same as every other Mac app). | Documented one-liner in README, FAQ, and release notes: `~/.gaia/venv/bin/gaia uninstall --purge` |
+| **Linux DEB** | `apt remove gaia-agent-ui` → tier 1; `apt purge gaia-agent-ui` → tier 3. `prerm` script stops the GAIA Agent UI Electron process only (does NOT kill the user-launched `gaia chat --ui` backend, which the user may want to keep running). `postrm` handles purge cleanup. | Native `apt purge` |
+| **Linux AppImage** | Delete the `.AppImage` file. User data orphaned (consistent with how all AppImages work). | `~/.gaia/venv/bin/gaia uninstall --purge` from CLI |
+
+### §5.2 The unifying piece: `gaia uninstall` CLI
+
+A single CLI command implements the actual cleanup logic. All four platforms delegate to it:
+
+```bash
+gaia uninstall                    # Tier 1: print what we'd remove (no-op without flags)
+gaia uninstall --venv             # Tier 2: also remove ~/.gaia/venv/
+gaia uninstall --purge            # Tier 3: remove ~/.gaia/{venv,chat,documents,electron-config.json,gaia.log,electron-install*}
+gaia uninstall --purge-lemonade   # Also remove Lemonade Server (opt-in)
+gaia uninstall --purge-models     # Also remove ~/.cache/lemonade/models/ (opt-in)
+gaia uninstall --dry-run          # Show what would be deleted, change nothing
+gaia uninstall --yes              # Skip confirmation prompts (CI / scripted / silent NSIS uninstall)
+```
+
+**One implementation, four front-ends.** Lives at `src/gaia/installer/uninstall_command.py`. Already listed as a "future command" in the existing [`installer.mdx`](./installer.mdx) (lines 437–442); this plan implements it for real.
+
+---
+
+## §6 Approach: ground-up using Lemonade as a reference
+
+We are **not vendoring** Lemonade's installer files. We are reading them, understanding what they do, and writing GAIA's installer fresh — clean-room implementation against Lemonade's architecture as a reference.
+
+### Why ground-up over vendoring
+
+| | Vendor / fork | Ground-up |
+|---|---|---|
+| Long-term maintenance | High — diverges from upstream | Low — clean code we own |
+| Lemonade-specific cruft | Inherited (CMake, C++, lemond service) | Excluded |
+| Format choices | Inherits Lemonade's (MSI, PKG) | Optimal for our use case (NSIS, DMG) |
+| Risk of upstream breakage | High | Zero |
+| Code clarity | Low — unrelated patterns mixed in | High — only what GAIA needs |
+
+The format pivots (NSIS over MSI, DMG over PKG) make ground-up the obvious answer. Vendoring would force us to delete and rewrite half of what we copied.
+
+### What we learn from Lemonade (per-area)
+
+| Area | Lemonade reference | What we learn |
+|---|---|---|
+| Branded installer wizard | `src/cpp/installer/Product.wxs.in` | Banner BMP layout (top + side), per-user install scope, ARP properties pattern |
+| Custom auto-start property | `Property Id="ADDTOSTARTUP"` in WiX | NSIS equivalent: a `Section` with `WriteRegStr HKCU` |
+| macOS notarization | `.github/actions/build-macos-dmg/action.yml` | Notarization flow with electron-builder, `notarytool` log fetching on failure |
+| Debian packaging conventions | `contrib/debian/` (whole tree) | `control`, `rules`, `changelog.in` template, `prerm`/`postrm` script structure, lintian-clean conventions |
+| GitHub composite actions | `.github/actions/*` | Pattern for composite actions wrapping platform-specific build steps |
+| SignPath integration | `.signpath/policies/` | Free OSS code signing for Windows; policy file structure |
+| Build env bootstrap | `setup.sh` | Template for "make sure the build environment is sane" script |
+| Per-user vs per-machine | `MSIINSTALLPERUSER` property | Default to per-user (no UAC); allow per-machine via opt-in flag |
+
+We **do not** need Lemonade's CMake build orchestration, C++ source layout, `lemonade-server.preinst` (Lemonade-specific systemd unit management), or launchpad-ppa workflow.
+
+### Maintenance philosophy
+
+We do not auto-sync from Lemonade. If they change their installer significantly and we want to incorporate the change, that's a manual review-and-port effort, no different from any other open-source reference. Documented in `installer/README.md`.
+
+---
+
+## §7 Phases
+
+The work is broken into **nine phases** (A–I). Phase A is the smallest, highest-value, and ships first. The rest can land in roughly the dependency order shown. **No time estimates** — these depend on review cycles, parallel work, and external dependencies (SignPath approval timeline) that are too variable to predict honestly.
+
+### Phase A — Extract `bin/gaia-ui` install logic into shared module
+
+The smallest, highest-value change. Lands as its own PR before any installer migration work. Fixes the primary user-facing bug (broken Squirrel install UX) immediately.
+
+**Deliverables:**
+
+- New module: `src/gaia/apps/webui/services/backend-installer.cjs`
+  - Pure CommonJS so it can be `require()`'d from both contexts
+  - Exports: `ensureUv()`, `installBackend(opts)`, `ensureBackend(opts)`, `getInstalledVersion(gaiaBin)`, `findGaiaBin()`
+  - **State machine** (§3.2) persisted to `~/.gaia/electron-install-state.json`
+  - **Pre-checks before starting:**
+    - **Disk space** — at least 3 GB free at `~/.gaia/`'s parent. Friendly dialog if insufficient.
+    - **Network** — basic reachability check (HEAD to `https://astral.sh` or similar). Friendly "you appear to be offline" dialog with Retry / Quit if no network.
+    - **Existing partial install** — read state file; if `partial`, offer Resume or Restart from scratch.
+  - **Logging** — all output also written to `~/.gaia/electron-install.log`. Error dialogs show the log path with a "Copy log path" button.
+  - **Progress callbacks** — caller passes `onProgress(stage, percent, message)` so the UI can stream updates without the module knowing about Electron
+- **Rename** `bin/gaia-ui.mjs` → `bin/gaia-ui.cjs` (§3.1). Update `package.json` `bin` map.
+- Refactor `bin/gaia-ui.cjs` to import from the new shared module instead of duplicating logic
+- Refactor `main.cjs`:
+  - Remove the dead-end `findGaiaCommand()` warning path
+  - On `app.whenReady()`, call `ensureBackend()` from the new module
+  - Show a progress dialog (borderless `BrowserWindow` with custom HTML) while the install runs
+  - On failure, show a friendly error dialog with **Retry** / **Manual install instructions** / **Quit** buttons + log path
+- Add `services/backend-installer-progress-dialog.cjs` — owns the Electron-specific progress UI and IPC plumbing
+
+**Acceptance:**
+
+- `bin/gaia-ui.cjs` works exactly as `bin/gaia-ui.mjs` did
+- A fresh Windows machine with NO `gaia` on PATH can install the existing Squirrel `.exe` and on first launch, the Electron app installs the Python backend automatically with visible progress
+- The progress dialog updates as install steps complete
+- Closing the install dialog mid-install: state is persisted; next launch resumes or restarts cleanly
+- Insufficient disk space → friendly dialog before any install begins
+- Offline → friendly dialog with Retry
+- Failed install → error dialog with log path, retry option, manual fallback link
+- All log output goes to `~/.gaia/electron-install.log`
+- Existing `npm test` still passes
+
+**This is the change with the highest user impact.** It fixes the broken-Squirrel UX immediately, even before electron-builder migration lands.
+
+### Phase B — Restructure `scripts/` → `installer/`
+
+Move existing build/install/release scripts from `scripts/` into a focused `installer/` tree. Folds in PR [#341](https://github.com/amd/gaia/pull/341) (BOM removal, log location fix, permission fallback).
+
+**Deliverables:**
+
+- New top-level directory: `installer/`
+  - `installer/nsis/` — Windows NSIS scripts and assets
+  - `installer/debian/` — DEB packaging files
+  - `installer/macos/` — DMG layout, entitlements, `Info.plist`
+  - `installer/linux/` — `.desktop` file, AppImage assets
+  - `installer/scripts/` — build orchestration scripts
+  - `installer/version/` — version normalization helpers
+  - `installer/README.md` — how to build installers locally + Lemonade reference notes
+- Move from `scripts/`:
+  - `build-ui-installer.{ps1,sh}` → `installer/scripts/`
+  - `install.{ps1,sh}` → `installer/scripts/` (still referenced from `installer.mdx`)
+  - `start-agent-ui.{ps1,sh}` → `installer/scripts/`
+  - `start-lemonade.{ps1,sh,bat}` → `installer/scripts/`
+  - `release-ui.mjs`, `bump-ui-version.mjs` → `installer/version/`
+- Fold in PR #341: BOM fix in `install.ps1`, logger fallback to `~/.gaia/gaia.log`, PermissionError handling
+- Update all references in `package.json`, CI workflows, docs
+- Delete the old entries from `scripts/`
+
+**Acceptance:**
+
+- All previously-working scripts still work from their new homes
+- CI workflows still pass
+- `grep -r "scripts/build-ui" . --include="*.yml" --include="*.json" --include="*.md*"` returns no hits
+- PR #341's three fixes are present in the new locations
+
+### Phase D — `gaia uninstall` CLI
+
+**Phase D ships before Phase C** because Phase C's NSIS uninstaller calls `gaia uninstall` for the optional purge flow. D is a Python-only change with no Electron dependencies and can land in parallel with B.
+
+**Deliverables:**
+
+- New module: `src/gaia/installer/uninstall_command.py`
+- New CLI subcommand registered in `src/gaia/cli.py`
+- Implements the full flag set from §5.2
+- Confirmation prompts skippable via `--yes` AND via stdin-not-a-tty detection (so silent uninstall flows work)
+- Cross-platform path handling via `pathlib`
+- Unit tests in `tests/unit/installer/test_uninstall_command.py` using `pyfakefs` to verify each tier removes the right files and leaves the right files alone
+- Update `installer.mdx` to promote `gaia uninstall` from "future" to "implemented"
+
+**Acceptance:**
+
+- All flag combinations work as documented
+- `--dry-run` shows accurate output
+- Tests cover happy path + each opt-in flag combination
+- Linux DEB `postrm` can call `gaia uninstall --purge --yes` reliably
+- Windows NSIS uninstaller can call `gaia uninstall --purge --yes` reliably
+
+### Phase C — Migrate electron-forge → electron-builder
+
+Replace `forge.config.cjs` with electron-builder's `build` section. **The existing Squirrel installer is removed entirely** — no migration logic, no auto-uninstall of legacy installs. Existing v0.17.1 users uninstall manually via Apps & Features (release-notes step).
+
+**Why migrate:**
+
+- electron-forge's only Windows maker is **Squirrel**, which produces a non-standard installer with no visible UI and no Start Menu entry
+- electron-forge has **no AppImage maker**
+- electron-forge can't produce a DMG with custom layout
+- electron-builder has first-class support for **NSIS / DMG / DEB / AppImage** and integrates with **electron-updater**
+- electron-builder is the de-facto standard for Electron apps
+
+**Deliverables:**
+
+- Remove `@electron-forge/*` devDependencies from `src/gaia/apps/webui/package.json`
+- Add `electron-builder` (^26.4.0) and `electron-updater` (^6.3.0)
+- Add a `"build"` section to `package.json`:
+  - `appId: "ai.amd.gaia"`
+  - `productName: "GAIA Agent UI"`
+  - `directories.output: "dist-app"`
+  - `win.target: ['nsis']` with NSIS-specific config (per-user install, custom installer pages, SignPath integration)
+  - `mac.target: ['dmg']` with DMG layout
+  - `linux.target: ['deb', 'AppImage']` with desktop file integration
+  - File globs that exclude dev/test/source paths (replicate the current `forge.config.cjs.packagerConfig.ignore` patterns)
+  - Code signing identity references via env vars
+  - `publish: { provider: 'github', owner: 'amd', repo: 'gaia' }`
+- New npm scripts: `package`, `package:win`, `package:mac`, `package:linux`
+- **Delete `forge.config.cjs`**
+- **Remove `electron-squirrel-startup`** from `dependencies` and from `main.cjs`
+- Move locale-pruning logic to `installer/scripts/after-pack.cjs` (electron-builder `afterPack` hook)
+- Move 4-part → 3-part SemVer normalizer to `installer/version/normalize.mjs`
+- NSIS installer template at `installer/nsis/installer.nsh` — `customInstall` / `customUnInstall` hooks that write and remove the autostart HKCU Run key
+- **No Squirrel migration code.** Release notes document the manual uninstall step for v0.17.1 users.
+
+**Acceptance:**
+
+- `npm run package:win` produces a working `.exe` (NSIS) on Windows that installs and launches
+- `npm run package:mac` produces a working `.dmg` on macOS that mounts and installs via drag-to-Applications
+- `npm run package:linux` produces working `.deb` and `.AppImage` artifacts on Linux
+- Locale pruning still strips Chromium translations (~45 MB savings)
+- The 4-part → 3-part version normalization still works
+- Existing GAIA UI launches cleanly (no missing `electron-squirrel-startup` errors)
+
+### Phase E — Installer assets and branding
+
+Generate platform-specific installer assets that match GAIA's visual identity. Asset generation only — visual design is delivered separately.
+
+**Deliverables:**
+
+- `installer/nsis/installer-banner.bmp` — 150×57 BMP (NSIS top banner)
+- `installer/nsis/installer-sidebar.bmp` — 164×314 BMP (NSIS sidebar)
+- `installer/nsis/icon.ico` — multi-size `.ico` (16/32/48/256)
+- `installer/macos/icon.icns` — macOS icon set (generated via `iconutil`)
+- `installer/macos/dmg-background.png` — DMG background image (660×400) with drag-to-Applications arrow
+- `installer/macos/entitlements.mac.plist` — **explicit list** of entitlements:
+  ```xml
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
+  <key>com.apple.security.inherit</key><true/>
+  ```
+  These are required because the app spawns child processes (`uv`, `python`, `gaia`). Without them, the signed-and-notarized app installs successfully but crashes on first launch when it tries to run the bootstrap.
+- `installer/macos/Info.plist` — app metadata (bundle identifier, minimum macOS version, etc.)
+- `installer/linux/gaia-ui.desktop` — `.desktop` file
+- `installer/linux/gaia-ui.png` — 512×512 icon used by AppImage and DEB
+- Tray-specific assets verified at this stage:
+  - `iconTemplate.png` + `iconTemplate@2x.png` for macOS retina
+  - `tray-icon-22.png` for Linux
+  - Confirm `icon.ico` includes 16/32 sizes for Windows system tray
+
+**Acceptance:**
+
+- All installers display the new branding
+- Icons render at all sizes without aliasing
+- `lintian` passes on the `.deb`
+- A signed and notarized DMG installs and launches on a clean macOS Sonoma machine **and successfully spawns the backend installer subprocess**
+
+### Phase F — Auto-update via electron-updater
+
+**Deliverables:**
+
+- Add `electron-updater` import + configuration to `main.cjs`
+- GitHub provider configuration: `{ provider: 'github', owner: 'amd', repo: 'gaia' }` (works for public repos with no auth)
+- Provider URL is read from `app.config.json` so swapping to R2 later is a one-line change
+- Update check on app launch (10-second delay) and every 4 hours
+- Concurrent-check guard
+- Event handlers for `update-available`, `download-progress`, `update-downloaded`, `error`
+- "Restart to update" dialog using Electron's native `dialog.showMessageBox`
+- IPC channel `update:status` exposing the current state to the renderer
+- Frontend: small "update available — restart to apply" toast in the status bar
+- `GAIA_DISABLE_UPDATE=1` env var to skip all checks (CI / dev / corporate environments)
+
+**Acceptance:**
+
+- Launching an old version with a new release published triggers download + restart prompt
+- Failed update attempts are logged and surfaced gracefully (no crash)
+- Update check respects offline mode
+- `GAIA_DISABLE_UPDATE=1` skips all checks
+- Manual smoke test: install version `0.17.2-rc.1`, publish `0.17.2-rc.2`, verify the older app picks it up
+
+### Phase G — CI/CD workflow (`build-installers.yml`)
+
+GitHub Actions workflow that builds and uploads installers on tag push. **Integrates with the existing 431-line `publish.yml`** rather than replacing it.
+
+**Deliverables:**
+
+- New workflow: `.github/workflows/build-installers.yml`
+- Matrix:
+  - `windows-latest` → NSIS `.exe`
+  - `macos-latest` (Apple Silicon) → `.dmg`
+  - `ubuntu-latest` → `.deb` + `.AppImage`
+- Each job:
+  - Restores `~/.cache/electron` and `~/.cache/electron-builder`
+  - Installs Node 20
+  - Runs `npm ci && npm run package:<platform>` from `src/gaia/apps/webui/`
+  - Code-signs (Phase H)
+  - Uploads `.blockmap` files alongside installers (delta updates)
+  - Uploads to GitHub Releases via `softprops/action-gh-release@v2`
+- Composite action `prepare-gaia-debian-build` adapted from Lemonade's pattern (clean-room rewrite)
+- Workflow can run manually via `workflow_dispatch` for testing
+- **Integration with `publish.yml`:** `build-installers.yml` is invoked as a job after the validate step. Artifacts feed into the existing GitHub Release publish step. Single approval gate from `publish.yml` covers the whole release including installers.
+
+**Acceptance:**
+
+- Pushing a tag `v0.17.2-rc.1` triggers the workflow and produces all four artifacts
+- Artifacts appear on the GitHub Release page
+- Each installer can be downloaded and run successfully on the target platform
+- Subsequent tag pushes produce delta `.blockmap` files
+- The single `publish.yml` approval gate still works end-to-end
+
+### Phase I — Documentation
+
+**Documentation is a first-class deliverable.** Because the desktop installer is the primary install path for non-developers, the docs need to lead with it, not bury it.
+
+**Deliverables:**
+
+- **Quickstart rewrite** (`docs/quickstart.mdx`) — lead with the desktop installer download. CLI/pip/npm install paths are documented as "developer alternatives" further down.
+- **Download guide** (`docs/guides/install.mdx` — new): per-platform install instructions, screenshots of the wizard, what to expect during first-run setup, how to enable auto-start
+- **Troubleshooting guide** (`docs/reference/install-troubleshooting.mdx` — new):
+  - "First-launch backend install fails" — common causes (firewall, proxy, disk space, antivirus)
+  - "GAIA Agent UI won't start" — log file locations, how to attach to bug report
+  - "Update isn't being detected" — manual update check, version mismatch
+  - "Uninstall doesn't remove all data" — `gaia uninstall --purge` instructions
+  - "macOS Gatekeeper blocks the app" — how to bypass for unsigned builds
+  - "Windows SmartScreen blocks the installer" — how to bypass for unsigned builds
+- **FAQ updates** (`docs/reference/faq.mdx`):
+  - Where are my chats stored?
+  - How do I uninstall?
+  - Why is the first launch slow?
+  - Does GAIA send my data anywhere?
+  - How do I install on a machine without internet?
+- **README badges** — download buttons for Win/Mac/Linux pointing at the latest GitHub Release
+- **Release notes template** — must include the manual uninstall step for v0.17.1 Squirrel users
+- **Content for the future `amd-gaia.ai/download` page** — Markdown snippets the website project can consume (asset URLs, install commands, screenshots). The actual website page is a separate project but blocks on this content existing.
+- Update `installer.mdx` (the existing CLI install plan) to cross-reference the new desktop installer plan and clarify the audience split (CLI = developers, desktop = end users)
+
+**Acceptance:**
+
+- New user can navigate from `amd-gaia.ai` → "Download" → installer in under 30 seconds
+- Every install failure mode in §13 has a corresponding troubleshooting entry
+- Quickstart no longer leads with `pip install`
+- README has working download badges
+- Release notes for v0.17.2 include the Squirrel manual-uninstall step
+
+### Phase H — Code signing setup
+
+Apply for SignPath OSS for Windows; configure Apple Developer ID for macOS. Partially blocked on AMD admin decisions (Apple Developer ID) and external SignPath approval.
+
+**Deliverables:**
+
+- SignPath OSS application submitted (one-time, ~1 week external approval)
+- `.signpath/policies/gaia.policy` configured for the Windows NSIS installer
+- GitHub secret `SIGNPATH_API_TOKEN` set
+- Apple Developer ID configuration:
+  - Decision needed (Open Question §1): AMD-owned or personal cert
+  - GitHub secrets `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, `CSC_LINK`, `CSC_KEY_PASSWORD` configured
+- `build-installers.yml` updated to invoke signing on the appropriate platforms
+- Until both are set up: artifacts are unsigned, troubleshooting guide documents the SmartScreen / Gatekeeper bypass steps
+
+**Acceptance:**
+
+- A signed `.exe` shows the AMD publisher in the SmartScreen prompt instead of "Unknown publisher"
+- A signed and notarized `.dmg` opens without the Gatekeeper warning on a fresh macOS install
+- Both signing flows are documented in `docs/deployment/`
+
+---
+
+## §8 File-by-file change plan
+
+### New files
+
+```
+installer/
+├── README.md                          # How to build installers locally; Lemonade reference notes
+├── nsis/
+│   ├── installer.nsh                  # customInstall/customUnInstall hooks (autostart Run key)
+│   ├── installer-banner.bmp
+│   ├── installer-sidebar.bmp
+│   └── icon.ico
+├── debian/
+│   ├── control
+│   ├── changelog.in
+│   ├── copyright
+│   ├── rules
+│   ├── gaia-ui.install
+│   ├── postinst
+│   ├── prerm                          # Stops Electron app process only — does NOT touch backend
+│   └── postrm
+├── macos/
+│   ├── icon.icns
+│   ├── dmg-background.png
+│   ├── entitlements.mac.plist         # Explicit entitlements (§7 Phase E)
+│   └── Info.plist
+├── linux/
+│   ├── gaia-ui.desktop
+│   └── gaia-ui.png
+├── scripts/
+│   ├── after-pack.cjs                 # electron-builder afterPack hook (locale prune)
+│   ├── build-ui-installer.ps1
+│   ├── build-ui-installer.sh
+│   ├── install.ps1                    # With PR #341 fixes folded in
+│   ├── install.sh
+│   ├── start-agent-ui.ps1
+│   └── start-agent-ui.sh
+└── version/
+    ├── normalize.mjs
+    ├── bump-ui-version.mjs
+    └── release-ui.mjs
+
+src/gaia/apps/webui/services/
+├── backend-installer.cjs              # Phase A — extracted shared install logic
+└── backend-installer-progress-dialog.cjs # Phase A — Electron progress UI
+
+src/gaia/installer/
+└── uninstall_command.py               # Phase D
+
+tests/unit/installer/
+└── test_uninstall_command.py          # Phase D — pyfakefs-based unit tests
+
+.github/actions/
+└── prepare-gaia-debian-build/
+    └── action.yml                     # Clean-room from Lemonade's pattern
+
+.github/workflows/
+└── build-installers.yml               # New, integrates with publish.yml
+
+.signpath/
+└── policies/
+    └── gaia.policy                    # Phase H
+
+docs/guides/
+└── install.mdx                        # Phase I — primary install guide
+
+docs/reference/
+└── install-troubleshooting.mdx        # Phase I — troubleshooting
+
+docs/deployment/
+└── code-signing.mdx                   # Phase H — code signing admin docs
+```
+
+### Modified files
+
+```
+src/gaia/apps/webui/
+├── package.json                       # Drop forge, add electron-builder + updater + build section + bin map for .cjs
+├── forge.config.cjs                   # DELETED
+├── main.cjs                           # Phase A: call ensureBackend; Phase C: remove squirrel-startup; Phase F: electron-updater
+├── preload.cjs                        # Add update:status + install-progress IPC channels
+└── bin/
+    ├── gaia-ui.mjs                    # DELETED
+    └── gaia-ui.cjs                    # NEW (renamed from .mjs, switched to require())
+
+src/gaia/apps/webui/src/components/
+└── StatusBar.tsx                      # Add "update available" indicator chip
+
+src/gaia/cli.py                        # Phase D: register `gaia uninstall` subcommand
+
+docs/plans/installer.mdx               # Phase D + I: cross-reference desktop installer; promote `gaia uninstall`
+docs/quickstart.mdx                    # Phase I: lead with desktop installer
+docs/reference/faq.mdx                 # Phase I: chat storage, uninstall, slow first launch, privacy, offline install
+README.md                              # Phase I: download badges
+```
+
+### Deleted files
+
+```
+src/gaia/apps/webui/forge.config.cjs   # Replaced by package.json "build" section
+src/gaia/apps/webui/bin/gaia-ui.mjs    # Renamed to .cjs
+scripts/build-ui-installer.ps1         # Moved to installer/scripts/
+scripts/build-ui-installer.sh
+scripts/install.ps1
+scripts/install.sh
+scripts/start-agent-ui.ps1
+scripts/start-agent-ui.sh
+scripts/start-lemonade.ps1
+scripts/start-lemonade.sh
+scripts/start-lemonade.bat
+scripts/release-ui.mjs
+scripts/bump-ui-version.mjs
+```
+
+### Removed dependencies
+
+- `@electron-forge/cli`
+- `@electron-forge/maker-deb`
+- `@electron-forge/maker-squirrel`
+- `electron-squirrel-startup`
+
+### Added dependencies
+
+- `electron-builder` (^26.4.0)
+- `electron-updater` (^6.3.0)
+
+---
+
+## §9 Output matrix
+
+| Platform | Format | Auto-Update | Shortcut | Delta Updates | Code Signed | Auto-start | Size (est.) |
+|----------|--------|-------------|----------|---------------|-------------|------------|-------------|
+| Windows x64 | `.exe` (NSIS) | Yes | Start Menu + Desktop | Yes (`.blockmap`) | Yes (SignPath) | Unconditional via `customInstall` (default ON, disable via tray menu / Task Manager) | ~85 MB |
+| macOS Apple Silicon | `.dmg` | Yes | `/Applications` | Yes (`.blockmap`) | Yes (Apple Developer ID + notarized) | In-app prompt on second launch (default OFF) | ~95 MB |
+| Linux x64 | `.AppImage` | Yes | Manual `.desktop` | Yes (`.blockmap`) | GPG-signed only | In-app setting (default OFF) | ~90 MB |
+| Linux x64 | `.deb` | No (apt) | Yes (`.desktop`) | No | GPG-signed | In-app setting (default OFF) | ~85 MB |
+
+---
+
+## §10 Open questions
+
+### 1. Apple Developer ID ownership
+
+**Question:** AMD-owned `Developer ID Application: Advanced Micro Devices, Inc.` or personal cert?
+
+**Recommendation:** AMD-owned long-term. Until decided, ship unsigned `.dmg` with Gatekeeper bypass instructions in the troubleshooting guide.
+
+**Action needed:** Maintainer escalation to AMD legal/IT.
+
+### 2. SignPath OSS application timing
+
+**Question:** When do we apply for SignPath OSS?
+
+**Recommendation:** Apply early, in parallel with Phase A–C work. Approval typically takes ~1 week. If approval slips, Phase G ships unsigned and we backfill in Phase H.
+
+**Action needed:** Submit application at [https://signpath.io/solutions/open-source-community](https://signpath.io/solutions/open-source-community).
+
+### 3. NSIS license screen content
+
+**Question:** Show the full MIT license, or a short summary + link to GitHub?
+
+**Recommendation:** Full MIT license text (under 200 lines). Standard wizard convention.
+
+### 4. State recovery model for partial installs
+
+**Question:** When the Electron app launches and finds a `partial` install state, what's the resume strategy?
+
+**Options:**
+- A. **Restart from scratch** every time (simplest, slowest, safest)
+- B. **Resume from the last completed stage** (faster, more code, more failure modes)
+- C. **Verify existing artifacts and only re-run missing steps** (best UX, most code, hardest to test)
+
+**Recommendation:** **A for v0.17.2** (restart from scratch). Re-running `uv venv` and `pip install` is idempotent and only adds a few minutes. The complexity of B/C isn't worth it for the first release. Revisit in v0.17.3+ if user feedback says first-launch retries are too slow.
+
+### 5. npm-vs-desktop dual-install detection
+
+**Question:** What if a user installs via both `npm install -g @amd-gaia/agent-ui` AND the desktop installer?
+
+**Options:**
+- A. Don't detect, both work, two icons in the user's launcher
+- B. Detect via `~/.gaia/install-source.json`; warn user; prefer the desktop install
+- C. Refuse to install if the other path is detected
+
+**Recommendation:** **A** for v0.17.2. Both paths share `~/.gaia/venv/`, so they don't actually conflict — they just produce two app icons. Document the dual-install scenario in the FAQ as a known edge case.
+
+### 6. Test machine availability for cross-platform validation
+
+**Question:** Do we have access to clean Windows, macOS, and Linux machines for manual testing?
+
+**Action needed:** Confirm before Phase G smoke testing.
+
+---
+
+## §11 Acceptance criteria
+
+### User-facing
+
+A non-developer user can:
+
+- [ ] Visit GitHub Releases (or eventually `amd-gaia.ai/download`), see Windows / macOS / Linux assets, click their platform
+- [ ] Download a single file under 100 MB
+- [ ] Run the file (NSIS wizard on Windows, drag-to-Applications on Mac, `apt install` on Debian) without ever opening a terminal
+- [ ] Get a Start Menu / Applications / `.desktop` shortcut
+- [ ] Launch the app from the shortcut
+- [ ] See a clear progress dialog while the Python backend (uv + venv + amd-gaia + Lemonade + minimal model) installs automatically on first launch
+- [ ] If the install fails, see an error dialog with a Retry button, a "Manual install instructions" link, and a log file path
+- [ ] Send their first prompt within 10 minutes of starting the download (assuming minimal profile and reasonable connection)
+- [ ] On Windows, get auto-start at sign-in configured automatically (default ON via `customInstall`, can be disabled via Task Manager → Startup or the in-app tray menu)
+- [ ] Get a notification when a new version is available
+- [ ] Click "Restart to update" and have the app update without losing chat history
+- [ ] Uninstall via the OS-native flow (Add or Remove Programs / drag to Trash / `apt remove`) and have the app cleanly removed
+- [ ] Optionally remove all GAIA data with one extra checkbox or `--purge` flag
+- [ ] Find every install failure mode in the troubleshooting guide
+
+### Internal
+
+- [ ] All artifacts (`.exe`, `.dmg`, `.deb`, `.AppImage`) build successfully in CI on every release tag
+- [ ] All artifacts are code-signed by the time the desktop installer is announced as the recommended path
+- [ ] The Electron app boots without `electron-squirrel-startup`
+- [ ] The build pipeline produces `.blockmap` files for delta updates
+- [ ] Auto-update successfully delivers a new version end-to-end in a manual smoke test
+- [ ] `bin/gaia-ui.cjs` and `main.cjs` share a single `services/backend-installer.cjs` module — no duplicate install logic
+- [ ] `installer/README.md` documents how to build each artifact locally and references the Lemonade patterns
+- [ ] `gaia uninstall` works with all flag combinations and is unit-tested
+- [ ] All documentation deliverables in Phase I are complete
+- [ ] The cross-platform test matrix (§11.1) passes on a fresh machine for each platform
+
+### §11.1 Cross-platform test matrix
+
+Every release candidate must pass this matrix on a clean machine before announcement:
+
+| Test | Win NSIS | macOS DMG | Linux DEB | Linux AppImage |
+|---|---|---|---|---|
+| Install on clean machine (no Python, no `gaia`) | ✅ required | ✅ required | ✅ required | ✅ required |
+| First-run backend install completes successfully | ✅ required | ✅ required | ✅ required | ✅ required |
+| First prompt returns a sensible response | ✅ required | ✅ required | ✅ required | ✅ required |
+| Auto-start behaves per platform default (§4.1) | ✅ required | ✅ required | ✅ required | ✅ required |
+| Update from previous version triggers and completes | ✅ required | ✅ required | N/A (apt) | ✅ required |
+| Uninstall (tier 1) cleanly removes the app | ✅ required | ✅ required | ✅ required | ✅ required |
+| Uninstall (purge) cleanly removes app + user data | ✅ required | ✅ required | ✅ required | ✅ required |
+| Crash recovery: kill mid-install, relaunch resumes/restarts | ✅ required | ✅ required | ✅ required | ✅ required |
+| Offline first-launch shows friendly error | ✅ required | ✅ required | ✅ required | ✅ required |
+| Insufficient disk space shows friendly error | ✅ required | ✅ required | ✅ required | ✅ required |
+| Signed installer shows AMD publisher | ✅ Phase H | ✅ Phase H | N/A | N/A |
+
+---
+
+## §12 Success metrics (post-launch)
+
+| Metric | Target |
+|--------|--------|
+| Time from download → first prompt (minimal profile, 100 Mbps) | < 10 minutes |
+| First-run backend install success rate (clean machine, no `gaia` on PATH) | > 90% |
+| First-prompt completion rate (% of installs that successfully send their first prompt) | > 80% |
+| Installer size per platform | < 100 MB |
+| Auto-update success rate (rolling 30-day) | > 95% |
+| User-reported install failures (first month) | < 1% of downloads |
+| Tray-app auto-start opt-in retention rate (Windows) | > 70% (fewer than 30% disable it) |
+
+---
+
+## §13 Risks and mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| **electron-builder migration breaks the dev build** | Medium | High | Ship Phase A first (independently mergeable); test Phase C carefully on all 3 platforms before merge |
+| **Removing Squirrel installer leaves v0.17.1 users orphaned** | High | Low | Release notes call out the manual uninstall step; small user base affected; recoverable |
+| **SignPath OSS approval delayed** | Medium | High | Apply early in parallel with Phase A–C; ship Phase G unsigned with troubleshooting docs; sign retroactively when approved |
+| **macOS notarization fails intermittently** | Medium | Medium | Add `notarytool` log fetching to the build action (Lemonade pattern); retry logic in the workflow |
+| **First-run backend install fails on a user's machine (proxy, firewall, no internet)** | Medium | High | Pre-checks (network, disk space) before install; detailed error messages; troubleshooting guide; the desktop installer is the primary path so reliability is critical |
+| **User antivirus flags unsigned NSIS as a threat** | High | High | Sign as soon as SignPath is approved; document SmartScreen bypass in troubleshooting; consider delaying public announcement until signed |
+| **Backend install fails due to missing C++ build tools (rare with uv prebuilt wheels but possible)** | Low | Medium | Document recommendation to install Visual Studio Build Tools in troubleshooting; uv typically uses prebuilt wheels |
+| **Disk space exhaustion mid-install on small SSDs** | Medium | Medium | Pre-check 3 GB free at install start; friendly dialog if insufficient |
+| **Auto-start ON default upsets some Windows users** | Low | Low | In-app tray menu lets users disable it; Task Manager → Startup is the Windows-standard opt-out; matches Slack/Discord/Zoom convention |
+| **User installs via npm AND via desktop installer simultaneously** | Medium | Low | Both share `~/.gaia/venv/`; they don't conflict; documented in FAQ |
+| **NSIS scripting learning curve blocks Phase C** | Medium | Medium | Allocate explicit learning time; reference electron-builder examples + community templates; NSIS is well-documented |
+| **macOS hardened runtime entitlements wrong → app crashes on first launch when spawning child processes** | Medium | High | Explicit entitlements list in Phase E; manual cross-platform test required (§11.1) before signing rollout |
+| **`electron-updater` GitHub provider hits API rate limits at scale** | Low | Low | Cached metadata; switch to R2 when website lands |
+| **macOS Sonoma point releases break notarization** | Low | Medium | Pin `notarytool` version; monitor Apple Developer forums |
+| **`electron-updater` requires non-draft releases with assets uploaded before publish** | Medium | Medium | Workflow ordering: build → upload → publish in `publish.yml` |
+| **Documentation drifts behind code changes** | Medium | Medium | Phase I documentation is part of release acceptance criteria; PR template requires docs updates |
+
+---
+
+## §14 Implementation order
+
+Dependency-only ordering. **No time estimates** — actual cadence depends on review cycles, parallel work, SignPath external approval, and access to test machines.
+
+```
+Phase A  (extract backend-installer + state machine)         ◄── ships first, independently mergeable
+   │
+   ▼
+Phase B  (restructure scripts/, fold in PR #341)
+   │
+   ├──────────────► Phase D  (gaia uninstall CLI)             ◄── parallel-mergeable with B
+   │                    │
+   ▼                    ▼
+Phase C  (electron-forge → electron-builder; delete Squirrel)
+   │
+   ▼
+Phase E  (assets + macOS entitlements)
+   │
+   ▼
+Phase F  (auto-update via electron-updater)
+   │
+   ▼
+Phase G  (CI workflow + publish.yml integration)
+   │
+   ▼
+Phase I  (documentation)
+   │
+   ▼
+Phase H  (code signing — externally gated by SignPath approval)
+   │
+   ▼
+v0.17.2 release with desktop installer as the primary install path
+```
+
+**Phase A is the only phase with a hard "ship first" requirement.** It's independently mergeable, fixes the broken-Squirrel UX immediately, and is the foundation everything else builds on. Apply for SignPath in parallel with Phase A so it's approved by the time we need it in Phase H.
+
+---
+
+## §15 References
+
+- Issue: [#530 — Desktop installer: one-click install with NSIS, DMG, AppImage + auto-update](https://github.com/amd/gaia/issues/530)
+- Companion plan: [`installer.mdx`](./installer.mdx) — Python CLI install, `gaia init`, `gaia update`, and (post-Phase D) `gaia uninstall`
+- Related issue (left as polish, not folded in): [#597 — First-run setup wizard](https://github.com/amd/gaia/issues/597)
+- Related stale PR (folded into Phase B): [#341 — Fix installer BOM and logger permissions](https://github.com/amd/gaia/pull/341)
+- Lemonade installer source (reference architecture): [lemonade-sdk/lemonade](https://github.com/lemonade-sdk/lemonade)
+- electron-builder docs: [https://www.electron.build/](https://www.electron.build/)
+- electron-updater docs: [https://www.electron.build/auto-update](https://www.electron.build/auto-update)
+- NSIS docs: [https://nsis.sourceforge.io/Docs/](https://nsis.sourceforge.io/Docs/)
+- SignPath OSS program: [https://signpath.io/solutions/open-source-community](https://signpath.io/solutions/open-source-community)
+- Apple notarization: [https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)

@@ -3,18 +3,27 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, AgentInfo } from '../types';
 import { log } from '../utils/logger';
 
-const API_BASE = '/api';
+// When loaded from file:// (Electron with bundled frontend), API calls
+// must use an absolute URL to the backend. When loaded from http://
+// (dev server or backend-served frontend), relative paths work.
+const API_BASE = window.location.protocol === 'file:'
+    ? 'http://localhost:4200/api'
+    : '/api';
 
 // -- Helpers -------------------------------------------------------------------
 
 function getFriendlyError(status: number, detail: string): string {
     switch (status) {
-        case 403: return 'Access denied. This location is outside your home directory.';
-        case 404: return 'Not found. The file or folder may have been moved or deleted.';
-        case 413: return 'File too large to process.';
+        case 403: return detail || 'Access denied.';
+        // Prefer the backend's detail for 404s — the previous canned string
+        // ("The file or folder may have been moved or deleted.") was misleading
+        // for upload/indexing flows where the real cause was a malformed
+        // filepath, not a missing file. See issue #728.
+        case 404: return detail || 'The requested item was not found.';
+        case 413: return detail || 'File too large to process.';
         case 500: return 'Server error. Please try again.';
         case 502:
         case 503: return 'Service unavailable. Is the backend running?';
@@ -91,6 +100,12 @@ export async function downloadModel(modelName: string, force = false): Promise<{
     return apiFetch('POST', '/system/download-model', { model_name: modelName, force });
 }
 
+// -- Agents --------------------------------------------------------------------
+
+export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number }> {
+    return apiFetch('GET', '/agents');
+}
+
 // -- Sessions ------------------------------------------------------------------
 
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
@@ -105,7 +120,7 @@ export async function getSession(id: string): Promise<Session> {
     return apiFetch('GET', `/sessions/${id}`);
 }
 
-export async function updateSession(id: string, data: { title?: string; system_prompt?: string }): Promise<Session> {
+export async function updateSession(id: string, data: { title?: string; system_prompt?: string; agent_type?: string }): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}`, data);
 }
 
@@ -146,6 +161,8 @@ export interface StreamCallbacks {
     onDone: (event: StreamEvent) => void;
     /** Error occurred. */
     onError: (error: Error) => void;
+    /** A new agent was created and registered — refresh the agent list. */
+    onAgentCreated?: (event: StreamEvent) => void;
 }
 
 /** Agent event types that represent activity rather than content. */
@@ -161,6 +178,7 @@ export function sendMessageStream(
     onChunkOrCallbacks: ((event: StreamEvent) => void) | StreamCallbacks,
     onDone?: (event: StreamEvent) => void,
     onError?: (error: Error) => void,
+    agentType?: string,
 ): AbortController {
     // Support both old 3-arg style and new callbacks style
     let callbacks: StreamCallbacks;
@@ -190,6 +208,7 @@ export function sendMessageStream(
             session_id: sessionId,
             message,
             stream: true,
+            ...(agentType ? { agent_type: agentType } : {}),
         }),
         signal: controller.signal,
     })
@@ -250,6 +269,9 @@ export function sendMessageStream(
                                 } else if (event.type === 'error') {
                                     log.stream.error(`Stream error event:`, event.content);
                                     callbacks.onError(new Error(event.content || 'Unknown error'));
+                                } else if (event.type === 'agent_created') {
+                                    log.stream.info(`Agent created: ${event.agent_id}`);
+                                    callbacks.onAgentCreated?.(event);
                                 } else if (AGENT_EVENT_TYPES.has(event.type)) {
                                     agentEventCount++;
                                     log.stream.debug(`Agent event: ${event.type}`, event);
@@ -311,6 +333,47 @@ export async function listDocuments(): Promise<{ documents: Document[]; total: n
 
 export async function uploadDocumentByPath(filepath: string): Promise<Document> {
     return apiFetch('POST', '/documents/upload-path', { filepath });
+}
+
+/**
+ * Upload a document as a multipart blob for indexing.
+ *
+ * Used by drag-and-drop in both the Document Library and ChatView.
+ * Required for browser-mode users (and modern Electron versions, where
+ * File.path is no longer populated for drag-drop) — there's no reliable
+ * way to get an absolute filesystem path from a browser File object,
+ * so we have to stream the content directly to the server.
+ *
+ * Errors are mapped through getFriendlyError so 404/413 messages are
+ * consistent with the rest of the app.
+ */
+export async function uploadDocumentBlob(file: File): Promise<Document> {
+    const url = `${API_BASE}/documents/upload`;
+    const t = log.api.time();
+    log.api.info(`POST ${url}`, { fileName: file.name, size: file.size });
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    let res: Response;
+    try {
+        res = await fetch(url, { method: 'POST', body: formData });
+    } catch (err) {
+        log.api.error(`POST ${url} - network error`, err);
+        throw err;
+    }
+
+    if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
+        let detail = errorText;
+        try { detail = JSON.parse(errorText).detail || errorText; } catch {}
+        throw new Error(getFriendlyError(res.status, detail));
+    }
+
+    const data = await res.json();
+    log.api.timed(`POST ${url} -> ${res.status}`, t, data);
+    return data;
 }
 
 export async function deleteDocument(id: string): Promise<void> {

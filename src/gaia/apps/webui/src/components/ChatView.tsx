@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
@@ -11,8 +11,47 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { getSessionHash } from '../utils/format';
 import { bugReportUrl } from './UnsupportedFeature';
-import type { Message, StreamEvent, AgentStep, Attachment } from '../types';
+import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
 import './ChatView.css';
+
+/** Cache for getComputedStyle results — avoids repeated style recalculations
+ *  for the same textarea element since its styles rarely change. */
+const _computedStyleCache = new WeakMap<HTMLTextAreaElement, CSSStyleDeclaration>();
+
+/** Returns the pixel {x, y} of the caret inside a textarea, measured from the
+ *  textarea's top-left corner (including its padding). Uses a hidden mirror div
+ *  with matching styles so the result works for any font and multiline input.
+ *  Accounts for scrollTop so the position stays correct when content overflows. */
+function getCaretXY(el: HTMLTextAreaElement): { x: number; y: number } {
+    const sel = el.selectionStart ?? 0;
+    let computed = _computedStyleCache.get(el);
+    if (!computed) {
+        computed = window.getComputedStyle(el);
+        _computedStyleCache.set(el, computed);
+    }
+    const mirror = document.createElement('div');
+    mirror.style.cssText = [
+        'position:absolute', 'visibility:hidden', 'overflow:hidden',
+        'white-space:pre-wrap', 'word-wrap:break-word',
+        'top:-9999px', 'left:-9999px',
+        `box-sizing:${computed.boxSizing}`,
+        `width:${computed.width}`,
+        `padding:${computed.padding}`,
+        `border:${computed.border}`,
+        `font:${computed.font}`,
+        `line-height:${computed.lineHeight}`,
+        `letter-spacing:${computed.letterSpacing}`,
+        `word-spacing:${computed.wordSpacing}`,
+    ].join(';');
+    mirror.appendChild(document.createTextNode(el.value.substring(0, sel)));
+    const marker = document.createElement('span');
+    marker.textContent = '\u200b';
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+    const coords = { x: marker.offsetLeft, y: marker.offsetTop - el.scrollTop };
+    document.body.removeChild(mirror);
+    return coords;
+}
 
 const EMPTY_SUGGESTIONS = [
     'Summarize a document',
@@ -87,6 +126,7 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 tool: event.tool,
                 detail: event.detail,
                 active: true, timestamp: ts,
+                mcpServer: event.mcp_server,
             };
         case 'plan':
             return {
@@ -101,6 +141,7 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 active: true, timestamp: ts,
             };
         case 'status':
+            if (event.message?.startsWith('Agent: ')) return null;
             return {
                 id, type: 'status',
                 label: event.message || event.status || 'Working',
@@ -120,23 +161,28 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
 
 interface ChatViewProps {
     sessionId: string;
+    onCreateAgent?: () => void;
+    onAgentChange?: (agentId: string) => void;
 }
 
-export function ChatView({ sessionId }: ChatViewProps) {
+export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
         documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
         systemStatus,
+        agents, activeAgentId, setActiveAgentId,
     } = useChatStore();
 
     const { addNotification } = useNotificationStore();
+    const pendingPrompt = useChatStore((s) => s.pendingPrompt);
 
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useState('');
+    const [caret, setCaret] = useState({ x: 0, y: 0, focused: false });
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -146,6 +192,46 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
+    // Agent picker dropdown state
+    const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+    const agentPickerRef = useRef<HTMLDivElement>(null);
+    // Use session's stored agent_type as the source of truth for the picker display
+    const displayedAgentId = session?.agent_type || activeAgentId;
+    // Resolve human-readable agent names for the message header
+    const sessionAgentName = agents.find((a) => a.id === session?.agent_type)?.name;
+    const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name;
+
+    // Close agent picker on outside click
+    useEffect(() => {
+        if (!agentPickerOpen) return;
+        const handler = (e: MouseEvent) => {
+            if (agentPickerRef.current && !agentPickerRef.current.contains(e.target as Node)) {
+                setAgentPickerOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, [agentPickerOpen]);
+
+    const handleAgentChange = useCallback(async (newAgentId: string) => {
+        setAgentPickerOpen(false);
+        if (newAgentId === displayedAgentId) return;
+        const previousAgentId = displayedAgentId; // capture before any mutations
+        setActiveAgentId(newAgentId);
+        if (messages.length === 0) {
+            updateSessionInList(sessionId, { agent_type: newAgentId } as Partial<Session>);
+            try {
+                await api.updateSession(sessionId, { agent_type: newAgentId });
+            } catch {
+                // Roll back optimistic update on failure
+                updateSessionInList(sessionId, { agent_type: previousAgentId } as Partial<Session>);
+                setActiveAgentId(previousAgentId);
+            }
+        } else {
+            onAgentChange?.(newAgentId);
+        }
+    }, [displayedAgentId, messages.length, sessionId, setActiveAgentId, updateSessionInList, onAgentChange]);
+
     // Smooth streaming exit — snapshot last content so fade-out shows real text
     const [streamEnding, setStreamEnding] = useState(false);
     const lastStreamContentRef = useRef('');
@@ -173,6 +259,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
+    const caretRafRef = useRef<number>(0);
+    const updateCaret = useCallback(() => {
+        cancelAnimationFrame(caretRafRef.current);
+        caretRafRef.current = requestAnimationFrame(() => {
+            if (!inputRef.current) return;
+            const { x, y } = getCaretXY(inputRef.current);
+            setCaret(prev => ({ ...prev, x, y }));
+        });
+    }, []);
+    useEffect(() => () => cancelAnimationFrame(caretRafRef.current), []);
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
     const toolOccurredRef = useRef(false);
@@ -184,7 +280,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // (which can be hundreds/sec), dramatically reducing DOM mutations
     // and eliminating extension-triggered "runtime.lastError" floods.
     const streamBufferRef = useRef('');
-    const rafRef = useRef<number | null>(null);
+    const streamRafRef = useRef<number | null>(null);
     const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     /** Timestamp of the last auto-scroll (used for throttling). */
     const lastScrollRef = useRef(0);
@@ -194,7 +290,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const isNearBottomRef = useRef(true);
 
     const flushStreamBuffer = useCallback(() => {
-        rafRef.current = null;
+        streamRafRef.current = null;
         if (streamBufferRef.current) {
             setStreamContent(streamBufferRef.current);
         }
@@ -259,20 +355,26 @@ export function ChatView({ sessionId }: ChatViewProps) {
             .catch(() => {});
     }, [setDocuments]);
 
-    // Consume pending prompt from store (set by WelcomeScreen suggestions).
-    // This replaces the fragile event-dispatch-with-setTimeout pattern —
-    // the prompt is stored in Zustand before the session is created, so
-    // ChatView reliably picks it up on mount regardless of render timing.
+    // Consume pending prompt from store (set by WelcomeScreen suggestions
+    // or Ask Agent in FileBrowser). Reactive subscription ensures prompts
+    // are consumed both on mount AND when set while ChatView is already
+    // mounted (e.g., Ask Agent from file browser in an existing session).
     useEffect(() => {
+        // Use getState() as authoritative source to prevent double-fire
+        // in React StrictMode (effects mount/unmount/remount).
         const pending = useChatStore.getState().pendingPrompt;
-        if (pending) {
-            log.chat.info(`Consuming pending prompt: "${pending.slice(0, 60)}"`);
-            useChatStore.getState().setPendingPrompt(null);
-            setInput(pending);
-            // Defer send to next tick so React finishes mount
-            requestAnimationFrame(() => sendMessageRef.current(pending));
-        }
-    }, [sessionId]);
+        if (!pending) return;
+        log.chat.info(`Consuming pending prompt: "${pending.slice(0, 60)}"`);
+        useChatStore.getState().setPendingPrompt(null);
+        setInput(pending);
+        // Defer send to next tick so React finishes mount.
+        // Guard against component unmounting before the frame fires.
+        let cancelled = false;
+        requestAnimationFrame(() => {
+            if (!cancelled) sendMessageRef.current(pending);
+        });
+        return () => { cancelled = true; };
+    }, [pendingPrompt]);
 
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
     // streaming, and also schedules a trailing scroll so the final chunk
@@ -309,9 +411,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 abortRef.current.abort();
                 abortRef.current = null;
             }
-            if (rafRef.current !== null) {
-                cancelAnimationFrame(rafRef.current);
-                rafRef.current = null;
+            if (streamRafRef.current !== null) {
+                cancelAnimationFrame(streamRafRef.current);
+                streamRafRef.current = null;
             }
             if (scrollTimerRef.current) {
                 clearTimeout(scrollTimerRef.current);
@@ -349,9 +451,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
             abortRef.current = null;
         }
         // Cancel any pending rAF flush
-        if (rafRef.current !== null) {
-            cancelAnimationFrame(rafRef.current);
-            rafRef.current = null;
+        if (streamRafRef.current !== null) {
+            cancelAnimationFrame(streamRafRef.current);
+            streamRafRef.current = null;
         }
         // Use the buffer (most up-to-date) or fall back to store content
         const storeState = useChatStore.getState();
@@ -399,6 +501,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const el = e.target;
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+        updateCaret();
     };
 
     // Handle clipboard paste (screenshots)
@@ -513,9 +616,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // new message and streaming response are visible.
         isNearBottomRef.current = true;
 
-        if ((!text && !hasAttachments) || isStreaming) {
+        const isInitializing = systemStatus?.init_state === 'initializing';
+        if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
+            if (isInitializing) log.chat.debug('Send blocked: system initializing');
             return;
         }
 
@@ -611,8 +716,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     // Buffer chunks and flush to store at most once per frame (~60fps)
                     // instead of triggering a React re-render on every single SSE chunk
                     streamBufferRef.current = cleaned;
-                    if (rafRef.current === null) {
-                        rafRef.current = requestAnimationFrame(flushStreamBuffer);
+                    if (streamRafRef.current === null) {
+                        streamRafRef.current = requestAnimationFrame(flushStreamBuffer);
                     }
                 }
             },
@@ -697,6 +802,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         result: event.summary || event.title || 'Done',
                         active: false,
                         success: event.success !== false,
+                        latencyMs: event.latency_ms,
                     };
                     // Pass through structured command output if available
                     if (event.command_output) {
@@ -813,9 +919,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 doneHandled = true;
 
                 // Cancel any pending rAF flush — we have the final content
-                if (rafRef.current !== null) {
-                    cancelAnimationFrame(rafRef.current);
-                    rafRef.current = null;
+                if (streamRafRef.current !== null) {
+                    cancelAnimationFrame(streamRafRef.current);
+                    streamRafRef.current = null;
                 }
                 streamBufferRef.current = '';
 
@@ -880,9 +986,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onError: (err) => {
                 // Cancel any pending rAF flush
-                if (rafRef.current !== null) {
-                    cancelAnimationFrame(rafRef.current);
-                    rafRef.current = null;
+                if (streamRafRef.current !== null) {
+                    cancelAnimationFrame(streamRafRef.current);
+                    streamRafRef.current = null;
                 }
                 streamBufferRef.current = '';
 
@@ -901,7 +1007,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         'Then try sending your message again.' + issueFooter;
                 } else if (err instanceof TypeError || msg.includes('fetch') || msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
                     errorContent =
-                        'Cannot connect to the GAIA Agent UI server. Make sure the backend is running:\n\n' +
+                        'Cannot connect to the GAIA server. Make sure the backend is running:\n\n' +
                         '```\ngaia chat --ui\n```' + issueFooter;
                 } else if (msg.includes('500')) {
                     errorContent =
@@ -927,10 +1033,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 clearStreamContent();
                 clearAgentSteps();
             },
-        });
+            onAgentCreated: () => {
+                // A new agent was created — refresh the list so it appears
+                // in the agent selector immediately without a page reload.
+                api.listAgents()
+                    .then((data) => useChatStore.getState().setAgents(data.agents || []))
+                    .catch(() => { /* non-critical */ });
+            },
+        }, undefined, undefined, activeAgentId);
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
@@ -1069,35 +1182,40 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [documents, sessionId, updateSessionInList]);
 
-    // Drag & drop
+    // Drag & drop — uploads the file blob directly rather than relying on
+    // File.path (which is browser-undefined and was removed in Electron 32+).
+    // Dropped files index quietly and auto-attach to the current session;
+    // the Document Library panel is NOT forced open so the drop doesn't
+    // interrupt the chat view. Users can still open the library manually
+    // to see progress for large files. See issue #728.
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDragOver(false);
-        if (e.dataTransfer.files.length > 0) {
-            setShowDocLibrary(true);
-            for (const file of Array.from(e.dataTransfer.files)) {
-                const filepath = (file as any).path || file.name;
-                try {
-                    const doc = await api.uploadDocumentByPath(filepath);
-                    if (sessionId && doc?.id) {
-                        try {
-                            await api.attachDocument(sessionId, doc.id);
-                            const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
-                            const existing = freshSession?.document_ids ?? [];
-                            if (!existing.includes(doc.id)) {
-                                updateSessionInList(sessionId, { document_ids: [...existing, doc.id] });
-                            }
-                        } catch (attachErr) {
-                            log.doc.warn(`Could not attach dropped document to session: ${attachErr}`);
+        if (e.dataTransfer.files.length === 0) return;
+
+        for (const file of Array.from(e.dataTransfer.files)) {
+            log.doc.info(`Dropped on chat view: ${file.name}`);
+            try {
+                const doc = await api.uploadDocumentBlob(file);
+                if (sessionId && doc?.id) {
+                    try {
+                        await api.attachDocument(sessionId, doc.id);
+                        const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
+                        const existing = freshSession?.document_ids ?? [];
+                        if (!existing.includes(doc.id)) {
+                            updateSessionInList(sessionId, { document_ids: [...existing, doc.id] });
                         }
+                        log.doc.info(`Auto-attached "${file.name}" to session ${sessionId}`);
+                    } catch (attachErr) {
+                        log.doc.warn(`Could not attach dropped document to session: ${attachErr}`);
                     }
-                } catch (err) {
-                    log.doc.error(`Upload failed: ${filepath}`, err);
                 }
+            } catch (err) {
+                log.doc.error(`Upload failed: ${file.name}`, err);
             }
         }
-    }, [sessionId, updateSessionInList, setShowDocLibrary]);
+    }, [sessionId, updateSessionInList]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -1312,6 +1430,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 onDelete={!isStreaming ? handleDeleteMessage : undefined}
                                 onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
                                 latencyMs={latencyMs}
+                                agentName={msg.role === 'assistant' ? sessionAgentName : undefined}
                             />
                         </div>
                     );
@@ -1333,6 +1452,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             showTerminalCursor={streamEnding}
                             agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
                             agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
+                            agentName={activeAgentName}
                         />
                     </div>
                 )}
@@ -1398,13 +1518,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
                             onPaste={handlePaste}
+                            onSelect={updateCaret}
+                            onFocus={() => { setCaret(prev => ({ ...prev, focused: true })); updateCaret(); }}
+                            onBlur={() => setCaret(prev => ({ ...prev, focused: false }))}
                             placeholder="Type a message or paste an image... (Shift+Enter for new line)"
                             rows={1}
-                            disabled={isStreaming}
+                            disabled={isStreaming || systemStatus?.init_state === 'initializing'}
                             aria-label="Message input"
+                            style={{ caretColor: 'transparent' }}
                         />
+                        {!isStreaming && caret.focused && (
+                            <span
+                                className="input-cursor"
+                                style={{ left: `${caret.x}px`, top: `${caret.y}px` }}
+                                aria-hidden="true"
+                            />
+                        )}
                     </div>
-                    {!isStreaming && <span className="input-cursor" aria-hidden="true" />}
                     <div className="input-btns">
                         <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">
                             <Upload size={15} />
@@ -1435,6 +1565,51 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     </div>
                 </div>
                 <div className="input-footer">
+                    {onCreateAgent && (
+                        <>
+                            <button
+                                className="create-agent-btn"
+                                onClick={onCreateAgent}
+                                title="Build a custom agent"
+                                aria-label="Build a custom agent"
+                            >
+                                <Plus size={10} />
+                            </button>
+                            {agents.length > 1 && <span className="input-footer-sep" />}
+                        </>
+                    )}
+                    {agents.length > 1 && (
+                        <>
+                            <div className="agent-picker" ref={agentPickerRef}>
+                                <button
+                                    className="agent-picker-btn"
+                                    onClick={() => !isStreaming && setAgentPickerOpen((v) => !v)}
+                                    title="Switch agent"
+                                    aria-label="Switch agent"
+                                    disabled={isStreaming}
+                                >
+                                    <Bot size={10} />
+                                    <span>{agents.find((a) => a.id === displayedAgentId)?.name || 'Agent'}</span>
+                                    <ChevronDown size={10} />
+                                </button>
+                                {agentPickerOpen && (
+                                    <div className="agent-picker-dropdown">
+                                        {agents.map((agent) => (
+                                            <button
+                                                key={agent.id}
+                                                className={`agent-picker-option${agent.id === displayedAgentId ? ' active' : ''}`}
+                                                onClick={() => handleAgentChange(agent.id)}
+                                            >
+                                                <Bot size={12} />
+                                                <span>{agent.name}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <span className="input-footer-sep" />
+                        </>
+                    )}
                     <span className="input-footer-item">
                         <Lock size={10} />
                         <span>100% local &amp; private</span>

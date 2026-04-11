@@ -40,7 +40,23 @@ logger = logging.getLogger(__name__)
 # endpoint looks up the handler here to resolve a pending confirmation.
 _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 
-# ── Per-session ChatAgent cache ───────────────────────────────────────────────
+# ── Agent registry ───────────────────────────────────────────────────────────
+# Set by server lifespan via set_agent_registry() once discovery completes.
+_agent_registry = None
+
+
+def set_agent_registry(registry) -> None:
+    """Store the AgentRegistry for use by chat helpers."""
+    global _agent_registry
+    _agent_registry = registry
+
+
+def get_agent_registry():
+    """Return the current AgentRegistry instance, or None if not yet initialized."""
+    return _agent_registry
+
+
+# ── Per-session agent cache ───────────────────────────────────────────────────
 # Constructing a fresh ChatAgent on every message is expensive: it initialises
 # RAGSDK, MCPClientManager, runs LemonadeManager.ensure_ready() (HTTP calls),
 # registers all tools, composes the system prompt, and re-indexes session docs
@@ -53,7 +69,7 @@ _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 # accessed by at most one thread at a time — no per-entry locking needed.
 _agent_cache: dict[str, dict] = (
     {}
-)  # session_id -> {"agent": ChatAgent, "model_id": str, "document_ids": list}
+)  # session_id -> {"agent": Agent, "model_id": str, "agent_type": str, "document_ids": list}
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
@@ -62,9 +78,10 @@ _MAX_CACHED_AGENTS = 10
 _mcp_status_cache: list[dict] = []
 _mcp_status_lock = threading.Lock()
 
-# Lock preventing concurrent sessions from issuing simultaneous load_model()
-# calls when both arrive with Lemonade in a no-model or embedding-only state.
-_model_load_lock = threading.Lock()
+# Lock preventing concurrent load_model() calls.  Shared between the per-request
+# path (_maybe_load_expected_model) and the boot-time preload task in server.py.
+# Public (no underscore) because it is intentionally accessed cross-module.
+model_load_lock = threading.Lock()
 
 
 def get_cached_mcp_status() -> list[dict]:
@@ -73,26 +90,37 @@ def get_cached_mcp_status() -> list[dict]:
         return copy.deepcopy(_mcp_status_cache)
 
 
-def _get_cached_agent(session_id: str, model_id: str):
-    """Return the cached ChatAgent for *session_id* if the model matches, else None.
+def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
+    """Return the cached agent for *session_id* if model and agent_type match, else None.
 
-    Evicts the entry when the model has changed so a fresh agent is created.
+    Evicts the entry when the model or agent type has changed.
     """
     with _agent_cache_lock:
         entry = _agent_cache.get(session_id)
         if entry is None:
             return None
         if entry["model_id"] != model_id:
-            # Model changed — the cached agent used a different LLM; discard it.
             del _agent_cache[session_id]
             logger.debug(
                 "Agent cache miss (model change) for session %s", session_id[:8]
             )
             return None
+        if entry.get("agent_type", "chat") != agent_type:
+            del _agent_cache[session_id]
+            logger.debug(
+                "Agent cache miss (agent_type change) for session %s", session_id[:8]
+            )
+            return None
         return entry["agent"]
 
 
-def _store_agent(session_id: str, model_id: str, document_ids: list, agent) -> None:
+def _store_agent(
+    session_id: str,
+    model_id: str,
+    document_ids: list,
+    agent,
+    agent_type: str = "chat",
+) -> None:
     """Cache *agent* for *session_id*.  Evicts the oldest entry if over the limit."""
     with _agent_cache_lock:
         if session_id not in _agent_cache and len(_agent_cache) >= _MAX_CACHED_AGENTS:
@@ -101,12 +129,14 @@ def _store_agent(session_id: str, model_id: str, document_ids: list, agent) -> N
             logger.debug("Agent cache full; evicted session %s", oldest[:8])
         _agent_cache[session_id] = {
             "model_id": model_id,
+            "agent_type": agent_type,
             "document_ids": list(document_ids or []),
             "agent": agent,
         }
         logger.debug(
-            "Cached agent for session %s (cache size: %d)",
+            "Cached agent for session %s agent_type=%s (cache size: %d)",
             session_id[:8],
+            agent_type,
             len(_agent_cache),
         )
 
@@ -341,7 +371,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
         from gaia.llm.lemonade_client import LemonadeClient
 
-        with _model_load_lock:
+        with model_load_lock:
             # Re-check after acquiring the lock: another thread may have
             # already loaded the model while we were waiting.
             resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
@@ -381,15 +411,11 @@ async def _get_chat_response(
     """
 
     def _do_chat():
-        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
         # Build conversation history from database
         messages = db.get_messages(request.session_id, limit=20)
         history_pairs = _build_history_pairs(messages)
 
         # Resolve document IDs to file paths.
-        # Session-specific docs get auto-indexed; library docs are available
-        # for on-demand indexing by the agent based on user's query.
         document_ids = session.get("document_ids", [])
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
 
@@ -403,8 +429,6 @@ async def _get_chat_response(
 
         allowed = _compute_allowed_paths(all_doc_paths)
 
-        # Use custom model override if set in user settings,
-        # otherwise fall back to the session's model.
         model_id = session.get("model")
         custom_model = db.get_setting("custom_model")
         if custom_model:
@@ -415,22 +439,50 @@ async def _get_chat_response(
             )
             model_id = custom_model
 
-        # ── Agent cache ──────────────────────────────────────────────────────
-        # Reuse an existing ChatAgent rather than constructing a fresh one.
-        # On a cache hit we still re-register tools (so _TOOL_REGISTRY points
-        # to this agent's self after another session may have overwritten it)
-        # but skip the heavyweight __init__ work: RAGSDK construction,
-        # MCPClientManager init, LemonadeManager.ensure_ready() HTTP calls,
-        # system-prompt composition, and session-doc re-indexing.
         session_id = request.session_id
-        cached_agent = _get_cached_agent(session_id, model_id)
+        stored_agent_type = session.get("agent_type") or "chat"
+        agent_type = request.agent_type or stored_agent_type
+
+        # Validate requested agent_type exists in the registry before persisting
+        registry = _agent_registry
+        if agent_type != "chat" and registry and not registry.get(agent_type):
+            logger.warning(
+                "chat: Session %s requested unknown agent_type '%s', falling back to chat",
+                session_id[:8],
+                agent_type,
+            )
+            agent_type = "chat"
+
+        if agent_type != stored_agent_type:
+            db.update_session(session_id, agent_type=agent_type)
+            logger.info(
+                "chat: Session %s agent_type changed: %s -> %s",
+                session_id[:8],
+                stored_agent_type,
+                agent_type,
+            )
+        logger.info("chat: Session %s using agent type: %s", session_id[:8], agent_type)
+
+        # Honour agent model preferences from the registry (skipped when the
+        # user has set a custom model override, which always takes priority).
+        if not custom_model and registry and agent_type != "chat":
+            preferred = registry.resolve_model(agent_type)
+            if preferred:
+                logger.info(
+                    "chat: Agent %s prefers model %s (was %s)",
+                    agent_type,
+                    preferred,
+                    model_id,
+                )
+                model_id = preferred
+
+        # ── Agent cache ──────────────────────────────────────────────────────
+        cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
         if cached_agent is not None:
             agent = cached_agent
-            # Re-register tools so _TOOL_REGISTRY points at this agent's self.
             agent._register_tools()
-            # Index any session docs that were attached since the agent was cached.
-            if rag_file_paths and agent.rag:
+            if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
                 for fpath in new_paths:
                     try:
@@ -440,10 +492,18 @@ async def _get_chat_response(
                             agent.rebuild_system_prompt()
                     except Exception as _idx_err:
                         logger.warning("Failed to index %s: %s", fpath, _idx_err)
-            logger.debug(
-                "Agent cache hit (non-streaming) for session %s", session_id[:8]
+            logger.info(
+                "chat: Agent cache hit for session %s (agent_type=%s)",
+                session_id[:8],
+                agent_type,
             )
-        else:
+        elif agent_type == "chat":
+            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+            logger.info(
+                "chat: Creating new chat agent (ChatAgent) for session %s",
+                session_id[:8],
+            )
             config = ChatAgentConfig(
                 model_id=model_id,
                 max_steps=10,
@@ -455,7 +515,58 @@ async def _get_chat_response(
                 ui_session_id=session_id,
             )
             agent = ChatAgent(config)
-            _store_agent(session_id, model_id, document_ids, agent)
+            _store_agent(session_id, model_id, document_ids, agent, agent_type)
+        else:
+            # Non-chat agent: create via registry
+            registry = _agent_registry
+            if registry is None or registry.get(agent_type) is None:
+                # Registry unavailable or agent_type unknown (e.g. stale client state).
+                # Fall back to chat agent rather than permanently breaking the session.
+                if registry is None:
+                    logger.warning(
+                        "chat: Agent registry not initialized; falling back to chat for session %s",
+                        session_id[:8],
+                    )
+                else:
+                    logger.warning(
+                        "chat: Unknown agent_type '%s' for session %s; falling back to chat",
+                        agent_type,
+                        session_id[:8],
+                    )
+                agent_type = "chat"
+                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+                config = ChatAgentConfig(
+                    model_id=model_id,
+                    max_steps=10,
+                    silent_mode=True,
+                    debug=False,
+                    rag_documents=rag_file_paths,
+                    library_documents=library_paths,
+                    allowed_paths=allowed,
+                    ui_session_id=session_id,
+                )
+                agent = ChatAgent(config)
+                _store_agent(session_id, model_id, document_ids, agent, agent_type)
+            else:
+                logger.info(
+                    "chat: Creating new %s agent for session %s",
+                    agent_type,
+                    session_id[:8],
+                )
+                agent = registry.create_agent(
+                    agent_type,
+                    model_id=model_id,
+                    silent_mode=True,
+                    debug=False,
+                )
+                logger.info(
+                    "chat: Invoking agent %s for session %s, model=%s",
+                    agent_type,
+                    session_id[:8],
+                    model_id,
+                )
+                _store_agent(session_id, model_id, document_ids, agent, agent_type)
 
         # Restore conversation history (limited to prevent context overflow).
         # Always re-inject from DB so the history is consistent with what was
@@ -484,7 +595,10 @@ async def _get_chat_response(
             # overridden by fallback to "answer".
             val = result.get("result")
             return val if val is not None else result.get("answer", "")
-        return str(result) if result else ""
+        result_str = str(result) if result else ""
+        # Strip JSON envelope (e.g. {"answer": "..."}) emitted by agents
+        # whose system prompt requires JSON output format.
+        return _clean_answer_json(result_str)
 
     try:
         loop = asyncio.get_running_loop()
@@ -573,34 +687,63 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             )
             model_id = custom_model
 
-        # Move ALL slow work (ChatAgent constructor + process_query) into the
-        # background thread so the SSE generator can yield the thinking event
-        # immediately instead of blocking for 10-30s during initialization
+        stored_agent_type = session.get("agent_type") or "chat"
+        agent_type = request.agent_type or stored_agent_type
+
+        # Validate requested agent_type exists in the registry before persisting
+        registry = _agent_registry
+        if agent_type != "chat" and registry and not registry.get(agent_type):
+            logger.warning(
+                "chat: Session %s requested unknown agent_type '%s', falling back to chat (streaming)",
+                session_id[:8],
+                agent_type,
+            )
+            agent_type = "chat"
+
+        if agent_type != stored_agent_type:
+            db.update_session(session_id, agent_type=agent_type)
+            logger.info(
+                "chat: Session %s agent_type changed: %s -> %s (streaming)",
+                session_id[:8],
+                stored_agent_type,
+                agent_type,
+            )
+        logger.info(
+            "chat: Session %s using agent type: %s (streaming)",
+            session_id[:8],
+            agent_type,
+        )
+
+        # Honour agent model preferences from the registry (skipped when the
+        # user has set a custom model override, which always takes priority).
+        if not custom_model and registry and agent_type != "chat":
+            preferred = registry.resolve_model(agent_type)
+            if preferred:
+                logger.info(
+                    "chat: Agent %s prefers model %s (was %s) (streaming)",
+                    agent_type,
+                    preferred,
+                    model_id,
+                )
+                model_id = preferred
+
+        # Move ALL slow work into the background thread so the SSE generator
+        # can yield the thinking event immediately.
         result_holder = {"answer": "", "error": None}
 
         def _run_agent():
             try:
-                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
                 t0 = _time.monotonic()
 
                 # ── Agent cache check ─────────────────────────────────────────
-                # Reuse an existing ChatAgent if one exists for this session.
-                # On a cache hit we still call _register_tools() so _TOOL_REGISTRY
-                # points at this agent's self (another session may have overwritten
-                # it between turns).  We skip the heavyweight parts: ChatAgent
-                # __init__, RAGSDK construction, MCPClientManager init,
-                # LemonadeManager.ensure_ready() HTTP calls, system-prompt
-                # composition, and session-doc re-indexing for unchanged files.
-                cached_agent = _get_cached_agent(session_id, model_id)
+                cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
                 if cached_agent is not None:
                     # -- Cache hit --
                     agent = cached_agent
                     agent.console = sse_handler
 
-                    # Re-register tools: another session may have overwritten
-                    # _TOOL_REGISTRY with its own self-bound closures.
+                    # Re-register tools so _TOOL_REGISTRY points at this agent's self.
                     agent._register_tools()
 
                     # Early-exit if consumer disconnected
@@ -611,7 +754,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     new_rag_paths = [
                         p for p in rag_file_paths if p not in agent.indexed_files
                     ]
-                    if new_rag_paths and agent.rag:
+                    if new_rag_paths and hasattr(agent, "rag") and agent.rag:
                         _index_rag_with_progress(
                             agent,
                             new_rag_paths,
@@ -621,8 +764,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         )
 
                     logger.info(
-                        "PERF agent cache hit (streaming) session=%s setup=%.3fs",
+                        "chat: Agent cache hit for session %s (agent_type=%s) setup=%.3fs",
                         session_id[:8],
+                        agent_type,
                         _time.monotonic() - t0,
                     )
                     sse_handler._emit(
@@ -633,18 +777,22 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         }
                     )
 
-                else:
-                    # -- Cache miss: full construction --
-                    # Build config: session-specific docs auto-index,
-                    # library docs passed as metadata for on-demand indexing.
+                elif agent_type == "chat":
+                    # -- Cache miss: ChatAgent --
+                    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+                    logger.info(
+                        "chat: Creating new chat agent (ChatAgent) for session %s",
+                        session_id[:8],
+                    )
                     config = ChatAgentConfig(
                         model_id=model_id,
                         max_steps=10,
                         streaming=True,
                         silent_mode=False,
                         debug=False,
-                        rag_documents=[],  # Index manually below (session docs only)
-                        library_documents=library_paths,  # Available for on-demand indexing
+                        rag_documents=[],
+                        library_documents=library_paths,
                         allowed_paths=allowed,
                         ui_session_id=session_id,
                     )
@@ -652,8 +800,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     t_construct = _time.monotonic()
                     agent = ChatAgent(config)
                     logger.info(
-                        "PERF ChatAgent constructed session=%s took=%.3fs",
+                        "chat: Invoking agent chat for session %s, model=%s took=%.3fs",
                         session_id[:8],
+                        model_id,
                         _time.monotonic() - t_construct,
                     )
                     agent.console = sse_handler  # Assign early so tool events flow
@@ -705,12 +854,92 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             )
 
                     # Cache the agent for subsequent turns in this session.
-                    _store_agent(session_id, model_id, document_ids, agent)
+                    _store_agent(session_id, model_id, document_ids, agent, agent_type)
                     logger.info(
-                        "PERF total setup (cache miss) session=%s took=%.3fs",
+                        "chat: Total setup (cache miss, chat) session=%s took=%.3fs",
                         session_id[:8],
                         _time.monotonic() - t0,
                     )
+                    sse_handler._emit(
+                        {
+                            "type": "status",
+                            "status": "info",
+                            "message": "Sending to model...",
+                        }
+                    )
+
+                else:
+                    # -- Cache miss: non-chat agent via registry --
+                    registry = _agent_registry
+                    if registry is None or registry.get(agent_type) is None:
+                        # Registry unavailable or agent_type unknown (e.g. stale client
+                        # state). Fall back to chat to avoid breaking the session.
+                        if registry is None:
+                            logger.warning(
+                                "chat: Agent registry not initialized; falling back to chat for session %s",
+                                session_id[:8],
+                            )
+                        else:
+                            logger.warning(
+                                "chat: Unknown agent_type '%s' for session %s; falling back to chat",
+                                agent_type,
+                                session_id[:8],
+                            )
+                        _fallback_type = "chat"
+                        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+                        config = ChatAgentConfig(
+                            model_id=model_id,
+                            max_steps=10,
+                            streaming=True,
+                            silent_mode=False,
+                            debug=False,
+                            rag_documents=[],
+                            library_documents=library_paths,
+                            allowed_paths=allowed,
+                            ui_session_id=session_id,
+                        )
+                        agent = ChatAgent(config)
+                        agent.console = sse_handler
+                        if rag_file_paths and agent.rag:
+                            _index_rag_with_progress(agent, rag_file_paths, sse_handler)
+                        _store_agent(
+                            session_id, model_id, document_ids, agent, _fallback_type
+                        )
+                    else:
+                        logger.info(
+                            "chat: Creating new %s agent for session %s",
+                            agent_type,
+                            session_id[:8],
+                        )
+                        t_construct = _time.monotonic()
+                        agent = registry.create_agent(
+                            agent_type,
+                            model_id=model_id,
+                            streaming=True,
+                            silent_mode=False,
+                            debug=False,
+                        )
+                        agent.console = sse_handler
+                        logger.info(
+                            "chat: Invoking agent %s for session %s, model=%s took=%.3fs",
+                            agent_type,
+                            session_id[:8],
+                            model_id,
+                            _time.monotonic() - t_construct,
+                        )
+
+                        if sse_handler.cancelled.is_set():
+                            return
+
+                        # Index session-attached RAG docs
+                        if rag_file_paths and hasattr(agent, "rag") and agent.rag:
+                            _index_rag_with_progress(agent, rag_file_paths, sse_handler)
+
+                        _store_agent(
+                            session_id, model_id, document_ids, agent, agent_type
+                        )
+
                     sse_handler._emit(
                         {
                             "type": "status",
@@ -861,6 +1090,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             "detail": event.get("detail"),
                             "active": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                            "mcpServer": event.get("mcp_server"),
                         }
                     )
                 elif event_type == "tool_args" and captured_steps:
@@ -882,6 +1112,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             event.get("summary") or event.get("title") or "Done"
                         )
                         tool_step["success"] = event.get("success", True)
+                        # Persist MCP tool latency
+                        if event.get("latency_ms") is not None:
+                            tool_step["latencyMs"] = event["latency_ms"]
                         # Persist structured command output for terminal rendering
                         if event.get("command_output"):
                             tool_step["commandOutput"] = event["command_output"]
@@ -992,14 +1225,17 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         # Clean LLM output artifacts before DB storage.
         # Apply all canonical patterns so stored content is always clean
         # regardless of which streaming path was taken.
-        # Order matters: strip embedded JSON blobs BEFORE _clean_answer_json so
-        # that stray closing braces from tool/RAG JSON don't confuse the answer extractor.
+        # Order matters: _clean_answer_json MUST run before _THOUGHT_JSON_SUB_RE.
+        # The base agent asks for {"thought":..., "answer":...} JSON; if that JSON
+        # leaks into full_response (e.g. streaming buffer released early), the
+        # thought-stripper would consume the entire blob including the answer,
+        # leaving an empty string.  Extracting the answer first prevents that.
         if full_response:
             full_response = _TOOL_CALL_JSON_SUB_RE.sub("", full_response)
+            # Extract answer from {"thought":..., "answer":...} before thought stripping.
+            full_response = _clean_answer_json(full_response)
             full_response = _THOUGHT_JSON_SUB_RE.sub("", full_response)
             full_response = _RAG_RESULT_JSON_SUB_RE.sub("", full_response)
-            # _clean_answer_json handles pure {"answer": "..."} responses (whole string).
-            full_response = _clean_answer_json(full_response)
             # _ANSWER_JSON_SUB_RE handles mixed content where {"answer": "..."} is
             # embedded after plain text — strips the duplicate JSON wrapper.
             full_response = _ANSWER_JSON_SUB_RE.sub("", full_response)
@@ -1101,6 +1337,12 @@ async def _index_document(filepath: Path) -> int:
 
     Runs the synchronous RAG indexing in a thread pool executor
     to avoid blocking the async event loop.
+
+    Note: A return value of 0 means RAG reported success but produced
+    no chunks. Callers must treat 0 chunks as a failure condition.
+
+    Raises:
+        RuntimeError: If indexing fails for any reason.
     """
 
     def _do_index():
@@ -1113,32 +1355,28 @@ async def _index_document(filepath: Path) -> int:
         rag = RAGSDK(config)
         result = rag.index_document(str(filepath))
         logger.info("RAG index_document result for %s: %s", filepath, result)
-        if isinstance(result, dict):
-            if result.get("error"):
-                logger.warning(
-                    "RAG returned error for %s: %s", filepath, result["error"]
-                )
-            if not result.get("success"):
-                logger.warning(
-                    "RAG indexing unsuccessful for %s (success=False)", filepath
-                )
-            # RAG SDK returns "num_chunks", not "chunk_count"
-            chunks = result.get("num_chunks", 0) or result.get("chunk_count", 0)
-            logger.info(
-                "Indexed %s: %d chunks (success=%s)",
-                filepath,
-                chunks,
-                result.get("success"),
+
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                f"RAG returned unexpected type for {filepath.name}: "
+                f"{type(result).__name__}"
             )
-            return chunks
-        logger.warning(
-            "RAG index_document returned non-dict for %s: %r", filepath, result
-        )
-        return 0
+
+        error = result.get("error")
+        if error:
+            raise RuntimeError(f"RAG indexing failed for {filepath.name}: {error}")
+
+        if not result.get("success"):
+            raise RuntimeError(f"RAG indexing unsuccessful for {filepath.name}")
+
+        chunks = result.get("num_chunks", 0) or result.get("chunk_count", 0)
+        logger.info("Indexed %s: %d chunks", filepath, chunks)
+        return chunks
 
     try:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _do_index)
+    except RuntimeError:
+        raise
     except Exception as e:
-        logger.error("Failed to index document %s: %s", filepath, e, exc_info=True)
-        return 0
+        raise RuntimeError(f"Failed to index {filepath.name}: {e}") from e

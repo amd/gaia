@@ -1,0 +1,131 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+   SPDX-License-Identifier: MIT */
+
+/*
+ * Small, subtle update indicator chip. Pinned to the bottom-right of the
+ * main content area so it never covers chat input or the session list.
+ * Phase F of the desktop installer plan.
+ */
+
+.update-chip {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 1200;
+
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    max-width: 360px;
+
+    font-size: 12px;
+    line-height: 1.3;
+    font-weight: 500;
+    white-space: nowrap;
+
+    background: rgba(30, 30, 40, 0.92);
+    color: #f0f0f5;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.24);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+
+    animation: update-chip-fade-in 200ms ease-out;
+}
+
+@keyframes update-chip-fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.update-chip__icon {
+    flex-shrink: 0;
+    opacity: 0.85;
+}
+
+.update-chip__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.update-chip__action {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.update-chip__action:hover,
+.update-chip__action:focus-visible {
+    color: #ffffff;
+    outline: none;
+}
+
+.update-chip__dismiss {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: inherit;
+    opacity: 0.55;
+    cursor: pointer;
+    padding: 2px;
+    margin-left: 2px;
+    border-radius: 50%;
+}
+
+.update-chip__dismiss:hover,
+.update-chip__dismiss:focus-visible {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.08);
+    outline: none;
+}
+
+/* Status variants ------------------------------------------------------- */
+
+.update-chip--available {
+    border-color: rgba(99, 179, 237, 0.4);
+}
+
+.update-chip--downloading {
+    border-color: rgba(99, 179, 237, 0.4);
+}
+
+.update-chip--ready {
+    background: rgba(46, 125, 50, 0.92);
+    border-color: rgba(129, 199, 132, 0.55);
+    color: #ffffff;
+}
+
+.update-chip--error {
+    background: rgba(100, 30, 30, 0.92);
+    border-color: rgba(239, 83, 80, 0.55);
+    color: #ffffff;
+}
+
+/* Light-theme overrides (mirrors ConnectionBanner.css conventions) */
+@media (prefers-color-scheme: light) {
+    .update-chip {
+        background: rgba(255, 255, 255, 0.96);
+        color: #1a1a2e;
+        border-color: rgba(0, 0, 0, 0.08);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    }
+
+    .update-chip--ready {
+        background: rgba(46, 125, 50, 0.96);
+        color: #ffffff;
+    }
+
+    .update-chip--error {
+        background: rgba(198, 40, 40, 0.96);
+        color: #ffffff;
+    }
+}

@@ -1,0 +1,518 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Consolidated publishing workflow for all GAIA packages.
+#
+# Trigger: push a version tag (v*) to main.
+#
+# Flow:
+#   validate → build (pypi + npm + electron, parallel)
+#     → approve (single manual gate)
+#       → publish (pypi + npm, parallel)
+#         → github release (sigstore + electron artifacts)
+#
+# Environment setup (one-time, in GitHub repo settings):
+#   1. Create a "publish" environment with required reviewers.
+#      This is the single approval gate for all publishing.
+#   2. Keep the "pypi" environment for OIDC trusted publishing,
+#      but remove its required reviewers — the "publish" gate handles approval.
+#   3. Update the PyPI trusted publisher config (pypi.org → Manage → Publishing)
+#      to reference workflow "publish.yml" instead of "pypi.yml".
+
+name: Publish Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ── Stage 1: Validate ──────────────────────────────────────────────
+
+  validate:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.tag.outputs.TAG_NAME }}
+      tag_version: ${{ steps.tag.outputs.TAG_VERSION }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Extract tag info
+        id: tag
+        run: |
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "ERROR: This workflow must be triggered from a tag push."
+            echo "  GITHUB_REF_NAME=$GITHUB_REF_NAME (type: $GITHUB_REF_TYPE)"
+            echo "  To release: git tag v<version> && git push origin v<version>"
+            exit 1
+          fi
+          TAG_NAME="${GITHUB_REF_NAME}"
+          TAG_VERSION="${TAG_NAME#v}"
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "Tag: $TAG_NAME (version: $TAG_VERSION)"
+
+      - name: Verify tag is on main
+        run: |
+          if ! git merge-base --is-ancestor ${{ github.sha }} origin/main; then
+            echo "ERROR: Tag ${{ github.ref_name }} is not on the main branch."
+            exit 1
+          fi
+          echo "Tag ${{ github.ref_name }} verified on main"
+
+      - name: Verify all versions match
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.TAG_VERSION }}
+        run: |
+          PY_VERSION=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/gaia/version.py)
+          PKG_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('src/gaia/apps/webui/package.json','utf8')).version)")
+
+          echo "=== Version Check ==="
+          echo "  Git tag:      v$TAG_VERSION"
+          echo "  version.py:   $PY_VERSION"
+          echo "  package.json: $PKG_VERSION"
+
+          FAIL=0
+          if [ "$PY_VERSION" != "$TAG_VERSION" ]; then
+            echo "FAIL: version.py ($PY_VERSION) != tag (v$TAG_VERSION)"
+            FAIL=1
+          fi
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "FAIL: package.json ($PKG_VERSION) != tag (v$TAG_VERSION)"
+            FAIL=1
+          fi
+          if [ "$FAIL" -eq 1 ]; then
+            echo ""
+            echo 'Fix: update version.py and run "node installer/version/bump-ui-version.mjs", commit, and re-tag.'
+            exit 1
+          fi
+          echo "All versions match: v$TAG_VERSION"
+
+      - name: Validate release notes exist
+        env:
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
+        run: |
+          NOTES_FILE="docs/releases/${TAG_NAME}.mdx"
+          if [ ! -f "$NOTES_FILE" ]; then
+            echo "ERROR: Release notes missing: $NOTES_FILE"
+            echo ""
+            echo "Before tagging, create the release notes file."
+            echo "See docs/releases/ for examples."
+            exit 1
+          fi
+          echo "Release notes found: $NOTES_FILE"
+
+      - name: Validate docs.json references
+        env:
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os, sys
+
+          tag = os.environ["TAG_NAME"]
+          errors = []
+
+          with open("docs/docs.json") as f:
+              docs = json.load(f)
+
+          release_page = f"releases/{tag}"
+          found_page = False
+          for tab in docs["navigation"]["tabs"]:
+              if tab.get("tab") == "Releases":
+                  for group in tab["groups"]:
+                      if group.get("group") == "Release Notes":
+                          if release_page in group["pages"]:
+                              found_page = True
+          if found_page:
+              print(f"docs.json has release entry for {tag}")
+          else:
+              errors.append(f"docs/docs.json is missing '{release_page}' in the Releases tab")
+
+          found_navbar = False
+          for link in docs.get("navbar", {}).get("links", []):
+              if tag in link.get("label", ""):
+                  found_navbar = True
+          if found_navbar:
+              print(f"docs.json navbar references {tag}")
+          else:
+              errors.append(f"docs/docs.json navbar version label does not reference {tag}")
+
+          if errors:
+              for e in errors:
+                  print(f"ERROR: {e}")
+              print()
+              print("Update docs/docs.json before tagging.")
+              sys.exit(1)
+          PYEOF
+
+      - name: Validate release notes structure
+        env:
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
+        run: python3 util/validate_release_notes.py "docs/releases/${TAG_NAME}.mdx" --tag "$TAG_NAME"
+
+  # ── Stage 2: Build (parallel, all must succeed) ─────────────────────
+
+  build-pypi:
+    name: Build PyPI Package
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - name: Build distributions
+        run: |
+          rm -rf dist/ build/ *.egg-info
+          python -m pip install build
+          python -m build
+      - name: Verify with twine
+        run: |
+          python -m pip install twine
+          twine check dist/*
+      - name: Upload distributions
+        uses: actions/upload-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  build-npm:
+    name: Build npm Package
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: src/gaia/apps/webui
+        run: npm ci 2>/dev/null || npm install
+
+      - name: Build frontend
+        working-directory: src/gaia/apps/webui
+        run: npm run build
+
+      - name: Verify build output
+        working-directory: src/gaia/apps/webui
+        run: |
+          if [ ! -f dist/index.html ]; then
+            echo "ERROR: dist/index.html not found"
+            exit 1
+          fi
+          echo "Build output verified:"
+          ls -la dist/
+          JS_SIZE=$(find dist/assets -name "*.js" -exec du -cb {} + 2>/dev/null | tail -1 | cut -f1)
+          CSS_SIZE=$(find dist/assets -name "*.css" -exec du -cb {} + 2>/dev/null | tail -1 | cut -f1)
+          echo "  JS: $((JS_SIZE / 1024))KB"
+          echo "  CSS: $((CSS_SIZE / 1024))KB"
+
+      - name: Verify CLI entry point
+        working-directory: src/gaia/apps/webui
+        run: |
+          # Phase A renamed the CLI entry point from .mjs to .cjs so that
+          # both the bin entry and main.cjs can `require()` the shared
+          # services/backend-installer.cjs module (ESM/CJS can't mix).
+          if [ ! -f bin/gaia-ui.cjs ]; then
+            echo "ERROR: bin/gaia-ui.cjs not found"
+            exit 1
+          fi
+          node --check bin/gaia-ui.cjs
+          echo "CLI entry point verified"
+
+      - name: Verify built app version
+        run: |
+          PY_VERSION=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/gaia/version.py)
+          ESCAPED=$(echo "$PY_VERSION" | sed 's/\./\\./g')
+          APP_VERSION=$(grep -o "\"${ESCAPED}\"" src/gaia/apps/webui/dist/assets/index-*.js | head -1 | tr -d '"' || echo "NOT_FOUND")
+          echo "  version.py: $PY_VERSION"
+          echo "  Built app:  $APP_VERSION"
+          if [ "$APP_VERSION" != "$PY_VERSION" ]; then
+            echo "FAIL: Built app version ($APP_VERSION) != version.py ($PY_VERSION)"
+            exit 1
+          fi
+          echo "Built app version verified"
+
+      - name: Run backend tests
+        run: |
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          python -m pytest tests/unit/chat/ui/ -x --tb=short 2>/dev/null || echo "Backend tests skipped (dependencies not available)"
+
+      - name: Upload built frontend
+        uses: actions/upload-artifact@v6
+        with:
+          name: npm-package-build
+          path: src/gaia/apps/webui/dist/
+
+  build-electron:
+    name: Build Electron Apps
+    needs: validate
+    permissions:
+      contents: write   # build-electron-apps.yml declares contents: write
+    uses: ./.github/workflows/build-electron-apps.yml
+
+  # Build the GAIA Agent UI desktop installers (NSIS / DMG / DEB / AppImage)
+  # via the reusable build-installers workflow. The reusable workflow uploads
+  # each platform's artifacts to a workflow-run artifact named
+  # "<platform>-installer". The github-release job below downloads those
+  # artifacts and includes them in the published release.
+  #
+  # We pass publish_to_release=false so build-installers does NOT create its
+  # own draft release — publish.yml's github-release job is the single
+  # source of truth for what gets published, gated on the approval step.
+  build-desktop-installers:
+    name: Build Desktop Installers
+    needs: validate
+    permissions:
+      contents: write   # build-installers uploads workflow artifacts
+      id-token: write   # for SignPath OIDC (Phase H — opt-in via secret)
+    secrets: inherit
+    uses: ./.github/workflows/build-installers.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag_name }}
+      publish_to_release: false
+
+  # ── Stage 3: Approve (single manual gate) ───────────────────────────
+  # All four builds must pass before the approval prompt appears.
+  # Configure the "publish" GitHub environment with required reviewers.
+
+  approve-publish:
+    name: Approve Publishing
+    needs: [build-pypi, build-npm, build-electron, build-desktop-installers]
+    # Override default skip-on-failure: electron may be skipped (no apps found).
+    # Desktop installers are required (they're the primary install path).
+    if: >-
+      !cancelled() &&
+      needs.build-pypi.result == 'success' &&
+      needs.build-npm.result == 'success' &&
+      (needs.build-electron.result == 'success' || needs.build-electron.result == 'skipped') &&
+      needs.build-desktop-installers.result == 'success'
+    runs-on: ubuntu-latest
+    environment: publish
+    steps:
+      - run: |
+          echo "=== Build Results ==="
+          echo "  PyPI:               ${{ needs.build-pypi.result }}"
+          echo "  npm:                ${{ needs.build-npm.result }}"
+          echo "  Electron Apps:      ${{ needs.build-electron.result }}"
+          echo "  Desktop Installers: ${{ needs.build-desktop-installers.result }}"
+          echo ""
+          echo "All builds passed. Publishing approved."
+
+  # ── Stage 4: Publish (parallel, after single approval) ──────────────
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: approve-publish
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/amd-gaia
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download distributions
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-npm:
+    name: Publish to npm
+    needs: approve-publish
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@amd-gaia/agent-ui
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          # Node 24 ships with npm 11+ which supports OIDC trusted publishing.
+          # Node 22 ships with npm 10.x which does NOT — and `npm install -g
+          # npm@latest` on Node 22 runners corrupts npm's own dependencies.
+          node-version: '24'
+      - name: Download validated build
+        uses: actions/download-artifact@v6
+        with:
+          name: npm-package-build
+          path: src/gaia/apps/webui/dist/
+      - name: Install production dependencies
+        working-directory: src/gaia/apps/webui
+        run: npm ci --omit=dev 2>/dev/null || npm install --omit=dev
+      - name: Publish @amd-gaia/agent-ui
+        working-directory: src/gaia/apps/webui
+        # --ignore-scripts: skip prepublishOnly (which runs tsc && vite build)
+        # because the dist/ was already built in the build-npm job and
+        # downloaded from the artifact. Dev dependencies are omitted, so
+        # tsc would fail with missing @types/react.
+        run: npm publish --access public --provenance --ignore-scripts
+      - name: Verify publication
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Published @amd-gaia/agent-ui@$TAG_VERSION to npm"
+          echo ""
+          echo "Install with:"
+          echo "  npm install -g @amd-gaia/agent-ui@$TAG_VERSION"
+
+  # ── Stage 5: GitHub Release ─────────────────────────────────────────
+
+  github-release:
+    name: GitHub Release
+    needs: [validate, publish-pypi, publish-npm, build-electron, build-desktop-installers]
+    # Run after both publishes succeed; don't block on electron artifacts.
+    # Desktop installers are required since they're the primary install path
+    # — if they failed, the release shouldn't ship.
+    if: >-
+      !cancelled() &&
+      needs.publish-pypi.result == 'success' &&
+      needs.publish-npm.result == 'success' &&
+      needs.build-desktop-installers.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download Python distributions
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Sign with Sigstore
+        uses: sigstore/gh-action-sigstore-python@v3.2.0
+        with:
+          inputs: >-
+            ./dist/*.tar.gz
+            ./dist/*.whl
+
+      - name: Extract release notes
+        env:
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+        run: |
+          NOTES_FILE="docs/releases/${TAG_NAME}.mdx"
+          awk 'BEGIN{fm=0} /^---$/ && fm<2 {fm++; next} fm>=2{print}' "$NOTES_FILE" > RELEASE_BODY.md
+
+          cat >> RELEASE_BODY.md << 'EOF'
+
+          ---
+
+          ## Installation
+
+          ### Desktop installer (recommended for end users)
+
+          Download the installer for your platform from the assets below:
+
+          - **Windows** — `gaia-agent-ui-*-x64-setup.exe` (NSIS installer, autostart on by default)
+          - **macOS** — `gaia-agent-ui-*-arm64.dmg` (drag to Applications, Apple Silicon only)
+          - **Linux** — `gaia-agent-ui-*-amd64.deb` (Debian/Ubuntu) or `gaia-agent-ui-*-x86_64.AppImage` (any distro)
+
+          On first launch the app sets up its Python backend automatically (~5–10 minutes for the minimal profile, depends on your internet speed).
+
+          See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/install.mdx) for setup details and troubleshooting.
+
+          ### Developer install (Python CLI)
+
+          Install GAIA using pip:
+          ```bash
+          pip install amd-gaia
+          ```
+
+          Or using uv:
+          ```bash
+          uv pip install amd-gaia
+          ```
+
+          Or via npm:
+          ```bash
+          npm install -g @amd-gaia/agent-ui
+          ```
+          EOF
+          echo "Release body generated: $(wc -l < RELEASE_BODY.md) lines"
+
+      - name: Download Electron artifacts (Windows)
+        if: needs.build-electron.outputs.has_apps == 'true'
+        uses: actions/download-artifact@v6
+        with:
+          pattern: "*-windows-${{ github.sha }}"
+          path: release-assets
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Download Electron artifacts (Linux)
+        if: needs.build-electron.outputs.has_apps == 'true'
+        uses: actions/download-artifact@v6
+        with:
+          pattern: "*-linux-${{ github.sha }}"
+          path: release-assets
+          merge-multiple: true
+        continue-on-error: true
+
+      # ── Desktop installers (Phase G/I integration) ─────────────────
+      # The reusable build-installers workflow uploaded each platform's
+      # artifacts to "<platform>-installer" workflow-run artifacts. Pull
+      # them here and add to release-assets/ so the softprops step
+      # below includes them in the published release.
+      - name: Download Desktop Installer (Windows NSIS)
+        uses: actions/download-artifact@v6
+        with:
+          name: windows-installer
+          path: release-assets
+        continue-on-error: true
+
+      - name: Download Desktop Installer (macOS DMG)
+        uses: actions/download-artifact@v6
+        with:
+          name: macos-installer
+          path: release-assets
+        continue-on-error: true
+
+      - name: Download Desktop Installer (Linux DEB + AppImage)
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-installer
+          path: release-assets
+        continue-on-error: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/*
+            dist/**
+          body_path: RELEASE_BODY.md

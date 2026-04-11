@@ -11,6 +11,8 @@
  *   agent:*          — Agent process management (T2)
  *   tray:*           — Tray icon/config (T1)
  *   notification:*   — Desktop notifications & permission prompts (T5)
+ *   install:*        — First-run backend install progress (Phase A)
+ *   gaia:update:*    — Auto-update status & manual check (Phase F)
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -57,5 +59,45 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
     respondPermission: (id, action, remember) =>
       ipcRenderer.invoke("notification:respond", id, action, remember),
     onNotification: (cb) => onEvent("notification:new", cb),
+  },
+});
+
+// ── Install progress (Phase A) ──────────────────────────────────────────
+// Exposed as a separate global so the progress window can use it without
+// pulling in the full gaiaAPI surface (and so it keeps working if an
+// install dialog runs before the main window is ready).
+contextBridge.exposeInMainWorld("gaiaInstall", {
+  // Subscribe to progress updates. Returns an unsubscribe function.
+  onProgress: (cb) => onEvent("install:progress", cb),
+
+  // Query the current install state (state machine + log/state paths).
+  status: () => ipcRenderer.invoke("install:status"),
+
+  // Copy the log file path to the clipboard.
+  copyLogPath: () => ipcRenderer.invoke("install:copy-log-path"),
+
+  // Open the log file in the OS's default viewer.
+  openLogFile: () => ipcRenderer.invoke("install:open-log-file"),
+});
+
+// ── Auto-update (Phase F) ───────────────────────────────────────────────
+// Exposed as a separate global so the renderer can show a small "update
+// available" chip without pulling in the full gaiaAPI surface. Mirrors
+// the naming convention (gaiaInstall, gaiaUpdater, gaiaAPI).
+contextBridge.exposeInMainWorld("gaiaUpdater", {
+  /** Get the current update state (status, version, progress, error). */
+  getStatus: () => ipcRenderer.invoke("gaia:update:get-status"),
+
+  /** Manually trigger a check. Resolves with the post-check state. */
+  check: () => ipcRenderer.invoke("gaia:update:check"),
+
+  /**
+   * Subscribe to status changes. The callback is invoked with the full
+   * state object on every state transition. Returns an unsubscribe fn.
+   */
+  onStatusChange: (callback) => {
+    const handler = (_event, state) => callback(state);
+    ipcRenderer.on("gaia:update:status", handler);
+    return () => ipcRenderer.removeListener("gaia:update:status", handler);
   },
 });

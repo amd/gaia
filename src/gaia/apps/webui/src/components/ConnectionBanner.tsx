@@ -63,6 +63,24 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         if (shouldReset) setDismissed(false);
     }, [systemStatus, hasActiveConversation]);
 
+    // Case 0: Boot-time initialization in progress.
+    // Takes priority over all other cases (including dismiss and active-conversation suppression)
+    // because the system is not yet ready to serve requests.
+    if (systemStatus?.init_state === 'initializing') {
+        const runningTask = systemStatus.init_tasks?.find(t => t.status === 'running');
+        const label = runningTask?.name || 'Preparing AI system';
+        return (
+            <div className="connection-banner connection-banner--init" role="status">
+                <div className="connection-banner__icon">
+                    <Loader2 size={16} className="connection-banner__spinner" />
+                </div>
+                <div className="connection-banner__text">
+                    {label}<span className="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
+                </div>
+            </div>
+        );
+    }
+
     // Nothing to show
     if (dismissed) return null;
 
@@ -77,7 +95,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                     <WifiOff size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    Cannot connect to GAIA Agent UI server.{' '}
+                    Cannot connect to GAIA server.{' '}
                     <span className="connection-banner__hint">
                         Start it with: <code>gaia chat --ui</code>
                     </span>

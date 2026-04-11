@@ -7,6 +7,47 @@ icon: "circle-question"
 ## Installation and Setup
 
 <AccordionGroup>
+  <Accordion title="Where are my chats stored?" icon="database">
+    Your chat database is at `~/.gaia/chat/chat.db` (a SQLite file). It is never sent off your machine. Documents you upload are at `~/.gaia/documents/`.
+
+    See the [installation guide](/guides/install#where-things-live) for the full list of where GAIA stores data on your machine.
+  </Accordion>
+
+  <Accordion title="How do I uninstall GAIA?" icon="trash">
+    See the [installation guide](/guides/install#uninstalling) for platform-specific instructions:
+
+    - **Windows:** Settings → Apps → Installed apps → GAIA → Uninstall
+    - **macOS:** Drag GAIA from `/Applications` to the Trash
+    - **Linux (Debian/Ubuntu):** `sudo apt remove gaia-desktop` (or `apt purge` to also remove data)
+    - **Linux (AppImage):** Delete the `.AppImage` file
+
+    By default, uninstalling keeps your chats and documents. To remove everything, run `~/.gaia/venv/bin/gaia uninstall --purge` from a terminal.
+  </Accordion>
+
+  <Accordion title="Why is the first launch slow?" icon="hourglass">
+    The first time you launch GAIA Agent UI, it automatically sets up its Python backend — downloads `uv`, creates a Python 3.12 virtualenv at `~/.gaia/venv/`, installs the `amd-gaia[ui]` package, downloads the Lemonade Server, and downloads a minimal model.
+
+    This takes about **5-10 minutes** depending on your internet speed. **Subsequent launches are instant** — the app reuses the installed environment. See the [installation guide](/guides/install#first-launch-setup) for a breakdown of each stage.
+  </Accordion>
+
+  <Accordion title="Does GAIA send my data anywhere?" icon="shield">
+    **No.** GAIA runs entirely on your machine. There is no telemetry, no crash reporting, and no usage analytics.
+
+    The only network traffic is package downloads during install (from PyPI, npm, GitHub, and Astral's `uv` distribution). Once installed, GAIA can run fully offline. This is a deliberate design choice — see §2 of the [desktop installer plan](/plans/desktop-installer) for the rationale.
+  </Accordion>
+
+  <Accordion title="How do I install GAIA on a machine without internet?" icon="wifi">
+    The first-launch install requires internet to download Python and the GAIA backend. For offline installation, you would need to pre-download the Python wheels and models — this is not currently supported as a one-click flow.
+
+    [Open an issue](https://github.com/amd/gaia/issues/new) if you need this capability; we're tracking demand for an offline bundle.
+  </Accordion>
+
+  <Accordion title="How do I update GAIA?" icon="arrow-up">
+    GAIA Agent UI checks for updates automatically (10 seconds after launch, then every 4 hours) and notifies you in the status bar. Click **Restart to update** when prompted — your chat history is preserved across updates.
+
+    To disable auto-updates, set the environment variable `GAIA_DISABLE_UPDATE=1` before launching. To trigger a manual check, the developer command is `gaia update --check`. See the [installation guide](/guides/install#updating-gaia) for more.
+  </Accordion>
+
   <Accordion title="Can I reinstall GAIA?" icon="rotate">
     Yes, you can reinstall GAIA. The installer provides an option to remove your existing installation before reinstalling.
   </Accordion>
