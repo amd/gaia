@@ -9,6 +9,7 @@ Test suite for GAIA RAG (Retrieval-Augmented Generation) functionality
 import os
 import pickle
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -465,6 +466,111 @@ class TestRAGSDK:
                 assert status["indexed_files"] == 0
                 assert status["total_chunks"] == 0
                 assert status["cache_dir"] == temp_dir
+
+    def test_query_uses_consistent_snapshot_during_state_swap(self, mock_dependencies):
+        """Test that query returns data from one consistent snapshot."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                old_file = str((Path(temp_dir) / "old.md").absolute())
+                new_file = str((Path(temp_dir) / "new.md").absolute())
+                old_index = Mock()
+                search_started = threading.Event()
+                allow_finish = threading.Event()
+
+                def _search(*_args, **_kwargs):
+                    search_started.set()
+                    assert allow_finish.wait(timeout=1.0)
+                    return np.array([[0.25]]), np.array([[0]])
+
+                old_index.search.side_effect = _search
+                rag.index = old_index
+                rag.chunks = ["old chunk"]
+                rag.chunk_to_file = {0: old_file}
+                rag.indexed_files = {old_file}
+
+                result = {}
+
+                def _run_query():
+                    result["response"] = rag.query("What changed?")
+
+                worker = threading.Thread(target=_run_query)
+                worker.start()
+
+                assert search_started.wait(timeout=1.0)
+
+                with rag._state_lock:
+                    rag.index = Mock()
+                    rag.chunks = ["new chunk"]
+                    rag.chunk_to_file = {0: new_file}
+                    rag.indexed_files = {new_file}
+
+                allow_finish.set()
+                worker.join(timeout=1.0)
+
+                assert "response" in result
+                response = result["response"]
+                assert response.chunks == ["old chunk"]
+                assert response.source_files == ["old.md"]
+                assert response.query_metadata["source_files"] == ["old.md"]
+                assert response.query_metadata["total_indexed_files"] == 1
+                assert response.query_metadata["total_indexed_chunks"] == 1
+
+    def test_remove_document_preserves_state_when_rebuild_fails(
+        self, mock_dependencies
+    ):
+        """Test that failed rebuilds do not publish partial remove state."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                file_a = str((Path(temp_dir) / "doc_a.md").absolute())
+                file_b = str((Path(temp_dir) / "doc_b.md").absolute())
+                original_index = Mock()
+
+                rag.index = original_index
+                rag.chunks = ["chunk-a", "chunk-b"]
+                rag.indexed_files = {file_a, file_b}
+                rag.file_to_chunk_indices = {file_a: [0], file_b: [1]}
+                rag.chunk_to_file = {0: file_a, 1: file_b}
+                rag.file_indices = {file_a: Mock(), file_b: Mock()}
+                rag.file_embeddings = {
+                    file_a: np.array([[0.1, 0.2, 0.3, 0.4]]),
+                    file_b: np.array([[0.5, 0.6, 0.7, 0.8]]),
+                }
+                rag.file_metadata = {
+                    file_a: {"full_text": "A"},
+                    file_b: {"full_text": "B"},
+                }
+                rag.file_access_times = {file_a: 1, file_b: 2}
+                rag.file_index_times = {file_a: 1.0, file_b: 2.0}
+
+                with patch.object(
+                    rag, "_create_vector_index", side_effect=RuntimeError("boom")
+                ):
+                    assert rag.remove_document(file_a) is False
+
+                assert rag.index is original_index
+                assert rag.chunks == ["chunk-a", "chunk-b"]
+                assert rag.indexed_files == {file_a, file_b}
+                assert rag.file_to_chunk_indices == {file_a: [0], file_b: [1]}
+                assert rag.chunk_to_file == {0: file_a, 1: file_b}
+                assert file_a in rag.file_indices
+                assert file_a in rag.file_embeddings
+                assert file_a in rag.file_metadata
+                assert rag.file_access_times[file_a] == 1
+                assert rag.file_index_times[file_a] == 1.0
 
 
 class TestQuickRAG:
