@@ -240,7 +240,16 @@ jobs:
           # try to sign with a random keychain cert on CI runners.
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ env.APPLE_ID != '' && 'true' || 'false' }}
         # --publish never: we upload artifacts ourselves via action-gh-release.
-        run: npm run ${{ matrix.npm_script }} -- --publish never
+        # On macOS without signing secrets, pass identity=null to skip signing
+        # entirely. electron-builder auto-skips for PRs but NOT for tag pushes,
+        # so without this flag non-PR unsigned builds fail with "not a file".
+        run: |
+          EXTRA_ARGS=""
+          if [ "${{ matrix.platform }}" = "macos" ] && [ -z "$APPLE_ID" ]; then
+            echo "No APPLE_ID set — skipping macOS code signing (identity=null)"
+            EXTRA_ARGS="--config.mac.identity=null"
+          fi
+          npm run ${{ matrix.npm_script }} -- --publish never $EXTRA_ARGS
 
       # ─── Inspect build output ───────────────────────────────────────
       - name: List build artifacts
