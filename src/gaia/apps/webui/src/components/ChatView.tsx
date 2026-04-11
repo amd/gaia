@@ -14,6 +14,45 @@ import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
 import './ChatView.css';
 
+/** Cache for getComputedStyle results — avoids repeated style recalculations
+ *  for the same textarea element since its styles rarely change. */
+const _computedStyleCache = new WeakMap<HTMLTextAreaElement, CSSStyleDeclaration>();
+
+/** Returns the pixel {x, y} of the caret inside a textarea, measured from the
+ *  textarea's top-left corner (including its padding). Uses a hidden mirror div
+ *  with matching styles so the result works for any font and multiline input.
+ *  Accounts for scrollTop so the position stays correct when content overflows. */
+function getCaretXY(el: HTMLTextAreaElement): { x: number; y: number } {
+    const sel = el.selectionStart ?? 0;
+    let computed = _computedStyleCache.get(el);
+    if (!computed) {
+        computed = window.getComputedStyle(el);
+        _computedStyleCache.set(el, computed);
+    }
+    const mirror = document.createElement('div');
+    mirror.style.cssText = [
+        'position:absolute', 'visibility:hidden', 'overflow:hidden',
+        'white-space:pre-wrap', 'word-wrap:break-word',
+        'top:-9999px', 'left:-9999px',
+        `box-sizing:${computed.boxSizing}`,
+        `width:${computed.width}`,
+        `padding:${computed.padding}`,
+        `border:${computed.border}`,
+        `font:${computed.font}`,
+        `line-height:${computed.lineHeight}`,
+        `letter-spacing:${computed.letterSpacing}`,
+        `word-spacing:${computed.wordSpacing}`,
+    ].join(';');
+    mirror.appendChild(document.createTextNode(el.value.substring(0, sel)));
+    const marker = document.createElement('span');
+    marker.textContent = '\u200b';
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+    const coords = { x: marker.offsetLeft, y: marker.offsetTop - el.scrollTop };
+    document.body.removeChild(mirror);
+    return coords;
+}
+
 const EMPTY_SUGGESTIONS = [
     'Summarize a document',
     'Find a file on my computer',
@@ -142,6 +181,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useState('');
+    const [caret, setCaret] = useState({ x: 0, y: 0, focused: false });
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -218,6 +258,16 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
+    const caretRafRef = useRef<number>(0);
+    const updateCaret = useCallback(() => {
+        cancelAnimationFrame(caretRafRef.current);
+        caretRafRef.current = requestAnimationFrame(() => {
+            if (!inputRef.current) return;
+            const { x, y } = getCaretXY(inputRef.current);
+            setCaret(prev => ({ ...prev, x, y }));
+        });
+    }, []);
+    useEffect(() => () => cancelAnimationFrame(caretRafRef.current), []);
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
     const toolOccurredRef = useRef(false);
@@ -229,7 +279,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // (which can be hundreds/sec), dramatically reducing DOM mutations
     // and eliminating extension-triggered "runtime.lastError" floods.
     const streamBufferRef = useRef('');
-    const rafRef = useRef<number | null>(null);
+    const streamRafRef = useRef<number | null>(null);
     const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     /** Timestamp of the last auto-scroll (used for throttling). */
     const lastScrollRef = useRef(0);
@@ -239,7 +289,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const isNearBottomRef = useRef(true);
 
     const flushStreamBuffer = useCallback(() => {
-        rafRef.current = null;
+        streamRafRef.current = null;
         if (streamBufferRef.current) {
             setStreamContent(streamBufferRef.current);
         }
@@ -354,9 +404,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 abortRef.current.abort();
                 abortRef.current = null;
             }
-            if (rafRef.current !== null) {
-                cancelAnimationFrame(rafRef.current);
-                rafRef.current = null;
+            if (streamRafRef.current !== null) {
+                cancelAnimationFrame(streamRafRef.current);
+                streamRafRef.current = null;
             }
             if (scrollTimerRef.current) {
                 clearTimeout(scrollTimerRef.current);
@@ -394,9 +444,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             abortRef.current = null;
         }
         // Cancel any pending rAF flush
-        if (rafRef.current !== null) {
-            cancelAnimationFrame(rafRef.current);
-            rafRef.current = null;
+        if (streamRafRef.current !== null) {
+            cancelAnimationFrame(streamRafRef.current);
+            streamRafRef.current = null;
         }
         // Use the buffer (most up-to-date) or fall back to store content
         const storeState = useChatStore.getState();
@@ -444,6 +494,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         const el = e.target;
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+        updateCaret();
     };
 
     // Handle clipboard paste (screenshots)
@@ -658,8 +709,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     // Buffer chunks and flush to store at most once per frame (~60fps)
                     // instead of triggering a React re-render on every single SSE chunk
                     streamBufferRef.current = cleaned;
-                    if (rafRef.current === null) {
-                        rafRef.current = requestAnimationFrame(flushStreamBuffer);
+                    if (streamRafRef.current === null) {
+                        streamRafRef.current = requestAnimationFrame(flushStreamBuffer);
                     }
                 }
             },
@@ -861,9 +912,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 doneHandled = true;
 
                 // Cancel any pending rAF flush — we have the final content
-                if (rafRef.current !== null) {
-                    cancelAnimationFrame(rafRef.current);
-                    rafRef.current = null;
+                if (streamRafRef.current !== null) {
+                    cancelAnimationFrame(streamRafRef.current);
+                    streamRafRef.current = null;
                 }
                 streamBufferRef.current = '';
 
@@ -928,9 +979,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             },
             onError: (err) => {
                 // Cancel any pending rAF flush
-                if (rafRef.current !== null) {
-                    cancelAnimationFrame(rafRef.current);
-                    rafRef.current = null;
+                if (streamRafRef.current !== null) {
+                    cancelAnimationFrame(streamRafRef.current);
+                    streamRafRef.current = null;
                 }
                 streamBufferRef.current = '';
 
@@ -1460,13 +1511,23 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
                             onPaste={handlePaste}
+                            onSelect={updateCaret}
+                            onFocus={() => { setCaret(prev => ({ ...prev, focused: true })); updateCaret(); }}
+                            onBlur={() => setCaret(prev => ({ ...prev, focused: false }))}
                             placeholder="Type a message or paste an image... (Shift+Enter for new line)"
                             rows={1}
                             disabled={isStreaming || systemStatus?.init_state === 'initializing'}
                             aria-label="Message input"
+                            style={{ caretColor: 'transparent' }}
                         />
+                        {!isStreaming && caret.focused && (
+                            <span
+                                className="input-cursor"
+                                style={{ left: `${caret.x}px`, top: `${caret.y}px` }}
+                                aria-hidden="true"
+                            />
+                        )}
                     </div>
-                    {!isStreaming && <span className="input-cursor" aria-hidden="true" />}
                     <div className="input-btns">
                         <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">
                             <Upload size={15} />

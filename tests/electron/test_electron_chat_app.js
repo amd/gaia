@@ -476,16 +476,16 @@ describe('Chat App Integration', () => {
     });
 
     it('should have React as dependency', () => {
-      expect(pkg.dependencies.react).toBeDefined();
-      expect(pkg.dependencies['react-dom']).toBeDefined();
+      expect(pkg.devDependencies.react).toBeDefined();
+      expect(pkg.devDependencies['react-dom']).toBeDefined();
     });
 
     it('should have Zustand for state management', () => {
-      expect(pkg.dependencies.zustand).toBeDefined();
+      expect(pkg.devDependencies.zustand).toBeDefined();
     });
 
     it('should have lucide-react for icons', () => {
-      expect(pkg.dependencies['lucide-react']).toBeDefined();
+      expect(pkg.devDependencies['lucide-react']).toBeDefined();
     });
 
     it('should have TypeScript as devDependency', () => {
@@ -1115,6 +1115,13 @@ describe('Chat App Integration', () => {
 
     it('should have chat title overflow handling', () => {
       expect(chatCss).toContain('text-overflow: ellipsis');
+    });
+
+    it('should have terminal block cursor tracking caret position', () => {
+      expect(chatCss).toContain('.input-cursor');
+      expect(chatCss).toContain('position: absolute');
+      expect(chatCss).toContain('pointer-events: none');
+      expect(chatCss).toContain('width: 10px');
     });
   });
 
