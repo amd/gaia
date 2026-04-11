@@ -369,7 +369,11 @@ jobs:
         run: npm ci --omit=dev 2>/dev/null || npm install --omit=dev
       - name: Publish @amd-gaia/agent-ui
         working-directory: src/gaia/apps/webui
-        run: npm publish --access public --provenance
+        # --ignore-scripts: skip prepublishOnly (which runs tsc && vite build)
+        # because the dist/ was already built in the build-npm job and
+        # downloaded from the artifact. Dev dependencies are omitted, so
+        # tsc would fail with missing @types/react.
+        run: npm publish --access public --provenance --ignore-scripts
       - name: Verify publication
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
