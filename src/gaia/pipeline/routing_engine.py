@@ -7,7 +7,7 @@ Routes defects to appropriate agents and phases based on type, severity, and con
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.registry import AgentRegistry
 from gaia.pipeline.defect_types import (
@@ -15,6 +15,16 @@ from gaia.pipeline.defect_types import (
     DefectType,
     defect_type_from_string,
     get_defect_specialists,
+)
+from gaia.resilience import (
+    Bulkhead,
+    BulkheadConfig,
+    BulkheadFullError,
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitOpenError,
+    RetryConfig,
+    retry,
 )
 from gaia.utils.logging import get_logger
 
@@ -377,6 +387,21 @@ class RoutingEngine:
         # Sort by priority (lower = higher priority)
         self._rules.sort(key=lambda r: r.priority)
 
+        # Resilience primitives — protect routing from cascading failures
+        self._routing_circuit_breaker = CircuitBreaker(
+            CircuitBreakerConfig(
+                failure_threshold=5,
+                recovery_timeout=30.0,
+                success_threshold=2,
+            )
+        )
+        self._routing_bulkhead = Bulkhead(
+            BulkheadConfig(max_concurrency=10, acquire_timeout=5.0)
+        )
+        self._routing_retry_config = RetryConfig(
+            max_retries=3, base_delay=1.0, max_delay=10.0
+        )
+
         logger.info(
             "RoutingEngine initialized",
             extra={
@@ -469,6 +494,47 @@ class RoutingEngine:
         )
 
         return decision
+
+    def route_defect_resilient(
+        self,
+        defect: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> RoutingDecision:
+        """
+        Route a defect through the full resilience stack.
+
+        Wraps ``route_defect()`` with circuit breaker, bulkhead, and retry
+        to protect against cascading failures during pipeline execution.
+
+        Args:
+            defect: Defect dictionary with at least 'description' field
+            context: Optional context (current_phase, severity, etc.)
+
+        Returns:
+            RoutingDecision with routing instructions
+
+        Raises:
+            CircuitOpenError: If circuit breaker is open (routing engine failing)
+            BulkheadFullError: If too many concurrent routing operations
+        """
+        # Build the resilience-wrapped callable once, then execute it.
+        # Circuit breaker wraps bulkhead wraps retry wraps route_defect.
+        route_callable = self._make_resilient_route(defect, context)
+        return self._routing_circuit_breaker.call(
+            lambda: self._routing_bulkhead.execute(route_callable)
+        )
+
+    def _make_resilient_route(
+        self,
+        defect: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Callable[[], RoutingDecision]:
+        """Create a retry-wrapped callable for bulkhead/circuit breaker."""
+        @retry(self._routing_retry_config)
+        def _route_with_retry():
+            return self.route_defect(defect, context)
+
+        return _route_with_retry
 
     def route_defects(
         self,

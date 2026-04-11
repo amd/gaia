@@ -4,47 +4,43 @@ agent:
   version: 1.0.0
   category: review
   model_id: Qwen3-0.6B-GGUF
-  description: |
-    Security specialist that identifies vulnerabilities,
+  description: 'Security specialist that identifies vulnerabilities,
+
     security risks, and compliance issues.
 
+    '
   triggers:
     keywords:
-      - security
-      - vulnerability
-      - audit
-      - penetration
-      - owasp
-      - encryption
-      - authentication
+    - security
+    - vulnerability
+    - audit
+    - penetration
+    - owasp
+    - encryption
+    - authentication
     phases:
-      - QUALITY
-      - REVIEW
+    - QUALITY
+    - REVIEW
     complexity_range:
       min: 0.3
       max: 1.0
-
   capabilities:
-    - security-audit
-    - vulnerability-detection
-    - compliance-check
-    - threat-modeling
-
+  - security-audit
+  - vulnerability-detection
+  - compliance-audit
+  - threat-modeling
   system_prompt: prompts/security-auditor.md
-
   tools:
-    - file_read
-    - security_scan
-    - dependency_check
-
+  - file_read
+  - security_scan
+  - dependency_check
   constraints:
     max_file_changes: 0
     requires_review: true
-
   metadata:
     author: GAIA Team
-    created: "2026-03-23"
+    created: '2026-03-23'
     tags:
-      - security
-      - audit
-      - vulnerability
+    - security
+    - audit
+    - vulnerability

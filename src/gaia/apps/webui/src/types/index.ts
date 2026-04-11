@@ -477,3 +477,67 @@ export interface PipelineAggregateMetrics {
     overall_health: number;
     recommendations: string[];
 }
+
+// ── Pipeline Execution Types ─────────────────────────────────────────────
+
+/** Pipeline execution status */
+export type PipelineStatus =
+    | 'initial'
+    | 'starting'
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'blocked';
+
+/** Pipeline stage identifier */
+export type PipelineStage =
+    | 'domain_analysis'
+    | 'workflow_modeling'
+    | 'loom_building'
+    | 'gap_detection'
+    | 'pipeline_execution';
+
+/** Pipeline event delivered via SSE */
+export interface PipelineEvent {
+    type: StreamEventType;
+    pipeline_id?: string;
+    status?: string;
+    message?: string;
+    step?: number;
+    total?: number;
+    content?: string;
+    tool?: string;
+    summary?: string;
+    result?: Record<string, unknown>;
+    elapsed?: number;
+}
+
+/** Request to execute a pipeline from the Agent UI */
+export interface PipelineRunRequest {
+    session_id: string;
+    task_description: string;
+    template_name?: string;
+    auto_spawn?: boolean;
+    stream?: boolean;
+}
+
+/** Response from non-streaming pipeline execution */
+export interface PipelineRunResponse {
+    pipeline_id: string;
+    status: string;
+    message: string;
+}
+
+/** Track of a single pipeline execution in the UI */
+export interface PipelineExecution {
+    id: string;
+    sessionId: string;
+    taskDescription: string;
+    status: PipelineStatus;
+    currentStage?: PipelineStage;
+    startTime: number;
+    endTime?: number;
+    events: PipelineEvent[];
+    result?: Record<string, unknown>;
+    error?: string;
+}

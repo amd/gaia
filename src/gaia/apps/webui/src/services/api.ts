@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateCreateRequest, TemplateUpdateRequest, PipelineMetricsResponse, PipelineMetricsHistory, PipelineAggregateMetrics } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateCreateRequest, TemplateUpdateRequest, PipelineMetricsResponse, PipelineMetricsHistory, PipelineAggregateMetrics, PipelineRunRequest, PipelineRunResponse, PipelineEvent } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -584,4 +584,125 @@ export async function getAgentSelections(pipelineId: string): Promise<{ phase: s
         alternatives: as.alternatives,
         timestamp: as.timestamp,
     }));
+}
+
+// ── Pipeline Execution (SSE Streaming) ─────────────────────────────────
+
+/** Callbacks for pipeline SSE streaming events. */
+export interface PipelineStreamCallbacks {
+    onStatus?: (event: PipelineEvent) => void;
+    onStep?: (event: PipelineEvent) => void;
+    onThinking?: (event: PipelineEvent) => void;
+    onToolStart?: (event: PipelineEvent) => void;
+    onToolEnd?: (event: PipelineEvent) => void;
+    onToolResult?: (event: PipelineEvent) => void;
+    onDone?: (event: PipelineEvent) => void;
+    onError?: (error: Error) => void;
+}
+
+/** Route SSE event type to appropriate callback key. */
+const PIPELINE_EVENT_MAP: Record<string, keyof PipelineStreamCallbacks> = {
+    status: 'onStatus',
+    step: 'onStep',
+    thinking: 'onThinking',
+    plan: 'onStatus',
+    tool_start: 'onToolStart',
+    tool_end: 'onToolEnd',
+    tool_result: 'onToolResult',
+    done: 'onDone',
+    error: 'onError',
+};
+
+/**
+ * Execute a pipeline with SSE streaming.
+ *
+ * Returns an AbortController so the caller can cancel the stream.
+ * Events are routed to the appropriate callback based on their type.
+ */
+export function runPipelineStream(
+    request: PipelineRunRequest,
+    callbacks: PipelineStreamCallbacks,
+): AbortController {
+    const controller = new AbortController();
+    const t = log.stream.time();
+    let eventCount = 0;
+
+    log.stream.info('Starting pipeline SSE stream', {
+        taskDescription: request.task_description,
+        sessionId: request.session_id,
+    });
+
+    fetch(`${API_BASE}/api/v1/pipeline/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+    })
+        .then(async (res) => {
+            log.stream.info(`Pipeline SSE connection opened -> HTTP ${res.status}`);
+
+            if (!res.ok) {
+                const errText = await res.text().catch(() => '');
+                log.stream.error(`Pipeline SSE failed: HTTP ${res.status}`, errText);
+                callbacks.onError?.(new Error(`HTTP ${res.status}: ${errText}`));
+                return;
+            }
+
+            const reader = res.body?.getReader();
+            if (!reader) {
+                callbacks.onError?.(new Error('No response body'));
+                return;
+            }
+
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        log.stream.timed(`Pipeline stream complete: ${eventCount} events`, t);
+                        break;
+                    }
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const raw = line.slice(6).trim();
+                            if (!raw) continue;
+                            try {
+                                const event: PipelineEvent = JSON.parse(raw);
+                                eventCount++;
+                                const cbKey = PIPELINE_EVENT_MAP[event.type] || 'onStatus';
+                                callbacks[cbKey]?.(event);
+                            } catch {
+                                log.stream.warn('Malformed pipeline SSE data', {
+                                    raw: raw.slice(0, 100),
+                                });
+                            }
+                        }
+                    }
+                }
+            } finally {
+                reader.releaseLock();
+            }
+        })
+        .catch((err) => {
+            if (err.name === 'AbortError') {
+                log.stream.warn(`Pipeline stream aborted after ${eventCount} events`);
+            } else {
+                log.stream.error('Pipeline stream fetch error', err);
+                callbacks.onError?.(err);
+            }
+        });
+
+    return controller;
+}
+
+/** Execute a pipeline without streaming (returns result after completion). */
+export async function runPipeline(request: PipelineRunRequest): Promise<PipelineRunResponse> {
+    return apiFetch('POST', '/api/v1/pipeline/run', { ...request, stream: false });
 }

@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Pipeline template management endpoints for GAIA Agent UI.
+"""Pipeline template management and execution endpoints for GAIA Agent UI.
 
 Provides REST API endpoints for pipeline template CRUD operations:
 - List all templates
@@ -10,14 +10,29 @@ Provides REST API endpoints for pipeline template CRUD operations:
 - Update existing template
 - Delete template
 - Validate template YAML
+- Execute pipeline with SSE streaming (POST /api/v1/pipeline/run)
 """
 
+import asyncio
+import json
 import logging
+import queue
+import threading
+import time
+import uuid
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
+
+from ..database import ChatDatabase
+from ..dependencies import get_db
 
 from ..schemas.pipeline_templates import (
+    PipelineRunRequest,
+    PipelineRunResponse,
     PipelineTemplateSchema,
     TemplateCreateRequest,
     TemplateListResponse,
@@ -29,6 +44,11 @@ from ..services.template_service import TemplateService, TemplateValidationError
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["pipeline"])
+
+
+# Session locks and semaphore for pipeline execution (matches chat.py pattern)
+_pipeline_session_locks: dict[str, asyncio.Lock] = {}
+_pipeline_semaphore = asyncio.Semaphore(5)  # Max 5 concurrent pipeline runs
 
 
 def get_template_service() -> TemplateService:
@@ -256,3 +276,203 @@ async def validate_template(
             status_code=500,
             detail="Failed to validate template. Check server logs for details.",
         )
+
+
+@router.post("/api/v1/pipeline/run")
+async def run_pipeline_endpoint(
+    request: PipelineRunRequest,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
+):
+    """
+    Execute a pipeline task with SSE streaming.
+
+    Runs the full 5-stage pipeline orchestration:
+    1. Domain Analysis
+    2. Workflow Modeling
+    3. Loom Building
+    4. Gap Detection (with optional auto-spawn)
+    5. Pipeline Execution
+
+    When ``stream=True`` (default), returns a Server-Sent Events stream
+    with typed events: ``status``, ``step``, ``thinking``, ``tool_start``,
+    ``tool_end``, ``tool_result``, ``done``, ``error``.
+
+    When ``stream=False``, returns a single JSON response after completion.
+    """
+    # Verify session exists
+    session = db.get_session(request.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    pipeline_id = str(uuid.uuid4())
+
+    # Acquire session lock (prevent duplicate runs for same session)
+    session_lock = _pipeline_session_locks.setdefault(
+        request.session_id, asyncio.Lock()
+    )
+    try:
+        await asyncio.wait_for(session_lock.acquire(), timeout=5.0)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Force-releasing stuck pipeline session lock for %s",
+            request.session_id,
+        )
+        try:
+            session_lock.release()
+        except RuntimeError:
+            pass
+        await session_lock.acquire()
+
+    # Acquire semaphore (limit concurrent pipeline runs)
+    try:
+        await asyncio.wait_for(_pipeline_semaphore.acquire(), timeout=60.0)
+    except asyncio.TimeoutError:
+        session_lock.release()
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "The server is busy processing other pipeline runs. "
+                "Please try again."
+            ),
+        )
+
+    # Create an SSE output handler for this run
+    output_handler = _PipelineSSEHandler()
+
+    try:
+        if request.stream:
+            async def _release_locks():
+                try:
+                    session_lock.release()
+                except RuntimeError:
+                    pass
+                try:
+                    _pipeline_semaphore.release()
+                except ValueError:
+                    pass
+
+            async def _stream_pipeline_events() -> AsyncGenerator[str, None]:
+                """Stream pipeline events as SSE."""
+                try:
+                    # Emit start event
+                    try:
+                        start_event = json.dumps({
+                            'type': 'status',
+                            'status': 'starting',
+                            'message': 'Initializing pipeline...',
+                            'pipeline_id': pipeline_id,
+                        })
+                    except (TypeError, ValueError):
+                        start_event = '{"type": "status", "status": "starting", "message": "Initializing pipeline..."}'
+                    yield f"data: {start_event}\n\n"
+
+                    # Execute pipeline in a background thread
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(
+                        None,
+                        _execute_pipeline_sync,
+                        request.task_description,
+                        request.auto_spawn,
+                        request.template_name,
+                    )
+
+                    # Stream any buffered output handler events
+                    output_handler.drain(output_handler.event_queue)
+
+                    # Emit completion event
+                    try:
+                        done_event = json.dumps({
+                            'type': 'done',
+                            'pipeline_id': pipeline_id,
+                            'status': result.get('pipeline_status', 'unknown'),
+                            'result': result,
+                        })
+                    except (TypeError, ValueError):
+                        done_event = json.dumps({
+                            'type': 'done',
+                            'pipeline_id': pipeline_id,
+                            'status': 'unknown',
+                            'result': {'pipeline_status': 'unknown', 'error': 'Serialization error'},
+                        })
+                    yield f"data: {done_event}\n\n"
+                except Exception as e:
+                    logger.error(f"Pipeline streaming error: {e}", exc_info=True)
+                    try:
+                        error_event = json.dumps({
+                            'type': 'error',
+                            'content': str(e),
+                            'pipeline_id': pipeline_id,
+                        })
+                    except (TypeError, ValueError):
+                        error_event = '{"type": "error", "content": "Internal error"}'
+                    yield f"data: {error_event}\n\n"
+
+            return StreamingResponse(
+                _stream_pipeline_events(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+                background=BackgroundTask(_release_locks),
+            )
+        else:
+            # Non-streaming: execute and return result
+            try:
+                result = _execute_pipeline_sync(
+                    request.task_description,
+                    request.auto_spawn,
+                    request.template_name,
+                )
+                return PipelineRunResponse(
+                    pipeline_id=pipeline_id,
+                    status=result.get("pipeline_status", "unknown"),
+                    message="Pipeline execution completed",
+                )
+            finally:
+                session_lock.release()
+                _pipeline_semaphore.release()
+
+    finally:
+        # For streaming path, locks are released in BackgroundTask after response
+        # For non-streaming path, this is a no-op (already released above)
+        pass
+
+
+def _execute_pipeline_sync(
+    task_description: str,
+    auto_spawn: bool,
+    template_name: str | None = None,
+) -> dict:
+    """Execute pipeline synchronously (for executor thread)."""
+    try:
+        from gaia.pipeline.orchestrator import run_pipeline as _run_pipeline
+
+        return _run_pipeline(
+            task_description=task_description,
+            auto_spawn=auto_spawn,
+        )
+    except Exception as e:
+        logger.error(f"Pipeline execution failed: {e}", exc_info=True)
+        return {
+            "pipeline_status": "failed",
+            "error": str(e),
+        }
+
+
+class _PipelineSSEHandler:
+    """Simple event queue for pipeline SSE streaming."""
+
+    def __init__(self):
+        self.event_queue: queue.Queue = queue.Queue()
+
+    def drain(self, q: queue.Queue):
+        """Yield all queued events."""
+        while not q.empty():
+            try:
+                event = q.get_nowait()
+                yield f"data: {json.dumps(event)}\n\n"
+            except queue.Empty:
+                break

@@ -1345,34 +1345,129 @@ For more help, see:
 
 ## gaia pipeline
 
+Execute a natural-language task through the 5-stage autonomous agent pipeline.
+
 <Note>
-  **Programmatic API only.** The `gaia pipeline` command is registered as a placeholder. The pipeline orchestration engine is accessed through the Python SDK — there is no interactive CLI workflow at this time.
+  **Auto-spawn requires Claude Code.** The `GapDetector` stage invokes `master-ecosystem-creator.md`, a Claude Code subagent, when gaps are detected. Running outside Claude Code will result in silent failures when gaps are found. Use `--no-spawn` to disable auto-spawn for standalone deployments.
 </Note>
 
 ```bash
+gaia pipeline "TASK DESCRIPTION" [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--model` | string | Qwen3.5-35B-A3B-GGUF | Model to use for pipeline execution |
+| `--no-spawn` | flag | false | Disable automatic agent spawning when gaps detected |
+| `--debug` | flag | false | Enable debug output with stage-by-stage progress |
+
+**Examples:**
+
+<CodeGroup>
+```bash Run Pipeline (Default)
+gaia pipeline "Build a data analysis agent for CSV processing"
+```
+
+```bash Specify Custom Model
+gaia pipeline "Create a code review agent" --model Qwen3.5-35B-A3B-GGUF
+```
+
+```bash Disable Auto-Spawn
+gaia pipeline "Build testing agent" --no-spawn
+```
+
+```bash Show Pipeline Stage Diagram
 gaia pipeline
 ```
 
-Running `gaia pipeline` prints SDK import examples and documentation links.
+```bash Debug Mode
+gaia pipeline "Build multi-agent system" --debug
+```
+</CodeGroup>
 
-**Use the Python SDK instead:**
+**What It Does:**
 
-```python
-from gaia.pipeline.engine import PipelineEngine
-from gaia.pipeline.state import PipelineContext
+1. **Initializes Lemonade Server** - Ensures LLM backend is ready via `initialize_lemonade_for_agent("pipeline")`
+2. **Stage 1: Domain Analysis** - Analyzes task to identify knowledge domains
+3. **Stage 2: Workflow Modeling** - Models workflow and recommends required agents
+4. **Stage 3: Loom Building** - Builds execution topology
+5. **Stage 4: Gap Detection** - Scans for missing agents, auto-generates if needed
+6. **Stage 5: Pipeline Execution** - Executes complete agent pipeline
 
-engine = PipelineEngine()
-context = PipelineContext(
-    pipeline_id="my-pipeline",
-    user_goal="Build a REST API",
-    quality_threshold=0.80,
-)
-await engine.initialize(context, config={"template": "rapid"})
-snapshot = await engine.start()
-engine.shutdown()
+**Prerequisites:**
+
+- Lemonade Server running on port 8000
+- Clear Thought MCP server (optional, provides sequential thinking at each stage)
+- Claude Code environment (required for auto-spawn via `master-ecosystem-creator.md`)
+
+**Pipeline Stage Diagram:**
+
+When run without a task argument, `gaia pipeline` displays the stage flow:
+
+```
+┌─────────────────┐
+│  Task Input     │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 1:        │
+│ DomainAnalyzer  │ → Analyzes task to identify domains
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 2:        │
+│ WorkflowModeler │ → Models workflow + recommends agents
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 3:        │
+│ LoomBuilder     │ → Builds execution topology
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 4:        │
+│ GapDetector     │ → Scans available agents vs required
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │ Gaps?   │
+    └────┬────┘
+      Yes│No
+         │     ┌──────────────────────────┐
+         │     │ Master Ecosystem Creator │
+         └────→│ (Generates missing agents)│
+               └────────────┬─────────────┘
+                            │
+         ▼                  │
+┌─────────────────┐         │
+│ Stage 5:        │◄────────┘
+│ PipelineExec.   │ → Executes complete pipeline
+└─────────────────┘
 ```
 
-[Full Pipeline Guide](/guides/pipeline) | [SDK Reference](/sdk/infrastructure/pipeline)
+**Programmatic API:**
+
+For advanced use cases, use the Python SDK directly:
+
+```python
+from gaia.pipeline.orchestrator import run_pipeline
+
+result = run_pipeline(
+    task_description="Build a data analysis agent",
+    auto_spawn=True,
+    model_id="Qwen3.5-35B-A3B-GGUF"
+)
+print(f"Pipeline status: {result['pipeline_status']}")
+print(f"Agents spawned: {result['agents_spawned']}")
+```
+
+[Full Pipeline Guide](/guides/pipeline) | [Auto-Spawn Guide](/guides/auto-spawn-pipeline) | [SDK Reference](/sdk/infrastructure/pipeline)
 
 ---
 

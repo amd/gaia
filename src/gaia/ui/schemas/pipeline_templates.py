@@ -114,3 +114,23 @@ class TemplateUpdateRequest(BaseModel):
     agent_categories: Optional[Dict[str, List[str]]] = None
     routing_rules: Optional[List[Dict[str, Any]]] = None
     quality_weights: Optional[Dict[str, float]] = None
+
+
+class PipelineRunRequest(BaseModel):
+    """Request to execute a pipeline from the Agent UI."""
+
+    session_id: str = Field(..., description="Session ID for tracking")
+    task_description: str = Field(..., description="Task/objective to execute")
+    template_name: Optional[str] = Field(
+        None, description="Optional pipeline template name"
+    )
+    auto_spawn: bool = Field(default=True, description="Auto-generate missing agents")
+    stream: bool = Field(default=True, description="Enable SSE streaming")
+
+
+class PipelineRunResponse(BaseModel):
+    """Response from pipeline execution (non-streaming mode)."""
+
+    pipeline_id: str = Field(..., description="Unique pipeline execution ID")
+    status: str = Field(..., description="running|completed|failed|blocked")
+    message: str = Field(default="", description="Status message")
