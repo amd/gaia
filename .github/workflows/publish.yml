@@ -359,6 +359,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
       - name: Download validated build
         uses: actions/download-artifact@v6
         with:
