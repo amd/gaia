@@ -6,10 +6,10 @@
 # Trigger: push a version tag (v*) to main.
 #
 # Flow:
-#   validate → build (pypi + npm + electron, parallel)
+#   validate → build (pypi + npm + desktop installers, parallel)
 #     → approve (single manual gate)
 #       → publish (pypi + npm, parallel)
-#         → github release (sigstore + electron artifacts)
+#         → github release (sigstore + desktop installers)
 #
 # Environment setup (one-time, in GitHub repo settings):
 #   1. Create a "publish" environment with required reviewers.
@@ -270,13 +270,6 @@ jobs:
           name: npm-package-build
           path: src/gaia/apps/webui/dist/
 
-  build-electron:
-    name: Build Electron Apps
-    needs: validate
-    permissions:
-      contents: write   # build-electron-apps.yml declares contents: write
-    uses: ./.github/workflows/build-electron-apps.yml
-
   # Build the GAIA Agent UI desktop installers (NSIS / DMG / DEB / AppImage)
   # via the reusable build-installers workflow. The reusable workflow uploads
   # each platform's artifacts to a workflow-run artifact named
@@ -299,19 +292,16 @@ jobs:
       publish_to_release: false
 
   # ── Stage 3: Approve (single manual gate) ───────────────────────────
-  # All four builds must pass before the approval prompt appears.
+  # All builds must pass before the approval prompt appears.
   # Configure the "publish" GitHub environment with required reviewers.
 
   approve-publish:
     name: Approve Publishing
-    needs: [build-pypi, build-npm, build-electron, build-desktop-installers]
-    # Override default skip-on-failure: electron may be skipped (no apps found).
-    # Desktop installers are required (they're the primary install path).
+    needs: [build-pypi, build-npm, build-desktop-installers]
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
-      (needs.build-electron.result == 'success' || needs.build-electron.result == 'skipped') &&
       needs.build-desktop-installers.result == 'success'
     runs-on: ubuntu-latest
     environment: publish
@@ -320,7 +310,6 @@ jobs:
           echo "=== Build Results ==="
           echo "  PyPI:               ${{ needs.build-pypi.result }}"
           echo "  npm:                ${{ needs.build-npm.result }}"
-          echo "  Electron Apps:      ${{ needs.build-electron.result }}"
           echo "  Desktop Installers: ${{ needs.build-desktop-installers.result }}"
           echo ""
           echo "All builds passed. Publishing approved."
@@ -392,10 +381,7 @@ jobs:
 
   github-release:
     name: GitHub Release
-    needs: [validate, publish-pypi, publish-npm, build-electron, build-desktop-installers]
-    # Run after both publishes succeed; don't block on electron artifacts.
-    # Desktop installers are required since they're the primary install path
-    # — if they failed, the release shouldn't ship.
+    needs: [validate, publish-pypi, publish-npm, build-desktop-installers]
     if: >-
       !cancelled() &&
       needs.publish-pypi.result == 'success' &&
@@ -465,25 +451,7 @@ jobs:
           EOF
           echo "Release body generated: $(wc -l < RELEASE_BODY.md) lines"
 
-      - name: Download Electron artifacts (Windows)
-        if: needs.build-electron.outputs.has_apps == 'true'
-        uses: actions/download-artifact@v6
-        with:
-          pattern: "*-windows-${{ github.sha }}"
-          path: release-assets
-          merge-multiple: true
-        continue-on-error: true
-
-      - name: Download Electron artifacts (Linux)
-        if: needs.build-electron.outputs.has_apps == 'true'
-        uses: actions/download-artifact@v6
-        with:
-          pattern: "*-linux-${{ github.sha }}"
-          path: release-assets
-          merge-multiple: true
-        continue-on-error: true
-
-      # ── Desktop installers (Phase G/I integration) ─────────────────
+      # ── Desktop installers ─────────────────────────────────────────
       # The reusable build-installers workflow uploaded each platform's
       # artifacts to "<platform>-installer" workflow-run artifacts. Pull
       # them here and add to release-assets/ so the softprops step
