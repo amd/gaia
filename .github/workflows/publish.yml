@@ -362,10 +362,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
-      - name: Upgrade npm for OIDC trusted publishing
-        run: |
-          npm install -g npm@latest
-          echo "npm version: $(npm -v)"
       - name: Download validated build
         uses: actions/download-artifact@v6
         with:
