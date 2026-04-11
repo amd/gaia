@@ -330,14 +330,16 @@ class FileSearchToolsMixin:
 
                 # If found in CWD + common locations, return immediately
                 if matching_files:
+                    limited_files = matching_files[:10]
                     return {
                         "status": "success",
-                        "files": matching_files[:10],
-                        "file_list": self._format_file_list(matching_files[:10]),
-                        "count": len(matching_files),
+                        "files": limited_files,
+                        "file_list": self._format_file_list(limited_files),
+                        # Report only what the UI can actually access (avoid "count > returned files").
+                        "count": len(limited_files),
                         "total_locations_searched": len(searched_locations),
                         "search_context": "common_locations",
-                        "display_message": f"✓ Found {len(matching_files)} file(s)",
+                        "display_message": f"✓ Found {len(limited_files)} file(s)",
                     }
 
                 # Quick search found nothing
@@ -383,13 +385,15 @@ class FileSearchToolsMixin:
 
                 # Return final results
                 if matching_files:
+                    limited_files = matching_files[:10]
                     return {
                         "status": "success",
-                        "files": matching_files[:10],
-                        "file_list": self._format_file_list(matching_files[:10]),
-                        "count": len(matching_files),
+                        "files": limited_files,
+                        "file_list": self._format_file_list(limited_files),
+                        # Report only what the UI can actually access (avoid "count > returned files").
+                        "count": len(limited_files),
                         "total_locations_searched": len(searched_locations),
-                        "display_message": f"✓ Found {len(matching_files)} file(s) after deep search",
+                        "display_message": f"✓ Found {len(limited_files)} file(s) after deep search",
                         "user_instruction": "If multiple files found, display numbered list and ask user to select one.",
                     }
                 else:
