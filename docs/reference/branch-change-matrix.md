@@ -1024,8 +1024,21 @@ The Phase column uses the following abbreviations:
 | `util/migrate-capabilities.py` | P1-2: NEW migration utility for capability vocabulary; 50+ old→unified mappings in `CAPABILITY_MAP` | Utility + Documentation | Session-3 |
 | `config/agents/security-auditor.yaml` | Capability migration: `compliance-check` → `compliance-audit` | Configuration | Session-3 |
 | `config/agents/senior-developer.yaml` | Capability migration: `testing` → `test-automation`, `refactoring` → `code-refactoring` | Configuration | Session-3 |
+| `src/gaia/ui/routers/pipeline.py` | B3-C: SSE endpoint lock release simplification, JSON serialization error handling | Agent UI + Pipeline | Session-3 |
 | `docs/reference/branch-change-matrix.md` | Documentation: Update resilience wiring status, routing_engine row, Session-3 tracking | Documentation | Session-3 |
 | `MERGE_DECISION_pipeline-orchestration-v1.md` | Documentation: Add Session-3 results to open items and executive summary | Documentation | Session-3 |
+| `quality_review_session3.md` | Documentation: Session-3 quality assessment, bug fixes verified | Documentation | Session-3 |
+
+**Session-3 Test Files Created (2026-04-11):**
+
+| Files Created | Description | Category | Phase |
+|---|---|---|---|
+| `tests/pipeline/test_orchestrator.py` | P1-1, B2-A: PipelineOrchestrator unit tests, tool dispatch, JSON parsing | Testing Infrastructure | Session-3 |
+| `tests/pipeline/test_routing_engine_resilience.py` | P1-1 (WIRE-1): Circuit breaker, bulkhead, retry resilience tests | Testing Infrastructure | Session-3 |
+| `tests/pipeline/test_capability_migration.py` | P1-2 (ARCH-2): YAML vocabulary validation, migration script tests | Testing Infrastructure | Session-3 |
+| `tests/pipeline/test_agent_registry_bridge.py` | INT-2: Two-registry separation validation | Testing Infrastructure | Session-3 |
+| `tests/ui/routers/test_pipeline_sse_lock_release.py` | B3-C Bug #1: Lock release logic validation | Testing Infrastructure | Session-3 |
+| `tests/ui/routers/test_pipeline_json_serialization.py` | B3-C Bug #2: JSON error handling validation | Testing Infrastructure | Session-3 |
 
 ---
 
