@@ -75,6 +75,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 20
           model: claude-opus-4-5-20251101
+          direct_prompt: "Review this pull request. Read pr-diff.txt and pr-files.txt first, then review the changes."
           custom_instructions: |
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
 
