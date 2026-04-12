@@ -56,7 +56,7 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: '#f59e0b',
 };
 
-export function PipelineRunner({ onViewChange }: { onViewChange?: (view: string) => void }) {
+export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' | 'templates' | 'runner') => void }) {
   const sessions = useChatStore((s) => s.sessions);
   const currentSessionId = useChatStore((s) => s.currentSessionId);
 

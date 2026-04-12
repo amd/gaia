@@ -677,7 +677,15 @@ export function runPipelineStream(
                                 const event: PipelineEvent = JSON.parse(raw);
                                 eventCount++;
                                 const cbKey = PIPELINE_EVENT_MAP[event.type] || 'onStatus';
-                                callbacks[cbKey]?.(event);
+                                // onError expects Error, other callbacks expect PipelineEvent
+                                if (cbKey === 'onError') {
+                                    const error = new Error(
+                                        'content' in event ? String(event.content) : 'Pipeline error occurred'
+                                    );
+                                    (callbacks as Record<string, (...args: any[]) => void>)[cbKey]?.(error);
+                                } else {
+                                    (callbacks as Record<string, (...args: any[]) => void>)[cbKey]?.(event);
+                                }
                             } catch {
                                 log.stream.warn('Malformed pipeline SSE data', {
                                     raw: raw.slice(0, 100),

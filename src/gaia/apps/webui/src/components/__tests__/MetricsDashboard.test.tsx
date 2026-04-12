@@ -84,7 +84,7 @@ vi.mock('lucide-react', () => ({
   RefreshCw: ({ size }: { size?: number }) => <svg data-testid="refresh-icon" width={size} />,
   Settings: ({ size }: { size?: number }) => <svg data-testid="settings-icon" width={size} />,
   Play: ({ size }: { size?: number }) => <svg data-testid="play-icon" width={size} />,
-  Pause: ({ size?: number }) => <svg data-testid="pause-icon" />,
+  Pause: ({ size }: { size?: number }) => <svg data-testid="pause-icon" />,
   BarChart3: ({ size }: { size?: number }) => <svg data-testid="barchart-icon" width={size} />,
   AlertCircle: ({ size }: { size?: number }) => <svg data-testid="alert-icon" width={size} />,
 }));
