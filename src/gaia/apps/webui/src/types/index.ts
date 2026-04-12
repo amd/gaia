@@ -364,6 +364,26 @@ export interface TemplateUpdateRequest {
     quality_weights?: Record<string, number>;
 }
 
+// ── Agent Registry Types ───────────────────────────────────────────────
+
+export interface AgentRegistryEntry {
+    id: string;
+    name: string;
+    category: string;
+    description: string;
+    model_id: string | null;
+    capabilities: string[];
+    keywords: string[];
+    phases: string[];
+    complexity_range: string;
+    tools: string[];
+    enabled: boolean;
+    version: string;
+    source: 'yaml' | 'pipeline_stage';
+    entrypoint?: string | null;
+    templates_using: string[];
+}
+
 // ── Pipeline Metrics Types ───────────────────────────────────────────────
 
 export interface PhaseTiming {

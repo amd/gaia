@@ -164,24 +164,106 @@ class AgentRegistry:
         )
 
     async def _load_all_agents(self) -> None:
-        """Load all agent definitions from YAML files."""
+        """Load all agent definitions from YAML and MD files."""
         if not self._agents_dir:
             return
 
-        yaml_files = list(self._agents_dir.glob("*.yaml"))
-        yaml_files.extend(self._agents_dir.glob("*.yml"))
+        agent_files = list(self._agents_dir.glob("*.yaml"))
+        agent_files.extend(self._agents_dir.glob("*.yml"))
+        agent_files.extend(self._agents_dir.glob("*.md"))  # new
 
-        for yaml_file in yaml_files:
+        for agent_file in agent_files:
             try:
-                agent = await self._load_agent(yaml_file)
+                if agent_file.suffix in (".md",):
+                    agent = await self._load_md_agent(agent_file)
+                else:
+                    agent = await self._load_agent(agent_file)
+
                 async with self._lock:
+                    if agent.id in self._agents:
+                        logger.warning(
+                            f"Agent ID collision: {agent.id} already loaded from "
+                            f"another file; skipping {agent_file}"
+                        )
+                        continue
                     self._agents[agent.id] = agent
                 logger.debug(f"Loaded agent: {agent.id}")
             except Exception as e:
                 logger.error(
-                    f"Failed to load agent from {yaml_file}: {e}",
-                    extra={"file": str(yaml_file)},
+                    f"Failed to load agent from {agent_file}: {e}",
+                    extra={"file": str(agent_file)},
                 )
+
+    def _build_agent_definition(
+        self, data: dict, system_prompt_override: str = None
+    ) -> AgentDefinition:
+        """Build an AgentDefinition from parsed YAML/frontmatter data.
+
+        Args:
+            data: Parsed YAML data (may be nested under 'agent' key or flat).
+            system_prompt_override: If provided, used as system_prompt instead of
+                the value in data. Used by _load_md_agent() to pass the Markdown body.
+
+        Returns:
+            AgentDefinition instance.
+        """
+        agent_data = data.get("agent", data)  # handles both nested and flat YAML
+
+        triggers_data = agent_data.get("triggers", {})
+        capabilities_data = agent_data.get("capabilities", [])
+        constraints_data = agent_data.get("constraints", {})
+        execution_targets = agent_data.get("execution_targets", {})
+
+        # complexity_range: handles both legacy dict and new list format
+        raw_cr = triggers_data.get("complexity_range", [0.0, 1.0])
+        if isinstance(raw_cr, dict):
+            complexity_range = (
+                float(raw_cr.get("min", 0.0)),
+                float(raw_cr.get("max", 1.0)),
+            )
+        elif isinstance(raw_cr, (list, tuple)) and len(raw_cr) == 2:
+            complexity_range = (float(raw_cr[0]), float(raw_cr[1]))
+        else:
+            complexity_range = (0.0, 1.0)
+
+        # system_prompt resolution
+        if system_prompt_override is not None:
+            system_prompt = system_prompt_override
+        else:
+            system_prompt = agent_data.get("system_prompt", "")
+
+        return AgentDefinition(
+            id=agent_data.get("id", ""),
+            name=agent_data.get("name", ""),
+            version=agent_data.get("version", "1.0.0"),
+            category=agent_data.get("category", ""),
+            description=agent_data.get("description", ""),
+            model_id=agent_data.get("model_id", None),
+            triggers=AgentTriggers(
+                keywords=triggers_data.get("keywords", []),
+                phases=triggers_data.get("phases", []),
+                complexity_range=complexity_range,
+                state_conditions=triggers_data.get("state_conditions", {}),
+                defect_types=triggers_data.get("defect_types", []),
+            ),
+            capabilities=AgentCapabilities(
+                capabilities=capabilities_data if isinstance(capabilities_data, list) else [],
+                tools=agent_data.get("tools", []),
+                execution_targets=execution_targets if isinstance(execution_targets, dict) else {},
+            ),
+            system_prompt=system_prompt,
+            tools=agent_data.get("tools", []),
+            execution_targets=execution_targets,
+            constraints=AgentConstraints(
+                max_file_changes=constraints_data.get("max_file_changes", 20),
+                max_lines_per_file=constraints_data.get("max_lines_per_file", 500),
+                requires_review=constraints_data.get("requires_review", True),
+                timeout_seconds=constraints_data.get("timeout_seconds", 300),
+                max_steps=constraints_data.get("max_steps", 100),
+            ),
+            metadata=agent_data.get("metadata", {}),
+            enabled=agent_data.get("enabled", True),
+        )
 
     async def _load_agent(self, yaml_file: Path) -> AgentDefinition:
         """
@@ -206,61 +288,66 @@ class AgentRegistry:
             if not data:
                 raise ValueError("Empty YAML file")
 
-            # Handle both direct and nested 'agent' key formats
-            agent_data = data.get("agent", data)
-
-            # Parse nested structures
-            triggers_data = agent_data.get("triggers", {})
-            capabilities_data = agent_data.get("capabilities", [])
-            constraints_data = agent_data.get("constraints", {})
-            execution_targets = agent_data.get("execution_targets", {})
-
-            return AgentDefinition(
-                id=agent_data.get("id", ""),
-                name=agent_data.get("name", ""),
-                version=agent_data.get("version", "1.0.0"),
-                category=agent_data.get("category", ""),
-                description=agent_data.get("description", ""),
-                model_id=agent_data.get("model_id", None),
-                triggers=AgentTriggers(
-                    keywords=triggers_data.get("keywords", []),
-                    phases=triggers_data.get("phases", []),
-                    complexity_range=(
-                        tuple(
-                            triggers_data.get(
-                                "complexity_range", {"min": 0, "max": 1}
-                            ).values()
-                        )
-                        if isinstance(triggers_data.get("complexity_range"), dict)
-                        else (0.0, 1.0)
-                    ),
-                ),
-                capabilities=AgentCapabilities(
-                    capabilities=(
-                        capabilities_data if isinstance(capabilities_data, list) else []
-                    ),
-                    tools=agent_data.get("tools", []),
-                    execution_targets=(
-                        execution_targets if isinstance(execution_targets, dict) else {}
-                    ),
-                ),
-                system_prompt=agent_data.get("system_prompt", ""),
-                tools=agent_data.get("tools", []),
-                execution_targets=execution_targets,
-                constraints=AgentConstraints(
-                    max_file_changes=constraints_data.get("max_file_changes", 20),
-                    max_lines_per_file=constraints_data.get("max_lines_per_file", 500),
-                    requires_review=constraints_data.get("requires_review", True),
-                    timeout_seconds=constraints_data.get("timeout_seconds", 300),
-                ),
-                metadata=agent_data.get("metadata", {}),
-                enabled=agent_data.get("enabled", True),
-            )
+            return self._build_agent_definition(data)
 
         except yaml.YAMLError as e:
             raise AgentLoadError(str(yaml_file), f"YAML parsing error: {e}")
         except Exception as e:
             raise AgentLoadError(str(yaml_file), str(e))
+
+    async def _load_md_agent(self, md_file: Path) -> AgentDefinition:
+        """Load an agent from a .md file with YAML frontmatter.
+
+        The file must begin with '---' on the first line, followed by YAML
+        frontmatter, then a closing '---', then the Markdown body (system prompt).
+
+        Args:
+            md_file: Path to the .md agent definition file.
+
+        Returns:
+            AgentDefinition instance with system_prompt set to the Markdown body.
+
+        Raises:
+            AgentLoadError: If the file format is invalid.
+        """
+        try:
+            if yaml is None:
+                raise ImportError("PyYAML is required for agent loading")
+
+            with open(md_file, "r", encoding="utf-8-sig") as f:  # utf-8-sig strips BOM
+                content = f.read()
+
+            # Normalize Windows CRLF to LF before any string operations
+            content = content.replace("\r\n", "\n").replace("\r", "\n")
+
+            if not content.startswith("---"):
+                raise AgentLoadError(
+                    f"{md_file}: does not begin with YAML frontmatter (---)"
+                )
+
+            # Strip the opening "---\n" before finding the closing delimiter
+            rest = content[4:]  # remove leading "---\n"
+            first_close = rest.find("\n---\n")
+            if first_close == -1:
+                raise AgentLoadError(
+                    f"{md_file}: no closing --- for frontmatter block"
+                )
+
+            frontmatter_text = rest[:first_close]
+            system_prompt = rest[first_close + 5 :].strip()  # skip "\n---\n"
+
+            data = yaml.safe_load(frontmatter_text)
+            if not data or not isinstance(data, dict):
+                raise AgentLoadError(f"{md_file}: empty or invalid frontmatter")
+
+            return self._build_agent_definition(data, system_prompt_override=system_prompt)
+
+        except yaml.YAMLError as e:
+            raise AgentLoadError(str(md_file), f"YAML parsing error: {e}")
+        except AgentLoadError:
+            raise
+        except Exception as e:
+            raise AgentLoadError(str(md_file), str(e))
 
     def _build_indexes(self) -> None:
         """Build capability, trigger, and category indexes for fast routing."""
@@ -305,19 +392,19 @@ class AgentRegistry:
                     self.registry = registry
 
                 def on_modified(self, event):
-                    if event.src_path.endswith((".yaml", ".yml")):
+                    if event.src_path.endswith((".yaml", ".yml", ".md")):
                         asyncio.create_task(
                             self.registry._reload_agent(Path(event.src_path))
                         )
 
                 def on_created(self, event):
-                    if event.src_path.endswith((".yaml", ".yml")):
+                    if event.src_path.endswith((".yaml", ".yml", ".md")):
                         asyncio.create_task(
                             self.registry._load_agent_and_index(Path(event.src_path))
                         )
 
                 def on_deleted(self, event):
-                    if event.src_path.endswith((".yaml", ".yml")):
+                    if event.src_path.endswith((".yaml", ".yml", ".md")):
                         asyncio.create_task(
                             self.registry._unload_agent(Path(event.src_path))
                         )
@@ -335,40 +422,46 @@ class AgentRegistry:
             logger.warning("watchdog not installed - hot-reload disabled")
             self._auto_reload = False
 
-    async def _reload_agent(self, yaml_file: Path) -> None:
+    async def _reload_agent(self, agent_file: Path) -> None:
         """Reload single agent on file change."""
         try:
-            agent = await self._load_agent(yaml_file)
+            if agent_file.suffix in (".md",):
+                agent = await self._load_md_agent(agent_file)
+            else:
+                agent = await self._load_agent(agent_file)
             async with self._lock:
                 self._agents[agent.id] = agent
                 self._build_indexes()
             logger.info(f"Hot-reloaded agent: {agent.id}")
         except Exception as e:
-            logger.error(f"Failed to reload agent {yaml_file}: {e}")
+            logger.error(f"Failed to reload agent {agent_file}: {e}")
 
-    async def _load_agent_and_index(self, yaml_file: Path) -> None:
+    async def _load_agent_and_index(self, agent_file: Path) -> None:
         """Load new agent and add to indexes."""
         try:
-            agent = await self._load_agent(yaml_file)
+            if agent_file.suffix in (".md",):
+                agent = await self._load_md_agent(agent_file)
+            else:
+                agent = await self._load_agent(agent_file)
             async with self._lock:
                 self._agents[agent.id] = agent
                 self._build_indexes()
             logger.info(f"Loaded new agent: {agent.id}")
         except Exception as e:
-            logger.error(f"Failed to load agent {yaml_file}: {e}")
+            logger.error(f"Failed to load agent {agent_file}: {e}")
 
-    async def _unload_agent(self, yaml_file: Path) -> None:
+    async def _unload_agent(self, agent_file: Path) -> None:
         """Unload agent when file is deleted."""
         try:
-            # Extract agent ID from filename
-            agent_id = yaml_file.stem
+            # Extract agent ID from filename (works for both .yaml and .md)
+            agent_id = agent_file.stem
             async with self._lock:
                 if agent_id in self._agents:
                     del self._agents[agent_id]
                     self._build_indexes()
             logger.info(f"Unloaded agent: {agent_id}")
         except Exception as e:
-            logger.error(f"Failed to unload agent {yaml_file}: {e}")
+            logger.error(f"Failed to unload agent {agent_file}: {e}")
 
     def select_agent(
         self,

@@ -1,0 +1,94 @@
+﻿---
+id: senior-developer
+name: Senior Developer
+version: 1.0.0
+category: development
+model_id: Qwen3-0.6B-GGUF
+description: 'Full-stack generalist agent capable of handling complex
+
+  development tasks across frontend, backend, and infrastructure.
+
+  '
+triggers:
+  keywords:
+  - implement
+  - develop
+  - code
+  - build
+  - create
+  - feature
+  - endpoint
+  - component
+  - function
+  phases:
+  - DEVELOPMENT
+  - REFACTORING
+  complexity_range:
+  - 0.3
+  - 1.0
+capabilities:
+- full-stack-development
+- api-design
+- database-design
+- test-automation
+- code-review
+- debugging
+- code-refactoring
+tools:
+- file_read
+- file_write
+- bash_execute
+- git_operations
+- search_codebase
+- run_tests
+execution_targets:
+  default: cpu
+  fallback:
+  - gpu
+constraints:
+  max_file_changes: 20
+  max_lines_per_file: 500
+  requires_review: true
+  timeout_seconds: 600
+metadata:
+  author: GAIA Team
+  created: '2026-03-23'
+  tags:
+  - development
+  - full-stack
+  - core
+---
+
+# Senior Developer — Development
+
+## Identity and Purpose
+
+[This agent prompt body needs to be authored. The original YAML agent definition
+pointed to a non-existent prompt file: prompts/senior-developer.md]
+
+## Core Principles
+
+- [To be authored based on agent role and capabilities]
+
+## Workflow
+
+### Phase 1: Analysis
+
+[To be authored]
+
+### Phase 2: Implementation
+
+[To be authored]
+
+### Phase 3: Validation
+
+[To be authored]
+
+## Output Specification
+
+[To be authored]
+
+## Constraints and Safety
+
+[To be authored]
+

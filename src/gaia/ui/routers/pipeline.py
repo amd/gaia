@@ -16,10 +16,12 @@ Provides REST API endpoints for pipeline template CRUD operations:
 import asyncio
 import json
 import logging
+import os
 import queue
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -275,6 +277,159 @@ async def validate_template(
         raise HTTPException(
             status_code=500,
             detail="Failed to validate template. Check server logs for details.",
+        )
+
+
+@router.get("/api/v1/pipeline/agents")
+async def list_agents():
+    """
+    List all available agents from config/agents/ and pipeline templates.
+
+    Returns a unified agent registry showing:
+    - All agent definitions (YAML + MD format)
+    - Category grouping
+    - Capabilities, triggers, model assignments
+    - Which pipeline templates reference each agent
+    - Pipeline stage agents (domain-analyzer, etc.)
+    - Template specialist agents (planning-analysis-strategist, etc.)
+    """
+    try:
+        agents_dir = Path(os.getcwd()) / "config" / "agents"
+        if not agents_dir.is_dir():
+            return {"agents": [], "categories": {}, "total": 0}
+
+        # Parse all YAML agents
+        yaml_agents = {}
+        try:
+            import yaml as yaml_lib
+        except ImportError:
+            yaml_lib = None
+
+        if yaml_lib:
+            for yaml_file in sorted(agents_dir.glob("*.yaml")):
+                try:
+                    with open(yaml_file, "r", encoding="utf-8") as f:
+                        data = yaml_lib.safe_load(f)
+                    if not data:
+                        continue
+                    agent_data = data.get("agent", data)
+                    agent_id = agent_data.get("id", yaml_file.stem)
+                    triggers = agent_data.get("triggers", {})
+                    complexity = triggers.get("complexity_range", {})
+                    if isinstance(complexity, dict):
+                        complexity_range = f"{complexity.get('min', 0)}-{complexity.get('max', 1)}"
+                    elif isinstance(complexity, list) and len(complexity) == 2:
+                        complexity_range = f"{complexity[0]}-{complexity[1]}"
+                    else:
+                        complexity_range = "0-1"
+
+                    yaml_agents[agent_id] = {
+                        "id": agent_id,
+                        "name": agent_data.get("name", agent_id),
+                        "category": agent_data.get("category", "unknown"),
+                        "description": (agent_data.get("description", "") or "").strip(),
+                        "model_id": agent_data.get("model_id", None),
+                        "capabilities": agent_data.get("capabilities", []),
+                        "keywords": triggers.get("keywords", []),
+                        "phases": triggers.get("phases", []),
+                        "complexity_range": complexity_range,
+                        "tools": agent_data.get("tools", []),
+                        "enabled": agent_data.get("enabled", True),
+                        "version": agent_data.get("version", "1.0.0"),
+                        "source": "yaml",
+                        "templates_using": [],
+                    }
+                except Exception as e:
+                    logger.warning(f"Failed to parse agent YAML {yaml_file}: {e}")
+
+        # Parse MD pipeline stage agents
+        md_agents = {}
+        for md_file in sorted(agents_dir.glob("*.md")):
+            try:
+                with open(md_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+                # Extract YAML frontmatter
+                if not content.startswith("---"):
+                    continue
+                parts = content.split("---", 2)
+                if len(parts) < 3:
+                    continue
+                frontmatter = parts[1].strip()
+                if yaml_lib:
+                    fm_data = yaml_lib.safe_load(frontmatter)
+                else:
+                    # Minimal fallback parse
+                    fm_data = {}
+                    for line in frontmatter.split("\n"):
+                        if ":" in line:
+                            key, _, val = line.partition(":")
+                            fm_data[key.strip()] = val.strip().strip('"')
+
+                agent_id = fm_data.get("id", md_file.stem)
+                category = fm_data.get("category", "pipeline_stage")
+                md_agents[agent_id] = {
+                    "id": agent_id,
+                    "name": fm_data.get("name", agent_id),
+                    "category": category,
+                    "description": (fm_data.get("description", "") or "").strip(),
+                    "model_id": fm_data.get("model_id", None),
+                    "capabilities": fm_data.get("capabilities", []),
+                    "keywords": fm_data.get("triggers", {}).get("keywords", []) if isinstance(fm_data.get("triggers"), dict) else [],
+                    "phases": fm_data.get("triggers", {}).get("phases", []) if isinstance(fm_data.get("triggers"), dict) else [],
+                    "complexity_range": "0-1",
+                    "tools": fm_data.get("tools", []),
+                    "enabled": fm_data.get("enabled", True),
+                    "version": fm_data.get("version", "1.0.0"),
+                    "source": "pipeline_stage",
+                    "entrypoint": fm_data.get("pipeline.entrypoint", None),
+                    "templates_using": [],
+                }
+            except Exception as e:
+                logger.warning(f"Failed to parse agent MD {md_file}: {e}")
+
+        # Cross-reference with pipeline templates
+        templates_dir = Path(os.getcwd()) / "config" / "pipeline_templates"
+        template_agent_map = {}  # agent_id -> [template_names]
+        if templates_dir.is_dir() and yaml_lib:
+            for tmpl_file in sorted(templates_dir.glob("*.yaml")):
+                try:
+                    with open(tmpl_file, "r", encoding="utf-8") as f:
+                        tmpl_data = yaml_lib.safe_load(f)
+                    if not tmpl_data:
+                        continue
+                    tmpl_name = tmpl_data.get("name", tmpl_file.stem)
+                    agent_cats = tmpl_data.get("agent_categories", {})
+                    for cat_agents in agent_cats.values():
+                        if isinstance(cat_agents, list):
+                            for aid in cat_agents:
+                                template_agent_map.setdefault(aid, []).append(tmpl_name)
+                except Exception as e:
+                    logger.warning(f"Failed to parse template {tmpl_file}: {e}")
+
+        # Apply template references to agents
+        for aid, tmpl_names in template_agent_map.items():
+            if aid in yaml_agents:
+                yaml_agents[aid]["templates_using"] = tmpl_names
+            elif aid in md_agents:
+                md_agents[aid]["templates_using"] = tmpl_names
+
+        # Build category index
+        all_agents = {**yaml_agents, **md_agents}
+        categories = {}
+        for aid, agent in all_agents.items():
+            cat = agent["category"]
+            categories.setdefault(cat, []).append(aid)
+
+        return {
+            "agents": list(all_agents.values()),
+            "categories": categories,
+            "total": len(all_agents),
+        }
+    except Exception as e:
+        logger.error("Failed to list agents: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to list agents. Check server logs for details.",
         )
 
 

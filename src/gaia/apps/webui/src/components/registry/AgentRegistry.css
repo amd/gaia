@@ -1,0 +1,362 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* AgentRegistry - Browse all available GAIA agents */
+
+.agent-registry {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+}
+
+/* Header */
+.ar-header h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 0 0 4px;
+    color: var(--text-primary, #111827);
+}
+
+.ar-header p {
+    margin: 0 0 20px;
+    color: var(--text-secondary, #6b7280);
+    font-size: 0.875rem;
+}
+
+/* Loading */
+.ar-loading {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--text-secondary, #6b7280);
+    justify-content: center;
+}
+
+.ar-loading-spinner {
+    width: 24px;
+    height: 24px;
+    border: 3px solid var(--border, #e5e7eb);
+    border-top-color: var(--accent, #3b82f6);
+    border-radius: 50%;
+    animation: ar-spin 0.8s linear infinite;
+}
+
+@keyframes ar-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Toolbar */
+.ar-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.ar-search {
+    position: relative;
+}
+
+.ar-search-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-secondary, #9ca3af);
+}
+
+.ar-search input {
+    width: 100%;
+    padding: 10px 12px 10px 36px;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 8px;
+    font-size: 0.875rem;
+    background: var(--bg-input, #f9fafb);
+    color: var(--text-primary, #111827);
+}
+
+.ar-search input:focus {
+    outline: none;
+    border-color: var(--accent, #3b82f6);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.ar-category-filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.ar-cat-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 9999px;
+    background: var(--bg-card, #fff);
+    color: var(--text-secondary, #6b7280);
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.ar-cat-btn:hover {
+    background: var(--bg-input, #f3f4f6);
+}
+
+.ar-cat-btn.active {
+    background: var(--accent, #3b82f6);
+    color: #fff;
+    border-color: var(--accent, #3b82f6);
+}
+
+/* Empty State */
+.ar-empty {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text-secondary, #6b7280);
+}
+
+.ar-empty svg {
+    margin-bottom: 12px;
+    opacity: 0.4;
+}
+
+.ar-empty h3 {
+    margin: 0 0 4px;
+    font-size: 1rem;
+    color: var(--text-primary, #374151);
+}
+
+.ar-empty p {
+    margin: 0;
+    font-size: 0.875rem;
+}
+
+/* Agent List */
+.ar-agent-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Agent Card */
+.ar-agent-card {
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: box-shadow 0.15s ease;
+}
+
+.ar-agent-card:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.ar-agent-disabled {
+    opacity: 0.6;
+}
+
+/* Agent Header Row */
+.ar-agent-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.ar-agent-header:hover {
+    background: var(--bg-input, #f9fafb);
+}
+
+.ar-agent-icon {
+    color: var(--text-secondary, #9ca3af);
+    flex-shrink: 0;
+}
+
+.ar-agent-title {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+.ar-agent-name {
+    font-weight: 600;
+    font-size: 0.875rem;
+    color: var(--text-primary, #111827);
+}
+
+.ar-agent-id {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.6875rem;
+    color: var(--text-secondary, #9ca3af);
+}
+
+.ar-agent-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+/* Badges */
+.ar-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+}
+
+.ar-badge-source {
+    background: #ede9fe;
+    color: #7c3aed;
+}
+
+.ar-badge-category {
+    background: #dbeafe;
+    color: #2563eb;
+}
+
+.ar-badge-model {
+    background: #d1fae5;
+    color: #059669;
+}
+
+.ar-badge-disabled {
+    background: #fee2e2;
+    color: #dc2626;
+}
+
+/* Agent Details */
+.ar-agent-details {
+    border-top: 1px solid var(--border, #e5e7eb);
+    padding: 16px;
+    background: var(--bg-input, #f9fafb);
+}
+
+.ar-detail-section {
+    margin-bottom: 12px;
+}
+
+.ar-detail-section:last-child {
+    margin-bottom: 0;
+}
+
+.ar-detail-section h4 {
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin: 0 0 6px;
+    color: var(--text-secondary, #6b7280);
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+}
+
+.ar-agent-description {
+    font-size: 0.8125rem;
+    color: var(--text-primary, #374151);
+    line-height: 1.5;
+    margin: 0;
+}
+
+/* Capability Chips */
+.ar-capability-list,
+.ar-keyword-list,
+.ar-phase-list,
+.ar-template-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.ar-capability-chip {
+    display: inline-block;
+    padding: 3px 10px;
+    background: #e0e7ff;
+    color: #4338ca;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 500;
+}
+
+.ar-keyword-chip {
+    display: inline-block;
+    padding: 3px 10px;
+    background: #fef3c7;
+    color: #92400e;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-family: monospace;
+    font-weight: 500;
+}
+
+.ar-phase-chip {
+    display: inline-block;
+    padding: 3px 10px;
+    background: #d1fae5;
+    color: #065f46;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+}
+
+.ar-tool-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    background: #f3f4f6;
+    color: #374151;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-family: monospace;
+    font-weight: 500;
+}
+
+.ar-template-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    background: #ede9fe;
+    color: #6d28d9;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 500;
+}
+
+.ar-entrypoint {
+    display: block;
+    padding: 8px 12px;
+    background: #1e293b;
+    color: #e2e8f0;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    overflow-x: auto;
+    margin: 0;
+}
+
+.ar-detail-meta {
+    display: flex;
+    gap: 16px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border, #e5e7eb);
+    font-size: 0.6875rem;
+    color: var(--text-secondary, #9ca3af);
+}

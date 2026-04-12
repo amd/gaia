@@ -7,6 +7,9 @@
   padding: 24px;
   max-width: 1400px;
   margin: 0 auto;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .ptm-header {

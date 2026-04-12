@@ -415,3 +415,132 @@ class AgentCapabilities:
         if special:
             parts.append(f"special={special}")
         return f"AgentCapabilities({', '.join(parts)})"
+
+
+# =============================================================================
+# VALID_CAPABILITY_STRINGS - Canonical vocabulary for agent capability routing
+# =============================================================================
+#
+# This is the canonical vocabulary for agent capability routing.
+# Derived from the 18 YAML agent definitions in config/agents/.
+# Used by _build_agent_definition() in registry.py for validation (Phase 2).
+#
+# New agents SHOULD use only these strings until a formal vocabulary expansion
+# process is defined.
+# =============================================================================
+
+VALID_CAPABILITY_STRINGS: frozenset = frozenset(
+    [
+        "accessibility-audit",
+        "angular-development",
+        "api-design",
+        "api-development",
+        "api-documentation",
+        "aria-validation",
+        "authentication",
+        "benchmarking",
+        "best-practices-validation",
+        "bottleneck-detection",
+        "caching",
+        "changelog-generation",
+        "chronicle-digest-analysis",
+        "ci-cd-pipeline",
+        "cloud-deployment",
+        "code-refactoring",
+        "code-review",
+        "compliance-audit",
+        "component-design",
+        "coverage-analysis",
+        "css-styling",
+        "data-modeling",
+        "data-pipeline",
+        "database-design",
+        "database-integration",
+        "debugging",
+        "defect-routing",
+        "deployment-coordination",
+        "docker-containerization",
+        "documentation-review",
+        "etl-development",
+        "full-stack-development",
+        "gap-identification",
+        "graphql-schema",
+        "improvement-suggestions",
+        "inclusive-design",
+        "kubernetes-orchestration",
+        "migration-planning",
+        "openapi-specification",
+        "optimization",
+        "performance-analysis",
+        "pipeline-progression",
+        "progress-tracking",
+        "project-management",
+        "quality-assessment",
+        "quality-decision-making",
+        "query-optimization",
+        "react-development",
+        "release-management",
+        "requirements-analysis",
+        "responsive-design",
+        "review-consensus",
+        "risk-assessment",
+        "roadmap-creation",
+        "scalability-planning",
+        "schema-modeling",
+        "security-audit",
+        "service-architecture",
+        "spark-processing",
+        "status-reporting",
+        "strategic-planning",
+        "system-architecture",
+        "task-breakdown",
+        "task-coordination",
+        "technical-writing",
+        "technology-selection",
+        "terraform-iac",
+        "test-automation",
+        "test-generation",
+        "test-quality-assessment",
+        "threat-modeling",
+        "tutorial-creation",
+        "typescript",
+        "versioning",
+        "vue-development",
+        "vulnerability-detection",
+        "wcag-compliance",
+    ]
+)
+
+
+def validate_capabilities(capabilities: list[str]) -> list[str]:
+    """
+    Validate a list of capability strings against the canonical vocabulary.
+
+    This function checks each capability string against VALID_CAPABILITY_STRINGS
+    and returns a list of warnings for any strings that are not recognized.
+
+    Note: This function does NOT raise errors - it returns informational warnings
+    only. This allows for flexibility during development while still surfacing
+    potential issues.
+
+    Args:
+        capabilities: List of capability strings to validate.
+
+    Returns:
+        List of warning messages for unrecognized capability strings.
+        Empty list if all capabilities are valid.
+
+    Example:
+        >>> warnings = validate_capabilities(["code-review", "unknown-capability"])
+        >>> len(warnings)
+        1
+        >>> "unknown-capability" in warnings[0]
+        True
+    """
+    warnings_list = []
+    for cap in capabilities:
+        if cap not in VALID_CAPABILITY_STRINGS:
+            warnings_list.append(
+                f"Unrecognized capability: '{cap}' - not in VALID_CAPABILITY_STRINGS"
+            )
+    return warnings_list

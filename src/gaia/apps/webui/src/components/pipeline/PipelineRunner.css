@@ -7,6 +7,9 @@
     max-width: 960px;
     margin: 0 auto;
     padding: 24px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
 }
 
 .pr-header h1 {

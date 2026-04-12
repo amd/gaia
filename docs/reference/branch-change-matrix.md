@@ -56,6 +56,48 @@ The change matrix in Section 3 uses the following column schema. All reviewers s
 
 ---
 
+### Milestone 1 & 2 Completion Record (Agent Ecosystem Migration)
+
+**Date:** 2026-04-11
+**Branch:** `feature/pipeline-orchestration-v1`
+**Program:** Agent Ecosystem Migration (Phase 5/6)
+
+**Summary:**
+Milestones 1 and 2 of the Agent Ecosystem Migration program completed successfully. All 18 YAML agent definition files have been migrated to MD frontmatter format, the registry now loads both .yaml and .md files with collision detection, and the capability vocabulary has been standardized.
+
+**Files Created/Modified:**
+
+| Category | Files | Description |
+|----------|-------|-------------|
+| **Registry** | `src/gaia/agents/registry.py` | Added `_build_agent_definition()` helper, `_load_md_agent()` method with CRLF/BOM handling, `*.md` glob in `_load_all_agents()`, agent-ID collision guard |
+| **Capabilities** | `src/gaia/core/capabilities.py` | Added `VALID_CAPABILITY_STRINGS` constant (77 unique strings) |
+| **Agent Definitions** | `config/agents/*.md` (18 files) | All 18 YAML agents converted to MD format with non-empty system prompts |
+| **Templates** | `/c/Users/amikinka/.claude/templates/` (17 files) | Complete template library: 5 agent, 5 component, 4 pipeline, 2 meta, 1 README |
+| **Migration Script** | `util/migrate-capabilities.py` | Capability vocabulary migration script |
+| **Specifications** | `docs/spec/agent-ecosystem-design-spec.md` | Added Section 10 (Pipeline Integration Checklist) |
+| **Specifications** | `docs/spec/agent-ecosystem-action-plan.md` | Updated Milestone 1/2/3 status |
+| **Unit Tests** | `tests/unit/agents/` (18 tests) | Unit tests for `_load_md_agent()` and migration validation |
+
+**Quality Metrics:**
+- 18/18 agents migrated (100%)
+- 100% unit test pass rate
+- 61/61 quality checks passed
+- 77 unique capability strings standardized in `VALID_CAPABILITY_STRINGS`
+
+**Commits on This Branch (Milestone 1/2 Related):**
+- Registry implementation with MD loader and collision guard
+- Capabilities vocabulary standardization
+- Template library creation
+- Migration script execution
+- Spec updates (Sections 10, milestone tracking)
+
+**Current State:**
+- Milestone 1: COMPLETED (2026-04-11)
+- Milestone 2: COMPLETED (2026-04-11)
+- Milestone 3: READY — unblocked
+
+---
+
 ## Table of Contents
 
 - [Section 1 — Document Header](#section-1--document-header)

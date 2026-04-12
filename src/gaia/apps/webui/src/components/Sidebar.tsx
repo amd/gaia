@@ -16,8 +16,8 @@ interface SidebarProps {
     tunnelActive?: boolean;
     tunnelLoading?: boolean;
     onMobileToggle?: () => void;
-    currentView?: 'chat' | 'templates' | 'runner';
-    onViewChange?: (view: 'chat' | 'templates' | 'runner') => void;
+    currentView?: 'chat' | 'templates' | 'runner' | 'registry';
+    onViewChange?: (view: 'chat' | 'templates' | 'runner' | 'registry') => void;
 }
 
 /** Copy a session's hash link to the clipboard. */
@@ -458,6 +458,15 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                     >
                         <span className="sidebar-nav-icon">⚡</span>
                         <span>Run Pipeline</span>
+                    </button>
+                    <button
+                        className={`sidebar-nav-item ${currentView === 'registry' ? 'active' : ''}`}
+                        onClick={() => onViewChange('registry')}
+                        title="Agent Registry"
+                        aria-label="Open agent registry"
+                    >
+                        <span className="sidebar-nav-icon">🤖</span>
+                        <span>Agent Registry</span>
                     </button>
                 </div>
             )}

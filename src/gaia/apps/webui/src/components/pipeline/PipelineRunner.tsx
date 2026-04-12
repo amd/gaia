@@ -27,13 +27,13 @@ import { useChatStore } from '../../stores/chatStore';
 import { useTemplateStore } from '../../stores/templateStore';
 import './PipelineRunner.css';
 
-/** Map 5-stage pipeline phases to template agent categories. */
+/** Map 5-stage pipeline phases to actual agent categories in config/agents/. */
 const STAGE_CATEGORY_MAP: Record<string, string> = {
-  domain_analysis: 'planning',
-  workflow_modeling: 'planning',
-  loom_building: 'development',
-  gap_detection: 'quality',
-  pipeline_execution: 'development',
+  domain_analysis: 'analysis',
+  workflow_modeling: 'analysis',
+  loom_building: 'orchestration',
+  gap_detection: 'orchestration',
+  pipeline_execution: 'orchestration',
 };
 
 const STAGE_ICONS: Record<string, string> = {
@@ -41,6 +41,8 @@ const STAGE_ICONS: Record<string, string> = {
   development: '⚙️',
   quality: '🔍',
   decision: '📊',
+  analysis: '🔬',
+  orchestration: '🕸️',
 };
 
 const EVENT_ICONS: Record<string, React.ReactNode> = {
@@ -122,11 +124,11 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
   // Build phase-to-agent mapping for display
   const phaseAgents: Array<{ stage: string; agents: string[]; category: string }> = selectedTemplate
     ? [
-        { stage: 'Domain Analysis', agents: agentCategories?.planning || [], category: 'planning' },
-        { stage: 'Workflow Modeling', agents: agentCategories?.planning || [], category: 'planning' },
-        { stage: 'Loom Building', agents: agentCategories?.development || [], category: 'development' },
-        { stage: 'Gap Detection', agents: agentCategories?.quality || [], category: 'quality' },
-        { stage: 'Pipeline Execution', agents: agentCategories?.development || [], category: 'development' },
+        { stage: 'Domain Analysis', agents: agentCategories?.analysis || [], category: 'analysis' },
+        { stage: 'Workflow Modeling', agents: agentCategories?.analysis || [], category: 'analysis' },
+        { stage: 'Loom Building', agents: agentCategories?.orchestration || [], category: 'orchestration' },
+        { stage: 'Gap Detection', agents: agentCategories?.orchestration || [], category: 'orchestration' },
+        { stage: 'Pipeline Execution', agents: agentCategories?.orchestration || [], category: 'orchestration' },
       ]
     : [];
 

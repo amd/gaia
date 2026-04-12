@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateCreateRequest, TemplateUpdateRequest, PipelineMetricsResponse, PipelineMetricsHistory, PipelineAggregateMetrics, PipelineRunRequest, PipelineRunResponse, PipelineEvent } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateCreateRequest, TemplateUpdateRequest, PipelineMetricsResponse, PipelineMetricsHistory, PipelineAggregateMetrics, PipelineRunRequest, PipelineRunResponse, PipelineEvent, AgentRegistryEntry } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -511,6 +511,11 @@ export async function deleteTemplate(templateName: string): Promise<{ deleted: b
 /** Validate a pipeline template YAML. */
 export async function validateTemplate(templateName: string): Promise<TemplateValidateResponse> {
     return apiFetch('GET', `/v1/pipeline/templates/${templateName}/validate`);
+}
+
+/** List all registered agents with categories, capabilities, and template references. */
+export async function listAgents(): Promise<{ agents: AgentRegistryEntry[]; categories: Record<string, string[]>; total: number }> {
+    return apiFetch('GET', '/v1/pipeline/agents');
 }
 
 // ── Pipeline Metrics ─────────────────────────────────────────────────────
