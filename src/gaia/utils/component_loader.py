@@ -394,7 +394,8 @@ class ComponentLoader:
             Full path to saved component
 
         Raises:
-            ComponentLoaderError: If component cannot be saved
+            ComponentLoaderError: If component cannot be saved, or path
+                traversal attempt is detected (SEC-003).
         """
         import logging
 
@@ -411,7 +412,19 @@ class ComponentLoader:
                             component_path=component_path
                         )
 
-            full_path = self._framework_dir / component_path
+            full_path = (self._framework_dir / component_path).resolve()
+            framework_dir_resolved = self._framework_dir.resolve()
+
+            # SEC-003: Path traversal protection — ensure resolved path
+            # stays within the component-framework directory
+            try:
+                full_path.relative_to(framework_dir_resolved)
+            except ValueError:
+                raise ComponentLoaderError(
+                    f"Path traversal detected: {component_path!r} resolves outside "
+                    f"the component-framework directory. Paths must stay within "
+                    f"component-framework/."
+                )
 
             # Create parent directories if they don't exist
             full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -438,6 +451,8 @@ class ComponentLoader:
 
             logger.debug(f"Saved component: {component_path} -> {full_path}")
             return str(full_path)
+        except ComponentLoaderError:
+            raise
         except IOError as e:
             raise ComponentLoaderError(
                 f"Failed to write component file",
