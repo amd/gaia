@@ -232,7 +232,9 @@
               "spec/api-server",
               "spec/pipeline-engine",
               "spec/phase5_multi_stage_pipeline",
-              "spec/component-framework-design-spec"
+              "spec/component-framework-design-spec",
+              "spec/auto-spawn-pipeline-state-flow",
+              "spec/phase5-implementation-assessment"
             ]
           },
           {
@@ -283,7 +285,9 @@
               "spec/blender-agent",
               "spec/summarizer-app",
               "spec/component-status",
-              "spec/unified-capability-model"
+              "spec/unified-capability-model",
+              "spec/agent-ecosystem-design-spec",
+              "spec/ether-repl-spec"
             ]
           },
           {

@@ -190,6 +190,7 @@ atlassian_config.json
 *.mcp.json
 .mcp.json
 !.devcontainer/.mcp.json
+.playwright-mcp/
 
 # Local settings files (machine-specific, not for repo)
 *local.json
