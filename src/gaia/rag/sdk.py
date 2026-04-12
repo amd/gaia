@@ -1217,7 +1217,7 @@ These positions indicate where to split the text."""
                 if prev_empty and next_not_empty:
                     # Additional check: does it look like a title?
                     # (starts with capital, no ending punctuation, relatively short)
-                    if line.strip()[0].isupper() and not line.strip()[-1] in ".!?,;":
+                    if line.strip()[0].isupper() and line.strip()[-1] not in ".!?,;":
                         is_boundary = True
 
             if is_boundary and current_section:
@@ -1577,6 +1577,10 @@ These positions indicate where to split the text."""
         """
         file_path = str(Path(file_path).absolute())
         with self._state_lock:
+            # Keep remove+reindex under the same lock so readers never observe a
+            # gap where the document disappeared between generations. Query
+            # paths snapshot state quickly under this same lock and then do the
+            # expensive work outside it.
             # Remove old version if it exists
             if file_path in self.indexed_files:
                 self.log.info(f"Removing old version of {file_path}")
@@ -1897,6 +1901,9 @@ These positions indicate where to split the text."""
                         stats["total_chunks"] = len(self.chunks)
                         return stats
 
+                    # Re-check capacity under the lock because another writer
+                    # may have indexed or evicted documents while we were
+                    # loading this cache entry from disk.
                     if not self._has_indexing_capacity():
                         msg = (
                             f"Memory limit reached: {len(self.indexed_files)} files "
@@ -2036,6 +2043,10 @@ These positions indicate where to split the text."""
                     stats["total_chunks"] = len(self.chunks)
                     return stats
 
+                # This second capacity check is intentional: the optimistic
+                # pre-flight above avoids expensive extraction work, while this
+                # locked check protects against TOCTOU drift after extraction
+                # and chunking finish.
                 if not self._has_indexing_capacity():
                     msg = (
                         f"Memory limit reached: {len(self.indexed_files)} files "
@@ -2221,6 +2232,9 @@ These positions indicate where to split the text."""
             file_index = faiss.IndexFlatL2(dimension)
             # pylint: disable=no-value-for-parameter
             file_index.add(file_embeddings.astype("float32"))
+            # Intentionally keep this rebuilt index query-local. Publishing it
+            # back into the shared per-file caches here would mutate shared
+            # state from a read path after the snapshot was taken.
         else:
             # Use cached index - FAST!
             file_index = cached_file_index
@@ -2319,6 +2333,8 @@ These positions indicate where to split the text."""
         scores = []
         for idx, dist in zip(indices[0], distances[0]):
             idx = int(idx)
+            # FAISS can surface stale or invalid positions relative to the
+            # captured chunk snapshot; skip anything outside the snapshot.
             if idx < 0 or idx >= len(chunks_snapshot):
                 continue
             retrieved_indices.append(idx)

@@ -802,7 +802,7 @@ class TestErrorHandling:
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory():
             config = AgentConfig()
             chat = AgentSDK(config)
 
