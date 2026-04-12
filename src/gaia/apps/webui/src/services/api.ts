@@ -464,17 +464,17 @@ export async function getMCPRuntimeStatus(): Promise<{ servers: MCPServerStatus[
 
 /** List all available pipeline templates. */
 export async function listTemplates(): Promise<TemplateListResponse> {
-    return apiFetch('GET', '/api/v1/pipeline/templates');
+    return apiFetch('GET', '/v1/pipeline/templates');
 }
 
 /** Get a specific pipeline template by name. */
 export async function getTemplate(templateName: string): Promise<PipelineTemplate> {
-    return apiFetch('GET', `/api/v1/pipeline/templates/${templateName}`);
+    return apiFetch('GET', `/v1/pipeline/templates/${templateName}`);
 }
 
 /** Get raw YAML content for a pipeline template. */
 export async function getTemplateRaw(templateName: string): Promise<string> {
-    const url = `${API_BASE}/api/v1/pipeline/templates/${templateName}/raw`;
+    const url = `${API_BASE}/v1/pipeline/templates/${templateName}/raw`;
     const t = log.api.time();
     log.api.info(`GET ${url}`);
 
@@ -495,29 +495,29 @@ export async function getTemplateRaw(templateName: string): Promise<string> {
 
 /** Create a new pipeline template. */
 export async function createTemplate(data: TemplateCreateRequest): Promise<PipelineTemplate> {
-    return apiFetch('POST', '/api/v1/pipeline/templates', data);
+    return apiFetch('POST', '/v1/pipeline/templates', data);
 }
 
 /** Update an existing pipeline template. */
 export async function updateTemplate(templateName: string, data: TemplateUpdateRequest): Promise<PipelineTemplate> {
-    return apiFetch('PUT', `/api/v1/pipeline/templates/${templateName}`, data);
+    return apiFetch('PUT', `/v1/pipeline/templates/${templateName}`, data);
 }
 
 /** Delete a pipeline template. */
 export async function deleteTemplate(templateName: string): Promise<{ deleted: boolean; template: string }> {
-    return apiFetch('DELETE', `/api/v1/pipeline/templates/${templateName}`);
+    return apiFetch('DELETE', `/v1/pipeline/templates/${templateName}`);
 }
 
 /** Validate a pipeline template YAML. */
 export async function validateTemplate(templateName: string): Promise<TemplateValidateResponse> {
-    return apiFetch('GET', `/api/v1/pipeline/templates/${templateName}/validate`);
+    return apiFetch('GET', `/v1/pipeline/templates/${templateName}/validate`);
 }
 
 // ── Pipeline Metrics ─────────────────────────────────────────────────────
 
 /** Get comprehensive metrics for a specific pipeline execution. */
 export async function getPipelineMetrics(pipelineId: string): Promise<PipelineMetricsResponse> {
-    return apiFetch('GET', `/api/v1/pipeline/metrics/${pipelineId}`);
+    return apiFetch('GET', `/v1/pipeline/metrics/${pipelineId}`);
 }
 
 /** Get metrics history for a pipeline. */
@@ -525,12 +525,12 @@ export async function getMetricsHistory(pipelineId: string, metricType?: string)
     const params = new URLSearchParams();
     if (metricType) params.set('metric_type', metricType);
     const query = params.toString() ? `?${params}` : '';
-    return apiFetch('GET', `/api/v1/pipeline/metrics/${pipelineId}/history${query}`);
+    return apiFetch('GET', `/v1/pipeline/metrics/${pipelineId}/history${query}`);
 }
 
 /** Get aggregate metrics across all pipelines. */
 export async function getAggregateMetrics(): Promise<PipelineAggregateMetrics> {
-    return apiFetch('GET', '/api/v1/pipeline/metrics/aggregate');
+    return apiFetch('GET', '/v1/pipeline/metrics/aggregate');
 }
 
 /** Get phase-specific timing metrics. */
@@ -632,7 +632,7 @@ export function runPipelineStream(
         sessionId: request.session_id,
     });
 
-    fetch(`${API_BASE}/api/v1/pipeline/run`, {
+    fetch(`${API_BASE}/v1/pipeline/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
