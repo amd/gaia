@@ -1,8 +1,8 @@
 # Phase 4 Completion & Program Closeout Status Document
 
-**Document Version:** 21.0 (PHASE 5 COMPLETE - Runtime Verified)
+**Document Version:** 22.0 (PHASE 5 COMPLETE - Agent Ecosystem Display Added)
 **Date:** 2026-04-11
-**Status:** Phase 0 COMPLETE - Phase 1 COMPLETE - Phase 2 COMPLETE - Phase 3 COMPLETE - Phase 4 COMPLETE - Phase 5 COMPLETE (Runtime verified, all endpoints functional)
+**Status:** Phase 0 COMPLETE - Phase 1 COMPLETE - Phase 2 COMPLETE - Phase 3 COMPLETE - Phase 4 COMPLETE - Phase 5 COMPLETE (Agent ecosystem visible in Pipeline Runner)
 **Owner:** software-program-manager
 
 ---
@@ -739,6 +739,22 @@ Phase 1 Sprint 3 (Pipeline-Nexus Integration) is **COMPLETE** with 31 tests pass
 |----|-------|------|------------|--------|
 | **RT-001** | Double `/api` prefix in API paths | `api.ts` | All pipeline paths used `/api/v1/...` but `API_BASE` is `/api`, creating `/api/api/v1/...`. Stripped `/api/` from pipeline paths. | FIXED |
 
+### Session-5: Agent Ecosystem Display (COMPLETE)
+
+You correctly identified that the agent templates and ecosystem were invisible. The Pipeline Runner now shows:
+
+**When a template is selected, the Agent Ecosystem section displays:**
+1. **Agent Categories** — Grouped by role (Planning, Development, Quality, Decision) with agent count per category
+2. **Agent Chips** — Each agent ID shown as a styled chip (e.g., `planning-analysis-strategist`, `security-auditor`)
+3. **Phase → Agent Mapping** — Which agents run at each of the 5 pipeline stages
+4. **Routing Rules** — Conditional routing with conditions, targets, and loop indicators
+
+| Template | Agents | Categories | Routing Rules |
+|----------|--------|------------|---------------|
+| enterprise | 7 agents | 4 (planning: 2, development: 1, quality: 3, decision: 1) | 2 rules (security → security-auditor, performance → performance-analyst) |
+| generic | 4 agents | 4 (1 each) | 3 rules (security, missing_tests, low quality) |
+| rapid | 3 agents | 3 (no decision category) | 1 rule (critical severity) |
+
 ### Pending Tasks
 
 - [ ] Merge PR (blocked on GitHub SAML SSO authorization)
@@ -1058,8 +1074,8 @@ Phase 0 COMPLETE (Tool Scoping)
 | 16.0 | 2026-04-06 | Phase 3 Sprint 3 COMPLETE - Caching + Enterprise Config (~1640 LOC, ~170+ tests), QG4 PASS, ~90% program complete | software-program-manager |
 | 17.0 | **2026-04-06** | **Phase 3 Sprint 4 COMPLETE - Observability + API (~2370 LOC, ~180+ tests), QG5 PASS, ~95% program complete, Phase 3 COMPLETE** | **software-program-manager** |
 | **18.0** | **2026-04-06** | **Phase 3 Test Fixes Applied (6 issues), Phase 4 Implementation Plan Created, Phase 4 READY FOR KICKOFF** | **senior-developer-agent** |
+| **22.0** | **2026-04-11** | **Phase 5 Agent Ecosystem Display - Agent categories, phase mapping, and routing rules visible in Pipeline Runner** | **senior-developer** |
 | **21.0** | **2026-04-11** | **Phase 5 Runtime Verified - All endpoints functional, UI renders, double /api prefix bug fixed, commit pushed** | **senior-developer** |
-| **20.0** | **2026-04-11** | **Phase 5 Session-3 COMPLETE - All TS bugs fixed, build passes, docs updated. Runtime verification pending.** | **senior-developer** |
 
 ---
 
