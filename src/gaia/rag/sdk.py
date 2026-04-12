@@ -11,6 +11,7 @@ import hashlib
 import os
 import pickle
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -151,6 +152,7 @@ class RAGSDK:
         self._access_counter = 0
         self.file_access_times = {}  # {file_path: monotonic access counter}
         self.file_index_times = {}  # {file_path: index_time (wall clock for display)}
+        self._state_lock = threading.RLock()
 
         # Create cache directory
         os.makedirs(self.config.cache_dir, exist_ok=True)
@@ -1215,7 +1217,7 @@ These positions indicate where to split the text."""
                 if prev_empty and next_not_empty:
                     # Additional check: does it look like a title?
                     # (starts with capital, no ending punctuation, relatively short)
-                    if line.strip()[0].isupper() and not line.strip()[-1] in ".!?,;":
+                    if line.strip()[0].isupper() and line.strip()[-1] not in ".!?,;":
                         is_boundary = True
 
             if is_boundary and current_section:
@@ -1449,6 +1451,18 @@ These positions indicate where to split the text."""
         )
         return index, chunks
 
+    def _snapshot_query_state(self) -> Dict[str, Any]:
+        """Capture a consistent read snapshot for query operations."""
+        with self._state_lock:
+            if self.index is None or not self.chunks:
+                raise ValueError("No documents indexed. Call index_document() first.")
+            return {
+                "index": self.index,
+                "chunks": list(self.chunks),
+                "chunk_to_file": dict(self.chunk_to_file),
+                "indexed_file_count": len(self.indexed_files),
+            }
+
     def remove_document(self, file_path: str) -> bool:
         """
         Remove a document from the index.
@@ -1460,84 +1474,96 @@ These positions indicate where to split the text."""
             True if removal succeeded, False otherwise
         """
         file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            if file_path not in self.indexed_files:
+                self.log.warning(f"Document not indexed: {file_path}")
+                return False
 
-        if file_path not in self.indexed_files:
-            self.log.warning(f"Document not indexed: {file_path}")
-            return False
+            try:
+                new_chunks = list(self.chunks)
+                new_chunk_to_file = dict(self.chunk_to_file)
+                new_file_to_chunk_indices = {
+                    path: list(indices)
+                    for path, indices in self.file_to_chunk_indices.items()
+                }
+                new_index = self.index
 
-        try:
-            # Get chunk indices for this file
-            if file_path in self.file_to_chunk_indices:
-                chunk_indices_set = set(self.file_to_chunk_indices[file_path])
+                # Get chunk indices for this file
+                if file_path in self.file_to_chunk_indices:
+                    chunk_indices_set = set(self.file_to_chunk_indices[file_path])
 
-                # OPTIMIZED: Rebuild all structures in one O(N) pass
-                # This is much faster than deleting in a loop (which is O(N²))
-                new_chunks = []
-                new_chunk_to_file = {}
-                new_file_to_chunk_indices = {}
+                    # OPTIMIZED: Rebuild all structures in one O(N) pass
+                    # This is much faster than deleting in a loop (which is O(N²))
+                    new_chunks = []
+                    new_chunk_to_file = {}
+                    new_file_to_chunk_indices = {}
 
-                # Single pass through all chunks - O(N)
-                for old_idx, chunk in enumerate(self.chunks):
-                    # Skip chunks from file being removed
-                    if old_idx in chunk_indices_set:
-                        continue
+                    # Single pass through all chunks - O(N)
+                    for old_idx, chunk in enumerate(self.chunks):
+                        # Skip chunks from file being removed
+                        if old_idx in chunk_indices_set:
+                            continue
 
-                    new_idx = len(new_chunks)
-                    new_chunks.append(chunk)
+                        new_idx = len(new_chunks)
+                        new_chunks.append(chunk)
 
-                    # Update chunk_to_file mapping
-                    if old_idx in self.chunk_to_file:
-                        file = self.chunk_to_file[old_idx]
-                        new_chunk_to_file[new_idx] = file
+                        # Update chunk_to_file mapping
+                        if old_idx in self.chunk_to_file:
+                            owner = self.chunk_to_file[old_idx]
+                            new_chunk_to_file[new_idx] = owner
 
-                        # Update file_to_chunk_indices for this file
-                        if file not in new_file_to_chunk_indices:
-                            new_file_to_chunk_indices[file] = []
-                        new_file_to_chunk_indices[file].append(new_idx)
+                            # Update file_to_chunk_indices for this file
+                            if owner not in new_file_to_chunk_indices:
+                                new_file_to_chunk_indices[owner] = []
+                            new_file_to_chunk_indices[owner].append(new_idx)
 
-                # Atomic replacement - all or nothing
+                    # Rebuild index only after the new chunk set is ready.
+                    if new_chunks:
+                        new_index, new_chunks = self._create_vector_index(new_chunks)
+                    else:
+                        new_index = None
+
+                # Publish state only after all rebuild work succeeded.
                 self.chunks = new_chunks
                 self.chunk_to_file = new_chunk_to_file
                 self.file_to_chunk_indices = new_file_to_chunk_indices
+                self.index = new_index
 
-            # Remove from indexed files
-            self.indexed_files.discard(file_path)
+                # Remove from indexed files
+                self.indexed_files.discard(file_path)
 
-            # Clean up LRU tracking
-            if file_path in self.file_access_times:
-                del self.file_access_times[file_path]
-            if file_path in self.file_index_times:
-                del self.file_index_times[file_path]
+                # Clean up LRU tracking
+                if file_path in self.file_access_times:
+                    del self.file_access_times[file_path]
+                if file_path in self.file_index_times:
+                    del self.file_index_times[file_path]
 
-            # Clean up cached per-file indices and embeddings
-            if file_path in self.file_indices:
-                del self.file_indices[file_path]
-            if file_path in self.file_embeddings:
-                del self.file_embeddings[file_path]
+                # Clean up cached per-file indices and embeddings
+                if file_path in self.file_indices:
+                    del self.file_indices[file_path]
+                if file_path in self.file_embeddings:
+                    del self.file_embeddings[file_path]
 
-            # Clean up cached metadata
-            if file_path in self.file_metadata:
-                del self.file_metadata[file_path]
+                # Clean up cached metadata
+                if file_path in self.file_metadata:
+                    del self.file_metadata[file_path]
 
-            # Rebuild index if chunks remain
-            if self.chunks:
-                self.index, self.chunks = self._create_vector_index(self.chunks)
-                if self.config.show_stats:
-                    print(f"✅ Removed {Path(file_path).name} from index")
-                    print(
-                        f"📊 Remaining: {len(self.indexed_files)} documents, {len(self.chunks)} chunks"
-                    )
-            else:
-                self.index = None
-                if self.config.show_stats:
-                    print("✅ Removed last document from index")
+                if self.index is not None:
+                    if self.config.show_stats:
+                        print(f"✅ Removed {Path(file_path).name} from index")
+                        print(
+                            f"📊 Remaining: {len(self.indexed_files)} documents, {len(self.chunks)} chunks"
+                        )
+                else:
+                    if self.config.show_stats:
+                        print("✅ Removed last document from index")
 
-            self.log.info(f"Successfully removed document: {file_path}")
-            return True
+                self.log.info(f"Successfully removed document: {file_path}")
+                return True
 
-        except Exception as e:
-            self.log.error(f"Failed to remove document {file_path}: {e}")
-            return False
+            except Exception as e:
+                self.log.error(f"Failed to remove document {file_path}: {e}")
+                return False
 
     def reindex_document(self, file_path: str) -> Dict[str, Any]:
         """
@@ -1550,23 +1576,27 @@ These positions indicate where to split the text."""
             Dict with indexing results and statistics (same as index_document)
         """
         file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            # Keep remove+reindex under the same lock so readers never observe a
+            # gap where the document disappeared between generations. Query
+            # paths snapshot state quickly under this same lock and then do the
+            # expensive work outside it.
+            # Remove old version if it exists
+            if file_path in self.indexed_files:
+                self.log.info(f"Removing old version of {file_path}")
+                if not self.remove_document(file_path):
+                    return {
+                        "success": False,
+                        "error": "Failed to remove old version",
+                        "file_name": Path(file_path).name,
+                    }
 
-        # Remove old version if it exists
-        if file_path in self.indexed_files:
-            self.log.info(f"Removing old version of {file_path}")
-            if not self.remove_document(file_path):
-                return {
-                    "success": False,
-                    "error": "Failed to remove old version",
-                    "file_name": Path(file_path).name,
-                }
-
-        # Index the new version
-        self.log.info(f"Indexing new version of {file_path}")
-        result = self.index_document(file_path)
-        if result.get("success"):
-            result["reindexed"] = True
-        return result
+            # Index the new version
+            self.log.info(f"Indexing new version of {file_path}")
+            result = self.index_document(file_path)
+            if result.get("success"):
+                result["reindexed"] = True
+            return result
 
     def _evict_lru_document(self) -> bool:
         """
@@ -1776,32 +1806,33 @@ These positions indicate where to split the text."""
         stats["file_type"] = file_type
         stats["file_name"] = Path(file_path).name
 
-        # Check if already indexed
-        if file_path in self.indexed_files:
-            if self.config.show_stats:
-                print(f"📋 Document already indexed: {Path(file_path).name}")
-            self.log.info(f"Document already indexed: {file_path}")
-            stats["success"] = True
-            stats["already_indexed"] = True
-            stats["total_indexed_files"] = len(self.indexed_files)
-            stats["total_chunks"] = len(self.chunks)
-            return stats
+        with self._state_lock:
+            # Check if already indexed
+            if file_path in self.indexed_files:
+                if self.config.show_stats:
+                    print(f"📋 Document already indexed: {Path(file_path).name}")
+                self.log.info(f"Document already indexed: {file_path}")
+                stats["success"] = True
+                stats["already_indexed"] = True
+                stats["total_indexed_files"] = len(self.indexed_files)
+                stats["total_chunks"] = len(self.chunks)
+                return stats
 
-        # Pre-flight: check capacity before investing in indexing
-        if not self._has_indexing_capacity():
-            msg = (
-                f"Memory limit reached: {len(self.indexed_files)} files "
-                f"(max: {self.config.max_indexed_files}), "
-                f"{len(self.chunks)} chunks "
-                f"(max: {self.config.max_total_chunks}). "
-                "Enable LRU eviction or remove documents manually."
-            )
-            self.log.warning(f"Cannot index {file_path}: {msg}")
-            if self.config.show_stats:
-                print(f"❌ {msg}")
-            stats["error"] = msg
-            stats["memory_limit_reached"] = True
-            return stats
+            # Pre-flight: check capacity before investing in indexing
+            if not self._has_indexing_capacity():
+                msg = (
+                    f"Memory limit reached: {len(self.indexed_files)} files "
+                    f"(max: {self.config.max_indexed_files}), "
+                    f"{len(self.chunks)} chunks "
+                    f"(max: {self.config.max_total_chunks}). "
+                    "Enable LRU eviction or remove documents manually."
+                )
+                self.log.warning(f"Cannot index {file_path}: {msg}")
+                if self.config.show_stats:
+                    print(f"❌ {msg}")
+                stats["error"] = msg
+                stats["memory_limit_reached"] = True
+                return stats
 
         # Check cache - the cache key is based on file content hash
         cache_path = self._get_cache_path(file_path)
@@ -1861,50 +1892,79 @@ These positions indicate where to split the text."""
                         vlm_info = f" (VLM: {cached_metadata['vlm_pages']} pages)"
                     print(f"  ✅ Loaded {len(cached_chunks)} cached chunks{vlm_info}")
 
-                # Track chunk indices for this file
-                start_idx = len(self.chunks)
-                file_chunk_indices = []
+                with self._state_lock:
+                    if file_path in self.indexed_files:
+                        self.log.info(f"Document already indexed: {file_path}")
+                        stats["success"] = True
+                        stats["already_indexed"] = True
+                        stats["total_indexed_files"] = len(self.indexed_files)
+                        stats["total_chunks"] = len(self.chunks)
+                        return stats
 
-                if self.index is None:
-                    # First document - use cached index directly
-                    self.chunks = cached_chunks
-                    # Track indices for all chunks (0 to len-1)
-                    for i in range(len(cached_chunks)):
-                        file_chunk_indices.append(i)
-                        self.chunk_to_file[i] = file_path
-                    self.index, self.chunks = self._create_vector_index(self.chunks)
-                else:
-                    # Merge with existing chunks and recreate index
-                    old_count = len(self.chunks)
-                    self.chunks.extend(cached_chunks)
-                    # Track indices for new chunks (start_idx to start_idx+len-1)
-                    for i in range(len(cached_chunks)):
-                        chunk_idx = start_idx + i
-                        file_chunk_indices.append(chunk_idx)
-                        self.chunk_to_file[chunk_idx] = file_path
-                    if self.config.show_stats:
-                        print(
-                            f"  🔄 Rebuilding index ({old_count} + {len(cached_chunks)} = {len(self.chunks)} chunks)"
+                    # Re-check capacity under the lock because another writer
+                    # may have indexed or evicted documents while we were
+                    # loading this cache entry from disk.
+                    if not self._has_indexing_capacity():
+                        msg = (
+                            f"Memory limit reached: {len(self.indexed_files)} files "
+                            f"(max: {self.config.max_indexed_files}), "
+                            f"{len(self.chunks)} chunks "
+                            f"(max: {self.config.max_total_chunks}). "
+                            "Enable LRU eviction or remove documents manually."
                         )
-                    self.index, self.chunks = self._create_vector_index(self.chunks)
+                        self.log.warning(f"Cannot index {file_path}: {msg}")
+                        if self.config.show_stats:
+                            print(f"❌ {msg}")
+                        stats["error"] = msg
+                        stats["memory_limit_reached"] = True
+                        return stats
 
-                # Store file-to-chunk mapping
-                self.file_to_chunk_indices[file_path] = file_chunk_indices
+                    # Track chunk indices for this file and publish only after the
+                    # rebuilt index succeeds so partial state is never visible.
+                    if self.index is None:
+                        rebuilt_chunks_source = list(cached_chunks)
+                        file_chunk_indices = list(range(len(cached_chunks)))
+                        rebuilt_chunk_to_file = {
+                            idx: file_path for idx in file_chunk_indices
+                        }
+                    else:
+                        old_chunks = list(self.chunks)
+                        old_count = len(old_chunks)
+                        rebuilt_chunks_source = old_chunks + list(cached_chunks)
+                        start_idx = len(old_chunks)
+                        file_chunk_indices = list(
+                            range(start_idx, start_idx + len(cached_chunks))
+                        )
+                        rebuilt_chunk_to_file = dict(self.chunk_to_file)
+                        for chunk_idx in file_chunk_indices:
+                            rebuilt_chunk_to_file[chunk_idx] = file_path
+                        if self.config.show_stats:
+                            print(
+                                f"  🔄 Rebuilding index ({old_count} + {len(cached_chunks)} = {len(rebuilt_chunks_source)} chunks)"
+                            )
 
-                # Restore metadata in memory
-                if cached_full_text or cached_metadata:
-                    self.file_metadata[file_path] = {
-                        "full_text": cached_full_text,
-                        **cached_metadata,
-                    }
+                    rebuilt_index, rebuilt_chunks = self._create_vector_index(
+                        rebuilt_chunks_source
+                    )
+                    self.index = rebuilt_index
+                    self.chunks = rebuilt_chunks
+                    self.chunk_to_file = rebuilt_chunk_to_file
+                    self.file_to_chunk_indices[file_path] = file_chunk_indices
 
-                self.indexed_files.add(file_path)
+                    # Restore metadata in memory
+                    if cached_full_text or cached_metadata:
+                        self.file_metadata[file_path] = {
+                            "full_text": cached_full_text,
+                            **cached_metadata,
+                        }
 
-                # Track access time for LRU (was missing — pre-existing bug)
-                current_time = time.time()
-                self.file_index_times[file_path] = current_time
-                self._access_counter += 1
-                self.file_access_times[file_path] = self._access_counter
+                    self.indexed_files.add(file_path)
+
+                    # Track access time for LRU (was missing — pre-existing bug)
+                    current_time = time.time()
+                    self.file_index_times[file_path] = current_time
+                    self._access_counter += 1
+                    self.file_access_times[file_path] = self._access_counter
 
                 if self.config.show_stats:
                     print("  ✅ Successfully loaded from cache")
@@ -1972,55 +2032,89 @@ These positions indicate where to split the text."""
             # Split into chunks
             new_chunks = self._split_text_into_chunks(text)
 
-            # Track which chunks belong to this file
-            file_chunk_indices = []
-            start_idx = len(self.chunks)
+            with self._state_lock:
+                if file_path in self.indexed_files:
+                    if self.config.show_stats:
+                        print(f"📋 Document already indexed: {Path(file_path).name}")
+                    self.log.info(f"Document already indexed: {file_path}")
+                    stats["success"] = True
+                    stats["already_indexed"] = True
+                    stats["total_indexed_files"] = len(self.indexed_files)
+                    stats["total_chunks"] = len(self.chunks)
+                    return stats
 
-            # Add to existing chunks or create new
-            if self.chunks:
-                old_count = len(self.chunks)
-                self.chunks.extend(new_chunks)
-
-                # Track the indices of chunks for this file
-                for i in range(start_idx, start_idx + len(new_chunks)):
-                    file_chunk_indices.append(i)
-                    self.chunk_to_file[i] = file_path
-
-                if self.config.show_stats:
-                    print(
-                        f"🔄 Rebuilding search index ({old_count} + {len(new_chunks)} = {len(self.chunks)} total chunks)"
+                # This second capacity check is intentional: the optimistic
+                # pre-flight above avoids expensive extraction work, while this
+                # locked check protects against TOCTOU drift after extraction
+                # and chunking finish.
+                if not self._has_indexing_capacity():
+                    msg = (
+                        f"Memory limit reached: {len(self.indexed_files)} files "
+                        f"(max: {self.config.max_indexed_files}), "
+                        f"{len(self.chunks)} chunks "
+                        f"(max: {self.config.max_total_chunks}). "
+                        "Enable LRU eviction or remove documents manually."
                     )
-                self.index, self.chunks = self._create_vector_index(self.chunks)
-            else:
-                # First file being indexed
-                for i in range(len(new_chunks)):
-                    file_chunk_indices.append(i)
-                    self.chunk_to_file[i] = file_path
+                    self.log.warning(f"Cannot index {file_path}: {msg}")
+                    if self.config.show_stats:
+                        print(f"❌ {msg}")
+                    stats["error"] = msg
+                    stats["memory_limit_reached"] = True
+                    return stats
 
+                # Track which chunks belong to this file and only publish them after
+                # the rebuilt global index succeeds.
+                if self.chunks:
+                    old_chunks = list(self.chunks)
+                    old_count = len(old_chunks)
+                    rebuilt_chunks_source = old_chunks + list(new_chunks)
+                    start_idx = len(old_chunks)
+                    file_chunk_indices = list(
+                        range(start_idx, start_idx + len(new_chunks))
+                    )
+                    rebuilt_chunk_to_file = dict(self.chunk_to_file)
+                    for chunk_idx in file_chunk_indices:
+                        rebuilt_chunk_to_file[chunk_idx] = file_path
+
+                    if self.config.show_stats:
+                        print(
+                            f"🔄 Rebuilding search index ({old_count} + {len(new_chunks)} = {len(rebuilt_chunks_source)} total chunks)"
+                        )
+                else:
+                    file_chunk_indices = list(range(len(new_chunks)))
+                    rebuilt_chunks_source = list(new_chunks)
+                    rebuilt_chunk_to_file = {
+                        idx: file_path for idx in file_chunk_indices
+                    }
+
+                    if self.config.show_stats:
+                        print("🏗️  Building initial search index...")
+
+                rebuilt_index, rebuilt_chunks = self._create_vector_index(
+                    rebuilt_chunks_source
+                )
+                self.index = rebuilt_index
+                self.chunks = rebuilt_chunks
+                self.chunk_to_file = rebuilt_chunk_to_file
+                self.file_to_chunk_indices[file_path] = file_chunk_indices
+
+                # Build and cache per-file FAISS index for fast file-specific searches
                 if self.config.show_stats:
-                    print("🏗️  Building initial search index...")
-                self.index, self.chunks = self._create_vector_index(new_chunks)
+                    print("🔍 Building per-file search index...")
 
-            # Store the file-to-chunks mapping
-            self.file_to_chunk_indices[file_path] = file_chunk_indices
+                self._load_embedder()
+                # Generate embeddings for this file's chunks only
+                file_embeddings = self._encode_texts(new_chunks, show_progress=False)
 
-            # Build and cache per-file FAISS index for fast file-specific searches
-            if self.config.show_stats:
-                print("🔍 Building per-file search index...")
+                # Create FAISS index for this file
+                dimension = file_embeddings.shape[1]
+                file_index = faiss.IndexFlatL2(dimension)
+                # pylint: disable=no-value-for-parameter
+                file_index.add(file_embeddings.astype("float32"))
 
-            self._load_embedder()
-            # Generate embeddings for this file's chunks only
-            file_embeddings = self._encode_texts(new_chunks, show_progress=False)
-
-            # Create FAISS index for this file
-            dimension = file_embeddings.shape[1]
-            file_index = faiss.IndexFlatL2(dimension)
-            # pylint: disable=no-value-for-parameter
-            file_index.add(file_embeddings.astype("float32"))
-
-            # Cache the index and embeddings for this file
-            self.file_indices[file_path] = file_index
-            self.file_embeddings[file_path] = file_embeddings
+                # Cache the index and embeddings for this file
+                self.file_indices[file_path] = file_index
+                self.file_embeddings[file_path] = file_embeddings
 
             if self.config.show_stats:
                 print(f"✅ Cached per-file index with {len(new_chunks)} chunks")
@@ -2040,25 +2134,26 @@ These positions indicate where to split the text."""
                 f.write(f"{checksum}\n".encode())
                 f.write(pickled)
 
-            # Store metadata in memory for fast access
-            self.file_metadata[file_path] = {
-                "full_text": text,
-                **file_metadata,  # num_pages, vlm_pages, total_images
-            }
-
             # Auto-save markdown version to cache directory for easy access
             self._save_extracted_markdown(file_path, text, file_metadata)
 
-            self.indexed_files.add(file_path)
+            with self._state_lock:
+                # Store metadata in memory for fast access
+                self.file_metadata[file_path] = {
+                    "full_text": text,
+                    **file_metadata,  # num_pages, vlm_pages, total_images
+                }
 
-            # Track index time for LRU
-            current_time = time.time()
-            self.file_index_times[file_path] = current_time
-            self._access_counter += 1
-            self.file_access_times[file_path] = self._access_counter
+                self.indexed_files.add(file_path)
 
-            # Check memory limits and evict if necessary
-            limits_ok = self._check_memory_limits()
+                # Track index time for LRU
+                current_time = time.time()
+                self.file_index_times[file_path] = current_time
+                self._access_counter += 1
+                self.file_access_times[file_path] = self._access_counter
+
+                # Check memory limits and evict if necessary
+                limits_ok = self._check_memory_limits()
             if not limits_ok:
                 self.log.warning(
                     f"Memory limits exceeded after indexing {file_path}. "
@@ -2105,27 +2200,31 @@ These positions indicate where to split the text."""
         2. Searches smaller, file-specific FAISS index
         3. No need to rebuild index on each query
         """
-        if self.index is None or not self.chunks:
-            raise ValueError("No documents indexed. Call index_document() first.")
+        with self._state_lock:
+            if self.index is None or not self.chunks:
+                raise ValueError("No documents indexed. Call index_document() first.")
 
-        if file_path not in self.file_to_chunk_indices:
-            raise ValueError(f"File not indexed: {file_path}")
+            if file_path not in self.file_to_chunk_indices:
+                raise ValueError(f"File not indexed: {file_path}")
 
-        # Update access time for LRU tracking
-        self._access_counter += 1
-        self.file_access_times[file_path] = self._access_counter
+            # Update access time for LRU tracking
+            self._access_counter += 1
+            self.file_access_times[file_path] = self._access_counter
 
-        # Get chunk indices for this file
-        file_chunk_indices = self.file_to_chunk_indices[file_path]
+            # Snapshot file-scoped state before the expensive embedding/search work.
+            file_chunk_indices = list(self.file_to_chunk_indices[file_path])
+            chunks_snapshot = list(self.chunks)
+            cached_file_index = self.file_indices.get(file_path)
+
         if not file_chunk_indices:
             return [], []
 
-        # Get chunks for this file
-        file_chunks = [self.chunks[i] for i in file_chunk_indices]
+        # Get chunks for this file from the snapshot
+        file_chunks = [chunks_snapshot[i] for i in file_chunk_indices]
 
-        # Use CACHED per-file index (this is the performance fix!)
-        if file_path not in self.file_indices:
-            # Index not cached - build it now (shouldn't happen normally)
+        # Use cached per-file index when available; otherwise rebuild locally
+        # from the snapshot without mutating shared state mid-query.
+        if cached_file_index is None:
             self.log.warning(f"Per-file index not cached for {file_path}, rebuilding")
             self._load_embedder()
             file_embeddings = self._encode_texts(file_chunks, show_progress=False)
@@ -2133,11 +2232,12 @@ These positions indicate where to split the text."""
             file_index = faiss.IndexFlatL2(dimension)
             # pylint: disable=no-value-for-parameter
             file_index.add(file_embeddings.astype("float32"))
-            self.file_indices[file_path] = file_index
-            self.file_embeddings[file_path] = file_embeddings
+            # Intentionally keep this rebuilt index query-local. Publishing it
+            # back into the shared per-file caches here would mutate shared
+            # state from a read path after the snapshot was taken.
         else:
             # Use cached index - FAST!
-            file_index = self.file_indices[file_path]
+            file_index = cached_file_index
 
         # Encode query only once
         self._load_embedder()
@@ -2165,21 +2265,25 @@ These positions indicate where to split the text."""
 
         return retrieved_chunks, scores
 
-    def _retrieve_chunks_with_metadata(self, query: str) -> tuple:
+    def _retrieve_chunks_with_metadata(
+        self, query: str, search_snapshot: Optional[Dict[str, Any]] = None
+    ) -> tuple:
         """
         Retrieve chunks with metadata about their source files.
 
         Returns:
             (chunks, scores, metadata) tuple
         """
-        chunks, scores = self._retrieve_chunks(query)
+        snapshot = search_snapshot or self._search_chunks(query)
+        chunks = snapshot["retrieved_chunks"]
+        scores = snapshot["scores"]
 
         # Build metadata for each chunk
         metadata = []
-        for i, (chunk, score) in enumerate(zip(chunks, scores)):
-            # Find which file this chunk came from
-            chunk_idx = self.chunks.index(chunk) if chunk in self.chunks else -1
-            source_file = self.chunk_to_file.get(chunk_idx, "unknown")
+        for i, (chunk_idx, chunk, score) in enumerate(
+            zip(snapshot["retrieved_indices"], chunks, scores)
+        ):
+            source_file = snapshot["chunk_to_file"].get(chunk_idx, "unknown")
 
             metadata.append(
                 {
@@ -2200,28 +2304,42 @@ These positions indicate where to split the text."""
 
     def _retrieve_chunks(self, query: str) -> tuple:
         """Retrieve relevant chunks for query."""
-        if self.index is None or not self.chunks:
-            raise ValueError("No documents indexed. Call index_document() first.")
+        snapshot = self._search_chunks(query)
+        return snapshot["retrieved_chunks"], snapshot["scores"]
+
+    def _search_chunks(self, query: str) -> Dict[str, Any]:
+        """Retrieve relevant chunks and indices from a consistent snapshot."""
+        snapshot = self._snapshot_query_state()
+        chunks_snapshot = snapshot["chunks"]
+        index_snapshot = snapshot["index"]
 
         self._load_embedder()
 
         # Generate query embedding
         if self.config.show_stats:
-            print(f"🔍 Searching through {len(self.chunks)} chunks...")
+            print(f"🔍 Searching through {len(chunks_snapshot)} chunks...")
         self.log.debug(f"Encoding query: {query[:50]}...")
         query_embedding = self._encode_texts([query], show_progress=False)
 
         # Search for similar chunks
-        k = min(self.config.max_chunks, len(self.chunks))
+        k = min(self.config.max_chunks, len(chunks_snapshot))
         if self.config.show_stats:
             print(f"  🎯 Finding {k} most relevant chunks...")
         # pylint: disable=no-value-for-parameter
-        distances, indices = self.index.search(query_embedding.astype("float32"), k)
+        distances, indices = index_snapshot.search(query_embedding.astype("float32"), k)
 
-        # Get chunks and scores
-        retrieved_chunks = [self.chunks[i] for i in indices[0]]
-        # Convert distances to similarity scores (lower distance = higher similarity)
-        scores = [1.0 / (1.0 + dist) for dist in distances[0]]
+        retrieved_indices = []
+        retrieved_chunks = []
+        scores = []
+        for idx, dist in zip(indices[0], distances[0]):
+            idx = int(idx)
+            # FAISS can surface stale or invalid positions relative to the
+            # captured chunk snapshot; skip anything outside the snapshot.
+            if idx < 0 or idx >= len(chunks_snapshot):
+                continue
+            retrieved_indices.append(idx)
+            retrieved_chunks.append(chunks_snapshot[idx])
+            scores.append(1.0 / (1.0 + float(dist)))
 
         if self.config.show_stats:
             avg_relevance = sum(scores) / len(scores) if scores else 0.0
@@ -2232,7 +2350,10 @@ These positions indicate where to split the text."""
         self.log.debug(
             f"Retrieved {len(retrieved_chunks)} chunks with scores: {[f'{s:.3f}' for s in scores]}"
         )
-        return retrieved_chunks, scores
+        snapshot["retrieved_indices"] = retrieved_indices
+        snapshot["retrieved_chunks"] = retrieved_chunks
+        snapshot["scores"] = scores
+        return snapshot
 
     def query(self, question: str, include_metadata: bool = True) -> RAGResponse:
         """
@@ -2245,16 +2366,18 @@ These positions indicate where to split the text."""
         Returns:
             RAGResponse with answer, retrieved chunks, and metadata
         """
-        if self.index is None:
-            raise ValueError("No documents indexed. Call index_document() first.")
+        search_snapshot = self._search_chunks(question)
+        chunks = search_snapshot["retrieved_chunks"]
+        scores = search_snapshot["scores"]
+        total_indexed_files = search_snapshot["indexed_file_count"]
+        total_indexed_chunks = len(search_snapshot["chunks"])
 
         # Retrieve relevant chunks with metadata
         if include_metadata:
             chunks, scores, chunk_metadata = self._retrieve_chunks_with_metadata(
-                question
+                question, search_snapshot
             )
         else:
-            chunks, scores = self._retrieve_chunks(question)
             chunk_metadata = None
 
         # Build context from retrieved chunks
@@ -2291,8 +2414,8 @@ Answer:"""
                 "question": question,
                 "num_chunks_retrieved": len(chunks),
                 "source_files": source_files,
-                "total_indexed_files": len(self.indexed_files),
-                "total_indexed_chunks": len(self.chunks),
+                "total_indexed_files": total_indexed_files,
+                "total_indexed_chunks": total_indexed_chunks,
                 "average_relevance_score": float(np.mean(scores)) if scores else 0.0,
                 "max_relevance_score": float(max(scores)) if scores else 0.0,
                 "min_relevance_score": float(min(scores)) if scores else 0.0,
@@ -2384,10 +2507,11 @@ Answer:"""
         """Clear the RAG cache."""
         import shutil
 
-        if os.path.exists(self.config.cache_dir):
-            shutil.rmtree(self.config.cache_dir)
-            os.makedirs(self.config.cache_dir, exist_ok=True)
-        self.log.info("Cache cleared")
+        with self._state_lock:
+            if os.path.exists(self.config.cache_dir):
+                shutil.rmtree(self.config.cache_dir)
+                os.makedirs(self.config.cache_dir, exist_ok=True)
+            self.log.info("Cache cleared")
 
     def get_status(self) -> Dict[str, Any]:
         """Get RAG system status."""
