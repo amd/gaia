@@ -162,6 +162,139 @@ Create, rename, search, export (Markdown/JSON), and delete sessions. Sessions pe
 
 ---
 
+## Pipeline Runner
+
+The Agent UI includes a built-in **Pipeline Runner** for executing the 5-stage autonomous agent pipeline with real-time SSE streaming. This feature allows you to run complex AI workflows that automatically plan, build, validate, and iterate on tasks until quality thresholds are met.
+
+### Accessing the Pipeline Runner
+
+Click the **Run Pipeline** button in the sidebar (⚡ icon) to open the Pipeline Runner page. The Template Manager is accessible from the same navigation area for managing pipeline templates.
+
+### Pipeline Configuration
+
+The Pipeline Runner provides a configuration form with the following options:
+
+| Field | Description |
+|-------|-------------|
+| **Task Description** | Natural language description of what you want the pipeline to analyze or build |
+| **Session** | Select an existing session to associate with the pipeline execution |
+| **Auto-spawn** | Enable automatic agent spawning when capability gaps are detected (requires Claude Code environment) |
+| **Template** | Optional pipeline template to use for routing and quality thresholds |
+
+<Tip>
+  **Auto-spawn requires Claude Code.** When enabled, the Gap Detection stage can invoke `master-ecosystem-creator.md` to generate missing agents automatically. Running outside Claude Code will result in silent failures when gaps are found. Use the Template Manager to pre-configure templates with required agents.
+</Tip>
+
+### The 5 Pipeline Stages
+
+The Pipeline Runner displays real-time progress through 5 autonomous stages:
+
+```
+┌─────────────────┐
+│  Task Input     │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 1:        │
+│ Domain Analyzer │ → Analyzes task to identify knowledge domains
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 2:        │
+│ Workflow Modeler│ → Models workflow and recommends required agents
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 3:        │
+│ Loom Builder    │ → Builds execution topology (agent graph)
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Stage 4:        │
+│ Gap Detector    │ → Compares required vs available agents
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │ Gaps?   │
+    └────┬────┘
+      Yes│No
+         │     ┌──────────────────────────┐
+         │     │ Master Ecosystem Creator │
+         └────→│ (Generates missing agents)│
+               └────────────┬─────────────┘
+                            │
+         ▼                  │
+┌─────────────────┐         │
+│ Stage 5:        │◄────────┘
+│ Pipeline Exec.  │ → Executes complete agent pipeline
+└─────────────────┘
+```
+
+The stage indicator at the top of the execution view shows which stage is active (highlighted) and which stages are complete (checkmark).
+
+### Real-Time Event Log
+
+The Pipeline Runner streams SSE (Server-Sent Events) in real-time to an event log. Each event is color-coded and expandable:
+
+| Event Type | Icon | Description |
+|------------|------|-------------|
+| `status` | Terminal | Pipeline status updates (starting, running, completed, failed) |
+| `step` | Chevron | Stage transitions and progress markers |
+| `thinking` | Alert | LLM reasoning and decision-making output |
+| `tool_start` | Chevron | Tool execution beginning |
+| `tool_end` | Check | Tool execution completed successfully |
+| `tool_result` | Terminal | Tool execution results |
+| `done` | Check | Pipeline completed successfully |
+| `error` | XCircle | Pipeline failed with error |
+
+Click the chevron icon on any event to expand and view full details, including tool arguments and results.
+
+### Execution History
+
+Each pipeline run is preserved in execution history with:
+
+- **Run ID** — Unique identifier (first 8 characters shown)
+- **Status** — Current state (starting, running, completed, failed, cancelled)
+- **Timestamps** — Start and end times
+- **Task Description** — The original task input
+- **Event Log** — Complete SSE event stream with expandable details
+
+Use the **Clear History** button to remove all completed executions. Individual executions can be deleted using the trash icon in the execution header.
+
+### Managing Pipeline Runs
+
+| Action | Description |
+|--------|-------------|
+| **Run Pipeline** | Start a new pipeline execution with the configured settings |
+| **Cancel** | Stop a running pipeline (marks as failed with "Cancelled by user" error) |
+| **Clear History** | Remove all completed execution records |
+| **Delete Execution** | Remove a specific execution from history |
+| **Manage Templates** | Navigate to the Template Manager to create or edit pipeline templates |
+
+### Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Auto-spawn silently fails">
+    The auto-spawn feature requires a Claude Code environment. When running outside Claude Code, the Gap Detector stage will detect gaps but cannot spawn new agents. Disable auto-spawn or use pre-configured templates with all required agents.
+  </Accordion>
+
+  <Accordion title="Pipeline fails immediately">
+    Ensure Lemonade Server is running and the selected session is valid. Check the event log for the specific error message.
+  </Accordion>
+
+  <Accordion title="No templates in dropdown">
+    Templates are managed separately in the Template Manager. Click "Manage Templates" to create your first template.
+  </Accordion>
+</AccordionGroup>
+
+[→ Full Pipeline Orchestration Guide](/guides/pipeline) | [→ Pipeline SDK Reference](/sdk/infrastructure/pipeline)
+
+---
+
 ## MCP Server
 
 The Agent UI includes a built-in **MCP (Model Context Protocol) server** that exposes the full Agent UI as a set of tools. This lets external AI assistants — like **Claude Code**, **Cursor**, or any MCP-compatible client — interact with GAIA agents through the same backend that powers the web UI.

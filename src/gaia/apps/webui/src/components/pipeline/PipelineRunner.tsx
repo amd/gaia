@@ -81,7 +81,8 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: string)
   const [autoSpawn, setAutoSpawn] = useState(true);
   const [templateName, setTemplateName] = useState('');
   const [sessionId, setSessionId] = useState(currentSessionId || '');
-  const [collapsedEvents, setCollapsedEvents] = useState<Set<string>>(new Set());
+  // Use array for collapsed event keys (immutable, React-detectable)
+  const [collapsedEvents, setCollapsedEvents] = useState<string[]>([]);
 
   const eventLogRef = useRef<HTMLDivElement>(null);
 
@@ -92,10 +93,10 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: string)
 
   // Sync session ID when current session changes
   useEffect(() => {
-    if (currentSessionId && !sessionId) {
+    if (currentSessionId) {
       setSessionId(currentSessionId);
     }
-  }, [currentSessionId, sessionId]);
+  }, [currentSessionId]);
 
   // Auto-scroll event log
   useEffect(() => {
@@ -125,15 +126,11 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: string)
   }, [cancelPipeline]);
 
   const toggleEventCollapse = useCallback((eventId: string) => {
-    setCollapsedEvents((prev) => {
-      const next = new Set(prev);
-      if (next.has(eventId)) {
-        next.delete(eventId);
-      } else {
-        next.add(eventId);
-      }
-      return next;
-    });
+    setCollapsedEvents((prev) =>
+      prev.includes(eventId)
+        ? prev.filter((id) => id !== eventId)
+        : [...prev, eventId]
+    );
   }, []);
 
   const formatTime = (ts: number) => {
@@ -374,7 +371,7 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: string)
                     const eventType =
                       'type' in event ? (event as any).type : 'status';
                     const eventKey = `${exec.id}-${i}`;
-                    const isCollapsed = collapsedEvents.has(eventKey);
+                    const isCollapsed = collapsedEvents.includes(eventKey);
                     const icon = EVENT_ICONS[eventType] || <Terminal size={14} />;
                     const colorClass = EVENT_COLORS[eventType] || 'event-status';
                     const content =
@@ -392,6 +389,15 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: string)
                         <div
                           className="pr-event-summary"
                           onClick={() => toggleEventCollapse(eventKey)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              toggleEventCollapse(eventKey);
+                            }
+                          }}
+                          role="button"
+                          tabIndex={0}
+                          aria-expanded={!isCollapsed}
                         >
                           <button className="pr-event-toggle">
                             {isCollapsed ? (

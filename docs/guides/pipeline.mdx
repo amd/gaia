@@ -16,6 +16,10 @@ icon: "diagram-project"
   **Programmatic API only.** The `gaia pipeline` command is registered as a placeholder and prints SDK usage instructions. Full interactive CLI support is not yet implemented. Use the Python SDK for all pipeline operations.
 </Note>
 
+<Tip>
+  **New:** The Agent UI now includes a **Pipeline Runner** page for executing pipelines with real-time SSE streaming. Access it via the "Run Pipeline" button (⚡) in the sidebar. See the [Agent UI Guide](/guides/agent-ui#pipeline-runner) for the graphical interface.
+</Tip>
+
 ## What Is Pipeline Orchestration?
 
 The GAIA Pipeline Orchestration engine executes goals as **self-improving recursive loops**. Each iteration moves through four phases: planning a strategy, implementing it, scoring the output against 27 quality validators, and then deciding whether the result is good enough to ship or needs another pass.
