@@ -533,13 +533,12 @@ exists. Stages 2, 3, and 4 do not.
 Replace with:
 ```
 3. **Pipeline stages — PARTIALLY DELIVERED (Phase 5) with architectural deviation.** Phase 5
-delivered Python-class implementations of Stages 1–4 plus a GapDetector (Stage 4b) and
-PipelineExecutor (Stage 5):
+delivered Python-class implementations of Stages 1–5:
    - Stage 1: `src/gaia/pipeline/stages/domain_analyzer.py` (`DomainAnalyzer(Agent)`)
    - Stage 2: `src/gaia/pipeline/stages/workflow_modeler.py` (`WorkflowModeler(Agent)`)
    - Stage 3: `src/gaia/pipeline/stages/loom_builder.py` (`LoomBuilder(Agent)`)
-   - Stage 4a: `src/gaia/pipeline/stages/gap_detector.py` (`GapDetector(Agent)`)
-   - Stage 4b: `src/gaia/pipeline/stages/pipeline_executor.py` (`PipelineExecutor(Agent)`)
+   - Stage 4: `src/gaia/pipeline/stages/gap_detector.py` (`GapDetector(Agent)`)
+   - Stage 5: `src/gaia/pipeline/stages/pipeline_executor.py` (`PipelineExecutor(Agent)`)
    - Coordinator: `src/gaia/pipeline/orchestrator.py` (`PipelineOrchestrator(Agent)`)
 
    **Architectural deviation:** This spec anticipated MD-format agent config files in
