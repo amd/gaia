@@ -20,11 +20,28 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
+  Users,
 } from 'lucide-react';
 import { usePipelineStore } from '../../stores/pipelineStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useTemplateStore } from '../../stores/templateStore';
 import './PipelineRunner.css';
+
+/** Map 5-stage pipeline phases to template agent categories. */
+const STAGE_CATEGORY_MAP: Record<string, string> = {
+  domain_analysis: 'planning',
+  workflow_modeling: 'planning',
+  loom_building: 'development',
+  gap_detection: 'quality',
+  pipeline_execution: 'development',
+};
+
+const STAGE_ICONS: Record<string, string> = {
+  planning: '📋',
+  development: '⚙️',
+  quality: '🔍',
+  decision: '📊',
+};
 
 const EVENT_ICONS: Record<string, React.ReactNode> = {
   status: <Terminal size={14} />,
@@ -97,6 +114,21 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
       setSessionId(currentSessionId);
     }
   }, [currentSessionId]);
+
+  // Get selected template's agent categories for display
+  const selectedTemplate = templates.find((t) => t.name === templateName) || null;
+  const agentCategories = selectedTemplate?.agent_categories || null;
+
+  // Build phase-to-agent mapping for display
+  const phaseAgents: Array<{ stage: string; agents: string[]; category: string }> = selectedTemplate
+    ? [
+        { stage: 'Domain Analysis', agents: agentCategories?.planning || [], category: 'planning' },
+        { stage: 'Workflow Modeling', agents: agentCategories?.planning || [], category: 'planning' },
+        { stage: 'Loom Building', agents: agentCategories?.development || [], category: 'development' },
+        { stage: 'Gap Detection', agents: agentCategories?.quality || [], category: 'quality' },
+        { stage: 'Pipeline Execution', agents: agentCategories?.development || [], category: 'development' },
+      ]
+    : [];
 
   // Auto-scroll event log
   useEffect(() => {
@@ -235,6 +267,70 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
             </div>
           </div>
         </div>
+
+        {/* Agent Ecosystem Preview */}
+        {agentCategories && Object.keys(agentCategories).length > 0 && (
+          <div className="pr-agent-ecosystem">
+            <div className="pr-agent-ecosystem-header">
+              <Users size={16} />
+              <h3>Agent Ecosystem</h3>
+              <span className="pr-agent-ecosystem-count">
+                {Object.values(agentCategories).flat().length} agents across {Object.keys(agentCategories).length} categories
+              </span>
+            </div>
+            <div className="pr-agent-categories">
+              {Object.entries(agentCategories).map(([category, agents]) => (
+                <div key={category} className="pr-agent-category">
+                  <div className="pr-agent-category-header">
+                    <span className="pr-agent-category-icon">{STAGE_ICONS[category] || '🤖'}</span>
+                    <span className="pr-agent-category-label">{category.charAt(0).toUpperCase() + category.slice(1)}</span>
+                    <span className="pr-agent-category-count">{agents.length} agent{agents.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="pr-agent-category-agents">
+                    {agents.map((agent) => (
+                      <span key={agent} className="pr-agent-chip">
+                        {agent}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Phase-to-agent mapping */}
+            <div className="pr-phase-mapping">
+              <h4>Phase → Agent Mapping</h4>
+              <div className="pr-phase-agents-list">
+                {phaseAgents.map((pa) => (
+                  <div key={pa.stage} className="pr-phase-item">
+                    <span className="pr-phase-name">{pa.stage}</span>
+                    <ChevronRight size={12} className="pr-phase-arrow" />
+                    {pa.agents.length > 0 ? (
+                      <span className="pr-phase-agent-names">
+                        {pa.agents.join(', ')}
+                      </span>
+                    ) : (
+                      <span className="pr-phase-no-agent">No agent assigned</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Routing rules summary */}
+            {selectedTemplate?.routing_rules && selectedTemplate.routing_rules.length > 0 && (
+              <div className="pr-routing-rules">
+                <h4>Routing Rules ({selectedTemplate.routing_rules.length})</h4>
+                {selectedTemplate.routing_rules.map((rule, i) => (
+                  <div key={i} className="pr-rule">
+                    <span className="pr-rule-condition">{rule.condition}</span>
+                    <ChevronRight size={12} className="pr-phase-arrow" />
+                    <span className="pr-rule-target">{rule.route_to}</span>
+                    {rule.loop_back && <span className="pr-rule-loop">↻ loop</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="pr-actions">
           <button

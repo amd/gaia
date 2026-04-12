@@ -443,3 +443,186 @@
 .spin {
     animation: spin 1s linear infinite;
 }
+
+/* Agent Ecosystem Preview */
+.pr-agent-ecosystem {
+    margin-top: 16px;
+    padding: 16px;
+    background: var(--bg-input, #f9fafb);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 8px;
+}
+
+.pr-agent-ecosystem-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.pr-agent-ecosystem-header h3 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary, #111827);
+}
+
+.pr-agent-ecosystem-count {
+    font-size: 0.75rem;
+    color: var(--text-secondary, #6b7280);
+    margin-left: auto;
+}
+
+.pr-agent-categories {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.pr-agent-category {
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.pr-agent-category-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg-input, #f3f4f6);
+    border-bottom: 1px solid var(--border, #e5e7eb);
+}
+
+.pr-agent-category-icon {
+    font-size: 1rem;
+}
+
+.pr-agent-category-label {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-primary, #374151);
+    text-transform: capitalize;
+}
+
+.pr-agent-category-count {
+    margin-left: auto;
+    font-size: 0.6875rem;
+    color: var(--text-secondary, #6b7280);
+    background: var(--bg-card, #fff);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.pr-agent-category-agents {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 12px;
+}
+
+.pr-agent-chip {
+    display: inline-block;
+    padding: 3px 10px;
+    background: #eef2ff;
+    color: #4f46e5;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-weight: 500;
+    border: 1px solid #c7d2fe;
+}
+
+/* Phase to Agent Mapping */
+.pr-phase-mapping {
+    border-top: 1px solid var(--border, #e5e7eb);
+    padding-top: 12px;
+}
+
+.pr-phase-mapping h4,
+.pr-routing-rules h4 {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    margin: 0 0 8px;
+    color: var(--text-primary, #374151);
+}
+
+.pr-phase-agents-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.pr-phase-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--bg-card, #fff);
+    border-radius: 4px;
+    font-size: 0.75rem;
+}
+
+.pr-phase-name {
+    font-weight: 500;
+    color: var(--text-primary, #374151);
+    min-width: 140px;
+}
+
+.pr-phase-arrow {
+    color: var(--text-secondary, #9ca3af);
+    flex-shrink: 0;
+}
+
+.pr-phase-agent-names {
+    color: #4f46e5;
+    font-weight: 500;
+}
+
+.pr-phase-no-agent {
+    color: var(--text-secondary, #9ca3af);
+    font-style: italic;
+}
+
+/* Routing Rules */
+.pr-routing-rules {
+    border-top: 1px solid var(--border, #e5e7eb);
+    padding-top: 12px;
+    margin-top: 12px;
+}
+
+.pr-rule {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--bg-card, #fff);
+    border-radius: 4px;
+    font-size: 0.75rem;
+    margin-bottom: 4px;
+}
+
+.pr-rule-condition {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    color: #d97706;
+    background: #fef3c7;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.6875rem;
+}
+
+.pr-rule-target {
+    font-weight: 600;
+    color: #059669;
+}
+
+.pr-rule-loop {
+    margin-left: auto;
+    font-size: 0.6875rem;
+    color: #7c3aed;
+    background: #ede9fe;
+    padding: 1px 6px;
+    border-radius: 3px;
+}
