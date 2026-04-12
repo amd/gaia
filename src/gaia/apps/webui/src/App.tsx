@@ -13,6 +13,7 @@ import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { PermissionPrompt } from './components/PermissionPrompt';
 import { PipelineTemplateManager } from './components/templates/PipelineTemplateManager';
+import { PipelineRunner } from './components/pipeline/PipelineRunner';
 import { useChatStore } from './stores/chatStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
@@ -51,7 +52,7 @@ function AnimatedPresence({ show, children, duration = 250 }: {
     );
 }
 
-type AppView = 'chat' | 'templates';
+type AppView = 'chat' | 'templates' | 'runner';
 
 function App() {
     const {
@@ -428,6 +429,8 @@ function App() {
 
                 {currentView === 'templates' ? (
                     <PipelineTemplateManager />
+                ) : currentView === 'runner' ? (
+                    <PipelineRunner onViewChange={setCurrentView} />
                 ) : (
                     <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
                         {displayedSessionId ? (

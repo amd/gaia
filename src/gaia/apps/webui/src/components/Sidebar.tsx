@@ -16,8 +16,8 @@ interface SidebarProps {
     tunnelActive?: boolean;
     tunnelLoading?: boolean;
     onMobileToggle?: () => void;
-    currentView?: 'chat' | 'templates';
-    onViewChange?: (view: 'chat' | 'templates') => void;
+    currentView?: 'chat' | 'templates' | 'runner';
+    onViewChange?: (view: 'chat' | 'templates' | 'runner') => void;
 }
 
 /** Copy a session's hash link to the clipboard. */
@@ -449,6 +449,15 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                     >
                         <span className="sidebar-nav-icon">📋</span>
                         <span>Templates</span>
+                    </button>
+                    <button
+                        className={`sidebar-nav-item ${currentView === 'runner' ? 'active' : ''}`}
+                        onClick={() => onViewChange('runner')}
+                        title="Pipeline Runner"
+                        aria-label="Open pipeline runner"
+                    >
+                        <span className="sidebar-nav-icon">⚡</span>
+                        <span>Run Pipeline</span>
                     </button>
                 </div>
             )}
