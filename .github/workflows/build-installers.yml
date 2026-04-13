@@ -258,6 +258,11 @@ jobs:
             # (the security warning in electron-builder's output only matters when
             # CSC_LINK / APPLE_ID secrets are present and fork PRs are allowed).
             export CSC_FOR_PULL_REQUEST=true
+            # CSC_LINK is set to "" at the job level (secrets expand to empty
+            # strings when unset). @electron/osx-sign resolves "" to the working
+            # directory and fails with "not a file". Unset it so osx-sign skips
+            # the certificate-file path entirely and honours identity=- directly.
+            unset CSC_LINK
             EXTRA_ARGS="--config.mac.identity=-"
           fi
           npm run ${{ matrix.npm_script }} -- --publish never $EXTRA_ARGS
