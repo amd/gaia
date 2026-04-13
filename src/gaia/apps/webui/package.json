@@ -60,6 +60,7 @@
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
     "electron-squirrel-startup": "^1.0.0",
+    "playwright": "^1.59.1",
     "recharts": "^2.12.0"
   },
   "devDependencies": {

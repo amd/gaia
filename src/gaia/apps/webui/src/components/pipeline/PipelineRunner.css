@@ -414,6 +414,69 @@
 .event-done .pr-event-type { background: #d1fae5; color: #059669; }
 .event-error .pr-event-type { background: #fee2e2; color: #dc2626; }
 
+/* Recursive pipeline event colors */
+.event-loop .pr-event-type { background: #e0e7ff; color: #4338ca; }
+.event-quality .pr-event-type { background: #f0fdf4; color: #16a34a; }
+.event-phase .pr-event-type { background: #fef3c7; color: #d97706; }
+.event-iteration .pr-event-type { background: #e0f2fe; color: #0284c7; }
+.event-iteration-end .pr-event-type { background: #d1fae5; color: #059669; }
+.event-defect .pr-event-type { background: #fef2f2; color: #b91c1c; }
+
+/* Recursive pipeline event metadata */
+.pr-event-iteration {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6366f1;
+  background: #e0e7ff;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  margin-left: 4px;
+}
+.pr-event-phase {
+  font-size: 11px;
+  font-weight: 600;
+  color: #d97706;
+  background: #fef3c7;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  margin-left: 4px;
+}
+.pr-event-quality {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  margin-left: 4px;
+}
+.pr-event-quality.pass {
+  color: #16a34a;
+  background: #f0fdf4;
+}
+.pr-event-quality.fail {
+  color: #dc2626;
+  background: #fee2e2;
+}
+
+/* Iteration and loop badges */
+.pr-iteration-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6366f1;
+  background: #e0e7ff;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  margin-left: 8px;
+}
+.pr-loop-count-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #4338ca;
+  background: #c7d2fe;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  margin-left: 4px;
+}
+
 /* Empty state */
 .pr-empty {
     text-align: center;

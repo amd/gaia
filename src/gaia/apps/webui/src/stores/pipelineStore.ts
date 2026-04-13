@@ -174,13 +174,27 @@ export const usePipelineStore = create<PipelineState>((set, get) => {
                 onDone: (event) => {
                     set((state) => {
                         if (!state.activeExecution) return state;
+                        const updates: Partial<PipelineExecution> = {
+                            status: 'completed',
+                            endTime: Date.now(),
+                            result: event.result,
+                            events: [...state.activeExecution.events, event],
+                        };
+                        // Extract recursive pipeline metadata from done event
+                        if ((event as any).loop_count !== undefined) {
+                            updates.loopCount = (event as any).loop_count;
+                        }
+                        if ((event as any).quality_scores !== undefined) {
+                            updates.qualityScores = (event as any).quality_scores;
+                            const scores = updates.qualityScores as number[];
+                            if (scores.length > 0) {
+                                updates.latestQualityScore = scores[scores.length - 1];
+                            }
+                        }
                         return {
                             activeExecution: {
                                 ...state.activeExecution,
-                                status: 'completed',
-                                endTime: Date.now(),
-                                result: event.result,
-                                events: [...state.activeExecution.events, event],
+                                ...updates,
                             },
                             isRunning: false,
                             lastResult: event.result as unknown as PipelineRunResponse,
@@ -207,6 +221,85 @@ export const usePipelineStore = create<PipelineState>((set, get) => {
                         };
                     });
                     log.ui.error('[pipelineStore] Pipeline failed:', error);
+                },
+                // Recursive pipeline event handlers
+                onLoopBack: (event) => {
+                    set((state) => {
+                        if (!state.activeExecution) return state;
+                        const newIteration = (event as any).iteration ?? state.activeExecution.currentIteration ?? 1;
+                        return {
+                            activeExecution: {
+                                ...state.activeExecution,
+                                currentIteration: newIteration,
+                                currentPhase: (event as any).target_phase ?? state.activeExecution.currentPhase,
+                                events: [...state.activeExecution.events, event],
+                            },
+                        };
+                    });
+                    log.ui.info(`[pipelineStore] Loop back to ${(event as any).target_phase ?? 'prior phase'} (iteration ${(event as any).iteration ?? '?'})`);
+                },
+                onQualityScore: (event) => {
+                    set((state) => {
+                        if (!state.activeExecution) return state;
+                        const score = (event as any).quality_score;
+                        const scores = state.activeExecution.qualityScores ?? [];
+                        return {
+                            activeExecution: {
+                                ...state.activeExecution,
+                                latestQualityScore: score,
+                                qualityScores: [...scores, score],
+                                events: [...state.activeExecution.events, event],
+                            },
+                        };
+                    });
+                },
+                onPhaseJump: (event) => {
+                    set((state) => {
+                        if (!state.activeExecution) return state;
+                        return {
+                            activeExecution: {
+                                ...state.activeExecution,
+                                currentPhase: (event as any).target_phase,
+                                events: [...state.activeExecution.events, event],
+                            },
+                        };
+                    });
+                    log.ui.info(`[pipelineStore] Phase jump to ${(event as any).target_phase ?? '?'}`);
+                },
+                onIterationStart: (event) => {
+                    set((state) => {
+                        if (!state.activeExecution) return state;
+                        const iter = (event as any).iteration ?? (state.activeExecution.currentIteration ?? 0) + 1;
+                        return {
+                            activeExecution: {
+                                ...state.activeExecution,
+                                currentIteration: iter,
+                                events: [...state.activeExecution.events, event],
+                            },
+                        };
+                    });
+                },
+                onIterationEnd: (event) => {
+                    set((state) => {
+                        if (!state.activeExecution) return state;
+                        return {
+                            activeExecution: {
+                                ...state.activeExecution,
+                                events: [...state.activeExecution.events, event],
+                            },
+                        };
+                    });
+                },
+                onDefectFound: (event) => {
+                    set((state) => {
+                        if (!state.activeExecution) return state;
+                        return {
+                            activeExecution: {
+                                ...state.activeExecution,
+                                events: [...state.activeExecution.events, event],
+                            },
+                        };
+                    });
                 },
             });
 

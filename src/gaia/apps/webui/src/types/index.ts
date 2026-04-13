@@ -255,7 +255,14 @@ export type StreamEventType =
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
-    | 'mcp_status';  // MCP server connection status update
+    | 'mcp_status'    // MCP server connection status update
+    // Pipeline recursive events
+    | 'loop_back'     // Pipeline looping back to a prior phase
+    | 'quality_score' // Quality evaluation score
+    | 'phase_jump'    // Pipeline jumped to a specific phase
+    | 'iteration_start' // New iteration/loop started
+    | 'iteration_end'   // Iteration/loop completed
+    | 'defect_found';   // Defect detected during quality phase
 
 export interface StreamEvent {
     type: StreamEventType;
@@ -312,6 +319,25 @@ export interface StreamEvent {
         files?: Array<Record<string, unknown>>;
         total?: number;
     };
+    // Pipeline recursive event fields
+    /** Current loop iteration number (for iteration_start, iteration_end, loop_back events). */
+    iteration?: number;
+    /** Target phase for loop_back or phase_jump events. */
+    target_phase?: string;
+    /** Quality score value 0-1 (for quality_score events). */
+    quality_score?: number;
+    /** Defect details found during quality phase (for defect_found events). */
+    defects?: Array<{
+        type: string;
+        severity: string;
+        description: string;
+    }>;
+    /** Pipeline loop count in the final done event. */
+    loop_count?: number;
+    /** Quality score history in the final done event. */
+    quality_scores?: number[];
+    /** Decision history in the final done event. */
+    decisions?: Record<string, unknown>[];
 }
 
 // ── Pipeline Template Types ──────────────────────────────────────────────
@@ -382,6 +408,12 @@ export interface AgentRegistryEntry {
     source: 'yaml' | 'pipeline_stage';
     entrypoint?: string | null;
     templates_using: string[];
+}
+
+export interface AgentFileContent {
+    agent_id: string;
+    source: string;
+    content: string;
 }
 
 // ── Pipeline Metrics Types ───────────────────────────────────────────────
@@ -560,4 +592,10 @@ export interface PipelineExecution {
     events: PipelineEvent[];
     result?: Record<string, unknown>;
     error?: string;
+    // Recursive pipeline fields
+    currentIteration?: number;
+    latestQualityScore?: number;
+    qualityScores?: number[];
+    currentPhase?: string;
+    loopCount?: number;
 }

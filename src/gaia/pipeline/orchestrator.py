@@ -24,6 +24,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
@@ -550,3 +551,131 @@ def run_pipeline(
     return orchestrator.run_pipeline(
         task_description=task_description, auto_spawn=auto_spawn
     )
+
+
+def _execute_recursive_pipeline(
+    task_description: str,
+    sse_handler=None,
+    template_name: str = "generic",
+    max_iterations: int = 10,
+) -> Dict[str, Any]:
+    """
+    Execute recursive pipeline using PipelineEngine with SSE event emission.
+
+    This bridges the sync orchestrator interface with the async PipelineEngine,
+    emitting SSE events for loop_back, quality_score, phase_jump, iteration_start,
+    iteration_end, and defect_found events.
+
+    Args:
+        task_description: Task/objective to execute
+        sse_handler: Optional _PipelineSSEHandler instance for event emission
+        template_name: Pipeline template name
+        max_iterations: Maximum recursive loop iterations
+
+    Returns:
+        Dictionary with:
+        - pipeline_status: str (success/failed)
+        - stage_results: Dict[str, Any]
+        - loop_count: int - number of recursive loops executed
+        - quality_scores: List[float] - quality score history
+        - decisions: List[Dict] - decision history
+        - error: str (only if failed)
+    """
+    import asyncio
+
+    from gaia.pipeline.engine import PipelineEngine, PipelinePhase
+    from gaia.pipeline.state import PipelineContext
+
+    pipeline_id = f"recursive-{uuid4().hex[:12]}"
+
+    async def _run_async():
+        engine = PipelineEngine(
+            model_id="Qwen3.5-35B-A3B-GGUF",
+            enable_logging=False,
+            skip_lemonade=True,
+        )
+        context = PipelineContext(
+            pipeline_id=pipeline_id,
+            user_goal=task_description,
+            max_iterations=max_iterations,
+        )
+        config = {"template": template_name}
+        await engine.initialize(context, config)
+
+        # Emit iteration_start for first iteration
+        if sse_handler:
+            _emit_sse(sse_handler, "iteration_start", {
+                "message": f"Pipeline starting (max {max_iterations} iterations)",
+                "iteration": 1,
+            })
+
+        # Run the recursive pipeline
+        result = await engine.start()
+
+        # Extract decision and quality history from state machine
+        decisions = []
+        quality_scores = []
+        artifacts = getattr(engine._state_machine, "artifacts", {})
+
+        # Collect quality scores from artifacts
+        for key, value in artifacts.items():
+            if "quality" in str(key).lower():
+                if isinstance(value, (int, float)):
+                    quality_scores.append(value)
+                elif isinstance(value, dict) and "score" in value:
+                    quality_scores.append(value["score"])
+
+        # Collect decisions
+        if hasattr(engine._state_machine, "decisions"):
+            decisions = [
+                d if isinstance(d, dict) else getattr(d, "to_dict", lambda: d)()
+                for d in engine._state_machine.decisions
+            ]
+
+        loop_count = getattr(
+            getattr(engine._state_machine, "state", None), "iteration", 1
+        )
+
+        status = "success" if result and getattr(result, "state", None) else "failed"
+
+        return {
+            "pipeline_status": status,
+            "stage_results": {
+                "pipeline_engine": {
+                    "final_state": getattr(result, "state", "unknown") if result else "unknown",
+                    "artifacts": dict(artifacts),
+                }
+            },
+            "loop_count": loop_count,
+            "quality_scores": quality_scores,
+            "decisions": decisions,
+            "pipeline_id": pipeline_id,
+        }
+
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(_run_async())
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error(f"Recursive pipeline execution failed: {e}", exc_info=True)
+        if sse_handler:
+            _emit_sse(sse_handler, "error", {
+                "message": f"Pipeline failed: {e}",
+            })
+        return {
+            "pipeline_status": "failed",
+            "error": str(e),
+            "pipeline_id": pipeline_id,
+        }
+
+
+def _emit_sse(handler, event_type: str, data: Dict[str, Any]) -> None:
+    """Emit an SSE event through the handler's event queue."""
+    try:
+        event = {"type": event_type, **data}
+        handler.event_queue.put(event)
+    except Exception as e:
+        logger.warning(f"Failed to emit SSE event {event_type}: {e}")

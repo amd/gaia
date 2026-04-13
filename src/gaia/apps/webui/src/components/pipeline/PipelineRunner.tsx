@@ -21,6 +21,10 @@ import {
   ChevronDown,
   ChevronRight,
   Users,
+  RotateCcw,
+  Gauge,
+  Zap,
+  Search,
 } from 'lucide-react';
 import { usePipelineStore } from '../../stores/pipelineStore';
 import { useChatStore } from '../../stores/chatStore';
@@ -54,6 +58,13 @@ const EVENT_ICONS: Record<string, React.ReactNode> = {
   tool_result: <Terminal size={14} />,
   done: <CheckCircle2 size={14} />,
   error: <XCircle size={14} />,
+  // Recursive pipeline events
+  loop_back: <RotateCcw size={14} />,
+  quality_score: <Gauge size={14} />,
+  phase_jump: <Zap size={14} />,
+  iteration_start: <Play size={14} />,
+  iteration_end: <CheckCircle2 size={14} />,
+  defect_found: <Search size={14} />,
 };
 
 const EVENT_COLORS: Record<string, string> = {
@@ -65,6 +76,13 @@ const EVENT_COLORS: Record<string, string> = {
   tool_result: 'event-result',
   done: 'event-done',
   error: 'event-error',
+  // Recursive pipeline events
+  loop_back: 'event-loop',
+  quality_score: 'event-quality',
+  phase_jump: 'event-phase',
+  iteration_start: 'event-iteration',
+  iteration_end: 'event-iteration-end',
+  defect_found: 'event-defect',
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -440,6 +458,16 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
                 <span className="pr-execution-status">
                   {exec.status}
                 </span>
+                {isActive && exec.currentIteration !== undefined && exec.currentIteration > 1 && (
+                  <span className="pr-iteration-badge" title="Current loop iteration">
+                    Iteration {exec.currentIteration}
+                  </span>
+                )}
+                {exec.loopCount !== undefined && exec.loopCount > 0 && (
+                  <span className="pr-loop-count-badge" title="Total loops executed">
+                    {exec.loopCount} loop{exec.loopCount !== 1 ? 's' : ''}
+                  </span>
+                )}
               </div>
               <div className="pr-execution-meta">
                 <span>{formatTime(exec.startTime)}</span>
@@ -478,11 +506,20 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
                       'message' in event ? (event as any).message : '';
                     const toolName =
                       'tool' in event ? (event as any).tool : '';
+                    const targetPhase =
+                      'target_phase' in event ? (event as any).target_phase : undefined;
+                    const qualityScore =
+                      'quality_score' in event ? (event as any).quality_score : undefined;
+                    const iteration =
+                      'iteration' in event ? (event as any).iteration : undefined;
+
+                    // Special rendering for recursive pipeline events
+                    const isSpecialEvent = ['loop_back', 'quality_score', 'phase_jump', 'iteration_start', 'iteration_end', 'defect_found'].includes(eventType);
 
                     return (
                       <div
                         key={eventKey}
-                        className={`pr-event ${colorClass}`}
+                        className={`pr-event ${colorClass}${isSpecialEvent ? ' pr-event-recursive' : ''}`}
                       >
                         <div
                           className="pr-event-summary"
@@ -508,6 +545,18 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
                           <span className="pr-event-type">{eventType}</span>
                           {toolName && (
                             <span className="pr-event-tool">{toolName}</span>
+                          )}
+                          {/* Recursive event metadata */}
+                          {iteration !== undefined && (
+                            <span className="pr-event-iteration">#{iteration}</span>
+                          )}
+                          {targetPhase && (
+                            <span className="pr-event-phase">→ {targetPhase}</span>
+                          )}
+                          {qualityScore !== undefined && (
+                            <span className={`pr-event-quality ${qualityScore >= 0.9 ? 'pass' : 'fail'}`}>
+                              {(qualityScore * 100).toFixed(0)}%
+                            </span>
                           )}
                           <span className="pr-event-text">
                             {message || content}

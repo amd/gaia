@@ -24,6 +24,8 @@ import uuid
 from pathlib import Path
 from typing import AsyncGenerator
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -433,6 +435,67 @@ async def list_agents():
         )
 
 
+# Regex pattern for path traversal protection - only allow safe characters
+_AGENT_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+
+
+class AgentFileUpdate(BaseModel):
+    """Request body for updating an agent file."""
+    content: str = Field(..., description="Raw YAML/MD content to save")
+
+
+@router.get("/api/v1/pipeline/agents/{agent_id}/raw")
+async def get_agent_raw(agent_id: str):
+    """
+    Get raw YAML/MD content for an agent file.
+
+    Returns the agent file content as JSON with agent_id, source filename, and content.
+    Path traversal protection: agent_id must match alphanumeric, underscore, hyphen only.
+    """
+    # Security: validate agent_id to prevent path traversal
+    if not _AGENT_ID_PATTERN.match(agent_id):
+        raise HTTPException(status_code=400, detail="Invalid agent_id format")
+
+    agents_dir = Path(os.getcwd()) / "config" / "agents"
+    if not agents_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Agents directory not found")
+
+    # Try .yaml first, then .md
+    for ext in [".yaml", ".md"]:
+        filepath = agents_dir / f"{agent_id}{ext}"
+        if filepath.exists():
+            content = filepath.read_text(encoding="utf-8")
+            return {"agent_id": agent_id, "source": filepath.name, "content": content}
+
+    raise HTTPException(status_code=404, detail=f"Agent file not found for: {agent_id}")
+
+
+@router.put("/api/v1/pipeline/agents/{agent_id}/raw")
+async def update_agent_raw(agent_id: str, update: AgentFileUpdate):
+    """
+    Update raw YAML/MD content for an agent file.
+
+    Saves the provided content back to the existing agent file.
+    Path traversal protection: agent_id must match alphanumeric, underscore, hyphen only.
+    """
+    # Security: validate agent_id to prevent path traversal
+    if not _AGENT_ID_PATTERN.match(agent_id):
+        raise HTTPException(status_code=400, detail="Invalid agent_id format")
+
+    agents_dir = Path(os.getcwd()) / "config" / "agents"
+    if not agents_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Agents directory not found")
+
+    # Find existing file
+    for ext in [".yaml", ".md"]:
+        filepath = agents_dir / f"{agent_id}{ext}"
+        if filepath.exists():
+            filepath.write_text(update.content, encoding="utf-8")
+            return {"agent_id": agent_id, "source": filepath.name, "updated": True}
+
+    raise HTTPException(status_code=404, detail=f"Agent file not found for: {agent_id}")
+
+
 @router.post("/api/v1/pipeline/run")
 async def run_pipeline_endpoint(
     request: PipelineRunRequest,
@@ -522,7 +585,7 @@ async def run_pipeline_endpoint(
                         start_event = '{"type": "status", "status": "starting", "message": "Initializing pipeline..."}'
                     yield f"data: {start_event}\n\n"
 
-                    # Execute pipeline in a background thread
+                    # Execute pipeline in a background thread (recursive mode with SSE events)
                     loop = asyncio.get_event_loop()
                     result = await loop.run_in_executor(
                         None,
@@ -530,19 +593,29 @@ async def run_pipeline_endpoint(
                         request.task_description,
                         request.auto_spawn,
                         request.template_name,
+                        True,  # recursive=True
+                        output_handler,
                     )
 
                     # Stream any buffered output handler events
                     output_handler.drain(output_handler.event_queue)
 
-                    # Emit completion event
+                    # Emit completion event (include recursive pipeline metadata)
                     try:
-                        done_event = json.dumps({
+                        done_payload = {
                             'type': 'done',
                             'pipeline_id': pipeline_id,
                             'status': result.get('pipeline_status', 'unknown'),
                             'result': result,
-                        })
+                        }
+                        # Add recursive pipeline metadata if present
+                        if 'loop_count' in result:
+                            done_payload['loop_count'] = result['loop_count']
+                        if 'quality_scores' in result:
+                            done_payload['quality_scores'] = result['quality_scores']
+                        if 'decisions' in result:
+                            done_payload['decisions'] = result['decisions']
+                        done_event = json.dumps(done_payload)
                     except (TypeError, ValueError):
                         done_event = json.dumps({
                             'type': 'done',
@@ -600,8 +673,27 @@ def _execute_pipeline_sync(
     task_description: str,
     auto_spawn: bool,
     template_name: str | None = None,
+    recursive: bool = False,
+    sse_handler=None,
 ) -> dict:
-    """Execute pipeline synchronously (for executor thread)."""
+    """Execute pipeline synchronously (for executor thread).
+
+    Args:
+        task_description: Task description for the pipeline.
+        auto_spawn: Whether to auto-spawn missing agents.
+        template_name: Optional pipeline template name.
+        recursive: If True, use PipelineEngine with recursive loop support.
+        sse_handler: Optional SSE handler for event emission during execution.
+    """
+    if recursive:
+        from gaia.pipeline.orchestrator import _execute_recursive_pipeline
+
+        return _execute_recursive_pipeline(
+            task_description=task_description,
+            sse_handler=sse_handler,
+            template_name=template_name or "generic",
+        )
+
     try:
         from gaia.pipeline.orchestrator import run_pipeline as _run_pipeline
 
@@ -622,6 +714,14 @@ class _PipelineSSEHandler:
 
     def __init__(self):
         self.event_queue: queue.Queue = queue.Queue()
+
+    def emit(self, event_type: str, data: dict):
+        """Emit an SSE event to the stream."""
+        event = {"type": event_type, **data}
+        try:
+            self.event_queue.put(event)
+        except Exception:
+            pass
 
     def drain(self, q: queue.Queue):
         """Yield all queued events."""

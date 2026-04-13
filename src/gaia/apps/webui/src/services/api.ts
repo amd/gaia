@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateCreateRequest, TemplateUpdateRequest, PipelineMetricsResponse, PipelineMetricsHistory, PipelineAggregateMetrics, PipelineRunRequest, PipelineRunResponse, PipelineEvent, AgentRegistryEntry } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateCreateRequest, TemplateUpdateRequest, PipelineMetricsResponse, PipelineMetricsHistory, PipelineAggregateMetrics, PipelineRunRequest, PipelineRunResponse, PipelineEvent, AgentRegistryEntry, AgentFileContent } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -518,6 +518,16 @@ export async function listAgents(): Promise<{ agents: AgentRegistryEntry[]; cate
     return apiFetch('GET', '/v1/pipeline/agents');
 }
 
+/** Get raw YAML/MD content for an agent file. */
+export async function getAgentRaw(agentId: string): Promise<AgentFileContent> {
+    return apiFetch('GET', `/v1/pipeline/agents/${agentId}/raw`);
+}
+
+/** Save edited YAML/MD content back to an agent file. */
+export async function saveAgentRaw(agentId: string, content: string): Promise<{ agent_id: string; source: string; updated: boolean }> {
+    return apiFetch('PUT', `/v1/pipeline/agents/${agentId}/raw`, { content });
+}
+
 // ── Pipeline Metrics ─────────────────────────────────────────────────────
 
 /** Get comprehensive metrics for a specific pipeline execution. */
@@ -603,6 +613,13 @@ export interface PipelineStreamCallbacks {
     onToolResult?: (event: PipelineEvent) => void;
     onDone?: (event: PipelineEvent) => void;
     onError?: (error: Error) => void;
+    // Recursive pipeline callbacks
+    onLoopBack?: (event: PipelineEvent) => void;
+    onQualityScore?: (event: PipelineEvent) => void;
+    onPhaseJump?: (event: PipelineEvent) => void;
+    onIterationStart?: (event: PipelineEvent) => void;
+    onIterationEnd?: (event: PipelineEvent) => void;
+    onDefectFound?: (event: PipelineEvent) => void;
 }
 
 /** Route SSE event type to appropriate callback key. */
@@ -616,6 +633,13 @@ const PIPELINE_EVENT_MAP: Record<string, keyof PipelineStreamCallbacks> = {
     tool_result: 'onToolResult',
     done: 'onDone',
     error: 'onError',
+    // Recursive pipeline events
+    loop_back: 'onLoopBack',
+    quality_score: 'onQualityScore',
+    phase_jump: 'onPhaseJump',
+    iteration_start: 'onIterationStart',
+    iteration_end: 'onIterationEnd',
+    defect_found: 'onDefectFound',
 };
 
 /**

@@ -51,6 +51,7 @@ from gaia.quality.scorer import QualityScorer
 from gaia.utils.id_generator import generate_loop_id
 from gaia.utils.logging import get_logger, setup_logging
 from gaia.utils.component_loader import ComponentLoader
+from gaia.pipeline.isolation import PipelineIsolation
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -391,7 +392,7 @@ class PipelineEngine:
         return self._state_machine.snapshot
 
     async def _execute_pipeline(self) -> None:
-        """Execute all pipeline phases."""
+        """Execute all pipeline phases with recursive loop support."""
         phases = [
             PipelinePhase.PLANNING,
             PipelinePhase.DEVELOPMENT,
@@ -400,32 +401,57 @@ class PipelineEngine:
         ]
 
         phase_failed = False
-        for phase in phases:
-            if not self._running:
-                break
+        current_phase_idx = 0
+        loop_count = 0
+        max_total_loops = self._context.max_iterations * len(phases)
 
-            phase_complete = await self._execute_phase(phase)
+        while current_phase_idx < len(phases) and self._running and loop_count < max_total_loops:
+            phase = phases[current_phase_idx]
+            phase_complete, decision = await self._execute_phase(phase)
 
             if not phase_complete:
-                logger.warning(f"Phase {phase} did not complete successfully")
                 phase_failed = True
                 break
 
-        # Determine terminal state: cancellation vs. failure vs. success
+            # Handle LOOP_BACK: jump to target phase
+            if decision and decision.decision_type == DecisionType.LOOP_BACK:
+                target = decision.target_phase
+                if target and target in phases:
+                    current_phase_idx = phases.index(target)
+                    loop_count += 1
+                    self._state_machine.increment_iteration()
+                    logger.info(
+                        f"LOOP_BACK: jumping from {phase} to {target}",
+                        extra={"reason": decision.reason, "iteration": self._state_machine.snapshot.iteration_count}
+                    )
+                    continue
+                else:
+                    # Invalid or missing target_phase - treat as FAIL
+                    logger.error(f"LOOP_BACK decision has invalid target_phase: {target}")
+                    phase_failed = True
+                    break
+
+            # Handle FAIL
+            if decision and decision.decision_type == DecisionType.FAIL:
+                phase_failed = True
+                break
+
+            # Normal progression
+            current_phase_idx += 1
+            loop_count += 1
+
+        if loop_count >= max_total_loops:
+            phase_failed = True
+            logger.error("Pipeline exceeded maximum total loop iterations")
+
         if phase_failed:
-            self._state_machine.transition(
-                PipelineState.FAILED,
-                "Pipeline phase failed",
-            )
+            self._state_machine.transition(PipelineState.FAILED, "Pipeline phase failed")
         else:
-            self._state_machine.transition(
-                PipelineState.COMPLETED,
-                "Pipeline execution complete",
-            )
+            self._state_machine.transition(PipelineState.COMPLETED, "Pipeline execution complete")
         self._running = False
         self._completion_event.set()
 
-    async def _execute_phase(self, phase_name: str) -> bool:
+    async def _execute_phase(self, phase_name: str) -> tuple:
         """
         Execute a single phase.
 
@@ -433,7 +459,7 @@ class PipelineEngine:
             phase_name: Phase to execute
 
         Returns:
-            True if phase completed successfully
+            Tuple of (bool, Decision or None): (success, decision)
         """
         logger.info(f"Executing phase: {phase_name}")
 
@@ -473,18 +499,26 @@ class PipelineEngine:
                         phase=phase_name,
                         loop_id=None,
                     )
-                return False
+                return (False, None)
 
-        # Execute phase based on type
-        success = True
-        if phase_name == PipelinePhase.PLANNING:
-            success = await self._execute_planning()
-        elif phase_name == PipelinePhase.DEVELOPMENT:
-            success = await self._execute_development()
-        elif phase_name == PipelinePhase.QUALITY:
-            success = await self._execute_quality()
-        elif phase_name == PipelinePhase.DECISION:
-            success = await self._execute_decision()
+        # Wrap phase execution in PipelineIsolation context (SEC-005)
+        try:
+            with PipelineIsolation(pipeline_id=f"{self._context.pipeline_id}-{phase_name}"):
+                # Execute phase based on type
+                decision: Optional[Decision] = None
+                success = True
+                if phase_name == PipelinePhase.PLANNING:
+                    success = await self._execute_planning()
+                elif phase_name == PipelinePhase.DEVELOPMENT:
+                    success = await self._execute_development()
+                elif phase_name == PipelinePhase.QUALITY:
+                    success = await self._execute_quality()
+                elif phase_name == PipelinePhase.DECISION:
+                    decision = await self._execute_decision()
+                    success = decision is not None
+        except Exception as e:
+            logger.exception(f"Phase execution error in isolation: {e}")
+            return (False, None)
 
         # Execute phase exit hooks
         if self._hook_executor:
@@ -497,7 +531,7 @@ class PipelineEngine:
             )
             result = await self._hook_executor.execute_hooks("PHASE_EXIT", context)
             if result.halt_pipeline:
-                return False
+                return (False, None)
 
         # NEW: Commit PHASE_EXIT event (Phase 1 Sprint 3)
         if self._enable_chronicle and self._nexus:
@@ -512,7 +546,7 @@ class PipelineEngine:
                 loop_id=None,
             )
 
-        return success
+        return (success, decision)
 
     async def _execute_planning(self) -> bool:
         """Execute planning phase."""
@@ -691,6 +725,26 @@ class PipelineEngine:
                 },
             )
 
+            # Save generated components via ComponentLoader
+            if self._component_loader and loop_state and loop_state.artifacts:
+                try:
+                    for agent_id, artifact_text in loop_state.artifacts.items():
+                        if artifact_text:
+                            component_path = f"development/{agent_id}.md"
+                            self._component_loader.save_component(
+                                component_path=component_path,
+                                content=artifact_text,
+                                frontmatter={
+                                    "template_id": f"dev-{agent_id}",
+                                    "template_type": "templates",
+                                    "version": "1.0.0",
+                                    "description": f"Development artifact from {agent_id}",
+                                },
+                            )
+                            logger.info(f"Saved component: {component_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to save components: {e}")
+
         self._state_machine.increment_iteration()
         return True
 
@@ -740,7 +794,7 @@ class PipelineEngine:
 
         return True
 
-    async def _execute_decision(self) -> bool:
+    async def _execute_decision(self) -> Decision:
         """Execute decision phase."""
         logger.info("Executing DECISION phase")
 
@@ -834,9 +888,8 @@ class PipelineEngine:
         # Handle decision
         if decision.decision_type == DecisionType.FAIL:
             self._state_machine.set_error(decision.reason)
-            return False
 
-        return True
+        return decision
 
     async def _execute_supervisor_decision(
         self,

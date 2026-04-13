@@ -7,9 +7,9 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { Search, Users, Tag, Cpu, Terminal, FileText, Zap, ChevronDown, ChevronRight } from 'lucide-react';
+import { Search, Users, Tag, Cpu, Terminal, FileText, Zap, ChevronDown, ChevronRight, Code2, Edit3, Save, X, Copy, Check } from 'lucide-react';
 import * as api from '../../services/api';
-import type { AgentRegistryEntry } from '../../types';
+import type { AgentRegistryEntry, AgentFileContent } from '../../types';
 import './AgentRegistry.css';
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
@@ -47,6 +47,14 @@ export function AgentRegistry() {
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+
+  // Source modal state
+  const [editingAgent, setEditingAgent] = useState<string | null>(null);
+  const [fileContent, setFileContent] = useState<string>('');
+  const [isLoadingFile, setIsLoadingFile] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     api.listAgents()
@@ -86,6 +94,61 @@ export function AgentRegistry() {
 
   const toggleAgent = (id: string) => {
     setExpandedAgent((prev) => (prev === id ? null : id));
+  };
+
+  // Source modal functions
+  const loadAgentFile = async (agentId: string) => {
+    setIsLoadingFile(true);
+    setSaveError(null);
+    try {
+      const data = await api.getAgentRaw(agentId);
+      setFileContent(data.content);
+      setEditingAgent(agentId);
+      setIsEditing(false);
+    } catch (err) {
+      setSaveError(`Failed to load agent file: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsLoadingFile(false);
+    }
+  };
+
+  const saveAgentFile = async () => {
+    if (!editingAgent) return;
+    setSaveError(null);
+    try {
+      await api.saveAgentRaw(editingAgent, fileContent);
+      setIsEditing(false);
+      // Close modal after successful save
+      setEditingAgent(null);
+    } catch (err) {
+      setSaveError(`Failed to save agent file: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setSaveError(null);
+    // Reload original content
+    if (editingAgent) {
+      loadAgentFile(editingAgent);
+    }
+  };
+
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(fileContent);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setSaveError('Failed to copy to clipboard');
+    }
+  };
+
+  const closeModal = () => {
+    setEditingAgent(null);
+    setFileContent('');
+    setSaveError(null);
+    setIsEditing(false);
   };
 
   if (loading) {
@@ -287,6 +350,26 @@ export function AgentRegistry() {
                     </div>
                   )}
 
+                  {/* Source File Actions */}
+                  <div className="ar-detail-section ar-source-actions">
+                    <button
+                      className="ar-source-btn"
+                      onClick={() => loadAgentFile(agent.id)}
+                      disabled={isLoadingFile}
+                    >
+                      <Code2 size={14} />
+                      {isLoadingFile && editingAgent === agent.id ? 'Loading...' : 'View Source'}
+                    </button>
+                    <button
+                      className="ar-source-btn ar-source-btn-edit"
+                      onClick={() => loadAgentFile(agent.id).then(() => setIsEditing(true))}
+                      disabled={isLoadingFile}
+                    >
+                      <Edit3 size={14} />
+                      Edit
+                    </button>
+                  </div>
+
                   <div className="ar-detail-section ar-detail-meta">
                     <span>Version: {agent.version}</span>
                     <span>Complexity: {agent.complexity_range}</span>
@@ -297,6 +380,89 @@ export function AgentRegistry() {
           );
         })}
       </div>
+
+      {/* Source Modal */}
+      {editingAgent && (
+        <div className="ar-modal-overlay" onClick={closeModal}>
+          <div className="ar-source-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="ar-modal-header">
+              <div className="ar-modal-title">
+                <Code2 size={18} />
+                <span>Agent Source: {editingAgent}</span>
+              </div>
+              <div className="ar-modal-actions">
+                {!isEditing && (
+                  <button
+                    className="ar-modal-btn ar-modal-btn-copy"
+                    onClick={copyToClipboard}
+                    title="Copy to clipboard"
+                  >
+                    {copied ? <Check size={16} /> : <Copy size={16} />}
+                    {copied ? 'Copied' : 'Copy'}
+                  </button>
+                )}
+                <button
+                  className="ar-modal-btn ar-modal-btn-close"
+                  onClick={closeModal}
+                  title="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="ar-modal-body">
+              {isLoadingFile ? (
+                <div className="ar-modal-loading">
+                  <div className="ar-loading-spinner" />
+                  <span>Loading agent file...</span>
+                </div>
+              ) : isEditing ? (
+                <div className="ar-editor-container">
+                  <textarea
+                    className="ar-source-editor"
+                    value={fileContent}
+                    onChange={(e) => setFileContent(e.target.value)}
+                    spellCheck={false}
+                    autoFocus
+                  />
+                </div>
+              ) : (
+                <div className="ar-source-viewer">
+                  <pre><code>{fileContent}</code></pre>
+                </div>
+              )}
+            </div>
+
+            {saveError && (
+              <div className="ar-modal-error">
+                <X size={14} />
+                {saveError}
+              </div>
+            )}
+
+            <div className="ar-modal-footer">
+              {isEditing ? (
+                <>
+                  <button className="ar-modal-btn ar-modal-btn-cancel" onClick={cancelEdit}>
+                    <X size={16} />
+                    Cancel
+                  </button>
+                  <button className="ar-modal-btn ar-modal-btn-save" onClick={saveAgentFile}>
+                    <Save size={16} />
+                    Save Changes
+                  </button>
+                </>
+              ) : (
+                <button className="ar-modal-btn ar-modal-btn-edit-large" onClick={() => setIsEditing(true)}>
+                  <Edit3 size={16} />
+                  Edit File
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
