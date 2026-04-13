@@ -235,19 +235,24 @@ jobs:
           # softprops/action-gh-release in a later step. `publish: never`
           # is implied by the CLI flag below.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # On macOS, only auto-discover signing identity when APPLE_ID is set.
-          # Otherwise force-disable auto-discovery so electron-builder doesn't
-          # try to sign with a random keychain cert on CI runners.
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ env.APPLE_ID != '' && 'true' || 'false' }}
+          # Always allow identity auto-discovery. When APPLE_ID is set,
+          # electron-builder finds the real Developer ID cert in the keychain.
+          # When APPLE_ID is absent, the explicit --config.mac.identity=-
+          # below overrides auto-discovery and forces ad-hoc signing.
+          # Setting this to 'false' would suppress signing entirely — even
+          # when an explicit identity is passed on the CLI.
+          CSC_IDENTITY_AUTO_DISCOVERY: "true"
         # --publish never: we upload artifacts ourselves via action-gh-release.
-        # On macOS without signing secrets, pass identity=null to skip signing
-        # entirely. electron-builder auto-skips for PRs but NOT for tag pushes,
-        # so without this flag non-PR unsigned builds fail with "not a file".
+        # On macOS without signing secrets, ad-hoc sign with identity="-".
+        # This produces a valid code signature (sealed resources, correct
+        # bundle ID) without a Developer ID cert. Users see "cannot be
+        # verified" (bypassable via right-click → Open) instead of the
+        # unrecoverable "is damaged" error that identity=null caused.
         run: |
           EXTRA_ARGS=""
           if [ "${{ matrix.platform }}" = "macos" ] && [ -z "$APPLE_ID" ]; then
-            echo "No APPLE_ID set — skipping macOS code signing (identity=null)"
-            EXTRA_ARGS="--config.mac.identity=null"
+            echo "No APPLE_ID set — using ad-hoc code signing (identity=-)"
+            EXTRA_ARGS="--config.mac.identity=-"
           fi
           npm run ${{ matrix.npm_script }} -- --publish never $EXTRA_ARGS
 
@@ -269,6 +274,37 @@ jobs:
               -exec ls -lh {} \; || true
           else
             echo "(dist-app/ does not exist — build may have failed)"
+          fi
+
+      # ─── Verify macOS code signature ─────────────────────────────────
+      # Guards against shipping a broken .app bundle (the class of bug
+      # that caused #745 — identity=null produced a linker-only ad-hoc
+      # signature with no sealed resources, which macOS reported as
+      # "damaged"). This step fails the build if the signature is invalid.
+      - name: Verify macOS code signature
+        if: matrix.platform == 'macos'
+        working-directory: src/gaia/apps/webui
+        shell: bash
+        run: |
+          APP=$(find dist-app -name "*.app" -maxdepth 2 -print -quit 2>/dev/null)
+          if [ -z "$APP" ]; then
+            echo "No .app found in dist-app/ — skipping verification"
+            exit 0
+          fi
+          echo "=== Verifying: $APP ==="
+          # --deep validates nested code (frameworks, helpers).
+          # --strict is omitted: it rejects valid ad-hoc signatures on macOS 13+.
+          codesign --verify --deep "$APP"
+          echo ""
+          echo "=== Signature details ==="
+          codesign -dv --verbose=4 "$APP" 2>&1
+          echo ""
+          echo "=== Sealed Resources check ==="
+          if codesign -dv --verbose=4 "$APP" 2>&1 | grep -q "Sealed Resources"; then
+            echo "OK: Resources are sealed"
+          else
+            echo "FAIL: No sealed resources — the .app bundle has a broken signature"
+            exit 1
           fi
 
       # ─── Upload to workflow run (always, for debugging) ─────────────
