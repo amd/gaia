@@ -23,20 +23,22 @@ graph LR
     subgraph Shipped["Shipped"]
         V15("v0.15.x<br/><i>SDK, MCP Client,<br/>Agents, Linux</i>")
         V16("v0.16.0<br/><i>C++ Framework,<br/>Agent UI v1</i>")
+        V172("v0.17.2<br/><i>Desktop Installer,<br/>Agent Registry</i>")
     end
 
     subgraph Current["In Progress"]
-        V17("v0.17.2<br/><i>Installer,<br/>Setup Wizard</i>")
+        V173("v0.17.3<br/><i>RAG Reliability,<br/>Security, Website</i>")
     end
 
     subgraph Near["Near-Term"]
-        V18("v0.18.x<br/><i>Webapp, Registry,<br/>API Polish</i>")
-        V19("v0.19.0<br/><i>Model Quality</i>")
+        V18("v0.18.x<br/><i>Eval, Webapp,<br/>API Polish</i>")
+        V19("v0.19.0<br/><i>Model Quality,<br/>Installer Polish</i>")
         V20("v0.20.0<br/><i>Memory, Email,<br/>Daily Briefs</i>")
     end
 
     subgraph Mid["Mid-Term"]
         V21("v0.21.0<br/><i>Voice-First,<br/>Vision, CUA</i>")
+        V220("v0.22.0<br/><i>App Consolidation</i>")
         V22("v0.22.5<br/><i>C++ Production<br/>[OEM]</i>")
         V23("v0.23.0<br/><i>Autonomy, Home,<br/>Messaging</i>")
     end
@@ -46,15 +48,17 @@ graph LR
         V25("v0.25.0<br/><i>OS Agents<br/>[OEM]</i>")
     end
 
-    V15 --> V16 --> V17 --> V18 --> V19 --> V20 --> V21 --> V22 --> V23 --> V24 --> V25
+    V15 --> V16 --> V172 --> V173 --> V18 --> V19 --> V20 --> V21 --> V220 --> V22 --> V23 --> V24 --> V25
 
     style V15 fill:#555,stroke:#333,stroke-width:2px,color:#fff
     style V16 fill:#555,stroke:#333,stroke-width:2px,color:#fff
-    style V17 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style V172 fill:#555,stroke:#333,stroke-width:2px,color:#fff
+    style V173 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
     style V18 fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
     style V19 fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
     style V20 fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
     style V21 fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style V220 fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
     style V22 fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
     style V23 fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
     style V24 fill:#2d2d2d,stroke:#555,stroke-width:2px,color:#fff
@@ -70,6 +74,11 @@ graph LR
 ---
 
 ## Shipped
+
+### v0.17.2
+<Check>April 2026</Check>
+
+One-click desktop installers (Windows, macOS, Linux) with auto-update. Agent registry with custom agent builder — create agents through conversation or YAML manifests. MCP tool execution transparency in activity panel. RAG cache integrity verification. Cross-browser drag-and-drop document upload fix.
 
 ### v0.16.0
 <Check>March 2026</Check>
@@ -123,69 +132,94 @@ Core platform: `LemonadeClient` for NPU/iGPU inference on Ryzen AI, `ChatSDK` (r
 
 ---
 
-## v0.17.2 — Website, Desktop Installer & Setup Wizard
+## v0.17.3 — RAG Reliability, Security & Website
 
-**Status:** In progress
+**Status:** In progress — **Due: April 17, 2026**
 
-Ship the one-click install experience. Users should go from zero to first chat in under 5 minutes.
+Harden the RAG pipeline, ship security fixes, and launch the public website.
 
 | Deliverable | Description | Issue |
 |-------------|-------------|-------|
-| Desktop installer | NSIS (Windows), DMG (macOS), AppImage (Linux) with auto-update | [#530](https://github.com/amd/gaia/issues/530) |
-| First-run setup wizard | Guided onboarding: system scan, model download, first chat | [#597](https://github.com/amd/gaia/issues/597) |
+| RAG cache security | Replace pickle with JSON + HMAC verification | [#768](https://github.com/amd/gaia/pull/768) |
+| RAG thread safety | Fix concurrent index access | [#746](https://github.com/amd/gaia/pull/746) |
+| File-search alignment | Keep file count aligned with accessible results | [#754](https://github.com/amd/gaia/pull/754) |
 | GAIA website | Public site at amd-gaia.ai | [#169](https://github.com/amd/gaia/issues/169) |
-| RAG reliability fixes | Fix silent indexing failures and progress feedback | [#590](https://github.com/amd/gaia/issues/590), [#591](https://github.com/amd/gaia/issues/591) |
+| PDF robustness | Handle password-protected and corrupted PDFs gracefully | [#451](https://github.com/amd/gaia/issues/451) |
+| Indexing progress | Visual feedback during document indexing | [#591](https://github.com/amd/gaia/issues/591) |
+| Installer fixes | BOM and logger permission fixes | [#341](https://github.com/amd/gaia/pull/341) |
+| Username bug | Support spaces in Windows usernames | [#40](https://github.com/amd/gaia/issues/40) |
 
-Detailed plan: [Installer](/plans/installer) | [Setup Wizard](/plans/setup-wizard)
+Detailed plan: [Installer](/plans/installer) | [Security Model](/plans/security-model)
 
 ---
 
-## v0.18.x — Webapp Integration & Agent Registry
+## v0.18.x — Eval, Webapp Integration & API Polish
 
 **Status:** Up next
 
-Make GAIA embeddable in web applications and polish the Agent UI.
+Replace the eval framework, make GAIA embeddable in web applications, and harden the API.
 
-### v0.18.0 — Agent Eval Benchmark
+### v0.18.0 — Agent Eval Benchmark — *Due: April 21*
 
 | Deliverable | Description | Issue |
 |-------------|-------------|-------|
-| Document processing tests | Comprehensive test suite for RAG pipeline | [#456](https://github.com/amd/gaia/issues/456) |
-| Thread-safe RAG operations | Fix concurrent index access | [#455](https://github.com/amd/gaia/issues/455) |
-| Web search tool | DuckDuckGo + Perplexity for research | [#669](https://github.com/amd/gaia/issues/669) |
+| Replace eval framework | New eval runner, scorecard, scenario loading | [#573](https://github.com/amd/gaia/issues/573) |
+| Eval extensibility | Plugin API for custom scenarios, scorers, document types | [#671](https://github.com/amd/gaia/issues/671) |
+| Eval test coverage | Tests for public API surface | [#673](https://github.com/amd/gaia/issues/673) |
+| Eval documentation | Scenario authoring, custom scoring, CI/CD integration | [#670](https://github.com/amd/gaia/issues/670) |
+| Legacy eval cleanup | Remove ~9,200 lines of dead code | [#672](https://github.com/amd/gaia/issues/672) |
+| Docs identity clarification | Clarify GAIA's identity and audience paths | [#724](https://github.com/amd/gaia/issues/724) |
 
-### v0.18.1 — Webapp Integration Support
+### v0.18.1 — Webapp Integration Support — *Due: April 25*
 
 | Deliverable | Description | Issue |
 |-------------|-------------|-------|
 | System prompt passthrough | Honor custom system prompts from API clients | [#650](https://github.com/amd/gaia/issues/650) |
 | Document indexing API | Index documents via OpenAI-compatible endpoint | [#651](https://github.com/amd/gaia/issues/651) |
 | API key authentication | Optional auth for the API server | [#630](https://github.com/amd/gaia/issues/630) |
-| JS chat client library | `@amd-gaia/chat-client` npm package | [#652](https://github.com/amd/gaia/issues/652) |
-| Drop-in chat widget | Single `<script>` tag embeddable widget | [#653](https://github.com/amd/gaia/issues/653) |
+| File System Agent | Navigation, browsing, and scratchpad tools | [#502](https://github.com/amd/gaia/issues/502) |
 
-### v0.18.2 — Agent Registry, API Readiness & UI Polish
+### v0.18.2 — API Readiness & UI Polish — *Due: April 30*
 
 | Deliverable | Description | Issue |
 |-------------|-------------|-------|
-| Agent registry and selection | Switch between agents in the UI | [#612](https://github.com/amd/gaia/issues/612) |
-| Tool execution guardrails | Confirm-first popup for write operations | [#438](https://github.com/amd/gaia/issues/438) |
-| Multi-session concurrency | Support concurrent API clients | [#654](https://github.com/amd/gaia/issues/654) |
+| Connector Hub Phase 1 | Catalog UI + Obsidian smoke test | [#736](https://github.com/amd/gaia/issues/736) |
+| System prompt optimization | Reduce ChatAgent prompt from ~7,400 to ~4,000 tokens | [#719](https://github.com/amd/gaia/issues/719) |
 | MCP security hardening | Address MCP protocol vulnerabilities | [#94](https://github.com/amd/gaia/issues/94) |
+| Unbounded context fix | Fix query context growth in chat sessions | [#453](https://github.com/amd/gaia/issues/453) |
+| Document processing tests | Comprehensive RAG test suite | [#456](https://github.com/amd/gaia/issues/456) |
+| Multi-session concurrency | Support concurrent API clients | [#654](https://github.com/amd/gaia/issues/654) |
+| Code base indexing | Indexing engine for codebase search | [#656](https://github.com/amd/gaia/issues/656) |
+| MCP test framework | Tool calling reliability tests | [#709](https://github.com/amd/gaia/issues/709) |
+| Lemonade UI feedback | Model download, busy state, connection loss indicators | [#588](https://github.com/amd/gaia/issues/588) |
 
 Detailed plan: [Agent UI](/plans/agent-ui) | [Security Model](/plans/security-model)
 
 ---
 
-## v0.19.0 — Model Fine-Tuning & Agent Quality
+## v0.19.0 — Model Fine-Tuning & Agent Quality — *Due: May 5*
 
 **Status:** Planned
 
-Improve agent response quality through model optimization and prompt engineering.
+Improve agent response quality through model optimization. Ship installer polish (silent install, code signing, setup wizard).
+
+| Deliverable | Description | Issue |
+|-------------|-------------|-------|
+| Model quality optimization | System prompt compression, sub-4B model eval, first SFT fine-tune | [#616](https://github.com/amd/gaia/issues/616) |
+| Eval-to-training pipeline | Convert agent eval results into GRPO training data | [#666](https://github.com/amd/gaia/issues/666) |
+| Unsloth integration | QLoRA + GRPO fine-tuning on AMD consumer GPUs | [#667](https://github.com/amd/gaia/issues/667) |
+| LoRA adapter library | Per-agent adapters with hot-swap via Lemonade Server | [#668](https://github.com/amd/gaia/issues/668) |
+| Agent decomposition | GaiaAgent (0.6B) orchestrates specialized sub-agents | [#674](https://github.com/amd/gaia/issues/674) |
+| Agent MCP Server | Task creation, agent assignment, inter-agent communication | [#675](https://github.com/amd/gaia/issues/675) |
+| Silent install mode | Unattended/silent installation for automated deployments | [#614](https://github.com/amd/gaia/issues/614) |
+| First-run setup wizard | Guided onboarding: system scan, model download, first chat | [#597](https://github.com/amd/gaia/issues/597) |
+| Pre-configured distribution | Bundled distribution package | [#711](https://github.com/amd/gaia/issues/711) |
+| macOS code signing | Apple Developer ID for notarization | [#733](https://github.com/amd/gaia/issues/733) |
+| Windows code signing | SignPath OSS for Windows installer signing | [#732](https://github.com/amd/gaia/issues/732) |
 
 ---
 
-## v0.20.0 — Agent Memory & Bootstrap
+## v0.20.0 — Agent Memory & Bootstrap — *Due: May 12*
 
 **Status:** Planned
 
@@ -209,7 +243,7 @@ Detailed plan: [Agent UI](/plans/agent-ui) | [Email & Calendar](/plans/email-cal
 
 ---
 
-## v0.21.0 — Multimodal, Voice & Desktop Vision
+## v0.21.0 — Multimodal, Voice & Desktop Vision — *Due: May 19*
 
 **Status:** Planned
 
@@ -233,7 +267,27 @@ Detailed plan: [CUA](/plans/cua) | [Vision SDK](/plans/vision-sdk) | [Image Agen
 
 ---
 
-## v0.22.5 — C++ Framework: Production Readiness [OEM]
+## v0.22.0 — App Consolidation: Single Agent UI — *Due: May 26*
+
+**Status:** Planned
+
+Consolidate all standalone apps (Jira, Docker, Blender, Summarize, Code, EMR, SD) into the Agent UI as selectable agents. One app, one install, all capabilities.
+
+| Deliverable | Description | Issue |
+|-------------|-------------|-------|
+| Consolidation epic | Migrate standalone apps into Agent UI | [#759](https://github.com/amd/gaia/issues/759) |
+| Jira app | Consolidate Jira standalone app | [#760](https://github.com/amd/gaia/issues/760) |
+| Docker app | Consolidate Docker standalone app | [#761](https://github.com/amd/gaia/issues/761) |
+| Summarize app | Consolidate Summarize app | [#763](https://github.com/amd/gaia/issues/763) |
+| Blender agent | Consolidate Blender agent | [#764](https://github.com/amd/gaia/issues/764) |
+| Code agent | Consolidate Code agent (gaia-code) | [#769](https://github.com/amd/gaia/issues/769) |
+| EMR agent | Consolidate EMR agent (gaia-emr) | [#770](https://github.com/amd/gaia/issues/770) |
+| SD agent | Consolidate SD agent (gaia sd) | [#771](https://github.com/amd/gaia/issues/771) |
+| Homebrew | Add GAIA to Homebrew for macOS | [#767](https://github.com/amd/gaia/issues/767) |
+
+---
+
+## v0.22.5 — C++ Framework: Production Readiness [OEM] — *Due: May 26*
 
 **Status:** Planned
 
@@ -244,7 +298,7 @@ Detailed plan: [C++ Framework Docs](/cpp)
 
 ---
 
-## v0.23.0 — Autonomous Agent Infrastructure
+## v0.23.0 — Autonomous Agent Infrastructure — *Due: June 2*
 
 **Status:** Planned
 
@@ -268,7 +322,7 @@ Detailed plan: [Autonomy Engine](/plans/autonomy-engine) | [Messaging](/plans/me
 
 ---
 
-## v0.24.0 — Agent Hub, Service Integration & Onboarding
+## v0.24.0 — Agent Hub, Service Integration & Onboarding — *Due: June 9*
 
 **Status:** Planned
 
@@ -294,7 +348,7 @@ Detailed plan: [Agent Hub](/plans/agent-hub) | [Skill Format](/plans/skill-forma
 
 ---
 
-## v0.25.0 — OS Agents: MCP Servers [OEM]
+## v0.25.0 — OS Agents: MCP Servers [OEM] — *Due: June 16*
 
 **Status:** Planned
 
@@ -330,4 +384,4 @@ security, gaming, productivity, and backup management.
 
 ---
 
-*Updated: April 1, 2026*
+*Updated: April 13, 2026*
