@@ -6,7 +6,11 @@
 Test suite for GAIA RAG (Retrieval-Augmented Generation) functionality
 """
 
+import hashlib
+import hmac
+import json
 import os
+import secrets
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -968,6 +972,129 @@ class TestCacheSecurity:
                 result2 = rag2.index_document(str(fake_pdf))
 
                 # Should succeed by re-indexing (not loading tampered cache)
+                assert result2["success"] is True
+                assert len(rag2.chunks) > 0
+
+    def test_forged_signature_rejected(self, mock_dependencies):
+        """Test that a signature computed with a different key is rejected."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                cache_path = os.path.join(temp_dir, "forged.json")
+                data = {"chunks": ["injected"], "full_text": "", "metadata": {}}
+                json_bytes = json.dumps(data).encode("utf-8")
+
+                # Write cache data
+                with open(cache_path, "wb") as f:
+                    f.write(json_bytes)
+
+                # Forge signature with attacker's own key
+                attacker_key = secrets.token_bytes(32)
+                forged_sig = hmac.new(
+                    attacker_key, json_bytes, hashlib.sha256
+                ).hexdigest()
+                with open(cache_path + ".sig", "w") as f:
+                    f.write(forged_sig)
+
+                with pytest.raises(ValueError, match="integrity check failed"):
+                    rag._verify_and_load_cache(cache_path)
+
+    def test_hmac_key_persists_across_instances(self, mock_dependencies):
+        """Test that HMAC key is created once and reused by new RAGSDK instances."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            key_dir = Path(temp_dir) / "hmac_home" / ".gaia" / "cache"
+
+            with (
+                patch("gaia.rag.sdk.RAGSDK._check_dependencies"),
+                patch("gaia.rag.sdk.Path.home", return_value=Path(temp_dir) / "hmac_home"),
+            ):
+                rag1 = RAGSDK(config)
+                key1 = rag1._get_hmac_key()
+
+                # Verify key file was created
+                key_path = key_dir / "hmac.key"
+                assert key_path.exists()
+                assert len(key1) == 32
+
+                # New instance should load the same key
+                rag2 = RAGSDK(config)
+                key2 = rag2._get_hmac_key()
+                assert key1 == key2
+
+    def test_cache_overwrite_produces_valid_cache(self, mock_dependencies):
+        """Test that overwriting an existing cache produces a valid new cache."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                cache_path = os.path.join(temp_dir, "overwrite.json")
+
+                # Save initial cache
+                rag._save_cache(
+                    cache_path,
+                    {"chunks": ["v1"], "full_text": "first", "metadata": {}},
+                )
+
+                # Overwrite with new data
+                rag._save_cache(
+                    cache_path,
+                    {"chunks": ["v2", "v2b"], "full_text": "second", "metadata": {"version": 2}},
+                )
+
+                # Load should return the new data (not the old)
+                loaded = rag._verify_and_load_cache(cache_path)
+                assert loaded["chunks"] == ["v2", "v2b"]
+                assert loaded["full_text"] == "second"
+                assert loaded["metadata"]["version"] == 2
+
+    def test_corrupted_json_triggers_reindex(self, mock_dependencies):
+        """Test that invalid JSON in cache triggers re-indexing, not a crash."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                # Index to create valid cache
+                result1 = rag.index_document(str(fake_pdf))
+                assert result1["success"] is True
+
+                # Corrupt both cache AND sig so sig "matches" the garbage
+                cache_path = rag._get_cache_path(str(fake_pdf))
+                garbage = b"not valid json at all {"
+                with open(cache_path, "wb") as f:
+                    f.write(garbage)
+                # Write a matching sig for the garbage so HMAC passes
+                # but json.loads will fail
+                key = rag._get_hmac_key()
+                sig = hmac.new(key, garbage, hashlib.sha256).hexdigest()
+                with open(cache_path + ".sig", "w") as f:
+                    f.write(sig)
+
+                # New instance should fail cache load and re-index
+                rag2 = RAGSDK(config)
+                result2 = rag2.index_document(str(fake_pdf))
                 assert result2["success"] is True
                 assert len(rag2.chunks) > 0
 
