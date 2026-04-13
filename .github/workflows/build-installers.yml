@@ -252,6 +252,12 @@ jobs:
           EXTRA_ARGS=""
           if [ "${{ matrix.platform }}" = "macos" ] && [ -z "$APPLE_ID" ]; then
             echo "No APPLE_ID set — using ad-hoc code signing (identity=-)"
+            # electron-builder skips signing for pull-request builds unless this
+            # env var is set. Safe to enable for ad-hoc: there are no real signing
+            # credentials to leak. Remove this if real Developer ID certs are added
+            # (the security warning in electron-builder's output only matters when
+            # CSC_LINK / APPLE_ID secrets are present and fork PRs are allowed).
+            export CSC_FOR_PULL_REQUEST=true
             EXTRA_ARGS="--config.mac.identity=-"
           fi
           npm run ${{ matrix.npm_script }} -- --publish never $EXTRA_ARGS
