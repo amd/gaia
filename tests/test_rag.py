@@ -25,6 +25,59 @@ except ImportError as e:
     IMPORT_ERROR = str(e)
 
 
+@pytest.fixture
+def mock_dependencies():
+    """Mock external dependencies shared across RAG test classes."""
+    with (
+        patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
+        patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
+        patch("gaia.rag.sdk.PdfReader") as mock_pdf,
+        patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
+        patch("gaia.rag.sdk.faiss") as mock_faiss,
+        patch("gaia.rag.sdk.AgentSDK") as mock_chat,
+    ):
+        mock_vlm_instance = Mock()
+        mock_vlm_instance.check_availability.return_value = False
+        mock_vlm_class.return_value = mock_vlm_instance
+
+        mock_lemonade_instance = Mock()
+        mock_lemonade_instance.embeddings.return_value = {
+            "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+        }
+        mock_lemonade.return_value = mock_lemonade_instance
+
+        mock_pdf_instance = Mock()
+        mock_pdf_instance.pages = [Mock()]
+        mock_pdf_instance.pages[0].extract_text.return_value = (
+            "Sample PDF content for testing."
+        )
+        mock_pdf.return_value = mock_pdf_instance
+
+        mock_embedder = Mock()
+        mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
+        mock_st.return_value = mock_embedder
+
+        mock_index = Mock()
+        mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
+        mock_faiss.IndexFlatL2.return_value = mock_index
+
+        mock_chat_response = Mock()
+        mock_chat_response.text = "Mocked LLM response"
+        mock_chat_response.stats = {"tokens": 50}
+        mock_chat_instance = Mock()
+        mock_chat_instance.send.return_value = mock_chat_response
+        mock_chat.return_value = mock_chat_instance
+
+        yield {
+            "pdf": mock_pdf,
+            "embedder": mock_embedder,
+            "index": mock_index,
+            "chat": mock_chat_instance,
+            "vlm": mock_vlm_instance,
+            "lemonade": mock_lemonade_instance,
+        }
+
+
 class TestRAGConfig:
     """Test RAG configuration."""
 
@@ -95,67 +148,6 @@ class TestRAGResponse:
 
 class TestRAGSDK:
     """Test RAG SDK functionality."""
-
-    @pytest.fixture
-    def mock_dependencies(self):
-        """Mock external dependencies."""
-        # Mock VLMClient and LemonadeClient at the module level where they're defined
-        with (
-            patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
-            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
-            patch("gaia.rag.sdk.PdfReader") as mock_pdf,
-            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
-            patch("gaia.rag.sdk.faiss") as mock_faiss,
-            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
-        ):
-
-            # Mock VLMClient to prevent connection attempts
-            mock_vlm_instance = Mock()
-            mock_vlm_instance.check_availability.return_value = False
-            mock_vlm_class.return_value = mock_vlm_instance
-
-            # Mock LemonadeClient for embeddings
-            mock_lemonade_instance = Mock()
-            # Return OpenAI-compatible format: {"data": [{"embedding": [...]}]}
-            mock_lemonade_instance.embeddings.return_value = {
-                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
-            }
-            mock_lemonade.return_value = mock_lemonade_instance
-
-            # Mock PDF reader
-            mock_pdf_instance = Mock()
-            mock_pdf_instance.pages = [Mock()]
-            mock_pdf_instance.pages[0].extract_text.return_value = (
-                "Sample PDF content for testing."
-            )
-            mock_pdf.return_value = mock_pdf_instance
-
-            # Mock sentence transformer
-            mock_embedder = Mock()
-            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
-            mock_st.return_value = mock_embedder
-
-            # Mock FAISS
-            mock_index = Mock()
-            mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
-            mock_faiss.IndexFlatL2.return_value = mock_index
-
-            # Mock AgentSDK
-            mock_chat_response = Mock()
-            mock_chat_response.text = "Mocked LLM response"
-            mock_chat_response.stats = {"tokens": 50}
-            mock_chat_instance = Mock()
-            mock_chat_instance.send.return_value = mock_chat_response
-            mock_chat.return_value = mock_chat_instance
-
-            yield {
-                "pdf": mock_pdf,
-                "embedder": mock_embedder,
-                "index": mock_index,
-                "chat": mock_chat_instance,
-                "vlm": mock_vlm_instance,
-                "lemonade": mock_lemonade_instance,
-            }
 
     def test_sdk_initialization(self, mock_dependencies):
         """Test SDK initialization."""
@@ -580,58 +572,6 @@ class TestErrorHandling:
 class TestMemoryLimits:
     """Test memory limit enforcement and LRU eviction."""
 
-    @pytest.fixture
-    def mock_dependencies(self):
-        """Mock external dependencies."""
-        with (
-            patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
-            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
-            patch("gaia.rag.sdk.PdfReader") as mock_pdf,
-            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
-            patch("gaia.rag.sdk.faiss") as mock_faiss,
-            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
-        ):
-            mock_vlm_instance = Mock()
-            mock_vlm_instance.check_availability.return_value = False
-            mock_vlm_class.return_value = mock_vlm_instance
-
-            mock_lemonade_instance = Mock()
-            mock_lemonade_instance.embeddings.return_value = {
-                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
-            }
-            mock_lemonade.return_value = mock_lemonade_instance
-
-            mock_pdf_instance = Mock()
-            mock_pdf_instance.pages = [Mock()]
-            mock_pdf_instance.pages[0].extract_text.return_value = (
-                "Sample PDF content for testing."
-            )
-            mock_pdf.return_value = mock_pdf_instance
-
-            mock_embedder = Mock()
-            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
-            mock_st.return_value = mock_embedder
-
-            mock_index = Mock()
-            mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
-            mock_faiss.IndexFlatL2.return_value = mock_index
-
-            mock_chat_response = Mock()
-            mock_chat_response.text = "Mocked LLM response"
-            mock_chat_response.stats = {"tokens": 50}
-            mock_chat_instance = Mock()
-            mock_chat_instance.send.return_value = mock_chat_response
-            mock_chat.return_value = mock_chat_instance
-
-            yield {
-                "pdf": mock_pdf,
-                "embedder": mock_embedder,
-                "index": mock_index,
-                "chat": mock_chat_instance,
-                "vlm": mock_vlm_instance,
-                "lemonade": mock_lemonade_instance,
-            }
-
     def test_index_rejected_at_file_limit_eviction_disabled(self, mock_dependencies):
         """Test that indexing is rejected when file limit reached and eviction disabled."""
         if not RAG_AVAILABLE:
@@ -894,59 +834,7 @@ class TestMemoryLimits:
 
 
 class TestCacheSecurity:
-    """Test cache security: JSON format, HMAC integrity, and legacy pickle cleanup."""
-
-    @pytest.fixture
-    def mock_dependencies(self):
-        """Mock external dependencies."""
-        with (
-            patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
-            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
-            patch("gaia.rag.sdk.PdfReader") as mock_pdf,
-            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
-            patch("gaia.rag.sdk.faiss") as mock_faiss,
-            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
-        ):
-            mock_vlm_instance = Mock()
-            mock_vlm_instance.check_availability.return_value = False
-            mock_vlm_class.return_value = mock_vlm_instance
-
-            mock_lemonade_instance = Mock()
-            mock_lemonade_instance.embeddings.return_value = {
-                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
-            }
-            mock_lemonade.return_value = mock_lemonade_instance
-
-            mock_pdf_instance = Mock()
-            mock_pdf_instance.pages = [Mock()]
-            mock_pdf_instance.pages[0].extract_text.return_value = (
-                "Sample PDF content for testing."
-            )
-            mock_pdf.return_value = mock_pdf_instance
-
-            mock_embedder = Mock()
-            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
-            mock_st.return_value = mock_embedder
-
-            mock_index = Mock()
-            mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
-            mock_faiss.IndexFlatL2.return_value = mock_index
-
-            mock_chat_response = Mock()
-            mock_chat_response.text = "Mocked LLM response"
-            mock_chat_response.stats = {"tokens": 50}
-            mock_chat_instance = Mock()
-            mock_chat_instance.send.return_value = mock_chat_response
-            mock_chat.return_value = mock_chat_instance
-
-            yield {
-                "pdf": mock_pdf,
-                "embedder": mock_embedder,
-                "index": mock_index,
-                "chat": mock_chat_instance,
-                "vlm": mock_vlm_instance,
-                "lemonade": mock_lemonade_instance,
-            }
+    """Test cache security: JSON format and HMAC integrity verification."""
 
     def test_cache_uses_json_not_pickle(self, mock_dependencies):
         """Test that cache files are saved as JSON, not pickle."""
@@ -1051,92 +939,6 @@ class TestCacheSecurity:
                 # Load should fail
                 with pytest.raises(ValueError, match="signature file missing"):
                     rag._verify_and_load_cache(cache_path)
-
-    def test_legacy_pickle_cache_deleted(self, mock_dependencies):
-        """Test that legacy .pkl cache files are deleted during indexing."""
-        if not RAG_AVAILABLE:
-            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
-
-        import pickle
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
-
-            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
-                rag = RAGSDK(config)
-
-                fake_pdf = Path(temp_dir) / "test.pdf"
-                fake_pdf.write_text("dummy")
-
-                # Get the cache path and create a legacy .pkl file
-                cache_path = rag._get_cache_path(str(fake_pdf))
-                pkl_path = cache_path.replace(".json", ".pkl")
-
-                # Create a legacy pickle cache file
-                with open(pkl_path, "wb") as f:
-                    pickle.dump(
-                        {"chunks": ["old"], "full_text": "", "metadata": {}}, f
-                    )
-
-                assert os.path.exists(pkl_path), "Legacy .pkl file should exist"
-
-                # Index the document — should delete the legacy .pkl file
-                result = rag.index_document(str(fake_pdf))
-                assert result["success"] is True
-
-                # Legacy .pkl should be gone
-                assert not os.path.exists(pkl_path), "Legacy .pkl file should be deleted"
-
-                # New .json cache should exist
-                assert os.path.exists(cache_path), "New .json cache should be created"
-
-    def test_malicious_pickle_not_loaded(self, mock_dependencies):
-        """Test that even if a malicious .pkl file exists, it's deleted not loaded."""
-        if not RAG_AVAILABLE:
-            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
-
-        import pickle
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
-
-            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
-                rag = RAGSDK(config)
-
-                fake_pdf = Path(temp_dir) / "test.pdf"
-                fake_pdf.write_text("dummy")
-
-                # Create a malicious pickle that would create a marker file
-                cache_path = rag._get_cache_path(str(fake_pdf))
-                pkl_path = cache_path.replace(".json", ".pkl")
-                marker_path = os.path.join(temp_dir, "EXPLOIT_MARKER")
-
-                class MaliciousPayload:
-                    def __reduce__(self):
-                        return (open, (marker_path, "w"))
-
-                with open(pkl_path, "wb") as f:
-                    pickle.dump(
-                        {
-                            "chunks": [],
-                            "full_text": "",
-                            "metadata": {},
-                            "trigger": MaliciousPayload(),
-                        },
-                        f,
-                    )
-
-                # Index the document — should delete .pkl, NOT execute it
-                result = rag.index_document(str(fake_pdf))
-                assert result["success"] is True
-
-                # Verify the exploit did NOT run
-                assert not os.path.exists(
-                    marker_path
-                ), "Malicious pickle payload should NOT have been executed"
-
-                # Verify .pkl was cleaned up
-                assert not os.path.exists(pkl_path), "Legacy .pkl should be deleted"
 
     def test_index_document_reindexes_on_tampered_cache(self, mock_dependencies):
         """Test that index_document falls back to re-indexing when cache is tampered."""

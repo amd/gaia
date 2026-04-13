@@ -122,6 +122,7 @@ class RAGSDK:
         self._check_dependencies()
 
         # Initialize components
+        self._hmac_key: Optional[bytes] = None  # Lazy-loaded, cached for session
         self.embedder = None
         self.llm_client = None
         self.use_lemonade_embeddings = False
@@ -258,27 +259,32 @@ class RAGSDK:
         Get or create HMAC key for cache integrity verification.
 
         The key is stored per-installation in ~/.gaia/cache/hmac.key
-        and is used to sign cache files to prevent tampering.
+        and is used to sign cache files to prevent tampering. Cached in
+        memory after first load to avoid repeated disk reads.
 
         Returns:
             32-byte HMAC key
         """
+        if self._hmac_key is not None:
+            return self._hmac_key
+
         key_dir = Path.home() / ".gaia" / "cache"
         key_path = key_dir / "hmac.key"
 
         if key_path.exists():
-            return key_path.read_bytes()
+            self._hmac_key = key_path.read_bytes()
+            return self._hmac_key
 
         key_dir.mkdir(parents=True, exist_ok=True)
         key = secrets.token_bytes(32)
         key_path.write_bytes(key)
-        # Restrict permissions (Unix-like systems)
         try:
             key_path.chmod(0o600)
         except (OSError, AttributeError):
-            pass  # Windows doesn't support Unix-style permissions
+            pass
         self.log.info("Generated new HMAC key for cache integrity verification")
-        return key
+        self._hmac_key = key
+        return self._hmac_key
 
     def _save_cache(self, cache_path: str, cache_data: dict):
         """
@@ -293,14 +299,11 @@ class RAGSDK:
             cache_data: Dictionary with 'chunks', 'full_text', and 'metadata' keys
         """
         json_bytes = json.dumps(cache_data, ensure_ascii=False).encode("utf-8")
-
-        # Write JSON data
-        with open(cache_path, "wb") as f:
-            f.write(json_bytes)
-
-        # Write HMAC signature
         key = self._get_hmac_key()
         signature = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
+
+        with open(cache_path, "wb") as f:
+            f.write(json_bytes)
         with open(cache_path + ".sig", "w", encoding="utf-8") as f:
             f.write(signature)
 
@@ -1902,19 +1905,6 @@ These positions indicate where to split the text."""
             self.config.cache_dir, f"{cache_filename}_extracted.md"
         )
 
-        # Security: Remove legacy pickle cache files (CVE fix)
-        # Old versions used insecure pickle serialization; delete any .pkl
-        # files and force re-index with secure JSON format
-        legacy_pkl_path = cache_path.replace(".json", ".pkl")
-        if os.path.exists(legacy_pkl_path):
-            self.log.warning(
-                f"Removing legacy pickle cache (security upgrade): {legacy_pkl_path}"
-            )
-            try:
-                os.remove(legacy_pkl_path)
-            except OSError as e:
-                self.log.error(f"Failed to remove legacy pickle cache: {e}")
-
         if os.path.exists(cache_path):
             if self.config.show_stats:
                 print(f"💾 Loading from cache: {Path(file_path).name}")
@@ -1922,12 +1912,8 @@ These positions indicate where to split the text."""
             try:
                 cached_data = self._verify_and_load_cache(cache_path)
                 cached_chunks = cached_data["chunks"]
-                cached_full_text = cached_data.get(
-                    "full_text", ""
-                )  # May not exist in old caches
-                cached_metadata = cached_data.get(
-                    "metadata", {}
-                )  # May not exist in old caches
+                cached_full_text = cached_data.get("full_text", "")
+                cached_metadata = cached_data.get("metadata", {})
 
                 # Check if cache might be missing VLM content
                 # If metadata doesn't have VLM info, it's an old cache
