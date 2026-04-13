@@ -16,16 +16,31 @@ This guide covers common problems people encounter when installing GAIA. If your
 
 ## macOS: Gatekeeper blocks the app {#gatekeeper}
 
-**Symptom**: "GAIA cannot be opened because the developer cannot be verified."
+**Symptom**: A dialog appears saying **"gaia-desktop" Not Opened** — "Apple could not verify gaia-desktop is free of malware…" with only **Move to Trash** and **Done** buttons. Or on older macOS: "GAIA cannot be opened because the developer cannot be verified."
 
-**Cause**: The DMG is unsigned (we're working on Apple notarization — see [#530](https://github.com/amd/gaia/issues/530)).
+**Cause**: The DMG is ad-hoc signed but not notarized with an Apple Developer ID (we're working on notarization — see [#733](https://github.com/amd/gaia/issues/733)).
 
-**Fix**: Right-click GAIA in Applications and choose **Open**. In the dialog that appears, click **Open**. macOS remembers this choice for future launches.
+**Fix — macOS 15 Sequoia and later:**
 
-If that doesn't work:
+1. Click **Done** in the dialog (do not click "Move to Trash").
+2. Open **System Settings → Privacy & Security**.
+3. Scroll down to the Security section. You will see:
+   > "gaia-desktop" was blocked from use because it is not from an identified developer.
+4. Click **Open Anyway**.
+5. Enter your Mac password when prompted.
+6. The app opens. macOS remembers this choice for future launches.
+
+**Fix — macOS 14 Ventura and earlier:**
+
+Right-click (or Control-click) **GAIA** in the Applications folder and choose **Open**. In the dialog that appears, click **Open**.
+
+**Alternative fix — terminal (all macOS versions):**
+
 ```bash
-xattr -d com.apple.quarantine /Applications/GAIA.app
+xattr -cr /Applications/GAIA.app
 ```
+
+Then double-click the app — it will open without the Gatekeeper dialog.
 
 ## First-launch backend install fails
 
