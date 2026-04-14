@@ -25,11 +25,18 @@ namespace gaia {
         result.pop_back();
     }
 
-    // Append /api/v1 if not already present
-    const std::string suffix = "/api/v1";
-    if (result.size() < suffix.size() ||
-        result.substr(result.size() - suffix.size()) != suffix) {
-        result += suffix;
+    // Preserve OpenAI-compatible /v1 endpoints and Lemonade /api/v1 endpoints.
+    const std::string lemonadeSuffix = "/api/v1";
+    const std::string openaiSuffix = "/v1";
+    const bool hasLemonadeSuffix =
+        result.size() >= lemonadeSuffix.size() &&
+        result.substr(result.size() - lemonadeSuffix.size()) == lemonadeSuffix;
+    const bool hasOpenAiSuffix =
+        result.size() >= openaiSuffix.size() &&
+        result.substr(result.size() - openaiSuffix.size()) == openaiSuffix;
+
+    if (!hasLemonadeSuffix && !hasOpenAiSuffix) {
+        result += lemonadeSuffix;
     }
 
     return result;
@@ -361,6 +368,16 @@ void LemonadeClient::ensureModelLoaded(const std::string& modelName, int ctxSize
     if (effectiveModel.empty()) {
         if (debug_) {
             std::cerr << "[Lemonade] ensureModelLoaded: no model specified, skipping" << std::endl;
+        }
+        return;
+    }
+
+    // Non-Lemonade OpenAI-compatible servers such as Ollama do not expose
+    // Lemonade's /health and /load endpoints. In that case, skip model
+    // management and let the server handle model selection from the request.
+    if (baseUrl_.size() < 7 || baseUrl_.substr(baseUrl_.size() - 7) != "/api/v1") {
+        if (debug_) {
+            std::cerr << "[Lemonade] ensureModelLoaded: non-Lemonade endpoint detected, skipping" << std::endl;
         }
         return;
     }
