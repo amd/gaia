@@ -77,21 +77,6 @@ updates:
         patterns:
           - "*"
 
-  # JavaScript - Eval webapp (monitor only, no PRs)
-  - package-ecosystem: "npm"
-    directory: "/src/gaia/eval/webapp"
-    schedule:
-      interval: "monthly"
-    labels:
-      - "dependencies"
-      - "javascript"
-      - "eval-webapp"
-    open-pull-requests-limit: 0
-    groups:
-      eval-webapp-dependencies:
-        patterns:
-          - "*"
-
   # JavaScript - EMR Dashboard Electron wrapper
   - package-ecosystem: "npm"
     directory: "/src/gaia/agents/emr/dashboard/electron"
