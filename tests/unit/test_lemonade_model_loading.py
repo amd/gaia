@@ -10,11 +10,13 @@ from gaia.llm.lemonade_client import LemonadeClient, LemonadeStatus
 class TestEnsureModelLoaded:
     """Test _ensure_model_loaded helper method."""
 
+    @patch.object(LemonadeClient, "health_check")
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
-    def test_calls_load_when_model_not_loaded(self, mock_load, mock_status):
+    def test_calls_load_when_model_not_loaded(self, mock_load, mock_status, mock_health):
         """Verify load_model is called when model not in loaded_models list."""
         # Setup
+        mock_health.return_value = {"status": "ok", "all_models_loaded": [], "model_loaded": "model-a"}
         client = LemonadeClient(host="localhost", port=8000)
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:8000",
@@ -30,11 +32,13 @@ class TestEnsureModelLoaded:
             "model-b", auto_download=True, prompt=False, ctx_size=None
         )
 
+    @patch.object(LemonadeClient, "health_check")
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
-    def test_skips_load_when_model_already_loaded(self, mock_load, mock_status):
+    def test_skips_load_when_model_already_loaded(self, mock_load, mock_status, mock_health):
         """Verify no load_model call when model already in loaded_models list."""
         # Setup
+        mock_health.return_value = {"status": "ok", "all_models_loaded": [], "model_loaded": "model-a"}
         client = LemonadeClient(host="localhost", port=8000)
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:8000",
@@ -48,6 +52,7 @@ class TestEnsureModelLoaded:
         # Verify - should NOT call load_model
         mock_load.assert_not_called()
 
+    @patch.object(LemonadeClient, "health_check")
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     def test_skips_check_when_auto_download_disabled(self, mock_load, mock_status):
@@ -62,11 +67,13 @@ class TestEnsureModelLoaded:
         mock_status.assert_not_called()
         mock_load.assert_not_called()
 
+    @patch.object(LemonadeClient, "health_check")
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
-    def test_handles_status_check_error_gracefully(self, mock_load, mock_status):
+    def test_handles_status_check_error_gracefully(self, mock_load, mock_status, mock_health):
         """Verify errors during status check are logged but don't fail."""
         # Setup
+        mock_health.return_value = {"status": "ok", "all_models_loaded": [], "model_loaded": None}
         client = LemonadeClient(host="localhost", port=8000)
         mock_status.side_effect = Exception("Connection failed")
 
@@ -170,11 +177,13 @@ class TestStreamChatCompletionsModelLoading:
 class TestNoPromptBehavior:
     """Test that model downloads happen without prompting."""
 
+    @patch.object(LemonadeClient, "health_check")
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
-    def test_ensure_model_loaded_passes_prompt_false(self, mock_load, mock_status):
+    def test_ensure_model_loaded_passes_prompt_false(self, mock_load, mock_status, mock_health):
         """Verify _ensure_model_loaded passes prompt=False to avoid user prompts."""
         # Setup
+        mock_health.return_value = {"status": "ok", "all_models_loaded": [], "model_loaded": None}
         client = LemonadeClient(host="localhost", port=8000)
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:8000",
@@ -195,14 +204,16 @@ class TestNoPromptBehavior:
 class TestModelLoadingIntegration:
     """Integration-style tests for model loading behavior."""
 
+    @patch.object(LemonadeClient, "health_check")
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     @patch("gaia.llm.lemonade_client.OpenAI")
     def test_model_loaded_when_not_present(
-        self, mock_openai_class, mock_load, mock_status
+        self, mock_openai_class, mock_load, mock_status, mock_health
     ):
         """Integration test: model is loaded when not in loaded_models list."""
         # Setup
+        mock_health.return_value = {"status": "ok", "all_models_loaded": [], "model_loaded": "different-model"}
         client = LemonadeClient(host="localhost", port=8000)
 
         # Mock status to show model NOT loaded
@@ -239,14 +250,16 @@ class TestModelLoadingIntegration:
             "new-model", auto_download=True, prompt=False, ctx_size=None
         )
 
+    @patch.object(LemonadeClient, "health_check")
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     @patch("gaia.llm.lemonade_client.OpenAI")
     def test_model_not_loaded_when_already_present(
-        self, mock_openai_class, mock_load, mock_status
+        self, mock_openai_class, mock_load, mock_status, mock_health
     ):
         """Integration test: no load when model already in loaded_models list."""
         # Setup
+        mock_health.return_value = {"status": "ok", "all_models_loaded": [], "model_loaded": "existing-model"}
         client = LemonadeClient(host="localhost", port=8000)
 
         # Mock status to show model IS loaded
@@ -279,4 +292,20 @@ class TestModelLoadingIntegration:
         )
 
         # Verify load_model was NOT called (model already loaded)
+        mock_load.assert_not_called()
+
+class TestNonLemonadeBackend:
+    """Test non-Lemonade backend detection (llama.cpp direct)."""
+
+    @patch.object(LemonadeClient, "health_check")
+    @patch.object(LemonadeClient, "get_status")
+    @patch.object(LemonadeClient, "load_model")
+    def test_skips_load_for_non_lemonade_backend(self, mock_load, mock_status, mock_health):
+        """Verify _ensure_model_loaded skips load for non-Lemonade backends (llama.cpp)."""
+        client = LemonadeClient(host="localhost", port=8000)
+        mock_health.return_value = {"status": "ok"}
+
+        client._ensure_model_loaded("model-a", auto_download=True)
+
+        mock_status.assert_not_called()
         mock_load.assert_not_called()
