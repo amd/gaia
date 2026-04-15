@@ -717,6 +717,120 @@ class TestLogHandlerCleanup:
 
 
 # ---------------------------------------------------------------------------
+# Lemonade ProductCode-based uninstall (works for bundled NSIS-installed MSI)
+# ---------------------------------------------------------------------------
+
+
+class TestLemonadeProductCodeUninstall:
+    """When Lemonade was installed via the bundled NSIS MSI (or any other
+    means), ``gaia uninstall --purge --purge-lemonade`` must locate the MSI
+    ProductCode in the registry and call ``msiexec /x {GUID}`` to remove it.
+
+    This guarantees the uninstall path is identical regardless of whether
+    Lemonade was installed standalone or via the bundled GAIA installer.
+    """
+
+    def test_purge_lemonade_invokes_msiexec_with_product_code(
+        self, fake_home, monkeypatch
+    ):
+        from unittest.mock import MagicMock, patch
+
+        from gaia.installer import lemonade_installer as li
+
+        _seed_gaia_tree(fake_home)
+
+        product_code = "{12345678-1234-1234-1234-123456789012}"
+
+        # Pretend we're on Windows
+        monkeypatch.setattr("platform.system", lambda: "Windows")
+
+        # Fake an installed Lemonade with a known ProductCode
+        with (
+            patch.object(
+                li.LemonadeInstaller,
+                "check_installation",
+                return_value=li.LemonadeInfo(
+                    installed=True,
+                    version="10.0.0",
+                    path=r"C:\Program Files\lemonade-server\lemonade-server.exe",
+                ),
+            ),
+            patch.object(
+                li.LemonadeInstaller,
+                "find_product_code",
+                return_value=product_code,
+            ),
+            patch.object(
+                li.LemonadeInstaller,
+                "wait_for_msi_mutex",
+                return_value=True,
+            ),
+            patch("gaia.installer.lemonade_installer.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            captured = _Capture()
+            exit_code = uc.run(
+                _ns(purge=True, purge_lemonade=True, yes=True),
+                printer=captured,
+            )
+
+        assert exit_code == uc.EXIT_OK, captured.text
+
+        # Find the msiexec /x {GUID} invocation
+        msi_calls = [
+            call
+            for call in mock_run.call_args_list
+            if call.args
+            and isinstance(call.args[0], list)
+            and call.args[0][:2] == ["msiexec", "/x"]
+        ]
+        assert (
+            msi_calls
+        ), f"expected msiexec /x invocation, got: {mock_run.call_args_list}"
+        cmd = msi_calls[0].args[0]
+        assert (
+            product_code in cmd
+        ), f"expected ProductCode {product_code} in command {cmd}"
+
+    def test_purge_lemonade_when_not_installed_is_noop(self, fake_home, monkeypatch):
+        """If Lemonade isn't installed at all, --purge-lemonade exits cleanly
+        and does not invoke msiexec.
+        """
+        from unittest.mock import patch
+
+        from gaia.installer import lemonade_installer as li
+
+        _seed_gaia_tree(fake_home)
+
+        with (
+            patch.object(
+                li.LemonadeInstaller,
+                "check_installation",
+                return_value=li.LemonadeInfo(installed=False, error="not found"),
+            ),
+            patch("gaia.installer.lemonade_installer.subprocess.run") as mock_run,
+        ):
+            captured = _Capture()
+            exit_code = uc.run(
+                _ns(purge=True, purge_lemonade=True, yes=True),
+                printer=captured,
+            )
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert "not installed" in captured.text
+        # No msiexec calls when nothing to remove
+        msi_calls = [
+            call
+            for call in mock_run.call_args_list
+            if call.args
+            and isinstance(call.args[0], list)
+            and "msiexec" in str(call.args[0][0]).lower()
+        ]
+        assert not msi_calls, f"unexpected msiexec call: {msi_calls}"
+
+
+# ---------------------------------------------------------------------------
 # Lemonade Python interpreter resolution
 # ---------------------------------------------------------------------------
 

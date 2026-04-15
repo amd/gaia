@@ -202,6 +202,9 @@ installer/version.nsh
 installer/**.exe
 release_info.json
 
+# Lemonade MSI downloaded at build time (issue #774)
+installer/lemonade-server-minimal.msi
+
 # version
 version.txt
 **/version.nsh

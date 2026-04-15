@@ -512,6 +512,193 @@ class TestNeedsInstallConsistency(unittest.TestCase):
         self.assertTrue(installer.needs_install(info))
 
 
+class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
+    """End-to-end check that _ensure_lemonade_installed() does NOT trigger a
+    download or msiexec call when Lemonade is already installed.
+
+    This locks in the contract that the bundled NSIS MSI install (pre-step)
+    plus a subsequent ``gaia init`` invocation must be a no-op for Lemonade.
+    """
+
+    def _make_cmd(self, installed_info, profile="minimal"):
+        """Build an InitCommand whose installer.check_installation() returns info."""
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller") as mock_cls:
+            mock_installer = MagicMock()
+            mock_installer.is_platform_supported.return_value = True
+            mock_installer.get_platform_name.return_value = "Windows"
+            mock_installer.check_installation.return_value = installed_info
+            # If anything tries to download or install, blow up the test
+            mock_installer.download_installer.side_effect = AssertionError(
+                "download_installer must NOT be called when already installed"
+            )
+            mock_installer.install.side_effect = AssertionError(
+                "install must NOT be called when already installed"
+            )
+            mock_cls.return_value = mock_installer
+            cmd = InitCommand(profile=profile, yes=True)
+        return cmd, mock_installer
+
+    @patch("subprocess.run")
+    @patch("urllib.request.urlretrieve")
+    @patch("urllib.request.urlopen")
+    def test_skip_when_installed_at_target_version(
+        self, mock_urlopen, mock_urlretrieve, mock_subprocess
+    ):
+        """Case 2: installed at LEMONADE_VERSION -> needs_install False, no download."""
+        info = LemonadeInfo(
+            installed=True,
+            version=LEMONADE_VERSION,
+            path="/usr/bin/lemonade-server",
+        )
+        # Sanity: the installer's own needs_install agrees
+        installer = LemonadeInstaller()
+        self.assertFalse(installer.needs_install(info))
+
+        cmd, mock_installer = self._make_cmd(info)
+        result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
+        mock_installer.download_installer.assert_not_called()
+        mock_installer.install.assert_not_called()
+        # No external download attempted
+        mock_urlopen.assert_not_called()
+        mock_urlretrieve.assert_not_called()
+        # No msiexec invoked
+        for call in mock_subprocess.call_args_list:
+            args = call.args[0] if call.args else []
+            if isinstance(args, (list, tuple)) and args:
+                self.assertNotIn(
+                    "msiexec",
+                    str(args[0]).lower(),
+                    f"msiexec must not be invoked: {args}",
+                )
+
+    @patch("subprocess.run")
+    @patch("urllib.request.urlretrieve")
+    @patch("urllib.request.urlopen")
+    def test_skip_when_installed_at_newer_version(
+        self, mock_urlopen, mock_urlretrieve, mock_subprocess
+    ):
+        """Case 4 (CRITICAL): installed at NEWER version (e.g. 11.0.0) -> no download.
+
+        Scenario: the bundled NSIS installer dropped Lemonade v10.0.0 but the
+        user has since upgraded to v11.0.0. ``gaia init`` must treat this as
+        compatible (newer is fine), NOT downgrade or re-download.
+        """
+        # Pick a version definitively newer than LEMONADE_VERSION (10.0.0)
+        newer_version = "11.0.0"
+        info = LemonadeInfo(
+            installed=True,
+            version=newer_version,
+            path="/usr/bin/lemonade-server",
+        )
+        installer = LemonadeInstaller()
+        self.assertFalse(
+            installer.needs_install(info),
+            "needs_install must return False for newer version",
+        )
+
+        cmd, mock_installer = self._make_cmd(info)
+        result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
+        mock_installer.download_installer.assert_not_called()
+        mock_installer.install.assert_not_called()
+        mock_urlopen.assert_not_called()
+        mock_urlretrieve.assert_not_called()
+
+    def test_older_version_meeting_minimum_does_not_redownload_in_ci(self):
+        """Case 3 (older but >= profile minimum, --yes): accepted, no install."""
+        # 9.1.0 is older than 10.0.0 target but >= profile minimum (9.0.0)
+        info = LemonadeInfo(
+            installed=True,
+            version="9.1.0",
+            path="/usr/bin/lemonade-server",
+        )
+        cmd, mock_installer = self._make_cmd(info, profile="minimal")
+        result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
+        mock_installer.download_installer.assert_not_called()
+        mock_installer.install.assert_not_called()
+
+    def test_older_version_below_minimum_triggers_install_in_ci(self):
+        """Case 3b: installed << profile minimum, --yes -> upgrade is invoked.
+
+        This case DOES download — verify the upgrade path is taken.
+        """
+        from gaia.installer.init_command import InitCommand
+
+        info = LemonadeInfo(
+            installed=True,
+            version="8.0.0",  # well below profile minimum 9.0.0
+            path="/usr/bin/lemonade-server",
+        )
+
+        with patch("gaia.installer.init_command.LemonadeInstaller") as mock_cls:
+            mock_installer = MagicMock()
+            mock_installer.is_platform_supported.return_value = True
+            mock_installer.get_platform_name.return_value = "Windows"
+            mock_installer.check_installation.return_value = info
+            mock_cls.return_value = mock_installer
+            cmd = InitCommand(profile="minimal", yes=True)
+            # Stub upgrade path so it doesn't try to actually run anything
+            cmd._upgrade_lemonade = MagicMock(return_value=True)
+
+            result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
+        cmd._upgrade_lemonade.assert_called_once_with("8.0.0")
+
+
+class TestLegacyFallback(unittest.TestCase):
+    """Regression: when Lemonade is NOT installed (e.g. bundled MSI install
+    failed or user is on Linux without a bundled installer), gaia init must
+    still fall through to the runtime download path.
+
+    Protects acceptance criterion AC5.
+    """
+
+    def test_not_installed_proceeds_to_download(self):
+        """check_installation returns not-installed -> download + install called."""
+        from gaia.installer.init_command import InitCommand
+
+        info = LemonadeInfo(installed=False, error="lemonade-server not found in PATH")
+
+        with patch("gaia.installer.init_command.LemonadeInstaller") as mock_cls:
+            mock_installer = MagicMock()
+            mock_installer.is_platform_supported.return_value = True
+            mock_installer.get_platform_name.return_value = "Linux"
+            mock_installer.check_installation.return_value = info
+            # Simulate successful download + install
+            from pathlib import Path as _P
+
+            mock_installer.download_installer.return_value = _P("/tmp/lemonade.deb")
+            mock_installer.install.return_value = InstallResult(
+                success=True, version=LEMONADE_VERSION, message="ok"
+            )
+            # Verify step calls check_installation again — now installed
+            mock_installer.check_installation.side_effect = [
+                info,  # first call: not installed
+                LemonadeInfo(  # post-install verification call
+                    installed=True,
+                    version=LEMONADE_VERSION,
+                    path="/usr/bin/lemonade-server",
+                ),
+            ]
+            mock_cls.return_value = mock_installer
+
+            cmd = InitCommand(profile="minimal", yes=True)
+            result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
+        # The download path MUST be taken
+        mock_installer.download_installer.assert_called_once()
+        mock_installer.install.assert_called_once()
+
+
 class TestWaitForMsiMutex(unittest.TestCase):
     """Test wait_for_msi_mutex."""
 

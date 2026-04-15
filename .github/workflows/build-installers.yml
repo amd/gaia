@@ -92,6 +92,7 @@ on:
       - 'src/gaia/apps/webui/main.cjs'
       - 'src/gaia/apps/webui/bin/**'
       - 'src/gaia/apps/webui/services/**'
+      - 'src/gaia/version.py'
 
 # Least-privilege default. Only the release-upload step needs `contents:
 # write`, and it's gated behind `inputs.publish_to_release` — which is
@@ -209,6 +210,42 @@ jobs:
         shell: bash
         run: npm run build
 
+      # ─── Bundle Lemonade Server MSI (issue #774) ────────────────────
+      # The Windows NSIS installer embeds lemonade-server-minimal.msi so
+      # users get a working Lemonade setup on first launch with no runtime
+      # download. version.nsh exposes ${LEMONADE_VERSION} to NSIS for the
+      # DetailPrint message; the MSI itself is downloaded from the pinned
+      # upstream release. Both steps Windows-only — no impact on mac/linux.
+      - name: Generate installer/version.nsh (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          # Runs write_version_files() which emits installer/version.nsh containing
+          # !define LEMONADE_VERSION and !define GAIA_VERSION
+          python src/gaia/version.py
+          echo "Generated installer/version.nsh:"
+          cat installer/version.nsh
+
+      - name: Download Lemonade MSI (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          LEMONADE_VERSION=$(grep -oE 'LEMONADE_VERSION = "[^"]+"' src/gaia/version.py | cut -d'"' -f2)
+          if [ -z "$LEMONADE_VERSION" ]; then
+            echo "ERROR: Could not parse LEMONADE_VERSION from src/gaia/version.py" >&2
+            exit 1
+          fi
+          URL="https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_VERSION}/lemonade-server-minimal.msi"
+          echo "Downloading Lemonade MSI v${LEMONADE_VERSION} from ${URL}"
+          curl -fsSL --retry 3 --retry-delay 5 "${URL}" -o installer/lemonade-server-minimal.msi
+          # Sanity check: >50MB guards against silent truncation
+          SIZE=$(wc -c < installer/lemonade-server-minimal.msi)
+          echo "Downloaded MSI size: ${SIZE} bytes"
+          if [ "$SIZE" -lt 52428800 ]; then
+            echo "ERROR: MSI smaller than expected (<50MB); download likely corrupt." >&2
+            exit 1
+          fi
+
       # ─── Code signing config (opt-in by secret presence) ─────────────
       - name: Detect Windows code signing
         if: matrix.platform == 'windows' && env.SIGNPATH_API_TOKEN != ''
@@ -285,6 +322,35 @@ jobs:
               -exec ls -lh {} \; || true
           else
             echo "(dist-app/ does not exist — build may have failed)"
+          fi
+
+      # ─── Verify Lemonade MSI bundling (issue #774) ───────────────────
+      # Guards against regressions where the MSI stops being bundled.
+      # Uses 7z to inspect the NSIS installer archive. NSIS solid
+      # compression can prevent 7z from listing inner files — in that
+      # case we print a warning but do NOT fail the build (the NSIS File
+      # directive already fails compilation if the MSI was missing, so a
+      # built .exe is strong evidence of a successful bundle). We only
+      # fail if 7z CAN list contents but the MSI name is absent.
+      - name: Verify Lemonade MSI embedded in installer (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          INSTALLER=$(ls src/gaia/apps/webui/dist-app/*.exe 2>/dev/null | head -1)
+          if [ -z "$INSTALLER" ]; then
+            echo "ERROR: No installer .exe found in dist-app/" >&2
+            exit 1
+          fi
+          echo "Inspecting: ${INSTALLER}"
+          LISTING=$(7z l "${INSTALLER}" 2>&1)
+          STATUS=$?
+          if [ $STATUS -ne 0 ]; then
+            echo "WARNING: 7z could not list installer contents (NSIS solid compression?). Build passed — NSIS File directive is the compile-time gate."
+          elif echo "${LISTING}" | grep -q "lemonade-server-minimal.msi"; then
+            echo "OK: Lemonade MSI is confirmed bundled in the installer."
+          else
+            echo "ERROR: 7z can list the installer but lemonade-server-minimal.msi is NOT present." >&2
+            exit 1
           fi
 
       # ─── Verify macOS code signature ─────────────────────────────────
