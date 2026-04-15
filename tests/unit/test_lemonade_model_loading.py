@@ -52,7 +52,6 @@ class TestEnsureModelLoaded:
         # Verify - should NOT call load_model
         mock_load.assert_not_called()
 
-    @patch.object(LemonadeClient, "health_check")
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     def test_skips_check_when_auto_download_disabled(self, mock_load, mock_status):
