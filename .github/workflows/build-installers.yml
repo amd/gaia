@@ -238,11 +238,15 @@ jobs:
           URL="https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_VERSION}/lemonade-server-minimal.msi"
           echo "Downloading Lemonade MSI v${LEMONADE_VERSION} from ${URL}"
           curl -fsSL --retry 3 --retry-delay 5 "${URL}" -o installer/lemonade-server-minimal.msi
-          # Sanity check: >50MB guards against silent truncation
+          # Sanity check: the -minimal MSI is a bootstrap installer (~4-6MB) that
+          # fetches the Lemonade runtime on first run, so we guard against an
+          # obviously-truncated download (<1MB = not even an MSI header) rather
+          # than pinning to a specific upstream size that can change between
+          # minor releases.
           SIZE=$(wc -c < installer/lemonade-server-minimal.msi)
           echo "Downloaded MSI size: ${SIZE} bytes"
-          if [ "$SIZE" -lt 52428800 ]; then
-            echo "ERROR: MSI smaller than expected (<50MB); download likely corrupt." >&2
+          if [ "$SIZE" -lt 1048576 ]; then
+            echo "ERROR: MSI smaller than 1MB; download likely corrupt or 404 HTML body." >&2
             exit 1
           fi
 

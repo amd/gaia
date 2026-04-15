@@ -87,8 +87,10 @@
   ; Graceful-failure contract: non-zero exit codes are logged but we never
   ; Abort — GAIA install always continues. User can recover via `gaia init`.
   ;
-  ; $PLUGINSDIR is NSIS's auto-cleaned temp dir, so the ~150MB MSI does NOT
-  ; persist on the user's disk after the installer exits. ${BUILD_RESOURCES_DIR}
+  ; $PLUGINSDIR is NSIS's auto-cleaned temp dir, so the ~5MB bootstrap MSI
+  ; does NOT persist on the user's disk after the installer exits. (The MSI
+  ; itself is a small bootstrap — it fetches the Lemonade runtime on first
+  ; run — see lemonade-server-minimal.msi upstream.) ${BUILD_RESOURCES_DIR}
   ; is injected by electron-builder as a makensis -D flag and resolves to
   ; the repo's installer/ directory (per directories.buildResources in
   ; electron-builder.yml). SetOutPath "$INSTDIR" at the end restores the
