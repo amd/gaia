@@ -184,48 +184,70 @@ cd src/gaia/apps/webui && npm run dev      # Terminal 2: frontend (port 5173)
 gaia/
 ├── src/gaia/           # Main source code
 │   ├── agents/         # Agent implementations
-│   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent, tools
-│   │   ├── chat/       # ChatAgent with RAG capabilities
-│   │   ├── code/       # CodeAgent with orchestration, validators
+│   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent
+│   │   ├── tools/      # Cross-agent tool mixins (file_tools, screenshot_tools)
+│   │   ├── chat/       # ChatAgent with RAG (tools/rag_tools, tools/shell_tools)
+│   │   ├── code/       # CodeAgent with orchestration, validators, file_io tools
+│   │   ├── builder/    # BuilderAgent — scaffolds new agents from templates
+│   │   ├── summarize/  # SummarizeAgent — document/text summarization
 │   │   ├── blender/    # BlenderAgent for 3D automation
 │   │   ├── jira/       # JiraAgent for issue management
 │   │   ├── docker/     # DockerAgent for containerization
-│   │   ├── emr/        # MedicalIntakeAgent for healthcare
+│   │   ├── emr/        # MedicalIntakeAgent for healthcare (VLM)
 │   │   ├── routing/    # RoutingAgent for intelligent agent selection
-│   │   └── sd/         # Stable Diffusion image generation agent
+│   │   ├── sd/         # SDAgent for Stable Diffusion image generation
+│   │   └── registry.py # YAML-manifest agent registry + KNOWN_TOOLS map
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
 │   │   ├── jira/       # Jira standalone app
 │   │   ├── llm/        # LLM standalone app
 │   │   ├── summarize/  # Document summarization app
-│   │   └── docker/     # Docker standalone app
+│   │   ├── docker/     # Docker standalone app
+│   │   ├── example/    # Reference/starter app
+│   │   └── _shared/    # Shared assets for apps
 │   ├── audio/          # Audio processing (Whisper ASR, Kokoro TTS)
 │   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
 │   ├── database/       # DatabaseMixin and DatabaseAgent
 │   ├── electron/       # Electron app integration
 │   ├── eval/           # Evaluation framework
+│   ├── img/            # Shared image assets
 │   ├── installer/      # Install/init commands (gaia init, lemonade installer)
-│   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI)
+│   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI) + providers/
 │   ├── mcp/            # Model Context Protocol servers/clients
 │   ├── rag/            # Document retrieval (RAG)
+│   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
 │   ├── shell/          # Shell integration
 │   ├── talk/           # Voice interaction SDK
 │   ├── testing/        # Test utilities and fixtures
 │   ├── ui/             # Agent UI backend (FastAPI server, routers, SSE, database)
 │   ├── utils/          # Utility modules (FileWatcher, parsing)
-│   └── cli.py          # Main CLI entry point
+│   ├── vlm/            # Vision LLM tool mixin (VLMToolsMixin, structured extraction)
+│   └── cli.py          # Main CLI entry point (all `gaia <command>` subparsers)
 ├── tests/              # Test suite
 │   ├── unit/           # Unit tests
 │   ├── mcp/            # MCP integration tests
 │   ├── integration/    # Cross-system integration tests
 │   ├── stress/         # Stress/load tests
-│   └── electron/       # Electron app tests (Jest)
+│   ├── electron/       # Electron app tests (Jest)
+│   ├── fixtures/       # Shared test fixtures/data
+│   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)
 ├── scripts/            # Build, install, and launch scripts
 ├── docs/               # Documentation (MDX format)
 ├── workshop/           # Tutorial materials
 └── .github/workflows/  # CI/CD pipelines
 ```
+
+### Console Script Entry Points
+
+Defined in [`setup.py`](setup.py) under `console_scripts`:
+
+| Script | Entry Point | Purpose |
+|--------|-------------|---------|
+| `gaia` / `gaia-cli` | `gaia.cli:main` | Main CLI — all `gaia <subcommand>` |
+| `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge binary |
+| `gaia-code` | `gaia.agents.code.cli:main` | CodeAgent standalone entry (NOT `gaia code`) |
+| `gaia-emr` | `gaia.agents.emr.cli:main` | EMR/MedicalIntake standalone entry |
 
 ## Architecture
 
@@ -256,12 +278,30 @@ gaia/
 |-------|----------|-------------|---------------|
 | **ChatAgent** | `agents/chat/agent.py` | Document Q&A with RAG | Qwen3.5-35B |
 | **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3.5-35B |
+| **BuilderAgent** | `agents/builder/agent.py` | Scaffolds new agents from templates | Qwen3.5-35B |
+| **SummarizeAgent** | `agents/summarize/agent.py` | Document/text summarization | Qwen3.5-35B |
 | **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B |
 | **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B |
 | **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B |
 | **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing | Qwen3-VL-4B (VLM) |
 | **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B |
 | **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
+
+### Agent Registry & Tool Mixins
+
+New agents are preferably registered via YAML manifests validated by Pydantic in [`src/gaia/agents/registry.py`](src/gaia/agents/registry.py). The registry exposes `KNOWN_TOOLS` — a curated map of reusable tool mixins that agents opt into by name:
+
+| Tool name | Mixin | Purpose |
+|-----------|-------|---------|
+| `rag` | `gaia.agents.chat.tools.rag_tools.RAGToolsMixin` | Document retrieval |
+| `file_search` | `gaia.agents.tools.file_tools.FileSearchToolsMixin` | Fuzzy/glob file search |
+| `file_io` | `gaia.agents.code.tools.file_io.FileIOToolsMixin` | Read/write/edit files |
+| `shell` | `gaia.agents.chat.tools.shell_tools.ShellToolsMixin` | Sandboxed shell commands |
+| `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | Screen capture |
+| `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
+| `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
+
+When adding a new tool, register it in `KNOWN_TOOLS` so YAML-manifest agents can declare it.
 
 ### Default Models
 - General tasks: `Qwen3-0.6B-GGUF`
@@ -270,23 +310,47 @@ gaia/
 
 ## CLI Commands
 
-Primary commands available via `gaia`:
+All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -h` for the authoritative list.
+
+**Agents & chat:**
 - `gaia chat` - Interactive chat with RAG
 - `gaia chat --ui` - Launch Agent UI (browser-based, requires `[ui]` extras)
 - `gaia chat --ui --ui-port 8080` - Agent UI on custom port
 - `gaia talk` - Voice interaction
-- `gaia prompt` - Single prompt to LLM
-- `gaia llm` - Simple LLM queries
+- `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
+- `gaia llm "<text>"` - Simple LLM queries
+- `gaia summarize` - Document summarization
 - `gaia blender` - Blender 3D agent
 - `gaia sd` - Stable Diffusion image generation
 - `gaia jira` - Jira integration
 - `gaia docker` - Docker management
+
+**Servers & infrastructure:**
 - `gaia api` - OpenAI-compatible API server
-- `gaia mcp` - MCP bridge server (start, stop, status, test)
-- `gaia eval` - Evaluation framework
-- `gaia summarize` - Document summarization
-- `gaia cache` - Cache management (status, clear)
+- `gaia mcp {start|stop|status|test|agent|docker|add|list|remove|tools|test-client}` - MCP bridge
+- `gaia cache {status|clear}` - Cache management
+
+**Setup & utilities:**
 - `gaia init` - Setup Lemonade Server and download models
+- `gaia install` - Install helper (e.g. Lemonade on first run)
+- `gaia download` - Download a model
+- `gaia kill` - Kill stray GAIA / Lemonade processes
+- `gaia test` - Smoke tests
+- `gaia yt` - YouTube transcript ingest
+- `gaia template` - Scaffold agent templates
+
+**Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
+- `gaia eval {fix-code|agent}` - Run evaluation harness
+- `gaia gt` - Generate ground truth
+- `gaia generate` - Dataset/response generation
+- `gaia batch-exp` - Batch experiments
+- `gaia report` - Render eval reports
+- `gaia visualize` / `gaia perf-vis` - Visualize results
+
+**Standalone binaries** (separate `console_scripts`, not subcommands):
+- `gaia-code` - CodeAgent entry (`src/gaia/agents/code/cli.py`)
+- `gaia-emr` - Medical intake entry (`src/gaia/agents/emr/cli.py`)
+- `gaia-mcp` - Standalone MCP bridge binary
 
 ## Documentation Index
 
@@ -388,18 +452,19 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 2. **Check for duplicates:** Search existing issues/PRs to avoid redundant responses
 
 3. **Reference specific files:** Use precise file references with line numbers when possible
-   - Agent implementations: `src/gaia/agents/` (base/, chat/, code/, blender/, jira/, docker/, emr/, routing/)
+   - Agent implementations: `src/gaia/agents/` (base/, tools/, chat/, code/, builder/, summarize/, blender/, jira/, docker/, emr/, routing/, sd/, registry.py)
    - CLI commands: `src/gaia/cli.py`
    - MCP integration: `src/gaia/mcp/`
-   - LLM backend: `src/gaia/llm/`
+   - LLM backend: `src/gaia/llm/` (+ `providers/` for Claude/OpenAI)
    - Audio processing: `src/gaia/audio/` (whisper_asr.py, kokoro_tts.py)
    - RAG system: `src/gaia/rag/` (sdk.py, pdf_utils.py)
    - Evaluation: `src/gaia/eval/` (eval.py, batch_experiment.py)
-   - Applications: `src/gaia/apps/` (webui/, jira/, llm/, summarize/, docker/)
+   - Applications: `src/gaia/apps/` (webui/, jira/, llm/, summarize/, docker/, example/, _shared/)
    - Agent SDK: `src/gaia/chat/` (AgentSDK class, formerly ChatSDK)
    - Agent UI backend: `src/gaia/ui/` (FastAPI server, routers, SSE handler)
    - Agent UI frontend: `src/gaia/apps/webui/` (React/TypeScript/Vite/Electron)
    - API Server: `src/gaia/api/`
+   - SD/VLM tool mixins: `src/gaia/sd/mixin.py`, `src/gaia/vlm/mixin.py`
 
 4. **Link to relevant documentation:**
    - **Getting Started:** [`docs/setup.mdx`](docs/setup.mdx), [`docs/quickstart.mdx`](docs/quickstart.mdx)
@@ -553,7 +618,6 @@ Specialized agents are available in `.claude/agents/` for specific tasks (23 age
 - **docker-specialist** (opus) - Docker containerization, Kubernetes
 - **github-actions-specialist** (opus) - CI/CD workflows, pipeline debugging
 - **github-issues-specialist** (opus) - GitHub Issues/PRs for AI agents
-- **nsis-installer** (sonnet) - Windows installer development
 - **release-manager** (sonnet) - Release management, version bumping
 
 ### Documentation Agents
@@ -562,8 +626,13 @@ Specialized agents are available in `.claude/agents/` for specific tasks (23 age
 
 When invoking a proactive agent from `.claude/agents/`, indicate which agent you are using in your response.
 
-## Learned Skills
+## Claude Code Plugins
 
-**Read these before starting related tasks:**
+The repo declares two plugins in [`.claude/settings.json`](.claude/settings.json) from the official Anthropic marketplace:
 
-- `.claude/skills/gaia-eval-benchmark.md` - How to run, audit, and trust/distrust the GAIA Agent UI eval benchmark; covers RAG cache integrity, response rendering bugs, eval judge leniency, and MCP session inspection (tags: eval, rag, mcp, gaia-agent-ui, debugging, hallucination, ci-cd, testing)
+- **`frontend-design@claude-plugins-official`** — higher-quality UI generation
+- **`superpowers@claude-plugins-official`** — structured dev methodology (brainstorm → plan → TDD → review → verify)
+
+These are **not auto-installed silently**. First time a contributor opens the repo in Claude Code (v2.1.0+), they'll be prompted to install them. Accept once — see [`docs/reference/dev.mdx`](docs/reference/dev.mdx) "Step 6: Claude Code Plugins (Optional)" for details and the opt-out.
+
+When a task fits a Superpowers skill (e.g. `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:test-driven-development`, `superpowers:systematic-debugging`, `superpowers:verification-before-completion`), **use it** — these skills enforce the dev practices this repo expects.
