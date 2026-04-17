@@ -84,7 +84,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 20
-          model: claude-opus-4-5-20251101
+          model: claude-opus-4-7
           direct_prompt: "Review this pull request. Read pr-diff.txt and pr-files.txt first, then review the changes."
           custom_instructions: |
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
@@ -320,7 +320,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 20
-          model: claude-opus-4-5-20251101
+          model: claude-opus-4-7
           custom_instructions: |
             You are GAIA's AI assistant helping with pull request discussions.
 
@@ -458,7 +458,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 30
-          model: claude-opus-4-5-20251101
+          model: claude-opus-4-7
           custom_instructions: |
             You are GAIA's helpful AI assistant responding to issues and PR conversations.
 
@@ -696,7 +696,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 30
-          model: claude-opus-4-5-20251101
+          model: claude-opus-4-7
           # Note: claude-code-action@beta does not support workflow_run events natively.
           # Using direct_prompt mode to bypass event type validation.
           direct_prompt: |
