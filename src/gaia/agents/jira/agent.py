@@ -22,15 +22,17 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-# (urlparse was previously used in a debug log line — see agent.py:635
-# — but was removed along with a CodeQL py/clear-text-logging-sensitive-data
-# false positive. Re-add the import if you need URL parsing again.)
 
 import aiohttp
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.tools import tool
+
+# (urlparse was previously used in a debug log line — see agent.py:635
+# — but was removed along with a CodeQL py/clear-text-logging-sensitive-data
+# false positive. Re-add the import if you need URL parsing again.)
+
 
 logger = logging.getLogger(__name__)
 

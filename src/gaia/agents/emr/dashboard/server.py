@@ -90,8 +90,15 @@ def _sanitize_response_text(text: str) -> str:
         text,
     )
     # Remove individual "File ..." lines from stack traces. Use [^"\n]* to
-    # ensure the quoted path match can't span lines or re-enter.
-    text = re.sub(r'^\s*File "[^"\n]*", line \d+[^\n]*$', "", text, flags=re.MULTILINE)
+    # ensure the quoted path match can't span lines or re-enter, and bound
+    # every unbounded quantifier to keep CodeQL's polynomial-redos analyzer
+    # satisfied.
+    text = re.sub(
+        r"^[ \t]{0,32}File \"[^\"\n]{0,512}\", line \d{1,12}[^\n]{0,256}$",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
     # Remove exception class names like "ValueError: ..." or "KeyError: ..."
     # Tighten \w* to a bounded repetition for ReDoS safety.
     text = re.sub(r"\b\w{0,64}(Error|Exception)\b:\s*", "", text)

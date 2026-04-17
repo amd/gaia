@@ -65,22 +65,24 @@ export class ChatUI {
     sanitizeInto(targetEl, html) {
         // URL-bearing attributes where an unsafe scheme could execute script.
         const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'action', 'formaction']);
-        // Schemes that can execute JS in at least one browser — covered per
-        // CodeQL alerts #168 / #170. The list is explicit (not a regex) so
-        // a future reviewer can audit exactly what is blocked.
+        // Schemes that can execute JS in at least one browser. Explicit list
+        // (not a regex) so a future reviewer can audit what is blocked.
         const DANGEROUS_SCHEMES = ['javascript:', 'data:', 'vbscript:'];
 
-        // Build off-DOM so no untrusted script ever lives in the live tree.
-        const scratch = document.createElement('template');
-        scratch.innerHTML = html;
-        const frag = scratch.content;
+        // Parse via DOMParser rather than assigning to ``innerHTML``.
+        // ``parseFromString`` with the ``text/html`` MIME produces a
+        // disconnected document whose <script> tags are never executed (per
+        // the HTML parsing spec), and avoids the ``innerHTML =`` sink that
+        // CodeQL flagged as xss-through-dom / xss-through-exception.
+        const parsed = new DOMParser().parseFromString(html, 'text/html');
 
-        // Remove dangerous elements
-        frag.querySelectorAll('script,iframe,object,embed,form,input,textarea,link,style,meta,base')
+        // Remove dangerous elements from the parsed body
+        parsed.body
+            .querySelectorAll('script,iframe,object,embed,form,input,textarea,link,style,meta,base')
             .forEach(el => el.remove());
 
         // Remove event handlers and unsafe URL schemes on any URL-bearing attribute
-        frag.querySelectorAll('*').forEach(el => {
+        parsed.body.querySelectorAll('*').forEach(el => {
             [...el.attributes].forEach(attr => {
                 const name = attr.name.toLowerCase();
                 const value = attr.value.trimStart().toLowerCase();
@@ -92,12 +94,12 @@ export class ChatUI {
             });
         });
 
-        // Mount the sanitized DocumentFragment directly. We never round-trip
-        // through ``return div.innerHTML`` → ``targetEl.innerHTML = s``, which
-        // is what CodeQL flagged as xss-through-dom/xss-through-exception —
-        // once the sanitizer pass is done, we keep the nodes.
-        targetEl.textContent = '';  // clear any prior content
-        targetEl.appendChild(frag);
+        // Move the sanitized child nodes into the target element. No HTML
+        // string ever crosses back through an innerHTML assignment.
+        targetEl.textContent = '';
+        while (parsed.body.firstChild) {
+            targetEl.appendChild(parsed.body.firstChild);
+        }
     }
 
     clearMessages() {

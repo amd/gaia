@@ -1072,6 +1072,35 @@ class TestCodeAgentEditFileGuardrails:
         assert result["status"] == "error"
         assert "not found" in result["error"].lower()
 
+    def test_edit_oversized_new_content_blocked(self, mixin_and_registry, tmp_path):
+        """Replacement content exceeding MAX_WRITE_SIZE_BYTES is rejected.
+
+        Regression guard for the #495 review-feedback fix: the previous
+        edit_file implementation only ran is_write_blocked + is_path_allowed
+        and never passed the new_content size to validate_write, so a model
+        could push a payload via edit_file that write_file would reject.
+        """
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "small.txt"
+        target.write_text("needle")
+
+        # 11 MB > 10 MB cap — must be refused.
+        huge_content = "x" * (MAX_WRITE_SIZE_BYTES + 1024)
+        result = edit_fn(
+            file_path=str(target),
+            old_content="needle",
+            new_content=huge_content,
+        )
+        assert result["status"] == "error"
+        # Error message mentions size
+        assert (
+            "size" in result["error"].lower()
+            or "max" in result["error"].lower()
+            or "too large" in result["error"].lower()
+        )
+        # Original content unchanged on the disk
+        assert target.read_text() == "needle"
+
     def test_edit_with_project_dir(self, mixin_and_registry, tmp_path):
         """Verify project_dir resolves relative paths for edit."""
         _, edit_fn = mixin_and_registry

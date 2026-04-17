@@ -315,11 +315,19 @@ app.post('/auth/login', loginLimiter, rateLimiter, (req, res) => {
     // Retrieve redirect URL from server-side storage and validate with url.parse()
     const target = consumeRedirect(nonce);
     const parsed = url.parse(target || '');
-    // Only redirect to relative paths (no host/protocol) to prevent open redirects
-    if (!parsed.host && !parsed.protocol && parsed.pathname) {
-      // Sanitize pathname to prevent protocol-relative URLs (e.g., //evil.com)
-      const safePath = parsed.pathname.startsWith('/') && !parsed.pathname.startsWith('//') ? parsed.pathname : '/';
-      res.redirect(303, safePath);
+    // Strict allowlist regex: must be an absolute-path reference (single
+    // leading slash, no second slash, no scheme, no authority, no CR/LF,
+    // no backslashes). This is the pattern CodeQL's
+    // js/server-side-unvalidated-url-redirection can recognize as a
+    // sanitization sink.
+    const SAFE_PATH_RE = /^\/(?!\/)[A-Za-z0-9\-_~.%/?&=:@#[\]!$'()*+,;]*$/;
+    if (
+      !parsed.host &&
+      !parsed.protocol &&
+      parsed.pathname &&
+      SAFE_PATH_RE.test(parsed.pathname)
+    ) {
+      res.redirect(303, parsed.pathname);
     } else {
       res.redirect(303, '/');
     }
