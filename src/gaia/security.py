@@ -12,6 +12,7 @@ import logging
 import os
 import platform
 import shutil
+import sys
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
@@ -137,6 +138,26 @@ def _get_blocked_directories() -> Set[str]:
 BLOCKED_DIRECTORIES: Set[str] = _get_blocked_directories()
 
 
+def _normalize_macos_symlinks(path_str: str) -> str:
+    """Strip the macOS ``/private/`` prefix so symlinked system dirs match.
+
+    On macOS, ``/etc``, ``/var``, ``/tmp`` etc. are symlinks into ``/private``.
+    ``os.path.realpath`` resolves them to the ``/private`` form, but the
+    :data:`BLOCKED_DIRECTORIES` / allowlist sets use the unprefixed form.
+    Without this normalization, ``/etc/foo.conf`` (realpath
+    ``/private/etc/foo.conf``) would never match ``/etc`` in either set.
+
+    Args:
+        path_str: An absolute realpath string.
+
+    Returns:
+        Same string with a leading ``/private`` stripped, if present.
+    """
+    if path_str.startswith("/private/"):
+        return path_str[len("/private") :]
+    return path_str
+
+
 class PathValidator:
     """
     Validates file paths against an allowed list, with user prompting for exceptions.
@@ -257,13 +278,10 @@ class PathValidator:
             real_path = Path(os.path.realpath(path)).resolve()
             real_path_str = str(real_path)
 
-            # macOS /var symlink handling: normalize by removing /private prefix
-            def normalize_macos(p: str) -> str:
-                if p.startswith("/private/"):
-                    return p[len("/private") :]
-                return p
-
-            norm_real_path = normalize_macos(real_path_str)
+            # macOS /var symlink handling: normalize by removing /private prefix.
+            # Use the module-level helper so is_write_blocked applies the same
+            # rule (otherwise /etc/<file> slips past the blocklist on Darwin).
+            norm_real_path = _normalize_macos_symlinks(real_path_str)
 
             # Check if real path is within any allowed directory
             for allowed_path in list(self.allowed_paths):
@@ -273,7 +291,7 @@ class PathValidator:
                     allowed_path_str_raw = str(allowed_path)
                     res_allowed = Path(os.path.realpath(allowed_path_str_raw)).resolve()
                     allowed_path_str = str(res_allowed)
-                    norm_allowed_path = normalize_macos(allowed_path_str)
+                    norm_allowed_path = _normalize_macos_symlinks(allowed_path_str)
 
                     # Robust check using string prefix on normalized paths.
                     # Append os.sep to prevent prefix attacks where
@@ -306,7 +324,21 @@ class PathValidator:
             return False
 
     def _prompt_user_for_access(self, path: Path) -> bool:
-        """Prompt user to allow access to a path."""
+        """Prompt user to allow access to a path.
+
+        In non-interactive environments (Agent UI, API server, CI) ``input()``
+        would block the thread indefinitely. Detect that and auto-deny so the
+        agent surfaces a clean "access denied" error instead of hanging.
+        Interactive CLI usage (TTY) still prompts normally.
+        """
+        if not _is_interactive():
+            logger.warning(
+                "Path %s outside allowlist; auto-denying (non-interactive "
+                "context — no TTY). Configure allowed_paths to grant access.",
+                path,
+            )
+            return False
+
         print(
             "\n⚠️  SECURITY WARNING: Agent is attempting to access a path outside allowed directories."
         )
@@ -357,20 +389,22 @@ class PathValidator:
         try:
             real_path = Path(os.path.realpath(path)).resolve()
             real_path_str = str(real_path)
-            norm_path = os.path.normpath(real_path_str)
+            # Apply macOS /private normalization so /etc, /var/run, etc. match
+            # the BLOCKED_DIRECTORIES entries (they're stored unprefixed).
+            norm_path = os.path.normpath(_normalize_macos_symlinks(real_path_str))
             file_name = real_path.name.lower()
             file_ext = real_path.suffix.lower()
 
             # Check blocked directories (case-insensitive on Windows)
+            is_windows = platform.system() == "Windows"
             for blocked_dir in BLOCKED_DIRECTORIES:
-                # Case-insensitive comparison on Windows, case-sensitive elsewhere
-                cmp_norm = (
-                    norm_path.lower() if platform.system() == "Windows" else norm_path
+                normalized_blocked = os.path.normpath(
+                    _normalize_macos_symlinks(blocked_dir)
                 )
+                # Case-insensitive comparison on Windows, case-sensitive elsewhere
+                cmp_norm = norm_path.lower() if is_windows else norm_path
                 cmp_blocked = (
-                    blocked_dir.lower()
-                    if platform.system() == "Windows"
-                    else blocked_dir
+                    normalized_blocked.lower() if is_windows else normalized_blocked
                 )
                 if cmp_norm.startswith(cmp_blocked + os.sep) or cmp_norm == cmp_blocked:
                     return (
@@ -451,21 +485,44 @@ class PathValidator:
                 existing_size = real_path.stat().st_size
                 if not self._prompt_overwrite(real_path, existing_size):
                     return (False, f"User declined to overwrite '{real_path}'")
-            except OSError:
-                pass  # File may have been deleted between check and prompt
+            except OSError as exc:
+                # TOCTOU: file may have been deleted or rotated between the
+                # existence check and the stat/prompt. Explicitly log the
+                # skip per CLAUDE.md's no-silent-fallback rule and treat it
+                # as a new file (no prompt).
+                logger.debug(
+                    "validate_write: could not stat %s before overwrite "
+                    "prompt (%s); treating as new file.",
+                    real_path,
+                    exc,
+                )
 
         return (True, "")
 
     def _prompt_overwrite(self, path: Path, existing_size: int) -> bool:
         """Prompt user before overwriting an existing file.
 
+        In non-interactive environments auto-approve the overwrite — the
+        write already passed allowlist + blocklist + size checks, and a
+        timestamped ``.bak`` backup is created separately in ``create_backup``,
+        so data loss is recoverable. Blocking on ``input()`` in a server
+        context would hang the request instead.
+
         Args:
             path: Path to the existing file.
             existing_size: Current file size in bytes.
 
         Returns:
-            True if user approves overwrite, False otherwise.
+            True if user approves overwrite (or non-interactive), False otherwise.
         """
+        if not _is_interactive():
+            logger.info(
+                "Auto-approving overwrite of %s (non-interactive context, "
+                "backup will be created)",
+                path,
+            )
+            return True
+
         size_str = _format_size(existing_size)
         print(f"\n⚠️  File already exists: {path} ({size_str})")
 
@@ -529,6 +586,19 @@ class PathValidator:
             audit_logger.warning(msg)
         else:
             audit_logger.error(msg)
+
+
+def _is_interactive() -> bool:
+    """Return True when stdin is a TTY connected to a real terminal.
+
+    Used to suppress blocking ``input()`` prompts when the validator runs
+    inside the Agent UI server, API server, or any non-TTY context (CI, pipe).
+    """
+    try:
+        return bool(sys.stdin.isatty())
+    except (AttributeError, ValueError):
+        # sys.stdin may be replaced or closed in some embedded contexts
+        return False
 
 
 def _format_size(size_bytes: int) -> str:

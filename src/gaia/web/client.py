@@ -506,9 +506,21 @@ class WebClient:
         save_dir.mkdir(parents=True, exist_ok=True)
         save_path = save_dir / filename
 
-        # Verify path is still within save_dir (prevent traversal)
-        if not str(save_path.resolve()).startswith(str(save_dir)):
+        # Verify path is still within save_dir (prevent traversal). Compare
+        # against `save_dir + os.sep` so ``/tmp/foo`` does not accept a
+        # resolved path in ``/tmp/foobar/…`` — same defense-in-depth pattern
+        # used in PathValidator.is_write_blocked.
+        save_dir_prefix = str(save_dir).rstrip(os.sep) + os.sep
+        resolved_save = str(save_path.resolve())
+        if not (
+            resolved_save == str(save_dir) or resolved_save.startswith(save_dir_prefix)
+        ):
             raise ValueError(f"Path traversal detected: {filename}")
+
+        # Read content_type BEFORE response.close() — `requests.Response`
+        # caches headers but relying on a closed response for later attribute
+        # access is fragile (future requests versions may clear them).
+        content_type = response.headers.get("Content-Type", "unknown")
 
         # Stream to disk
         downloaded = 0
@@ -525,8 +537,6 @@ class WebClient:
                 f.write(chunk)
 
         response.close()
-
-        content_type = response.headers.get("Content-Type", "unknown")
 
         return {
             "path": str(save_path),

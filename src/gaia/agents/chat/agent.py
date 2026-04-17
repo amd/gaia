@@ -21,9 +21,9 @@ from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
 from gaia.agents.tools import BrowserToolsMixin  # Web browsing and search
-from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
+from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
 from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
@@ -620,7 +620,16 @@ MANDATORY WORKFLOW for "what about X?" / "try X" / "what about the Y document?":
 "What about the employee handbook? How many PTO days?" = INDEX + QUERY "PTO days" + ANSWER "15 days"
 
 IMPORTANT: If no specific question was asked, query the document for "key policies" or "main content" and summarize — NEVER just say "it's indexed, what do you want to know?"
+"""
 
+        # ── Tier 1b: Optional tool sections — each block is only injected when
+        # the corresponding mixin was actually registered. Without this gating
+        # the LLM sees tool instructions for tools that don't exist and either
+        # hallucinates them or emits syntactically-valid tool calls that come
+        # back as "unknown tool" errors (#495 review feedback from @itomek-amd).
+        filesystem_section = ""
+        if getattr(self.config, "enable_filesystem", True):
+            filesystem_section = """
 **FILE SYSTEM TOOLS:**
 You have powerful file system tools. Use them when the user asks about files, folders, or their PC:
 - **browse_directory**: List folder contents with sizes and dates
@@ -658,10 +667,20 @@ Tools like find_files return a 'display_message' field - ALWAYS show this to the
 Example:
 User: "Can you find the oil and gas manual on my drive?"
 You: {"tool": "find_files", "tool_args": {"query": "oil gas manual", "file_types": "pdf,docx"}}
-Result: "Found 1 result(s):\n  1. C:/Users/user/Documents/Oil-Gas-Manual.pdf (2.1 MB)"
+Result: "Found 1 result(s):\\n  1. C:/Users/user/Documents/Oil-Gas-Manual.pdf (2.1 MB)"
 You: {"tool": "index_document", "tool_args": {"file_path": "C:/Users/user/Documents/Oil-Gas-Manual.pdf"}}
 You: {"answer": "Found and indexed Oil-Gas-Manual.pdf (150 chunks). You can now ask me questions about it!"}
 
+**DIRECTORY BROWSING WORKFLOW:**
+When user asks "what's in my Documents?" or "show me the project structure":
+1. Use browse_directory to list contents, or tree for visual hierarchy
+2. Use file_info for details about specific files
+3. Use bookmark to save frequently accessed locations
+"""
+
+        scratchpad_section = ""
+        if getattr(self.config, "enable_scratchpad", True):
+            scratchpad_section = """
 **DATA ANALYSIS WORKFLOW (Scratchpad):**
 For multi-document analysis (spending, tax, research), use the scratchpad tools:
 1. **find_files** to locate documents (e.g., credit card statements)
@@ -676,13 +695,11 @@ You: {"tool": "find_files", "tool_args": {"query": "statement", "file_types": "p
 You: {"tool": "create_table", "tool_args": {"table_name": "transactions", "columns": "date TEXT, description TEXT, amount REAL, category TEXT, source TEXT"}}
 Then for each PDF: read_file → extract transactions → insert_data
 Then: {"tool": "query_data", "tool_args": {"sql": "SELECT category, SUM(amount) as total FROM scratch_transactions GROUP BY category ORDER BY total DESC"}}
+"""
 
-**DIRECTORY BROWSING WORKFLOW:**
-When user asks "what's in my Documents?" or "show me the project structure":
-1. Use browse_directory to list contents, or tree for visual hierarchy
-2. Use file_info for details about specific files
-3. Use bookmark to save frequently accessed locations
-
+        browser_section = ""
+        if getattr(self.config, "enable_browser", True):
+            browser_section = """
 **BROWSER TOOLS:**
 You can browse the web, search for information, and download files:
 - **fetch_page**: Fetch a web page and extract readable text, links, or tables
@@ -705,7 +722,12 @@ When user wants to get and analyze a web resource:
 2. **download_file** to save locally
 3. **index_document** or **read_file** to process the downloaded file
 4. Use scratchpad tools for structured analysis
+"""
 
+        # Tail of Tier 1: always-on examples + indexing note. Kept separate so
+        # we can prepend the gated sections between the discovery workflow and
+        # these examples without having to maintain a single monolithic f-string.
+        discovery_rules_tail = """
 NOTE: Progress indicators (spinners) are shown automatically by the tool while searching.
 You don't need to say "searching..." - the tool displays it live!
 
@@ -991,8 +1013,8 @@ You: {"answer": "The top salesperson in Q1 2025 was Sarah Chen with $70,000 in r
 **FILE BROWSING:** browse_directory for navigation, list_recent_files for recent files, get_file_info for metadata.
 
 **UNSUPPORTED FEATURES:**
-If user asks for something not supported (web browsing, email, scheduling, cloud storage, file conversion, live collaboration, video/audio analysis), explain it's not available and suggest alternatives. Link: https://github.com/amd/gaia/issues/new?template=feature_request.md
-NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fetch_webpage). For generate_image, ALWAYS attempt the call first before saying unavailable.
+If user asks for something not supported (email, scheduling, cloud storage, file conversion, live collaboration, video/audio analysis), explain it's not available and suggest alternatives. Link: https://github.com/amd/gaia/issues/new?template=feature_request.md
+NOTE: Web browsing and search ARE supported via `fetch_page`, `search_web`, and `download_file` (see BROWSER TOOLS section above). Image analysis IS supported (analyze_image). For generate_image, ALWAYS attempt the call first before saying unavailable.
   IMAGE GENERATION MANDATORY WORKFLOW — AUTOMATIC FAIL if violated:
   BANNED RESPONSE (NEVER SAY): "I can generate images when the --sd flag is active" / "image generation requires --sd" / "I can create images for you" — ANY claim about availability before attempting.
   MANDATORY: When user asks "can you generate an image?" or asks you to create any image, you MUST call generate_image FIRST. If it returns an error, THEN report it is unavailable. NEVER claim you can or cannot generate images without first attempting the call. Your first response to any image request must be the tool call, not a text explanation.
@@ -1004,6 +1026,10 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
             + indexed_docs_section
             + tool_rules
             + discovery_rules
+            + filesystem_section
+            + scratchpad_section
+            + browser_section
+            + discovery_rules_tail
             + rag_query_rules
             + data_file_rules
         )
@@ -2031,7 +2057,15 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
             return False
 
     def __del__(self):
-        """Cleanup when agent is destroyed."""
+        """Cleanup when agent is destroyed.
+
+        Releases watchdog observers, HTTP session, and the two SQLite
+        connections owned by this agent. ``__del__`` is best-effort — Python
+        doesn't guarantee it fires on interpreter shutdown — but explicit
+        close() makes tests deterministic (WAL journals released, file handles
+        closed) and avoids leaking Session/connection objects in long-running
+        services like the Agent UI backend.
+        """
         try:
             self.stop_watching()
         except Exception as e:
@@ -2041,3 +2075,13 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
                 self._web_client.close()
         except Exception as e:
             logger.error(f"Error closing web client during cleanup: {e}")
+        try:
+            if self._fs_index:
+                self._fs_index.close_db()
+        except Exception as e:
+            logger.error(f"Error closing file system index during cleanup: {e}")
+        try:
+            if self._scratchpad:
+                self._scratchpad.close_db()
+        except Exception as e:
+            logger.error(f"Error closing scratchpad during cleanup: {e}")

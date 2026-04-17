@@ -318,7 +318,9 @@ class FileSystemToolsMixin:
 
                     for i, entry in enumerate(filtered):
                         is_last = i == len(filtered) - 1
-                        connector = "+-- " if is_last else "+-- "
+                        # ASCII box-drawing: distinct glyphs for last vs. intermediate
+                        # entries so the rendered tree actually has a shape.
+                        connector = "`-- " if is_last else "|-- "
                         extension = "    " if is_last else "|   "
 
                         is_dir = entry.is_dir(follow_symlinks=False)

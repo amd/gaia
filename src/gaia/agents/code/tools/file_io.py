@@ -670,6 +670,25 @@ class FileIOToolsMixin:
                         )
                         return {"status": "error", "error": reason}
 
+                    # Enforce MAX_WRITE_SIZE_BYTES on the replacement content.
+                    # Previously this path only ran is_path_allowed + is_write_blocked,
+                    # so a model could push a 50 MB `new_content` via edit_file even
+                    # though the same payload via write_file is blocked.
+                    new_size = len(new_content.encode("utf-8"))
+                    from gaia.security import MAX_WRITE_SIZE_BYTES
+
+                    if new_size > MAX_WRITE_SIZE_BYTES:
+                        reason = (
+                            f"Edit blocked: replacement content "
+                            f"({new_size / (1024 * 1024):.1f} MB) exceeds "
+                            f"maximum allowed size "
+                            f"({MAX_WRITE_SIZE_BYTES / (1024 * 1024):.0f} MB)"
+                        )
+                        path_validator.audit_write(
+                            "edit", str(path), new_size, "denied", reason
+                        )
+                        return {"status": "error", "error": reason}
+
                 if not path.exists():
                     return {"status": "error", "error": f"File not found: {file_path}"}
 

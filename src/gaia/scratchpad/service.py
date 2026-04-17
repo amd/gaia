@@ -12,13 +12,45 @@ from gaia.logger import get_logger
 
 log = get_logger(__name__)
 
+# Column DDL validation. Each column definition must look like
+# ``identifier TYPE [constraint ...]`` where TYPE is a known SQLite affinity
+# and constraints are a limited allowlist. The columns string comes from the
+# LLM via the ``create_table`` tool — because DatabaseMixin.execute() calls
+# executescript(), any stray ``;`` would enable multi-statement injection.
+_VALID_SQL_TYPES = {
+    # Core SQLite affinities
+    "TEXT",
+    "INTEGER",
+    "REAL",
+    "NUMERIC",
+    "BLOB",
+    # Common synonyms SQLite accepts and maps to an affinity
+    "BOOLEAN",
+    "DATE",
+    "DATETIME",
+    "TIMESTAMP",
+    "VARCHAR",
+    "CHAR",
+    "DECIMAL",
+    "BIGINT",
+    "SMALLINT",
+    "TINYINT",
+    "FLOAT",
+    "DOUBLE",
+}
+_COLUMN_DEF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 class ScratchpadService(DatabaseMixin):
     """SQLite-backed working memory for multi-document data analysis.
 
-    Inherits from DatabaseMixin for all database operations.
-    Uses the same database file as FileSystemIndexService but with
-    a 'scratch_' prefix on all table names to avoid collisions.
+    Inherits from DatabaseMixin for all database operations. Uses its own
+    database file (``~/.gaia/scratchpad.db`` by default) — separate from
+    ``FileSystemIndexService``'s ``~/.gaia/file_index.db`` so each service's
+    ``PRAGMA integrity_check`` only sees its own schema.
+
+    All table names are prefixed with ``scratch_`` for defense-in-depth even
+    though the two services now live in separate files.
 
     Tables are user-created via tools and can persist across sessions
     or be cleaned up after analysis.
@@ -34,13 +66,16 @@ class ScratchpadService(DatabaseMixin):
     MAX_ROWS_PER_TABLE = 1_000_000
     MAX_TOTAL_SIZE_BYTES = 100 * 1024 * 1024  # 100MB
 
-    DEFAULT_DB_PATH = "~/.gaia/file_index.db"
+    # Keep on its own file so FileSystemIndexService's integrity_check doesn't
+    # see scratch_* tables as "unexpected corruption" and vice-versa (#495
+    # review feedback).
+    DEFAULT_DB_PATH = "~/.gaia/scratchpad.db"
 
     def __init__(self, db_path: Optional[str] = None):
         """Initialize scratchpad service.
 
         Args:
-            db_path: Path to SQLite database. Defaults to ~/.gaia/file_index.db
+            db_path: Path to SQLite database. Defaults to ~/.gaia/scratchpad.db
         """
         path = db_path or self.DEFAULT_DB_PATH
         resolved = str(Path(path).expanduser())
@@ -75,12 +110,14 @@ class ScratchpadService(DatabaseMixin):
                 "Drop unused tables before creating new ones."
             )
 
-        # Validate columns string (basic check)
-        if not columns or not columns.strip():
-            raise ValueError("Column definitions cannot be empty.")
+        # Validate and normalize the column DDL. This is the single most
+        # important guardrail in this class — `self.execute()` is backed by
+        # sqlite3.executescript() which allows multiple statements, so an
+        # unchecked `columns` string is a direct SQL-injection vector.
+        safe_columns = self._validate_columns(columns)
 
         # Create table using execute() (outside any transaction)
-        self.execute(f"CREATE TABLE IF NOT EXISTS {full_name} ({columns})")
+        self.execute(f"CREATE TABLE IF NOT EXISTS {full_name} ({safe_columns})")
 
         log.info(f"Scratchpad table created: {safe_name}")
         return f"Table '{safe_name}' created with columns: {columns}"
@@ -153,21 +190,20 @@ class ScratchpadService(DatabaseMixin):
                 "Use insert_rows() for inserts or drop_table() for deletions."
             )
 
-        # Block dangerous keywords even in SELECT (subquery attacks)
-        dangerous = [
-            "INSERT ",
-            "UPDATE ",
-            "DELETE ",
-            "DROP ",
-            "ALTER ",
-            "CREATE ",
-            "ATTACH ",
-        ]
-        for keyword in dangerous:
-            if keyword in upper:
-                raise ValueError(
-                    f"Query contains disallowed keyword: {keyword.strip()}"
-                )
+        # Block dangerous keywords even in SELECT (subquery attacks). Match
+        # on word boundaries so column names like ``email_insert_ts`` or
+        # string literals such as ``'UPDATE PENDING'`` are not false-positives.
+        # We also strip quoted string literals entirely before scanning so
+        # the keyword search can only trigger on actual SQL tokens.
+        #
+        # Note: column names like ``created_at`` tokenize to {CREATED, AT}, so
+        # ``CREATE`` itself is *not* a false-positive — safe to include.
+        scan_target = _strip_sql_string_literals(upper)
+        dangerous = {"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "ATTACH"}
+        tokens = set(re.findall(r"\b[A-Z]+\b", scan_target))
+        hits = tokens & dangerous
+        if hits:
+            raise ValueError(f"Query contains disallowed keyword: {sorted(hits)[0]}")
 
         return self.query(normalized)
 
@@ -311,3 +347,132 @@ class ScratchpadService(DatabaseMixin):
             f"SELECT COUNT(*) as count FROM {full_table_name}", one=True
         )
         return result["count"] if result else 0
+
+    def _validate_columns(self, columns: str) -> str:
+        """Validate a user-supplied CREATE TABLE column DDL string.
+
+        The ``columns`` argument arrives from the LLM through the
+        ``create_table`` tool. Because :meth:`DatabaseMixin.execute` dispatches
+        to ``sqlite3.executescript``, an unsanitized string would allow
+        multi-statement SQL injection (e.g. ``id INT); DROP TABLE ...; --``).
+
+        Strategy — defense-in-depth, **not** full SQL parsing:
+
+        1. **Hard-deny statement separators and comments**: no ``;``, ``--``,
+           ``/*``, ``*/``. Without these tokens the executed script can only
+           be a single CREATE TABLE statement, so even arbitrary constraint
+           expressions can't chain into a second statement.
+        2. **Balanced parens**: an unbalanced string could close the outer
+           ``CREATE TABLE`` early.
+        3. **Per-column shape check**: split on top-level commas and verify
+           each part starts with ``<identifier> <TYPE>[(size)]``. The ``<TYPE>``
+           root must be a known SQLite affinity. Constraint text after the
+           type (including ``CHECK(...)``, ``DEFAULT CURRENT_TIMESTAMP``,
+           ``REFERENCES foo(bar)``) is passed through unchanged — parens are
+           already balanced and separator tokens are already denied.
+
+        Args:
+            columns: Raw column definition string.
+
+        Returns:
+            The original columns string (trimmed) — safe to interpolate into
+            a CREATE TABLE statement once it passes these checks.
+
+        Raises:
+            ValueError: If any part of ``columns`` fails validation.
+        """
+        if not columns or not columns.strip():
+            raise ValueError("Column definitions cannot be empty.")
+
+        # 1. Hard deny statement terminators / comments before any parsing.
+        for forbidden in (";", "--", "/*", "*/"):
+            if forbidden in columns:
+                raise ValueError(
+                    f"Invalid column definitions: contains forbidden token "
+                    f"{forbidden!r}"
+                )
+
+        # 2. Parens must balance to zero, otherwise the CREATE TABLE
+        # expression could be terminated early.
+        if columns.count("(") != columns.count(")"):
+            raise ValueError("Invalid column definitions: unbalanced parentheses.")
+
+        # 3. Split on top-level commas (commas outside any parens) and shape-check.
+        defs = _split_top_level(columns, ",")
+        defs = [d.strip() for d in defs if d.strip()]
+        if not defs:
+            raise ValueError("Column definitions cannot be empty.")
+        if len(defs) > 64:
+            raise ValueError("Too many columns (max 64).")
+
+        seen_names: set = set()
+        for part in defs:
+            # Skip table-level constraints that start with keywords like
+            # ``CHECK(...)``, ``PRIMARY KEY(...)``, ``FOREIGN KEY(...)`` --
+            # these are valid SQLite DDL but not per-column definitions.
+            first_token = part.split(None, 1)[0].upper()
+            if first_token in ("CHECK", "PRIMARY", "FOREIGN", "UNIQUE", "CONSTRAINT"):
+                continue
+
+            tokens = part.split(None, 2)
+            if len(tokens) < 2:
+                raise ValueError(
+                    f"Invalid column definition {part!r}: expected "
+                    "'<name> <TYPE> [constraints...]'."
+                )
+            name, sql_type = tokens[0], tokens[1]
+
+            if not _COLUMN_DEF_RE.match(name):
+                raise ValueError(
+                    f"Invalid column name {name!r}: must match "
+                    "[A-Za-z_][A-Za-z0-9_]*"
+                )
+            if name.lower() in seen_names:
+                raise ValueError(f"Duplicate column name: {name!r}")
+            seen_names.add(name.lower())
+
+            # Strip optional size spec like VARCHAR(255) or DECIMAL(10,2)
+            type_root = re.sub(r"\(.*$", "", sql_type).upper()
+            if type_root not in _VALID_SQL_TYPES:
+                raise ValueError(
+                    f"Invalid column type {sql_type!r}. Allowed roots: "
+                    f"{sorted(_VALID_SQL_TYPES)}"
+                )
+
+        return columns.strip()
+
+
+def _split_top_level(text: str, separator: str) -> List[str]:
+    """Split *text* on *separator*, ignoring separators inside parens.
+
+    Used by ``_validate_columns`` so that commas inside ``CHECK(x, y)`` or
+    ``DECIMAL(10, 2)`` don't split a column into two parts.
+    """
+    parts: List[str] = []
+    depth = 0
+    buf: List[str] = []
+    for ch in text:
+        if ch == "(":
+            depth += 1
+            buf.append(ch)
+        elif ch == ")":
+            depth -= 1
+            buf.append(ch)
+        elif ch == separator and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        parts.append("".join(buf))
+    return parts
+
+
+def _strip_sql_string_literals(sql_upper: str) -> str:
+    """Replace SQL string literals with empty strings for safe keyword scanning.
+
+    Handles both single-quoted ('foo') and double-quoted ("bar") literals and
+    SQLite's doubled-quote escape ('it''s'). Used by ``query_data`` so that a
+    SELECT whose literal mentions ``DROP`` or ``UPDATE`` isn't falsely rejected.
+    """
+    return re.sub(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"", "''", sql_upper)

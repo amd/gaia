@@ -1125,31 +1125,51 @@ class TestPathValidatorEdgeCases:
     def test_prompt_user_for_access_yes(self, validator, tmp_path):
         """Verify _prompt_user_for_access with 'y' grants temporary access."""
         outside = tmp_path.parent / "outside_test_prompt.txt"
-        with patch("builtins.input", return_value="y"):
+        # Force interactive mode so the non-TTY guard added in #495 doesn't
+        # short-circuit the input() prompt.
+        with patch("gaia.security._is_interactive", return_value=True), patch(
+            "builtins.input", return_value="y"
+        ):
             result = validator._prompt_user_for_access(Path(outside))
         assert result is True
 
     def test_prompt_user_for_access_no(self, validator, tmp_path):
         """Verify _prompt_user_for_access with 'n' denies access."""
         outside = tmp_path.parent / "outside_denied.txt"
-        with patch("builtins.input", return_value="n"):
+        with patch("gaia.security._is_interactive", return_value=True), patch(
+            "builtins.input", return_value="n"
+        ):
             result = validator._prompt_user_for_access(Path(outside))
         assert result is False
 
     def test_prompt_user_for_access_always(self, validator, tmp_path):
         """Verify _prompt_user_for_access with 'a' grants and persists access."""
         outside = tmp_path.parent / "outside_always.txt"
-        with patch("builtins.input", return_value="a"):
+        with patch("gaia.security._is_interactive", return_value=True), patch(
+            "builtins.input", return_value="a"
+        ):
             with patch.object(validator, "_save_persisted_path") as mock_save:
                 result = validator._prompt_user_for_access(Path(outside))
         assert result is True
         mock_save.assert_called_once()
 
+    def test_prompt_user_for_access_non_interactive_denies(self, validator, tmp_path):
+        """Non-TTY contexts auto-deny without ever calling input()."""
+        outside = tmp_path.parent / "outside_non_tty.txt"
+        with patch("gaia.security._is_interactive", return_value=False), patch(
+            "builtins.input"
+        ) as mock_input:
+            result = validator._prompt_user_for_access(Path(outside))
+        assert result is False
+        mock_input.assert_not_called()
+
     def test_prompt_overwrite_yes(self, validator, tmp_path):
         """Verify _prompt_overwrite with 'y' returns True."""
         existing = tmp_path / "overwrite_prompt.txt"
         existing.write_text("data")
-        with patch("builtins.input", return_value="y"):
+        with patch("gaia.security._is_interactive", return_value=True), patch(
+            "builtins.input", return_value="y"
+        ):
             result = validator._prompt_overwrite(existing, existing.stat().st_size)
         assert result is True
 
@@ -1157,9 +1177,22 @@ class TestPathValidatorEdgeCases:
         """Verify _prompt_overwrite with 'n' returns False."""
         existing = tmp_path / "overwrite_no.txt"
         existing.write_text("data")
-        with patch("builtins.input", return_value="n"):
+        with patch("gaia.security._is_interactive", return_value=True), patch(
+            "builtins.input", return_value="n"
+        ):
             result = validator._prompt_overwrite(existing, existing.stat().st_size)
         assert result is False
+
+    def test_prompt_overwrite_non_interactive_approves(self, validator, tmp_path):
+        """Non-TTY contexts auto-approve overwrite (relies on backup)."""
+        existing = tmp_path / "overwrite_non_tty.txt"
+        existing.write_text("data")
+        with patch("gaia.security._is_interactive", return_value=False), patch(
+            "builtins.input"
+        ) as mock_input:
+            result = validator._prompt_overwrite(existing, existing.stat().st_size)
+        assert result is True
+        mock_input.assert_not_called()
 
 
 # ============================================================================

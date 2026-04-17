@@ -202,12 +202,16 @@ class TestPromptOverwrite:
     def validator(self, tmp_path):
         return PathValidator(allowed_paths=[str(tmp_path)])
 
+    # All _prompt_overwrite tests need to force interactive mode, otherwise
+    # the non-TTY guard (#495 review) auto-approves without calling input().
     def test_prompt_overwrite_yes(self, validator, tmp_path):
         """User responding 'y' approves the overwrite."""
         target = tmp_path / "file.txt"
         target.write_text("data")
 
-        with patch("builtins.input", return_value="y"):
+        with patch("gaia.security._is_interactive", return_value=True), patch(
+            "builtins.input", return_value="y"
+        ):
             result = validator._prompt_overwrite(target, 100)
 
         assert result is True
@@ -217,7 +221,9 @@ class TestPromptOverwrite:
         target = tmp_path / "file.txt"
         target.write_text("data")
 
-        with patch("builtins.input", return_value="n"):
+        with patch("gaia.security._is_interactive", return_value=True), patch(
+            "builtins.input", return_value="n"
+        ):
             result = validator._prompt_overwrite(target, 100)
 
         assert result is False
@@ -227,7 +233,9 @@ class TestPromptOverwrite:
         target = tmp_path / "file.txt"
         target.write_text("data")
 
-        with patch("builtins.input", return_value="yes"):
+        with patch("gaia.security._is_interactive", return_value=True), patch(
+            "builtins.input", return_value="yes"
+        ):
             result = validator._prompt_overwrite(target, 100)
 
         assert result is True
@@ -237,7 +245,9 @@ class TestPromptOverwrite:
         target = tmp_path / "file.txt"
         target.write_text("data")
 
-        with patch("builtins.input", return_value="no"):
+        with patch("gaia.security._is_interactive", return_value=True), patch(
+            "builtins.input", return_value="no"
+        ):
             result = validator._prompt_overwrite(target, 100)
 
         assert result is False
@@ -248,7 +258,9 @@ class TestPromptOverwrite:
         target.write_text("data")
 
         # Simulate: "maybe" -> "xxx" -> "y"
-        with patch("builtins.input", side_effect=["maybe", "xxx", "y"]):
+        with patch("gaia.security._is_interactive", return_value=True), patch(
+            "builtins.input", side_effect=["maybe", "xxx", "y"]
+        ):
             result = validator._prompt_overwrite(target, 200)
 
         assert result is True
@@ -259,7 +271,9 @@ class TestPromptOverwrite:
         target.write_text("data")
 
         # Simulate: "" -> "asdf" -> "n"
-        with patch("builtins.input", side_effect=["", "asdf", "n"]):
+        with patch("gaia.security._is_interactive", return_value=True), patch(
+            "builtins.input", side_effect=["", "asdf", "n"]
+        ):
             result = validator._prompt_overwrite(target, 50)
 
         assert result is False
@@ -277,12 +291,29 @@ class TestPromptOverwrite:
                 " ".join(str(x) for x in a)
             ),
         ):
-            with patch("builtins.input", return_value="y"):
+            with patch("gaia.security._is_interactive", return_value=True), patch(
+                "builtins.input", return_value="y"
+            ):
                 validator._prompt_overwrite(target, 2048)
 
         printed_output = "\n".join(printed_lines)
         assert str(target) in printed_output
         assert "2.0 KB" in printed_output
+
+    def test_prompt_overwrite_non_interactive_approves_with_backup(
+        self, validator, tmp_path
+    ):
+        """In non-TTY contexts the overwrite is auto-approved (backup covers data loss)."""
+        target = tmp_path / "file.txt"
+        target.write_text("data")
+
+        with patch("gaia.security._is_interactive", return_value=False), patch(
+            "builtins.input"
+        ) as mock_input:
+            result = validator._prompt_overwrite(target, 100)
+
+        assert result is True
+        mock_input.assert_not_called()
 
 
 # ============================================================================

@@ -47,15 +47,26 @@ export class ChatUI {
     }
 
     sanitizeHTML(html) {
+        // URL-bearing attributes where an unsafe scheme could execute script.
+        const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'action', 'formaction']);
+        // Schemes that can execute JS in at least one browser — covered per
+        // CodeQL alerts #168 / #170. The list is explicit (not a regex) so
+        // a future reviewer can audit exactly what is blocked.
+        const DANGEROUS_SCHEMES = ['javascript:', 'data:', 'vbscript:'];
+
         const div = document.createElement('div');
         div.innerHTML = html;
         // Remove dangerous elements
         const dangerous = div.querySelectorAll('script,iframe,object,embed,form,input,textarea,link,style,meta,base');
         dangerous.forEach(el => el.remove());
-        // Remove event handlers and javascript: URLs
+        // Remove event handlers and unsafe URL schemes on any URL-bearing attribute
         div.querySelectorAll('*').forEach(el => {
             [...el.attributes].forEach(attr => {
-                if (attr.name.startsWith('on') || (attr.name === 'href' && attr.value.trimStart().toLowerCase().startsWith('javascript:'))) {
+                const name = attr.name.toLowerCase();
+                const value = attr.value.trimStart().toLowerCase();
+                const isUnsafeUrl = URL_ATTRS.has(name)
+                    && DANGEROUS_SCHEMES.some(s => value.startsWith(s));
+                if (name.startsWith('on') || isUnsafeUrl) {
                     el.removeAttribute(attr.name);
                 }
             });

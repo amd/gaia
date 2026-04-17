@@ -1393,15 +1393,23 @@ class TestParseDateRangeDirect:
             assert "No files found" in result
 
     def test_yyyy_mm_format(self):
-        """'2026-03' (YYYY-MM) format works as date range."""
+        """'YYYY-MM' date range matches files whose mtime falls in that month."""
         agent, tools = _make_mock_agent_and_tools()
         find = tools["find_files"]
 
+        import os
         import tempfile
+        import time
+        from datetime import datetime
 
         with tempfile.TemporaryDirectory() as td:
-            Path(td, "march.txt").write_text("march file")
-            # Current date is 2026-03, so file created now should match
+            march_file = Path(td, "march.txt")
+            march_file.write_text("march file")
+            # Pin mtime to 2026-03-15 so the test doesn't drift with the
+            # wall clock (original test failed outside March).
+            march_ts = time.mktime(datetime(2026, 3, 15, 12, 0).timetuple())
+            os.utime(march_file, (march_ts, march_ts))
+
             result = find(query="march", date_range="2026-03", scope=td)
             assert "march.txt" in result
 

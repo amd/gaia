@@ -1311,9 +1311,14 @@ class FileSearchToolsMixin:
                     path_validator = getattr(self, "_path_validator", None)
 
                 if path_validator is not None:
-                    # Validate write access (skip overwrite prompt since we're editing)
+                    # Validate write access (skip overwrite prompt since we're editing).
+                    # Pass the *actual* size of the replacement string so
+                    # MAX_WRITE_SIZE_BYTES is enforced — passing 0 here would
+                    # silently bypass the size guardrail (#495 review feedback).
                     is_allowed, reason = path_validator.validate_write(
-                        str(resolved_path), content_size=0, prompt_user=False
+                        str(resolved_path),
+                        content_size=len(new_content.encode("utf-8")),
+                        prompt_user=False,
                     )
                     # Re-check allowlist with prompting if it failed on allowlist
                     if not is_allowed and "not in allowed paths" in reason:
