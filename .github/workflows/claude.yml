@@ -276,7 +276,6 @@ jobs:
             **Writing Style:**
             - Be professional, constructive, and specific
             - Assume the author is skilled but may not know GAIA conventions — teach with concrete examples from `src/gaia/`
-            - Prioritize ```suggestion blocks over descriptions
             - Reference `file.py:line` for every claim
             - Make it easy for maintainers to accept suggestions with one click
 
