@@ -20,9 +20,9 @@ LLMs have a knowledge cutoff—they don't know about your company's documents, y
 <Tabs>
 <Tab title="Without RAG">
 ```python
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
-llm = LLMClient()
+llm = create_client()  # LLMClient is abstract; use the factory
 response = llm.generate("What's our company's refund policy?")
 # "I don't have access to your company's specific policies..."
 ```

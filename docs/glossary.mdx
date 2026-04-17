@@ -284,7 +284,7 @@ The RoutingAgent's ability to identify programming languages and frameworks from
 AMD's optimized LLM serving platform providing hardware-accelerated inference on Ryzen AI processors. Supports NPU/iGPU hybrid mode, model management, and an OpenAI-compatible API. Start with `lemonade-server serve`. Required for most GAIA operations. See also: NPU, Hybrid Mode, LEMONADE_BASE_URL.
 
 ### LEMONADE_BASE_URL
-Environment variable specifying the address of the Lemonade Server (e.g., `http://localhost:8080`).
+Environment variable specifying the address of the Lemonade Server (default `http://localhost:8000/api/v1`). The GAIA OpenAI-compatible API server runs on port 8080 — don't confuse the two.
 
 ### LLM (Large Language Model)
 AI models trained on vast text corpora that can understand and generate human-like text (e.g., Qwen, Claude, GPT).
