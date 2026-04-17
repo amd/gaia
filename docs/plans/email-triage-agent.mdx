@@ -1915,7 +1915,7 @@ Each row shows two estimates:
 | 20 | MCP integration tests with mocked Gmail responses | 0.5d | 0.2d | |
 | 21 | Injection-fixture red-team tests (basic) | 0.5d | 0.3d | (requires adversarial creativity) |
 | 22 | **Slack webhook output channel** (§12.20 MVT tier) — block-kit formatter, config field, `gaia email slack-setup` | 0.5d | 0.2d | |
-| 23 | Documentation: [`docs/guides/email.mdx`](../guides/email.mdx) + SDK cross-reference | 0.5d | 0.1d | |
+| 23 | Documentation: new `docs/guides/email.mdx` + SDK cross-reference (net-new file, created as part of this deliverable) | 0.5d | 0.1d | |
 
 **Totals:**
 - **Human-only:** ~17 days sequential, ~3.5 weeks with review.
@@ -2023,7 +2023,7 @@ Same two-column format as §16.2 (Human vs CC-assisted with parallelism).
 | 28 | Comprehensive test suite — eval fixtures with 200+ labeled messages | 3d | 1.0d | ║ (fixture generation + runner in parallel) |
 | 29 | **Slack MCP bidirectional integration** (§12.20 C1 Polish tier) — pre-configured Slack MCP server, auto-registered tools (`send_slack_message`, `read_channel`, `search_slack`), DM-based query flow | 1d | 0.4d | ║ (with #17) |
 | 30 | **Slack interactive approval flow** (§12.20 C2 tier) — Slack app + Events API + Block Kit approve/edit/reject buttons for drafts | 2d | 0.8d | |
-| 31 | Documentation: [`docs/guides/email.mdx`](../guides/email.mdx) expanded, [`docs/sdk/sdks/email.mdx`](../sdk/sdks/email.mdx) | 1d | 0.2d | |
+| 31 | Documentation: expand `docs/guides/email.mdx`, new `docs/sdk/sdks/email.mdx` (both files created during C1/C2 — not yet in-tree) | 1d | 0.2d | |
 
 **Totals:**
 - **Human-only:** ~42 days sequential, ~8.5 weeks with review.
@@ -2611,4 +2611,4 @@ Choices the spec implies but does not resolve:
 
 **Security:**
 - [Agentic AI Security Survey (arXiv 2510.23883)](https://arxiv.org/html/2510.23883v1) — EchoLeak, indirect prompt injection
-- [MITRE — Indirect Prompt Injection](https://atlas.mitre.org/techniques/AML.T0051.001)
+- [OWASP LLM Top 10 — LLM01: Prompt Injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/)
