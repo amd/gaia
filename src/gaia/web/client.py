@@ -238,8 +238,15 @@ class WebClient:
             # Resolve relative redirects
             redirect_url = urljoin(current_url, redirect_url)
 
-            # Validate redirect target (SSRF check on each hop)
-            self.validate_url(redirect_url)
+            # Validate redirect target (SSRF check on each hop). If this
+            # raises (e.g. the Location header tries to send us to a private
+            # IP), close the current streamed response FIRST so we don't
+            # leak the connection / file descriptor on the validation error.
+            try:
+                self.validate_url(redirect_url)
+            except Exception:
+                response.close()
+                raise
 
             # Close the prior streamed response — we're not reading its body
             # (redirects have empty / informational bodies anyway).

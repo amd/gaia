@@ -789,6 +789,50 @@ class TestResponseSizeCap:
         assert result._content == b"hello"
 
 
+class TestRedirectStreamCleanup:
+    """Regression: stream stays closed when a redirect target is rejected.
+
+    Before #495 the SSRF validation on a redirect target (``self.validate_url``)
+    ran *after* the prior streamed response was still open. If validation
+    threw — e.g., the Location header tried to send us to a private IP —
+    the streamed response would leak until GC closed it.
+    """
+
+    def setup_method(self):
+        self.client = WebClient()
+
+    def teardown_method(self):
+        self.client.close()
+
+    def test_blocked_redirect_closes_prior_response(self):
+        # First response is a 302 redirecting to a blocked URL.
+        blocked_resp = MagicMock()
+        blocked_resp.status_code = 302
+        blocked_resp.headers = {
+            "Location": "http://169.254.169.254/meta",
+            "Content-Length": "0",
+        }
+        blocked_resp.iter_content = MagicMock(return_value=iter([b""]))
+        blocked_resp._content_consumed = False
+        blocked_resp._content = False
+
+        self.client._session.request = MagicMock(return_value=blocked_resp)
+
+        with patch.object(self.client, "_rate_limit_wait"):
+            # validate_url returns on the first hop; raises on the redirect
+            with patch.object(
+                self.client,
+                "validate_url",
+                side_effect=[None, ValueError("Blocked: private IP")],
+            ):
+                with pytest.raises(ValueError, match="private IP"):
+                    self.client.get("https://example.com/entry")
+
+        # The streamed response must have been closed by the redirect handler
+        # before the raise propagated.
+        blocked_resp.close.assert_called()
+
+
 class TestSanitizeFilename:
     """_sanitize_filename hardening (#495 bulletproofing)."""
 
