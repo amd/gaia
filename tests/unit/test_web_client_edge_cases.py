@@ -789,5 +789,50 @@ class TestResponseSizeCap:
         assert result._content == b"hello"
 
 
+class TestSanitizeFilename:
+    """_sanitize_filename hardening (#495 bulletproofing)."""
+
+    def test_basename_strips_parent_dirs(self):
+        assert WebClient._sanitize_filename("../../../etc/passwd") == "passwd"
+
+    def test_null_bytes_removed(self):
+        assert "\x00" not in WebClient._sanitize_filename("file\x00.bin")
+
+    def test_control_chars_removed(self):
+        # \x07 (BEL) and other control chars must be stripped.
+        out = WebClient._sanitize_filename("name\x07\x01\x02.bin")
+        assert "\x07" not in out and "\x01" not in out
+
+    def test_leading_dot_prefixed(self):
+        assert WebClient._sanitize_filename(".hidden").startswith("_")
+
+    def test_trailing_dots_and_spaces_stripped(self):
+        # Windows strips these on creation, so strip them here for portability.
+        assert WebClient._sanitize_filename("test.txt.") == "test.txt"
+        assert WebClient._sanitize_filename("test.txt   ") == "test.txt"
+
+    def test_empty_input_yields_download(self):
+        assert WebClient._sanitize_filename("") == "download"
+
+    def test_length_capped(self):
+        assert len(WebClient._sanitize_filename("a" * 500)) <= 200
+
+    @pytest.mark.parametrize(
+        "reserved", ["CON", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "LPT9"]
+    )
+    def test_windows_reserved_names_prefixed(self, reserved):
+        """Opening ``CON`` on Windows targets the console device, not a file."""
+        out = WebClient._sanitize_filename(reserved)
+        assert out.startswith("_"), f"{reserved} -> {out}"
+
+    def test_windows_reserved_with_extension_prefixed(self):
+        """``CON.txt`` still resolves to the console device on Windows."""
+        assert WebClient._sanitize_filename("CON.txt").startswith("_")
+
+    def test_reserved_name_case_insensitive(self):
+        """Lower-case reserved names are also prefixed (Windows is CI)."""
+        assert WebClient._sanitize_filename("con").startswith("_")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

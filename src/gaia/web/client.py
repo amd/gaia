@@ -656,14 +656,45 @@ class WebClient:
 
     # -- Utility -------------------------------------------------------------
 
+    # Windows reserved device names — creating a file called e.g. ``CON`` on
+    # Windows opens the console device instead of a file, and ``CON.txt``
+    # still resolves to the device. Avoid these even on non-Windows so
+    # downloads remain portable.
+    _WINDOWS_RESERVED = frozenset(
+        {"CON", "PRN", "AUX", "NUL"}
+        | {f"COM{i}" for i in range(1, 10)}
+        | {f"LPT{i}" for i in range(1, 10)}
+    )
+
     @staticmethod
     def _sanitize_filename(raw_name: str) -> str:
-        """Sanitize filename from URL or Content-Disposition header."""
+        """Sanitize filename from URL or Content-Disposition header.
+
+        Guarantees the returned value:
+        - contains no null bytes or control characters
+        - has no path-separator characters (``/`` or ``\\``)
+        - is not a Windows reserved device name (CON, PRN, NUL, COM1…)
+        - does not start with a leading dot
+        - is at most 200 bytes
+        - is never the empty string
+        """
         name = os.path.basename(raw_name)
+        # Strip null bytes + control chars + whitespace
         name = name.replace("\x00", "").strip()
+        name = re.sub(r"[\x00-\x1f]", "", name)
+        # Path separators → underscores
         name = re.sub(r"[/\\]", "_", name)
+        # Safe character set
         name = re.sub(r"[^a-zA-Z0-9._-]", "_", name)
+        # Avoid leading dot (hidden file) and trailing dots / spaces (Windows
+        # strips them on creation, which can cause unexpected collisions).
         if name.startswith("."):
             name = "_" + name
+        name = name.rstrip(". ")
+        # Reject Windows reserved device names (compare against the stem).
+        stem = name.split(".", 1)[0].upper()
+        if stem in WebClient._WINDOWS_RESERVED:
+            name = "_" + name
+        # Length cap
         name = name[:200]
         return name or "download"
