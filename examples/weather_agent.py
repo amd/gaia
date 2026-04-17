@@ -55,7 +55,7 @@ class WeatherAgent(Agent, MCPClientMixin):
 
         # Use the compact 4B model for faster local inference. Extra kwargs are
         # forwarded to Agent (e.g. ``max_steps``, ``debug``).
-        kwargs.setdefault("model_id", "Qwen3-4B-GGUF")
+        kwargs.setdefault("model_id", "Qwen3-4B-Instruct-2507-GGUF")
         kwargs.setdefault("max_steps", 10)
         super().__init__(**kwargs)
 

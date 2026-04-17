@@ -55,11 +55,18 @@ class DocAgent(Agent):
         self.index_dir = Path(index_dir)
         self.index_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize the shared RAG SDK. We keep chunk sizes small so answers
-        # fit in the Qwen3-4B context window, and we allow-list the index
-        # directory so RAGSDK's path validator lets us read files from it.
+        # Use the compact 4B model for faster local inference.  ``setdefault``
+        # lets callers override the model via kwargs (used by the integration
+        # tests to pin to whatever model is loaded by the CI Lemonade server).
+        kwargs.setdefault("model_id", "Qwen3-4B-Instruct-2507-GGUF")
+
+        # Initialize the shared RAG SDK with the same model so that both the
+        # agent's reasoning and the RAG SDK's internal answer-synthesis call
+        # use the same loaded Lemonade model.  Without this the RAG path
+        # silently tries to load the framework default (Qwen3.5-35B-A3B-GGUF).
         self.rag = RAGSDK(
             RAGConfig(
+                model=kwargs["model_id"],
                 chunk_size=500,
                 chunk_overlap=100,
                 max_chunks=5,
@@ -67,10 +74,6 @@ class DocAgent(Agent):
             )
         )
 
-        # Use the compact 4B model for faster local inference.  ``setdefault``
-        # lets callers override the model via kwargs (used by the integration
-        # tests to pin to whatever model is loaded by the CI Lemonade server).
-        kwargs.setdefault("model_id", "Qwen3-4B-GGUF")
         super().__init__(**kwargs)
 
         # Index any documents already in the directory.

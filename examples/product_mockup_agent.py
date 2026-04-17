@@ -40,7 +40,7 @@ class ProductMockupAgent(Agent):
         """
         # Use a lightweight model for faster mockup generation.  ``setdefault``
         # lets callers override via kwargs (e.g. for the integration tests).
-        kwargs.setdefault("model_id", "Qwen3-4B-GGUF")
+        kwargs.setdefault("model_id", "Qwen3-4B-Instruct-2507-GGUF")
         super().__init__(**kwargs)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
