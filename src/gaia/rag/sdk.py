@@ -960,7 +960,7 @@ These positions indicate where to split the text."""
                 )
                 response = response_data["choices"][0]["text"]
 
-                # Parse the split positions (json already imported at top)
+                # Parse the split positions (json imported at module top)
                 split_positions = json.loads(response)
 
                 # Create chunks based on LLM-suggested positions
@@ -1109,8 +1109,7 @@ These positions indicate where to split the text."""
     def _extract_text_from_json(self, json_path: str) -> str:
         """Extract text from JSON file."""
         try:
-            # json already imported at module level
-            # Use _safe_open to prevent symlink attacks
+            # Use _safe_open to prevent symlink attacks (json imported at module top)
             with self._safe_open(json_path, "rb") as f:
                 data = json.load(f)
 
