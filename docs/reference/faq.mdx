@@ -31,9 +31,11 @@ icon: "circle-question"
   </Accordion>
 
   <Accordion title="Does GAIA send my data anywhere?" icon="shield">
-    **No.** GAIA runs entirely on your machine. There is no telemetry, no crash reporting, and no usage analytics.
+    **Not by default.** GAIA runs entirely on your machine. There is no telemetry, no crash reporting, and no usage analytics.
 
-    The only network traffic is package downloads during install (from PyPI, npm, GitHub, and Astral's `uv` distribution). Once installed, GAIA can run fully offline. This is a deliberate design choice — see §2 of the [desktop installer plan](/plans/desktop-installer) for the rationale.
+    The only network traffic is package downloads during install (from PyPI, npm, GitHub, and Astral's `uv` distribution). Once installed, GAIA can run fully offline with the default Lemonade Server backend. This is a deliberate design choice — see §2 of the [desktop installer plan](/plans/desktop-installer) for the rationale.
+
+    **Caveat:** If you explicitly configure an external LLM provider (Claude API or OpenAI) via the provider settings, prompts and responses for those sessions are sent to the provider you selected. Local-first is the default; cloud is opt-in.
   </Accordion>
 
   <Accordion title="How do I install GAIA on a machine without internet?" icon="wifi">
