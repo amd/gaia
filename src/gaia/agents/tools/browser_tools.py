@@ -260,10 +260,19 @@ class BrowserToolsMixin:
                 from pathlib import Path
 
                 resolved_dir = str(Path(save_to).expanduser().resolve())
+                # Allowlist check — may prompt the user in an interactive TTY;
+                # auto-denies in Agent UI / API server contexts (see #495 S1).
                 if not mixin._path_validator.is_path_allowed(
                     resolved_dir, prompt_user=True
                 ):
                     return f"Error: Access denied to directory: {save_to}"
+                # Blocklist check — prevents downloading into /etc, /bin,
+                # ~/.ssh, etc. even if the allowlist somehow let it through.
+                is_blocked, reason = mixin._path_validator.is_write_blocked(
+                    resolved_dir
+                )
+                if is_blocked:
+                    return f"Error: {reason}"
 
             try:
                 result = mixin._web_client.download(

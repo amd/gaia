@@ -713,5 +713,81 @@ class TestRequestEncodingFixup:
         assert result.encoding == "UTF-8"
 
 
+class TestResponseSizeCap:
+    """Regression tests for the decompression-bomb guard added in #495."""
+
+    def setup_method(self):
+        # Small cap so the test doesn't actually allocate 10 MB.
+        self.client = WebClient(max_response_size=1024)
+
+    def teardown_method(self):
+        self.client.close()
+
+    def test_content_length_exceeding_cap_is_rejected(self):
+        """Server's declared Content-Length > cap: reject before streaming."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Length": "99999"}
+        mock_response.encoding = "utf-8"
+        mock_response.apparent_encoding = "utf-8"
+
+        self.client._session.request = MagicMock(return_value=mock_response)
+
+        with (
+            patch.object(self.client, "validate_url"),
+            patch.object(self.client, "_rate_limit_wait"),
+        ):
+            with pytest.raises(ValueError, match="Response too large"):
+                self.client.get("https://example.com/page")
+
+    def test_streamed_body_exceeding_cap_is_rejected(self):
+        """Body larger than cap while streaming (e.g. gzip bomb) is rejected."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        # Lie: advertise Content-Length of 100 (under cap) but actually
+        # stream 2 KB when decompressed.
+        mock_response.headers = {"Content-Length": "100"}
+        mock_response.encoding = "utf-8"
+        mock_response.apparent_encoding = "utf-8"
+        # iter_content yields chunks that total > cap (1024 bytes)
+        mock_response.iter_content = MagicMock(
+            return_value=iter([b"x" * 512, b"y" * 512, b"z" * 512])
+        )
+        # simulate a fresh stream=True response (not yet consumed)
+        mock_response._content_consumed = False
+        mock_response._content = False
+
+        self.client._session.request = MagicMock(return_value=mock_response)
+
+        with (
+            patch.object(self.client, "validate_url"),
+            patch.object(self.client, "_rate_limit_wait"),
+        ):
+            with pytest.raises(ValueError, match="exceeds max size"):
+                self.client.get("https://example.com/bomb")
+
+    def test_body_under_cap_is_consumed_normally(self):
+        """Body within cap is returned and ``response.content`` is cached."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Length": "5"}
+        mock_response.encoding = "utf-8"
+        mock_response.apparent_encoding = "utf-8"
+        mock_response.iter_content = MagicMock(return_value=iter([b"hello"]))
+        mock_response._content_consumed = False
+        mock_response._content = False
+
+        self.client._session.request = MagicMock(return_value=mock_response)
+
+        with (
+            patch.object(self.client, "validate_url"),
+            patch.object(self.client, "_rate_limit_wait"),
+        ):
+            result = self.client.get("https://example.com/small")
+
+        # After _consume_body_capped, response.content should be the joined bytes
+        assert result._content == b"hello"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

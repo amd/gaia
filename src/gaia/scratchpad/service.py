@@ -147,6 +147,23 @@ class ScratchpadService(DatabaseMixin):
         if not data:
             return 0
 
+        # Defense in depth: validate every column name in every row before
+        # building SQL. DatabaseMixin.insert interpolates dict keys directly
+        # into the SQL string (``INSERT INTO t (keys...) VALUES (:keys...)``);
+        # sqlite3 happens to reject multi-statement attacks because execute()
+        # accepts only one statement, but relying on that is brittle. Enforce
+        # here that keys match the same identifier grammar as column names in
+        # create_table.
+        for i, row in enumerate(data):
+            if not isinstance(row, dict):
+                raise ValueError(f"Row {i} is not a dict: got {type(row).__name__}")
+            for key in row.keys():
+                if not isinstance(key, str) or not _COLUMN_DEF_RE.match(key):
+                    raise ValueError(
+                        f"Row {i} has invalid column name {key!r}: must match "
+                        "[A-Za-z_][A-Za-z0-9_]*"
+                    )
+
         # Check row limit
         current_count = self._get_row_count(full_name)
         if current_count + len(data) > self.MAX_ROWS_PER_TABLE:

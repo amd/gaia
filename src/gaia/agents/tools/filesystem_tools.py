@@ -18,6 +18,13 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Hard cap on how many bytes ``read_file`` will pull into memory. The LLM can
+# be asked to read arbitrary files; without a cap, a single tool call against
+# a multi-GB log or ``/dev/zero`` OOMs the agent process. 50 MB is large
+# enough for any reasonable document (PDFs, big CSVs) but small enough that
+# we can tolerate loading it into memory at once.
+MAX_READ_BYTES = 50 * 1024 * 1024
+
 
 def _format_size(size_bytes: int) -> str:
     """Format bytes to human-readable string."""
@@ -777,6 +784,20 @@ class FileSystemToolsMixin:
                 if mode == "metadata":
                     return file_info(str(resolved))
 
+                # Size guard: refuse to load files bigger than MAX_READ_BYTES
+                # (50 MB) entirely. ``mode="preview"`` / ``mode="metadata"`` use
+                # streaming / metadata-only paths so they remain available for
+                # the LLM to at least inspect the file. PDFs skip this check
+                # because ``_read_pdf`` pages through the document rather than
+                # reading every byte, and it has its own page cap.
+                if file_size > MAX_READ_BYTES and ext != ".pdf" and mode != "preview":
+                    return (
+                        f"Error: File too large to read in full ({_format_size(file_size)}). "
+                        f"Maximum is {_format_size(MAX_READ_BYTES)}.\n"
+                        f"Use mode='preview' for the first 20 lines, "
+                        f"or mode='metadata' for file info without reading content."
+                    )
+
                 # Handle specific file types
 
                 # CSV/TSV
@@ -841,34 +862,52 @@ class FileSystemToolsMixin:
                     except ImportError:
                         pass
 
-                try:
-                    with open(
-                        resolved,
-                        "r",
-                        encoding=detected_encoding,
-                        errors="replace",
-                    ) as f:
-                        all_lines = f.readlines()
-                except UnicodeDecodeError:
-                    with open(
-                        resolved,
-                        "r",
-                        encoding="utf-8",
-                        errors="replace",
-                    ) as f:
-                        all_lines = f.readlines()
+                # Stream the file one line at a time so preview mode on a
+                # huge log never loads the whole thing. We stop as soon as we
+                # have enough lines for the requested mode, and cap bytes read
+                # at MAX_READ_BYTES so a file with no newlines can't balloon
+                # memory either.
+                if mode == "preview":
+                    target_lines = 20
+                elif lines > 0:
+                    target_lines = lines
+                else:
+                    target_lines = None  # "all lines" mode (cap enforced above)
 
+                def _read_lines_capped(encoding_to_use: str):
+                    """Read up to ``target_lines`` lines with a total byte cap."""
+                    collected = []
+                    bytes_read = 0
+                    with open(
+                        resolved, "r", encoding=encoding_to_use, errors="replace"
+                    ) as f:
+                        for line in f:
+                            collected.append(line)
+                            bytes_read += len(line.encode("utf-8", errors="replace"))
+                            if (
+                                target_lines is not None
+                                and len(collected) > target_lines
+                            ):
+                                return collected, True  # overflow marker
+                            if bytes_read >= MAX_READ_BYTES:
+                                return collected, True
+                    return collected, False
+
+                try:
+                    all_lines, hit_limit = _read_lines_capped(detected_encoding)
+                except UnicodeDecodeError:
+                    all_lines, hit_limit = _read_lines_capped("utf-8")
+
+                # "Total lines" when we stopped early is a lower bound — mark
+                # the output so the model knows the file has more.
                 total_lines = len(all_lines)
 
-                if mode == "preview":
-                    display_lines = all_lines[:20]
-                    truncated = total_lines > 20
-                elif lines > 0:
-                    display_lines = all_lines[:lines]
-                    truncated = total_lines > lines
+                if target_lines is not None:
+                    display_lines = all_lines[:target_lines]
+                    truncated = hit_limit or total_lines > target_lines
                 else:
                     display_lines = all_lines
-                    truncated = False
+                    truncated = hit_limit
 
                 # Format with line numbers
                 output_lines = [

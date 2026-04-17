@@ -741,6 +741,45 @@ class TestReadFile:
         assert "2 | line two" in result
         assert "3 | line three" in result
 
+    def test_read_file_refuses_oversized_in_full_mode(self, tmp_path, monkeypatch):
+        """Files >MAX_READ_BYTES in mode='full' return an error, not OOM.
+
+        Protects against an LLM asking to read ``/dev/zero`` or a multi-GB
+        log and crashing the agent process (#495 bulletproofing pass).
+        """
+        # Patch the cap down to 1 KB so the test doesn't have to write 50 MB.
+        monkeypatch.setattr("gaia.agents.tools.filesystem_tools.MAX_READ_BYTES", 1024)
+        f = tmp_path / "huge.txt"
+        f.write_bytes(b"x" * 4096)  # 4 KB > 1 KB cap
+
+        result = self.read(file_path=str(f))
+        assert "File too large" in result
+        assert "1.0 KB" in result or "1024" in result  # mentions the cap
+        assert "preview" in result.lower()  # suggests recovery path
+
+    def test_read_file_preview_still_works_on_oversized(self, tmp_path, monkeypatch):
+        """mode='preview' bypasses the total-size check and streams lines."""
+        monkeypatch.setattr("gaia.agents.tools.filesystem_tools.MAX_READ_BYTES", 1024)
+        f = tmp_path / "huge_text.txt"
+        # 5 KB of lines — each line < 100 bytes so first 20 fit under cap
+        f.write_text("\n".join(f"line {i}" for i in range(1, 200)), encoding="utf-8")
+
+        result = self.read(file_path=str(f), mode="preview")
+        assert "line 1" in result
+        # Should not return the "File too large" error on preview
+        assert "File too large" not in result
+
+    def test_read_file_metadata_mode_skips_size_check(self, tmp_path, monkeypatch):
+        """mode='metadata' never reads content and is always available."""
+        monkeypatch.setattr("gaia.agents.tools.filesystem_tools.MAX_READ_BYTES", 1024)
+        f = tmp_path / "huge_meta.txt"
+        f.write_bytes(b"x" * 8192)  # 8 KB
+
+        result = self.read(file_path=str(f), mode="metadata")
+        assert "File too large" not in result
+        # metadata mode returns file_info() output — just check it's non-empty
+        assert str(f) in result
+
     def test_read_text_with_line_limit(self, tmp_path):
         """Read a text file with limited lines shows truncation message."""
         f = tmp_path / "long.txt"

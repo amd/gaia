@@ -423,3 +423,41 @@ class TestGetSizeBytes:
         assert size > 0
         # 10 rows * 200 bytes estimated = 2000
         assert size == 10 * 200
+
+
+# ---------------------------------------------------------------------------
+# Insert-row key validation (defense-in-depth, #495 bulletproofing)
+# ---------------------------------------------------------------------------
+
+
+class TestInsertRowsKeyValidation:
+    """insert_rows must reject dict keys that aren't safe SQL identifiers."""
+
+    def test_insert_rejects_injection_in_key(self, scratchpad):
+        """A dict key containing SQL punctuation is rejected up-front."""
+        scratchpad.create_table("txn", "id INTEGER, amount REAL")
+        with pytest.raises(ValueError, match="invalid column name"):
+            scratchpad.insert_rows(
+                "txn", [{"id); DROP TABLE scratch_txn; --": 1, "amount": 0.5}]
+            )
+        # Table survives — injection blocked at validation, not at SQL layer.
+        names = [t["name"] for t in scratchpad.list_tables()]
+        assert "txn" in names
+
+    def test_insert_rejects_non_string_key(self, scratchpad):
+        """Non-string dict keys (e.g. int) are rejected."""
+        scratchpad.create_table("t", "id INTEGER")
+        with pytest.raises(ValueError, match="invalid column name"):
+            scratchpad.insert_rows("t", [{1: 42}])  # int key
+
+    def test_insert_rejects_non_dict_row(self, scratchpad):
+        """A row that is not a dict is rejected with a clear message."""
+        scratchpad.create_table("t", "id INTEGER")
+        with pytest.raises(ValueError, match="not a dict"):
+            scratchpad.insert_rows("t", [[1, 2]])  # list, not dict
+
+    def test_insert_accepts_normal_keys(self, scratchpad):
+        """Snake_case identifiers are accepted as before."""
+        scratchpad.create_table("t", "id INTEGER, name TEXT")
+        count = scratchpad.insert_rows("t", [{"id": 1, "name": "alice"}])
+        assert count == 1

@@ -181,29 +181,41 @@ class WebClient:
         return self._request("POST", url, data=data, **kwargs)
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
-        """Internal request method with SSRF checks and manual redirect following."""
+        """Internal request method with SSRF checks and manual redirect following.
+
+        Returns a response whose ``content`` / ``text`` are already guaranteed
+        to be within ``self._max_response_size`` bytes — we stream the body
+        and cap it so a gzip bomb (Content-Length: 100 → decompresses to
+        100 GB) can't OOM the process by the time a caller touches
+        ``response.text``.
+        """
         self.validate_url(url)
 
         domain = urlparse(url).hostname
         self._rate_limit_wait(domain)
 
-        # Disable auto-redirects -- we follow manually to validate each hop
+        # Disable auto-redirects -- we follow manually to validate each hop.
+        # Force streaming so we can cap decompressed body size before it
+        # reaches memory (requests would otherwise eagerly decode gzip).
         kwargs.setdefault("timeout", self._timeout)
         kwargs["allow_redirects"] = False
+        kwargs["stream"] = True
 
         current_url = url
         for redirect_count in range(self.MAX_REDIRECTS + 1):
             response = self._session.request(method, current_url, **kwargs)
 
-            # Check response size
+            # Pre-check declared Content-Length (still useful — rejects cheap
+            # DoS before we stream anything).
             content_length = response.headers.get("Content-Length")
             if content_length and int(content_length) > self._max_response_size:
+                response.close()
                 raise ValueError(
                     f"Response too large: {int(content_length)} bytes "
                     f"(max: {self._max_response_size})"
                 )
 
-            # Not a redirect -- return
+            # Not a redirect -- consume body with a hard byte cap and return.
             if response.status_code not in (301, 302, 303, 307, 308):
                 # Use apparent_encoding for better charset handling
                 if response.encoding and response.apparent_encoding:
@@ -212,18 +224,26 @@ class WebClient:
                         and response.apparent_encoding.lower() != "iso-8859-1"
                     ):
                         response.encoding = response.apparent_encoding
+                self._consume_body_capped(response)
                 return response
 
             # Follow redirect -- validate the new URL
             redirect_url = response.headers.get("Location")
             if not redirect_url:
-                return response  # No Location header, return as-is
+                # No Location header; cap body just like a normal response
+                # before returning.
+                self._consume_body_capped(response)
+                return response
 
             # Resolve relative redirects
             redirect_url = urljoin(current_url, redirect_url)
 
             # Validate redirect target (SSRF check on each hop)
             self.validate_url(redirect_url)
+
+            # Close the prior streamed response — we're not reading its body
+            # (redirects have empty / informational bodies anyway).
+            response.close()
 
             # Rate limit for new domain
             new_domain = urlparse(redirect_url).hostname
@@ -243,6 +263,42 @@ class WebClient:
             )
 
         raise ValueError(f"Too many redirects (max {self.MAX_REDIRECTS})")
+
+    def _consume_body_capped(self, response: requests.Response) -> None:
+        """Read ``response`` body in chunks up to ``self._max_response_size``.
+
+        Because we forced ``stream=True`` in ``_request``, ``response.content``
+        would otherwise lazily fetch everything on first access. This replaces
+        ``response._content`` with the capped payload so that downstream
+        ``response.text`` / ``response.content`` observe the cap regardless
+        of server Content-Length honesty. If the body exceeds the cap we
+        raise — matching the behaviour of the declared-Content-Length check.
+        """
+        # If body was already materialized (caller passed a preloaded
+        # response — uncommon, but possible in tests), leave it alone.
+        if (
+            getattr(response, "_content_consumed", False)
+            and response._content is not False
+        ):
+            return
+
+        chunks = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=8192):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > self._max_response_size:
+                response.close()
+                raise ValueError(
+                    f"Response body exceeds max size: {total} bytes "
+                    f"(max: {self._max_response_size}). "
+                    "Possible decompression bomb or server mis-reporting "
+                    "Content-Length."
+                )
+            chunks.append(chunk)
+        response._content = b"".join(chunks)
+        response._content_consumed = True
 
     # -- HTML Parsing & Extraction -------------------------------------------
 
