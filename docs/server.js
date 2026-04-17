@@ -317,17 +317,19 @@ app.post('/auth/login', loginLimiter, rateLimiter, (req, res) => {
     const parsed = url.parse(target || '');
     // Strict allowlist regex: must be an absolute-path reference (single
     // leading slash, no second slash, no scheme, no authority, no CR/LF,
-    // no backslashes). This is the pattern CodeQL's
-    // js/server-side-unvalidated-url-redirection can recognize as a
-    // sanitization sink.
+    // no backslashes), and must NOT contain ``..`` segments. This is the
+    // pattern CodeQL's js/server-side-unvalidated-url-redirection rule
+    // recognizes as a sanitization sink.
     const SAFE_PATH_RE = /^\/(?!\/)[A-Za-z0-9\-_~.%/?&=:@#[\]!$'()*+,;]*$/;
-    if (
+    const pathname = parsed.pathname || '';
+    const isSafePath =
       !parsed.host &&
       !parsed.protocol &&
-      parsed.pathname &&
-      SAFE_PATH_RE.test(parsed.pathname)
-    ) {
-      res.redirect(303, parsed.pathname);
+      pathname &&
+      SAFE_PATH_RE.test(pathname) &&
+      !pathname.split('/').includes('..');
+    if (isSafePath) {
+      res.redirect(303, pathname);
     } else {
       res.redirect(303, '/');
     }
