@@ -10,7 +10,7 @@ weather server. Demonstrates how to compose ``Agent`` with
 
 Requirements:
 - Python 3.12+
-- MCP weather server: uvx mcp-server-weather
+- uv (which provides `uvx` for launching the MCP server on demand)
 - Lemonade server running for LLM reasoning
 
 Run:
@@ -31,10 +31,15 @@ from gaia.mcp.client.mcp_client_manager import MCPClientManager
 class WeatherAgent(Agent, MCPClientMixin):
     """Agent that provides weather information via an MCP weather server."""
 
-    # Connection spec for the public Open-Meteo MCP server (no API key needed).
+    # Connection spec for the open-meteo-mcp server — a free, no-API-key
+    # weather server that wraps the Open-Meteo API.  ``uvx`` downloads and
+    # runs it on demand, so no manual install step is required.
     WEATHER_SERVER = {
         "name": "weather",
-        "config": {"command": "uvx", "args": ["mcp-server-weather"]},
+        "config": {
+            "command": "uvx",
+            "args": ["--from", "open-meteo-mcp", "open_meteo_mcp"],
+        },
     }
 
     def __init__(self, **kwargs):
@@ -100,7 +105,7 @@ def main():
         print(f"Error initializing agent: {e}")
         print("\nMake sure:")
         print("  1. Lemonade server is running: lemonade-server serve")
-        print("  2. Weather MCP server is installed: uvx mcp-server-weather")
+        print("  2. `uv` is installed so `uvx` can fetch the weather MCP server")
         return
 
     # Interactive loop

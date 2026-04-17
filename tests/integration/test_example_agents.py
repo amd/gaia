@@ -20,6 +20,11 @@ import pytest
 examples_dir = Path(__file__).parent.parent.parent / "examples"
 sys.path.insert(0, str(examples_dir))
 
+# Compact model used across every LLM-backed integration test so the stx
+# runner only needs to pull/load one ~4B model.  Matches the model our CI
+# workflow loads via installer/scripts/start-lemonade.ps1.
+TEST_MODEL_ID = os.environ.get("GAIA_TEST_MODEL", "Qwen3-4B-Instruct-2507-GGUF")
+
 
 def _check_lemonade() -> bool:
     """Check if Lemonade server is available."""
@@ -53,33 +58,36 @@ class TestNotesAgent:
         """Test that NotesAgent can create and retrieve notes."""
         from notes_agent import NotesAgent
 
-        # Create agent with temp database
+        # Create agent with temp database.  We use try/finally so that the
+        # SQLite connection is always closed before the TemporaryDirectory
+        # tries to delete the file — Windows will otherwise raise
+        # PermissionError (WinError 32) when the db is still locked.
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test_notes.db")
-            agent = NotesAgent(db_path=db_path)
+            agent = NotesAgent(db_path=db_path, model_id=TEST_MODEL_ID)
+            try:
+                # Create a note
+                result = agent.process_query(
+                    "Create a note called 'Integration Test' with content 'Testing GAIA'"
+                )
 
-            # Create a note
-            result = agent.process_query(
-                "Create a note called 'Integration Test' with content 'Testing GAIA'"
-            )
+                # Validate response structure
+                assert (
+                    result.get("status") == "success"
+                ), f"Query failed: {result.get('error', 'Unknown error')}"
+                assert "result" in result
 
-            # Validate response structure
-            assert (
-                result.get("status") == "success"
-            ), f"Query failed: {result.get('error', 'Unknown error')}"
-            assert "result" in result
+                response_text = result.get("result", "").lower()
+                assert (
+                    "note" in response_text or "created" in response_text
+                ), "Response doesn't mention note creation"
 
-            response_text = result.get("result", "").lower()
-            assert (
-                "note" in response_text or "created" in response_text
-            ), "Response doesn't mention note creation"
-
-            # List notes to verify creation
-            result = agent.process_query("Show me all my notes")
-            assert result.get("status") == "success"
-            assert "integration test" in result.get("result", "").lower()
-
-            agent.close_db()
+                # List notes to verify creation
+                result = agent.process_query("Show me all my notes")
+                assert result.get("status") == "success"
+                assert "integration test" in result.get("result", "").lower()
+            finally:
+                agent.close_db()
 
 
 @requires_lemonade
@@ -91,7 +99,7 @@ class TestProductMockupAgent:
         from product_mockup_agent import ProductMockupAgent
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            agent = ProductMockupAgent(output_dir=tmpdir)
+            agent = ProductMockupAgent(output_dir=tmpdir, model_id=TEST_MODEL_ID)
 
             # Generate a mockup
             result = agent.process_query(
@@ -125,33 +133,36 @@ class TestFileWatcherAgent:
         from file_watcher_agent import FileWatcherAgent
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create agent watching temp directory
-            agent = FileWatcherAgent(watch_dir=tmpdir)
+            # Create agent watching temp directory.  We use try/finally so
+            # that the watcher is always torn down before TemporaryDirectory
+            # attempts to delete the folder — Windows will otherwise raise
+            # PermissionError if the observer still holds a handle to it.
+            agent = FileWatcherAgent(watch_dir=tmpdir, model_id=TEST_MODEL_ID)
+            try:
+                # Verify agent initialized
+                assert agent is not None
+                assert (
+                    len(agent.watching_directories) > 0
+                ), "Agent not watching any directories"
 
-            # Verify agent initialized
-            assert agent is not None
-            assert (
-                len(agent.watching_directories) > 0
-            ), "Agent not watching any directories"
+                # Create a test file
+                test_file = Path(tmpdir) / "test.txt"
+                test_file.write_text("Hello from integration test")
 
-            # Create a test file
-            test_file = Path(tmpdir) / "test.txt"
-            test_file.write_text("Hello from integration test")
+                # Wait for watcher to detect file (retry to avoid flakiness on slow CI)
+                detected = False
+                for _ in range(10):
+                    time.sleep(1)
+                    if any(f["name"] == "test.txt" for f in agent.processed_files):
+                        detected = True
+                        break
 
-            # Wait for watcher to detect file (retry to avoid flakiness on slow CI)
-            detected = False
-            for _ in range(10):
-                time.sleep(1)
-                if any(f["name"] == "test.txt" for f in agent.processed_files):
-                    detected = True
-                    break
-
-            # Verify file was processed
-            assert (
-                detected
-            ), "test.txt was not detected by file watcher within 10 seconds"
-
-            agent.stop_all_watchers()
+                # Verify file was processed
+                assert (
+                    detected
+                ), "test.txt was not detected by file watcher within 10 seconds"
+            finally:
+                agent.stop_all_watchers()
 
 
 class TestHardwareAdvisorAgent:
