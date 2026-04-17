@@ -108,8 +108,11 @@ class ScratchpadService(DatabaseMixin):
         # Rebuild: close, delete the file, re-init.
         try:
             self.close_db()
-        except Exception:  # pylint: disable=broad-except
-            pass
+        except Exception as exc:  # pylint: disable=broad-except
+            # close_db can fail if the connection is already broken (which
+            # is why we're rebuilding). Log at debug instead of swallowing
+            # silently — CLAUDE.md prohibits bare except/pass.
+            log.debug("close_db during scratchpad rebuild raised (%s); continuing", exc)
         try:
             Path(db_path).unlink(missing_ok=True)
         except OSError as exc:

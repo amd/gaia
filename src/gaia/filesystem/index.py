@@ -194,8 +194,11 @@ class FileSystemIndexService(DatabaseMixin):
         """
         try:
             self.close_db()
-        except Exception:  # pylint: disable=broad-except
-            pass
+        except Exception as exc:  # pylint: disable=broad-except
+            # close_db can fail if the connection is already broken (that's
+            # why we're rebuilding). Log at debug and continue — this is not
+            # a silent fallback, it's the documented teardown path.
+            logger.debug("close_db during rebuild raised (%s); continuing", exc)
         try:
             Path(db_path).unlink(missing_ok=True)
         except OSError as exc:

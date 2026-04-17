@@ -237,8 +237,15 @@ class PathValidator:
                 try:
                     with open(self.config_file, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                except Exception:
-                    pass  # Start fresh if corrupt
+                except (OSError, json.JSONDecodeError) as load_err:
+                    # Corrupt or unreadable cache file — start fresh and log
+                    # so the situation is visible in debug output (CLAUDE.md
+                    # prohibits bare except/pass).
+                    logger.warning(
+                        "Allowed-paths cache %s unreadable (%s); rebuilding.",
+                        self.config_file,
+                        load_err,
+                    )
 
             str_path = str(path)
             if str_path not in data["paths"]:
