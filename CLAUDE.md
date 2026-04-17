@@ -84,23 +84,25 @@ This self-review step is mandatory - never skip verification of your output.
 
 ### No Silent Fallbacks — Fail Loudly
 
-**Do not add fallbacks, default-to-something-that-works-ish behavior, or silent degradation paths.** Either the operation succeeds as intended, or it raises an actionable error.
+**Do not add fallbacks, default-to-something-that-works-ish behavior, or silent degradation paths.** Either the operation succeeds as intended, or it raises an actionable error. Applies to every layer: agents, LLM clients, CLI, CI workflows, config loaders, RAG, API server, Electron apps.
 
-This applies to every layer: agents, LLM clients, CLI commands, CI workflows, config loaders, RAG indexers, API server, Electron apps. If the primary path fails:
+**Prohibited:**
+- `except Exception: pass`, `try: ... except: return None`, or any handler that discards the error and returns a placeholder/empty/cached value.
+- Model-level `fallback_model` / `fallback_client` / "try the other provider" glue. If Opus is down, surface the error — don't silently switch to Sonnet.
+- Config loaders that default missing required values to empty string, `None`, or a guess. Missing required config is a startup-time error.
+- Retry loops that swallow the final failure and return success.
 
-- **Raise/return a specific error** that names *what failed* and *what the caller should do*.
-- **Do not substitute** a different model, a cached result, a placeholder string, an empty list, or a "best-effort" path unless the caller explicitly asked for it.
-- **Do not swallow exceptions** to keep flows green. `except Exception: pass` and `try: ... except: return None` are prohibited in production paths.
-- **Do not wire model-level `fallback_model` / `fallback_client` / "try-the-other-provider" glue** in CI workflows or runtime code. If Opus is down, the right behavior is a clear failure message, not a silent switch to Sonnet.
+**Allowed (this is fail-loudly, not "no error handling"):**
+- Catching a specific exception and **re-raising with context**: `raise GaiaError(f"invalid config: {path}") from e`.
+- Translating exceptions at a **system boundary** (REST endpoint → HTTP 500 with a correlation ID; agent tool → structured error object).
+- Explicit **opt-in** retry/backoff when the caller *asked for* resilience (e.g., `ChatSDK(max_retries=3)`) — never a hidden default.
 
-**Why:** fallbacks hide regressions. A review bot that silently downgrades from Opus to a smaller model looks like it's working but produces worse reviews for weeks before anyone notices. A config loader that "defaults" a missing API key to empty string produces confusing 401s deep in the request pipeline instead of a clear "ANTHROPIC_API_KEY is not set" at startup.
+**Actionable errors name three things:**
+1. *What failed* — `"Lemonade Server not reachable at http://localhost:8000"`
+2. *What the caller should do* — `"Run `gaia init` to install it, or set GAIA_LEMONADE_URL"`
+3. *Where to look next* — file path, docs link, issue tracker
 
-**Actionable errors include:**
-- The name of the missing/failed resource (`"Lemonade Server not reachable at http://localhost:8000"`)
-- What the user can do (`"Run `gaia init` to install it, or set GAIA_LEMONADE_URL"`)
-- Where to look next (file path, docs link, issue tracker)
-
-When in doubt, fail and say why. Better a loud error the user can fix than a quiet wrong answer.
+**Why the rule exists:** fallbacks hide regressions. A review bot silently downgraded from Opus to a smaller model looks fine but produces worse reviews for weeks. A config loader that defaults a missing API key to `""` produces confusing 401s deep in the request pipeline instead of a clear `"ANTHROPIC_API_KEY is not set"` at startup. Better a loud error the user can fix than a quiet wrong answer.
 
 ### Testing Requirements
 
