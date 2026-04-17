@@ -51,12 +51,12 @@ class MCPTool:
 
         return {
             "name": f"mcp_{server_name}_{self.name}",
+            "display_name": f"{self.name} ({server_name})",
             "description": f"[MCP:{server_name}] {self.description}",
             "parameters": gaia_params,
             "atomic": True,
             # Metadata for debugging/routing
             "_mcp_server": server_name,
-            "_mcp_tool_name": self.name,
         }
 
 
@@ -144,11 +144,11 @@ class MCPClient:
                 self.last_error = (
                     f"Failed to establish transport connection to '{self.name}'"
                 )
-                logger.warning(self.last_error)
+                logger.debug(self.last_error)
                 return False
         except Exception as e:
             self.last_error = f"Transport error for '{self.name}': {e}"
-            logger.warning(self.last_error)
+            logger.debug(self.last_error)
             return False
 
         try:
@@ -170,7 +170,7 @@ class MCPClient:
                 self.last_error = (
                     f"Initialization failed: {error.get('message', 'Unknown error')}"
                 )
-                logger.warning(f"MCP server '{self.name}': {self.last_error}")
+                logger.debug(f"MCP server '{self.name}': {self.last_error}")
                 return False
 
             result = response.get("result", {})
@@ -183,7 +183,7 @@ class MCPClient:
 
         except Exception as e:
             self.last_error = f"Error during initialization: {e}"
-            logger.warning(f"MCP server '{self.name}': {self.last_error}")
+            logger.debug(f"MCP server '{self.name}': {self.last_error}")
             self.disconnect()
             return False
 
@@ -316,7 +316,6 @@ class MCPClient:
             logger.debug(f"Tool {tool_name} completed successfully")
             logger.debug(f"  Response: {json.dumps(result, indent=2)}")
 
-        logger.debug(f"Tool {tool_name} completed successfully")
         return result
 
     def create_tool_wrapper(self, tool: MCPTool) -> Callable[..., Dict[str, Any]]:

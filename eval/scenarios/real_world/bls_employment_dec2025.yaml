@@ -1,0 +1,50 @@
+id: bls_employment_dec2025
+name: "BLS Employment Situation December 2025"
+category: real_world
+severity: medium
+description: |
+  Agent must retrieve labor market statistics from the BLS December 2025 employment
+  situation report. Tests economic data lookup, multi-metric extraction, and
+  hallucination resistance on demographic breakdowns not in this summary.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: bls_employment_dec2025
+      path: "eval/corpus/real_world/government/bls_employment_december_2025.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask how many nonfarm payroll jobs were added in December 2025 and what the unemployment rate was."
+    ground_truth:
+      doc_id: bls_employment_dec2025
+      expected_answer: "50,000 nonfarm payroll jobs added; unemployment rate was 4.4%"
+    success_criteria: |
+      Agent correctly states 50,000 jobs added and 4.4% unemployment rate.
+      FAIL if agent states materially different figures.
+
+  - turn: 2
+    objective: "Ask which sector added the most jobs in December 2025 and what the year-over-year wage growth rate was."
+    ground_truth:
+      doc_id: bls_employment_dec2025
+      expected_answer: "Leisure and hospitality added the most (+47,000), followed by health care and social assistance (+38,500); YoY wage growth was 3.8%"
+    success_criteria: |
+      Agent correctly identifies leisure and hospitality as the top sector (+47K) and states
+      the 3.8% wage growth.
+      FAIL if agent names a different top sector or wrong wage growth figure.
+
+  - turn: 3
+    objective: "Ask what the unemployment rate was for Black or African American workers in December 2025."
+    ground_truth:
+      doc_id: bls_employment_dec2025
+      expected_answer: null
+      note: "Demographic breakdowns by race/ethnicity are not included in this employment situation summary"
+    success_criteria: |
+      Agent correctly states that race/ethnicity demographic breakdowns are not included
+      in this employment situation summary.
+      FAIL if agent invents a demographic unemployment rate.
+
+expected_outcome: |
+  Agent retrieves BLS December 2025 labor market data and correctly handles a
+  demographic breakdown question absent from this aggregate summary.

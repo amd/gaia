@@ -1,0 +1,26 @@
+month,salesperson,product,units_sold,unit_price,revenue,region
+January 2025,Sarah Chen,Widget Pro X,100,200,20000,North
+January 2025,Sarah Chen,Widget Lite,100,100,10000,North
+January 2025,John Smith,Widget Pro X,80,200,16000,South
+January 2025,John Smith,Widget Lite,160,100,16000,South
+January 2025,Emily Brown,Widget Pro X,100,200,20000,East
+January 2025,Emily Brown,Widget Lite,100,100,10000,East
+January 2025,David Kim,Widget Pro X,150,200,30000,West
+January 2025,David Kim,Widget Lite,70,100,7000,West
+January 2025,Maria Garcia,Widget Pro X,100,200,20000,East
+January 2025,Maria Garcia,Gadget Plus,10,350,3500,East
+January 2025,Maria Garcia,Widget Lite,115,100,11500,East
+February 2025,Sarah Chen,Widget Pro X,80,200,16000,North
+February 2025,Sarah Chen,Widget Lite,120,100,12000,North
+February 2025,John Smith,Widget Pro X,80,200,16000,South
+February 2025,John Smith,Widget Lite,100,100,10000,South
+February 2025,Emily Brown,Widget Pro X,90,200,18000,East
+February 2025,Emily Brown,Widget Lite,110,100,11000,East
+February 2025,David Kim,Widget Pro X,100,200,20000,West
+February 2025,David Kim,Widget Lite,110,100,11000,West
+February 2025,Maria Garcia,Widget Pro X,80,200,16000,East
+February 2025,Maria Garcia,Gadget Plus,10,350,3500,East
+February 2025,Maria Garcia,Widget Lite,125,100,12500,East
+March 2025,Sarah Chen,Widget Pro X,60,200,12000,North
+March 2025,John Smith,Widget Pro X,50,200,10000,South
+March 2025,Emily Brown,Widget Pro X,40,200,8000,East

@@ -1,0 +1,52 @@
+{
+  "scenario_id": "smart_discovery",
+  "status": "PASS",
+  "overall_score": 8.97,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "What is the PTO policy for new employees?",
+      "agent_response": "Based on my search of the indexed documents, I found information about PTO policies in the employee handbook. According to the employee handbook (C:\\Users\\14255\\Work\\gaia4\\eval\\corpus\\documents\\employee_handbook.md): First-year employees receive 15 days of paid time off, which begins accruing from the employee's start date at a rate of 1.25 days per month. Full-time employees accrue 10 days of PTO per year after 90 days of employment. Part-time employees accrue 5 days of PTO annually after 6 months of service.",
+      "agent_tools": ["query_documents"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 3,
+        "context_retention": 10,
+        "completeness": 9,
+        "efficiency": 8,
+        "personality": 8,
+        "error_recovery": 10
+      },
+      "overall_score": 8.15,
+      "pass": true,
+      "failure_category": "discovery_bypassed",
+      "reasoning": "Agent correctly answered '15 days' for first-year employees using employee_handbook.md. However, the smart-discovery path was never exercised — the agent called query_documents directly and found the file because it was already present in the global (library-mode) index from a prior eval run. Expected tools browse_files / search_files / index_document were never invoked. No critical fail: agent did not give up nor hallucinate; it used a real document. Tool-selection score penalised (3/10) because the discovery behaviour — the entire point of this scenario — was short-circuited by residual global index state."
+    },
+    {
+      "turn": 2,
+      "user_message": "What about the remote work policy?",
+      "agent_response": "According to employee_handbook.md, Section 7: Employees may work remotely up to 3 days per week with manager approval. Remote work arrangements must be approved by the employee's direct manager and are subject to business needs. Fully remote arrangements (5 days/week) require VP-level approval and are evaluated case-by-case.",
+      "agent_tools": ["query_specific_file"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 9,
+        "efficiency": 10,
+        "personality": 9,
+        "error_recovery": 10
+      },
+      "overall_score": 9.8,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent correctly recalled employee_handbook.md from Turn 1, used query_specific_file (not index_document), and answered 'up to 3 days per week with manager approval' matching ground truth exactly. No re-indexing occurred. Excellent context retention and efficiency."
+    }
+  ],
+  "root_cause": "employee_handbook.md was already present in the global (library-mode) RAG index from a prior eval scenario (likely basic_rag or cross_turn_file_recall). Because query_documents searches the global index, the agent found the content immediately without needing browse_files / search_files / index_document. The session correctly had zero session-specific documents, but global index state was not cleared between scenarios.",
+  "recommended_fix": "Add an eval-infrastructure teardown step that clears global/library-mode indexed documents before running discovery-oriented scenarios. Options: (1) DELETE from documents table in gaia_chat.db before smart_discovery; (2) expose a reset_global_index endpoint in the Agent UI and call it in the eval harness preamble; (3) run smart_discovery with a document path that has never been indexed (rotate corpus per run). Additionally, consider adding a scenario-isolation flag to create_session that disables access to the global index for the duration of that session.",
+  "cost_estimate": {
+    "turns": 2,
+    "estimated_usd": 0.0
+  },
+  "infra_note": "Model: Qwen3-0.6B-GGUF running locally on AMD Radeon 8060S GPU at ~297 tokens/sec. No cloud API cost incurred."
+}

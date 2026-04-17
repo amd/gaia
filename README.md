@@ -4,8 +4,8 @@
 [![Latest Release](https://img.shields.io/github/v/release/amd/gaia?include_prereleases)](https://github.com/amd/gaia/releases/latest "Download the latest release")
 [![PyPI](https://img.shields.io/pypi/v/amd-gaia)](https://pypi.org/project/amd-gaia/)
 [![GitHub downloads](https://img.shields.io/github/downloads/amd/gaia/total.svg)](https://github.com/amd/gaia/releases)
-[![OS - Windows](https://img.shields.io/badge/OS-Windows-blue)](https://amd-gaia.ai/quickstart "Windows installation")
-[![OS - Linux](https://img.shields.io/badge/OS-Linux-green)](https://amd-gaia.ai/quickstart "Linux installation")
+[![OS - Windows](https://img.shields.io/badge/OS-Windows-blue)](https://amd-gaia.ai/docs/quickstart "Windows installation")
+[![OS - Linux](https://img.shields.io/badge/OS-Linux-green)](https://amd-gaia.ai/docs/quickstart "Linux installation")
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-7289DA?logo=discord&logoColor=white)](https://discord.com/channels/1392562559122407535/1402013282495102997)
@@ -13,8 +13,18 @@
 **GAIA** is AMD's open-source framework for building intelligent AI agents that run **100% locally** on AMD Ryzen AI hardware. Keep your data private, eliminate cloud costs, and deploy in air-gapped environments—all with hardware-accelerated performance.
 
 <p align="center">
-  <a href="https://amd-gaia.ai/quickstart"><strong>Get Started →</strong></a>
+  <a href="https://amd-gaia.ai/docs/quickstart"><strong>Get Started →</strong></a>
 </p>
+
+---
+
+## Download
+
+[![Download for Windows](https://img.shields.io/badge/Download-Windows-0078d4?style=for-the-badge&logo=windows)](https://github.com/amd/gaia/releases/latest)
+[![Download for macOS](https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple)](https://github.com/amd/gaia/releases/latest)
+[![Download for Linux](https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/amd/gaia/releases/latest)
+
+See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/install.mdx) for setup instructions.
 
 ---
 
@@ -52,18 +62,19 @@ result = agent.process_query("What's the weather in Austin?")
 print(result)
 ```
 
-**[See the full quickstart guide →](https://amd-gaia.ai/quickstart)**
+**[See the full quickstart guide →](https://amd-gaia.ai/docs/quickstart)**
 
 ---
 
 ## Key Capabilities
 
 - **Agent Framework** — Base class with tool orchestration, state management, and error recovery
-- **RAG System** — Document indexing and semantic search for Q&A
-- **Voice Integration** — Whisper ASR + Kokoro TTS for speech interaction
+- **Agent UI** — Privacy-first desktop app with chat, file browser, document indexing, and tool execution
+- **RAG System** — Document indexing and semantic search for Q&A over 50+ file formats
+- **Voice Integration** — Whisper ASR + Kokoro TTS for speech interaction (P0 enabling technology)
 - **Vision Models** — Extract text from images with Qwen3-VL-4B
+- **MCP Integration** — Connect to any MCP server for external tool access
 - **Plugin System** — Distribute agents via PyPI with auto-discovery
-- **Web UI Packaging** — Generate modern interfaces for your agents
 
 ---
 
@@ -92,7 +103,7 @@ protected:
 pip install amd-gaia
 ```
 
-For complete setup instructions including Lemonade Server, see the **[Quickstart Guide](https://amd-gaia.ai/quickstart)**.
+For complete setup instructions including Lemonade Server, see the **[Quickstart Guide](https://amd-gaia.ai/docs/quickstart)**.
 
 ---
 
@@ -108,10 +119,34 @@ For complete setup instructions including Lemonade Server, see the **[Quickstart
 
 ## Documentation
 
-- **[Quickstart](https://amd-gaia.ai/quickstart)** — Build your first agent in 10 minutes
-- **[SDK Reference](https://amd-gaia.ai/sdk)** — Complete API documentation
-- **[Guides](https://amd-gaia.ai/guides/chat)** — Chat, Voice, RAG, and more
-- **[FAQ](https://amd-gaia.ai/reference/faq)** — Frequently asked questions
+- **[Quickstart](https://amd-gaia.ai/docs/quickstart)** — Build your first agent in 10 minutes
+- **[SDK Reference](https://amd-gaia.ai/docs/sdk)** — Complete API documentation
+- **[Guides](https://amd-gaia.ai/docs/guides)** — Chat, Voice, RAG, and more
+- **[FAQ](https://amd-gaia.ai/docs/reference/faq)** — Frequently asked questions
+
+---
+
+## Releases
+
+See the full [Release Notes](https://amd-gaia.ai/docs/releases) on the documentation site, or browse [GitHub Releases](https://github.com/amd/gaia/releases).
+
+### Release Process
+
+To publish a new release (e.g. `v0.17.0`), create a release PR that updates these 3 files:
+
+| # | File | What to change |
+|---|------|----------------|
+| 1 | `src/gaia/version.py` | Set `__version__ = "0.17.0"` |
+| 2 | `docs/releases/v0.17.0.mdx` | Create release notes (see [format guide](https://amd-gaia.ai/docs/releases)) |
+| 3 | `docs/docs.json` | **(a)** Add `"releases/v0.17.0"` to the Releases tab pages array, **(b)** update the navbar label to `"v0.17.0 · Lemonade X.Y.Z"` |
+
+Then merge and tag:
+
+```bash
+git tag v0.17.0 && git push origin v0.17.0
+```
+
+CI validates all three files are consistent with the tag before publishing to [GitHub Releases](https://github.com/amd/gaia/releases) and [PyPI](https://pypi.org/project/amd-gaia/).
 
 ---
 
@@ -137,5 +172,5 @@ We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for deta
 
 [MIT License](./LICENSE.md)
 
-Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT

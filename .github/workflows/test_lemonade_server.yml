@@ -53,7 +53,7 @@ jobs:
         run: |
           try {
               # Start server and load model (all in one session)
-              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 8000 -CtxSize 32768 -InitWaitTime 10
+              .\installer\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 8000 -CtxSize 32768 -InitWaitTime 10
 
               # Verify health endpoint
               Write-Host "=== Verifying Health Endpoint ==="

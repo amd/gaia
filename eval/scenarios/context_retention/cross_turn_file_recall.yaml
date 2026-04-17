@@ -1,0 +1,41 @@
+id: cross_turn_file_recall
+name: "Cross-Turn File Recall"
+category: context_retention
+severity: critical
+description: |
+  User indexes a document in Turn 1, then asks about its content in Turn 2
+  without re-mentioning the document name. Agent must recall what was indexed.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - corpus_doc: product_comparison
+      path: "eval/corpus/documents/product_comparison.html"
+
+turns:
+  - turn: 1
+    objective: "Ask agent to list what documents are available/indexed"
+    ground_truth:
+      expected_behavior: "Agent lists the product comparison document or indicates a document has been indexed"
+    success_criteria: "Agent lists the product comparison document or indicates a document has been indexed"
+
+  - turn: 2
+    objective: "Ask about pricing without naming the file: 'how much do the two products cost?'"
+    ground_truth:
+      doc_id: product_comparison
+      fact_ids: [price_a, price_b]
+      expected_answer: "StreamLine $49/month, ProFlow $79/month"
+    success_criteria: "Agent correctly states both prices from the indexed document"
+
+  - turn: 3
+    objective: "Follow-up with pronoun: 'which one is better value for money?'"
+    ground_truth:
+      # doc_id present to identify source document; no fact_id because this is a
+      # synthesis/opinion turn that doesn't test a single extractable fact.
+      doc_id: product_comparison
+      expected_behavior: "Agent synthesizes pricing ($49 vs $79), ratings (4.2 vs 4.7), and integrations (10 vs 25) from the document to give a reasoned comparison. Agent must not use facts not present in the document."
+    success_criteria: "Agent gives a reasoned comparison using prices ($49 vs $79), ratings (4.2 vs 4.7), and integrations (10 vs 25) from the indexed document. FAIL if agent uses facts not in the document."
+
+expected_outcome: |
+  Agent recalls the indexed document across turns and answers without re-indexing.

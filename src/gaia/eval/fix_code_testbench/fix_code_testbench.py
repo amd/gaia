@@ -23,7 +23,7 @@ from typing import Optional
 from openai import OpenAI
 
 DEFAULT_ENDPOINT = "http://localhost:8000/api/v1"
-DEFAULT_LOCAL_MODEL = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+DEFAULT_LOCAL_MODEL = "Qwen3.5-35B-A3B-GGUF"
 CLAUDE_MODEL_NAME = "claude-sonnet-4-5-20250929"
 
 PROMPT_ENGINEERING_GUIDANCE = """

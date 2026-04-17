@@ -96,6 +96,7 @@ def initialize_lemonade_for_agent(
     use_chatgpt: bool = False,
     host: str | None = None,
     port: int | None = None,
+    base_url: str | None = None,
 ):
     """
     Initialize Lemonade Server for a specific GAIA agent.
@@ -111,12 +112,15 @@ def initialize_lemonade_for_agent(
         use_chatgpt: Whether ChatGPT API is being used
         host: Host address of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
+        base_url: Full base URL for the Lemonade server (e.g., https://abc.ngrok-free.app).
+                  When provided, takes priority over host/port.
 
     Returns:
         Tuple of (success: bool, base_url: str | None)
 
     Note:
-        Host and port can be configured via LEMONADE_BASE_URL environment variable.
+        Host and port can be configured via LEMONADE_BASE_URL environment variable,
+        or pass a full URL via base_url for remote servers (e.g., ngrok).
 
     Example:
         success, base_url = initialize_lemonade_for_agent("chat")
@@ -125,14 +129,18 @@ def initialize_lemonade_for_agent(
     """
     from gaia.llm.lemonade_manager import LemonadeManager
 
-    # Use provided host/port, or get from env var, or use defaults
+    # Use provided base_url, or host/port, or get from env var, or use defaults
     env_host, env_port, env_base_url = _get_lemonade_config()
-    host = host if host is not None else env_host
-    port = port if port is not None else env_port
+
+    # If base_url is provided (e.g., --base-url), use it directly
+    # This preserves https:// URLs (e.g., ngrok) without mangling
+    if base_url is None:
+        host = host if host is not None else env_host
+        port = port if port is not None else env_port
 
     # Skip initialization if using external API
     if skip_if_external and (use_claude or use_chatgpt):
-        return True, env_base_url
+        return True, base_url or env_base_url
 
     # Map agent names to context size requirements
     # Complex agents need 32768+, simple ones can use default 4096
@@ -152,19 +160,32 @@ def initialize_lemonade_for_agent(
     required_ctx = agent_context_sizes.get(agent.lower(), 32768)
 
     # LemonadeManager handles all validation and error printing
-    success = LemonadeManager.ensure_ready(
-        min_context_size=required_ctx,
-        quiet=quiet,
-        host=host,
-        port=port,
-    )
+    # Pass base_url directly when provided to preserve full URL (https, ngrok, etc.)
+    if base_url:
+        success = LemonadeManager.ensure_ready(
+            min_context_size=required_ctx,
+            quiet=quiet,
+            base_url=base_url,
+        )
+    else:
+        success = LemonadeManager.ensure_ready(
+            min_context_size=required_ctx,
+            quiet=quiet,
+            host=host,
+            port=port,
+        )
 
     if not success:
         return False, None
 
     # Get base_url from LemonadeManager
-    base_url = LemonadeManager.get_base_url() or f"http://{host}:{port}/api/v1"
-    return True, base_url
+    resolved_url = LemonadeManager.get_base_url()
+    if resolved_url is None:
+        if base_url:
+            resolved_url = base_url
+        else:
+            resolved_url = f"http://{host}:{port}/api/v1"
+    return True, resolved_url
 
 
 def ensure_agent_models(
@@ -411,7 +432,7 @@ class GaiaCliClient:
     ):
         """Chat interface using the new ChatApp - interactive if no message, single message if message provided"""
         try:
-            from gaia.chat.sdk import ChatConfig, ChatSDK
+            from gaia.chat.sdk import AgentConfig, AgentSDK
 
             # Interactive mode if no message provided, single message mode if message provided
             use_interactive = message is None
@@ -427,14 +448,14 @@ class GaiaCliClient:
                 config_kwargs["model"] = model
 
             if use_interactive:
-                # Interactive mode using ChatSDK
-                config = ChatConfig(**config_kwargs)
-                chat = ChatSDK(config)
+                # Interactive mode using AgentSDK
+                config = AgentConfig(**config_kwargs)
+                chat = AgentSDK(config)
                 asyncio.run(chat.start_interactive_session())
             else:
                 # Single message mode with streaming
-                config = ChatConfig(**config_kwargs)
-                chat = ChatSDK(config)
+                config = AgentConfig(**config_kwargs)
+                chat = AgentSDK(config)
                 full_response = ""
                 for chunk in chat.send_stream(message):
                     if not chunk.is_complete:
@@ -480,6 +501,7 @@ async def async_main(action, **kwargs):
             skip_if_external=True,
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
+            base_url=lemonade_base_url,
         )
         if not success:
             sys.exit(1)
@@ -661,6 +683,173 @@ def run_cli(action, **kwargs):
     return asyncio.run(async_main(action, **kwargs))
 
 
+def _ensure_webui_built(log=None):
+    """Rebuild the Agent UI frontend if source files are newer than dist."""
+    from gaia.ui.build import ensure_webui_built
+
+    ensure_webui_built(
+        log_fn=log.info if log else print,
+        warn_fn=log.warning if log else print,
+    )
+
+
+def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist=None):
+    """Launch the Agent UI server (FastAPI + uvicorn).
+
+    Reused by top-level --ui, gaia chat --ui, and the interactive menu.
+    """
+    if log is None:
+        log = get_logger(__name__)
+
+    _ensure_webui_built(log=log)
+
+    try:
+        from gaia.ui.server import create_app
+
+        # Forward --base-url to the UI server via environment variable
+        if base_url:
+            os.environ["LEMONADE_BASE_URL"] = base_url
+            log.info(f"Using remote Lemonade server: {base_url}")
+            print(f"Remote Lemonade server: {base_url}")
+
+        log.info(f"Starting GAIA Agent UI on http://localhost:{port}")
+        print(f"Starting GAIA Agent UI on http://localhost:{port}")
+        print(f"   Open your browser to http://localhost:{port}")
+        print("   Press Ctrl+C to stop")
+        print()
+        if not base_url:
+            print("   Prerequisites:")
+            print(
+                "     1. Models downloaded  : gaia init --profile chat  (first time only, ~25 GB)"
+            )
+            print("     2. Lemonade running   : lemonade-server serve")
+            print()
+
+        import uvicorn
+
+        app = create_app(webui_dist=webui_dist)
+        uvicorn.run(
+            app,
+            host="127.0.0.1",
+            port=port,
+            log_level="debug" if debug else "info",
+            access_log=debug,
+        )
+    except ImportError as e:
+        print(f"\nMissing dependencies for Agent UI: {e}")
+        print("\n   The Agent UI requires extra dependencies that are not installed.")
+        print("   Install them with:\n")
+        print('     uv pip install -e ".[ui]"')
+        print("\n   Or if you installed from PyPI:\n")
+        print("     pip install amd-gaia[ui]")
+        print()
+        sys.exit(1)
+    except OSError as e:
+        err_str = str(e).lower()
+        # Windows WSAEADDRINUSE (10048) or WSAEACCES (10013) — port already in use
+        if (
+            "10048" in str(e)
+            or "10013" in str(e)
+            or "address already in use" in err_str
+        ):
+            print(f"\nPort {port} is already in use.")
+            print(f"   Another process is already listening on port {port}.")
+            print("   Try a different port:")
+            print("     gaia chat --ui --ui-port 8080")
+        else:
+            log.error(f"Error starting Agent UI: {e}")
+            print(f"Error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        log.error(f"Error starting Agent UI: {e}")
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+def _launch_interactive_cli(log=None):
+    """Launch the interactive CLI chat with default configuration.
+
+    Reused by top-level --cli and the interactive menu.
+    """
+    if log is None:
+        log = get_logger(__name__)
+
+    try:
+        success, base_url = initialize_lemonade_for_agent("chat")
+        if not success:
+            sys.exit(1)
+
+        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+        from gaia.agents.chat.app import interactive_mode
+
+        config = ChatAgentConfig(
+            base_url=base_url or os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
+            silent_mode=True,
+        )
+        agent = ChatAgent(config)
+
+        if not agent.current_session:
+            agent.current_session = agent.session_manager.create_session()
+
+        interactive_mode(agent)
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user")
+    except Exception as e:
+        log.error(f"Error in chat: {e}", exc_info=True)
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+def _show_interactive_menu(log=None):
+    """Show an interactive menu when `gaia` is run with no arguments."""
+    if log is None:
+        log = get_logger(__name__)
+
+    print()
+    print("========================================")
+    print(f"  GAIA {version}")
+    print("  Build AI Agents That Run Locally")
+    print("========================================")
+    print()
+    print("  [1] Agent UI  — Desktop chat interface (browser)")
+    print("  [2] CLI Chat  — Interactive terminal chat")
+    print("  [3] Help      — Show all commands")
+    print()
+
+    try:
+        choice = input("  Select [1/2/3]: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return
+
+    if choice == "1":
+        _launch_agent_ui(log=log)
+    elif choice == "2":
+        _launch_interactive_cli(log=log)
+    elif choice == "3":
+        print()
+        print("  Usage: gaia [--ui | --cli | <command>]")
+        print()
+        print("  Quick start:")
+        print("    gaia                   Launch Agent UI (default)")
+        print("    gaia --ui              Launch Agent UI (explicit)")
+        print("    gaia --ui-port 8080    Agent UI on custom port")
+        print("    gaia --cli             Interactive CLI chat")
+        print()
+        print("  Commands:")
+        print("    gaia chat              Interactive chat with RAG")
+        print("    gaia chat --ui         Agent UI (alias for gaia --ui)")
+        print('    gaia prompt "Hello"    Single prompt to LLM')
+        print("    gaia talk              Voice interaction")
+        print("    gaia init              Setup Lemonade + models")
+        print("    gaia code              Code generation agent")
+        print()
+        print("  Run 'gaia --help' for the full command list.")
+    else:
+        print(f"  Unknown option: {choice}")
+        print("  Run 'gaia --help' for all commands.")
+
+
 def main():
     import argparse
 
@@ -680,6 +869,37 @@ def main():
         action="version",
         version=f"{version}",
         help="Show program's version number and exit",
+    )
+
+    # Top-level flags for launching Agent UI or CLI directly
+    parser.add_argument(
+        "--ui",
+        action="store_true",
+        help="Launch the Agent UI (browser-based chat interface)",
+    )
+    parser.add_argument(
+        "--ui-port",
+        type=int,
+        default=4200,
+        help="Port for the Agent UI server (default: 4200, used with --ui)",
+    )
+    parser.add_argument(
+        "--ui-dist",
+        default=None,
+        help="Path to pre-built Agent UI frontend dist directory (used with --ui)",
+    )
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="Launch interactive CLI chat",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help=(
+            "Remote Lemonade server base URL (e.g. https://host:8000/api/v1)."
+            " Used with --ui."
+        ),
     )
 
     # Create a parent parser for common arguments
@@ -815,7 +1035,36 @@ def main():
         nargs="+",
         help="Allowed directory paths for file operations (default: current directory)",
     )
+    chat_parser.add_argument(
+        "--max-indexed-files",
+        type=int,
+        default=100,
+        help="Maximum number of files to keep indexed before LRU eviction (default: 100)",
+    )
+    chat_parser.add_argument(
+        "--max-total-chunks",
+        type=int,
+        default=10000,
+        help="Maximum total chunks across all indexed files (default: 10000)",
+    )
 
+    # Agent UI
+    chat_parser.add_argument(
+        "--ui",
+        action="store_true",
+        help="Launch the Agent UI (browser-based chat interface)",
+    )
+    chat_parser.add_argument(
+        "--ui-port",
+        type=int,
+        default=4200,
+        help="Port for the Agent UI server (default: 4200)",
+    )
+    chat_parser.add_argument(
+        "--ui-dist",
+        default=None,
+        help="Path to pre-built Agent UI frontend dist directory (used with --ui)",
+    )
     talk_parser = subparsers.add_parser(
         "talk", help="Start voice conversation with Gaia", parents=[parent_parser]
     )
@@ -1577,7 +1826,7 @@ Examples:
   gaia eval fix-code src/gaia/eval/fix_code_testbench/off_by_one_bug/off_by_one_bug.py \\
       "Loop stops too early" \\
       output/off_by_one_bug_fixed.py \\
-      --model Qwen3-Coder-30B-A3B-Instruct-GGUF
+      --model Qwen3.5-35B-A3B-GGUF
 
   # Run fix_code testbench and ask for edit_file tool output
   gaia eval fix-code src/app.ts "TS2322 type error" fixed.ts --use-edit-file
@@ -1639,6 +1888,128 @@ Examples:
         type=int,
         default=None,
         help="Last line in the file to include in the prompt (default: EOF)",
+    )
+
+    # Agent eval subcommand: gaia eval agent [OPTIONS]
+    agent_eval_parser = eval_subparsers.add_parser(
+        "agent",
+        help="Run agent eval benchmark scenarios",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run all scenarios
+  gaia eval agent
+
+  # Run a specific scenario by ID
+  gaia eval agent --scenario simple_factual_rag
+
+  # Run all scenarios in a category
+  gaia eval agent --category rag_quality
+
+  # Regenerate corpus documents and validate manifest
+  gaia eval agent --generate-corpus
+
+  # Run architecture audit only (no LLM calls)
+  gaia eval agent --audit-only
+
+  # Run against a custom backend
+  gaia eval agent --backend http://localhost:8080
+
+  # Run eval then auto-fix failures with Claude Code
+  gaia eval agent --fix
+
+  # Fix mode with custom iteration limit and target
+  gaia eval agent --fix --max-fix-iterations 5 --target-pass-rate 0.95
+
+  # Fix a specific category
+  gaia eval agent --category rag_quality --fix
+
+  # Compare two runs for regressions
+  gaia eval agent --compare eval/results/run1/scorecard.json eval/results/run2/scorecard.json
+
+  # Save this run as the new baseline
+  gaia eval agent --save-baseline
+
+  # Compare current run against saved baseline (auto-detects eval/results/baseline.json)
+  gaia eval agent --compare eval/results/latest/scorecard.json
+
+  # Convert a real Agent UI conversation into a scenario YAML
+  gaia eval agent --capture-session 29c211c7-31b5-4084-bb3f-1825c0210942
+        """,
+    )
+    agent_eval_parser.add_argument(
+        "--scenario",
+        default=None,
+        help="Run specific scenario by ID",
+    )
+    agent_eval_parser.add_argument(
+        "--category",
+        default=None,
+        help="Run all scenarios in category",
+    )
+    agent_eval_parser.add_argument(
+        "--audit-only",
+        action="store_true",
+        help="Run architecture audit only (no LLM calls)",
+    )
+    agent_eval_parser.add_argument(
+        "--generate-corpus",
+        action="store_true",
+        help="Regenerate corpus documents (CSV, etc.) and validate manifest.json",
+    )
+    agent_eval_parser.add_argument(
+        "--backend",
+        default="http://localhost:4200",
+        help="Agent UI backend URL (default: http://localhost:4200)",
+    )
+    agent_eval_parser.add_argument(
+        "--model",
+        default="claude-sonnet-4-6",
+        help="Eval model (default: claude-sonnet-4-6)",
+    )
+    agent_eval_parser.add_argument(
+        "--budget",
+        default="2.00",
+        help="Max budget per scenario in USD (default: 2.00)",
+    )
+    agent_eval_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=900,
+        help="Timeout per scenario in seconds (default: 900, scaled up automatically for multi-turn/large-doc scenarios)",
+    )
+    agent_eval_parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="After eval, invoke Claude Code to fix failures and re-eval (up to --max-fix-iterations)",
+    )
+    agent_eval_parser.add_argument(
+        "--max-fix-iterations",
+        type=int,
+        default=3,
+        help="Max fix-then-re-eval iterations in --fix mode (default: 3)",
+    )
+    agent_eval_parser.add_argument(
+        "--target-pass-rate",
+        type=float,
+        default=0.90,
+        help="Stop --fix iterations early when pass rate reaches this threshold (default: 0.90)",
+    )
+    agent_eval_parser.add_argument(
+        "--compare",
+        nargs="+",
+        metavar="PATH",
+        help="Compare two scorecard.json files (BASELINE CURRENT) or compare a run against saved baseline (CURRENT only)",
+    )
+    agent_eval_parser.add_argument(
+        "--save-baseline",
+        action="store_true",
+        help="After eval, save this run's scorecard as eval/results/baseline.json for future --compare",
+    )
+    agent_eval_parser.add_argument(
+        "--capture-session",
+        metavar="SESSION_ID",
+        help="Convert an Agent UI session from the database into a YAML scenario file",
     )
 
     # Add new subparser for generating summary reports from evaluation directories
@@ -2231,35 +2602,44 @@ Examples:
         help="Silent installation (no UI, no desktop shortcuts)",
     )
 
-    # Uninstall command (uninstall specific components)
-    uninstall_parser = subparsers.add_parser(
-        "uninstall",
-        help="Uninstall GAIA components",
-        parents=[parent_parser],
+    # Uninstall command: tiered cleanup of the Python-side GAIA install.
+    # The actual flag set + handler live in gaia.installer.uninstall_command
+    # so every desktop installer (NSIS, DMG, DEB, AppImage) can delegate to
+    # the same implementation.
+    from gaia.installer.uninstall_command import (
+        register_subparser as _register_uninstall_subparser,
     )
-    uninstall_parser.add_argument(
-        "--lemonade",
-        action="store_true",
-        help="Uninstall Lemonade Server",
-    )
-    uninstall_parser.add_argument(
-        "--models",
-        action="store_true",
-        help="Clear all downloaded models (frees disk space)",
-    )
-    uninstall_parser.add_argument(
-        "--yes",
-        "-y",
-        action="store_true",
-        help="Skip confirmation prompts",
-    )
+
+    _register_uninstall_subparser(subparsers, parent_parser)
 
     args = parser.parse_args()
 
     # Check if action is specified
     if not args.action:
-        log.warning("No action specified. Displaying help message.")
-        parser.print_help()
+        # Top-level --ui flag: launch Agent UI
+        if getattr(args, "ui", False):
+            _launch_agent_ui(
+                port=getattr(args, "ui_port", 4200),
+                base_url=getattr(args, "base_url", None),
+                log=log,
+                debug=getattr(args, "debug", False),
+                webui_dist=getattr(args, "ui_dist", None),
+            )
+            return
+
+        # Top-level --cli flag: launch interactive CLI chat
+        if getattr(args, "cli", False):
+            _launch_interactive_cli(log=log)
+            return
+
+        # No flags: launch Agent UI (default experience)
+        _launch_agent_ui(
+            port=getattr(args, "ui_port", 4200),
+            base_url=getattr(args, "base_url", None),
+            log=log,
+            debug=getattr(args, "debug", False),
+            webui_dist=getattr(args, "ui_dist", None),
+        )
         return
 
     # Set logging level using the GaiaLogger manager (if provided)
@@ -2267,6 +2647,20 @@ Examples:
 
     if hasattr(args, "logging_level"):
         log_manager.set_level("gaia", getattr(logging, args.logging_level))
+
+    # Handle chat --ui: launch Agent UI server (backward compat)
+    if args.action == "chat" and getattr(args, "ui", False):
+        max_files = getattr(args, "max_indexed_files", 0)
+        if max_files:
+            os.environ["GAIA_MAX_INDEXED_FILES"] = str(max_files)
+        _launch_agent_ui(
+            port=getattr(args, "ui_port", 4200),
+            base_url=getattr(args, "base_url", None),
+            log=log,
+            debug=getattr(args, "debug", False),
+            webui_dist=getattr(args, "ui_dist", None),
+        )
+        return
 
     # Handle core Gaia CLI commands
     if args.action in ["prompt", "chat", "talk", "stats"]:
@@ -3216,6 +3610,7 @@ Let me know your answer!
         success, _ = initialize_lemonade_for_agent(
             agent="minimal",
             quiet=False,
+            base_url=getattr(args, "base_url", None),
         )
         if not success:
             return
@@ -3467,6 +3862,76 @@ Let me know your answer!
 
     # Handle evaluation
     if args.action == "eval":
+        if getattr(args, "eval_command", None) == "agent":
+            # --capture-session: convert Agent UI session → YAML scenario
+            capture_sid = getattr(args, "capture_session", None)
+            if capture_sid:
+                from gaia.eval.runner import capture_session
+
+                capture_session(capture_sid)
+                return
+
+            # --generate-corpus: regenerate corpus documents and validate manifest
+            if getattr(args, "generate_corpus", False):
+                from gaia.eval.runner import generate_corpus
+
+                generate_corpus()
+                return
+
+            # --compare: diff two scorecard files, no eval run needed
+            compare_paths = getattr(args, "compare", None)
+            if compare_paths:
+                from gaia.eval.runner import RESULTS_DIR, compare_scorecards
+
+                try:
+                    if len(compare_paths) == 1:
+                        # Single path: compare against saved baseline
+                        baseline_path = RESULTS_DIR / "baseline.json"
+                        if not baseline_path.exists():
+                            print(f"[ERROR] No saved baseline found at {baseline_path}")
+                            print(
+                                "  Run `gaia eval agent --save-baseline` first to save a baseline."
+                            )
+                            return
+                        compare_scorecards(str(baseline_path), compare_paths[0])
+                    elif len(compare_paths) == 2:
+                        compare_scorecards(compare_paths[0], compare_paths[1])
+                    else:
+                        print("[ERROR] --compare accepts 1 or 2 paths")
+                except FileNotFoundError as e:
+                    print(f"[ERROR] {e}")
+                return
+
+            from gaia.eval.runner import AgentEvalRunner
+
+            runner = AgentEvalRunner(
+                backend_url=args.backend,
+                model=args.model,
+                budget_per_scenario=args.budget,
+                timeout_per_scenario=args.timeout,
+            )
+            scorecard = runner.run(
+                scenario_id=getattr(args, "scenario", None),
+                category=getattr(args, "category", None),
+                audit_only=getattr(args, "audit_only", False),
+                fix_mode=getattr(args, "fix", False),
+                max_fix_iterations=getattr(args, "max_fix_iterations", 3),
+                target_pass_rate=getattr(args, "target_pass_rate", 0.90),
+            )
+            # --save-baseline: copy scorecard to eval/results/baseline.json
+            if getattr(args, "save_baseline", False) and scorecard:
+                import json
+
+                from gaia.eval.runner import RESULTS_DIR
+
+                baseline_path = RESULTS_DIR / "baseline.json"
+                baseline_path.write_text(
+                    json.dumps(scorecard, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(f"[BASELINE] Saved baseline → {baseline_path}")
+            return
+
         if getattr(args, "eval_command", None) == "fix-code":
             try:
                 from gaia.eval.fix_code_testbench.fix_code_testbench import (
@@ -3934,9 +4399,12 @@ Let me know your answer!
                 print(f"  Total tokens used: {total_tokens:,}")
                 print(f"  Total cost: ${total_cost:.4f}")
                 print(f"  Average tokens per file: {avg_tokens:.0f}")
-                print(
-                    f"  Average cost per file: ${total_cost/len(summary['transcripts']):.4f}"
+                avg_cost = (
+                    total_cost / len(summary["transcripts"])
+                    if summary["transcripts"]
+                    else 0
                 )
+                print(f"  Average cost per file: ${avg_cost:.4f}")
                 print(f"  Meeting types: {', '.join(generation_info['meeting_types'])}")
                 print(f"  Claude model: {generation_info['claude_model']}")
 
@@ -4007,9 +4475,10 @@ Let me know your answer!
                 print(f"  Total tokens used: {total_tokens:,}")
                 print(f"  Total cost: ${total_cost:.4f}")
                 print(f"  Average tokens per file: {avg_tokens:.0f}")
-                print(
-                    f"  Average cost per file: ${total_cost/len(summary['emails']):.4f}"
+                avg_cost = (
+                    total_cost / len(summary["emails"]) if summary["emails"] else 0
                 )
+                print(f"  Average cost per file: ${avg_cost:.4f}")
                 print(f"  Email types: {', '.join(generation_info['email_types'])}")
                 print(f"  Claude model: {generation_info['claude_model']}")
 
@@ -4081,9 +4550,12 @@ Let me know your answer!
                 print(f"  Total tokens used: {total_tokens:,}")
                 print(f"  Total cost: ${total_cost:.4f}")
                 print(f"  Average tokens per file: {avg_tokens:.0f}")
-                print(
-                    f"  Average cost per file: ${total_cost/len(summary['documents']):.4f}"
+                avg_cost = (
+                    total_cost / len(summary["documents"])
+                    if summary["documents"]
+                    else 0
                 )
+                print(f"  Average cost per file: ${avg_cost:.4f}")
                 print(f"  PDF types: {', '.join(generation_info['document_types'])}")
                 print(f"  Claude model: {generation_info['claude_model']}")
 
@@ -4281,18 +4753,19 @@ Let me know your answer!
             # Check if already installed
             info = installer.check_installation()
             if info.installed and info.version:
-                installed_ver = info.version.lstrip("v")
-                target_ver = LEMONADE_VERSION.lstrip("v")
-
-                if installed_ver == target_ver:
-                    print(f"✅ Lemonade Server v{info.version} is already installed")
+                # Use needs_install (returns True if current < target)
+                if not installer.needs_install(info):
+                    print(
+                        f"✅ Lemonade Server v{info.version} is already installed"
+                        f" (>= v{LEMONADE_VERSION})"
+                    )
                     sys.exit(0)
                 else:
                     print(f"Lemonade Server v{info.version} is installed")
-                    print(f"GAIA requires v{LEMONADE_VERSION}")
+                    print(f"GAIA expects v{LEMONADE_VERSION}+")
                     print("")
                     print("To update, run:")
-                    print("  gaia uninstall --lemonade")
+                    print("  gaia uninstall --purge --purge-lemonade")
                     print("  gaia install --lemonade")
                     sys.exit(1)
 
@@ -4328,171 +4801,13 @@ Let me know your answer!
             print("Specify what to install: --lemonade")
             sys.exit(1)
 
-    # Handle uninstall command
+    # Handle uninstall command — delegates to the shared implementation in
+    # gaia.installer.uninstall_command so every desktop installer platform
+    # (NSIS / DMG / DEB / AppImage) uses the same tiered-cleanup code path.
     if args.action == "uninstall":
-        from rich.console import Console
+        from gaia.installer.uninstall_command import run as _run_uninstall
 
-        console = Console()
-
-        # Handle model cache clearing
-        if args.models:
-            import shutil
-
-            try:
-                # Find HuggingFace cache directory
-                hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
-                if sys.platform == "win32":
-                    hf_cache = (
-                        Path(os.path.expanduser("~")) / ".cache" / "huggingface" / "hub"
-                    )
-
-                if not hf_cache.exists():
-                    console.print("[yellow]📦 No model cache found[/yellow]")
-                    console.print(f"   [dim]Checked: {hf_cache}[/dim]")
-                    sys.exit(0)
-
-                # Find all model directories
-                model_dirs = list(hf_cache.glob("models--*"))
-                if not model_dirs:
-                    console.print("[green]✅ Model cache is already empty[/green]")
-                    console.print(f"   [dim]Location: {hf_cache}[/dim]")
-                    sys.exit(0)
-
-                # Calculate total size
-                total_size = 0
-                for model_dir in model_dirs:
-                    try:
-                        total_size += sum(
-                            f.stat().st_size
-                            for f in model_dir.rglob("*")
-                            if f.is_file()
-                        )
-                    except Exception:
-                        pass
-
-                size_gb = total_size / (1024**3)
-
-                # Show what will be deleted
-                console.print()
-                console.print(f"[bold]Found {len(model_dirs)} model(s) in cache[/bold]")
-                console.print(f"   [dim]Location: {hf_cache}[/dim]")
-                console.print(f"   [dim]Total size: ~{size_gb:.1f} GB[/dim]")
-                console.print()
-
-                # Confirm deletion
-                if not args.yes:
-                    console.print(
-                        f"[bold]Delete all {len(model_dirs)} model(s)?[/bold] [dim](frees ~{size_gb:.1f} GB)[/dim]"
-                    )
-                    console.print()
-                    console.print("   [y/N]: ", end="")
-                    response = input()
-                    if response.lower() != "y":
-                        console.print("[dim]Model deletion cancelled[/dim]")
-                        sys.exit(0)
-
-                console.print()
-                console.print(
-                    f"[bold blue]Deleting {len(model_dirs)} model(s)...[/bold blue]"
-                )
-                console.print()
-
-                success_count = 0
-                fail_count = 0
-
-                for model_dir in model_dirs:
-                    # Extract model name from directory
-                    model_name = model_dir.name.replace("models--", "").replace(
-                        "--", "/"
-                    )
-                    console.print(f"   [cyan]{model_name}[/cyan]... ", end="")
-                    try:
-                        shutil.rmtree(model_dir)
-                        console.print("[green]✅[/green]")
-                        success_count += 1
-                    except PermissionError:
-                        console.print("[red]❌ (locked)[/red]")
-                        fail_count += 1
-                    except Exception as e:
-                        console.print(f"[red]❌ ({e})[/red]")
-                        fail_count += 1
-
-                # Summary
-                console.print()
-                if success_count > 0:
-                    console.print(f"[green]✅ Deleted {success_count} model(s)[/green]")
-                if fail_count > 0:
-                    console.print(
-                        f"[red]❌ Failed to delete {fail_count} model(s)[/red]"
-                    )
-                    console.print()
-                    console.print("   [bold]If files are locked:[/bold]")
-                    console.print(
-                        "   [dim]1. Close all apps using models (gaia chat, etc.)[/dim]"
-                    )
-                    console.print(
-                        "   [dim]2. Stop Lemonade:[/dim] [cyan]gaia kill --lemonade[/cyan]"
-                    )
-                    console.print(
-                        "   [dim]3. Re-run:[/dim] [cyan]gaia uninstall --models[/cyan]"
-                    )
-
-                sys.exit(0 if fail_count == 0 else 1)
-
-            except Exception as e:
-                console.print(f"[red]❌ Error: {e}[/red]")
-                sys.exit(1)
-
-        # Handle Lemonade Server uninstallation
-        elif args.lemonade:
-            from gaia.installer.lemonade_installer import LemonadeInstaller
-
-            installer = LemonadeInstaller(console=console)
-
-            # Check if installed
-            info = installer.check_installation()
-            if not info.installed:
-                console.print("[green]✅ Lemonade Server is not installed[/green]")
-                sys.exit(0)
-
-            # Show installation details
-            console.print()
-            console.print(f"[bold]Found Lemonade Server v{info.version}[/bold]")
-            if info.path:
-                console.print(f"   [dim]Location: {info.path}[/dim]")
-            console.print()
-
-            # Confirm uninstallation
-            if not args.yes:
-                console.print(
-                    f"[bold]Uninstall Lemonade Server v{info.version}?[/bold] \\[y/N]: ",
-                    end="",
-                )
-                response = input()
-                if response.lower() != "y":
-                    console.print("[dim]Uninstall cancelled[/dim]")
-                    sys.exit(0)
-
-            # Uninstall
-            console.print()
-            console.print("[bold blue]Uninstalling Lemonade Server...[/bold blue]")
-            result = installer.uninstall(silent=True)
-
-            if result.success:
-                console.print()
-                console.print(
-                    "[green]✅ Lemonade Server uninstalled successfully[/green]"
-                )
-                sys.exit(0)
-            else:
-                console.print()
-                console.print(f"[red]❌ Uninstall failed: {result.error}[/red]")
-                sys.exit(1)
-        else:
-            console.print("[yellow]Specify what to uninstall:[/yellow]")
-            console.print("  [cyan]--lemonade[/cyan]  Uninstall Lemonade Server")
-            console.print("  [cyan]--models[/cyan]    Clear all downloaded models")
-            sys.exit(1)
+        sys.exit(_run_uninstall(args))
 
     # Log error for unknown action
     log.error(f"Unknown action specified: {args.action}")
@@ -4720,6 +5035,7 @@ def handle_jira_command(args):
             skip_if_external=True,
             use_claude=getattr(args, "use_claude", False),
             use_chatgpt=getattr(args, "use_chatgpt", False),
+            base_url=getattr(args, "base_url", None),
         )
         if not success:
             sys.exit(1)
@@ -4769,6 +5085,7 @@ def handle_docker_command(args):
             skip_if_external=True,
             use_claude=getattr(args, "use_claude", False),
             use_chatgpt=getattr(args, "use_chatgpt", False),
+            base_url=getattr(args, "base_url", None),
         )
         if not success:
             sys.exit(1)
@@ -4818,6 +5135,7 @@ def handle_api_command(args):
             success, _ = initialize_lemonade_for_agent(
                 agent="mcp",
                 quiet=False,
+                base_url=getattr(args, "base_url", None),
             )
             if not success:
                 return
@@ -5144,6 +5462,7 @@ def handle_sd_command(args):
         use_claude=getattr(args, "use_claude", False),
         use_chatgpt=getattr(args, "use_chatgpt", False),
         quiet=False,
+        base_url=getattr(args, "base_url", None),
     )
 
     if not success and not (
@@ -5313,6 +5632,7 @@ def handle_blender_command(args):
             skip_if_external=True,
             use_claude=getattr(args, "use_claude", False),
             use_chatgpt=getattr(args, "use_chatgpt", False),
+            base_url=getattr(args, "base_url", None),
         )
         if not success:
             sys.exit(1)
@@ -5519,6 +5839,7 @@ def handle_mcp_start(args):
             success, _ = initialize_lemonade_for_agent(
                 agent="mcp",
                 quiet=False,
+                base_url=getattr(args, "base_url", None),
             )
             if not success:
                 return
@@ -5591,28 +5912,32 @@ def handle_mcp_start(args):
             log_handle = open(log_file_path, "a", encoding="utf-8")
 
             # Start the process
-            if sys.platform.startswith("win"):
-                # Windows
-                process = subprocess.Popen(
-                    cmd_args,
-                    stdin=subprocess.DEVNULL,
-                    stdout=log_handle,
-                    stderr=subprocess.STDOUT,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-                    cwd=os.getcwd(),
-                    text=True,
-                )
-            else:
-                # Unix-like systems
-                process = subprocess.Popen(
-                    cmd_args,
-                    stdin=subprocess.DEVNULL,
-                    stdout=log_handle,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                    cwd=os.getcwd(),
-                    text=True,
-                )
+            try:
+                if sys.platform.startswith("win"):
+                    # Windows
+                    process = subprocess.Popen(
+                        cmd_args,
+                        stdin=subprocess.DEVNULL,
+                        stdout=log_handle,
+                        stderr=subprocess.STDOUT,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                        cwd=os.getcwd(),
+                        text=True,
+                    )
+                else:
+                    # Unix-like systems
+                    process = subprocess.Popen(
+                        cmd_args,
+                        stdin=subprocess.DEVNULL,
+                        stdout=log_handle,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                        cwd=os.getcwd(),
+                        text=True,
+                    )
+            except Exception:
+                log_handle.close()
+                raise
 
             # Write PID to dedicated PID file
             pid_file_path = os.path.abspath("gaia.mcp.pid")
@@ -5623,6 +5948,8 @@ def handle_mcp_start(args):
             ts = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
             log_handle.write(f"{ts} | INFO | Process ID: {process.pid}\n")
             log_handle.flush()
+            # Close parent's handle — subprocess inherited its own fd copy
+            log_handle.close()
 
             print("✅ MCP bridge started in background")
             print(f"📍 Listening on: {args.host}:{args.port}")

@@ -19,7 +19,7 @@ agents:
   - changed-files:
     - any-glob-to-any-file: ['src/gaia/agents/**/*']
 
-# Chat SDK changes
+# Agent SDK changes
 chat:
   - changed-files:
     - any-glob-to-any-file: ['src/gaia/chat/**/*', 'docs/guides/chat.md', 'docs/sdk/sdks/chat.md']

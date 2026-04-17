@@ -25,7 +25,7 @@ def test_talk_sdk_passes_mic_threshold_to_audio_client():
     """TalkSDK passes mic_threshold from TalkConfig through to AudioClient."""
     with (
         patch("gaia.talk.sdk.AudioClient") as MockAudioClient,
-        patch("gaia.talk.sdk.ChatSDK"),
+        patch("gaia.talk.sdk.AgentSDK"),
     ):
         MockAudioClient.return_value = MagicMock()
         config = TalkConfig(mic_threshold=0.007, enable_tts=False)

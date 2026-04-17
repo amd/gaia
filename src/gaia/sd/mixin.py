@@ -336,11 +336,17 @@ class SDToolsMixin:
                         error_msg = "Cannot connect to Lemonade Server. Is it running?"
                     return {"status": "error", "error": error_msg}
 
-            # Start progress for generation with timer
+            # Start progress for generation with timer (show_timer not supported by all consoles)
             if console and hasattr(console, "start_progress"):
-                console.start_progress(
-                    f"Generating image ({steps} steps)...", show_timer=True
-                )
+                import inspect
+
+                _sp_params = inspect.signature(console.start_progress).parameters
+                if "show_timer" in _sp_params:
+                    console.start_progress(
+                        f"Generating image ({steps} steps)...", show_timer=True
+                    )
+                else:
+                    console.start_progress(f"Generating image ({steps} steps)...")
 
             start_time = time.time()
 

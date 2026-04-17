@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for MCPClientManager."""
 
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -10,8 +11,20 @@ from gaia.mcp.client.config import MCPConfig
 from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
 
+def _mock_home(monkeypatch, home_dir: Path):
+    """Monkeypatch Path.home() and HOME/USERPROFILE to use a custom directory."""
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("USERPROFILE", str(home_dir))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+
+
 class TestMCPClientManager:
     """Test MCPClientManager functionality."""
+
+    @pytest.fixture(autouse=True)
+    def isolate_home(self, monkeypatch, tmp_path):
+        """Redirect Path.home() to tmp_path so tests never touch ~/.gaia/."""
+        _mock_home(monkeypatch, tmp_path)
 
     @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
     def test_add_server_creates_and_connects_client(self, mock_client_class):
@@ -133,6 +146,14 @@ class TestMCPClientManager:
         mock_client2.disconnect.assert_called_once()
         assert len(manager.list_servers()) == 0
 
+    def test_disconnect_all_clears_failed_dict(self):
+        """disconnect_all must clear _failed so stale errors don't persist."""
+        manager = MCPClientManager()
+        # Seed _failed directly to simulate a previous failed connection
+        manager._failed["removed_server"] = "connection refused"
+        manager.disconnect_all()
+        assert len(manager._failed) == 0
+
     @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
     def test_add_server_requires_config_dict(self, mock_client_class):
         """Test that add_server requires a config dict, not a command string."""
@@ -207,8 +228,11 @@ class TestMCPConfig:
     """Test MCPConfig functionality."""
 
     def test_config_creates_default_file_path(self, tmp_path, monkeypatch):
-        """Test that config uses default path if not specified."""
-        monkeypatch.setenv("HOME", str(tmp_path))
+        """Test that config uses global path when no local mcp_servers.json exists."""
+        empty_dir = tmp_path / "no_local"
+        empty_dir.mkdir()
+        monkeypatch.chdir(empty_dir)
+        _mock_home(monkeypatch, tmp_path)
 
         config = MCPConfig()
 
@@ -380,10 +404,9 @@ class TestMCPConfig:
         assert server["env"]["DEBUG"] == "true"
 
     def test_config_prefers_local_over_global(self, tmp_path, monkeypatch):
-        """Test that local config is preferred over global config."""
+        """Test that local config wins when both configs define the same server."""
         import json
 
-        # Create both local and global configs with different servers
         local_dir = tmp_path / "local"
         global_dir = tmp_path / "global"
         local_config = local_dir / "mcp_servers.json"
@@ -392,37 +415,44 @@ class TestMCPConfig:
         local_dir.mkdir(parents=True)
         global_config.parent.mkdir(parents=True)
 
+        # Both configs define "shared_server" — local value should win.
         local_config.write_text(
             json.dumps(
-                {"mcpServers": {"local_server": {"command": "echo", "args": ["local"]}}}
+                {
+                    "mcpServers": {
+                        "local_server": {"command": "echo", "args": ["local"]},
+                        "shared_server": {"command": "echo", "args": ["local-value"]},
+                    }
+                }
             )
         )
         global_config.write_text(
             json.dumps(
                 {
                     "mcpServers": {
-                        "global_server": {"command": "echo", "args": ["global"]}
+                        "global_server": {"command": "echo", "args": ["global"]},
+                        "shared_server": {"command": "echo", "args": ["global-value"]},
                     }
                 }
             )
         )
 
-        # Set CWD to local dir and HOME to global parent
         monkeypatch.chdir(local_dir)
-        monkeypatch.setenv("HOME", str(global_dir))
+        _mock_home(monkeypatch, global_dir)
 
         config = MCPConfig()
 
-        # Should load local config (has local_server, not global_server)
+        # Both servers present (stacking), shared_server uses local value.
         assert config.server_exists("local_server")
-        assert not config.server_exists("global_server")
+        assert config.server_exists("global_server")
+        assert config.get_server("shared_server")["args"] == ["local-value"]
+        # Save target is the local file.
         assert config.config_file == local_config
 
     def test_config_falls_back_to_global_when_no_local(self, tmp_path, monkeypatch):
-        """Test that global config is used when no local config exists."""
+        """Test that global config is loaded when no local config exists."""
         import json
 
-        # Create only global config (no local)
         local_dir = tmp_path / "local"
         global_dir = tmp_path / "global"
         global_config = global_dir / ".gaia" / "mcp_servers.json"
@@ -440,12 +470,327 @@ class TestMCPConfig:
             )
         )
 
-        # Set CWD to local dir (no config) and HOME to global parent
         monkeypatch.chdir(local_dir)
-        monkeypatch.setenv("HOME", str(global_dir))
+        _mock_home(monkeypatch, global_dir)
 
         config = MCPConfig()
 
-        # Should fall back to global config
         assert config.server_exists("global_server")
         assert config.config_file == global_config
+
+    # ---------------------------------------------------------------------------
+    # Config stacking tests
+    # ---------------------------------------------------------------------------
+
+    def test_config_stacking_merges_global_and_local(self, tmp_path, monkeypatch):
+        """Both global and local configs are loaded and merged."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        (local_dir / "mcp_servers.json").parent.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)
+
+        (local_dir / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"local_server": {"command": "echo", "args": ["l"]}}}
+            )
+        )
+        (global_dir / ".gaia" / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"global_server": {"command": "echo", "args": ["g"]}}}
+            )
+        )
+
+        monkeypatch.chdir(local_dir)
+        _mock_home(monkeypatch, global_dir)
+
+        config = MCPConfig()
+
+        assert config.server_exists("local_server")
+        assert config.server_exists("global_server")
+
+    def test_config_stacking_local_overrides_global(self, tmp_path, monkeypatch):
+        """Local config wins when the same server key appears in both."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        local_dir.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)
+
+        (local_dir / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"myserver": {"command": "echo", "args": ["local"]}}}
+            )
+        )
+        (global_dir / ".gaia" / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"myserver": {"command": "echo", "args": ["global"]}}}
+            )
+        )
+
+        monkeypatch.chdir(local_dir)
+        _mock_home(monkeypatch, global_dir)
+
+        config = MCPConfig()
+
+        assert config.get_server("myserver")["args"] == ["local"]
+
+    def test_config_stacking_global_only(self, tmp_path, monkeypatch):
+        """Only global config is loaded when no local config exists."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        local_dir.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)
+
+        (global_dir / ".gaia" / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"global_server": {"command": "echo", "args": ["g"]}}}
+            )
+        )
+
+        monkeypatch.chdir(local_dir)
+        _mock_home(monkeypatch, global_dir)
+
+        config = MCPConfig()
+
+        assert config.server_exists("global_server")
+        assert config.config_file == global_dir / ".gaia" / "mcp_servers.json"
+
+    def test_config_stacking_local_only(self, tmp_path, monkeypatch):
+        """Only local config is loaded when no global config file exists."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        local_dir.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)  # dir exists but no file
+
+        (local_dir / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"local_server": {"command": "echo", "args": ["l"]}}}
+            )
+        )
+
+        monkeypatch.chdir(local_dir)
+        _mock_home(monkeypatch, global_dir)
+
+        config = MCPConfig()
+
+        assert config.server_exists("local_server")
+        assert config.config_file == local_dir / "mcp_servers.json"
+
+    def test_config_stacking_neither_exists(self, tmp_path, monkeypatch):
+        """No servers are loaded when neither config file exists."""
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        local_dir.mkdir(parents=True)
+
+        monkeypatch.chdir(local_dir)
+        _mock_home(monkeypatch, global_dir)
+
+        config = MCPConfig()
+
+        assert config.get_servers() == {}
+        assert config.config_file == global_dir / ".gaia" / "mcp_servers.json"
+
+    def test_config_explicit_file_no_stacking(self, tmp_path, monkeypatch):
+        """When an explicit config_file is given, only that file is loaded."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        explicit_dir = tmp_path / "explicit"
+        local_dir.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)
+        explicit_dir.mkdir(parents=True)
+
+        explicit_config = explicit_dir / "my_config.json"
+        explicit_config.write_text(
+            json.dumps(
+                {"mcpServers": {"explicit_server": {"command": "echo", "args": ["e"]}}}
+            )
+        )
+        (local_dir / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"local_server": {"command": "echo", "args": ["l"]}}}
+            )
+        )
+        (global_dir / ".gaia" / "mcp_servers.json").write_text(
+            json.dumps(
+                {"mcpServers": {"global_server": {"command": "echo", "args": ["g"]}}}
+            )
+        )
+
+        monkeypatch.chdir(local_dir)
+        _mock_home(monkeypatch, global_dir)
+
+        config = MCPConfig(config_file=str(explicit_config))
+
+        # Only the explicit file is loaded; local and global are ignored.
+        assert config.server_exists("explicit_server")
+        assert not config.server_exists("local_server")
+        assert not config.server_exists("global_server")
+        assert config.config_file == explicit_config
+        assert config.load_report["mode"] == "explicit"
+        assert config.load_report["servers"] == ["explicit_server"]
+
+    def test_load_report_auto_with_overrides(self, tmp_path, monkeypatch):
+        """load_report captures overrides when the same server key appears in both."""
+        import json
+
+        local_dir = tmp_path / "local"
+        global_dir = tmp_path / "global"
+        local_dir.mkdir(parents=True)
+        (global_dir / ".gaia").mkdir(parents=True)
+
+        (local_dir / "mcp_servers.json").write_text(
+            json.dumps({"mcpServers": {"shared": {"command": "echo", "args": ["l"]}}})
+        )
+        (global_dir / ".gaia" / "mcp_servers.json").write_text(
+            json.dumps({"mcpServers": {"shared": {"command": "echo", "args": ["g"]}}})
+        )
+
+        monkeypatch.chdir(local_dir)
+        _mock_home(monkeypatch, global_dir)
+
+        config = MCPConfig()
+
+        assert config.load_report["mode"] == "auto"
+        assert config.load_report["overrides"] == ["shared"]
+        assert config.load_report["global"]["servers"] == ["shared"]
+        assert config.load_report["local"]["servers"] == ["shared"]
+
+
+class TestMCPClientManagerStatusReport:
+    """Tests for MCPClientManager._failed tracking and get_status_report()."""
+
+    @pytest.fixture(autouse=True)
+    def isolate_home(self, monkeypatch, tmp_path):
+        """Redirect Path.home() to tmp_path so tests never touch ~/.gaia/."""
+        _mock_home(monkeypatch, tmp_path)
+
+    def test_get_status_report_empty_when_no_servers(self):
+        manager = MCPClientManager()
+        assert manager.get_status_report() == []
+
+    @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
+    def test_get_status_report_connected_server(self, mock_client_class):
+        mock_client = Mock()
+        mock_client.connect.return_value = True
+        mock_client.list_tools.return_value = [Mock(), Mock(), Mock()]
+        mock_client_class.from_config.return_value = mock_client
+
+        manager = MCPClientManager()
+        manager.add_server("github", {"command": "npx", "args": ["-y", "server"]})
+
+        report = manager.get_status_report()
+        assert len(report) == 1
+        assert report[0]["name"] == "github"
+        assert report[0]["connected"] is True
+        assert report[0]["tool_count"] == 3
+        assert report[0]["error"] is None
+
+    def test_failed_servers_tracked_during_load_from_config(self):
+        manager = MCPClientManager()
+
+        def _fail_connect(name, cfg, debug=False):
+            m = Mock()
+            m.connect.return_value = False
+            m.last_error = "Connection refused"
+            return m
+
+        with patch("gaia.mcp.client.mcp_client_manager.MCPClient") as mock_cls:
+            mock_cls.from_config.side_effect = _fail_connect
+            manager.config._servers = {
+                "bad_server": {"command": "npx", "args": ["-y", "server"]}
+            }
+            manager.load_from_config()
+
+        assert "bad_server" in manager._failed
+        assert manager._failed["bad_server"] == "Connection refused"
+
+    def test_get_status_report_includes_failed_servers(self):
+        manager = MCPClientManager()
+
+        def _fail_connect(name, cfg, debug=False):
+            m = Mock()
+            m.connect.return_value = False
+            m.last_error = "Timeout"
+            return m
+
+        with patch("gaia.mcp.client.mcp_client_manager.MCPClient") as mock_cls:
+            mock_cls.from_config.side_effect = _fail_connect
+            manager.config._servers = {
+                "broken": {"command": "npx", "args": ["-y", "server"]}
+            }
+            manager.load_from_config()
+
+        report = manager.get_status_report()
+        assert len(report) == 1
+        assert report[0]["name"] == "broken"
+        assert report[0]["connected"] is False
+        assert report[0]["tool_count"] == 0
+        assert report[0]["error"] == "Timeout"
+
+    @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
+    def test_get_status_report_mixed_connected_and_failed(self, mock_client_class):
+        ok_client = Mock()
+        ok_client.connect.return_value = True
+        ok_client.list_tools.return_value = [Mock()]
+
+        fail_client = Mock()
+        fail_client.connect.return_value = False
+        fail_client.last_error = "Refused"
+
+        def side_effect(name, cfg, debug=False):
+            if name == "ok":
+                return ok_client
+            return fail_client
+
+        mock_client_class.from_config.side_effect = side_effect
+
+        manager = MCPClientManager()
+        manager.config._servers = {
+            "ok": {"command": "npx", "args": ["-y", "ok"]},
+            "broken": {"command": "npx", "args": ["-y", "broken"]},
+        }
+        manager.load_from_config()
+
+        report = manager.get_status_report()
+        assert len(report) == 2
+        connected = {r["name"]: r for r in report}
+        assert connected["ok"]["connected"] is True
+        assert connected["ok"]["tool_count"] == 1
+        assert connected["broken"]["connected"] is False
+        assert connected["broken"]["error"] == "Refused"
+
+    @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
+    def test_failed_cleared_on_successful_reconnect(self, mock_client_class):
+        """A server that was previously failed should be removed from _failed on success."""
+        fail_client = Mock()
+        fail_client.connect.return_value = False
+        fail_client.last_error = "Refused"
+
+        ok_client = Mock()
+        ok_client.connect.return_value = True
+        ok_client.list_tools.return_value = []
+
+        mock_client_class.from_config.side_effect = [fail_client, ok_client]
+
+        manager = MCPClientManager()
+        manager.config._servers = {"s": {"command": "npx", "args": []}}
+        manager.load_from_config()
+        assert "s" in manager._failed
+
+        # Simulate successful reconnect via load_from_config again
+        # disconnect_all() clears _clients so load_from_config will retry
+        manager.disconnect_all()
+        manager.config._servers = {"s": {"command": "npx", "args": []}}
+        manager.load_from_config()
+
+        assert "s" not in manager._failed
+        assert "s" in manager._clients

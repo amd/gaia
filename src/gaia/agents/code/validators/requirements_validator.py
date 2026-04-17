@@ -16,7 +16,7 @@ class RequirementsValidator:
         r".*-ibm-cloud-ibm-cloud.*",  # Recursive IBM
         r".*-azure-.*-azure.*",  # Recursive Azure
         r".*-gcp-.*-gcp.*",  # Recursive GCP
-        r".*(\\w{4,})-\\1-\\1.*",  # Same word 3+ times
+        r".*(\w{4,})-\1-\1.*",  # Same word 3+ times
         r"flask-graphql-.*-.*-.*-.*-.*",  # 5+ segments
     ]
 

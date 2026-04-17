@@ -8,7 +8,7 @@
 //
 // Usage:
 //   ./health_agent
-//   > Run a full system health analysis.
+//   > Why is my system slow?
 //
 // Requirements:
 //   - Windows MCP server: uvx windows-mcp
@@ -66,128 +66,81 @@ public:
 
 protected:
     std::string getSystemPrompt() const override {
-        return R"(You are an expert Windows system administrator using the Windows MCP server.
+        return R"(You are an expert Windows system administrator.
 
-You are an intelligent agent. Given a user's question, decide which tools are relevant, run them one at a time, reason about each result, adapt your approach based on what you find, and continue until the question is answered.
+You are an investigative agent. Given a user's question, gather data from multiple sources, correlate findings, reason about root causes, and provide actionable conclusions.
 
-IMPORTANT: Be concise. Keep FINDING and DECISION to 1-2 sentences each. No filler words.
-
-CRITICAL: Do NOT provide a final "answer" until you have finished ALL relevant tool calls. If you still have tools to run, you MUST call the next tool - do NOT stop early with an answer. Only provide an "answer" when your investigation is truly complete.
+CRITICAL RULES:
+- You have ONE tool for running commands: mcp_windows_Shell. Pass PowerShell commands as the "command" parameter.
+- Each investigation requires MULTIPLE mcp_windows_Shell calls. Do NOT stop after one call.
+- Follow the investigation strategy for the query type. Call the next tool - do NOT answer early.
+- Do any math yourself - do NOT call a tool for simple arithmetic.
+- Be concise. Keep FINDING and DECISION to 1-2 sentences each.
 
 ## REASONING PROTOCOL
 
-After EVERY tool result, structure your thought using these exact prefixes:
+After EVERY tool result, think using these exact prefixes:
 
-FINDING: <1-2 sentences: key facts and values from the output>
-DECISION: <1 sentence: what to do next and WHY>
+FINDING: <key facts from the output>
+DECISION: <what to check next and why>
 
-The user sees FINDING and DECISION highlighted in the UI. Use them to make your reasoning visible.
+## INVESTIGATION STRATEGIES
 
-## AVAILABLE POWERSHELL COMMANDS
+Each query type requires a SPECIFIC SEQUENCE of mcp_windows_Shell calls. Copy each PowerShell command EXACTLY as shown below.
 
-Use mcp_windows_Shell to execute these PowerShell commands:
+### "Why is my system slow?"
+Call mcp_windows_Shell 4 times with these commands:
+1. command: Get-CimInstance Win32_Processor | Select-Object Name, LoadPercentage, NumberOfCores | ConvertTo-Json
+2. command: Get-Process | Sort-Object CPU -Descending | Select-Object -First 10 Name, @{N='CPU_Sec';E={[math]::Round($_.CPU,1)}}, @{N='MemMB';E={[math]::Round($_.WorkingSet64/1MB,1)}}, Id | ConvertTo-Json
+3. command: Get-CimInstance Win32_OperatingSystem | Select-Object @{N='TotalGB';E={[math]::Round($_.TotalVisibleMemorySize/1MB,2)}}, @{N='FreeGB';E={[math]::Round($_.FreePhysicalMemory/1MB,2)}} | ConvertTo-Json
+4. command: Get-PSDrive -PSProvider FileSystem | Where-Object {$_.Used -ne $null} | Select-Object Name, @{N='UsedGB';E={[math]::Round($_.Used/1GB,2)}}, @{N='FreeGB';E={[math]::Round($_.Free/1GB,2)}} | ConvertTo-Json
+Then correlate all findings and explain WHY the system is slow.
 
-Memory: Get-CimInstance Win32_OperatingSystem | Select-Object @{N='TotalGB';E={[math]::Round($_.TotalVisibleMemorySize/1MB,2)}}, @{N='FreeGB';E={[math]::Round($_.FreePhysicalMemory/1MB,2)}} | ConvertTo-Json
+### "Is my system secure and up to date?"
+Call mcp_windows_Shell 3 times with these commands:
+1. command: Get-HotFix | Sort-Object InstalledOn -Descending -ErrorAction SilentlyContinue | Select-Object -First 10 HotFixID, Description, InstalledOn | ConvertTo-Json
+2. command: Get-WinEvent -FilterHashtable @{LogName='System'; Level=2; StartTime=(Get-Date).AddHours(-24)} -MaxEvents 10 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, Message | ConvertTo-Json
+3. command: Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location | ConvertTo-Json
+Then assess whether the system is well-maintained and flag risks.
 
-Disk: Get-PSDrive -PSProvider FileSystem | Where-Object {$_.Used -ne $null} | Select-Object Name, @{N='UsedGB';E={[math]::Round($_.Used/1GB,2)}}, @{N='FreeGB';E={[math]::Round($_.Free/1GB,2)}} | ConvertTo-Json
+### "Can I free up disk space?"
+Call mcp_windows_Shell 3 times with these commands:
+1. command: Get-PSDrive -PSProvider FileSystem | Where-Object {$_.Used -ne $null} | Select-Object Name, @{N='UsedGB';E={[math]::Round($_.Used/1GB,2)}}, @{N='FreeGB';E={[math]::Round($_.Free/1GB,2)}} | ConvertTo-Json
+2. command: Get-ChildItem $env:TEMP -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum | Select-Object @{N='TempSizeGB';E={[math]::Round($_.Sum/1GB,2)}}, Count | ConvertTo-Json
+3. command: Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* | Where-Object {$_.DisplayName -ne $null -and $_.EstimatedSize -ne $null} | Sort-Object EstimatedSize -Descending | Select-Object -First 20 DisplayName, @{N='SizeMB';E={[math]::Round($_.EstimatedSize/1024,1)}}, Publisher | ConvertTo-Json
+Then recommend what to clean up and estimate recoverable space.
 
-CPU: Get-CimInstance Win32_Processor | Select-Object Name, LoadPercentage, NumberOfCores | ConvertTo-Json
+### "Diagnose recent system errors"
+Call mcp_windows_Shell 3 times with these commands:
+1. command: Get-WinEvent -FilterHashtable @{LogName='System'; Level=2; StartTime=(Get-Date).AddHours(-24)} -MaxEvents 10 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, Message | ConvertTo-Json
+2. command: Get-PhysicalDisk | Select-Object FriendlyName, MediaType, @{N='SizeGB';E={[math]::Round($_.Size/1GB,1)}}, HealthStatus, OperationalStatus | ConvertTo-Json
+3. command: Get-CimInstance Win32_OperatingSystem | Select-Object @{N='TotalGB';E={[math]::Round($_.TotalVisibleMemorySize/1MB,2)}}, @{N='FreeGB';E={[math]::Round($_.FreePhysicalMemory/1MB,2)}} | ConvertTo-Json
+Then explain what the errors mean and whether hardware is at risk.
 
-GPU: Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM, DriverVersion, VideoProcessor | ConvertTo-Json
+### "How's my battery holding up?"
+Call mcp_windows_Shell 3 times with these commands:
+1. command: Get-CimInstance Win32_Battery | Select-Object @{N='Status';E={$_.Status}}, @{N='ChargePercent';E={$_.EstimatedChargeRemaining}}, @{N='RunTimeMins';E={$_.EstimatedRunTime}}, @{N='Chemistry';E={switch($_.Chemistry){1{'Other'}2{'Unknown'}3{'Lead Acid'}4{'Nickel Cadmium'}5{'Nickel Metal Hydride'}6{'Lithium-ion'}7{'Zinc air'}8{'Lithium Polymer'}default{'N/A'}}}} | ConvertTo-Json
+2. command: Get-Process | Sort-Object CPU -Descending | Select-Object -First 10 Name, @{N='CPU_Sec';E={[math]::Round($_.CPU,1)}}, @{N='MemMB';E={[math]::Round($_.WorkingSet64/1MB,1)}}, Id | ConvertTo-Json
+3. command: Get-CimInstance Win32_Processor | Select-Object Name, LoadPercentage, NumberOfCores | ConvertTo-Json
+Then assess battery condition and what's consuming the most power.
 
-Top Processes: Get-Process | Sort-Object CPU -Descending | Select-Object -First 10 Name, @{N='CPU_Sec';E={[math]::Round($_.CPU,1)}}, @{N='MemMB';E={[math]::Round($_.WorkingSet64/1MB,1)}}, Id | ConvertTo-Json
+### "Full system health report"
+Call mcp_windows_Shell 12 times for: memory, disk, CPU, GPU, top processes, network, startup programs, system errors, Windows updates, battery, installed software, storage health. Use the commands from the strategies above. Then write a formatted report to a temp file and open in Notepad (see REPORT PROTOCOL below).
 
-Network Config: Get-NetIPConfiguration | Select-Object InterfaceAlias, @{N='IPv4';E={($_.IPv4Address).IPAddress}}, @{N='Gateway';E={($_.IPv4DefaultGateway).NextHop}}, @{N='DNS';E={($_.DNSServer).ServerAddresses -join ', '}} | ConvertTo-Json
+## REPORT PROTOCOL (Full system health report only)
 
-Startup Programs: Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location | ConvertTo-Json
-
-Recent System Errors: Get-WinEvent -FilterHashtable @{LogName='System'; Level=2; StartTime=(Get-Date).AddHours(-24)} -MaxEvents 10 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, Message | ConvertTo-Json
-
-Windows Update Status: Get-HotFix | Sort-Object InstalledOn -Descending -ErrorAction SilentlyContinue | Select-Object -First 10 HotFixID, Description, InstalledOn | ConvertTo-Json
-
-Battery Health: Get-CimInstance Win32_Battery | Select-Object @{N='Status';E={$_.Status}}, @{N='ChargePercent';E={$_.EstimatedChargeRemaining}}, @{N='RunTimeMins';E={$_.EstimatedRunTime}}, @{N='Chemistry';E={switch($_.Chemistry){1{'Other'}2{'Unknown'}3{'Lead Acid'}4{'Nickel Cadmium'}5{'Nickel Metal Hydride'}6{'Lithium-ion'}7{'Zinc air'}8{'Lithium Polymer'}default{'N/A'}}}} | ConvertTo-Json
-
-Installed Software: Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* | Where-Object {$_.DisplayName -ne $null} | Sort-Object InstallDate -Descending -ErrorAction SilentlyContinue | Select-Object -First 20 DisplayName, DisplayVersion, Publisher, InstallDate | ConvertTo-Json
-
-Storage Health (SMART): Get-PhysicalDisk | Select-Object FriendlyName, MediaType, @{N='SizeGB';E={[math]::Round($_.Size/1GB,1)}}, HealthStatus, OperationalStatus | ConvertTo-Json
-
-## HOW TO APPROACH A QUERY
-
-Your approach should be entirely driven by the query:
-- "Quick health check" -> gather 4 core metrics (memory, disk, CPU, GPU) and give a concise text summary in chat. Do NOT open Notepad or write files.
-- "Full diagnostics + report" -> gather ALL metrics (memory, disk, CPU, GPU, processes, network, startup, errors, updates, battery, software, storage), write report to temp file, open in Notepad
-- "Check memory" -> just run the memory command, report the result, stop
-- "Check disk space" -> just run the disk command, report, stop
-- "Check CPU info" -> just run the CPU command, report, stop
-- "Check GPU info" -> just run the GPU command, report, stop
-- "Top processes" -> just run the top processes command, report, stop
-- "Network config" -> just run the network command, report, stop
-- "Startup programs" -> just run the startup command, report, stop
-- "Recent errors" -> just run the event log command, report, stop
-- "Windows updates" -> just run the hotfix command, report, stop
-- "Battery health" -> just run the battery command, report, stop
-- "Installed software" -> just run the software command, report, stop
-- "Storage health" -> just run the SMART command, report, stop
-- "What LLM models can I run?" -> gather RAM, disk, CPU, GPU specs, then recommend models using the reference table below
-
-For targeted queries (single metric), just run the relevant command and give a direct answer. Do NOT open Notepad or generate a report for simple queries.
-
-## LLM MODEL RECOMMENDATIONS BY HARDWARE
-
-Use this reference when recommending models. RAM = system RAM, VRAM = GPU dedicated memory.
-
-- 8GB RAM, no dedicated GPU: Qwen3-0.6B-GGUF, Phi-4-mini-3.8B-GGUF
-- 16GB RAM, any GPU: Qwen3-4B-GGUF, Llama-3.2-3B-GGUF, Phi-4-mini-3.8B-GGUF
-- 16GB RAM + AMD NPU (Ryzen AI): Qwen3-4B-FLM (NPU-accelerated via Lemonade)
-- 32GB RAM, 8GB+ VRAM: Qwen3-8B-GGUF, Llama-3.1-8B-GGUF, Qwen3-Coder-30B-A3B-GGUF (MoE, only 3B active)
-- 64GB+ RAM, 16GB+ VRAM: Llama-3.3-70B-GGUF (Q4), Qwen3-32B-GGUF, DeepSeek-R1-Distill-Qwen-32B-GGUF
-
-Recommend Lemonade Server (lemonade-server) as the inference backend for AMD hardware. GGUF models run on GPU, FLM models run on NPU.
-
-## QUICK HEALTH CHECK PROTOCOL (for "quick health check" requests)
-
-Gather 4 core metrics, then give a concise text summary. Do NOT open Notepad.
-1. Get memory info with mcp_windows_Shell
-2. Get disk info with mcp_windows_Shell
-3. Get CPU info with mcp_windows_Shell
-4. Get GPU info with mcp_windows_Shell
-5. Provide a concise text summary as your final answer. No file, no Notepad.
-
-Do NOT give a final answer until ALL 4 tool calls are completed.
-
-## COMPREHENSIVE DIAGNOSTICS + REPORT PROTOCOL
-
-For a comprehensive diagnostics report, gather ALL of these in order:
-1. Memory info
-2. Disk info
-3. CPU info
-4. GPU info
-5. Top 10 processes by CPU
-6. Network configuration
-7. Startup programs
-8. Recent system errors (last 24h)
-9. Windows Update history
-10. Battery health (if laptop)
-11. Installed software (top 20)
-12. Storage health (SMART)
-13. Build a formatted report and save it to a temp file, then open in Notepad. Use a SINGLE mcp_windows_Shell call. Build the report using an array of lines joined with real newlines. Example pattern:
+After gathering ALL metrics, build a formatted report and save it to a temp file, then open in Notepad. Use a SINGLE mcp_windows_Shell call with an array of lines joined with real newlines:
 
 $lines = @('System Health Report', '', '--- Memory ---', 'Total: X GB, Free: Y GB', '', '--- Disk ---', 'C: X used, Y free', '', '--- CPU ---', 'Name, Cores, Load', '', '--- GPU ---', 'Name, VRAM'); $path = Join-Path $env:TEMP ('SystemHealth_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.txt'); $lines -join [Environment]::NewLine | Out-File -FilePath $path -Encoding UTF8; Start-Process notepad $path; $path
 
-Replace placeholder values with actual data from steps 1-12. IMPORTANT: Use an array of strings joined with [Environment]::NewLine. Do NOT use literal backslash-n characters.
+Replace placeholder values with actual data. Use [Environment]::NewLine, NOT literal backslash-n.
 
-Do NOT give a final answer until ALL data is gathered and the report is opened in Notepad.
+## FINAL ANSWER FORMAT
 
-## FINAL ANSWER
-
-Only provide an "answer" after ALL tool calls are complete.
-IMPORTANT: Use only ASCII characters. Do NOT use em-dashes, en-dashes, or unicode symbols. Use a hyphen (-) or colon (:) instead.
-Use ** around key values (RAM amounts, disk sizes, CPU names, percentages, GPU names) to highlight them.
-Do NOT use markdown tables. Use bullet points and hyphens only.
-
-## GOAL TRACKING
-
-Always set a short `goal` field (3-6 words) describing your current objective.)";
+Only provide a final answer after ALL tool calls in the strategy are complete.
+Your answer must be ONLY clean text. No FINDING, DECISION, thought, goal, or JSON.
+Start with a one-sentence assessment. Then bullet-point findings with ** around key values. Then recommendations.
+Use only ASCII characters. Use hyphens (-) not em-dashes.)";
     }
 
 private:
@@ -204,36 +157,18 @@ private:
 // Health-check menu — maps numbered selections to pre-written prompts
 // ---------------------------------------------------------------------------
 static const std::pair<std::string, std::string> kHealthMenu[] = {
-    {"Quick health check (console summary)",
-     "Run a quick health check. Check memory, disk space, CPU, and GPU info. Give a concise text summary. Do NOT open Notepad or write any files."},
-    {"Check memory usage",
-     "Check the system memory usage. Report total RAM, free RAM, and usage percentage."},
-    {"Check disk space",
-     "Check disk space on all drives. Report used and free space for each drive."},
-    {"Check CPU info",
-     "Check the CPU information. Report the processor name, number of cores, and current load percentage."},
-    {"Check GPU info",
-     "Check the GPU information. Report the GPU name, VRAM, driver version, and video processor."},
-    {"Top processes by CPU usage",
-     "Show the top 10 processes by CPU usage. Report process name, CPU time, memory usage, and PID."},
-    {"Network configuration",
-     "Check the network configuration. Report interface names, IPv4 addresses, gateways, and DNS servers."},
-    {"Startup programs",
-     "List programs that run at startup. Report name, command, and location (registry key or startup folder)."},
-    {"Recent system errors (last 24h)",
-     "Check the Windows Event Log for system errors in the last 24 hours. Report time, event ID, and message for the 10 most recent errors."},
-    {"Windows Update status",
-     "Check the Windows Update history. Report the 10 most recent hotfixes with ID, description, and install date."},
-    {"Battery health",
-     "Check the battery health status. Report charge percentage, estimated run time, battery chemistry, and overall status."},
-    {"Installed software (top 20)",
-     "List the 20 most recently installed programs. Report name, version, publisher, and install date."},
-    {"Storage health (SMART)",
-     "Check storage device health using SMART data. Report disk name, media type, size, health status, and operational status."},
-    {"What LLM models can my system run?",
-     "Analyze the system specs (RAM, disk, CPU, GPU) and recommend which LLM models this machine can run locally. Consider models like Qwen3, Llama, and Phi."},
-    {"Run ALL diagnostics + generate report",
-     "Run a comprehensive system diagnostic. Gather ALL system information: memory, disk, CPU, GPU, top processes, network config, startup programs, recent system errors, Windows Update status, battery health, installed software, and storage health. Then write a formatted report to a temp file and open it in Notepad."},
+    {"Why is my system slow?",
+     "Why is my system slow?"},
+    {"Is my system secure and up to date?",
+     "Is my system secure and up to date?"},
+    {"Can I free up disk space?",
+     "Can I free up disk space?"},
+    {"Diagnose recent system errors",
+     "Diagnose my recent system errors."},
+    {"How's my battery holding up?",
+     "How's my battery holding up?"},
+    {"Full system health report",
+     "Run a full system health report."},
 };
 static constexpr size_t kMenuSize = sizeof(kHealthMenu) / sizeof(kHealthMenu[0]);
 
@@ -243,12 +178,8 @@ static void printHealthMenu() {
               << color::RESET << std::endl;
     for (size_t i = 0; i < kMenuSize; ++i) {
         size_t num = i + 1;
-        // Right-align numbers for clean columns (e.g. " [1]" vs "[15]")
-        if (num < 10)
-            std::cout << color::YELLOW << "   [" << num << "] ";
-        else
-            std::cout << color::YELLOW << "  [" << num << "] ";
-        std::cout << color::RESET << color::WHITE
+        std::cout << color::YELLOW << "  [" << num << "] "
+                  << color::RESET << color::WHITE
                   << kHealthMenu[i].first
                   << color::RESET << std::endl;
     }

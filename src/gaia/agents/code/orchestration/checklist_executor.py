@@ -37,8 +37,8 @@ from .template_catalog import get_template
 logger = logging.getLogger(__name__)
 
 
-class ChatSDK(Protocol):
-    """Protocol for chat SDK interface used by LLM code generation."""
+class AgentSDK(Protocol):
+    """Protocol for agent SDK interface used by LLM code generation."""
 
     def send(self, message: str, timeout: int = 600, no_history: bool = False) -> Any:
         """Send a message and get response."""
@@ -289,7 +289,7 @@ class ChecklistExecutor:
     def __init__(
         self,
         tool_executor: ToolExecutor,
-        llm_client: Optional[ChatSDK] = None,
+        llm_client: Optional[AgentSDK] = None,
         error_handler: Optional[ErrorHandler] = None,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
         console: Optional[AgentConsole] = None,

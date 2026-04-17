@@ -1,0 +1,80 @@
+{
+  "scenario_id": "multi_doc_context",
+  "status": "PASS",
+  "overall_score": 9.05,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "What was the Q3 2025 revenue and year-over-year growth for Acme Corp?",
+      "agent_response": "According to acme_q3_report.md, Q3 2025 revenue was $14.2 million with year-over-year growth of 23%. The report shows this represented an increase from Q3 2024's $11.5 million.",
+      "agent_tools": ["list_indexed_documents", "query_specific_file", "query_specific_file"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 9,
+        "context_retention": 8,
+        "completeness": 10,
+        "efficiency": 7,
+        "personality": 9,
+        "error_recovery": 10
+      },
+      "overall_score": 9.05,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent correctly answered from acme_q3_report.md with both required facts: '$14.2 million' and '23%'. Also provided comparison to Q3 2024 ($11.5M). Agent listed docs first, then queried the correct file — good tool selection. Minor efficiency penalty for querying the same file twice (once for revenue, once for verification), but the dual-check shows careful reasoning. No handbook facts mixed in."
+    },
+    {
+      "turn": 2,
+      "user_message": "What is the remote work policy?",
+      "agent_response": "According to employee_handbook.md, page 7: Acme Corp supports workplace flexibility while maintaining collaboration and team cohesion. Standard Remote Work: Employees may work remotely up to 3 days per week with manager approval. ... Fully Remote Arrangements require VP-level approval. Remote Work Guidelines: available during core hours 9AM-3PM, secure internet required, comply with data security. (Agent also appended: According to acme_q3_report.md: Q3 2025 revenue reached $14.2 million, representing a 23% increase from Q3 2024.)",
+      "agent_tools": ["list_indexed_documents", "query_specific_file", "query_specific_file"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 7,
+        "context_retention": 8,
+        "completeness": 9,
+        "efficiency": 5,
+        "personality": 6,
+        "error_recovery": 10
+      },
+      "overall_score": 8.15,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent correctly answered the remote work question from employee_handbook.md: '3 days per week with manager approval' present. NOT a critical fail — the agent did not confuse documents; it clearly labelled each source separately. However, it unnecessarily queried acme_q3_report.md and appended Q3 financial data that the user did not ask for, cluttering the response. Efficiency and personality scores penalized. The HR facts are fully correct and drawn from the right document. Fully remote (VP approval) and guidelines sections also correctly included."
+    },
+    {
+      "turn": 3,
+      "user_message": "What is the CEO's outlook for Q4 mentioned in that financial report?",
+      "agent_response": "Q3 2025 Revenue: $14.2 million. Year-over-Year Growth: +23% compared to Q3 2024 ($11.5 million). CEO's Q4 Outlook: According to acme_q3_report.md — The CEO projects 15-18% growth for Q4, driven by: Enterprise segment expansion; Three new product launches planned for November. This information is from the 'CEO Letter' section of the quarterly report.",
+      "agent_tools": ["query_documents"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 10,
+        "personality": 9,
+        "error_recovery": 10
+      },
+      "overall_score": 9.95,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "CRITICAL TEST PASSED. Agent correctly resolved the pronoun 'that financial report' to acme_q3_report.md with zero handbook contamination. Returned the exact Q4 outlook: '15-18% growth driven by enterprise segment expansion' and 'three new product launches planned for November'. Single efficient tool call (query_documents). Response is clearly attributed to acme_q3_report.md CEO Letter section. context_retention=10 confirmed: agent tracked 'that financial report' across session turns without confusion."
+    }
+  ],
+  "root_cause": null,
+  "recommended_fix": "Minor: In Turn 2, agent volunteered unrequested financial context alongside the correct HR answer. This is likely due to the agent over-generalizing 'what might be helpful' given previous conversation context. Consider tightening the system prompt or tool selection heuristic to avoid appending cross-document context when the query is unambiguous and domain-specific.",
+  "cost_estimate": {
+    "turns": 3,
+    "estimated_usd": 0.04
+  },
+  "metadata": {
+    "session_id": "18a58f5a-a13c-49bb-881b-739e6778e415",
+    "model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    "documents_indexed": [
+      {"filename": "acme_q3_report.md", "chunk_count": 1},
+      {"filename": "employee_handbook.md", "chunk_count": 6}
+    ],
+    "critical_failure": false,
+    "timestamp": "2026-03-20T03:25:00Z"
+  }
+}

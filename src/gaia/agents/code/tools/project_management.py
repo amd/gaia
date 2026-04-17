@@ -237,11 +237,13 @@ Return ONLY valid JSON."""
                 try:
                     # Clean the response if it has markdown code blocks
                     if "```json" in plan_response:
-                        plan_response = plan_response.split("```json")[1].split("```")[
-                            0
-                        ]
+                        parts = plan_response.split("```json")
+                        if len(parts) > 1:
+                            plan_response = parts[1].split("```")[0]
                     elif "```" in plan_response:
-                        plan_response = plan_response.split("```")[1].split("```")[0]
+                        parts = plan_response.split("```")
+                        if len(parts) > 1:
+                            plan_response = parts[1].split("```")[0]
 
                     plan_data = json.loads(plan_response)
                     project_name = plan_data.get("project_name", "my_project")

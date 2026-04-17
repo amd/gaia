@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdlib>
 #include <string>
 
 // ---------------------------------------------------------------------------
@@ -26,31 +25,11 @@
 // ---------------------------------------------------------------------------
 
 static std::string testModel() {
-#ifdef _MSC_VER
-    char* env = nullptr;
-    size_t len = 0;
-    _dupenv_s(&env, &len, "GAIA_CPP_TEST_MODEL");
-    std::string result = env ? std::string(env) : "Qwen3-4B-Instruct-2507-GGUF";
-    free(env);
-    return result;
-#else
-    const char* env = std::getenv("GAIA_CPP_TEST_MODEL");
-    return env ? std::string(env) : "Qwen3-4B-Instruct-2507-GGUF";
-#endif
+    return gaia::getEnvVar("GAIA_CPP_TEST_MODEL", "Qwen3-4B-Instruct-2507-GGUF");
 }
 
 static std::string testBaseUrl() {
-#ifdef _MSC_VER
-    char* env = nullptr;
-    size_t len = 0;
-    _dupenv_s(&env, &len, "GAIA_CPP_BASE_URL");
-    std::string result = env ? std::string(env) : "http://localhost:8000/api/v1";
-    free(env);
-    return result;
-#else
-    const char* env = std::getenv("GAIA_CPP_BASE_URL");
-    return env ? std::string(env) : "http://localhost:8000/api/v1";
-#endif
+    return gaia::getEnvVar("GAIA_CPP_BASE_URL", "http://localhost:8000/api/v1");
 }
 
 static std::string toLower(std::string s) {

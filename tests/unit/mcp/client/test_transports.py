@@ -3,6 +3,7 @@
 """Unit tests for MCP transport implementations."""
 
 import json
+import sys
 from io import StringIO
 from unittest.mock import Mock, patch
 
@@ -291,6 +292,9 @@ class TestStdioTransport:
         stderr = transport._read_stderr()
         assert stderr == ""
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Unix signals not available on Windows"
+    )
     def test_format_exit_code_with_signal(self):
         """Test that _format_exit_code translates signal numbers to names."""
         # -11 is SIGSEGV on Unix
@@ -298,6 +302,9 @@ class TestStdioTransport:
         assert "-11" in result
         assert "SIGSEGV" in result
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="SIGKILL not available on Windows"
+    )
     def test_format_exit_code_with_sigkill(self):
         """Test _format_exit_code for SIGKILL (-9)."""
         result = StdioTransport._format_exit_code(-9)

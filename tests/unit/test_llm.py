@@ -175,6 +175,11 @@ class TestLlmCli(unittest.TestCase):
             if hasattr(e, "stderr") and e.stderr:
                 print(f"Partial stderr: {e.stderr}")
             self.fail(f"LLM command with server timed out after 60 seconds: {e}")
+        except OSError as e:
+            # WinError 4551: Application Control policy blocks subprocess
+            # This can happen on CI runners with strict security policies
+            print(f"OS error running gaia command (may be blocked by policy): {e}")
+            self.skipTest(f"OS blocked subprocess execution: {e}")
         except Exception as e:
             print(f"UNEXPECTED EXCEPTION: {type(e).__name__}: {e}")
             print(f"Exception details: {repr(e)}")
@@ -334,8 +339,10 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
                 )
 
                 self.assertTrue(result)
+                # After _try_reload_with_ctx, _context_size is updated to
+                # min_context_size to prevent reload loops, so both args are 32768.
                 mock_print_context.assert_called_once_with(
-                    4096, 32768, MessageType.WARNING
+                    32768, 32768, MessageType.WARNING
                 )
 
     def test_ensure_ready_insufficient_context_already_initialized(self):
@@ -374,8 +381,10 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
                 )
 
                 self.assertTrue(second_result)
+                # After _try_reload_with_ctx, _context_size is updated to
+                # min_context_size to prevent reload loops, so both args are 32768.
                 mock_print_context.assert_called_once_with(
-                    4096, 32768, MessageType.WARNING
+                    32768, 32768, MessageType.WARNING
                 )
 
     def test_ensure_ready_quiet_mode_suppresses_context_warning(self):

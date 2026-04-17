@@ -68,7 +68,6 @@ class TestMCPToolConversion:
         gaia_format = mcp_tool.to_gaia_format("testserver")
 
         assert gaia_format["_mcp_server"] == "testserver"
-        assert gaia_format["_mcp_tool_name"] == "test_tool"
         assert gaia_format["atomic"] is True
 
     def test_preserves_parameter_types(self):

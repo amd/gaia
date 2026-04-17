@@ -7,9 +7,23 @@ on:
   workflow_call:
   push:
     branches: [ main ]
+    paths:
+      - 'src/gaia/rag/**'
+      - 'src/gaia/llm/**'
+      - 'src/gaia/vlm/**'
+      - 'tests/test_rag*.py'
+      - 'setup.py'
+      - '.github/workflows/test_rag.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/rag/**'
+      - 'src/gaia/llm/**'
+      - 'src/gaia/vlm/**'
+      - 'tests/test_rag*.py'
+      - 'setup.py'
+      - '.github/workflows/test_rag.yml'
   merge_group:
   workflow_dispatch:
 

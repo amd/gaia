@@ -1,0 +1,353 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* AgentInstallDialog - Modal for agent installation progress */
+
+/* ── Dialog sizing ──────────────────────────────────────────── */
+.install-dialog {
+    width: 480px;
+}
+
+/* ── Body ───────────────────────────────────────────────────── */
+.install-body {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* ── Progress Stepper ───────────────────────────────────────── */
+.install-stepper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 4px 0 8px;
+}
+
+.install-step {
+    display: flex;
+    align-items: center;
+}
+
+.install-step-dot {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary);
+    border: 2px solid var(--border);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    transition: all 300ms var(--ease);
+    flex-shrink: 0;
+}
+
+.install-step.current .install-step-dot {
+    border-color: var(--amd-red);
+    background: rgba(226, 60, 64, 0.08);
+    color: var(--amd-red);
+    box-shadow: 0 0 0 3px rgba(226, 60, 64, 0.1);
+}
+
+.install-step.complete .install-step-dot {
+    border-color: var(--accent-green);
+    background: var(--accent-green);
+    color: white;
+}
+
+.install-step.failed .install-step-dot {
+    border-color: var(--accent-danger);
+    background: var(--accent-danger);
+    color: white;
+}
+
+.install-step-spinner {
+    animation: spin 1s linear infinite;
+}
+
+.install-step-num {
+    font-size: 10px;
+}
+
+.install-step-line {
+    width: 48px;
+    height: 2px;
+    background: var(--border);
+    transition: background 300ms var(--ease);
+}
+
+.install-step-line.complete {
+    background: var(--accent-green);
+}
+
+/* ── Progress Bar ───────────────────────────────────────────── */
+.install-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.install-progress-bar {
+    height: 6px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    overflow: hidden;
+    border: 1px solid var(--border-light);
+}
+
+.install-progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--amd-red);
+    transition: width 500ms var(--ease);
+    position: relative;
+}
+
+/* Animated shimmer on active progress */
+.install-progress-fill::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.2) 50%,
+        transparent 100%
+    );
+    animation: shimmer 1.5s infinite;
+}
+
+.install-progress-fill.success {
+    background: var(--accent-green);
+}
+
+.install-progress-fill.success::after {
+    animation: none;
+}
+
+.install-progress-fill.failed {
+    background: var(--accent-danger);
+}
+
+.install-progress-fill.failed::after {
+    animation: none;
+}
+
+@keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(200%); }
+}
+
+.install-progress-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.install-progress-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.install-progress-percent {
+    font-size: 12px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+}
+
+.install-progress-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+/* ── Step Icons ─────────────────────────────────────────────── */
+.install-step-icon {
+    flex-shrink: 0;
+}
+
+.install-step-icon.downloading {
+    color: var(--accent-blue);
+}
+
+.install-step-icon.verifying {
+    color: var(--accent-yellow);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.install-step-icon.installing {
+    color: var(--amd-red);
+    animation: spin 2s linear infinite;
+}
+
+.install-step-icon.installed {
+    color: var(--accent-green);
+}
+
+.install-step-icon.failed {
+    color: var(--accent-danger);
+}
+
+.install-step-icon.preparing {
+    color: var(--text-muted);
+    animation: spin 1s linear infinite;
+}
+
+/* ── Agent Details ──────────────────────────────────────────── */
+.install-details {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+}
+
+.install-detail-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.install-detail-key {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.install-detail-value {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
+    text-align: right;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.install-category-badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+/* ── Error State ────────────────────────────────────────────── */
+.install-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    background: rgba(239, 68, 68, 0.05);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    border-radius: var(--radius-sm);
+    color: var(--accent-danger);
+}
+
+[data-theme="dark"] .install-error {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.25);
+}
+
+.install-error-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.install-error-title {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.install-error-text {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+/* ── Success State ──────────────────────────────────────────── */
+.install-success {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: rgba(34, 197, 94, 0.05);
+    border: 1px solid rgba(34, 197, 94, 0.2);
+    border-radius: var(--radius-sm);
+    color: var(--accent-green);
+    font-size: 13px;
+    font-weight: 500;
+}
+
+[data-theme="dark"] .install-success {
+    background: rgba(34, 197, 94, 0.08);
+    border-color: rgba(34, 197, 94, 0.25);
+}
+
+/* ── Footer Actions ─────────────────────────────────────────── */
+.install-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+}
+
+/* spin and pulse keyframes are defined in index.css (global) */
+
+/* ── Accessibility: reduced motion ──────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    .install-step-icon.verifying,
+    .install-step-icon.installing,
+    .install-step-icon.preparing,
+    .install-step-spinner {
+        animation: none;
+    }
+
+    .install-progress-fill::after {
+        animation: none;
+    }
+
+    .install-progress-fill {
+        transition: none;
+    }
+
+    .install-step-dot {
+        transition: none;
+    }
+
+    .install-step-line {
+        transition: none;
+    }
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 480px) {
+    .install-dialog {
+        width: 100%;
+    }
+
+    .install-step-line {
+        width: 28px;
+    }
+}

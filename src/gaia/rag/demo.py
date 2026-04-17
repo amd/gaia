@@ -147,11 +147,11 @@ def demo_chat_with_rag():
     print("-" * 40)
 
     try:
-        from gaia.chat.sdk import ChatConfig, ChatSDK
+        from gaia.chat.sdk import AgentConfig, AgentSDK
 
         # Create chat with RAG support
-        config = ChatConfig(show_stats=True)
-        _chat = ChatSDK(config)
+        config = AgentConfig(show_stats=True)
+        _chat = AgentSDK(config)
 
         print("Chat SDK initialized successfully!")
 

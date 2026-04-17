@@ -36,15 +36,18 @@
               "cpp/quickstart",
               "cpp/overview",
               "cpp/integration",
+              "cpp/testing",
+              "cpp/api-reference",
+              "cpp/security",
               {
                 "group": "User Guides",
                 "pages": [
-                  "cpp/custom-agent",
                   "cpp/health-agent",
-                  "cpp/wifi-agent"
+                  "cpp/wifi-agent",
+                  "cpp/process-agent",
+                  "cpp/custom-agent"
                 ]
-              },
-              "cpp/api-reference"
+              }
             ]
           },
           {
@@ -52,6 +55,8 @@
             "pages": [
               "setup",
               "quickstart",
+              "guides/install",
+              "guides/agent-ui",
               {
                 "group": "User Guides",
                 "pages": [
@@ -66,6 +71,8 @@
                   "guides/jira",
                   "guides/docker",
                   "guides/routing",
+                  "guides/custom-agent",
+                  "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
                 ]
@@ -121,13 +128,15 @@
                     "pages": [
                       "sdk/core/agent-system",
                       "sdk/core/tools",
-                      "sdk/core/console"
+                      "sdk/core/console",
+                      "sdk/patterns"
                     ]
                   },
                   {
                     "group": "SDKs",
                     "pages": [
                       "sdk/sdks/chat",
+                      "sdk/sdks/agent-ui",
                       "sdk/sdks/rag",
                       "sdk/sdks/mcp",
                       "sdk/sdks/llm",
@@ -202,7 +211,8 @@
           {
             "group": "SDKs",
             "pages": [
-              "spec/chat-sdk",
+              "spec/agent-sdk",
+              "spec/agent-ui-server",
               "spec/rag-sdk",
               "spec/talk-sdk",
               "spec/mcp-client",
@@ -293,7 +303,8 @@
                 "group": "Evaluation Framework",
                 "pages": [
                   "reference/eval",
-                  "reference/eval/fix-code-testbench"
+                  "reference/eval/fix-code-testbench",
+                  "eval"
                 ]
               },
               "reference/dependency-management",
@@ -305,6 +316,7 @@
             "pages": [
               "glossary",
               "reference/faq",
+              "reference/install-troubleshooting",
               "reference/troubleshooting"
             ]
           }
@@ -340,17 +352,38 @@
             ]
           },
           {
-            "group": "Plans",
+            "group": "Agent UI",
+            "pages": [
+              "plans/agent-ui",
+              "plans/setup-wizard",
+              "plans/security-model",
+              "plans/email-calendar-integration",
+              "plans/messaging-integrations-plan",
+              "plans/autonomy-engine"
+            ]
+          },
+          {
+            "group": "Ecosystem",
             "pages": [
               "plans/agent-hub",
-              "plans/installer",
-              "plans/chat-ui",
+              "plans/skill-format",
+              "plans/oem-bundling"
+            ]
+          },
+          {
+            "group": "Infrastructure",
+            "pages": [
               "plans/mcp-client",
               "plans/cua",
               "plans/docker-containers",
-              "plans/image-agent",
-              "plans/vision-sdk",
               "plans/mcp-docs"
+            ]
+          },
+          {
+            "group": "Agents",
+            "pages": [
+              "plans/image-agent",
+              "plans/vision-sdk"
             ]
           }
         ]
@@ -361,6 +394,12 @@
           {
             "group": "Release Notes",
             "pages": [
+              "releases/index",
+              "releases/v0.17.2",
+              "releases/v0.17.1",
+              "releases/v0.17.0",
+              "releases/v0.16.1",
+              "releases/v0.16.0",
               "releases/v0.15.4.1",
               "releases/v0.15.4",
               "releases/v0.15.3.2",
@@ -402,7 +441,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.15.4.1 · Lemonade 9.3.0",
+        "label": "v0.17.2 \u00b7 Lemonade 10.0.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {
@@ -437,16 +476,44 @@
       "twitter": "https://twitter.com/amd",
       "linkedin": "https://linkedin.com/company/amd"
     },
-    "copyright": "Copyright © 2024-2026 Advanced Micro Devices, Inc."
+    "copyright": "Copyright \u00a9 2024-2026 Advanced Micro Devices, Inc."
   },
   "redirects": [
-    {"source": "/cpp", "destination": "/cpp/quickstart"},
-    {"source": "/guides/cpp", "destination": "/cpp/quickstart"},
-    {"source": "/guides/cpp/quickstart", "destination": "/cpp/quickstart"},
-    {"source": "/guides/cpp/overview", "destination": "/cpp/overview"},
-    {"source": "/guides/cpp/integration", "destination": "/cpp/integration"},
-    {"source": "/guides/cpp/custom-agent", "destination": "/cpp/custom-agent"},
-    {"source": "/guides/cpp/wifi-agent", "destination": "/cpp/wifi-agent"},
-    {"source": "/guides/mcp/client", "destination": "/sdk/sdks/mcp"}
+    {
+      "source": "/cpp",
+      "destination": "/cpp/quickstart"
+    },
+    {
+      "source": "/guides/cpp",
+      "destination": "/cpp/quickstart"
+    },
+    {
+      "source": "/guides/cpp/quickstart",
+      "destination": "/cpp/quickstart"
+    },
+    {
+      "source": "/guides/cpp/overview",
+      "destination": "/cpp/overview"
+    },
+    {
+      "source": "/guides/cpp/integration",
+      "destination": "/cpp/integration"
+    },
+    {
+      "source": "/guides/cpp/custom-agent",
+      "destination": "/cpp/custom-agent"
+    },
+    {
+      "source": "/guides/cpp/wifi-agent",
+      "destination": "/cpp/wifi-agent"
+    },
+    {
+      "source": "/guides/cpp/process-agent",
+      "destination": "/cpp/process-agent"
+    },
+    {
+      "source": "/guides/mcp/client",
+      "destination": "/sdk/sdks/mcp"
+    }
   ]
 }

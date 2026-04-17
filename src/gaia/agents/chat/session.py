@@ -9,7 +9,7 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class ChatSession:
     watched_directories: List[str]
     chat_history: List[Dict[str, str]]
     path_permissions: Dict[str, PathPermission]
-    metadata: Dict[str, any]
+    metadata: Dict[str, Any]
 
     def to_dict(self) -> Dict:
         """Convert session to dictionary."""

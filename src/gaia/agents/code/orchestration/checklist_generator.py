@@ -27,8 +27,8 @@ from .template_catalog import get_catalog_prompt, validate_checklist_item
 logger = logging.getLogger(__name__)
 
 
-class ChatSDK(Protocol):
-    """Protocol for chat SDK interface."""
+class AgentSDK(Protocol):
+    """Protocol for agent SDK interface."""
 
     def send(self, message: str, timeout: int = 600, no_history: bool = False) -> Any:
         """Send a message and get response."""
@@ -220,7 +220,7 @@ class ChecklistGenerator:
     invocations.
     """
 
-    def __init__(self, chat_sdk: ChatSDK):
+    def __init__(self, chat_sdk: AgentSDK):
         """Initialize the checklist generator.
 
         Args:

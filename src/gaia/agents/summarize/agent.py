@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 from gaia.agents.base import Agent
-from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
 from gaia.rag.sdk import RAGSDK
 
@@ -139,7 +139,7 @@ class SummarizerAgent(Agent):
         self.system_prompt_override = system_prompt_override
         self.generation_params = generation_params or {}
         self.log = get_logger(__name__)
-        chat_config = ChatConfig(
+        chat_config = AgentConfig(
             model=self.model,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
@@ -147,7 +147,7 @@ class SummarizerAgent(Agent):
             use_chatgpt=self.use_chatgpt,
             show_stats=True,
         )
-        self.chat_sdk = ChatSDK(chat_config)
+        self.chat_sdk = AgentSDK(chat_config)
         self.rag_sdk = RAGSDK()
         self.chunker = Chunker()
         self.llm_client = self.chat_sdk.llm_client

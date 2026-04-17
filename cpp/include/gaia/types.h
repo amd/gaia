@@ -102,6 +102,24 @@ inline std::string paramTypeToString(ToolParamType t) {
     return "unknown";
 }
 
+// Cross-platform environment variable helper.
+// On MSVC uses _dupenv_s (safe); on GCC/Clang (including MinGW) uses std::getenv.
+inline std::string getEnvVar(const char* name, const std::string& defaultValue = "") {
+#ifdef _MSC_VER
+    char* value = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&value, &len, name) == 0 && value) {
+        std::string result(value);
+        free(value);
+        return result;
+    }
+    return defaultValue;
+#else
+    const char* value = std::getenv(name);
+    return value ? std::string(value) : defaultValue;
+#endif
+}
+
 struct ToolParameter {
     std::string name;
     ToolParamType type = ToolParamType::UNKNOWN;
@@ -113,12 +131,31 @@ struct ToolParameter {
 // Takes JSON arguments, returns JSON result.
 using ToolCallback = std::function<json(const json&)>;
 
+// Callback invoked for each token as it arrives during streaming inference.
+using StreamCallback = std::function<void(const std::string& token)>;
+
+// ---- Security Types ----
+
+enum class ToolPolicy { ALLOW, CONFIRM, DENY };
+
+enum class ToolConfirmResult { ALLOW_ONCE, ALWAYS_ALLOW, DENY };
+
+// Returns sanitized args or throws std::invalid_argument to reject the call.
+using ToolValidateCallback = std::function<json(const std::string& toolName, const json& args)>;
+
+// Returns ALLOW_ONCE, ALWAYS_ALLOW, or DENY.
+using ToolConfirmCallback = std::function<ToolConfirmResult(const std::string& toolName, const json& args)>;
+
+
 struct ToolInfo {
     std::string name;
     std::string description;
     std::vector<ToolParameter> parameters;
     ToolCallback callback;
     bool atomic = false;
+    ToolPolicy policy = ToolPolicy::ALLOW;                // default = backwards-compatible
+    bool enabled = true;                                  // false = hidden from prompt + rejected on execute
+    std::optional<ToolValidateCallback> validateArgs;     // per-tool argument validator
 
     // MCP metadata (populated when tool comes from MCP server)
     std::optional<std::string> mcpServer;
@@ -140,21 +177,26 @@ struct ParsedResponse {
 
 // ---- Agent Configuration ----
 
+/// Return the default streaming setting, honoring the GAIA_STREAMING
+/// environment variable if set (1 = enabled, anything else = disabled).
+inline bool defaultStreaming() {
+    return getEnvVar("GAIA_STREAMING") == "1";
+}
+
 /// Return the default LLM base URL, honoring the LEMONADE_BASE_URL
 /// environment variable if set (matching the Python CLI behavior).
 inline std::string defaultBaseUrl() {
-#ifdef _MSC_VER
-    char* env = nullptr;
-    size_t len = 0;
-    _dupenv_s(&env, &len, "LEMONADE_BASE_URL");
-    std::string result = env ? std::string(env) : "http://localhost:8000/api/v1";
-    free(env);
-    return result;
-#else
-    const char* env = std::getenv("LEMONADE_BASE_URL");  // NOLINT(concurrency-mt-unsafe)
-    return env ? std::string(env) : "http://localhost:8000/api/v1";
-#endif
+    return getEnvVar("LEMONADE_BASE_URL", "http://localhost:8000/api/v1");
 }
+
+// ---- Decision Support ----
+
+/// A user-facing choice presented after an LLM yes/no confirmation prompt.
+struct Decision {
+    std::string label;       // display text: "Yes", "No"
+    std::string value;       // sent to LLM: "yes", "no"
+    std::string description; // hint: "Confirm and proceed"
+};
 
 struct AgentConfig {
     std::string baseUrl = defaultBaseUrl();
@@ -164,10 +206,26 @@ struct AgentConfig {
     int maxConsecutiveRepeats = 4;
     int maxHistoryMessages = 40; // Max messages kept between processQuery() calls (0 = unlimited)
     int contextSize = 16384;    // LLM context window size in tokens (n_ctx)
+    int maxTokens = 4096;       // Max tokens in LLM response
     bool debug = false;
     bool showPrompts = false;
-    bool streaming = false;
+    bool streaming = defaultStreaming();  // also controlled by GAIA_STREAMING=1
     bool silentMode = false;
+    double temperature = 0.7;  // LLM sampling temperature (0.0 = deterministic)
+
+    /// Validate config fields; throws std::invalid_argument on violation.
+    void validate() const;
+
+    /// Construct from a JSON object. Missing fields retain defaults.
+    /// Throws std::invalid_argument if any field is out of range.
+    static AgentConfig fromJson(const json& j);
+
+    /// Load config from a JSON file. All fields are optional.
+    /// Throws std::runtime_error on file/parse error, std::invalid_argument on invalid values.
+    static AgentConfig fromJsonFile(const std::string& path);
+
+    /// Serialize all fields to JSON (round-trips through fromJson).
+    json toJson() const;
 };
 
 } // namespace gaia

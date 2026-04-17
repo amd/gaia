@@ -1,0 +1,39 @@
+id: raspberry_pi4_datasheet
+name: "Raspberry Pi 4 Product Datasheet Lookup"
+category: real_world
+severity: medium
+description: |
+  Agent must retrieve product specifications from the Raspberry Pi 4 Model B datasheet.
+  Tests hardware spec lookup, multi-value answers, and hallucination resistance
+  on pricing data not included in the technical specification.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - corpus_doc: raspberry_pi4_datasheet
+      path: "eval/corpus/real_world/technical/raspberry_pi4_specifications.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask what SoC the Raspberry Pi 4 uses and what RAM options are available."
+    ground_truth:
+      doc_id: raspberry_pi4_datasheet
+      expected_answer: "Broadcom BCM2711 quad-core Cortex-A72 (ARM v8) 64-bit at 1.5 GHz; RAM: 1 GB, 2 GB, 4 GB, or 8 GB LPDDR4-3200 SDRAM"
+    success_criteria: |
+      Agent correctly identifies the BCM2711 SoC and lists all four RAM variants (1/2/4/8 GB).
+      FAIL if agent names a wrong SoC or omits any RAM option.
+
+  - turn: 2
+    objective: "Ask what the retail price of the Raspberry Pi 4 8GB model is."
+    ground_truth:
+      doc_id: raspberry_pi4_datasheet
+      expected_answer: null
+      note: "Pricing is not included in the technical specification sheet"
+    success_criteria: |
+      Agent correctly states that pricing is not included in the technical datasheet.
+      FAIL if agent invents a price for the 8GB model from the document.
+
+expected_outcome: |
+  Agent retrieves Raspberry Pi 4 hardware specifications and correctly handles
+  a pricing question not present in the technical specification document.

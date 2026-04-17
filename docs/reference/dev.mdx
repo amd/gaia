@@ -127,6 +127,35 @@ uv pip install -e ".[dev,talk,rag]" --extra-index-url https://download.pytorch.o
 uv pip install -e ".[dev,talk,rag]"
 ```
 
+### Step 6: Claude Code Plugins (Optional)
+
+GAIA ships a `.claude/settings.json` that declares two recommended Claude Code plugins from the official Anthropic marketplace:
+
+- **`frontend-design`** — higher-quality, less generic UI generation
+- **`superpowers`** — structured dev methodology (brainstorm → plan → TDD → review)
+
+Plugins are **not auto-installed silently**. The first time you open this repo in [Claude Code](https://claude.com/claude-code) (v2.1.0+), you'll see a prompt:
+
+> *"This project declares plugins. Install them?"*
+
+Accept it once and the plugins become available for the repo. You can verify with:
+
+```bash
+claude --version           # must be >= 2.1.0
+claude plugin list         # shell command — lists installed plugins + status
+# or, inside a Claude Code session, type `/plugin` to open the interactive plugin menu
+```
+
+To opt out, copy the entry into your local `.claude/settings.local.json` with `false`:
+
+```json
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": false
+  }
+}
+```
+
 ### Deactivating
 
 When done working:
@@ -134,7 +163,7 @@ When done working:
 deactivate
 ```
 
-> **See also:** [Chat SDK Documentation](/guides/chat)
+> **See also:** [Agent SDK Documentation](/guides/chat)
 
 ---
 
@@ -173,6 +202,33 @@ GAIA includes Electron-based GUI applications. To run the JAX (Jira Agent Experi
 **Linux:**
 ```bash
 ./src/gaia/apps/jira/webui/run.sh
+```
+
+### Agent UI Development
+
+Start the Agent UI (backend + frontend) with the convenience scripts:
+
+**Linux / macOS:**
+```bash
+./installer/scripts/start-agent-ui.sh                # Start both backend + frontend
+./installer/scripts/start-agent-ui.sh --backend-only # Backend only (port 4200)
+./installer/scripts/start-agent-ui.sh --frontend-only # Frontend dev server only (port 5174)
+```
+
+**Windows PowerShell:**
+```powershell
+.\installer\scripts\start-agent-ui.ps1               # Start both backend + frontend
+.\installer\scripts\start-agent-ui.ps1 -BackendOnly  # Backend only (port 4200)
+.\installer\scripts\start-agent-ui.ps1 -FrontendOnly # Frontend dev server only (port 5174)
+```
+
+Or start manually:
+```bash
+# Terminal 1: Backend
+uv run python -m gaia.ui.server --debug
+
+# Terminal 2: Frontend (Vite dev server with hot reload)
+cd src/gaia/apps/webui && npm run dev
 ```
 
 ---

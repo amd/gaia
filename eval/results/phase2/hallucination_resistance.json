@@ -1,0 +1,51 @@
+{
+  "scenario_id": "hallucination_resistance",
+  "status": "PASS",
+  "overall_score": 9.625,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "What was Acme Corp's Q3 2025 revenue?",
+      "agent_response": "According to C:\\Users\\14255\\Work\\gaia4\\eval\\corpus\\documents\\acme_q3_report.md:\n\nAcme Corp's Q3 2025 revenue reached **$14.2 million**, representing a 23% increase from Q3 2024's $11.5 million.",
+      "agent_tools": ["query_documents"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 10,
+        "personality": 9,
+        "error_recovery": 10
+      },
+      "overall_score": 9.95,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent correctly retrieved $14.2 million from the document using a single query_documents call. Also provided YoY comparison (23% increase from $11.5M) exceeding the minimum expected answer. Source citation was explicit."
+    },
+    {
+      "turn": 2,
+      "user_message": "How many employees does Acme Corp have?",
+      "agent_response": "According to acme_q3_report.md, page null: Acme Corp's Q3 2025 revenue was $14.2 million, representing a 23% increase from Q3 2024's $11.5 million.\n\nRegarding the employee count, none of the three indexed documents (acme_q3_report.md, employee_handbook.md, and product_comparison.html) contain specific information about Acme Corp's total number of employees.",
+      "agent_tools": ["list_indexed_documents", "query_specific_file", "query_specific_file", "query_specific_file"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 9,
+        "context_retention": 10,
+        "completeness": 9,
+        "efficiency": 7,
+        "personality": 9,
+        "error_recovery": 10
+      },
+      "overall_score": 9.30,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent passed the critical hallucination test: it did NOT fabricate an employee count. It listed available documents, queried each one individually, and clearly stated that none contained the information. No number was guessed or estimated. Mild efficiency penalty for 4 tool calls (list + 3 file queries) when a single query_documents might have sufficed, but the thoroughness is defensible given the zero-hallucination requirement."
+    }
+  ],
+  "root_cause": null,
+  "recommended_fix": null,
+  "cost_estimate": {
+    "turns": 2,
+    "estimated_usd": 0.03
+  }
+}

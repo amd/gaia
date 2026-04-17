@@ -1,0 +1,130 @@
+---
+title: "v0.16.1"
+description: "Process Analyst Agent, C++ tool security, MCP config stacking, gaia init reliability, CI improvements"
+---
+
+# GAIA v0.16.1 Release Notes
+
+**Patch release** with the Process Analyst Agent for C++, C++ tool security hardening, MCP config stacking, `gaia init` reliability fixes, Lemonade Server v10.0.0 update, and CI/CD improvements including a new doc link checker and scoped workflow triggers.
+
+**TL;DR:**
+- **New: Process Analyst Agent** — C++ agent for Windows process/service diagnostics with background monitoring and LemonadeClient
+- **New: C++ Tool Security** — Policy-based tool execution with confirmation prompts, allowlisting, and argument validation
+- **New: MCP Config Stacking** — Two-level config loading with improved tool display names
+- **Fix: `gaia init` reliability** — Improved version checks and MSI installer reliability
+- **Update: Lemonade Server v10.0.0** — Updated to latest Lemonade Server release
+- **CI: Doc link checker** — Automated broken link detection across documentation
+- **CI: Scoped workflow triggers** — Workflows only run when relevant files change
+- **Fix: Linux CLI test** — Resolved hanging test in merge queue
+
+---
+
+## What's New
+
+### Process Analyst Agent
+
+New C++ agent for Windows process and service diagnostics under `cpp/examples/process_agent.cpp` (PR #426):
+
+- **LemonadeClient C++ class** — Mirrors the Python `LemonadeClient`, handling HTTP communication with Lemonade Server from C++
+- **7 diagnostic tools** — `system_snapshot`, `list_processes`, `explain_item`, `kill_process`, `restart_process`, `restart_service`, and `quarantine_item`
+- **Background monitoring** — Continuous process monitoring with diff-based alerting that only reports changes, plus Windows balloon notifications for critical events
+- **Conversational diagnostics** — Ask natural-language questions about running processes and Windows services
+
+```cpp
+// Interactive agent — auto-analysis runs on startup, then action menu appears
+ProcessAgent agent("Qwen3-4B-Instruct-GGUF");
+agent.chat("What processes are consuming the most CPU?");
+
+// Background monitoring — scans every 5 minutes, alerts on changes
+SystemMonitor monitor("Qwen3-4B-Instruct-GGUF", std::chrono::seconds(300));
+monitor.start();
+```
+
+See the [Process Analyst documentation](/cpp/process-agent) for setup and usage.
+
+---
+
+### MCP Config Stacking & Tool Display Naming
+
+Improved MCP server configuration loading and tool naming (PR #477):
+
+- **Two-level config stacking** — Global config at `~/.gaia/mcp_servers.json` is merged with local `./mcp_servers.json`, allowing per-project overrides without duplicating shared server definitions
+- **Tool display names** — Tools now display as `tool_name (server)` instead of the opaque `mcp_server_tool` format, making it easier to identify which server provides each tool
+- **Connection summary panel** — Startup output now shows a compact summary of connected MCP servers and their available tools
+
+---
+
+### C++ Tool Security Framework
+
+New security layer for the C++ agent framework under `cpp/` providing policy-based control over tool execution (PR #496):
+
+- **Security policies** — `ToolSecurityPolicy` with `ALLOW_ALL`, `DENY_ALL`, `ALLOWLIST`, and `CONFIRMATION` modes
+- **Allowlist management** — Register specific tools as pre-approved for automatic execution
+- **Confirmation callbacks** — Interactive user confirmation before executing sensitive tools
+- **Argument validation** — Configurable validators to inspect and reject unsafe tool arguments (e.g., shell injection prevention)
+- **Security demo** — Full example application demonstrating all security features
+
+```cpp
+#include <gaia/security.h>
+
+gaia::ToolSecurityManager security;
+security.setPolicy(gaia::ToolSecurityPolicy::ALLOWLIST);
+security.addToAllowlist("mcp_windows_ReadFile");
+
+// Tools not on allowlist are blocked automatically
+```
+
+See the [C++ Security documentation](/cpp/security) for the full guide.
+
+---
+
+## Bug Fixes
+
+- **`gaia init` version checks** — Fixed version comparison logic and improved MSI installer reliability for Windows setup (PR #478)
+- **Linux CLI test hanging** — Resolved `test_gaia_cli_linux` hanging in merge queue by fixing process cleanup (PR #445)
+- **Broken documentation links** — Fixed broken links to amd-gaia.ai in README.md and across documentation (PR #497)
+
+---
+
+## Infrastructure
+
+### Lemonade Server v10.0.0
+
+Updated Lemonade Server dependency from v9.x to v10.0.0 (PR #498). The `LEMONADE_VERSION` constant in `src/gaia/version.py` and all CI workflows now reference v10.0.0.
+
+### CI/CD Improvements
+
+- **Doc link checker** — New `check_doc_links.yml` workflow with `util/check_doc_links.py` script that validates all internal documentation links (PR #499)
+- **Scoped workflow triggers** — All test workflows (`lint`, `test_unit`, `test_api`, `test_mcp`, etc.) now use path-based triggers so they only run when relevant source files change (PR #499)
+- **Fixed broken links** — 10+ broken links repaired across documentation pages (PR #499)
+
+---
+
+## Upgrade
+
+```bash
+# Install/upgrade GAIA (Python)
+pip install --upgrade amd-gaia
+
+# Build C++ framework
+cd cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+```
+
+---
+
+## Full Changelog
+
+**8 commits** since v0.16.0:
+
+- `e11e4a0` - Fix gaia init version checks and MSI reliability (#478)
+- `6693a0a` - ci: add doc link checker, scope workflow triggers, fix broken links (#499)
+- `b399e9e` - C++ framework: tool security — policies, confirmation, allowlisting, arg validation (#496)
+- `24c9e69` - Fix GAIA CLI Linux test hanging in merge queue (#445)
+- `aeaa8c5` - Update Lemonade Server to v10.0.0 (#498)
+- `e42a560` - Fixed broken links to amd-gaia.ai in README.md (#497)
+- `3b6518f` - feat(cpp): Process Analyst Agent with LemonadeClient and background monitoring (#426)
+- `f8fbec5` - Fix MCP config stacking and tool display naming (#477)
+
+Full Changelog: [v0.16.0...v0.16.1](https://github.com/amd/gaia/compare/v0.16.0...HEAD)

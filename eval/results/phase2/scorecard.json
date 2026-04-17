@@ -1,0 +1,112 @@
+{
+  "run_id": "phase2-critical-scenarios",
+  "timestamp": "2026-03-20T03:25:00Z",
+  "config": {
+    "model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    "embedding_model": "nomic-embed-text-v2-moe-GGUF",
+    "hardware": "AMD Radeon 8060S GPU",
+    "judge_model": "claude-sonnet-4-6"
+  },
+  "summary": {
+    "total_scenarios": 5,
+    "passed": 4,
+    "failed": 1,
+    "blocked": 0,
+    "errored": 0,
+    "pass_rate": 0.80,
+    "avg_score": 8.00,
+    "by_category": {
+      "rag_quality": {
+        "passed": 2,
+        "failed": 0,
+        "blocked": 0,
+        "errored": 0,
+        "avg_score": 9.52
+      },
+      "context_retention": {
+        "passed": 2,
+        "failed": 0,
+        "blocked": 0,
+        "errored": 0,
+        "avg_score": 9.08
+      },
+      "tool_selection": {
+        "passed": 0,
+        "failed": 1,
+        "blocked": 0,
+        "errored": 0,
+        "avg_score": 2.80
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "simple_factual_rag",
+      "category": "rag_quality",
+      "status": "PASS",
+      "overall_score": 9.42,
+      "root_cause": null,
+      "result_file": "eval/results/phase2/simple_factual_rag.json"
+    },
+    {
+      "scenario_id": "hallucination_resistance",
+      "category": "rag_quality",
+      "status": "PASS",
+      "overall_score": 9.625,
+      "root_cause": null,
+      "result_file": "eval/results/phase2/hallucination_resistance.json"
+    },
+    {
+      "scenario_id": "pronoun_resolution",
+      "category": "context_retention",
+      "status": "PASS",
+      "overall_score": 8.73,
+      "root_cause": "Agent guesses wrong absolute paths for already-indexed files (different wrong path each turn). Should use session-aware document list.",
+      "result_file": "eval/results/phase2/pronoun_resolution.json"
+    },
+    {
+      "scenario_id": "cross_turn_file_recall",
+      "category": "context_retention",
+      "status": "PASS",
+      "overall_score": 9.42,
+      "root_cause": null,
+      "result_file": "eval/results/phase2/cross_turn_file_recall.json"
+    },
+    {
+      "scenario_id": "smart_discovery",
+      "category": "tool_selection",
+      "status": "FAIL",
+      "overall_score": 2.80,
+      "root_cause": "search_file tool only scans standard Windows user folders (Documents, Downloads, Desktop) — does not search project subdirectories. Agent never used browse_files to explore project tree. No strategy adaptation when search fails.",
+      "recommended_fix": "1. search_file should scan CWD subdirectories recursively when common-folder search fails. 2. Agent system prompt should include browse project directory fallback. 3. Agent should escalate tool strategy when Turn N approach failed.",
+      "result_file": "eval/results/phase2/smart_discovery_rerun.json"
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.00,
+    "note": "All inference is local (Qwen3 on AMD GPU). No cloud API cost for agent inference. Claude as judge billed separately."
+  },
+  "known_bugs": [
+    {
+      "id": "path_truncation",
+      "severity": "medium",
+      "description": "Agent guesses wrong absolute paths for already-indexed files. E.g., constructs C:\\Users\\14255\\employee_handbook.md instead of full corpus path.",
+      "affected_scenarios": ["pronoun_resolution"],
+      "recommended_fix": "Inject session document paths into agent system context at turn start, OR fallback to session documents before failing with not-found."
+    },
+    {
+      "id": "search_file_scope",
+      "severity": "high",
+      "description": "search_file tool only scans standard Windows user folders; does not search project subdirectories.",
+      "affected_scenarios": ["smart_discovery"],
+      "recommended_fix": "Expand search_file to recursively scan CWD tree when user-folder search returns empty."
+    },
+    {
+      "id": "no_strategy_adaptation",
+      "severity": "medium",
+      "description": "When Turn 1 tool search fails, agent repeats same failed strategy in Turn 2 with no adaptation.",
+      "affected_scenarios": ["smart_discovery"],
+      "recommended_fix": "Add to agent prompt: if search returns empty, try browse_files on project directory before giving up."
+    }
+  ]
+}

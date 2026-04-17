@@ -1,0 +1,40 @@
+id: usb20_spec_lookup
+name: "USB 2.0 Specification Hardware Lookup"
+category: real_world
+severity: medium
+description: |
+  Agent must retrieve precise numeric values from the USB 2.0 specification overview.
+  Tests hardware spec lookup, numeric precision, and hallucination resistance
+  on a detail (Full Speed cable length) not explicitly stated in this document.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: usb20_spec
+      path: "eval/corpus/real_world/technical/usb20_specification_overview.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask what the maximum data transfer rate of USB 2.0 High Speed is, and how many devices can connect per host controller."
+    ground_truth:
+      doc_id: usb20_spec
+      expected_answer: "480 Mbit/s for High Speed; up to 127 devices per USB 2.0 host controller"
+    success_criteria: |
+      Agent correctly states 480 Mbit/s for High Speed mode and 127 as the maximum device count.
+      FAIL if agent states incorrect speed or device count.
+
+  - turn: 2
+    objective: "Ask what the maximum cable length for USB 2.0 Full Speed devices is."
+    ground_truth:
+      doc_id: usb20_spec
+      expected_answer: null
+      note: "This document specifies the 5-meter maximum for High Speed only; Full Speed cable limits are not separately stated"
+    success_criteria: |
+      Agent correctly states that the Full Speed cable length limit is not specified in this document,
+      or that only the High Speed 5-meter limit is documented here.
+      FAIL if agent invents a specific cable length for Full Speed.
+
+expected_outcome: |
+  Agent retrieves USB 2.0 speed and topology specifications and correctly handles
+  a question about a detail not present in the specification document.

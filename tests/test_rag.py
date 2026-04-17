@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """
 Test suite for GAIA RAG (Retrieval-Augmented Generation) functionality
 """
 
+import hashlib
+import hmac
+import json
 import os
+import secrets
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -16,13 +21,70 @@ import pytest
 
 # Test imports
 try:
-    from gaia.chat.sdk import ChatConfig, ChatSDK
+    from gaia.chat.sdk import AgentConfig, AgentSDK
     from gaia.rag.sdk import RAGSDK, RAGConfig, RAGResponse, quick_rag
 
     RAG_AVAILABLE = True
 except ImportError as e:
     RAG_AVAILABLE = False
     IMPORT_ERROR = str(e)
+
+
+@pytest.fixture
+def mock_dependencies():
+    """Mock external dependencies shared across RAG test classes."""
+    with (
+        patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
+        patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
+        patch("gaia.rag.sdk.PdfReader") as mock_pdf,
+        patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
+        patch("gaia.rag.sdk.faiss") as mock_faiss,
+        patch("gaia.rag.sdk.AgentSDK") as mock_chat,
+    ):
+        mock_vlm_instance = Mock()
+        mock_vlm_instance.check_availability.return_value = False
+        mock_vlm_class.return_value = mock_vlm_instance
+
+        mock_lemonade_instance = Mock()
+        mock_lemonade_instance.embeddings.return_value = {
+            "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+        }
+        mock_lemonade.return_value = mock_lemonade_instance
+
+        mock_pdf_instance = Mock()
+        # Default mocks to "not encrypted"; without this, Mock auto-creates
+        # is_encrypted as a truthy Mock attribute and the PDF extractor's
+        # encryption guard (added in #451) would short-circuit.
+        mock_pdf_instance.is_encrypted = False
+        mock_pdf_instance.pages = [Mock()]
+        mock_pdf_instance.pages[0].extract_text.return_value = (
+            "Sample PDF content for testing."
+        )
+        mock_pdf.return_value = mock_pdf_instance
+
+        mock_embedder = Mock()
+        mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
+        mock_st.return_value = mock_embedder
+
+        mock_index = Mock()
+        mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
+        mock_faiss.IndexFlatL2.return_value = mock_index
+
+        mock_chat_response = Mock()
+        mock_chat_response.text = "Mocked LLM response"
+        mock_chat_response.stats = {"tokens": 50}
+        mock_chat_instance = Mock()
+        mock_chat_instance.send.return_value = mock_chat_response
+        mock_chat.return_value = mock_chat_instance
+
+        yield {
+            "pdf": mock_pdf,
+            "embedder": mock_embedder,
+            "index": mock_index,
+            "chat": mock_chat_instance,
+            "vlm": mock_vlm_instance,
+            "lemonade": mock_lemonade_instance,
+        }
 
 
 class TestRAGConfig:
@@ -35,7 +97,7 @@ class TestRAGConfig:
 
         config = RAGConfig()
 
-        assert config.model == "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        assert config.model == "Qwen3.5-35B-A3B-GGUF"
         assert config.max_tokens == 1024
         assert config.chunk_size == 500
         assert config.chunk_overlap == 100
@@ -106,7 +168,7 @@ class TestRAGSDK:
             patch("gaia.rag.sdk.PdfReader") as mock_pdf,
             patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
             patch("gaia.rag.sdk.faiss") as mock_faiss,
-            patch("gaia.rag.sdk.ChatSDK") as mock_chat,
+            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
         ):
 
             # Mock VLMClient to prevent connection attempts
@@ -124,6 +186,10 @@ class TestRAGSDK:
 
             # Mock PDF reader
             mock_pdf_instance = Mock()
+            # Default mocks to "not encrypted"; without this, Mock auto-creates
+            # is_encrypted as a truthy Mock attribute and the PDF extractor's
+            # encryption guard (added in #451) would short-circuit.
+            mock_pdf_instance.is_encrypted = False
             mock_pdf_instance.pages = [Mock()]
             mock_pdf_instance.pages[0].extract_text.return_value = (
                 "Sample PDF content for testing."
@@ -140,7 +206,7 @@ class TestRAGSDK:
             mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
             mock_faiss.IndexFlatL2.return_value = mock_index
 
-            # Mock ChatSDK
+            # Mock AgentSDK
             mock_chat_response = Mock()
             mock_chat_response.text = "Mocked LLM response"
             mock_chat_response.stats = {"tokens": 50}
@@ -314,6 +380,13 @@ class TestRAGSDK:
                 assert isinstance(result2, dict)
                 assert result2.get("success") is True
 
+    # NOTE: The pickle-era cache recovery tests (test_corrupted_cache_recovery,
+    # test_cache_checksum_mismatch_recovery, test_oversized_cache_rejected,
+    # test_old_format_cache_migration) were removed when the cache format
+    # migrated to JSON + HMAC-SHA256. Equivalent coverage for the new format
+    # lives in `TestCacheSecurity` below (tampered cache, missing signature,
+    # forged signature, reindex-on-bad-cache, JSON-not-pickle, round-trip).
+
     def test_status_reporting(self, mock_dependencies):
         """Test status reporting."""
         if not RAG_AVAILABLE:
@@ -336,6 +409,111 @@ class TestRAGSDK:
                 assert status["indexed_files"] == 0
                 assert status["total_chunks"] == 0
                 assert status["cache_dir"] == temp_dir
+
+    def test_query_uses_consistent_snapshot_during_state_swap(self, mock_dependencies):
+        """Test that query returns data from one consistent snapshot."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                old_file = str((Path(temp_dir) / "old.md").absolute())
+                new_file = str((Path(temp_dir) / "new.md").absolute())
+                old_index = Mock()
+                search_started = threading.Event()
+                allow_finish = threading.Event()
+
+                def _search(*_args, **_kwargs):
+                    search_started.set()
+                    assert allow_finish.wait(timeout=1.0)
+                    return np.array([[0.25]]), np.array([[0]])
+
+                old_index.search.side_effect = _search
+                rag.index = old_index
+                rag.chunks = ["old chunk"]
+                rag.chunk_to_file = {0: old_file}
+                rag.indexed_files = {old_file}
+
+                result = {}
+
+                def _run_query():
+                    result["response"] = rag.query("What changed?")
+
+                worker = threading.Thread(target=_run_query)
+                worker.start()
+
+                assert search_started.wait(timeout=1.0)
+
+                with rag._state_lock:
+                    rag.index = Mock()
+                    rag.chunks = ["new chunk"]
+                    rag.chunk_to_file = {0: new_file}
+                    rag.indexed_files = {new_file}
+
+                allow_finish.set()
+                worker.join(timeout=1.0)
+
+                assert "response" in result
+                response = result["response"]
+                assert response.chunks == ["old chunk"]
+                assert response.source_files == ["old.md"]
+                assert response.query_metadata["source_files"] == ["old.md"]
+                assert response.query_metadata["total_indexed_files"] == 1
+                assert response.query_metadata["total_indexed_chunks"] == 1
+
+    def test_remove_document_preserves_state_when_rebuild_fails(
+        self, mock_dependencies
+    ):
+        """Test that failed rebuilds do not publish partial remove state."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                file_a = str((Path(temp_dir) / "doc_a.md").absolute())
+                file_b = str((Path(temp_dir) / "doc_b.md").absolute())
+                original_index = Mock()
+
+                rag.index = original_index
+                rag.chunks = ["chunk-a", "chunk-b"]
+                rag.indexed_files = {file_a, file_b}
+                rag.file_to_chunk_indices = {file_a: [0], file_b: [1]}
+                rag.chunk_to_file = {0: file_a, 1: file_b}
+                rag.file_indices = {file_a: Mock(), file_b: Mock()}
+                rag.file_embeddings = {
+                    file_a: np.array([[0.1, 0.2, 0.3, 0.4]]),
+                    file_b: np.array([[0.5, 0.6, 0.7, 0.8]]),
+                }
+                rag.file_metadata = {
+                    file_a: {"full_text": "A"},
+                    file_b: {"full_text": "B"},
+                }
+                rag.file_access_times = {file_a: 1, file_b: 2}
+                rag.file_index_times = {file_a: 1.0, file_b: 2.0}
+
+                with patch.object(
+                    rag, "_create_vector_index", side_effect=RuntimeError("boom")
+                ):
+                    assert rag.remove_document(file_a) is False
+
+                assert rag.index is original_index
+                assert rag.chunks == ["chunk-a", "chunk-b"]
+                assert rag.indexed_files == {file_a, file_b}
+                assert rag.file_to_chunk_indices == {file_a: [0], file_b: [1]}
+                assert rag.chunk_to_file == {0: file_a, 1: file_b}
+                assert file_a in rag.file_indices
+                assert file_a in rag.file_embeddings
+                assert file_a in rag.file_metadata
+                assert rag.file_access_times[file_a] == 1
+                assert rag.file_index_times[file_a] == 1.0
 
 
 class TestQuickRAG:
@@ -442,12 +620,12 @@ class TestChatIntegration:
             }
 
     def test_rag_enabling(self, mock_chat_dependencies):
-        """Test enabling RAG in ChatSDK."""
+        """Test enabling RAG in AgentSDK."""
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         # Enable RAG
         chat.enable_rag(documents=["test.pdf"])
@@ -456,12 +634,12 @@ class TestChatIntegration:
         assert chat.rag is not None
 
     def test_rag_disabling(self, mock_chat_dependencies):
-        """Test disabling RAG in ChatSDK."""
+        """Test disabling RAG in AgentSDK."""
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         # Enable then disable RAG
         chat.enable_rag()
@@ -475,8 +653,8 @@ class TestChatIntegration:
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         # Setup mock to return success dict
         mock_chat_dependencies["rag"].index_document.return_value = {"success": True}
@@ -495,8 +673,8 @@ class TestChatIntegration:
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         with pytest.raises(ValueError) as exc_info:
             chat.add_document("test.pdf")
@@ -508,8 +686,8 @@ class TestChatIntegration:
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        config = ChatConfig()
-        chat = ChatSDK(config)
+        config = AgentConfig()
+        chat = AgentSDK(config)
 
         # Enable RAG
         chat.enable_rag()
@@ -567,14 +745,664 @@ class TestErrorHandling:
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config = ChatConfig()
-            chat = ChatSDK(config)
+        with tempfile.TemporaryDirectory():
+            config = AgentConfig()
+            chat = AgentSDK(config)
 
             with pytest.raises(ValueError) as exc_info:
                 chat.send("")
 
             assert "Message cannot be empty" in str(exc_info.value)
+
+
+class TestMemoryLimits:
+    """Test memory limit enforcement and LRU eviction."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Mock external dependencies."""
+        with (
+            patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
+            patch("gaia.rag.sdk.PdfReader") as mock_pdf,
+            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
+            patch("gaia.rag.sdk.faiss") as mock_faiss,
+            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
+        ):
+            mock_vlm_instance = Mock()
+            mock_vlm_instance.check_availability.return_value = False
+            mock_vlm_class.return_value = mock_vlm_instance
+
+            mock_lemonade_instance = Mock()
+            mock_lemonade_instance.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+            mock_lemonade.return_value = mock_lemonade_instance
+
+            mock_pdf_instance = Mock()
+            # Default mocks to "not encrypted"; without this, Mock auto-creates
+            # is_encrypted as a truthy Mock attribute and the PDF extractor's
+            # encryption guard (added in #451) would short-circuit.
+            mock_pdf_instance.is_encrypted = False
+            mock_pdf_instance.pages = [Mock()]
+            mock_pdf_instance.pages[0].extract_text.return_value = (
+                "Sample PDF content for testing."
+            )
+            mock_pdf.return_value = mock_pdf_instance
+
+            mock_embedder = Mock()
+            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
+            mock_st.return_value = mock_embedder
+
+            mock_index = Mock()
+            mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
+            mock_faiss.IndexFlatL2.return_value = mock_index
+
+            mock_chat_response = Mock()
+            mock_chat_response.text = "Mocked LLM response"
+            mock_chat_response.stats = {"tokens": 50}
+            mock_chat_instance = Mock()
+            mock_chat_instance.send.return_value = mock_chat_response
+            mock_chat.return_value = mock_chat_instance
+
+            yield {
+                "pdf": mock_pdf,
+                "embedder": mock_embedder,
+                "index": mock_index,
+                "chat": mock_chat_instance,
+                "vlm": mock_vlm_instance,
+                "lemonade": mock_lemonade_instance,
+            }
+
+    def test_index_rejected_at_file_limit_eviction_disabled(self, mock_dependencies):
+        """Test that indexing is rejected when file limit reached and eviction disabled."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(
+                cache_dir=temp_dir,
+                max_indexed_files=1,
+                enable_lru_eviction=False,
+                show_stats=False,
+            )
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create two temp PDF files
+                pdf1 = Path(temp_dir) / "doc1.pdf"
+                pdf1.write_text("dummy content 1")
+                pdf2 = Path(temp_dir) / "doc2.pdf"
+                pdf2.write_text("dummy content 2")
+
+                # First doc should succeed
+                result1 = rag.index_document(str(pdf1))
+                assert result1["success"] is True
+
+                # Second doc should be rejected
+                result2 = rag.index_document(str(pdf2))
+                assert result2["success"] is False
+                assert result2.get("memory_limit_reached") is True
+                assert "Memory limit" in result2.get("error", "")
+
+    def test_index_rejected_at_chunk_limit_eviction_disabled(self, mock_dependencies):
+        """Test that indexing is rejected when chunk limit reached and eviction disabled."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(
+                cache_dir=temp_dir,
+                max_total_chunks=2,
+                enable_lru_eviction=False,
+                show_stats=False,
+            )
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create first PDF
+                pdf1 = Path(temp_dir) / "doc1.pdf"
+                pdf1.write_text("dummy content 1")
+
+                # Index first doc
+                result1 = rag.index_document(str(pdf1))
+                assert result1["success"] is True
+
+                # If already at or over chunk limit, second doc should be rejected
+                if len(rag.chunks) >= config.max_total_chunks:
+                    pdf2 = Path(temp_dir) / "doc2.pdf"
+                    pdf2.write_text("dummy content 2")
+
+                    result2 = rag.index_document(str(pdf2))
+                    assert result2["success"] is False
+                    assert result2.get("memory_limit_reached") is True
+
+    def test_lru_eviction_makes_room_for_new_doc(self, mock_dependencies):
+        """Test that LRU eviction allows new doc when at file limit."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(
+                cache_dir=temp_dir,
+                max_indexed_files=1,
+                enable_lru_eviction=True,
+                show_stats=False,
+            )
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create two temp PDF files with different names
+                pdf_a = Path(temp_dir) / "doc_a.pdf"
+                pdf_a.write_text("content for doc A")
+                pdf_b = Path(temp_dir) / "doc_b.pdf"
+                pdf_b.write_text("content for doc B")
+
+                # Index file A - should succeed
+                result_a = rag.index_document(str(pdf_a))
+                assert result_a["success"] is True
+
+                # Index file B - should succeed (A gets evicted by _check_memory_limits)
+                result_b = rag.index_document(str(pdf_b))
+                assert result_b["success"] is True
+
+                # File A should have been evicted, file B should remain
+                abs_a = str(pdf_a.absolute())
+                abs_b = str(pdf_b.absolute())
+                assert abs_a not in rag.indexed_files
+                assert abs_b in rag.indexed_files
+
+    def test_stats_include_memory_limit_fields(self, mock_dependencies):
+        """Test that stats dict includes memory limit information."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create and index a PDF
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                result = rag.index_document(str(fake_pdf))
+
+                assert result["success"] is True
+                assert "max_indexed_files" in result
+                assert "max_total_chunks" in result
+                assert result["max_indexed_files"] == 100
+                assert result["max_total_chunks"] == 10000
+
+    def test_preflight_rejection_logged(self, mock_dependencies, caplog):
+        """Test that pre-flight capacity rejection is logged when eviction is disabled.
+
+        When enable_lru_eviction=False and the file limit is reached,
+        _has_indexing_capacity returns False BEFORE _check_memory_limits
+        is called, so the rejection happens at the pre-flight check.
+        """
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        import logging
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(
+                cache_dir=temp_dir,
+                max_indexed_files=1,
+                enable_lru_eviction=False,
+                show_stats=False,
+            )
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create two temp PDF files
+                pdf1 = Path(temp_dir) / "doc1.pdf"
+                pdf1.write_text("dummy content 1")
+                pdf2 = Path(temp_dir) / "doc2.pdf"
+                pdf2.write_text("dummy content 2")
+
+                # Index first doc
+                rag.index_document(str(pdf1))
+
+                # Index second doc with log capture
+                with caplog.at_level(logging.WARNING):
+                    rag.index_document(str(pdf2))
+
+                # Check that a relevant warning was logged
+                log_messages = " ".join(r.message for r in caplog.records)
+                assert any(
+                    keyword in log_messages
+                    for keyword in ["Memory limit", "cannot", "eviction"]
+                ), f"Expected memory limit warning in logs, got: {log_messages}"
+
+    def test_eviction_failure_logged(self, mock_dependencies, caplog):
+        """Test that a warning is logged when LRU eviction fails to free memory.
+
+        With enable_lru_eviction=True, _has_indexing_capacity passes
+        the pre-flight check (eviction could theoretically free space).
+        After indexing, _check_memory_limits calls _evict_lru_document,
+        which calls remove_document. If remove_document returns False,
+        eviction fails and a warning about exceeding the file limit is logged.
+        """
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        import logging
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(
+                cache_dir=temp_dir,
+                max_indexed_files=1,
+                enable_lru_eviction=True,
+                show_stats=False,
+            )
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Create two temp PDF files
+                pdf1 = Path(temp_dir) / "doc1.pdf"
+                pdf1.write_text("dummy content 1")
+                pdf2 = Path(temp_dir) / "doc2.pdf"
+                pdf2.write_text("dummy content 2")
+
+                # Index first doc - succeeds normally
+                result1 = rag.index_document(str(pdf1))
+                assert result1["success"] is True
+
+                # Mock remove_document to return False so eviction fails
+                with (
+                    patch.object(rag, "remove_document", return_value=False),
+                    caplog.at_level(logging.WARNING),
+                ):
+                    result2 = rag.index_document(str(pdf2))
+
+                # The document still gets indexed (success=True) but
+                # _check_memory_limits logs a warning about eviction failure
+                assert result2["success"] is True
+
+                # Verify warning about eviction failure was logged
+                log_messages = " ".join(r.message for r in caplog.records)
+                assert any(
+                    keyword in log_messages
+                    for keyword in [
+                        "eviction failed",
+                        "Failed to evict",
+                        "Cannot meet file limit",
+                    ]
+                ), f"Expected eviction failure warning in logs, got: {log_messages}"
+
+    def test_cache_load_tracks_access_times(self, mock_dependencies):
+        """Test that loading from cache sets file_access_times and file_index_times."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                # First pass: index document to create cache
+                rag1 = RAGSDK(config)
+
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                result1 = rag1.index_document(str(fake_pdf))
+                assert result1["success"] is True
+
+                file_path = str(fake_pdf.absolute())
+
+                # Second pass: new RAGSDK instance loads from cache
+                rag2 = RAGSDK(config)
+
+                # Clear any state to ensure cache path is exercised
+                rag2.indexed_files.clear()
+                rag2.chunks.clear()
+                rag2.file_access_times.clear()
+                rag2.file_index_times.clear()
+
+                result2 = rag2.index_document(str(fake_pdf))
+                assert result2["success"] is True
+
+                # Verify that access/index times were set during cache load
+                assert file_path in rag2.file_access_times
+                assert file_path in rag2.file_index_times
+
+
+class TestCacheSecurity:
+    """Test cache security: JSON format and HMAC integrity verification."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Mock external dependencies.
+
+        Mirrors the fixture on TestRAGSDK / TestMemoryLimits so these tests can
+        exercise the full index_document path without sentence-transformers or
+        a live Lemonade server. ``is_encrypted = False`` is required so the
+        encrypted-PDF guard added in #451 doesn't short-circuit on a bare Mock.
+        """
+        with (
+            patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
+            patch("gaia.rag.sdk.PdfReader") as mock_pdf,
+            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
+            patch("gaia.rag.sdk.faiss") as mock_faiss,
+            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
+        ):
+            mock_vlm_instance = Mock()
+            mock_vlm_instance.check_availability.return_value = False
+            mock_vlm_class.return_value = mock_vlm_instance
+
+            mock_lemonade_instance = Mock()
+            mock_lemonade_instance.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+            mock_lemonade.return_value = mock_lemonade_instance
+
+            mock_pdf_instance = Mock()
+            # Default mocks to "not encrypted"; without this, Mock auto-creates
+            # is_encrypted as a truthy Mock attribute and the PDF extractor's
+            # encryption guard (added in #451) would short-circuit.
+            mock_pdf_instance.is_encrypted = False
+            mock_pdf_instance.pages = [Mock()]
+            mock_pdf_instance.pages[0].extract_text.return_value = (
+                "Sample PDF content for testing."
+            )
+            mock_pdf.return_value = mock_pdf_instance
+
+            mock_embedder = Mock()
+            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
+            mock_st.return_value = mock_embedder
+
+            mock_index = Mock()
+            mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
+            mock_faiss.IndexFlatL2.return_value = mock_index
+
+            mock_chat_response = Mock()
+            mock_chat_response.text = "Mocked LLM response"
+            mock_chat_response.stats = {"tokens": 50}
+            mock_chat_instance = Mock()
+            mock_chat_instance.send.return_value = mock_chat_response
+            mock_chat.return_value = mock_chat_instance
+
+            yield {
+                "pdf": mock_pdf,
+                "embedder": mock_embedder,
+                "index": mock_index,
+                "chat": mock_chat_instance,
+                "vlm": mock_vlm_instance,
+                "lemonade": mock_lemonade_instance,
+            }
+
+    def test_cache_uses_json_not_pickle(self, mock_dependencies):
+        """Test that cache files are saved as JSON, not pickle."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                result = rag.index_document(str(fake_pdf))
+                assert result["success"] is True
+
+                # Verify .json cache exists (not .pkl)
+                cache_files = list(Path(temp_dir).glob("*.json"))
+                pkl_files = list(Path(temp_dir).glob("*.pkl"))
+                assert len(cache_files) > 0, "Expected .json cache file"
+                assert len(pkl_files) == 0, "Should not create .pkl files"
+
+                # Verify .json.sig signature file exists
+                sig_files = list(Path(temp_dir).glob("*.json.sig"))
+                assert len(sig_files) > 0, "Expected .json.sig signature file"
+
+    def test_cache_roundtrip_json(self, mock_dependencies):
+        """Test that data survives JSON serialize/deserialize cycle correctly."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Test data with various types
+                test_data = {
+                    "chunks": ["chunk 1", "chunk 2 with unicode: \u00e9\u00e0\u00fc"],
+                    "full_text": "Full document text here.",
+                    "metadata": {"num_pages": 5, "vlm_pages": 0, "vlm_checked": True},
+                }
+
+                cache_path = os.path.join(temp_dir, "test_cache.json")
+                rag._save_cache(cache_path, test_data)
+
+                loaded = rag._verify_and_load_cache(cache_path)
+                assert loaded["chunks"] == test_data["chunks"]
+                assert loaded["full_text"] == test_data["full_text"]
+                assert loaded["metadata"] == test_data["metadata"]
+
+    def test_tampered_cache_rejected(self, mock_dependencies):
+        """Test that a tampered cache file is rejected on load."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Save valid cache
+                cache_path = os.path.join(temp_dir, "test_cache.json")
+                rag._save_cache(
+                    cache_path,
+                    {"chunks": ["original"], "full_text": "", "metadata": {}},
+                )
+
+                # Tamper with the cache file
+                with open(cache_path, "w") as f:
+                    f.write('{"chunks": ["TAMPERED"], "full_text": "", "metadata": {}}')
+
+                # Load should fail with integrity error
+                with pytest.raises(ValueError, match="integrity check failed"):
+                    rag._verify_and_load_cache(cache_path)
+
+    def test_missing_signature_rejected(self, mock_dependencies):
+        """Test that cache without signature file is rejected."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                # Save valid cache
+                cache_path = os.path.join(temp_dir, "test_cache.json")
+                rag._save_cache(
+                    cache_path,
+                    {"chunks": ["data"], "full_text": "", "metadata": {}},
+                )
+
+                # Delete the signature file
+                os.remove(cache_path + ".sig")
+
+                # Load should fail
+                with pytest.raises(ValueError, match="signature file missing"):
+                    rag._verify_and_load_cache(cache_path)
+
+    def test_index_document_reindexes_on_tampered_cache(self, mock_dependencies):
+        """Test that index_document falls back to re-indexing when cache is tampered."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                # First: index normally to create valid cache
+                result1 = rag.index_document(str(fake_pdf))
+                assert result1["success"] is True
+
+                # Tamper with the cache
+                cache_path = rag._get_cache_path(str(fake_pdf))
+                with open(cache_path, "w") as f:
+                    f.write("TAMPERED DATA")
+
+                # Reset state to force cache re-load
+                rag2 = RAGSDK(config)
+                result2 = rag2.index_document(str(fake_pdf))
+
+                # Should succeed by re-indexing (not loading tampered cache)
+                assert result2["success"] is True
+                assert len(rag2.chunks) > 0
+
+    def test_forged_signature_rejected(self, mock_dependencies):
+        """Test that a signature computed with a different key is rejected."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                cache_path = os.path.join(temp_dir, "forged.json")
+                data = {"chunks": ["injected"], "full_text": "", "metadata": {}}
+                json_bytes = json.dumps(data).encode("utf-8")
+
+                # Write cache data
+                with open(cache_path, "wb") as f:
+                    f.write(json_bytes)
+
+                # Forge signature with attacker's own key
+                attacker_key = secrets.token_bytes(32)
+                forged_sig = hmac.new(
+                    attacker_key, json_bytes, hashlib.sha256
+                ).hexdigest()
+                with open(cache_path + ".sig", "w") as f:
+                    f.write(forged_sig)
+
+                with pytest.raises(ValueError, match="integrity check failed"):
+                    rag._verify_and_load_cache(cache_path)
+
+    def test_hmac_key_persists_across_instances(self, mock_dependencies):
+        """Test that HMAC key is created once and reused by new RAGSDK instances."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+            key_dir = Path(temp_dir) / "hmac_home" / ".gaia" / "cache"
+
+            with (
+                patch("gaia.rag.sdk.RAGSDK._check_dependencies"),
+                patch(
+                    "gaia.rag.sdk.Path.home", return_value=Path(temp_dir) / "hmac_home"
+                ),
+            ):
+                rag1 = RAGSDK(config)
+                key1 = rag1._get_hmac_key()
+
+                # Verify key file was created
+                key_path = key_dir / "hmac.key"
+                assert key_path.exists()
+                assert len(key1) == 32
+
+                # New instance should load the same key
+                rag2 = RAGSDK(config)
+                key2 = rag2._get_hmac_key()
+                assert key1 == key2
+
+    def test_cache_overwrite_produces_valid_cache(self, mock_dependencies):
+        """Test that overwriting an existing cache produces a valid new cache."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                cache_path = os.path.join(temp_dir, "overwrite.json")
+
+                # Save initial cache
+                rag._save_cache(
+                    cache_path,
+                    {"chunks": ["v1"], "full_text": "first", "metadata": {}},
+                )
+
+                # Overwrite with new data
+                rag._save_cache(
+                    cache_path,
+                    {
+                        "chunks": ["v2", "v2b"],
+                        "full_text": "second",
+                        "metadata": {"version": 2},
+                    },
+                )
+
+                # Load should return the new data (not the old)
+                loaded = rag._verify_and_load_cache(cache_path)
+                assert loaded["chunks"] == ["v2", "v2b"]
+                assert loaded["full_text"] == "second"
+                assert loaded["metadata"]["version"] == 2
+
+    def test_corrupted_json_triggers_reindex(self, mock_dependencies):
+        """Test that invalid JSON in cache triggers re-indexing, not a crash."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                fake_pdf = Path(temp_dir) / "test.pdf"
+                fake_pdf.write_text("dummy")
+
+                # Index to create valid cache
+                result1 = rag.index_document(str(fake_pdf))
+                assert result1["success"] is True
+
+                # Corrupt both cache AND sig so sig "matches" the garbage
+                cache_path = rag._get_cache_path(str(fake_pdf))
+                garbage = b"not valid json at all {"
+                with open(cache_path, "wb") as f:
+                    f.write(garbage)
+                # Write a matching sig for the garbage so HMAC passes
+                # but json.loads will fail
+                key = rag._get_hmac_key()
+                sig = hmac.new(key, garbage, hashlib.sha256).hexdigest()
+                with open(cache_path + ".sig", "w") as f:
+                    f.write(sig)
+
+                # New instance should fail cache load and re-index
+                rag2 = RAGSDK(config)
+                result2 = rag2.index_document(str(fake_pdf))
+                assert result2["success"] is True
+                assert len(rag2.chunks) > 0
 
 
 if __name__ == "__main__":

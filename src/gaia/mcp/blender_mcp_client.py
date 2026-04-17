@@ -58,8 +58,14 @@ class MCPClient:
                 sock.connect((self.host, self.port))
                 sock.sendall(json.dumps(command).encode("utf-8"))
 
-                # Receive the response
-                response = sock.recv(65536).decode("utf-8")
+                # Receive full response (may arrive in multiple recv chunks)
+                chunks = []
+                while True:
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                response = b"".join(chunks).decode("utf-8")
 
                 # Parse the JSON response
                 parsed_response = json.loads(response)

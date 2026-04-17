@@ -1,0 +1,62 @@
+id: conversation_summary
+name: "5-Turn Conversation Summary"
+category: context_retention
+severity: medium
+description: |
+  A 5-turn conversation that tests the agent's ability to accumulate facts across
+  turns and produce a coherent summary at the end. All facts come from a single
+  document (acme_q3_report). The final turn asks the agent to recall everything
+  it has told the user so far.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask about Q3 revenue"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million"
+    success_criteria: "Agent states Q3 revenue was $14.2 million"
+
+  - turn: 2
+    objective: "Ask about year-over-year growth"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: yoy_growth
+      expected_answer: "23% increase from Q3 2024's $11.5 million"
+    success_criteria: "Agent mentions 23% growth and/or $11.5M baseline"
+
+  - turn: 3
+    objective: "Ask about CEO outlook for Q4"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: ceo_outlook
+      expected_answer: "Projected 15-18% growth driven by enterprise segment expansion"
+    success_criteria: "Agent mentions 15-18% projected growth"
+
+  - turn: 4
+    objective: "Ask 'which document has all this info?'"
+    ground_truth:
+      # No fact_id: this tests session/UI awareness (which doc is indexed), not a manifest fact.
+      # doc_id is present to identify which document the expected_answer refers to.
+      doc_id: acme_q3_report
+      expected_answer: "acme_q3_report.md"
+    success_criteria: "Agent identifies acme_q3_report as the source document"
+
+  - turn: 5
+    objective: "Ask 'summarize what you have told me so far'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_ids: [q3_revenue, yoy_growth, ceo_outlook]
+      expected_answer: "Q3 revenue $14.2M, YoY growth 23% from $11.5M, CEO projects 15-18% Q4 growth"
+    success_criteria: "Agent recalls all three facts from earlier turns: $14.2M revenue, 23% growth, and 15-18% Q4 outlook. FAIL if any fact is missing or incorrect."
+
+expected_outcome: |
+  Agent accumulates facts across 5 turns and produces a summary that includes
+  all three key data points without re-querying the document.

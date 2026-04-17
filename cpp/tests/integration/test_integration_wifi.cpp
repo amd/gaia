@@ -15,6 +15,7 @@
 
 #include <gtest/gtest.h>
 #include <gaia/agent.h>
+#include <gaia/security.h>
 #include <gaia/types.h>
 
 #include <algorithm>
@@ -59,16 +60,6 @@ static std::string runShell(const std::string& command) {
     return result.empty() ? "{\"status\": \"completed\", \"output\": \"(no output)\"}" : result;
 }
 
-static bool isSafeShellArg(const std::string& arg) {
-    for (char c : arg) {
-        if (c == ';' || c == '|' || c == '&' || c == '`' || c == '$'
-            || c == '(' || c == ')' || c == '{' || c == '}' || c == '<'
-            || c == '>' || c == '"' || c == '\n' || c == '\r') {
-            return false;
-        }
-    }
-    return !arg.empty();
-}
 
 // ---------------------------------------------------------------------------
 // Env var helpers
@@ -170,7 +161,7 @@ When asked to check something specific, call the relevant tool, then summarize t
                 ++toolCallCount;
                 lastToolCalled = "test_dns_resolution";
                 std::string hostname = args.value("hostname", "google.com");
-                if (!isSafeShellArg(hostname)) {
+                if (!gaia::isSafeShellArg(hostname)) {
                     return {{"error", "Invalid hostname"}};
                 }
                 std::string cmd = "Resolve-DnsName -Name " + hostname
@@ -209,7 +200,7 @@ When asked to check something specific, call the relevant tool, then summarize t
                 if (host.empty()) {
                     return {{"error", "host parameter is required"}};
                 }
-                if (!isSafeShellArg(host)) {
+                if (!gaia::isSafeShellArg(host)) {
                     return {{"error", "Invalid host"}};
                 }
                 std::string cmd =

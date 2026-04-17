@@ -29,6 +29,7 @@ jobs:
   test-gaia-cli-linux:
     name: Test GAIA CLI on Linux (Full Integration)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
@@ -98,47 +99,32 @@ jobs:
             return 0
           }
 
-          # Wait for server to start up with longer timeout for model download
-          echo "Waiting for Lemonade server to start (this may take up to 10 minutes for model download)..."
+          # Wait for server to be ready (5 min hard cap, poll every 10s)
+          echo "Waiting for Lemonade server to start..."
+          max_wait=300  # 5 minutes
+          elapsed=0
 
-          # Check if server is responding with extended timeout and exponential backoff
-          max_attempts=60  # Increased from 10 to 60
-          attempt=0
-          wait_time=5
-          max_wait_time=30
-
-          while [ $attempt -lt $max_attempts ]; do
-            # Check if process is still alive
+          while [ $elapsed -lt $max_wait ]; do
             if ! check_process_alive; then
               exit 1
             fi
 
-            # Try to connect to health endpoint
-            if curl -f -m 10 http://localhost:8000/api/v1/health 2>/dev/null; then
-              echo "✅ Lemonade server is responding!"
+            if curl -sf -m 5 http://localhost:8000/api/v1/health >/dev/null 2>&1; then
+              echo "✅ Lemonade server is responding! (${elapsed}s)"
               break
             fi
 
-            attempt=$((attempt + 1))
-            echo "Waiting for server... (attempt $attempt/$max_attempts, waiting ${wait_time}s)"
+            sleep 10
+            elapsed=$((elapsed + 10))
 
-            # Show recent log output every 10 attempts to indicate progress
-            if [ $((attempt % 10)) -eq 0 ]; then
-              echo "Recent server output:"
-              tail -n 5 lemonade.log 2>/dev/null || echo "No log output yet"
-            fi
-
-            sleep $wait_time
-
-            # Exponential backoff with max limit
-            if [ $wait_time -lt $max_wait_time ]; then
-              wait_time=$((wait_time + 5))
+            if [ $((elapsed % 60)) -eq 0 ]; then
+              echo "Still waiting... (${elapsed}s elapsed)"
+              tail -3 lemonade.log 2>/dev/null || true
             fi
           done
 
-          if [ $attempt -eq $max_attempts ]; then
-            echo "❌ Lemonade server failed to start within timeout"
-            echo "Final server log output:"
+          if [ $elapsed -ge $max_wait ]; then
+            echo "❌ Lemonade server failed to start within ${max_wait}s"
             cat lemonade.log
             kill $LEMONADE_PID 2>/dev/null || true
             exit 1

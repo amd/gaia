@@ -7,10 +7,16 @@ on:
   push:
     paths:
       - 'docs/**'
+      - 'cpp/**/*.md'
+      - 'src/gaia/version.py'
+      - 'util/check_doc_versions.py'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
       - 'docs/**'
+      - 'cpp/**/*.md'
+      - 'src/gaia/version.py'
+      - 'util/check_doc_versions.py'
       - '.github/workflows/docs.yml'
 
 # Cancel in-progress runs when a new run is triggered
@@ -40,3 +46,14 @@ jobs:
           echo "Validating documentation with Mintlify..."
           mintlify validate
           echo "✅ Documentation validated successfully"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Check version consistency
+        run: |
+          echo "Checking documentation version consistency..."
+          python util/check_doc_versions.py
+          echo "✅ Version consistency check passed"

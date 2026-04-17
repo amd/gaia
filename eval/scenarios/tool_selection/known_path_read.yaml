@@ -1,0 +1,36 @@
+id: known_path_read
+name: "Known Path -- Use read_file Directly"
+category: tool_selection
+severity: high
+description: |
+  User provides an exact file path. Agent should read the file directly using
+  read_file or query_specific_file rather than searching for it first. Tests
+  whether the agent avoids unnecessary tool calls when the path is known.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask 'Please read eval/corpus/documents/acme_q3_report.md and tell me the Q3 revenue.'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million"
+    success_criteria: "Agent reads the file directly (read_file or query_specific_file) and states $14.2M. PASS if agent retrieves the correct answer. FAIL if agent calls search_file before reading the explicitly named file."
+
+  - turn: 2
+    objective: "Ask 'Now what is the CEO's Q4 outlook?'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: ceo_outlook
+      expected_answer: "Projected 15-18% growth driven by enterprise segment expansion"
+    success_criteria: "Agent answers from the already-read document: 15-18% projected growth"
+
+expected_outcome: |
+  Agent uses direct file access when an explicit path is provided, avoiding
+  unnecessary search tool calls. Follow-up queries use already-indexed content.

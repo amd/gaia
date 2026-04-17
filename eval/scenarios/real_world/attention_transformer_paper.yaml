@@ -1,0 +1,49 @@
+id: attention_transformer_paper
+name: "Attention Is All You Need Research Paper Lookup"
+category: real_world
+severity: medium
+description: |
+  Agent must retrieve facts from the "Attention Is All You Need" Transformer paper.
+  Tests research paper lookup, benchmark comparison, author attribution, and
+  hallucination resistance on results not reported in this paper (English-to-Czech).
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: attention_transformer
+      path: "eval/corpus/real_world/scientific/attention_transformer_arxiv.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask what architecture the paper proposes and who the first two authors are."
+    ground_truth:
+      doc_id: attention_transformer
+      expected_answer: "The Transformer, based solely on attention mechanisms (no recurrence or convolutions); first two authors are Ashish Vaswani and Noam Shazeer"
+    success_criteria: |
+      Agent correctly describes the Transformer architecture (attention-only, no RNN/CNN)
+      and names Ashish Vaswani and Noam Shazeer as the first two authors.
+      FAIL if agent names incorrect authors or misattributes the architecture.
+
+  - turn: 2
+    objective: "Ask what BLEU scores the Transformer achieved on WMT 2014 English-to-German and English-to-French translation tasks."
+    ground_truth:
+      doc_id: attention_transformer
+      expected_answer: "28.4 BLEU on English-to-German; 41.8 BLEU on English-to-French (single-model state-of-the-art)"
+    success_criteria: |
+      Agent correctly states 28.4 BLEU (EN-DE) and 41.8 BLEU (EN-FR).
+      FAIL if agent states materially different BLEU scores.
+
+  - turn: 3
+    objective: "Ask what BLEU score the Transformer achieved on WMT 2014 English-to-Czech translation."
+    ground_truth:
+      doc_id: attention_transformer
+      expected_answer: null
+      note: "English-to-Czech results are not reported in this paper; only EN-DE and EN-FR benchmarks are included"
+    success_criteria: |
+      Agent correctly states that English-to-Czech results are not reported in this paper.
+      FAIL if agent invents an English-to-Czech BLEU score.
+
+expected_outcome: |
+  Agent retrieves Transformer paper benchmark results and correctly handles a
+  hallucination probe about a language pair not benchmarked in the paper.

@@ -3,11 +3,11 @@
 <!-- Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. -->
 <!-- SPDX-License-Identifier: MIT -->
 
-The [GAIA](https://github.com/amd/gaia) C++ agent framework. Implements the core agentic loop — LLM reasoning, tool execution, multi-step planning, and MCP (Model Context Protocol) client integration — as a lightweight, header-friendly C++ library.
+The [GAIA](https://github.com/amd/gaia) C++ agent framework — a native C++17 port of the Python base agent. Part of AMD's open-source AI agent platform for Ryzen AI hardware. See the [Agent UI plan](../docs/plans/agent-ui.mdx) for the consumer desktop experience that this framework supports.
 
 Included demos:
 
-- **`health_agent`** — Windows System Health Agent that connects to the [Windows MCP server](https://github.com/microsoft/windows-mcp), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.
+- **`health_agent`** — Windows System Health Agent that connects to the [Windows MCP server](https://pypi.org/project/windows-mcp/), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.
 - **`wifi_agent`** — Wi-Fi Troubleshooter that diagnoses and fixes network connectivity issues using registered PowerShell tools. Demonstrates adaptive reasoning: the agent decides which tools to run based on the query, interprets results, skips irrelevant steps, applies fixes, and verifies fixes worked — all driven by real LLM reasoning with no hard-coded sequences.
 
 ---
@@ -26,18 +26,34 @@ Included demos:
 
 ### 2. LLM Server (Lemonade)
 
-The agent connects to an OpenAI-compatible LLM server at `http://localhost:8000/api/v1` by default. The reference backend is [Lemonade Server](https://github.com/amd/lemonade), which runs models locally on AMD hardware.
+The agent connects to an OpenAI-compatible LLM server at `http://localhost:8000/api/v1` by default. The reference backend is [Lemonade Server](https://github.com/lemonade-sdk/lemonade), which runs models locally on AMD hardware.
 
-Install and start Lemonade before running the agent:
+Download and install Lemonade Server v10.0.0, then start it:
 
+**Windows:**
+```powershell
+# Download and run the MSI installer
+curl -L -o lemonade-server-minimal.msi https://github.com/lemonade-sdk/lemonade/releases/download/v10.0.0/lemonade-server-minimal.msi
+msiexec /i lemonade-server-minimal.msi
+```
+
+**Linux:**
 ```bash
-pip install lemonade-server
+# Download and install the .deb package
+curl -L -o lemonade-server_10.0.0_amd64.deb https://github.com/lemonade-sdk/lemonade/releases/download/v10.0.0/lemonade-server_10.0.0_amd64.deb
+sudo dpkg -i lemonade-server_10.0.0_amd64.deb
+```
+
+Or download directly from the [Lemonade v10.0.0 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v10.0.0).
+
+After installation, start the server:
+```bash
 lemonade-server serve
 ```
 
 Default model: `Qwen3-4B-GGUF` (configurable via `AgentConfig::modelId`)
 
-> **Any OpenAI-compatible server works.** The agent talks to a standard `/v1/chat/completions` endpoint. You can use [llama.cpp server](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com/), [vLLM](https://github.com/vllm-project/vllm), or any other OpenAI-compatible backend — just set `AgentConfig::baseUrl` and `AgentConfig::modelId` to match your endpoint. See the [Integration Guide](../docs/cpp/integration.mdx) for details.
+> **Any OpenAI-compatible server works.** The agent talks to a standard `/v1/chat/completions` endpoint. You can use [llama.cpp server](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com/), [vLLM](https://github.com/vllm-project/vllm), or any other OpenAI-compatible backend — just set `AgentConfig::baseUrl` and `AgentConfig::modelId` to match your endpoint. Endpoints that already use `/v1` are preserved as-is; Lemonade-style endpoints continue to use `/api/v1`. See the [Integration Guide](../docs/cpp/integration.mdx) for details.
 
 ### 3. Windows MCP Server (for the demo)
 
@@ -159,6 +175,34 @@ The agent will:
 
 ---
 
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GAIA_CPP_BASE_URL` | `http://localhost:8000/api/v1` | LLM server base URL. Overrides `AgentConfig::baseUrl`. |
+| `LEMONADE_MODEL` | _(none)_ | Model to load. Overrides `AgentConfig::modelId`. |
+| `GAIA_CPP_CTX_SIZE` | `16384` | LLM context window size in tokens. Overrides `AgentConfig::contextSize`. |
+| `GAIA_STREAMING` | _(unset)_ | Set to `1` to enable token streaming without changing code. Overrides the default for `AgentConfig::streaming`. |
+
+**Example — enable streaming for a single run:**
+```bash
+GAIA_STREAMING=1 ./build/my_agent
+```
+
+**Example — point to a remote server:**
+```bash
+GAIA_CPP_BASE_URL=http://192.168.1.50:8000 ./build/my_agent
+```
+
+**Example — point to Ollama's OpenAI-compatible endpoint:**
+```bash
+GAIA_CPP_BASE_URL=http://localhost:11434/v1 LEMONADE_MODEL=gemma4:e2b ./build/my_agent
+```
+
+Code-level config always takes precedence over environment variables when explicitly set, but these variables control the *default* value of each field in `AgentConfig`.
+
+---
+
 ## Running Tests
 
 Run the unit test binary directly (no LLM server required):
@@ -189,11 +233,15 @@ gaia/                           # repo root
     │   ├── tool_registry.h     # Tool registration and execution
     │   ├── mcp_client.h        # MCP JSON-RPC client (stdio transport)
     │   ├── json_utils.h        # JSON extraction with multi-strategy fallback
+    │   ├── lemonade_client.h   # HTTP client for the Lemonade inference server
+    │   ├── sse_parser.h        # SSE parser for streaming chat completions
     │   ├── console.h           # TerminalConsole / SilentConsole output handlers
     │   └── clean_console.h     # CleanConsole — polished TUI with colors and word-wrap
     ├── src/
     │   ├── agent.cpp           # Agent loop state machine
     │   ├── tool_registry.cpp
+    │   ├── lemonade_client.cpp # HTTP client (blocking + SSE streaming)
+    │   ├── sse_parser.cpp      # SSE token stream parser
     │   ├── mcp_client.cpp      # Cross-platform subprocess + pipes (Win32 / POSIX)
     │   ├── json_utils.cpp
     │   ├── console.cpp
@@ -205,6 +253,8 @@ gaia/                           # repo root
     │   ├── test_agent.cpp
     │   ├── test_tool_registry.cpp
     │   ├── test_json_utils.cpp
+    │   ├── test_lemonade_client.cpp
+    │   ├── test_sse_parser.cpp
     │   ├── test_mcp_client.cpp
     │   ├── test_console.cpp
     │   ├── test_clean_console.cpp

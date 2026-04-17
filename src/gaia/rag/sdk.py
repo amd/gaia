@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """
 GAIA RAG SDK - Simple PDF document retrieval and Q&A
 """
 
+import errno
 import hashlib
+import hmac
+import json
 import os
-import pickle
 import re
+import secrets
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,16 +39,51 @@ try:
 except ImportError:
     faiss = None
 
-from gaia.chat.sdk import ChatConfig, ChatSDK
+from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
 from gaia.security import PathValidator
+
+# --- PDF extraction errors ---------------------------------------------------
+# These inherit from ValueError so existing `except ValueError` blocks in
+# callers (and the index_document error path) keep working, while allowing
+# callers that care to distinguish the specific failure mode.
+
+
+class PDFExtractionError(ValueError):
+    """Base class for PDF extraction failures with actionable messages."""
+
+    #: Short stable status code (e.g. "encrypted", "corrupted", "empty")
+    #: suitable for surfacing in document metadata / telemetry.
+    status: str = "unreadable"
+
+
+class EncryptedPDFError(PDFExtractionError):
+    """Raised when a PDF is password-protected and cannot be decrypted."""
+
+    status = "encrypted"
+
+
+class CorruptedPDFError(PDFExtractionError):
+    """Raised when a PDF is malformed, truncated, or otherwise unreadable."""
+
+    status = "corrupted"
+
+
+class EmptyPDFError(PDFExtractionError):
+    """Raised when a PDF parses successfully but contains no extractable text.
+
+    Typical causes: scanned image-only PDFs (no OCR layer), or documents
+    where all pages are blank / contain only non-text glyphs.
+    """
+
+    status = "empty"
 
 
 @dataclass
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+    model: str = "Qwen3.5-35B-A3B-GGUF"
     max_tokens: int = 1024
     chunk_size: int = 500
     chunk_overlap: int = 100  # Increased to 20% overlap for better context preservation
@@ -119,6 +158,7 @@ class RAGSDK:
         self._check_dependencies()
 
         # Initialize components
+        self._hmac_key: Optional[bytes] = None  # Lazy-loaded, cached for session
         self.embedder = None
         self.llm_client = None
         self.use_lemonade_embeddings = False
@@ -141,20 +181,24 @@ class RAGSDK:
         )  # {file_path: {'full_text': str, 'num_pages': int, 'vlm_pages': int, ...}}
 
         # LRU tracking for memory management
-        self.file_access_times = {}  # {file_path: last_access_time}
-        self.file_index_times = {}  # {file_path: index_time}
+        # Uses a monotonic counter (not time.time()) to guarantee strict ordering
+        # even on platforms with coarse clock resolution (e.g. ~15ms on Windows).
+        self._access_counter = 0
+        self.file_access_times = {}  # {file_path: monotonic access counter}
+        self.file_index_times = {}  # {file_path: index_time (wall clock for display)}
+        self._state_lock = threading.RLock()
 
         # Create cache directory
         os.makedirs(self.config.cache_dir, exist_ok=True)
 
         # Initialize chat SDK for LLM responses
-        chat_config = ChatConfig(
+        chat_config = AgentConfig(
             model=self.config.model,
             max_tokens=self.config.max_tokens,
             show_stats=self.config.show_stats,
             use_local_llm=self.config.use_local_llm,
         )
-        self.chat = ChatSDK(chat_config)
+        self.chat = AgentSDK(chat_config)
 
         # Initialize path validator
         self.path_validator = PathValidator(self.config.allowed_paths)
@@ -197,7 +241,8 @@ class RAGSDK:
             IOError: If file cannot be opened
         """
         # Security check: Validate path against allowed directories
-        if not self.path_validator.is_path_allowed(file_path):
+        # Use prompt_user=False to prevent blocking on input() in server contexts
+        if not self.path_validator.is_path_allowed(file_path, prompt_user=False):
             raise PermissionError(f"Access denied: {file_path} is not in allowed paths")
 
         import stat
@@ -216,12 +261,14 @@ class RAGSDK:
         # This prevents TOCTOU attacks where symlinks are swapped
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY  # Ensure binary mode on Windows
 
         try:
             # Open file descriptor with O_NOFOLLOW
             fd = os.open(str(file_path), flags)
         except OSError as e:
-            if e.errno == 40:  # ELOOP - too many symbolic links
+            if e.errno == errno.ELOOP:  # too many symbolic links
                 raise PermissionError(f"Symlinks not allowed: {file_path}")
             raise IOError(f"Cannot open file {file_path}: {e}")
 
@@ -229,7 +276,6 @@ class RAGSDK:
         try:
             file_stat = os.fstat(fd)
             if not stat.S_ISREG(file_stat.st_mode):
-                os.close(fd)
                 raise PermissionError(f"Not a regular file: {file_path}")
 
             # Convert to file object with appropriate mode
@@ -244,6 +290,99 @@ class RAGSDK:
         except Exception as _e:
             os.close(fd)
             raise
+
+    def _get_hmac_key(self) -> bytes:
+        """
+        Get or create HMAC key for cache integrity verification.
+
+        The key is stored per-installation in ~/.gaia/cache/hmac.key
+        and is used to sign cache files to prevent tampering. Cached in
+        memory after first load to avoid repeated disk reads.
+
+        Returns:
+            32-byte HMAC key
+        """
+        if self._hmac_key is not None:
+            return self._hmac_key
+
+        key_dir = Path.home() / ".gaia" / "cache"
+        key_path = key_dir / "hmac.key"
+
+        if key_path.exists():
+            self._hmac_key = key_path.read_bytes()
+            return self._hmac_key
+
+        key_dir.mkdir(parents=True, exist_ok=True)
+        key = secrets.token_bytes(32)
+        key_path.write_bytes(key)
+        try:
+            key_path.chmod(0o600)
+        except (OSError, AttributeError):
+            pass
+        self.log.info("Generated new HMAC key for cache integrity verification")
+        self._hmac_key = key
+        return self._hmac_key
+
+    def _save_cache(self, cache_path: str, cache_data: dict):
+        """
+        Save cache data as JSON with HMAC-SHA256 integrity signature.
+
+        Creates two files:
+        - {cache_path} — JSON-serialized cache data
+        - {cache_path}.sig — HMAC-SHA256 signature (hex-encoded)
+
+        Args:
+            cache_path: Path to the cache file (should end in .json)
+            cache_data: Dictionary with 'chunks', 'full_text', and 'metadata' keys
+        """
+        json_bytes = json.dumps(cache_data, ensure_ascii=False).encode("utf-8")
+        key = self._get_hmac_key()
+        signature = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
+
+        with open(cache_path, "wb") as f:
+            f.write(json_bytes)
+        with open(cache_path + ".sig", "w", encoding="utf-8") as f:
+            f.write(signature)
+
+        self.log.debug(f"Saved signed cache: {cache_path}")
+
+    def _verify_and_load_cache(self, cache_path: str) -> dict:
+        """
+        Load cache data with HMAC-SHA256 integrity verification.
+
+        Verifies the signature before deserializing to prevent
+        loading tampered cache files.
+
+        Args:
+            cache_path: Path to the cache file
+
+        Returns:
+            Deserialized cache data dictionary
+
+        Raises:
+            ValueError: If signature is missing, invalid, or verification fails
+            json.JSONDecodeError: If cache file contains invalid JSON
+        """
+        sig_path = cache_path + ".sig"
+
+        if not os.path.exists(sig_path):
+            raise ValueError("Cache signature file missing — cannot verify integrity")
+
+        with open(cache_path, "rb") as f:
+            json_bytes = f.read()
+
+        with open(sig_path, "r", encoding="utf-8") as f:
+            stored_sig = f.read().strip()
+
+        key = self._get_hmac_key()
+        expected_sig = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
+
+        if not hmac.compare_digest(stored_sig, expected_sig):
+            raise ValueError(
+                "Cache integrity check failed — file may have been tampered with"
+            )
+
+        return json.loads(json_bytes)
 
     def _get_cache_path(self, file_path: str) -> str:
         """
@@ -280,14 +419,14 @@ class RAGSDK:
             path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
             cache_key = f"{path_hash}_{content_hash[:32]}"
 
-            return os.path.join(self.config.cache_dir, f"{cache_key}.pkl")
+            return os.path.join(self.config.cache_dir, f"{cache_key}.json")
 
         except (OSError, IOError) as e:
             # If file doesn't exist or can't be read, use path-based key
             # This will fail later during indexing anyway
             self.log.warning(f"Cannot read file for cache key: {e}")
             file_hash = hashlib.sha256(str(path).encode()).hexdigest()
-            return os.path.join(self.config.cache_dir, f"{file_hash}_notfound.pkl")
+            return os.path.join(self.config.cache_dir, f"{file_hash}_notfound.json")
 
     def _load_embedder(self):
         """Load embedding model via Lemonade server for hardware acceleration.
@@ -340,15 +479,33 @@ class RAGSDK:
             numpy array of embeddings with shape (num_texts, embedding_dim)
         """
 
+        # Truncate texts that exceed the embedding model's context window.
+        # Lemonade GGUF embedding models silently return empty data for
+        # inputs that exceed their token limit (~512 tokens). Using 1200
+        # chars as a conservative limit (~3 chars/token average).
+        MAX_EMBED_CHARS = 1200
+        truncated = 0
+        safe_texts = []
+        for t in texts:
+            if len(t) > MAX_EMBED_CHARS:
+                safe_texts.append(t[:MAX_EMBED_CHARS])
+                truncated += 1
+            else:
+                safe_texts.append(t)
+        if truncated > 0:
+            self.log.info(
+                f"   ✂️  Truncated {truncated}/{len(texts)} chunks to {MAX_EMBED_CHARS} chars for embedding"
+            )
+
         # Batch embedding requests to avoid timeouts
         BATCH_SIZE = 25  # Smaller batches for reliability (25 chunks ~= 12KB text)
         all_embeddings = []
 
-        total_batches = (len(texts) + BATCH_SIZE - 1) // BATCH_SIZE
+        total_batches = (len(safe_texts) + BATCH_SIZE - 1) // BATCH_SIZE
         total_start = time.time()
 
-        for batch_idx in range(0, len(texts), BATCH_SIZE):
-            batch_texts = texts[batch_idx : batch_idx + BATCH_SIZE]
+        for batch_idx in range(0, len(safe_texts), BATCH_SIZE):
+            batch_texts = safe_texts[batch_idx : batch_idx + BATCH_SIZE]
             batch_num = (batch_idx // BATCH_SIZE) + 1
 
             batch_start = time.time()
@@ -381,6 +538,38 @@ class RAGSDK:
 
             batch_duration = time.time() - batch_start
 
+            # Extract embeddings from response
+            # Expected format: {"data": [{"embedding": [...]}, ...]}
+            batch_embeddings = []
+            for item in response.get("data", []):
+                embedding = item.get("embedding", [])
+                batch_embeddings.append(embedding)
+
+            # If batch returned empty, fall back to one-by-one encoding
+            if len(batch_embeddings) == 0 and len(batch_texts) > 0:
+                self.log.warning(
+                    f"   ⚠️  Batch {batch_num} returned 0 embeddings, trying one-by-one"
+                )
+                for single_text in batch_texts:
+                    try:
+                        single_resp = self.embedder.embeddings(
+                            [single_text],
+                            model=self.config.embedding_model,
+                            timeout=60,
+                        )
+                        single_data = single_resp.get("data", [])
+                        if single_data:
+                            batch_embeddings.append(single_data[0].get("embedding", []))
+                        else:
+                            self.log.warning(
+                                "   ⚠️  Single text (%d chars) returned no embedding, skipping",
+                                len(single_text),
+                            )
+                    except Exception as e:
+                        self.log.warning(f"   ⚠️  Single embedding failed: {e}")
+
+            all_embeddings.extend(batch_embeddings)
+
             if show_progress or self.config.show_stats:
                 chunks_per_sec = (
                     len(batch_texts) / batch_duration if batch_duration > 0 else 0
@@ -389,15 +578,9 @@ class RAGSDK:
                     f"   ✅ Batch {batch_num} complete in {batch_duration:.2f}s ({chunks_per_sec:.1f} chunks/sec)"
                 )
 
-            # Extract embeddings from response
-            # Expected format: {"data": [{"embedding": [...]}, ...]}
-            for item in response.get("data", []):
-                embedding = item.get("embedding", [])
-                all_embeddings.append(embedding)
-
         total_duration = time.time() - total_start
-        if len(texts) > BATCH_SIZE:
-            overall_rate = len(texts) / total_duration if total_duration > 0 else 0
+        if len(safe_texts) > BATCH_SIZE:
+            overall_rate = len(safe_texts) / total_duration if total_duration > 0 else 0
             self.log.info(
                 f"   🎯 Total embedding time: {total_duration:.2f}s ({overall_rate:.1f} chunks/sec, {total_batches} batches)"
             )
@@ -419,12 +602,62 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
+            - pdf_status: str ("readable", "encrypted", "corrupted", "empty")
+
+        Raises:
+            EncryptedPDFError: PDF is password-protected.
+            CorruptedPDFError: PDF is malformed / unreadable.
+            EmptyPDFError: PDF parsed OK but contained no extractable text.
         """
         import time as time_module  # pylint: disable=reimported
 
+        file_name = Path(pdf_path).name
+
+        # Step 0: Open the PDF. pypdf raises EmptyFileError / PdfStreamError
+        # (both subclasses of PdfReadError) for empty/corrupted files. We map
+        # those to our own exceptions so callers can react and users get
+        # actionable guidance instead of a generic stack trace.
+        try:
+            from pypdf.errors import (  # pylint: disable=import-outside-toplevel
+                PdfReadError,
+            )
+        except ImportError:  # pragma: no cover - pypdf is required for PDFs
+            PdfReadError = Exception  # type: ignore[assignment,misc]
+
+        try:
+            reader = PdfReader(pdf_path)
+        except PdfReadError as e:
+            msg = (
+                f"Could not read PDF: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted, truncated, or not a valid PDF.\n"
+                "Suggestions:\n"
+                "  1. Re-download or re-export the PDF from the original source\n"
+                "  2. Try opening the file in a PDF viewer to confirm it is readable\n"
+                "  3. If the source is a scan, re-run OCR and export a fresh PDF"
+            )
+            self.log.error(f"Corrupted PDF {pdf_path}: {e}")
+            raise CorruptedPDFError(msg) from e
+
+        # Step 1: Refuse password-protected PDFs up-front. Without this check
+        # pypdf silently returns empty text for every page and the document
+        # gets "indexed" with zero chunks (see issue #451).
+        if getattr(reader, "is_encrypted", False):
+            msg = (
+                f"PDF is password-protected: {file_name}\n"
+                "GAIA cannot index encrypted PDFs.\n"
+                "Suggestions:\n"
+                "  1. Remove the password with qpdf:\n"
+                "     qpdf --decrypt --password=YOUR_PASSWORD input.pdf output.pdf\n"
+                "  2. Or with pdftk:\n"
+                "     pdftk input.pdf input_pw YOUR_PASSWORD output output.pdf\n"
+                "  3. Then re-index the decrypted file"
+            )
+            self.log.error(f"Encrypted PDF rejected: {pdf_path}")
+            raise EncryptedPDFError(msg)
+
         try:
             extract_start = time_module.time()
-            reader = PdfReader(pdf_path)
             total_pages = len(reader.pages)
             self.log.info(f"📄 Extracting text from {total_pages} pages...")
 
@@ -552,8 +785,13 @@ class RAGSDK:
                 print(
                     f"\n  ✅ Extracted {len(full_text):,} characters from {total_pages} pages"
                 )
+                pages_per_sec = (
+                    total_pages / extract_duration
+                    if extract_duration > 0
+                    else float("inf")
+                )
                 print(
-                    f"  ⏱️  Total extraction time: {extract_duration:.2f}s ({total_pages/extract_duration:.1f} pages/sec)"
+                    f"  ⏱️  Total extraction time: {extract_duration:.2f}s ({pages_per_sec:.1f} pages/sec)"
                 )
                 print(f"  💾 Text size: {len(full_text) / 1024:.1f} KB")
                 if vlm_pages_count > 0:
@@ -566,6 +804,30 @@ class RAGSDK:
                 f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages)"
             )
 
+            # If pypdf parsed the file but every page came back blank, surface
+            # this as EmptyPDFError rather than pretending it succeeded. The
+            # common cause is a scanned image-only PDF without an OCR layer.
+            #
+            # NOTE: `full_text` always carries `[Page N]` prefix lines even for
+            # blank pages (see the join above), so we can't just check
+            # full_text.strip(). Inspect the per-page content instead.
+            has_any_content = any((p["text"] or "").strip() for p in pages_data)
+            if not has_any_content:
+                msg = (
+                    f"No extractable text in PDF: {file_name}\n"
+                    f"The file has {total_pages} page(s) but none contained "
+                    "machine-readable text.\n"
+                    "Common causes:\n"
+                    "  1. The PDF is a scan with no OCR layer\n"
+                    "  2. All content is rendered as images or vector glyphs\n"
+                    "Suggestions:\n"
+                    "  1. Run OCR on the PDF (e.g. `ocrmypdf input.pdf output.pdf`)\n"
+                    "  2. Or enable VLM image extraction by downloading "
+                    f"{self.config.vlm_model} in Lemonade"
+                )
+                self.log.error(f"Empty PDF (no text): {pdf_path}")
+                raise EmptyPDFError(msg)
+
             # Build metadata
             metadata = {
                 "num_pages": total_pages,
@@ -573,9 +835,14 @@ class RAGSDK:
                 "total_images": total_images_processed,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
+                "pdf_status": "readable",
             }
 
             return full_text, total_pages, metadata
+        except PDFExtractionError:
+            # Already a well-formed extraction error with actionable guidance —
+            # re-raise without wrapping or re-logging (callers will log).
+            raise
         except Exception as e:
             self.log.error(f"Error reading PDF {pdf_path}: {e}")
             raise
@@ -659,7 +926,9 @@ class RAGSDK:
             segment = text[position:segment_end]
 
             # Ask LLM to identify good chunk boundaries
-            prompt = """You are a document chunking expert. Your task is to identify optimal points to split the following text into chunks.
+            segment_preview = segment[:2000]
+            ellipsis = "..." if len(segment) > 2000 else ""
+            prompt = f"""You are a document chunking expert. Your task is to identify optimal points to split the following text into chunks.
 
 The text should be split into chunks of approximately {chunk_size} tokens (roughly {chunk_size * 4} characters each).
 
@@ -672,8 +941,8 @@ IMPORTANT RULES:
 
 Text to chunk:
 ---
-{segment[:2000]}  # Limit prompt size
-{"..." if len(segment) > 2000 else ""}
+{segment_preview}
+{ellipsis}
 ---
 
 Please identify the CHARACTER POSITIONS where the text should be split.
@@ -682,7 +951,7 @@ These positions indicate where to split the text."""
 
             try:
                 # Get LLM response
-                response_data = self.llm_client.completions(
+                response_data = self.llm_client.generate(  # pylint: disable=no-member
                     model=self.config.model,
                     prompt=prompt,
                     temperature=0.0,  # Low temperature for deterministic chunking
@@ -883,6 +1152,66 @@ These positions indicate where to split the text."""
             self.log.error(f"Error reading JSON {json_path}: {e}")
             raise
 
+    def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
+        """Extract text from Excel (.xlsx / .xls) files using openpyxl."""
+        try:
+            import openpyxl
+
+            wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+            parts = []
+
+            for sheet in wb.worksheets:
+                parts.append(f"Sheet: {sheet.title}")
+
+                # Collect rows, skipping entirely blank rows
+                rows = []
+                for row in sheet.iter_rows(values_only=True):
+                    cells = [str(c) if c is not None else "" for c in row]
+                    if any(c.strip() for c in cells):
+                        rows.append(cells)
+
+                if not rows:
+                    continue
+
+                # Use first non-empty row as header if it looks like one
+                # (contains at least one non-numeric string cell)
+                header = rows[0]
+                has_header = any(
+                    c.strip()
+                    and not c.strip().replace(".", "").replace("-", "").isdigit()
+                    for c in header
+                )
+
+                if has_header and len(rows) > 1:
+                    parts.append(
+                        f"Columns: {', '.join(c for c in header if c.strip())}"
+                    )
+                    for row in rows[1:]:
+                        row_parts = []
+                        for i, cell in enumerate(row):
+                            col_name = header[i] if i < len(header) else f"Col{i+1}"
+                            if cell.strip():
+                                row_parts.append(f"{col_name}: {cell}")
+                        if row_parts:
+                            parts.append(" | ".join(row_parts))
+                else:
+                    for row in rows:
+                        parts.append(" | ".join(c for c in row if c.strip()))
+
+            text = "\n".join(parts)
+
+            if self.config.show_stats:
+                print(
+                    f"  ✅ Loaded Excel file ({len(wb.worksheets)} sheet(s), {len(text):,} chars)"
+                )
+            self.log.info(
+                f"📊 Extracted {len(text):,} characters from Excel file ({len(wb.worksheets)} sheets)"
+            )
+            return text
+        except Exception as e:
+            self.log.error(f"Error reading Excel file {xlsx_path}: {e}")
+            raise
+
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
         Extract text from file based on type.
@@ -915,6 +1244,10 @@ These positions indicate where to split the text."""
         # JSON files
         elif file_type == ".json":
             return self._extract_text_from_json(file_path), metadata
+
+        # Excel files
+        elif file_type in [".xlsx", ".xls"]:
+            return self._extract_text_from_xlsx(file_path), metadata
 
         # Code files (treat as text for Q&A purposes)
         elif file_type in [
@@ -1090,7 +1423,7 @@ These positions indicate where to split the text."""
                 if prev_empty and next_not_empty:
                     # Additional check: does it look like a title?
                     # (starts with capital, no ending punctuation, relatively short)
-                    if line.strip()[0].isupper() and not line.strip()[-1] in ".!?,;":
+                    if line.strip()[0].isupper() and line.strip()[-1] not in ".!?,;":
                         is_boundary = True
 
             if is_boundary and current_section:
@@ -1324,6 +1657,18 @@ These positions indicate where to split the text."""
         )
         return index, chunks
 
+    def _snapshot_query_state(self) -> Dict[str, Any]:
+        """Capture a consistent read snapshot for query operations."""
+        with self._state_lock:
+            if self.index is None or not self.chunks:
+                raise ValueError("No documents indexed. Call index_document() first.")
+            return {
+                "index": self.index,
+                "chunks": list(self.chunks),
+                "chunk_to_file": dict(self.chunk_to_file),
+                "indexed_file_count": len(self.indexed_files),
+            }
+
     def remove_document(self, file_path: str) -> bool:
         """
         Remove a document from the index.
@@ -1335,84 +1680,96 @@ These positions indicate where to split the text."""
             True if removal succeeded, False otherwise
         """
         file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            if file_path not in self.indexed_files:
+                self.log.warning(f"Document not indexed: {file_path}")
+                return False
 
-        if file_path not in self.indexed_files:
-            self.log.warning(f"Document not indexed: {file_path}")
-            return False
+            try:
+                new_chunks = list(self.chunks)
+                new_chunk_to_file = dict(self.chunk_to_file)
+                new_file_to_chunk_indices = {
+                    path: list(indices)
+                    for path, indices in self.file_to_chunk_indices.items()
+                }
+                new_index = self.index
 
-        try:
-            # Get chunk indices for this file
-            if file_path in self.file_to_chunk_indices:
-                chunk_indices_set = set(self.file_to_chunk_indices[file_path])
+                # Get chunk indices for this file
+                if file_path in self.file_to_chunk_indices:
+                    chunk_indices_set = set(self.file_to_chunk_indices[file_path])
 
-                # OPTIMIZED: Rebuild all structures in one O(N) pass
-                # This is much faster than deleting in a loop (which is O(N²))
-                new_chunks = []
-                new_chunk_to_file = {}
-                new_file_to_chunk_indices = {}
+                    # OPTIMIZED: Rebuild all structures in one O(N) pass
+                    # This is much faster than deleting in a loop (which is O(N²))
+                    new_chunks = []
+                    new_chunk_to_file = {}
+                    new_file_to_chunk_indices = {}
 
-                # Single pass through all chunks - O(N)
-                for old_idx, chunk in enumerate(self.chunks):
-                    # Skip chunks from file being removed
-                    if old_idx in chunk_indices_set:
-                        continue
+                    # Single pass through all chunks - O(N)
+                    for old_idx, chunk in enumerate(self.chunks):
+                        # Skip chunks from file being removed
+                        if old_idx in chunk_indices_set:
+                            continue
 
-                    new_idx = len(new_chunks)
-                    new_chunks.append(chunk)
+                        new_idx = len(new_chunks)
+                        new_chunks.append(chunk)
 
-                    # Update chunk_to_file mapping
-                    if old_idx in self.chunk_to_file:
-                        file = self.chunk_to_file[old_idx]
-                        new_chunk_to_file[new_idx] = file
+                        # Update chunk_to_file mapping
+                        if old_idx in self.chunk_to_file:
+                            owner = self.chunk_to_file[old_idx]
+                            new_chunk_to_file[new_idx] = owner
 
-                        # Update file_to_chunk_indices for this file
-                        if file not in new_file_to_chunk_indices:
-                            new_file_to_chunk_indices[file] = []
-                        new_file_to_chunk_indices[file].append(new_idx)
+                            # Update file_to_chunk_indices for this file
+                            if owner not in new_file_to_chunk_indices:
+                                new_file_to_chunk_indices[owner] = []
+                            new_file_to_chunk_indices[owner].append(new_idx)
 
-                # Atomic replacement - all or nothing
+                    # Rebuild index only after the new chunk set is ready.
+                    if new_chunks:
+                        new_index, new_chunks = self._create_vector_index(new_chunks)
+                    else:
+                        new_index = None
+
+                # Publish state only after all rebuild work succeeded.
                 self.chunks = new_chunks
                 self.chunk_to_file = new_chunk_to_file
                 self.file_to_chunk_indices = new_file_to_chunk_indices
+                self.index = new_index
 
-            # Remove from indexed files
-            self.indexed_files.discard(file_path)
+                # Remove from indexed files
+                self.indexed_files.discard(file_path)
 
-            # Clean up LRU tracking
-            if file_path in self.file_access_times:
-                del self.file_access_times[file_path]
-            if file_path in self.file_index_times:
-                del self.file_index_times[file_path]
+                # Clean up LRU tracking
+                if file_path in self.file_access_times:
+                    del self.file_access_times[file_path]
+                if file_path in self.file_index_times:
+                    del self.file_index_times[file_path]
 
-            # Clean up cached per-file indices and embeddings
-            if file_path in self.file_indices:
-                del self.file_indices[file_path]
-            if file_path in self.file_embeddings:
-                del self.file_embeddings[file_path]
+                # Clean up cached per-file indices and embeddings
+                if file_path in self.file_indices:
+                    del self.file_indices[file_path]
+                if file_path in self.file_embeddings:
+                    del self.file_embeddings[file_path]
 
-            # Clean up cached metadata
-            if file_path in self.file_metadata:
-                del self.file_metadata[file_path]
+                # Clean up cached metadata
+                if file_path in self.file_metadata:
+                    del self.file_metadata[file_path]
 
-            # Rebuild index if chunks remain
-            if self.chunks:
-                self.index, self.chunks = self._create_vector_index(self.chunks)
-                if self.config.show_stats:
-                    print(f"✅ Removed {Path(file_path).name} from index")
-                    print(
-                        f"📊 Remaining: {len(self.indexed_files)} documents, {len(self.chunks)} chunks"
-                    )
-            else:
-                self.index = None
-                if self.config.show_stats:
-                    print("✅ Removed last document from index")
+                if self.index is not None:
+                    if self.config.show_stats:
+                        print(f"✅ Removed {Path(file_path).name} from index")
+                        print(
+                            f"📊 Remaining: {len(self.indexed_files)} documents, {len(self.chunks)} chunks"
+                        )
+                else:
+                    if self.config.show_stats:
+                        print("✅ Removed last document from index")
 
-            self.log.info(f"Successfully removed document: {file_path}")
-            return True
+                self.log.info(f"Successfully removed document: {file_path}")
+                return True
 
-        except Exception as e:
-            self.log.error(f"Failed to remove document {file_path}: {e}")
-            return False
+            except Exception as e:
+                self.log.error(f"Failed to remove document {file_path}: {e}")
+                return False
 
     def reindex_document(self, file_path: str) -> Dict[str, Any]:
         """
@@ -1425,23 +1782,27 @@ These positions indicate where to split the text."""
             Dict with indexing results and statistics (same as index_document)
         """
         file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            # Keep remove+reindex under the same lock so readers never observe a
+            # gap where the document disappeared between generations. Query
+            # paths snapshot state quickly under this same lock and then do the
+            # expensive work outside it.
+            # Remove old version if it exists
+            if file_path in self.indexed_files:
+                self.log.info(f"Removing old version of {file_path}")
+                if not self.remove_document(file_path):
+                    return {
+                        "success": False,
+                        "error": "Failed to remove old version",
+                        "file_name": Path(file_path).name,
+                    }
 
-        # Remove old version if it exists
-        if file_path in self.indexed_files:
-            self.log.info(f"Removing old version of {file_path}")
-            if not self.remove_document(file_path):
-                return {
-                    "success": False,
-                    "error": "Failed to remove old version",
-                    "file_name": Path(file_path).name,
-                }
-
-        # Index the new version
-        self.log.info(f"Indexing new version of {file_path}")
-        result = self.index_document(file_path)
-        if result.get("success"):
-            result["reindexed"] = True
-        return result
+            # Index the new version
+            self.log.info(f"Indexing new version of {file_path}")
+            result = self.index_document(file_path)
+            if result.get("success"):
+                result["reindexed"] = True
+            return result
 
     def _evict_lru_document(self) -> bool:
         """
@@ -1450,11 +1811,18 @@ These positions indicate where to split the text."""
         Returns:
             True if a document was evicted, False otherwise
         """
-        if not self.config.enable_lru_eviction or not self.file_access_times:
+        if not self.config.enable_lru_eviction:
+            self.log.warning("LRU eviction disabled, cannot free memory")
+            return False
+
+        if not self.file_access_times:
+            self.log.warning("No tracked files available for LRU eviction")
             return False
 
         # Find LRU file (oldest access time)
         lru_file = min(self.file_access_times, key=self.file_access_times.get)
+
+        self.log.info(f"Evicting LRU document to free memory: {Path(lru_file).name}")
 
         if self.config.show_stats:
             print(
@@ -1462,11 +1830,17 @@ These positions indicate where to split the text."""
             )
 
         # Remove the LRU document
-        return self.remove_document(lru_file)
+        result = self.remove_document(lru_file)
+        if not result:
+            self.log.error(f"Failed to evict LRU document: {Path(lru_file).name}")
+        return result
 
-    def _check_memory_limits(self) -> None:
+    def _check_memory_limits(self) -> bool:
         """
         Check memory limits and evict documents if necessary.
+
+        Returns:
+            True if limits are satisfied, False if still exceeded
         """
         # Check total chunks limit
         while (
@@ -1475,15 +1849,61 @@ These positions indicate where to split the text."""
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
             if not self._evict_lru_document():
+                self.log.warning(
+                    f"Cannot meet chunk limit: {len(self.chunks)} chunks "
+                    f"exceeds max {self.config.max_total_chunks}, eviction failed"
+                )
                 break
 
         # Check indexed files limit
         while (
             self.config.max_indexed_files > 0
             and len(self.indexed_files) > self.config.max_indexed_files
-        ):
+            and len(self.indexed_files) > 1
+        ):  # Keep at least one file
             if not self._evict_lru_document():
+                self.log.warning(
+                    f"Cannot meet file limit: {len(self.indexed_files)} files "
+                    f"exceeds max {self.config.max_indexed_files}, eviction failed"
+                )
                 break
+
+        chunks_ok = (
+            self.config.max_total_chunks <= 0
+            or len(self.chunks) <= self.config.max_total_chunks
+        )
+        files_ok = (
+            self.config.max_indexed_files <= 0
+            or len(self.indexed_files) <= self.config.max_indexed_files
+        )
+        return chunks_ok and files_ok
+
+    def _has_indexing_capacity(self) -> bool:
+        """Check if there is capacity to index another document.
+
+        This is a read-only check — it does not evict. When eviction is
+        enabled, capacity is available if there is at least one document
+        that could be evicted. When disabled, capacity requires being
+        under the limits.
+        """
+        files_at_limit = (
+            self.config.max_indexed_files > 0
+            and len(self.indexed_files) >= self.config.max_indexed_files
+        )
+        chunks_at_limit = (
+            self.config.max_total_chunks > 0
+            and len(self.chunks) >= self.config.max_total_chunks
+        )
+
+        if not files_at_limit and not chunks_at_limit:
+            return True  # Under both limits
+
+        # At limit — can we evict to make room?
+        if self.config.enable_lru_eviction and len(self.indexed_files) > 0:
+            return True  # Eviction can free space (post-index)
+
+        # At limit with no eviction possible
+        return False
 
     def index_document(self, file_path: str) -> Dict[str, Any]:
         """
@@ -1533,6 +1953,8 @@ These positions indicate where to split the text."""
             "num_chunks": 0,
             "total_indexed_files": len(self.indexed_files),
             "total_chunks": len(self.chunks),
+            "max_indexed_files": self.config.max_indexed_files,
+            "max_total_chunks": self.config.max_total_chunks,
         }
 
         # Check if file exists before processing
@@ -1590,23 +2012,40 @@ These positions indicate where to split the text."""
         stats["file_type"] = file_type
         stats["file_name"] = Path(file_path).name
 
-        # Check if already indexed
-        if file_path in self.indexed_files:
-            if self.config.show_stats:
-                print(f"📋 Document already indexed: {Path(file_path).name}")
-            self.log.info(f"Document already indexed: {file_path}")
-            stats["success"] = True
-            stats["already_indexed"] = True
-            stats["total_indexed_files"] = len(self.indexed_files)
-            stats["total_chunks"] = len(self.chunks)
-            return stats
+        with self._state_lock:
+            # Check if already indexed
+            if file_path in self.indexed_files:
+                if self.config.show_stats:
+                    print(f"📋 Document already indexed: {Path(file_path).name}")
+                self.log.info(f"Document already indexed: {file_path}")
+                stats["success"] = True
+                stats["already_indexed"] = True
+                stats["total_indexed_files"] = len(self.indexed_files)
+                stats["total_chunks"] = len(self.chunks)
+                return stats
+
+            # Pre-flight: check capacity before investing in indexing
+            if not self._has_indexing_capacity():
+                msg = (
+                    f"Memory limit reached: {len(self.indexed_files)} files "
+                    f"(max: {self.config.max_indexed_files}), "
+                    f"{len(self.chunks)} chunks "
+                    f"(max: {self.config.max_total_chunks}). "
+                    "Enable LRU eviction or remove documents manually."
+                )
+                self.log.warning(f"Cannot index {file_path}: {msg}")
+                if self.config.show_stats:
+                    print(f"❌ {msg}")
+                stats["error"] = msg
+                stats["memory_limit_reached"] = True
+                return stats
 
         # Check cache - the cache key is based on file content hash
         cache_path = self._get_cache_path(file_path)
 
         # Also check for cached Markdown file with hash-based name
-        # Extract the cache key from the pickle cache path to find matching MD file
-        cache_filename = Path(cache_path).stem  # Remove .pkl extension
+        # Extract the cache key from the cache path to find matching MD file
+        cache_filename = Path(cache_path).stem  # Remove .json extension
         md_cache_path = os.path.join(
             self.config.cache_dir, f"{cache_filename}_extracted.md"
         )
@@ -1616,69 +2055,89 @@ These positions indicate where to split the text."""
                 print(f"💾 Loading from cache: {Path(file_path).name}")
             self.log.info(f"📦 Loading cached index for: {file_path}")
             try:
-                with open(cache_path, "rb") as f:
-                    cached_data = pickle.load(f)
-                    cached_chunks = cached_data["chunks"]
-                    cached_full_text = cached_data.get(
-                        "full_text", ""
-                    )  # May not exist in old caches
-                    cached_metadata = cached_data.get(
-                        "metadata", {}
-                    )  # May not exist in old caches
+                cached_data = self._verify_and_load_cache(cache_path)
+                cached_chunks = cached_data["chunks"]
+                cached_full_text = cached_data.get("full_text", "")
+                cached_metadata = cached_data.get("metadata", {})
 
-                    # Check if cache might be missing VLM content
-                    # If metadata doesn't have VLM info, it's an old cache
-                    if not cached_metadata.get("vlm_checked", False):
-                        if self.config.show_stats:
-                            print(
-                                "  ⚠️  Cache might be missing image text (pre-VLM cache)"
-                            )
-                            print(
-                                "     💡 Use /clear-cache to force re-extraction with VLM"
-                            )
-
-                    # Verify Markdown cache exists alongside pickle cache
-                    if os.path.exists(md_cache_path):
-                        self.log.info(
-                            f"  ✅ Markdown cache also available: {md_cache_path}"
-                        )
-
+                # Check if cache might be missing VLM content
+                # If metadata doesn't have VLM info, it's an old cache
+                if not cached_metadata.get("vlm_checked", False):
                     if self.config.show_stats:
-                        vlm_info = ""
-                        if cached_metadata.get("vlm_pages", 0) > 0:
-                            vlm_info = f" (VLM: {cached_metadata['vlm_pages']} pages)"
+                        print("  ⚠️  Cache might be missing image text (pre-VLM cache)")
                         print(
-                            f"  ✅ Loaded {len(cached_chunks)} cached chunks{vlm_info}"
+                            "     💡 Use /clear-cache to force re-extraction with VLM"
                         )
 
-                    # Track chunk indices for this file
-                    start_idx = len(self.chunks)
-                    file_chunk_indices = []
+                # Verify Markdown cache exists alongside JSON cache
+                if os.path.exists(md_cache_path):
+                    self.log.info(
+                        f"  ✅ Markdown cache also available: {md_cache_path}"
+                    )
 
+                if self.config.show_stats:
+                    vlm_info = ""
+                    if cached_metadata.get("vlm_pages", 0) > 0:
+                        vlm_info = f" (VLM: {cached_metadata['vlm_pages']} pages)"
+                    print(f"  ✅ Loaded {len(cached_chunks)} cached chunks{vlm_info}")
+
+                with self._state_lock:
+                    if file_path in self.indexed_files:
+                        self.log.info(f"Document already indexed: {file_path}")
+                        stats["success"] = True
+                        stats["already_indexed"] = True
+                        stats["total_indexed_files"] = len(self.indexed_files)
+                        stats["total_chunks"] = len(self.chunks)
+                        return stats
+
+                    # Re-check capacity under the lock because another writer
+                    # may have indexed or evicted documents while we were
+                    # loading this cache entry from disk.
+                    if not self._has_indexing_capacity():
+                        msg = (
+                            f"Memory limit reached: {len(self.indexed_files)} files "
+                            f"(max: {self.config.max_indexed_files}), "
+                            f"{len(self.chunks)} chunks "
+                            f"(max: {self.config.max_total_chunks}). "
+                            "Enable LRU eviction or remove documents manually."
+                        )
+                        self.log.warning(f"Cannot index {file_path}: {msg}")
+                        if self.config.show_stats:
+                            print(f"❌ {msg}")
+                        stats["error"] = msg
+                        stats["memory_limit_reached"] = True
+                        return stats
+
+                    # Track chunk indices for this file and publish only after the
+                    # rebuilt index succeeds so partial state is never visible.
                     if self.index is None:
-                        # First document - use cached index directly
-                        self.chunks = cached_chunks
-                        # Track indices for all chunks (0 to len-1)
-                        for i in range(len(cached_chunks)):
-                            file_chunk_indices.append(i)
-                            self.chunk_to_file[i] = file_path
-                        self.index, self.chunks = self._create_vector_index(self.chunks)
+                        rebuilt_chunks_source = list(cached_chunks)
+                        file_chunk_indices = list(range(len(cached_chunks)))
+                        rebuilt_chunk_to_file = {
+                            idx: file_path for idx in file_chunk_indices
+                        }
                     else:
-                        # Merge with existing chunks and recreate index
-                        old_count = len(self.chunks)
-                        self.chunks.extend(cached_chunks)
-                        # Track indices for new chunks (start_idx to start_idx+len-1)
-                        for i in range(len(cached_chunks)):
-                            chunk_idx = start_idx + i
-                            file_chunk_indices.append(chunk_idx)
-                            self.chunk_to_file[chunk_idx] = file_path
+                        old_chunks = list(self.chunks)
+                        old_count = len(old_chunks)
+                        rebuilt_chunks_source = old_chunks + list(cached_chunks)
+                        start_idx = len(old_chunks)
+                        file_chunk_indices = list(
+                            range(start_idx, start_idx + len(cached_chunks))
+                        )
+                        rebuilt_chunk_to_file = dict(self.chunk_to_file)
+                        for chunk_idx in file_chunk_indices:
+                            rebuilt_chunk_to_file[chunk_idx] = file_path
                         if self.config.show_stats:
                             print(
-                                f"  🔄 Rebuilding index ({old_count} + {len(cached_chunks)} = {len(self.chunks)} chunks)"
+                                f"  🔄 Rebuilding index ({old_count} + {len(cached_chunks)} = {len(rebuilt_chunks_source)} chunks)"
                             )
-                        self.index, self.chunks = self._create_vector_index(self.chunks)
 
-                    # Store file-to-chunk mapping
+                    rebuilt_index, rebuilt_chunks = self._create_vector_index(
+                        rebuilt_chunks_source
+                    )
+                    self.index = rebuilt_index
+                    self.chunks = rebuilt_chunks
+                    self.chunk_to_file = rebuilt_chunk_to_file
                     self.file_to_chunk_indices[file_path] = file_chunk_indices
 
                     # Restore metadata in memory
@@ -1689,23 +2148,45 @@ These positions indicate where to split the text."""
                         }
 
                     self.indexed_files.add(file_path)
-                    if self.config.show_stats:
-                        print("  ✅ Successfully loaded from cache")
 
-                    # Update stats for cache load
-                    stats["success"] = True
-                    stats["num_chunks"] = len(cached_chunks)
-                    stats["num_pages"] = cached_metadata.get("num_pages")
-                    stats["vlm_pages"] = cached_metadata.get("vlm_pages")
-                    stats["total_images"] = cached_metadata.get("total_images")
-                    stats["total_indexed_files"] = len(self.indexed_files)
-                    stats["total_chunks"] = len(self.chunks)
-                    stats["from_cache"] = True
-                    return stats
+                    # Track access time for LRU (was missing — pre-existing bug)
+                    current_time = time.time()
+                    self.file_index_times[file_path] = current_time
+                    self._access_counter += 1
+                    self.file_access_times[file_path] = self._access_counter
+
+                if self.config.show_stats:
+                    print("  ✅ Successfully loaded from cache")
+
+                # Check memory limits after cache load
+                limits_ok = self._check_memory_limits()
+
+                # Update stats for cache load
+                stats["success"] = True
+                stats["num_chunks"] = len(cached_chunks)
+                stats["num_pages"] = cached_metadata.get("num_pages")
+                stats["vlm_pages"] = cached_metadata.get("vlm_pages")
+                stats["total_images"] = cached_metadata.get("total_images")
+                stats["total_indexed_files"] = len(self.indexed_files)
+                stats["total_chunks"] = len(self.chunks)
+                stats["from_cache"] = True
+                if not limits_ok:
+                    stats["memory_limit_warning"] = True
+                return stats
             except Exception as e:
                 self.log.warning(f"Cache load failed: {e}, reindexing")
                 if self.config.show_stats:
-                    print("  ⚠️  Cache loading failed, will reindex from scratch")
+                    print(
+                        "  ⚠️  Cache outdated or corrupted, will reindex from scratch"
+                    )
+                try:
+                    os.remove(cache_path)
+                except OSError:
+                    pass
+                try:
+                    os.remove(md_cache_path)
+                except OSError:
+                    pass
 
         # Extract and process document
         if self.config.show_stats:
@@ -1740,55 +2221,89 @@ These positions indicate where to split the text."""
             # Split into chunks
             new_chunks = self._split_text_into_chunks(text)
 
-            # Track which chunks belong to this file
-            file_chunk_indices = []
-            start_idx = len(self.chunks)
+            with self._state_lock:
+                if file_path in self.indexed_files:
+                    if self.config.show_stats:
+                        print(f"📋 Document already indexed: {Path(file_path).name}")
+                    self.log.info(f"Document already indexed: {file_path}")
+                    stats["success"] = True
+                    stats["already_indexed"] = True
+                    stats["total_indexed_files"] = len(self.indexed_files)
+                    stats["total_chunks"] = len(self.chunks)
+                    return stats
 
-            # Add to existing chunks or create new
-            if self.chunks:
-                old_count = len(self.chunks)
-                self.chunks.extend(new_chunks)
-
-                # Track the indices of chunks for this file
-                for i in range(start_idx, start_idx + len(new_chunks)):
-                    file_chunk_indices.append(i)
-                    self.chunk_to_file[i] = file_path
-
-                if self.config.show_stats:
-                    print(
-                        f"🔄 Rebuilding search index ({old_count} + {len(new_chunks)} = {len(self.chunks)} total chunks)"
+                # This second capacity check is intentional: the optimistic
+                # pre-flight above avoids expensive extraction work, while this
+                # locked check protects against TOCTOU drift after extraction
+                # and chunking finish.
+                if not self._has_indexing_capacity():
+                    msg = (
+                        f"Memory limit reached: {len(self.indexed_files)} files "
+                        f"(max: {self.config.max_indexed_files}), "
+                        f"{len(self.chunks)} chunks "
+                        f"(max: {self.config.max_total_chunks}). "
+                        "Enable LRU eviction or remove documents manually."
                     )
-                self.index, self.chunks = self._create_vector_index(self.chunks)
-            else:
-                # First file being indexed
-                for i in range(len(new_chunks)):
-                    file_chunk_indices.append(i)
-                    self.chunk_to_file[i] = file_path
+                    self.log.warning(f"Cannot index {file_path}: {msg}")
+                    if self.config.show_stats:
+                        print(f"❌ {msg}")
+                    stats["error"] = msg
+                    stats["memory_limit_reached"] = True
+                    return stats
 
+                # Track which chunks belong to this file and only publish them after
+                # the rebuilt global index succeeds.
+                if self.chunks:
+                    old_chunks = list(self.chunks)
+                    old_count = len(old_chunks)
+                    rebuilt_chunks_source = old_chunks + list(new_chunks)
+                    start_idx = len(old_chunks)
+                    file_chunk_indices = list(
+                        range(start_idx, start_idx + len(new_chunks))
+                    )
+                    rebuilt_chunk_to_file = dict(self.chunk_to_file)
+                    for chunk_idx in file_chunk_indices:
+                        rebuilt_chunk_to_file[chunk_idx] = file_path
+
+                    if self.config.show_stats:
+                        print(
+                            f"🔄 Rebuilding search index ({old_count} + {len(new_chunks)} = {len(rebuilt_chunks_source)} total chunks)"
+                        )
+                else:
+                    file_chunk_indices = list(range(len(new_chunks)))
+                    rebuilt_chunks_source = list(new_chunks)
+                    rebuilt_chunk_to_file = {
+                        idx: file_path for idx in file_chunk_indices
+                    }
+
+                    if self.config.show_stats:
+                        print("🏗️  Building initial search index...")
+
+                rebuilt_index, rebuilt_chunks = self._create_vector_index(
+                    rebuilt_chunks_source
+                )
+                self.index = rebuilt_index
+                self.chunks = rebuilt_chunks
+                self.chunk_to_file = rebuilt_chunk_to_file
+                self.file_to_chunk_indices[file_path] = file_chunk_indices
+
+                # Build and cache per-file FAISS index for fast file-specific searches
                 if self.config.show_stats:
-                    print("🏗️  Building initial search index...")
-                self.index, self.chunks = self._create_vector_index(new_chunks)
+                    print("🔍 Building per-file search index...")
 
-            # Store the file-to-chunks mapping
-            self.file_to_chunk_indices[file_path] = file_chunk_indices
+                self._load_embedder()
+                # Generate embeddings for this file's chunks only
+                file_embeddings = self._encode_texts(new_chunks, show_progress=False)
 
-            # Build and cache per-file FAISS index for fast file-specific searches
-            if self.config.show_stats:
-                print("🔍 Building per-file search index...")
+                # Create FAISS index for this file
+                dimension = file_embeddings.shape[1]
+                file_index = faiss.IndexFlatL2(dimension)
+                # pylint: disable=no-value-for-parameter
+                file_index.add(file_embeddings.astype("float32"))
 
-            self._load_embedder()
-            # Generate embeddings for this file's chunks only
-            file_embeddings = self._encode_texts(new_chunks, show_progress=False)
-
-            # Create FAISS index for this file
-            dimension = file_embeddings.shape[1]
-            file_index = faiss.IndexFlatL2(dimension)
-            # pylint: disable=no-value-for-parameter
-            file_index.add(file_embeddings.astype("float32"))
-
-            # Cache the index and embeddings for this file
-            self.file_indices[file_path] = file_index
-            self.file_embeddings[file_path] = file_embeddings
+                # Cache the index and embeddings for this file
+                self.file_indices[file_path] = file_index
+                self.file_embeddings[file_path] = file_embeddings
 
             if self.config.show_stats:
                 print(f"✅ Cached per-file index with {len(new_chunks)} chunks")
@@ -1801,27 +2316,34 @@ These positions indicate where to split the text."""
                 "full_text": text,  # Cache full extracted text (for /dump)
                 "metadata": file_metadata,  # Cache metadata (num_pages, vlm_pages, etc.)
             }
-            with open(cache_path, "wb") as f:
-                pickle.dump(cache_data, f)
-
-            # Store metadata in memory for fast access
-            self.file_metadata[file_path] = {
-                "full_text": text,
-                **file_metadata,  # num_pages, vlm_pages, total_images
-            }
+            self._save_cache(cache_path, cache_data)
 
             # Auto-save markdown version to cache directory for easy access
             self._save_extracted_markdown(file_path, text, file_metadata)
 
-            self.indexed_files.add(file_path)
+            with self._state_lock:
+                # Store metadata in memory for fast access
+                self.file_metadata[file_path] = {
+                    "full_text": text,
+                    **file_metadata,  # num_pages, vlm_pages, total_images
+                }
 
-            # Track index time for LRU
-            current_time = time.time()
-            self.file_index_times[file_path] = current_time
-            self.file_access_times[file_path] = current_time
+                self.indexed_files.add(file_path)
 
-            # Check memory limits and evict if necessary
-            self._check_memory_limits()
+                # Track index time for LRU
+                current_time = time.time()
+                self.file_index_times[file_path] = current_time
+                self._access_counter += 1
+                self.file_access_times[file_path] = self._access_counter
+
+                # Check memory limits and evict if necessary
+                limits_ok = self._check_memory_limits()
+            if not limits_ok:
+                self.log.warning(
+                    f"Memory limits exceeded after indexing {file_path}. "
+                    "Consider increasing limits or removing documents."
+                )
+                stats["memory_limit_warning"] = True
 
             if self.config.show_stats:
                 print(f"✅ Successfully indexed {Path(file_path).name}")
@@ -1841,12 +2363,27 @@ These positions indicate where to split the text."""
             stats["num_chunks"] = len(new_chunks)
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)
+            if file_type == ".pdf":
+                stats["pdf_status"] = "readable"
             return stats
 
+        except PDFExtractionError as e:
+            # Specific, user-actionable PDF failure. Surface the short status
+            # code separately so UIs can badge the document (e.g. "encrypted")
+            # rather than showing the full multi-line remediation blob.
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"PDF extraction failed for {file_path}: {e.status}")
+            stats["error"] = str(e)
+            stats["pdf_status"] = e.status
+            return stats
         except Exception as e:
             if self.config.show_stats:
                 print(f"❌ Failed to index {Path(file_path).name}: {e}")
-            self.log.error(f"Failed to index {file_path}: {e}")
+            self.log.error(
+                f"Failed to index {file_path}: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
             stats["error"] = str(e)
             return stats
 
@@ -1859,26 +2396,31 @@ These positions indicate where to split the text."""
         2. Searches smaller, file-specific FAISS index
         3. No need to rebuild index on each query
         """
-        if self.index is None or not self.chunks:
-            raise ValueError("No documents indexed. Call index_document() first.")
+        with self._state_lock:
+            if self.index is None or not self.chunks:
+                raise ValueError("No documents indexed. Call index_document() first.")
 
-        if file_path not in self.file_to_chunk_indices:
-            raise ValueError(f"File not indexed: {file_path}")
+            if file_path not in self.file_to_chunk_indices:
+                raise ValueError(f"File not indexed: {file_path}")
 
-        # Update access time for LRU tracking
-        self.file_access_times[file_path] = time.time()
+            # Update access time for LRU tracking
+            self._access_counter += 1
+            self.file_access_times[file_path] = self._access_counter
 
-        # Get chunk indices for this file
-        file_chunk_indices = self.file_to_chunk_indices[file_path]
+            # Snapshot file-scoped state before the expensive embedding/search work.
+            file_chunk_indices = list(self.file_to_chunk_indices[file_path])
+            chunks_snapshot = list(self.chunks)
+            cached_file_index = self.file_indices.get(file_path)
+
         if not file_chunk_indices:
             return [], []
 
-        # Get chunks for this file
-        file_chunks = [self.chunks[i] for i in file_chunk_indices]
+        # Get chunks for this file from the snapshot
+        file_chunks = [chunks_snapshot[i] for i in file_chunk_indices]
 
-        # Use CACHED per-file index (this is the performance fix!)
-        if file_path not in self.file_indices:
-            # Index not cached - build it now (shouldn't happen normally)
+        # Use cached per-file index when available; otherwise rebuild locally
+        # from the snapshot without mutating shared state mid-query.
+        if cached_file_index is None:
             self.log.warning(f"Per-file index not cached for {file_path}, rebuilding")
             self._load_embedder()
             file_embeddings = self._encode_texts(file_chunks, show_progress=False)
@@ -1886,11 +2428,12 @@ These positions indicate where to split the text."""
             file_index = faiss.IndexFlatL2(dimension)
             # pylint: disable=no-value-for-parameter
             file_index.add(file_embeddings.astype("float32"))
-            self.file_indices[file_path] = file_index
-            self.file_embeddings[file_path] = file_embeddings
+            # Intentionally keep this rebuilt index query-local. Publishing it
+            # back into the shared per-file caches here would mutate shared
+            # state from a read path after the snapshot was taken.
         else:
             # Use cached index - FAST!
-            file_index = self.file_indices[file_path]
+            file_index = cached_file_index
 
         # Encode query only once
         self._load_embedder()
@@ -1918,21 +2461,25 @@ These positions indicate where to split the text."""
 
         return retrieved_chunks, scores
 
-    def _retrieve_chunks_with_metadata(self, query: str) -> tuple:
+    def _retrieve_chunks_with_metadata(
+        self, query: str, search_snapshot: Optional[Dict[str, Any]] = None
+    ) -> tuple:
         """
         Retrieve chunks with metadata about their source files.
 
         Returns:
             (chunks, scores, metadata) tuple
         """
-        chunks, scores = self._retrieve_chunks(query)
+        snapshot = search_snapshot or self._search_chunks(query)
+        chunks = snapshot["retrieved_chunks"]
+        scores = snapshot["scores"]
 
         # Build metadata for each chunk
         metadata = []
-        for i, (chunk, score) in enumerate(zip(chunks, scores)):
-            # Find which file this chunk came from
-            chunk_idx = self.chunks.index(chunk) if chunk in self.chunks else -1
-            source_file = self.chunk_to_file.get(chunk_idx, "unknown")
+        for i, (chunk_idx, chunk, score) in enumerate(
+            zip(snapshot["retrieved_indices"], chunks, scores)
+        ):
+            source_file = snapshot["chunk_to_file"].get(chunk_idx, "unknown")
 
             metadata.append(
                 {
@@ -1953,38 +2500,56 @@ These positions indicate where to split the text."""
 
     def _retrieve_chunks(self, query: str) -> tuple:
         """Retrieve relevant chunks for query."""
-        if self.index is None or not self.chunks:
-            raise ValueError("No documents indexed. Call index_document() first.")
+        snapshot = self._search_chunks(query)
+        return snapshot["retrieved_chunks"], snapshot["scores"]
+
+    def _search_chunks(self, query: str) -> Dict[str, Any]:
+        """Retrieve relevant chunks and indices from a consistent snapshot."""
+        snapshot = self._snapshot_query_state()
+        chunks_snapshot = snapshot["chunks"]
+        index_snapshot = snapshot["index"]
 
         self._load_embedder()
 
         # Generate query embedding
         if self.config.show_stats:
-            print(f"🔍 Searching through {len(self.chunks)} chunks...")
+            print(f"🔍 Searching through {len(chunks_snapshot)} chunks...")
         self.log.debug(f"Encoding query: {query[:50]}...")
         query_embedding = self._encode_texts([query], show_progress=False)
 
         # Search for similar chunks
-        k = min(self.config.max_chunks, len(self.chunks))
+        k = min(self.config.max_chunks, len(chunks_snapshot))
         if self.config.show_stats:
             print(f"  🎯 Finding {k} most relevant chunks...")
         # pylint: disable=no-value-for-parameter
-        distances, indices = self.index.search(query_embedding.astype("float32"), k)
+        distances, indices = index_snapshot.search(query_embedding.astype("float32"), k)
 
-        # Get chunks and scores
-        retrieved_chunks = [self.chunks[i] for i in indices[0]]
-        # Convert distances to similarity scores (lower distance = higher similarity)
-        scores = [1.0 / (1.0 + dist) for dist in distances[0]]
+        retrieved_indices = []
+        retrieved_chunks = []
+        scores = []
+        for idx, dist in zip(indices[0], distances[0]):
+            idx = int(idx)
+            # FAISS can surface stale or invalid positions relative to the
+            # captured chunk snapshot; skip anything outside the snapshot.
+            if idx < 0 or idx >= len(chunks_snapshot):
+                continue
+            retrieved_indices.append(idx)
+            retrieved_chunks.append(chunks_snapshot[idx])
+            scores.append(1.0 / (1.0 + float(dist)))
 
         if self.config.show_stats:
+            avg_relevance = sum(scores) / len(scores) if scores else 0.0
             print(
-                f"  ✅ Retrieved {len(retrieved_chunks)} chunks (avg relevance: {sum(scores)/len(scores):.3f})"
+                f"  ✅ Retrieved {len(retrieved_chunks)} chunks (avg relevance: {avg_relevance:.3f})"
             )
 
         self.log.debug(
             f"Retrieved {len(retrieved_chunks)} chunks with scores: {[f'{s:.3f}' for s in scores]}"
         )
-        return retrieved_chunks, scores
+        snapshot["retrieved_indices"] = retrieved_indices
+        snapshot["retrieved_chunks"] = retrieved_chunks
+        snapshot["scores"] = scores
+        return snapshot
 
     def query(self, question: str, include_metadata: bool = True) -> RAGResponse:
         """
@@ -1997,16 +2562,18 @@ These positions indicate where to split the text."""
         Returns:
             RAGResponse with answer, retrieved chunks, and metadata
         """
-        if self.index is None:
-            raise ValueError("No documents indexed. Call index_document() first.")
+        search_snapshot = self._search_chunks(question)
+        chunks = search_snapshot["retrieved_chunks"]
+        scores = search_snapshot["scores"]
+        total_indexed_files = search_snapshot["indexed_file_count"]
+        total_indexed_chunks = len(search_snapshot["chunks"])
 
         # Retrieve relevant chunks with metadata
         if include_metadata:
             chunks, scores, chunk_metadata = self._retrieve_chunks_with_metadata(
-                question
+                question, search_snapshot
             )
         else:
-            chunks, scores = self._retrieve_chunks(question)
             chunk_metadata = None
 
         # Build context from retrieved chunks
@@ -2043,8 +2610,8 @@ Answer:"""
                 "question": question,
                 "num_chunks_retrieved": len(chunks),
                 "source_files": source_files,
-                "total_indexed_files": len(self.indexed_files),
-                "total_indexed_chunks": len(self.chunks),
+                "total_indexed_files": total_indexed_files,
+                "total_indexed_chunks": total_indexed_chunks,
                 "average_relevance_score": float(np.mean(scores)) if scores else 0.0,
                 "max_relevance_score": float(max(scores)) if scores else 0.0,
                 "min_relevance_score": float(min(scores)) if scores else 0.0,
@@ -2073,7 +2640,7 @@ Answer:"""
 
         This creates a human-readable markdown version of the extracted text
         that can be used for /dump commands and debugging without re-extraction.
-        Uses hash-based naming to match the pickle cache for consistency.
+        Uses hash-based naming to match the JSON cache for consistency.
 
         Args:
             file_path: Path to original document
@@ -2083,7 +2650,7 @@ Answer:"""
         try:
             from datetime import datetime
 
-            # Calculate file hash for consistency with pickle cache
+            # Calculate file hash for consistency with JSON cache
             path = Path(file_path).absolute()
             hasher = hashlib.sha256()
             with self._safe_open(path, "rb") as f:
@@ -2091,7 +2658,7 @@ Answer:"""
                     hasher.update(chunk)
             content_hash = hasher.hexdigest()
 
-            # Use hash-based filename similar to pickle cache
+            # Use hash-based filename similar to JSON cache
             path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
             cache_key = f"{path_hash}_{content_hash[:32]}"
             md_filename = f"{cache_key}_extracted.md"
@@ -2136,10 +2703,11 @@ Answer:"""
         """Clear the RAG cache."""
         import shutil
 
-        if os.path.exists(self.config.cache_dir):
-            shutil.rmtree(self.config.cache_dir)
-            os.makedirs(self.config.cache_dir, exist_ok=True)
-        self.log.info("Cache cleared")
+        with self._state_lock:
+            if os.path.exists(self.config.cache_dir):
+                shutil.rmtree(self.config.cache_dir)
+                os.makedirs(self.config.cache_dir, exist_ok=True)
+            self.log.info("Cache cleared")
 
     def get_status(self) -> Dict[str, Any]:
         """Get RAG system status."""

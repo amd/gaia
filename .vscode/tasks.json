@@ -55,6 +55,61 @@
             "detail": "Compile GAIA VSCode extension"
         },
         {
+            "label": "C++: CMake Configure",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-B", "${workspaceFolder}/cpp/build",
+                "-S", "${workspaceFolder}/cpp",
+                "-DCMAKE_BUILD_TYPE=Release"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": [],
+            "detail": "Configure the C++ project (SSL on by default; vcpkg auto-bootstraps OpenSSL on first run)"
+        },
+        {
+            "label": "C++: Build",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build", "${workspaceFolder}/cpp/build",
+                "--config", "Release",
+                "--parallel"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": "$msCompile",
+            "detail": "Build all C++ targets (Release). Run 'C++: CMake Configure' first if cpp/build does not exist."
+        },
+        {
+            "label": "C++: Test",
+            "type": "shell",
+            "command": "ctest",
+            "args": [
+                "--test-dir", "${workspaceFolder}/cpp/build",
+                "-C", "Release",
+                "--output-on-failure"
+            ],
+            "group": "test",
+            "dependsOn": "C++: Build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": [],
+            "detail": "Run C++ unit tests via CTest"
+        },
+        {
             "label": "Run GAIA docs",
             "type": "shell",
             "command": "npm install && npm run dev",

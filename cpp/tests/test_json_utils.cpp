@@ -207,3 +207,13 @@ TEST(JsonUtilsTest, ParseWhitespace) {
     ASSERT_TRUE(parsed.answer.has_value());
     EXPECT_TRUE(parsed.answer.value().find("empty response") != std::string::npos);
 }
+
+TEST(JsonUtilsTest, NullToolArgs) {
+    std::string response = R"({"thought": "test", "tool": "echo", "tool_args": null})";
+    ParsedResponse parsed = parseLlmResponse(response);
+    ASSERT_TRUE(parsed.toolName.has_value());
+    EXPECT_EQ(parsed.toolName.value(), "echo");
+    ASSERT_TRUE(parsed.toolArgs.has_value());
+    EXPECT_TRUE(parsed.toolArgs.value().is_object());
+    EXPECT_TRUE(parsed.toolArgs.value().empty());
+}

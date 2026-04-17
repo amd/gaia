@@ -1,0 +1,6 @@
+# Ignore individual eval run directories (runtime artifacts)
+eval-*/
+rerun/
+
+# Keep baseline reference
+!baseline.json

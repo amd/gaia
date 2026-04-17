@@ -1,0 +1,28 @@
+id: screenshot_capture
+name: "Screenshot Tool -- Capture and Report"
+category: vision
+severity: medium
+description: |
+  Tests that the take_screenshot tool is registered and working in ChatAgent.
+  Agent should be able to capture a screenshot and report the file path.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask agent to take a screenshot"
+    user_message: "Can you take a screenshot of my screen right now?"
+    ground_truth:
+      expected_behavior: "Agent calls take_screenshot tool and reports the saved file path"
+    success_criteria: |
+      Agent calls take_screenshot tool. The tool saves a PNG file and returns
+      a file path. Agent reports the file path to the user.
+      PASS if agent attempts take_screenshot and reports a result (success OR graceful error).
+      FAIL if agent says it cannot take screenshots at all, or refuses to try.
+
+expected_outcome: |
+  Agent successfully calls take_screenshot, captures the screen (or reports
+  an error gracefully), and tells the user the file path or error message.

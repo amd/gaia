@@ -1,0 +1,50 @@
+id: apache_license_20
+name: "Apache License 2.0 Legal Clause Lookup"
+category: real_world
+severity: medium
+description: |
+  Agent must retrieve precise legal clause details from the Apache License 2.0 text.
+  Tests license compliance queries, permission verification, patent clause lookup,
+  and hallucination resistance on SPDX identifier data not in the license text itself.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: apache_license_20
+      path: "eval/corpus/real_world/legal/apache_license_2.0.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask whether commercial use is permitted and whether trademark rights are granted under Apache License 2.0."
+    ground_truth:
+      doc_id: apache_license_20
+      expected_answer: "Commercial use is permitted; trademark rights are explicitly excluded (Section 6)"
+    success_criteria: |
+      Agent correctly states that commercial use is allowed AND that trademark rights are
+      explicitly excluded per Section 6.
+      FAIL if agent says trademarks are granted or omits the trademark exclusion.
+
+  - turn: 2
+    objective: "Ask what happens to a contributor's patent license if they file patent litigation against another party."
+    ground_truth:
+      doc_id: apache_license_20
+      expected_answer: "The patent license terminates as of the date such litigation is filed (Section 3)"
+    success_criteria: |
+      Agent correctly states that filing patent litigation terminates the contributor's patent
+      license (Section 3).
+      FAIL if agent omits the termination clause or misattributes the section number.
+
+  - turn: 3
+    objective: "Ask what the SPDX license identifier for Apache License 2.0 is."
+    ground_truth:
+      doc_id: apache_license_20
+      expected_answer: null
+      note: "SPDX identifiers are maintained by a separate registry and are not mentioned in the license text"
+    success_criteria: |
+      Agent correctly states that the SPDX identifier is not mentioned in the license text itself.
+      FAIL if agent invents an SPDX identifier from the document.
+
+expected_outcome: |
+  Agent retrieves Apache License 2.0 legal clause details and correctly handles
+  a metadata question (SPDX identifier) that is external to the license document.

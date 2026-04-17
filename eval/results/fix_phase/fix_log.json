@@ -1,0 +1,26 @@
+[
+  {
+    "fix_id": 1,
+    "file": "src/gaia/agents/chat/tools/rag_tools.py",
+    "change_summary": "Added fuzzy basename fallback in query_specific_file. After the initial path match fails, the tool now extracts the basename from the provided path (e.g., 'employee_handbook.md' from 'C:\\Users\\14255\\employee_handbook.md') and searches indexed files whose Path.name matches. Exactly 1 match proceeds normally; 0 matches returns an error; 2+ matches returns an ambiguity error.",
+    "targets_scenario": ["negation_handling", "cross_section_rag"],
+    "rationale": "Agent was constructing guessed absolute paths (e.g., C:\\Users\\14255\\employee_handbook.md) for subsequent turns after Turn 1 succeeded with just the bare filename. The tool failed with 'not found' because the guessed path never matched any indexed document entry. The basename fallback recovers this case without requiring a full path match.",
+    "lines_changed": "550-574 (added 20 lines after initial matching_files check)"
+  },
+  {
+    "fix_id": 2,
+    "file": "src/gaia/agents/chat/agent.py",
+    "change_summary": "Added proportional response length instruction to the system prompt WHO YOU ARE section: 'Match your response length to the complexity of the question. For short questions, greetings, or simple factual lookups, reply in 1-2 sentences. Only expand to multiple paragraphs for complex analysis requests.'",
+    "targets_scenario": ["concise_response"],
+    "rationale": "Turn 2 ('Revenue?') generated an 84-word multi-bullet wall of clarifying questions instead of retrieving and citing the answer in one sentence. The agent had no explicit instruction about scaling response length to question complexity. The new rule directly addresses this by requiring 1-2 sentences for simple factual lookups.",
+    "lines_changed": "301 (1 line added after 'You keep it short...' bullet)"
+  },
+  {
+    "fix_id": 3,
+    "file": "src/gaia/ui/_chat_helpers.py",
+    "change_summary": "Modified _resolve_rag_paths to return empty lists when a session has no document_ids, instead of exposing ALL documents from the global library. Prevents cross-session contamination where documents indexed in prior sessions appeared in the system prompt and list_indexed_documents output of fresh sessions.",
+    "targets_scenario": ["honest_limitation", "csv_analysis", "smart_discovery", "concise_response"],
+    "rationale": "When document_ids is empty, the old code called db.list_documents() and returned ALL global library docs as library_paths. These appeared in the system prompt as 'available documents', causing the agent to reference or query documents from entirely different sessions. The fix ensures a session only sees documents explicitly linked to it via document_ids.",
+    "lines_changed": "89-97 (replaced 8-line all-docs-fetch with return [], [])"
+  }
+]

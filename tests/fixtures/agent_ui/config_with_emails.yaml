@@ -1,0 +1,40 @@
+application:
+  name: DataProcessor
+  version: 2.1.0
+  debug: false
+
+admin:
+  name: Sarah Chen
+  email: sarah.chen@company.com
+  phone: "+1-415-555-0142"
+
+notifications:
+  recipients:
+    - admin_alerts@company.com
+    - j.developer92@gmail.com
+  on_failure: true
+  on_success: false
+
+database:
+  host: db.internal.company.com
+  port: 5432
+  name: analytics_prod
+  connection_pool: 10
+
+monitoring:
+  contact_email: ops.monitoring@outlook.com
+  escalation_phone: "+1-206-555-0198"
+  alert_threshold: 95
+  check_interval_seconds: 30
+
+reporting:
+  send_to: weekly.reports@company.com
+  cc: m.analytics.lead@gmail.com
+  format: pdf
+  schedule: "0 8 * * MON"
+
+logging:
+  level: INFO
+  file: /var/log/dataprocessor/app.log
+  max_size_mb: 100
+  rotate_count: 5

@@ -1,0 +1,50 @@
+id: us_labor_statistics_xlsx
+name: "US Labor Statistics 2024 Spreadsheet Multi-Sheet Analysis"
+category: real_world
+severity: high
+description: |
+  Agent must analyze a two-sheet Excel spreadsheet (Monthly Unemployment + Industry Breakdown)
+  containing US labor statistics for 2024. Tests time-series lookup, industry comparison,
+  and hallucination resistance on demographic breakdowns absent from this dataset.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: us_labor_xlsx
+      path: "eval/corpus/real_world/spreadsheets/us_labor_statistics_2024.xlsx"
+
+turns:
+  - turn: 1
+    objective: "Ask what the unemployment rate was in July 2024 and which month had the lowest nonfarm payrolls added in 2024."
+    ground_truth:
+      doc_id: us_labor_xlsx
+      expected_answer: "July 2024 unemployment rate: 4.3%; month with lowest payrolls: October 2024 with only 36,000 jobs added"
+    success_criteria: |
+      Agent correctly states 4.3% for July 2024 (stored as decimal 0.043 in the spreadsheet)
+      and identifies October 2024 as the weakest month for job additions (36,000).
+      FAIL if agent states wrong rate or wrong month.
+
+  - turn: 2
+    objective: "Ask which industry lost the most jobs year-over-year in 2024 according to the Industry Breakdown sheet."
+    ground_truth:
+      doc_id: us_labor_xlsx
+      expected_answer: "Manufacturing, with a year-over-year change of -100,000 jobs"
+    success_criteria: |
+      Agent correctly identifies Manufacturing as the sector with the largest YoY job loss (-100K).
+      Requires reading the Industry Breakdown sheet, not just the Monthly Unemployment sheet.
+      FAIL if agent names a different industry or wrong figure.
+
+  - turn: 3
+    objective: "Ask what the unemployment rate was for workers aged 25 to 54 in July 2024."
+    ground_truth:
+      doc_id: us_labor_xlsx
+      expected_answer: null
+      note: "This spreadsheet contains only aggregate monthly unemployment rates; no age-demographic breakdowns are present"
+    success_criteria: |
+      Agent correctly states that age-demographic breakdowns are not included in this dataset.
+      FAIL if agent invents an age-group unemployment rate.
+
+expected_outcome: |
+  Agent navigates both sheets of the XLSX file, retrieves monthly and industry-level
+  statistics, and correctly refuses to fabricate demographic breakdowns.

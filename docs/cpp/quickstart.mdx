@@ -80,13 +80,13 @@ icon: "rocket"
   <Step title="Run a demo agent">
     Both demo agents are Windows-only (they use PowerShell for system interaction).
 
-    **Windows System Health Agent** (requires `uvx` for the MCP server):
+    **[Windows System Health Agent](/cpp/health-agent)** (requires `uvx` for the MCP server):
     ```bat
     build\Release\health_agent.exe
     ```
     The agent connects to the Windows MCP server, gathers CPU/memory/disk/GPU metrics via PowerShell, and presents results in the console or writes a full report to Notepad.
 
-    **Wi-Fi Troubleshooter** (no extra dependencies, run as admin for fix tools):
+    **[Wi-Fi Troubleshooter](/cpp/wifi-agent)** (no extra dependencies, run as admin for fix tools):
     ```bat
     build\Release\wifi_agent.exe
     ```
@@ -98,7 +98,7 @@ icon: "rocket"
 
 ## Running Tests
 
-Unit tests run without an LLM server:
+Verify your build with the unit test suite (no LLM server required):
 
 <Tabs>
   <Tab title="Windows">
@@ -113,21 +113,19 @@ Unit tests run without an LLM server:
   </Tab>
 </Tabs>
 
-The test suite covers all eight modules: agent loop, tool registry, JSON utilities, MCP client, console output, clean console, tool integration, and types.
-
-<Note>
-You can also run tests via CTest:
-
-```bat
-ctest --test-dir build -C Release --output-on-failure
-```
-
-This works because integration tests are not built by default. If you enable them with `-DGAIA_BUILD_INTEGRATION_TESTS=ON`, run the `tests_integration` binary separately with an LLM server running — otherwise CTest will hang on those tests.
-</Note>
+See the [Testing Guide](/cpp/testing) for the full test suite — unit tests (8 modules), integration tests (LLM, MCP, Wi-Fi, Health), CI pipeline, and how to add new tests.
 
 ## Next Steps
 
 <CardGroup cols={2}>
+  <Card title="System Health Agent" icon="desktop" href="/cpp/health-agent">
+    MCP-based system diagnostics — CPU, memory, disk, GPU via PowerShell
+  </Card>
+
+  <Card title="Wi-Fi Troubleshooter" icon="wifi" href="/cpp/wifi-agent">
+    Full network diagnostic and auto-fix using registered C++ tools
+  </Card>
+
   <Card title="Framework Overview" icon="book" href="/cpp/overview">
     Architecture, agent execution flow, how tools work, and project structure
   </Card>
@@ -136,20 +134,16 @@ This works because integration tests are not built by default. If you enable the
     Add gaia_core to your own CMake project via FetchContent, find_package, or shared library
   </Card>
 
-  <Card title="Custom Agent" icon="sliders" href="/cpp/custom-agent">
-    Custom prompts, typed tools, MCP servers, output capture, and AgentConfig tuning
+  <Card title="Testing Guide" icon="flask-vial" href="/cpp/testing">
+    Unit tests, integration tests, CI pipeline, and adding new tests
   </Card>
 
   <Card title="API Reference" icon="book-open" href="/cpp/api-reference">
     Error handling, thread safety, security, deployment, and complete class API
   </Card>
 
-  <Card title="Wi-Fi Troubleshooter" icon="wifi" href="/cpp/wifi-agent">
-    Full network diagnostic and auto-fix using registered C++ tools
-  </Card>
-
-  <Card title="System Health Agent" icon="desktop" href="/cpp/health-agent">
-    MCP-based system diagnostics — CPU, memory, disk, GPU via PowerShell
+  <Card title="Custom Agent" icon="sliders" href="/cpp/custom-agent">
+    Custom prompts, typed tools, MCP servers, output capture, and AgentConfig tuning
   </Card>
 </CardGroup>
 

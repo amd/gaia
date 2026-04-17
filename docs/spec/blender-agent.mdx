@@ -69,7 +69,10 @@ class BlenderAgent(Agent):
         model_id: str = None,
         base_url: str = "http://localhost:8000/api/v1",
         max_steps: int = 5,
-        **kwargs
+        debug_prompts: bool = False,
+        output_dir: str = None,
+        streaming: bool = False,
+        show_stats: bool = True,
     ):
         """
         Initialize BlenderAgent.
@@ -77,7 +80,12 @@ class BlenderAgent(Agent):
         Args:
             mcp: Pre-configured MCP client (or creates new one)
             model_id: LLM model ID
+            base_url: Base URL for the local LLM server API
             max_steps: Max steps before terminating
+            debug_prompts: Include prompts in conversation history
+            output_dir: Directory for storing JSON output files
+            streaming: Enable real-time streaming of LLM responses
+            show_stats: Display LLM performance stats after each response
         """
         pass
 

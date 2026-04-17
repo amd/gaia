@@ -1,0 +1,35 @@
+id: smart_discovery
+name: "Smart Discovery"
+category: tool_selection
+severity: critical
+description: |
+  No documents are pre-indexed. User asks about PTO policy.
+  Agent must: search for relevant file → find employee_handbook.md → index it → answer.
+
+persona: power_user
+
+setup:
+  index_documents: []  # No pre-indexed documents
+
+turns:
+  - turn: 1
+    objective: "Ask about PTO policy with no documents indexed"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: pto_days
+      expected_answer: "15 days"
+    success_criteria: |
+      Agent discovers and indexes employee_handbook.md (or similar HR document),
+      then correctly answers: first-year employees get 15 PTO days.
+      FAIL if agent says 'no documents available' without trying to find them.
+
+  - turn: 2
+    objective: "Ask follow-up: 'what about the remote work policy?'"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: remote_work
+      expected_answer: "Up to 3 days/week with manager approval"
+    success_criteria: "Agent answers from already-indexed document without re-indexing"
+
+expected_outcome: |
+  Agent proactively discovers and indexes the employee handbook, then answers accurately.

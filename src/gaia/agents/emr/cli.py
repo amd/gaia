@@ -302,7 +302,7 @@ def cmd_init(args):
 
     # Required models for EMR agent
     vlm_model = args.vlm_model  # Default: Qwen3-VL-4B-Instruct-GGUF
-    llm_model = "Qwen3-Coder-30B-A3B-Instruct-GGUF"  # For chat/query processing
+    llm_model = "Qwen3.5-35B-A3B-GGUF"  # For chat/query processing
     embed_model = "nomic-embed-text-v2-moe-GGUF"  # For similarity search
 
     REQUIRED_CONTEXT_SIZE = 32768

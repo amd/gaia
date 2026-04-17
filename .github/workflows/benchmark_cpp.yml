@@ -1,0 +1,153 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# C++ performance benchmark workflow.
+# Measures binary size, startup time, loop latency, and memory footprint.
+# Called from build_cpp.yml after the build job passes.
+
+name: C++ Benchmarks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: C++ Benchmarks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install OpenSSL (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libssl-dev
+
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: choco install openssl --no-progress -y
+
+      - name: Restore FetchContent cache
+        uses: actions/cache@v4
+        with:
+          path: cpp/build-bench/_deps
+          key: fetchcontent-bench-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+
+      # Restore baseline from last main-branch run (prefix match gets latest)
+      - name: Restore benchmark baseline
+        id: restore-baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: cpp/benchmark-results.json
+          key: benchmark-baseline-${{ matrix.os }}-dummy
+          restore-keys: benchmark-baseline-${{ matrix.os }}-
+
+      # Rename restored results to baseline path so the compare step can find it
+      - name: Rename restored cache to baseline
+        shell: bash
+        run: |
+          if [ -f cpp/benchmark-results.json ]; then
+            mv cpp/benchmark-results.json cpp/benchmark-baseline.json
+          fi
+
+      # Build static library + examples + benchmarks
+      - name: Configure CMake (static + benchmarks)
+        run: >
+          cmake -B cpp/build-bench -S cpp
+          -DCMAKE_BUILD_TYPE=Release
+          -DGAIA_BUILD_BENCHMARKS=ON
+          -DGAIA_BUILD_EXAMPLES=ON
+          -DGAIA_BUILD_TESTS=OFF
+          -DGAIA_BUILD_INTEGRATION_TESTS=OFF
+
+      - name: Build (static + benchmarks)
+        run: cmake --build cpp/build-bench --config Release --parallel
+
+      # Build shared library separately for DLL/SO size measurement
+      - name: Configure CMake (shared library)
+        run: >
+          cmake -B cpp/build-bench-shared -S cpp
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_SHARED_LIBS=ON
+          -DGAIA_BUILD_TESTS=OFF
+          -DGAIA_BUILD_EXAMPLES=OFF
+          -DGAIA_BUILD_BENCHMARKS=OFF
+
+      - name: Build (shared library)
+        run: cmake --build cpp/build-bench-shared --config Release --parallel
+
+      # Measure sizes and run all benchmarks on Linux
+      - name: Run benchmarks (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          STATIC=$(stat -c%s cpp/build-bench/libgaia_core.a)
+          SHARED=$(stat -c%s cpp/build-bench-shared/libgaia_core.so)
+          EXE=$(stat -c%s cpp/build-bench/security_demo)
+          echo "Static lib:  $STATIC bytes"
+          echo "Shared lib:  $SHARED bytes"
+          echo "Example exe: $EXE bytes"
+          cpp/build-bench/gaia_benchmarks \
+            --output cpp/benchmark-results.json \
+            --static-lib-size "$STATIC" \
+            --shared-lib-size "$SHARED" \
+            --exe-size "$EXE"
+
+      # Measure sizes and run all benchmarks on Windows
+      - name: Run benchmarks (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $static = (Get-Item "cpp/build-bench/Release/gaia_core.lib").Length
+          $shared = (Get-Item "cpp/build-bench-shared/Release/gaia_core.dll").Length
+          $exe    = (Get-Item "cpp/build-bench/Release/security_demo.exe").Length
+          Write-Host "Static lib:  $static bytes"
+          Write-Host "Shared lib:  $shared bytes"
+          Write-Host "Example exe: $exe bytes"
+          & "cpp/build-bench/Release/gaia_benchmarks.exe" `
+            --output "cpp/benchmark-results.json" `
+            --static-lib-size $static `
+            --shared-lib-size $shared `
+            --exe-size $exe
+
+      # Compare current results against baseline (binary: 10%, others: 15%)
+      - name: Compare against baseline
+        shell: bash
+        run: |
+          if [ -f cpp/benchmark-baseline.json ]; then
+            echo "Baseline found — running regression check"
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              BENCH_EXE="cpp/build-bench/Release/gaia_benchmarks.exe"
+            else
+              BENCH_EXE="cpp/build-bench/gaia_benchmarks"
+            fi
+            "$BENCH_EXE" \
+              --compare \
+              --baseline cpp/benchmark-baseline.json \
+              --current  cpp/benchmark-results.json
+          else
+            echo "No baseline found — first run establishes the baseline"
+          fi
+
+      # Save new baseline only on pushes to main (immutable cache: unique key per run)
+      - name: Save benchmark baseline
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: cpp/benchmark-results.json
+          key: benchmark-baseline-${{ matrix.os }}-${{ github.run_id }}
+
+      # Always upload results as an artifact for inspection
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: cpp-benchmark-${{ matrix.os }}
+          path: cpp/benchmark-results.json

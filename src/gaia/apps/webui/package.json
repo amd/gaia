@@ -1,0 +1,80 @@
+{
+  "name": "@amd-gaia/agent-ui",
+  "version": "0.17.2",
+  "type": "module",
+  "productName": "GAIA Agent UI",
+  "description": "Privacy-first agentic AI interface with document Q&A - runs 100% locally on AMD Ryzen AI",
+  "author": "AMD AI Group",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/amd/gaia.git",
+    "directory": "src/gaia/apps/webui"
+  },
+  "homepage": "https://amd-gaia.ai/guides/agent-ui",
+  "bugs": {
+    "url": "https://github.com/amd/gaia/issues"
+  },
+  "keywords": [
+    "gaia",
+    "amd",
+    "ryzen-ai",
+    "agent",
+    "ai",
+    "local-llm",
+    "privacy",
+    "rag",
+    "document-qa",
+    "electron"
+  ],
+  "main": "main.cjs",
+  "bin": {
+    "gaia-ui": "bin/gaia-ui.cjs"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "main.cjs",
+    "preload.cjs",
+    "services/",
+    "assets/",
+    "app.config.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "start": "electron .",
+    "package": "npm run build && electron-builder --config electron-builder.yml",
+    "package:win": "npm run build && electron-builder --win --config electron-builder.yml",
+    "package:mac": "npm run build && electron-builder --mac --config electron-builder.yml",
+    "package:linux": "npm run build && electron-builder --linux --config electron-builder.yml",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@vitejs/plugin-react": "^4.2.1",
+    "electron": "^40.6.1",
+    "electron-builder": "^26.8.1",
+    "lucide-react": "^0.312.0",
+    "qrcode": "^1.5.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-markdown": "^9.1.0",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12",
+    "zustand": "^4.5.0"
+  }
+}

@@ -57,11 +57,21 @@ def validate_release_notes(file_path: str, tag: str | None = None) -> list[str]:
                 if title_match and tag not in title_match.group(1):
                     errors.append(f"Title should contain '{tag}'")
 
-    # Required sections
-    required_sections = ["## Overview", "## What's New", "## Full Changelog"]
-    for section in required_sections:
-        if section not in content:
-            errors.append(f"Missing required section: {section}")
+    # Required sections (at least one variant must be present)
+    # Use regex to match section headers with optional emoji prefixes
+    # e.g., "## What's New", "## 🎯 Key Changes"
+
+    # "What's New" or "Key Changes" — describes what changed
+    if not re.search(r"^##\s+.*(?:What's New|Key Changes)", content, re.MULTILINE):
+        errors.append(
+            "Missing required section: '## What's New' or '## Key Changes'"
+        )
+
+    # "Full Changelog" or "Changelog" — links to the commit range
+    if not re.search(r"^##\s+.*(?:Full Changelog|Changelog)", content, re.MULTILINE):
+        errors.append(
+            "Missing required section: '## Full Changelog' or '## Changelog'"
+        )
 
     # Changelog link
     if "github.com/amd/gaia/compare/" not in content:

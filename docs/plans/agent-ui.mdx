@@ -1,0 +1,98 @@
+---
+title: Agent UI
+description: Privacy-first desktop AI assistant with document Q&A, tool execution, and agent capabilities
+icon: "robot"
+---
+
+# GAIA Agent UI
+
+<Info>
+**Status:** Active Development
+**Priority:** High
+[View on GitHub](https://github.com/amd/gaia) | [Vote with thumbs-up](https://github.com/amd/gaia/issues/167)
+</Info>
+
+## Overview
+
+The Agent UI is GAIA's desktop application — a privacy-first AI assistant that runs 100% locally on AMD Ryzen AI hardware. Unlike cloud-based alternatives, your conversations and documents never leave your machine.
+
+**Key rename:** The main consumer agent will be renamed from ChatAgent to **GaiaAgent** in v0.20.0 to reflect its full capabilities beyond chat.
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| Local-only | All data stays on your device — no cloud APIs |
+| NPU-accelerated | Hardware-optimized inference on AMD Ryzen AI |
+| Document Q&A | RAG pipeline over 50+ file formats |
+| Voice-first | Whisper ASR + Kokoro TTS for speech interaction (P0) |
+| Extensible | File I/O, web search, browser control, shell, MCP tools |
+
+## Phased Delivery
+
+### Phase A — Wire SDK Capabilities (v0.18.x)
+
+Wire existing SDK mixins into GaiaAgent and add MCP support.
+
+- File read/write/edit via FileIOToolsMixin
+- MCP server connectivity via MCPClientMixin
+- Web search via Brave MCP + Perplexity fallback
+- Browser control via Playwright MCP
+- Write confirmation popup for safety
+- Code blocks with syntax highlighting
+- Tool execution cards
+
+### Phase B — Memory, Dashboards & Onboarding (v0.20.0)
+
+The agent remembers you, learns your preferences, and provides two UI dashboards.
+
+- Persistent memory system (MemoryStore + MemoryMixin) — no context compaction, memory + RAG handles long conversations
+- Personality recipes — pre-built, browseable, fun/interesting variety
+- **Configuration dashboard** — personality, skills, MCP servers, tool management
+- **Observability dashboard** — audit trail, activity timeline, memory browser
+- Dynamic tool loading based on conversation context via memory
+- Email and calendar via MCP servers (gmail-mcp-server, Google Calendar MCP)
+- Onboarding wizard with system scan and model download
+- Merge CodeAgent file diff/tree views to GaiaAgent
+- Personalized daily briefs
+
+### Phase C — Autonomous Operation (v0.23.0)
+
+GAIA becomes an always-on background agent.
+
+- Heartbeat scheduler with cron-style tasks
+- System tray app with status indicator and quick actions
+- Messaging adapters (Signal, Telegram, Discord, Slack)
+- Email Triage Agent (Tier 1 use case)
+- Desktop notifications for proactive alerts
+- Encrypted credential vault for OAuth tokens
+- Messaging security and rate limiting
+
+### Phase D — Agent Ecosystem (v0.24.0)
+
+Discover, install, and manage agent skills.
+
+- SKILL.md format specification with dashboard integration
+- Agent manifest and dynamic registry
+- Skill marketplace with security tiers (AMD Verified, Community, Experimental)
+- OpenClaw skill compatibility layer
+- Model Manager UI
+- OEM bundling framework for hardware partners
+- Cost savings telemetry
+
+## Detailed Plans
+
+<CardGroup cols={2}>
+  <Card title="Agent UI Plan" icon="file" href="https://github.com/amd/gaia/blob/main/docs/plans/agent-ui.mdx">
+    Comprehensive technical plan with implementation details
+  </Card>
+  <Card title="Email & Calendar" icon="envelope" href="https://github.com/amd/gaia/blob/main/docs/plans/email-calendar-integration.mdx">
+    Email triage, calendar agent, Outlook integration, meeting notes
+  </Card>
+  <Card title="Messaging Adapters" icon="comments" href="https://github.com/amd/gaia/blob/main/docs/plans/messaging-integrations-plan.mdx">
+    Signal, Discord, Slack, Telegram bi-directional chat
+  </Card>
+  <Card title="Security Model" icon="shield" href="https://github.com/amd/gaia/blob/main/docs/plans/security-model.mdx">
+    Guardrails, audit trail, credential vault
+  </Card>
+</CardGroup>

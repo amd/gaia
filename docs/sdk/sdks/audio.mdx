@@ -26,7 +26,8 @@ from gaia.audio.audio_client import AudioClient
 audio = AudioClient(
     whisper_model_size="base",    # ASR model: base, small, medium, large
     audio_device_index=None,       # Auto-select
-    silence_threshold=0.05,        # Voice detection sensitivity
+    silence_threshold=0.5,         # Seconds of silence before processing speech
+    mic_threshold=0.003,           # Microphone energy threshold for voice detection
     enable_tts=True                # Enable text-to-speech
 )
 
@@ -63,7 +64,7 @@ asr = WhisperAsr(
     device_index=0,
     transcription_queue=transcription_queue,
     enable_cuda=False,  # Use CUDA if available
-    silence_threshold=0.05
+    silence_threshold=0.003
 )
 
 # Start recording

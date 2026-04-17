@@ -10,6 +10,7 @@ Operates at the LLM level (not agent level) for flexibility with community agent
 import os
 import sys
 import threading
+import time
 from enum import Enum
 from typing import Optional
 
@@ -54,6 +55,12 @@ class LemonadeManager:
     _context_size: int = 0
     _lock = threading.Lock()
     _log = get_logger(__name__)
+
+    # Rate-limit the per-turn context re-check that fires when context_size==0.
+    # Without this, every single message triggers 2 HTTP calls to /health and
+    # /models just to re-validate context size — even for "cool" or "no" replies.
+    _last_recheck_time: float = 0.0
+    _RECHECK_INTERVAL: float = 30.0  # seconds between re-checks
 
     @classmethod
     def is_lemonade_installed(cls) -> bool:
@@ -203,15 +210,36 @@ class LemonadeManager:
                     )
                     return True
                 else:
-                    # Context size may be cached from before models were loaded
+                    # Context size is below minimum — may be cached from before
+                    # models were loaded.  Rate-limit re-checks: without this guard,
+                    # every single chat message triggers 2 HTTP calls (/health +
+                    # /models) just to re-validate context size, adding 40-200 ms of
+                    # blocking overhead even for trivial replies like "cool".
+                    now = time.monotonic()
+                    if now - cls._last_recheck_time < cls._RECHECK_INTERVAL:
+                        cls._log.debug(
+                            "Skipping context re-check (%.1fs ago, interval=%.1fs)",
+                            now - cls._last_recheck_time,
+                            cls._RECHECK_INTERVAL,
+                        )
+                        return True
+                    cls._last_recheck_time = now
+
                     # Re-check current status to see if models are loaded now
                     try:
-                        client = LemonadeClient(
-                            host=host,
-                            port=port,
-                            keep_alive=True,
-                            verbose=not quiet,
-                        )
+                        if base_url:
+                            client = LemonadeClient(
+                                base_url=base_url,
+                                keep_alive=True,
+                                verbose=not quiet,
+                            )
+                        else:
+                            client = LemonadeClient(
+                                host=host,
+                                port=port,
+                                keep_alive=True,
+                                verbose=not quiet,
+                            )
                         status = client.get_status()
                         # Update cached context size
                         cls._context_size = status.context_size or 0
@@ -223,12 +251,27 @@ class LemonadeManager:
                             for model in status.loaded_models
                         )
 
+                        # If models are loaded but the server doesn't report context_size
+                        # (returns 0 — common with Lemonade 10+), treat it as sufficient
+                        # so the fast path is taken on subsequent calls.
+                        if cls._context_size == 0 and llm_models_loaded:
+                            cls._log.debug(
+                                "LLM models loaded but context_size not reported by server; "
+                                "assuming context is sufficient (min=%d)",
+                                min_context_size,
+                            )
+                            cls._context_size = min_context_size
+
                         # Only warn if context_size is non-zero (0 means no model loaded or still loading)
                         if (
                             cls._context_size > 0
                             and cls._context_size < min_context_size
                             and llm_models_loaded
                         ):
+                            if cls._try_reload_with_ctx(
+                                client, status, min_context_size, quiet, cls._lock
+                            ):
+                                return True
                             cls._log.warning(
                                 f"Lemonade running with {cls._context_size} tokens, "
                                 f"but {min_context_size} requested. "
@@ -247,12 +290,22 @@ class LemonadeManager:
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
 
             try:
-                client = LemonadeClient(
-                    host=host,
-                    port=port,
-                    keep_alive=True,
-                    verbose=not quiet,
-                )
+                # When base_url is provided, pass it directly to LemonadeClient
+                # so it preserves the full URL (including https:// for ngrok, etc.)
+                # rather than reconstructing from host/port with http://
+                if base_url:
+                    client = LemonadeClient(
+                        base_url=base_url,
+                        keep_alive=True,
+                        verbose=not quiet,
+                    )
+                else:
+                    client = LemonadeClient(
+                        host=host,
+                        port=port,
+                        keep_alive=True,
+                        verbose=not quiet,
+                    )
 
                 # Just check server status - no agent profile required
                 status = client.get_status()
@@ -292,6 +345,10 @@ class LemonadeManager:
                     and cls._context_size < min_context_size
                     and llm_models_loaded
                 ):
+                    if cls._try_reload_with_ctx(
+                        client, status, min_context_size, quiet, cls._lock
+                    ):
+                        return True
                     cls._log.warning(
                         f"Context size {cls._context_size} is less than "
                         f"requested {min_context_size}. Some features may not work correctly."
@@ -309,6 +366,88 @@ class LemonadeManager:
                 if not quiet:
                     cls.print_server_error(min_context_size)
                 return False
+
+    @classmethod
+    def _try_reload_with_ctx(
+        cls,
+        client: "LemonadeClient",
+        status,
+        min_context_size: int,
+        quiet: bool,
+        lock: "threading.Lock",
+    ) -> bool:
+        """Attempt to reload the current LLM model with a larger context size.
+
+        Temporarily releases `lock` during the blocking load_model() call so
+        other threads are not stalled for the duration of the reload.
+
+        Returns True if reload succeeded and context is now sufficient.
+        """
+        llm_models = [
+            m for m in status.loaded_models if "image" not in m.get("labels", [])
+        ]
+        if not llm_models:
+            return False
+
+        model_id = llm_models[0].get("id", "")
+        if not model_id:
+            return False
+
+        cls._log.info(
+            f"Auto-reloading '{model_id}' with ctx_size={min_context_size} "
+            f"(was {cls._context_size})"
+        )
+        if not quiet:
+            print(
+                f"\n⏳ Reloading model with ctx_size={min_context_size} tokens "
+                f"(was {cls._context_size}). This may take a moment...",
+                flush=True,
+            )
+
+        # Release the lock for the duration of the blocking model reload so
+        # other threads (e.g. status polling) are not stalled.
+        lock.release()
+        try:
+            client.load_model(model_id, ctx_size=min_context_size, prompt=False)
+            # Check if the server now reports the new context size.
+            # Some Lemonade versions do not expose ctx_size in their status
+            # (they return 0), and some may not honor the ctx_size parameter
+            # at all (always reporting the default, e.g. 4096).
+            #
+            # Regardless of what the server reports, update cls._context_size
+            # to min_context_size so we don't trigger an infinite reload loop
+            # on every request.  If the reload didn't actually change the
+            # model's context window the agent will still run — responses may
+            # be degraded — but at least the UI won't be stuck in a reload
+            # cycle on every message.
+            new_status = client.get_status()
+            reported_ctx = new_status.context_size or 0
+            actual_ctx = (
+                reported_ctx if reported_ctx >= min_context_size else min_context_size
+            )
+            success = reported_ctx >= min_context_size
+            if success:
+                cls._log.info(
+                    f"Model reloaded successfully with ctx_size={reported_ctx}"
+                )
+                if not quiet:
+                    print(f"✅ Context size updated to {reported_ctx} tokens.")
+            else:
+                cls._log.warning(
+                    "ctx_size after reload: reported=%d (need %d). "
+                    "Assuming reload succeeded to prevent reload loop.",
+                    reported_ctx,
+                    min_context_size,
+                )
+            # Always update the cached context size to break the reload loop.
+            cls._context_size = actual_ctx
+            return success
+        except Exception as e:
+            cls._log.warning(f"Auto-reload failed: {e}")
+            return False
+        finally:
+            # Re-acquire before returning to the `with cls._lock:` block.
+            lock.acquire()
 
     @classmethod
     def is_initialized(cls) -> bool:
@@ -335,4 +474,5 @@ class LemonadeManager:
             cls._initialized = False
             cls._base_url = None
             cls._context_size = 0
+            cls._last_recheck_time = 0.0
             cls._log.debug("LemonadeManager state reset")

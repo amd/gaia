@@ -11,9 +11,19 @@ on:
   workflow_call:
   push:
     branches: [ main ]
+    paths:
+      - 'src/gaia/mcp/**'
+      - 'tests/mcp/**'
+      - 'setup.py'
+      - '.github/workflows/test_mcp.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/mcp/**'
+      - 'tests/mcp/**'
+      - 'setup.py'
+      - '.github/workflows/test_mcp.yml'
   merge_group:
   workflow_dispatch:
 

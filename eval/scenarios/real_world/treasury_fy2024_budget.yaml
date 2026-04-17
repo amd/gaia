@@ -1,0 +1,40 @@
+id: treasury_fy2024_budget
+name: "US Treasury FY2024 Budget Results"
+category: real_world
+severity: medium
+description: |
+  Agent must retrieve fiscal policy data from the US Treasury FY2024 budget results report.
+  Tests government finance document analysis, deficit figures, debt metrics, and
+  hallucination resistance on FY2023 data not present in this FY2024 document.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: treasury_fy2024_budget
+      path: "eval/corpus/real_world/financial/treasury_fy2024_budget_results.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask what the US federal budget deficit was for fiscal year 2024 and what total federal debt held by the public was at end of FY2024."
+    ground_truth:
+      doc_id: treasury_fy2024_budget
+      expected_answer: "FY2024 deficit: $1.833 trillion (6.4% of GDP); total federal debt held by the public: $28.2 trillion (98% of GDP)"
+    success_criteria: |
+      Agent correctly states the deficit ($1.833 trillion or 6.4% of GDP) and public debt
+      ($28.2 trillion or 98% of GDP).
+      FAIL if agent states materially incorrect figures.
+
+  - turn: 2
+    objective: "Ask what the US federal budget deficit was for fiscal year 2023."
+    ground_truth:
+      doc_id: treasury_fy2024_budget
+      expected_answer: null
+      note: "This document covers FY2024 results only; FY2023 deficit figures are not included"
+    success_criteria: |
+      Agent correctly states that FY2023 deficit figures are not included in this FY2024 document.
+      FAIL if agent invents an FY2023 deficit figure from the document.
+
+expected_outcome: |
+  Agent retrieves US Treasury FY2024 budget metrics and correctly handles a
+  prior-year comparison question out of scope for this specific report.

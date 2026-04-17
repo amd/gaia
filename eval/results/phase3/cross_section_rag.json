@@ -1,0 +1,70 @@
+{
+  "scenario_id": "cross_section_rag",
+  "status": "FAIL",
+  "overall_score": 6.67,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "Give me a complete financial summary of Acme Corp's Q3 performance and what to expect in Q4.",
+      "agent_response": "**Detailed Financial Analysis of Acme Corp - Q3 & Q4 Outlook**\n\n### **Q3 Performance Deep Dive**\n- **Revenue Growth**: +8% YoY indicates strong market demand for core products\n- **Margin Expansion**: Gross margin improved from 39% to 42%, showing effective cost management\n- **Expense Efficiency**: Operating expenses decreased by 3% YoY despite business growth\n- **Cash Flow Improvement**: 15% increase in cash flow suggests better working capital management\n\n### **Key Success Factors Identified**\n1. Product line performance exceeded expectations\n2. Operational efficiency initiatives delivered measurable results\n3. Cost optimization efforts were successful without compromising quality\n\n### **Q4 Projections & Risk Assessment**\nBased on current trends:\n- Revenue guidance ($13M-$13.5M) represents healthy growth momentum (approx. 4% YoY)\n- Expected gross margin expansion to 44% shows continued operational excellence\n- R&D investment focus positions company well for future product launches\n\n### **Strategic Considerations**\nWhile the financials look positive, potential risks include seasonal fluctuations that may impact short-term cash flow and competitive pressures in key markets.\n\nWould you like me to analyze any specific aspect of this data more deeply?",
+      "agent_tools": ["list_indexed_documents", "query_specific_file"],
+      "scores": {
+        "correctness": 0,
+        "tool_selection": 2,
+        "context_retention": 5,
+        "completeness": 3,
+        "efficiency": 3,
+        "personality": 7,
+        "error_recovery": 0
+      },
+      "overall_score": 2.5,
+      "pass": false,
+      "failure_category": "CRITICAL_FAIL_hallucination_wrong_file",
+      "reasoning": "Agent called list_indexed_documents (correctly found acme_q3_report.md) but then called query_specific_file with file_path=employee_handbook.md — the wrong file. All financial figures in the response are hallucinated: '+8% YoY', 'gross margin 39%->42%', '$13M-$13.5M Q4 guidance'. Neither '$14.2 million' (Q3 revenue) nor '15-18%' (Q4 outlook) appear anywhere in the response. CRITICAL FAIL per scenario rules."
+    },
+    {
+      "turn": 2,
+      "user_message": "If Q4 hits the low end of that projection, what would be the full-year 2025 revenue?",
+      "agent_response": "According to acme_q3_report.md, page null:\n\nAcme Corp delivered strong financial performance in Q3 2025 with total revenue reaching $14.2 million, representing a 23% increase compared to Q3 2024's $11.5 million.\n\nKey highlights include:\n- Widget Pro X was their top product generating $8.1 million in revenue (57% of total)\n- Product portfolio breakdown: Widget Lite contributed $4.2 million (30%), Accessories and services generated $1.9 million (13%)\n- Regional breakdown showed North America led with $8.5 million (60%), followed by Europe at $3.9 million (27%) and Asia Pacific at $1.8 million (13%)\n\nFor Q4 projections, management expects 15-18% growth driven by enterprise segment expansion and three new product launches planned for November.\n\nBased on the reported data, if Q4 hits the low end of that projection (15% growth), the full-year 2025 revenue would be approximately $50.0 million ($9.8M + $10.7M + $14.2M + $16.3M). However, I don't have complete quarterly figures for Q1 and Q2 from this document.",
+      "agent_tools": ["list_indexed_documents", "query_specific_file", "query_specific_file", "query_specific_file"],
+      "scores": {
+        "correctness": 8,
+        "tool_selection": 9,
+        "context_retention": 7,
+        "completeness": 9,
+        "efficiency": 7,
+        "personality": 8,
+        "error_recovery": 8
+      },
+      "overall_score": 8.05,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent self-corrected and queried the correct file (acme_q3_report.md). Correctly retrieved Q3 revenue $14.2M, 23% YoY growth, and Q4 projection of 15-18%. Correctly calculated Q4 at low end: $14.2M * 1.15 = $16.3M. Acknowledged missing Q1/Q2 data from document ('I don't have complete quarterly figures for Q1 and Q2 from this document'). Minor deduction: included assumed Q1=$9.8M and Q2=$10.7M figures not present in the document, without clearly labeling them as estimates. Three tool calls to same file slightly inefficient but not harmful."
+    },
+    {
+      "turn": 3,
+      "user_message": "What exact words did the CEO use about Q4?",
+      "agent_response": "According to acme_q3_report.md, page 1:\n\n**Q3 Financial Performance Summary:**\n- Q3 2025 revenue reached $14.2 million, representing a 23% increase from Q3 2024's $11.5 million\n- Widget Pro X was the top product with $8.1 million in revenue (57% of total)\n- Widget Lite contributed $4.2 million (30% of total)\n- Accessories and services: $1.9 million (13% of total)\n\n**Regional Breakdown:**\n- North America: $8.5 million (60% of total)\n- Europe: $3.9 million (27% of total)\n- Asia Pacific: $1.8 million (13% of total)\n\n**Q4 Projections:**\nThe company projects 15-18% growth for Q4 driven by enterprise segment expansion and three new product launches planned for November.\n\nIf Q4 hits the low end of that projection (15%), full-year 2025 revenue would be approximately **$16.3 million** ($14.2M + 15% of $14.2M).\n\n**CEO Specific Wording About Q4:**\nIn the CEO letter, Jane Smith states: 'For Q4, we project 15-18% growth driven by enterprise segment expansion and three new product launches planned for November.'",
+      "agent_tools": ["query_specific_file", "query_specific_file"],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 9,
+        "completeness": 10,
+        "efficiency": 8,
+        "personality": 8,
+        "error_recovery": 9
+      },
+      "overall_score": 9.45,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent retrieved the exact CEO quote from the document: 'For Q4, we project 15-18% growth driven by enterprise segment expansion and three new product launches planned for November.' Contains both required phrases: '15-18%' and 'enterprise segment'. Correctly attributed to CEO Jane Smith. Quote matches the actual document text verbatim — no fabrication. Response also included surrounding context (Q3 figures, regional breakdown) which adds completeness without hurting accuracy."
+    }
+  ],
+  "root_cause": "Turn 1 tool selection failure: after correctly listing indexed documents, the agent passed 'employee_handbook.md' (a non-existent or unrelated file) as the file_path argument to query_specific_file instead of 'acme_q3_report.md'. This caused the RAG query to return irrelevant chunks (or none), and the agent fell back to hallucinated generic financial data. The agent lacked a self-check to verify that the file it queries is in the indexed document list. The failure did not persist into Turn 2 — a more specific follow-up prompt caused the agent to query the correct file.",
+  "recommended_fix": "Add a guardrail in the ChatAgent tool-selection logic: when query_specific_file is called, validate that the requested file_path matches an entry returned by list_indexed_documents. If not, either refuse the call or re-route to the correct indexed file. Alternatively, inject the session document list into the system prompt so the model has clear in-context evidence of which files are available. A retry prompt ('The file employee_handbook.md is not indexed in this session — did you mean acme_q3_report.md?') would also catch this class of error.",
+  "cost_estimate": {
+    "turns": 3,
+    "estimated_usd": 0.04
+  }
+}

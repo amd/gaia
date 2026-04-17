@@ -232,11 +232,11 @@ def test_chat_integration():
     print("-" * 40)
 
     try:
-        from gaia.chat.sdk import ChatConfig, ChatSDK
+        from gaia.chat.sdk import AgentConfig, AgentSDK
 
         # Create chat with RAG
-        chat_config = ChatConfig(show_stats=False)
-        chat = ChatSDK(chat_config)
+        chat_config = AgentConfig(show_stats=False)
+        chat = AgentSDK(chat_config)
         print("✅ Chat SDK initialized")
 
         # Test enabling RAG

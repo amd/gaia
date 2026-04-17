@@ -1,0 +1,28 @@
+id: text_to_speech
+name: "TTS Tool -- Graceful Degradation"
+category: web_system
+severity: low
+description: |
+  Tests that text_to_speech tool is registered. If Kokoro TTS dependencies not installed,
+  the tool should return a graceful error rather than crashing.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask agent to convert text to speech"
+    user_message: "Convert the text 'Hello, this is a test' to speech and save it."
+    ground_truth:
+      expected_behavior: "Agent calls text_to_speech tool and returns file path or graceful error"
+    success_criteria: |
+      Agent calls text_to_speech with the given text. Either the audio is generated
+      and saved (if Kokoro installed), or a graceful error about missing dependencies
+      is returned. PASS if agent attempts text_to_speech regardless of outcome.
+      FAIL if agent claims it cannot do TTS at all without trying the tool.
+
+expected_outcome: |
+  Agent calls text_to_speech and returns a file path (if TTS available) or
+  a clear error about missing dependencies (kokoro/soundfile not installed).

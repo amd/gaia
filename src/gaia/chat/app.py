@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: MIT
 
 """
-Gaia Chat SDK Demo Application
+Gaia Agent SDK Demo Application
 
-This demonstrates various ways to use the ChatSDK for integrating
+This demonstrates various ways to use the AgentSDK for integrating
 text chat capabilities with conversation history into your applications.
 """
 
@@ -14,9 +14,9 @@ import asyncio
 import sys
 
 from gaia.chat.sdk import (
-    ChatConfig,
-    ChatSDK,
-    ChatSession,
+    AgentConfig,
+    AgentSDK,
+    AgentSession,
     SimpleChat,
     quick_chat,
     quick_chat_with_memory,
@@ -28,14 +28,14 @@ async def demo_basic_chat():
     """Demo basic chat functionality with conversation memory."""
     print("=== Basic Chat Demo ===")
 
-    config = ChatConfig(
+    config = AgentConfig(
         model=DEFAULT_MODEL_NAME,
         assistant_name="Gaia",  # Custom assistant name
         show_stats=True,
         max_history_length=3,  # Keep 3 conversation pairs
         logging_level="INFO",
     )
-    chat = ChatSDK(config)
+    chat = AgentSDK(config)
 
     # Multi-turn conversation
     messages = [
@@ -61,12 +61,12 @@ async def demo_streaming_chat():
     """Demo streaming chat functionality."""
     print("\n=== Streaming Chat Demo ===")
 
-    config = ChatConfig(
+    config = AgentConfig(
         model=DEFAULT_MODEL_NAME,
         assistant_name="StreamBot",
         show_stats=True,
     )
-    chat = ChatSDK(config)
+    chat = AgentSDK(config)
 
     # First establish context
     chat.send("I'm learning about AI and machine learning.")
@@ -119,7 +119,7 @@ async def demo_chat_sessions():
     print("\n=== Chat Sessions Demo ===")
 
     # Create session manager
-    sessions = ChatSession()
+    sessions = AgentSession()
 
     # Create different themed sessions with custom assistant names
     work_chat = sessions.create_session(
@@ -179,13 +179,13 @@ async def demo_configuration():
     print("\n=== Configuration Demo ===")
 
     # Create chat with custom config
-    config = ChatConfig(
+    config = AgentConfig(
         model=DEFAULT_MODEL_NAME,
         system_prompt="You are a helpful assistant that always responds enthusiastically!",
         max_history_length=2,
         show_stats=True,
     )
-    chat = ChatSDK(config)
+    chat = AgentSDK(config)
 
     print("User: How are you today?")
     response1 = chat.send("How are you today?")
@@ -215,11 +215,11 @@ def print_integration_examples():
     print("""
 Basic Integration:
 ```python
-from gaia.chat.sdk import ChatSDK, ChatConfig
+from gaia.chat.sdk import AgentSDK, AgentConfig
 
 # Create SDK instance
-config = ChatConfig(model=DEFAULT_MODEL_NAME, show_stats=True)
-chat = ChatSDK(config)
+config = AgentConfig(model=DEFAULT_MODEL_NAME, show_stats=True)
+chat = AgentSDK(config)
 
 # Send message with conversation memory
 response = chat.send("Hello!")
@@ -232,14 +232,14 @@ for chunk in chat.send_stream("Tell me a story"):
 
 Assistant Naming:
 ```python
-from gaia.chat.sdk import ChatSDK, ChatConfig
+from gaia.chat.sdk import AgentSDK, AgentConfig
 
 # Create SDK with custom assistant name
-config = ChatConfig(
+config = AgentConfig(
     model=DEFAULT_MODEL_NAME,
     assistant_name="Gaia"
 )
-chat = ChatSDK(config)
+chat = AgentSDK(config)
 
 response = chat.send("What's your name?")
 print(f"Gaia: {response.text}")
@@ -265,16 +265,16 @@ print(response)
 
 Session Management:
 ```python
-from gaia.chat.sdk import ChatSession
+from gaia.chat.sdk import AgentSession
 
-sessions = ChatSession()
+sessions = AgentSession()
 work_chat = sessions.create_session(
-    "work", 
+    "work",
     system_prompt="Professional assistant",
     assistant_name="WorkBot"
 )
 personal_chat = sessions.create_session(
-    "personal", 
+    "personal",
     system_prompt="Friendly companion",
     assistant_name="Buddy"
 )
@@ -300,9 +300,9 @@ responses = quick_chat_with_memory([
 
 
 async def main():
-    """Main entry point for the Chat SDK demo application."""
+    """Main entry point for the Agent SDK demo application."""
     parser = argparse.ArgumentParser(
-        description="Gaia Chat SDK Demo - Examples of text chat with conversation history",
+        description="Gaia Agent SDK Demo - Examples of text chat with conversation history",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Demo Types:
@@ -392,8 +392,8 @@ Demo Types:
         sys.exit(1)
 
     print("\n✅ Demo completed successfully!")
-    print("\nTo integrate ChatSDK into your app:")
-    print("  from gaia.chat.sdk import ChatSDK, ChatConfig")
+    print("\nTo integrate AgentSDK into your app:")
+    print("  from gaia.chat.sdk import AgentSDK, AgentConfig")
     print("\nFor more examples, run: python app.py examples")
 
 
@@ -412,12 +412,12 @@ def cli_main(
         return None
     elif message:
         # Use SimpleChat for backward compatibility
-        config = ChatConfig(
+        config = AgentConfig(
             model=model or DEFAULT_MODEL_NAME,
             max_tokens=max_tokens,
             system_prompt=system_prompt,
         )
-        chat = ChatSDK(config)
+        chat = AgentSDK(config)
         response = chat.send(message)
         return response.text
     else:

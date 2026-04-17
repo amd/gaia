@@ -181,7 +181,7 @@ from pathlib import Path
 
 # Configure for executive summary only
 config = SummaryConfig(
-    model="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    model="Qwen3.5-35B-A3B-GGUF",
     styles=["executive"],
     input_type="transcript"  # Or "auto" for detection
 )
@@ -269,7 +269,7 @@ print(f"Recipients: {participants.get('recipients')}")
   "metadata": {
     "input_file": "meeting.txt",
     "input_type": "transcript",
-    "model": "Qwen3-Coder-30B",
+    "model": "Qwen3.5-35B",
     "timestamp": "2025-01-15T10:30:00",
     "processing_time_ms": 2500,
     "summary_style": "executive"

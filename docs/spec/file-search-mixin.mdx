@@ -50,19 +50,21 @@ class FileSearchToolsMixin:
     @tool
     def search_file(
         file_pattern: str,
-        search_all_drives: bool = True,
+        deep_search: bool = False,
         file_types: str = None
     ) -> Dict[str, Any]:
         """
-        Search for files with intelligent 3-phase strategy.
+        Search for files with two-phase strategy.
 
-        Phase 0: Current working directory (deep, unlimited)
-        Phase 1: Common document locations (Documents, Downloads, Desktop)
-        Phase 2: All drives (Windows) or root (Unix)
+        Quick search (default): CWD + common locations (Documents, Downloads, Desktop)
+        Deep search (deep_search=True): All drives (Windows) or root (Unix)
+
+        Always do quick search first. Only use deep_search=True after quick search
+        found nothing and user confirms they want a deeper search.
 
         Args:
             file_pattern: Pattern to search (e.g., 'oil', '*.pdf')
-            search_all_drives: Search all drives on Windows (default: True)
+            deep_search: Search all drives thoroughly (default: False)
             file_types: Filter by extensions (e.g., 'pdf,docx')
 
         Returns:
@@ -76,8 +78,9 @@ class FileSearchToolsMixin:
                     "directory": str
                 }],
                 "count": int,
-                "search_context": "current_directory" | "common_locations" | "deep_search",
+                "search_context": "common_locations",
                 "display_message": str,
+                "deep_search_available": bool,  # True when quick search found nothing
                 "user_instruction": str  # If multiple found
             }
         """

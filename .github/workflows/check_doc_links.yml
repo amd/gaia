@@ -1,0 +1,65 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Check Documentation Links
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'cpp/README.md'
+      - 'util/check_doc_links.py'
+      - '.github/workflows/check_doc_links.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'cpp/README.md'
+      - 'util/check_doc_links.py'
+      - '.github/workflows/check_doc_links.yml'
+  # Allow manual runs to audit all links on demand
+  workflow_dispatch:
+
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-internal-links:
+    name: Verify internal cross-references
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Check internal documentation links
+        run: |
+          echo "Checking internal cross-references..."
+          python util/check_doc_links.py --internal-only --verbose
+
+  check-external-links:
+    name: Verify external URLs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Check external documentation links
+        run: |
+          echo "Checking external URLs (with rate limiting)..."
+          python util/check_doc_links.py --external-only --max-workers 5
