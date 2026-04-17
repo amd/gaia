@@ -56,6 +56,10 @@ extraResources:
     to: dist
     filter:
       - "**/*"
+  - from: build/bundled-agents
+    to: agents
+    filter:
+      - "**/*"
 
 asar: true
 # Nothing currently needs to be unpacked from the asar.

@@ -2524,6 +2524,42 @@ Examples:
         "--all", action="store_true", help="Clear all caches"
     )
 
+    # Agent command (export/import custom agent bundles)
+    agent_parser = subparsers.add_parser(
+        "agent",
+        help="Manage custom agents (export/import bundles)",
+    )
+    agent_subparsers = agent_parser.add_subparsers(
+        dest="agent_action", help="Agent action to perform"
+    )
+
+    # Agent export command
+    agent_export_parser = agent_subparsers.add_parser(
+        "export",
+        help="Export custom agents from ~/.gaia/agents/ into a .zip bundle",
+    )
+    agent_export_parser.add_argument(
+        "--output",
+        default=None,
+        help="Destination path for the .zip bundle (default: ~/.gaia/export.zip)",
+    )
+
+    # Agent import command
+    agent_import_parser = agent_subparsers.add_parser(
+        "import",
+        help="Import a custom agent .zip bundle into ~/.gaia/agents/",
+    )
+    agent_import_parser.add_argument(
+        "path",
+        help="Path to the .zip bundle produced by 'gaia agent export'",
+    )
+    agent_import_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip interactive confirmation prompt (non-interactive/CI use)",
+    )
+
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
     init_parser = subparsers.add_parser(
@@ -4679,6 +4715,11 @@ Let me know your answer!
         handle_cache_command(args)
         return
 
+    # Handle Agent (export/import) command
+    if args.action == "agent":
+        handle_agent_command(args)
+        return
+
     # Handle Blender command
     if args.action == "blender":
         handle_blender_command(args)
@@ -5770,6 +5811,132 @@ def handle_cache_command(args):
         cache_log = get_logger(__name__)
         cache_log.error(f"Error managing cache: {e}")
         print(f"❌ Error: {e}")
+        sys.exit(1)
+
+
+def handle_agent_command(args):
+    """Handle the 'gaia agent' command group (export / import).
+
+    Args:
+        args: Parsed command-line arguments
+    """
+    if not hasattr(args, "agent_action") or args.agent_action is None:
+        print("❌ Error: No agent action specified")
+        print("Available actions: export, import")
+        print("Run 'gaia agent --help' for more information")
+        sys.exit(1)
+
+    if args.agent_action == "export":
+        handle_agent_export(args)
+    elif args.agent_action == "import":
+        handle_agent_import(args)
+    else:
+        print(f"❌ Unknown agent action: {args.agent_action}")
+        sys.exit(1)
+
+
+def handle_agent_export(args):
+    """Export custom agents under ~/.gaia/agents/ into a .zip bundle."""
+    # Lazy import to keep CLI startup fast.
+    from gaia.installer.export_import import export_custom_agents
+
+    output = args.output
+    if output is None:
+        output_path = Path.home() / ".gaia" / "export.zip"
+    else:
+        output_path = Path(output).expanduser()
+
+    # Warn about secrets before writing anything.
+    print(
+        "Warning: exported bundle contains your agent source files as-is. "
+        "Any API keys or credentials in agent.py will be included. "
+        "Review before sharing.",
+        file=sys.stderr,
+    )
+
+    try:
+        result = export_custom_agents(output_path)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    ids = ", ".join(result.agent_ids)
+    print(f"Exported {len(result.agent_ids)} agent(s) to {result.output_path}: {ids}")
+
+
+def handle_agent_import(args):
+    """Import a custom agent .zip bundle into ~/.gaia/agents/."""
+    import json
+    import zipfile
+
+    # Lazy import to keep CLI startup fast.
+    from gaia.installer.export_import import import_agent_bundle
+
+    bundle_path = Path(args.path).expanduser()
+
+    if not bundle_path.exists():
+        print(f"Error: bundle not found: {bundle_path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Peek at bundle.json so we can show agent ids in the trust prompt.
+    bundle_agent_ids = []
+    try:
+        with zipfile.ZipFile(bundle_path) as zf:
+            raw = zf.read("bundle.json")
+            manifest = json.loads(raw.decode("utf-8"))
+            bundle_agent_ids = manifest.get("agent_ids", []) or []
+    except (
+        zipfile.BadZipFile,
+        KeyError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ) as exc:
+        print(f"Error: invalid bundle: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # Trust gate.
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print(
+                "Error: refusing to import non-interactively without --yes. "
+                "Re-run with --yes to confirm.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        print(
+            "Importing this bundle will install third-party Python code on your machine."
+        )
+        if bundle_agent_ids:
+            print("Agents in bundle:")
+            for aid in bundle_agent_ids:
+                print(f"  - {aid}")
+        answer = input("[y/N] Continue? ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("Import cancelled.")
+            sys.exit(0)
+
+    try:
+        result = import_agent_bundle(bundle_path)
+    except (ValueError, zipfile.BadZipFile) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if result.imported:
+        print(f"Imported: {', '.join(result.imported)}")
+    if result.overwritten:
+        print(f"Overwritten: {', '.join(result.overwritten)}")
+    if result.errors:
+        print(f"Errors: {', '.join(result.errors)}", file=sys.stderr)
         sys.exit(1)
 
 

@@ -72,6 +72,7 @@
                   "guides/docker",
                   "guides/routing",
                   "guides/custom-agent",
+                  "guides/custom-installer",
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
@@ -115,6 +116,12 @@
                       "playbooks/emr-agent/part-1-getting-started",
                       "playbooks/emr-agent/part-2-dashboard",
                       "playbooks/emr-agent/part-3-architecture"
+                    ]
+                  },
+                  {
+                    "group": "Custom Installer",
+                    "pages": [
+                      "playbooks/custom-installer/index"
                     ]
                   }
                 ]

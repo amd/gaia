@@ -26,6 +26,7 @@ const NotificationService = require("./services/notification-service.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
 const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
 const autoUpdater = require("./services/auto-updater.cjs");
+const agentSeeder = require("./services/agent-seeder.cjs");
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -454,6 +455,25 @@ app.on("second-instance", (_event, _argv, _cwd) => {
 });
 
 app.whenReady().then(async () => {
+  // Phase 0: seed bundled agents BEFORE the Python backend starts, so the
+  // agent registry sees them on its first discovery pass. Failures here are
+  // non-fatal — the app must still launch even if seeding is blocked (e.g.
+  // permission error on ~/.gaia/agents).
+  try {
+    const seedResult = await agentSeeder.seedBundledAgents();
+    if (seedResult.seeded.length > 0) {
+      console.log("[main] Seeded agents:", seedResult.seeded);
+    }
+    if (seedResult.errors.length > 0) {
+      console.warn(
+        "[main] Agent seeding errors:",
+        seedResult.errors.map((e) => e.id)
+      );
+    }
+  } catch (err) {
+    console.warn("[main] Agent seeding failed (non-fatal):", err);
+  }
+
   // Phase A: ensure the Python backend is installed BEFORE creating the
   // main window. The progress dialog owns the UI during this phase.
   const bootstrapOk = await bootstrapBackend();

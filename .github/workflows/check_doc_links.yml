@@ -11,14 +11,28 @@ on:
       - 'README.md'
       - 'cpp/README.md'
       - 'util/check_doc_links.py'
+      - 'util/check_doc_citations.py'
       - '.github/workflows/check_doc_links.yml'
+      # Citation-checker anchor targets — rerun so symbol drift in these
+      # files is caught on the PR that moves them, not on the next doc PR.
+      - 'installer/nsis/installer.nsh'
+      - 'src/gaia/agents/registry.py'
+      - 'src/gaia/agents/base/agent.py'
+      - 'src/gaia/installer/export_import.py'
+      - 'src/gaia/apps/webui/services/agent-seeder.cjs'
   pull_request:
     paths:
       - 'docs/**'
       - 'README.md'
       - 'cpp/README.md'
       - 'util/check_doc_links.py'
+      - 'util/check_doc_citations.py'
       - '.github/workflows/check_doc_links.yml'
+      - 'installer/nsis/installer.nsh'
+      - 'src/gaia/agents/registry.py'
+      - 'src/gaia/agents/base/agent.py'
+      - 'src/gaia/installer/export_import.py'
+      - 'src/gaia/apps/webui/services/agent-seeder.cjs'
   # Allow manual runs to audit all links on demand
   workflow_dispatch:
 
@@ -45,6 +59,11 @@ jobs:
         run: |
           echo "Checking internal cross-references..."
           python util/check_doc_links.py --internal-only --verbose
+
+      - name: Check source-file citations
+        run: |
+          echo "Checking path:NNN citations to source files..."
+          python util/check_doc_citations.py
 
   check-external-links:
     name: Verify external URLs
