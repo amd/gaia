@@ -25,6 +25,14 @@ from gaia.logger import get_logger
 logger = get_logger(__name__)
 
 # Agent ID cannot match any of these — they are reserved for built-in agents.
+#
+# Note: `_normalize_agent_id` strips a trailing "-agent" suffix, so names like
+# "Widget Agent" slug to "widget", not "widget-agent". But the bare input "Agent"
+# collapses to just "agent" (there is no "-agent" suffix to strip), which would
+# shadow the `Agent` base class in imports and logs. Reserving "agent" here is
+# what catches that edge case — it's intentional, not redundant. Same for the
+# namespace: "chat" (ChatAgent), "gaia" (top-level product / CLI entry), and
+# "builder" (BuilderAgent itself).
 _RESERVED_IDS = {"agent", "chat", "gaia", "builder"}
 
 # Allowed characters for a generated agent ID.
