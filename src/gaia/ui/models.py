@@ -45,6 +45,34 @@ class SystemStatus(BaseModel):
     default_model_name: str = "Qwen3.5-35B-A3B-GGUF"  # Required model for GAIA Chat
     lemonade_url: str = "http://localhost:8000"  # Lemonade web UI base URL
     expected_model_loaded: bool = True  # False if a different model is loaded
+    # Boot-time initialization tracking (populated from DispatchQueue)
+    init_state: str = "ready"  # "initializing" | "ready" | "degraded"
+    init_tasks: List["InitTaskInfo"] = Field(default_factory=list)
+
+
+# ── Tasks ──────────────────────────────────────────────────────────────────
+
+
+class InitTaskInfo(BaseModel):
+    """Summary of a boot-time initialization task (embedded in SystemStatus)."""
+
+    name: str
+    status: str  # pending | running | done | failed
+
+
+class TaskResponse(BaseModel):
+    """A single background task visible to the frontend."""
+
+    id: str
+    name: str
+    status: str  # pending | running | done | failed
+    error: Optional[str] = None
+
+
+class TaskListResponse(BaseModel):
+    """List of background tasks."""
+
+    tasks: List[TaskResponse]
 
 
 # ── Settings ────────────────────────────────────────────────────────────────
@@ -78,6 +106,27 @@ class SettingsUpdateRequest(BaseModel):
     )
 
 
+# ── Agents ──────────────────────────────────────────────────────────────────
+
+
+class AgentInfo(BaseModel):
+    """Information about a registered agent."""
+
+    id: str
+    name: str
+    description: str
+    source: str  # "builtin" | "custom_python" | "custom_manifest"
+    conversation_starters: List[str] = Field(default_factory=list)
+    models: List[str] = Field(default_factory=list)
+
+
+class AgentListResponse(BaseModel):
+    """List of registered agents."""
+
+    agents: List[AgentInfo]
+    total: int
+
+
 # ── Sessions ────────────────────────────────────────────────────────────────
 
 
@@ -88,6 +137,7 @@ class CreateSessionRequest(BaseModel):
     model: Optional[str] = None
     system_prompt: Optional[str] = None
     document_ids: List[str] = Field(default_factory=list)
+    agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
 class UpdateSessionRequest(BaseModel):
@@ -96,6 +146,7 @@ class UpdateSessionRequest(BaseModel):
     title: Optional[str] = None
     system_prompt: Optional[str] = None
     document_ids: Optional[List[str]] = None
+    agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
 class SessionResponse(BaseModel):
@@ -109,6 +160,7 @@ class SessionResponse(BaseModel):
     system_prompt: Optional[str] = None
     message_count: int = 0
     document_ids: List[str] = Field(default_factory=list)
+    agent_type: str = "chat"
 
 
 class SessionListResponse(BaseModel):
@@ -128,6 +180,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., max_length=100_000)
     document_ids: Optional[List[str]] = None
     stream: bool = True
+    agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
 class SourceInfo(BaseModel):
@@ -183,6 +236,8 @@ class AgentStepResponse(BaseModel):
     timestamp: int = 0
     commandOutput: Optional[CommandOutputResponse] = None
     fileList: Optional[FileListResponse] = None
+    mcpServer: Optional[str] = None
+    latencyMs: Optional[float] = None
 
 
 class InferenceStatsResponse(BaseModel):

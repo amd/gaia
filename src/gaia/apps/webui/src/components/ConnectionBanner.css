@@ -52,6 +52,18 @@
     border-bottom: 1px solid #0c2d42;
 }
 
+.connection-banner--init {
+    background: #eff6ff;
+    color: #1e40af;
+    border-bottom: 1px solid #bfdbfe;
+}
+
+[data-theme="dark"] .connection-banner--init {
+    background: rgba(59, 130, 246, 0.06);
+    color: #93c5fd;
+    border-bottom: 1px solid rgba(59, 130, 246, 0.15);
+}
+
 .connection-banner__icon {
     flex-shrink: 0;
     display: flex;

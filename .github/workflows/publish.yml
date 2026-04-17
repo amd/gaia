@@ -6,10 +6,10 @@
 # Trigger: push a version tag (v*) to main.
 #
 # Flow:
-#   validate → build (pypi + npm + electron, parallel)
+#   validate → build (pypi + npm + desktop installers, parallel)
 #     → approve (single manual gate)
 #       → publish (pypi + npm, parallel)
-#         → github release (sigstore + electron artifacts)
+#         → github release (sigstore + desktop installers)
 #
 # Environment setup (one-time, in GitHub repo settings):
 #   1. Create a "publish" environment with required reviewers.
@@ -103,7 +103,7 @@ jobs:
           fi
           if [ "$FAIL" -eq 1 ]; then
             echo ""
-            echo 'Fix: update version.py and run "node scripts/bump-ui-version.mjs", commit, and re-tag.'
+            echo 'Fix: update version.py and run "node installer/version/bump-ui-version.mjs", commit, and re-tag.'
             exit 1
           fi
           echo "All versions match: v$TAG_VERSION"
@@ -236,11 +236,14 @@ jobs:
       - name: Verify CLI entry point
         working-directory: src/gaia/apps/webui
         run: |
-          if [ ! -f bin/gaia-ui.mjs ]; then
-            echo "ERROR: bin/gaia-ui.mjs not found"
+          # Phase A renamed the CLI entry point from .mjs to .cjs so that
+          # both the bin entry and main.cjs can `require()` the shared
+          # services/backend-installer.cjs module (ESM/CJS can't mix).
+          if [ ! -f bin/gaia-ui.cjs ]; then
+            echo "ERROR: bin/gaia-ui.cjs not found"
             exit 1
           fi
-          node --check bin/gaia-ui.mjs
+          node --check bin/gaia-ui.cjs
           echo "CLI entry point verified"
 
       - name: Verify built app version
@@ -267,32 +270,47 @@ jobs:
           name: npm-package-build
           path: src/gaia/apps/webui/dist/
 
-  build-electron:
-    name: Build Electron Apps
+  # Build the GAIA Agent UI desktop installers (NSIS / DMG / DEB / AppImage)
+  # via the reusable build-installers workflow. The reusable workflow uploads
+  # each platform's artifacts to a workflow-run artifact named
+  # "<platform>-installer". The github-release job below downloads those
+  # artifacts and includes them in the published release.
+  #
+  # We pass publish_to_release=false so build-installers does NOT create its
+  # own draft release — publish.yml's github-release job is the single
+  # source of truth for what gets published, gated on the approval step.
+  build-desktop-installers:
+    name: Build Desktop Installers
     needs: validate
-    uses: ./.github/workflows/build-electron-apps.yml
+    permissions:
+      contents: write   # build-installers uploads workflow artifacts
+      id-token: write   # for SignPath OIDC (Phase H — opt-in via secret)
+    secrets: inherit
+    uses: ./.github/workflows/build-installers.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag_name }}
+      publish_to_release: false
 
   # ── Stage 3: Approve (single manual gate) ───────────────────────────
-  # All three builds must pass before the approval prompt appears.
+  # All builds must pass before the approval prompt appears.
   # Configure the "publish" GitHub environment with required reviewers.
 
   approve-publish:
     name: Approve Publishing
-    needs: [build-pypi, build-npm, build-electron]
-    # Override default skip-on-failure: electron may be skipped (no apps found)
+    needs: [build-pypi, build-npm, build-desktop-installers]
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
-      (needs.build-electron.result == 'success' || needs.build-electron.result == 'skipped')
+      needs.build-desktop-installers.result == 'success'
     runs-on: ubuntu-latest
     environment: publish
     steps:
       - run: |
           echo "=== Build Results ==="
-          echo "  PyPI:     ${{ needs.build-pypi.result }}"
-          echo "  npm:      ${{ needs.build-npm.result }}"
-          echo "  Electron: ${{ needs.build-electron.result }}"
+          echo "  PyPI:               ${{ needs.build-pypi.result }}"
+          echo "  npm:                ${{ needs.build-npm.result }}"
+          echo "  Desktop Installers: ${{ needs.build-desktop-installers.result }}"
           echo ""
           echo "All builds passed. Publishing approved."
 
@@ -322,6 +340,9 @@ jobs:
     name: Publish to npm
     needs: approve-publish
     runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@amd-gaia/agent-ui
     permissions:
       contents: read
       id-token: write
@@ -329,7 +350,10 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          # Node 24 ships with npm 11+ which supports OIDC trusted publishing.
+          # Node 22 ships with npm 10.x which does NOT — and `npm install -g
+          # npm@latest` on Node 22 runners corrupts npm's own dependencies.
+          node-version: '24'
       - name: Download validated build
         uses: actions/download-artifact@v6
         with:
@@ -340,7 +364,11 @@ jobs:
         run: npm ci --omit=dev 2>/dev/null || npm install --omit=dev
       - name: Publish @amd-gaia/agent-ui
         working-directory: src/gaia/apps/webui
-        run: npm publish --access public --provenance
+        # --ignore-scripts: skip prepublishOnly (which runs tsc && vite build)
+        # because the dist/ was already built in the build-npm job and
+        # downloaded from the artifact. Dev dependencies are omitted, so
+        # tsc would fail with missing @types/react.
+        run: npm publish --access public --provenance --ignore-scripts
       - name: Verify publication
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
@@ -353,12 +381,12 @@ jobs:
 
   github-release:
     name: GitHub Release
-    needs: [validate, publish-pypi, publish-npm, build-electron]
-    # Run after both publishes succeed; don't block on electron artifacts
+    needs: [validate, publish-pypi, publish-npm, build-desktop-installers]
     if: >-
       !cancelled() &&
       needs.publish-pypi.result == 'success' &&
-      needs.publish-npm.result == 'success'
+      needs.publish-npm.result == 'success' &&
+      needs.build-desktop-installers.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -388,38 +416,65 @@ jobs:
 
           cat >> RELEASE_BODY.md << 'EOF'
 
----
+          ---
 
-## Installation
+          ## Installation
 
-Install GAIA using pip:
-```bash
-pip install amd-gaia
-```
+          ### Desktop installer (recommended for end users)
 
-Or using uv:
-```bash
-uv pip install amd-gaia
-```
-EOF
+          Download the installer for your platform from the assets below:
+
+          - **Windows** — `gaia-agent-ui-*-x64-setup.exe` (NSIS installer, autostart on by default)
+          - **macOS** — `gaia-agent-ui-*-arm64.dmg` (drag to Applications, Apple Silicon only)
+          - **Linux** — `gaia-agent-ui-*-amd64.deb` (Debian/Ubuntu) or `gaia-agent-ui-*-x86_64.AppImage` (any distro)
+
+          On first launch the app sets up its Python backend automatically (~5–10 minutes for the minimal profile, depends on your internet speed).
+
+          See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/install.mdx) for setup details and troubleshooting.
+
+          ### Developer install (Python CLI)
+
+          Install GAIA using pip:
+          ```bash
+          pip install amd-gaia
+          ```
+
+          Or using uv:
+          ```bash
+          uv pip install amd-gaia
+          ```
+
+          Or via npm:
+          ```bash
+          npm install -g @amd-gaia/agent-ui
+          ```
+          EOF
           echo "Release body generated: $(wc -l < RELEASE_BODY.md) lines"
 
-      - name: Download Electron artifacts (Windows)
-        if: needs.build-electron.outputs.has_apps == 'true'
+      # ── Desktop installers ─────────────────────────────────────────
+      # The reusable build-installers workflow uploaded each platform's
+      # artifacts to "<platform>-installer" workflow-run artifacts. Pull
+      # them here and add to release-assets/ so the softprops step
+      # below includes them in the published release.
+      - name: Download Desktop Installer (Windows NSIS)
         uses: actions/download-artifact@v6
         with:
-          pattern: "*-windows-${{ github.sha }}"
+          name: windows-installer
           path: release-assets
-          merge-multiple: true
         continue-on-error: true
 
-      - name: Download Electron artifacts (Linux)
-        if: needs.build-electron.outputs.has_apps == 'true'
+      - name: Download Desktop Installer (macOS DMG)
         uses: actions/download-artifact@v6
         with:
-          pattern: "*-linux-${{ github.sha }}"
+          name: macos-installer
           path: release-assets
-          merge-multiple: true
+        continue-on-error: true
+
+      - name: Download Desktop Installer (Linux DEB + AppImage)
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-installer
+          path: release-assets
         continue-on-error: true
 
       - name: Create GitHub Release

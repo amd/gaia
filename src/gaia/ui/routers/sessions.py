@@ -58,6 +58,7 @@ async def create_session(
             model=request.model,
             system_prompt=request.system_prompt,
             document_ids=request.document_ids,
+            agent_type=request.agent_type,
         )
         return session_to_response(session)
     except Exception as e:
@@ -84,11 +85,14 @@ async def update_session(
     db: ChatDatabase = Depends(get_db),
 ):
     """Update session title, system prompt, or linked documents."""
+    if request.agent_type is not None:
+        evict_session_agent(session_id)
     session = db.update_session(
         session_id,
         title=request.title,
         system_prompt=request.system_prompt,
         document_ids=request.document_ids,
+        agent_type=request.agent_type,
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.ui.sse_handler import (
     SSEOutputHandler,
     _fix_double_escaped,
@@ -1587,3 +1588,93 @@ class TestEventSequences:
         combined = "".join(e["content"] for e in chunk_events)
         assert combined == "Hello world!"
         assert events[-1] is None
+
+
+# ===========================================================================
+# MCP Tool Visualization (Issue #712)
+# ===========================================================================
+
+
+class TestMCPToolVisualization:
+    """Tests for MCP tool server name and latency in SSE events."""
+
+    def _register_mcp_tool(self, name, server):
+        _TOOL_REGISTRY[name] = {
+            "name": name,
+            "description": f"MCP tool from {server}",
+            "parameters": {},
+            "_mcp_server": server,
+        }
+
+    def _cleanup_registry(self, name):
+        _TOOL_REGISTRY.pop(name, None)
+
+    def test_tool_start_includes_mcp_server(self, handler):
+        tool_name = "mcp_github_search_code"
+        self._register_mcp_tool(tool_name, "github")
+        try:
+            handler.print_tool_usage(tool_name)
+            events = _drain(handler)
+            assert events[0]["mcp_server"] == "github"
+        finally:
+            self._cleanup_registry(tool_name)
+
+    def test_tool_start_no_mcp_server_for_native_tools(self, handler):
+        handler.print_tool_usage("search_file")
+        events = _drain(handler)
+        assert "mcp_server" not in events[0]
+
+    def test_tool_result_includes_latency_ms(self, handler):
+        handler.print_tool_usage("search_file")
+        _drain(handler)
+        handler.pretty_print_json({"status": "success", "data": {}}, title="Result")
+        events = _drain(handler)
+        assert events[0]["latency_ms"] >= 0
+
+    def test_latency_resets_between_tool_calls(self, handler):
+        handler.print_tool_usage("tool_a")
+        _drain(handler)
+        handler.pretty_print_json({"status": "success"}, title="Result")
+        events1 = _drain(handler)
+        handler.print_tool_usage("tool_b")
+        _drain(handler)
+        handler.pretty_print_json({"status": "success"}, title="Result")
+        events2 = _drain(handler)
+        assert events1[0]["latency_ms"] >= 0
+        assert events2[0]["latency_ms"] >= 0
+
+    def test_latency_not_present_without_tool_start(self, handler):
+        handler.pretty_print_json({"status": "success"}, title="Result")
+        events = _drain(handler)
+        assert "latency_ms" not in events[0]
+
+    def test_tool_complete_resets_start_time(self, handler):
+        handler.print_tool_usage("tool_a")
+        _drain(handler)
+        handler.print_tool_complete()
+        _drain(handler)
+        assert handler._tool_start_time is None
+        handler.print_tool_usage("tool_b")
+        _drain(handler)
+        handler.pretty_print_json({"status": "success"}, title="Result")
+        events = _drain(handler)
+        assert events[0]["latency_ms"] < 1000
+
+    def test_mcp_tool_full_flow(self, handler):
+        tool_name = "mcp_filesystem_read_file"
+        self._register_mcp_tool(tool_name, "filesystem")
+        try:
+            handler.print_tool_usage(tool_name)
+            assert _drain(handler)[0]["mcp_server"] == "filesystem"
+            handler.pretty_print_json({"path": "/tmp/test.txt"}, title="Arguments")
+            assert _drain(handler)[0]["type"] == "tool_args"
+            handler.pretty_print_json(
+                {"status": "success", "data": {"content": "hello"}}, title="Result"
+            )
+            result = _drain(handler)[0]
+            assert result["type"] == "tool_result"
+            assert result["latency_ms"] >= 0
+            handler.print_tool_complete()
+            assert _drain(handler)[0]["type"] == "tool_end"
+        finally:
+            self._cleanup_registry(tool_name)

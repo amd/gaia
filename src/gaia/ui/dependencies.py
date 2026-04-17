@@ -31,3 +31,8 @@ def get_indexing_tasks(request: Request) -> dict:
 def get_upload_locks(request: Request) -> dict:
     """Return the dict of per-file upload locks."""
     return request.app.state.upload_locks
+
+
+def get_dispatch_queue(request: Request):
+    """Return the DispatchQueue instance stored on ``app.state``, or None."""
+    return getattr(request.app.state, "dispatch_queue", None)

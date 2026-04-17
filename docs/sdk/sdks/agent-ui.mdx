@@ -994,13 +994,13 @@ The package version is sourced from `src/gaia/version.py` (single source of trut
 
 ```bash
 # Check version consistency (package.json matches version.py)
-node scripts/bump-ui-version.mjs --check
+node installer/version/bump-ui-version.mjs --check
 
 # Sync package.json to version.py
-node scripts/bump-ui-version.mjs
+node installer/version/bump-ui-version.mjs
 
 # Full release (sync, commit, tag, push)
-node scripts/release-ui.mjs
+node installer/version/release-ui.mjs
 ```
 
 Tags matching `v*` trigger the automated npm publish workflow.

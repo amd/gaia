@@ -67,7 +67,7 @@
 .msg-header-left {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
 }
 
 /* Avatar -- rounded for modern feel */
@@ -113,6 +113,30 @@
     color: var(--text-muted);
 }
 .role-assistant { color: var(--amd-red); }
+
+/* Agent name in message header: "GAIA Chat Agent | 3m ago" */
+.msg-role-brand {
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--amd-red);
+    margin: 0 4px;
+}
+.msg-role-agent {
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+}
+.msg-header-sep {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    opacity: 0.4;
+    user-select: none;
+}
 
 /* Timestamp -- always visible at reduced opacity, full on hover */
 .msg-timestamp {
@@ -615,7 +639,6 @@
     font-family: var(--font-mono, 'JetBrains Mono', 'SF Mono', monospace);
     font-size: 11px;
     color: var(--text-muted);
-    margin-left: 8px;
     white-space: nowrap;
 }
 

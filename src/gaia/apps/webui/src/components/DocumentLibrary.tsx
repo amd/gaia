@@ -204,7 +204,14 @@ export function DocumentLibrary() {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
     };
 
-    const uploadFile = useCallback(async (filepath: string, filename: string) => {
+    // Shared upload state-machine: preflight extension check, set UI state,
+    // run the caller-provided uploader, auto-attach the result to the current
+    // session, and refresh the document list. Used by both path-based and
+    // blob-based upload flows.
+    const runUpload = useCallback(async (
+        filename: string,
+        uploader: () => Promise<Document>,
+    ) => {
         // Pre-check: warn about unsupported file types before sending to server
         const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
         if (ext && !isExtensionSupported(ext)) {
@@ -217,13 +224,13 @@ export function DocumentLibrary() {
             return;
         }
 
-        log.doc.info(`Indexing document: ${filename} (${filepath})`);
+        log.doc.info(`Indexing document: ${filename}`);
         const t = log.doc.time();
         setIsUploading(true);
         setUploadStatus(`Indexing ${filename}...`);
         setUploadError(null);
         try {
-            const doc = await api.uploadDocumentByPath(filepath);
+            const doc = await uploader();
             log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, t);
             // Auto-attach to the active session so the agent can immediately use it
             if (currentSessionId && doc?.id) {
@@ -256,16 +263,32 @@ export function DocumentLibrary() {
         }
     }, [currentSessionId, updateSessionInList, setDocuments]);
 
+    /** Index a document by a server-side filesystem path (used by the file browser and path input). */
+    const uploadFile = useCallback(async (filepath: string, filename: string) => {
+        await runUpload(filename, () => api.uploadDocumentByPath(filepath));
+    }, [runUpload]);
+
+    /**
+     * Index a document by uploading its bytes directly (used by drag-and-drop).
+     *
+     * We can't use the path-based endpoint for drag-drop because browser File
+     * objects don't expose an absolute filesystem path — and in Electron 32+
+     * the File.path augmentation was removed as well. Streaming the blob is
+     * the only reliable cross-platform approach. See issue #728.
+     */
+    const uploadFileBlob = useCallback(async (file: File) => {
+        await runUpload(file.name, () => api.uploadDocumentBlob(file));
+    }, [runUpload]);
+
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
         setIsDragOver(false);
         const files = Array.from(e.dataTransfer.files);
         log.doc.info(`Dropped ${files.length} file(s) into Document Library`);
         for (const file of files) {
-            const path = (file as any).path || file.name;
-            await uploadFile(path, file.name);
+            await uploadFileBlob(file);
         }
-    }, [uploadFile]);
+    }, [uploadFileBlob]);
 
     const handleDeleteDoc = useCallback(async (id: string) => {
         const doc = documents.find((d) => d.id === id);

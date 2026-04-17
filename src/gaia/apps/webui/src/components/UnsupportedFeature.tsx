@@ -82,6 +82,19 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
         ],
         featureTitle: 'Support database file indexing',
     },
+    {
+        label: 'Microsoft Office',
+        extensions: new Set(['.doc', '.docx', '.ppt', '.pptx', '.xls']),
+        message:
+            'Word, PowerPoint, and legacy Excel (.xls) files are not yet ' +
+            'supported — GAIA does not currently ship parsers for these ' +
+            'formats.',
+        alternatives: [
+            'Save as PDF from Word or PowerPoint, then index the PDF',
+            'Re-save legacy .xls workbooks as .xlsx — GAIA supports modern Excel files',
+        ],
+        featureTitle: 'Support Microsoft Office (docx, pptx, xls) indexing',
+    },
 ];
 
 /**
@@ -96,10 +109,18 @@ export function getUnsupportedCategory(extension: string): FileTypeCategory | nu
     return null;
 }
 
-/** Set of all supported extensions for document indexing. */
+/**
+ * Set of all supported extensions for document indexing.
+ *
+ * Keep this in sync with ``ALLOWED_EXTENSIONS`` in
+ * ``src/gaia/ui/utils.py``. Only list extensions that have a real extractor
+ * in ``src/gaia/rag/sdk.py::_extract_text_from_file`` — listing one without
+ * a backend handler causes the RAG pipeline to index binary garbage.
+ * .doc/.docx/.ppt/.pptx and legacy .xls are intentionally excluded.
+ */
 export const SUPPORTED_EXTENSIONS = new Set([
-    '.pdf', '.txt', '.md', '.csv', '.json', '.doc', '.docx',
-    '.ppt', '.pptx', '.xls', '.xlsx', '.html', '.htm', '.xml', '.svg',
+    '.pdf', '.txt', '.md', '.csv', '.json', '.xlsx',
+    '.html', '.htm', '.xml', '.svg',
     '.yaml', '.yml', '.py', '.js', '.ts', '.java', '.c', '.cpp',
     '.h', '.rs', '.go', '.rb', '.sh', '.bat', '.ps1', '.log',
     '.cfg', '.ini', '.toml',
@@ -239,7 +260,7 @@ export function UploadErrorToast({ filename, error, onDismiss, timeout = 15000 }
         Icon = AlertTriangle;
     } else if (isFileTypeError) {
         title = `File type not supported: ${ext}`;
-        detail = 'This file format cannot be indexed. Supported: PDF, TXT, MD, CSV, JSON, Office docs, code files, and more.';
+        detail = 'This file format cannot be indexed. Supported: PDF, TXT, MD, CSV, JSON, XLSX, HTML, XML, YAML, and 30+ code file formats.';
         issueUrl = featureRequestUrl(`Support ${ext} file indexing`);
         Icon = AlertTriangle;
     } else if (isConnectionError) {

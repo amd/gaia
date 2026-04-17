@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """
@@ -12,6 +12,7 @@ import json
 import os
 import secrets
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -51,6 +52,10 @@ def mock_dependencies():
         mock_lemonade.return_value = mock_lemonade_instance
 
         mock_pdf_instance = Mock()
+        # Default mocks to "not encrypted"; without this, Mock auto-creates
+        # is_encrypted as a truthy Mock attribute and the PDF extractor's
+        # encryption guard (added in #451) would short-circuit.
+        mock_pdf_instance.is_encrypted = False
         mock_pdf_instance.pages = [Mock()]
         mock_pdf_instance.pages[0].extract_text.return_value = (
             "Sample PDF content for testing."
@@ -152,6 +157,71 @@ class TestRAGResponse:
 
 class TestRAGSDK:
     """Test RAG SDK functionality."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Mock external dependencies."""
+        # Mock VLMClient and LemonadeClient at the module level where they're defined
+        with (
+            patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
+            patch("gaia.rag.sdk.PdfReader") as mock_pdf,
+            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
+            patch("gaia.rag.sdk.faiss") as mock_faiss,
+            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
+        ):
+
+            # Mock VLMClient to prevent connection attempts
+            mock_vlm_instance = Mock()
+            mock_vlm_instance.check_availability.return_value = False
+            mock_vlm_class.return_value = mock_vlm_instance
+
+            # Mock LemonadeClient for embeddings
+            mock_lemonade_instance = Mock()
+            # Return OpenAI-compatible format: {"data": [{"embedding": [...]}]}
+            mock_lemonade_instance.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+            mock_lemonade.return_value = mock_lemonade_instance
+
+            # Mock PDF reader
+            mock_pdf_instance = Mock()
+            # Default mocks to "not encrypted"; without this, Mock auto-creates
+            # is_encrypted as a truthy Mock attribute and the PDF extractor's
+            # encryption guard (added in #451) would short-circuit.
+            mock_pdf_instance.is_encrypted = False
+            mock_pdf_instance.pages = [Mock()]
+            mock_pdf_instance.pages[0].extract_text.return_value = (
+                "Sample PDF content for testing."
+            )
+            mock_pdf.return_value = mock_pdf_instance
+
+            # Mock sentence transformer
+            mock_embedder = Mock()
+            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
+            mock_st.return_value = mock_embedder
+
+            # Mock FAISS
+            mock_index = Mock()
+            mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
+            mock_faiss.IndexFlatL2.return_value = mock_index
+
+            # Mock AgentSDK
+            mock_chat_response = Mock()
+            mock_chat_response.text = "Mocked LLM response"
+            mock_chat_response.stats = {"tokens": 50}
+            mock_chat_instance = Mock()
+            mock_chat_instance.send.return_value = mock_chat_response
+            mock_chat.return_value = mock_chat_instance
+
+            yield {
+                "pdf": mock_pdf,
+                "embedder": mock_embedder,
+                "index": mock_index,
+                "chat": mock_chat_instance,
+                "vlm": mock_vlm_instance,
+                "lemonade": mock_lemonade_instance,
+            }
 
     def test_sdk_initialization(self, mock_dependencies):
         """Test SDK initialization."""
@@ -310,6 +380,13 @@ class TestRAGSDK:
                 assert isinstance(result2, dict)
                 assert result2.get("success") is True
 
+    # NOTE: The pickle-era cache recovery tests (test_corrupted_cache_recovery,
+    # test_cache_checksum_mismatch_recovery, test_oversized_cache_rejected,
+    # test_old_format_cache_migration) were removed when the cache format
+    # migrated to JSON + HMAC-SHA256. Equivalent coverage for the new format
+    # lives in `TestCacheSecurity` below (tampered cache, missing signature,
+    # forged signature, reindex-on-bad-cache, JSON-not-pickle, round-trip).
+
     def test_status_reporting(self, mock_dependencies):
         """Test status reporting."""
         if not RAG_AVAILABLE:
@@ -332,6 +409,111 @@ class TestRAGSDK:
                 assert status["indexed_files"] == 0
                 assert status["total_chunks"] == 0
                 assert status["cache_dir"] == temp_dir
+
+    def test_query_uses_consistent_snapshot_during_state_swap(self, mock_dependencies):
+        """Test that query returns data from one consistent snapshot."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                old_file = str((Path(temp_dir) / "old.md").absolute())
+                new_file = str((Path(temp_dir) / "new.md").absolute())
+                old_index = Mock()
+                search_started = threading.Event()
+                allow_finish = threading.Event()
+
+                def _search(*_args, **_kwargs):
+                    search_started.set()
+                    assert allow_finish.wait(timeout=1.0)
+                    return np.array([[0.25]]), np.array([[0]])
+
+                old_index.search.side_effect = _search
+                rag.index = old_index
+                rag.chunks = ["old chunk"]
+                rag.chunk_to_file = {0: old_file}
+                rag.indexed_files = {old_file}
+
+                result = {}
+
+                def _run_query():
+                    result["response"] = rag.query("What changed?")
+
+                worker = threading.Thread(target=_run_query)
+                worker.start()
+
+                assert search_started.wait(timeout=1.0)
+
+                with rag._state_lock:
+                    rag.index = Mock()
+                    rag.chunks = ["new chunk"]
+                    rag.chunk_to_file = {0: new_file}
+                    rag.indexed_files = {new_file}
+
+                allow_finish.set()
+                worker.join(timeout=1.0)
+
+                assert "response" in result
+                response = result["response"]
+                assert response.chunks == ["old chunk"]
+                assert response.source_files == ["old.md"]
+                assert response.query_metadata["source_files"] == ["old.md"]
+                assert response.query_metadata["total_indexed_files"] == 1
+                assert response.query_metadata["total_indexed_chunks"] == 1
+
+    def test_remove_document_preserves_state_when_rebuild_fails(
+        self, mock_dependencies
+    ):
+        """Test that failed rebuilds do not publish partial remove state."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                file_a = str((Path(temp_dir) / "doc_a.md").absolute())
+                file_b = str((Path(temp_dir) / "doc_b.md").absolute())
+                original_index = Mock()
+
+                rag.index = original_index
+                rag.chunks = ["chunk-a", "chunk-b"]
+                rag.indexed_files = {file_a, file_b}
+                rag.file_to_chunk_indices = {file_a: [0], file_b: [1]}
+                rag.chunk_to_file = {0: file_a, 1: file_b}
+                rag.file_indices = {file_a: Mock(), file_b: Mock()}
+                rag.file_embeddings = {
+                    file_a: np.array([[0.1, 0.2, 0.3, 0.4]]),
+                    file_b: np.array([[0.5, 0.6, 0.7, 0.8]]),
+                }
+                rag.file_metadata = {
+                    file_a: {"full_text": "A"},
+                    file_b: {"full_text": "B"},
+                }
+                rag.file_access_times = {file_a: 1, file_b: 2}
+                rag.file_index_times = {file_a: 1.0, file_b: 2.0}
+
+                with patch.object(
+                    rag, "_create_vector_index", side_effect=RuntimeError("boom")
+                ):
+                    assert rag.remove_document(file_a) is False
+
+                assert rag.index is original_index
+                assert rag.chunks == ["chunk-a", "chunk-b"]
+                assert rag.indexed_files == {file_a, file_b}
+                assert rag.file_to_chunk_indices == {file_a: [0], file_b: [1]}
+                assert rag.chunk_to_file == {0: file_a, 1: file_b}
+                assert file_a in rag.file_indices
+                assert file_a in rag.file_embeddings
+                assert file_a in rag.file_metadata
+                assert rag.file_access_times[file_a] == 1
+                assert rag.file_index_times[file_a] == 1.0
 
 
 class TestQuickRAG:
@@ -563,7 +745,7 @@ class TestErrorHandling:
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory():
             config = AgentConfig()
             chat = AgentSDK(config)
 
@@ -575,6 +757,62 @@ class TestErrorHandling:
 
 class TestMemoryLimits:
     """Test memory limit enforcement and LRU eviction."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Mock external dependencies."""
+        with (
+            patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
+            patch("gaia.rag.sdk.PdfReader") as mock_pdf,
+            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
+            patch("gaia.rag.sdk.faiss") as mock_faiss,
+            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
+        ):
+            mock_vlm_instance = Mock()
+            mock_vlm_instance.check_availability.return_value = False
+            mock_vlm_class.return_value = mock_vlm_instance
+
+            mock_lemonade_instance = Mock()
+            mock_lemonade_instance.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+            mock_lemonade.return_value = mock_lemonade_instance
+
+            mock_pdf_instance = Mock()
+            # Default mocks to "not encrypted"; without this, Mock auto-creates
+            # is_encrypted as a truthy Mock attribute and the PDF extractor's
+            # encryption guard (added in #451) would short-circuit.
+            mock_pdf_instance.is_encrypted = False
+            mock_pdf_instance.pages = [Mock()]
+            mock_pdf_instance.pages[0].extract_text.return_value = (
+                "Sample PDF content for testing."
+            )
+            mock_pdf.return_value = mock_pdf_instance
+
+            mock_embedder = Mock()
+            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
+            mock_st.return_value = mock_embedder
+
+            mock_index = Mock()
+            mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
+            mock_faiss.IndexFlatL2.return_value = mock_index
+
+            mock_chat_response = Mock()
+            mock_chat_response.text = "Mocked LLM response"
+            mock_chat_response.stats = {"tokens": 50}
+            mock_chat_instance = Mock()
+            mock_chat_instance.send.return_value = mock_chat_response
+            mock_chat.return_value = mock_chat_instance
+
+            yield {
+                "pdf": mock_pdf,
+                "embedder": mock_embedder,
+                "index": mock_index,
+                "chat": mock_chat_instance,
+                "vlm": mock_vlm_instance,
+                "lemonade": mock_lemonade_instance,
+            }
 
     def test_index_rejected_at_file_limit_eviction_disabled(self, mock_dependencies):
         """Test that indexing is rejected when file limit reached and eviction disabled."""
@@ -840,6 +1078,68 @@ class TestMemoryLimits:
 class TestCacheSecurity:
     """Test cache security: JSON format and HMAC integrity verification."""
 
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Mock external dependencies.
+
+        Mirrors the fixture on TestRAGSDK / TestMemoryLimits so these tests can
+        exercise the full index_document path without sentence-transformers or
+        a live Lemonade server. ``is_encrypted = False`` is required so the
+        encrypted-PDF guard added in #451 doesn't short-circuit on a bare Mock.
+        """
+        with (
+            patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
+            patch("gaia.rag.sdk.PdfReader") as mock_pdf,
+            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
+            patch("gaia.rag.sdk.faiss") as mock_faiss,
+            patch("gaia.rag.sdk.AgentSDK") as mock_chat,
+        ):
+            mock_vlm_instance = Mock()
+            mock_vlm_instance.check_availability.return_value = False
+            mock_vlm_class.return_value = mock_vlm_instance
+
+            mock_lemonade_instance = Mock()
+            mock_lemonade_instance.embeddings.return_value = {
+                "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
+            }
+            mock_lemonade.return_value = mock_lemonade_instance
+
+            mock_pdf_instance = Mock()
+            # Default mocks to "not encrypted"; without this, Mock auto-creates
+            # is_encrypted as a truthy Mock attribute and the PDF extractor's
+            # encryption guard (added in #451) would short-circuit.
+            mock_pdf_instance.is_encrypted = False
+            mock_pdf_instance.pages = [Mock()]
+            mock_pdf_instance.pages[0].extract_text.return_value = (
+                "Sample PDF content for testing."
+            )
+            mock_pdf.return_value = mock_pdf_instance
+
+            mock_embedder = Mock()
+            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
+            mock_st.return_value = mock_embedder
+
+            mock_index = Mock()
+            mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
+            mock_faiss.IndexFlatL2.return_value = mock_index
+
+            mock_chat_response = Mock()
+            mock_chat_response.text = "Mocked LLM response"
+            mock_chat_response.stats = {"tokens": 50}
+            mock_chat_instance = Mock()
+            mock_chat_instance.send.return_value = mock_chat_response
+            mock_chat.return_value = mock_chat_instance
+
+            yield {
+                "pdf": mock_pdf,
+                "embedder": mock_embedder,
+                "index": mock_index,
+                "chat": mock_chat_instance,
+                "vlm": mock_vlm_instance,
+                "lemonade": mock_lemonade_instance,
+            }
+
     def test_cache_uses_json_not_pickle(self, mock_dependencies):
         """Test that cache files are saved as JSON, not pickle."""
         if not RAG_AVAILABLE:
@@ -1016,7 +1316,9 @@ class TestCacheSecurity:
 
             with (
                 patch("gaia.rag.sdk.RAGSDK._check_dependencies"),
-                patch("gaia.rag.sdk.Path.home", return_value=Path(temp_dir) / "hmac_home"),
+                patch(
+                    "gaia.rag.sdk.Path.home", return_value=Path(temp_dir) / "hmac_home"
+                ),
             ):
                 rag1 = RAGSDK(config)
                 key1 = rag1._get_hmac_key()
@@ -1053,7 +1355,11 @@ class TestCacheSecurity:
                 # Overwrite with new data
                 rag._save_cache(
                     cache_path,
-                    {"chunks": ["v2", "v2b"], "full_text": "second", "metadata": {"version": 2}},
+                    {
+                        "chunks": ["v2", "v2b"],
+                        "full_text": "second",
+                        "metadata": {"version": 2},
+                    },
                 )
 
                 # Load should return the new data (not the old)

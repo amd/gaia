@@ -290,3 +290,42 @@ class TestDocumentMonitor:
             assert call_count[0] == 0
         finally:
             await monitor.stop()
+
+    @pytest.mark.asyncio
+    async def test_reindex_zero_chunks_sets_failed(self, db, temp_file):
+        """Re-indexing that returns 0 chunks should set status to 'failed'."""
+        file_hash = _compute_file_hash(temp_file)
+        file_stat = os.stat(temp_file)
+
+        doc = db.add_document(
+            filename="test.txt",
+            filepath=temp_file,
+            file_hash=file_hash,
+            file_size=file_stat.st_size,
+            chunk_count=3,
+            file_mtime=file_stat.st_mtime,
+        )
+        doc_id = doc["id"]
+
+        # Modify the file to trigger re-indexing
+        time.sleep(0.1)
+        with open(temp_file, "a") as f:
+            f.write("\nModified content")
+
+        index_called = asyncio.Event()
+
+        async def zero_chunk_index(filepath) -> int:
+            index_called.set()
+            return 0
+
+        monitor = DocumentMonitor(db=db, index_fn=zero_chunk_index, interval=0.5)
+
+        await monitor.start()
+        try:
+            await asyncio.wait_for(index_called.wait(), timeout=10.0)
+            # Give monitor time to update DB
+            await asyncio.sleep(0.2)
+            updated = db.get_document(doc_id)
+            assert updated["indexing_status"] == "failed"
+        finally:
+            await monitor.stop()

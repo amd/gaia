@@ -268,7 +268,7 @@ If a different version of Lemonade is already installed, you'll be prompted to u
 
 ### Uninstall Command
 
-Uninstall GAIA components.
+Tiered cleanup of GAIA components. By default, the OS-native uninstall (Add or Remove Programs, drag to Trash, `apt remove`) only removes the app — user data in `~/.gaia/` is preserved. This command lets you escalate cleanup as far as you want.
 
 ```bash
 gaia uninstall [OPTIONS]
@@ -278,36 +278,40 @@ gaia uninstall [OPTIONS]
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `--lemonade` | flag | Uninstall Lemonade Server |
-| `--models` | flag | Delete all downloaded models from HuggingFace cache |
+| `--venv` | flag | Remove the Python environment (`~/.gaia/venv/`) |
+| `--purge` | flag | Remove venv + chats + documents + config + logs |
+| `--purge-lemonade` | flag | Also remove Lemonade Server (requires `--purge`) |
+| `--purge-models` | flag | Also remove downloaded Lemonade models (requires `--purge`) |
+| `--purge-hf-cache` | flag | Also remove `~/.cache/huggingface/` (requires `--purge`) |
+| `--dry-run` | flag | Show what would be removed without deleting anything |
 | `--yes, -y` | flag | Skip confirmation prompts |
 
 **Examples:**
 
 <CodeGroup>
-```bash Uninstall Lemonade
-gaia uninstall --lemonade
+```bash Preview
+gaia uninstall --dry-run
 ```
 
-```bash Delete All Models
-gaia uninstall --models
+```bash Remove Python Environment Only
+gaia uninstall --venv
 ```
 
-```bash Non-Interactive
-gaia uninstall --lemonade --yes
+```bash Full Purge (venv + chats + documents + config)
+gaia uninstall --purge
 ```
 
-```bash Delete Models Non-Interactive
-gaia uninstall --models --yes
+```bash Purge Including Models
+gaia uninstall --purge --purge-models
+```
+
+```bash Purge Including Lemonade Server
+gaia uninstall --purge --purge-lemonade --yes
 ```
 </CodeGroup>
 
-<Tip>
-The uninstall command automatically downloads the correct MSI version matching your installed Lemonade to ensure clean removal.
-</Tip>
-
 <Warning>
-`--models` permanently deletes all models from `~/.cache/huggingface/hub/`. Use with caution - you'll need to re-download models after.
+`--purge` permanently deletes your chat history, uploaded documents, and configuration. Use `--dry-run` first to preview what will be removed.
 </Warning>
 
 ### Kill Command

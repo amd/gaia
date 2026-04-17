@@ -200,7 +200,7 @@ flowchart TD
   },
   "backend": {
     "apiUrl": "http://localhost:8000/api/v1",
-    "mcpPort": 8080,
+    "mcpPort": 8765,
     "healthCheck": "/health"
   }
 }
@@ -416,7 +416,7 @@ createMainWindow(config, url) {
 class MCPClient {
   constructor(config) {
     this.apiUrl = config.backend.apiUrl;
-    this.mcpPort = config.backend.mcpPort || 8080;
+    this.mcpPort = config.backend.mcpPort || 8765;
     this.baseUrl = `http://localhost:${this.mcpPort}/mcp`;
   }
 
@@ -575,7 +575,7 @@ cat > src/gaia/apps/myapp/webui/app.config.json <<EOF
   },
   "backend": {
     "apiUrl": "http://localhost:8000/api/v1",
-    "mcpPort": 8080
+    "mcpPort": 8765
   }
 }
 EOF

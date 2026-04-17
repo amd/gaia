@@ -7,6 +7,7 @@ Tests model validation, defaults, and serialization.
 """
 
 from gaia.ui.models import (
+    AgentStepResponse,
     AttachDocumentRequest,
     ChatRequest,
     ChatResponse,
@@ -360,3 +361,41 @@ class TestAttachDocumentRequest:
     def test_document_id_required(self):
         request = AttachDocumentRequest(document_id="doc123")
         assert request.document_id == "doc123"
+
+
+class TestAgentStepResponse:
+    def test_mcp_fields_default_to_none(self):
+        step = AgentStepResponse(id=1, type="tool", label="Used tool", timestamp=0)
+        assert step.mcpServer is None
+        assert step.latencyMs is None
+
+    def test_mcp_fields_set(self):
+        step = AgentStepResponse(
+            id=1,
+            type="tool",
+            label="MCP tool",
+            timestamp=0,
+            mcpServer="github",
+            latencyMs=47.2,
+        )
+        assert step.mcpServer == "github"
+        assert step.latencyMs == 47.2
+
+    def test_mcp_fields_serialization(self):
+        step = AgentStepResponse(
+            id=1,
+            type="tool",
+            label="MCP tool",
+            timestamp=0,
+            mcpServer="filesystem",
+            latencyMs=123.0,
+        )
+        data = step.model_dump()
+        assert data["mcpServer"] == "filesystem"
+        assert data["latencyMs"] == 123.0
+
+    def test_mcp_fields_none_serialization(self):
+        step = AgentStepResponse(id=1, type="tool", label="Used tool", timestamp=0)
+        data = step.model_dump()
+        assert data["mcpServer"] is None
+        assert data["latencyMs"] is None

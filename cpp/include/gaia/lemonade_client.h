@@ -212,7 +212,7 @@ public:
     // ---- Configuration ----
 
     const std::string& baseUrl() const { return baseUrl_; }
-    /// Normalize and store the URL (appends /api/v1 if missing).
+    /// Normalize and store the URL (preserves /v1 or /api/v1, otherwise appends /api/v1).
     void setBaseUrl(const std::string& url);
 
     const std::string& model() const { return model_; }
@@ -225,7 +225,7 @@ public:
     void setDebug(bool d) { debug_ = d; }
 
 private:
-    /// Normalize URL: strip trailing slashes, append /api/v1 if missing.
+    /// Normalize URL: strip trailing slashes, preserve /v1 or /api/v1, append /api/v1 otherwise.
     static std::string normalizeUrl(const std::string& url);
 
     /// Parsed URL components.

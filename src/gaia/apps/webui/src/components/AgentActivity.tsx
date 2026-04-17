@@ -81,6 +81,9 @@ const DEFAULT_TOOL_META: ToolMeta = {
 
 function getToolMeta(toolName?: string): ToolMeta {
     if (!toolName) return DEFAULT_TOOL_META;
+    if (toolName.startsWith('mcp_')) {
+        return { label: 'MCP tool', activeLabel: 'Running MCP tool', icon: Globe, color: '#7c3aed' };
+    }
     return TOOL_META[toolName] || DEFAULT_TOOL_META;
 }
 
@@ -152,15 +155,33 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     }, [steps]);
 
     const toolSteps = displaySteps.filter((s) => s.type === 'tool');
+
+    // ── Filter state (for MCP tool visualization) ───────────────────
+    const [toolNameFilter, setToolNameFilter] = useState('');
+    const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'error'>('all');
+
+    // filteredSteps drives rendering; toolSteps/errorSteps use unfiltered
+    // displaySteps so counters and the filter-bar threshold stay stable.
+    const filteredSteps = useMemo(() => {
+        if (!toolNameFilter && statusFilter === 'all') return displaySteps;
+        return displaySteps.filter(s => {
+            if (s.type !== 'tool') return true;
+            if (toolNameFilter && !s.tool?.toLowerCase().includes(toolNameFilter.toLowerCase())) return false;
+            if (statusFilter === 'success' && s.success !== true) return false;
+            if (statusFilter === 'error' && s.success !== false) return false;
+            return true;
+        });
+    }, [displaySteps, toolNameFilter, statusFilter]);
+
     const errorSteps = displaySteps.filter((s) => s.type === 'error');
     const hasErrors = errorSteps.length > 0;
 
-    // Keep all tools expanded — auto-collapse is disabled for now to
-    // let users observe all activity. Will add adaptive collapse later.
+    // Auto-expand native tools for visibility. MCP tools start collapsed
+    // by default (users expand on demand) to reduce noise in busy sessions.
     useEffect(() => {
         prevStepCountRef.current = displaySteps.length;
         const toolIds = displaySteps
-            .filter((s) => s.type === 'tool')
+            .filter((s) => s.type === 'tool' && !s.mcpServer)
             .map((s) => s.id);
         if (toolIds.length > 0) {
             setExpandedTools((prev) => {
@@ -222,8 +243,31 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                 the height transition on collapse/expand. */}
             {displaySteps.length > 0 && (
                 <div className={`agent-flow-wrap ${expanded ? 'flow-expanded' : 'flow-collapsed'}`}>
+                    {/* Filter bar — shown when expanded and 2+ tool steps */}
+                    {expanded && toolSteps.length >= 2 && (
+                        <div className="activity-filter-bar">
+                            <input
+                                type="text"
+                                className="activity-filter-input"
+                                placeholder="Filter by tool name..."
+                                aria-label="Filter by tool name"
+                                value={toolNameFilter}
+                                onChange={(e) => setToolNameFilter(e.target.value)}
+                            />
+                            <select
+                                className="activity-filter-select"
+                                aria-label="Filter by status"
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value as 'all' | 'success' | 'error')}
+                            >
+                                <option value="all">All</option>
+                                <option value="success">Success</option>
+                                <option value="error">Error</option>
+                            </select>
+                        </div>
+                    )}
                     <div className="agent-flow">
-                        {displaySteps.map((step) => {
+                        {filteredSteps.map((step) => {
                             if (step.type === 'thinking') {
                                 return <FlowThought key={step.id} step={step} />;
                             }
@@ -412,8 +456,14 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
                     <span className="flow-tool-badge" style={{ '--badge-color': color } as React.CSSProperties}>
                         {step.tool}
                     </span>
+                    {step.mcpServer && (
+                        <span className="flow-tool-mcp-server">via {step.mcpServer}</span>
+                    )}
                 </div>
                 <div className="flow-tool-right">
+                    {step.latencyMs != null && !step.active && (
+                        <span className="flow-tool-latency">{Math.round(step.latencyMs)}ms</span>
+                    )}
                     {hasDetail && (
                         <span className={`flow-tool-chevron ${isExpanded ? 'expanded' : ''}`}>
                             <ChevronRight size={12} />
