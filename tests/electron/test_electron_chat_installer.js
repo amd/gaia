@@ -536,21 +536,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
   describe('Electron packaging configuration', () => {
     let pkg;
-    let forgeConfig;
 
     beforeAll(() => {
       const packagePath = path.join(CHAT_APP_PATH, 'package.json');
       pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-
-      // Forge config can be inline in package.json or in a separate file
-      if (typeof pkg.config?.forge === 'string') {
-        // External forge config file (e.g. "./forge.config.cjs")
-        const forgeConfigPath = path.join(CHAT_APP_PATH, pkg.config.forge);
-        expect(fs.existsSync(forgeConfigPath)).toBe(true);
-        forgeConfig = require(forgeConfigPath);
-      } else {
-        forgeConfig = pkg.config?.forge || {};
-      }
     });
 
     it('should have main field pointing to Electron entry', () => {
@@ -563,14 +552,13 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       expect(pkg.devDependencies.electron).toBeDefined();
     });
 
-    it('should have Electron Forge CLI', () => {
-      expect(pkg.devDependencies['@electron-forge/cli']).toBeDefined();
+    it('should have electron-builder as devDependency', () => {
+      expect(pkg.devDependencies['electron-builder']).toBeDefined();
     });
 
-    it('should have squirrel maker for Windows installer', () => {
-      const makers = forgeConfig.makers;
-      const squirrel = makers.find(m => m.name.includes('squirrel'));
-      expect(squirrel).toBeDefined();
+    it('should have electron-builder config file', () => {
+      const configPath = path.join(CHAT_APP_PATH, 'electron-builder.yml');
+      expect(fs.existsSync(configPath)).toBe(true);
     });
 
     it('should have package script', () => {
@@ -578,19 +566,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       expect(pkg.scripts.package).toContain('build');
     });
 
-    it('should have make script', () => {
-      expect(pkg.scripts.make).toBeDefined();
-      expect(pkg.scripts.make).toContain('build');
-    });
-
-    it('should have packager config with app name', () => {
-      expect(forgeConfig.packagerConfig.name).toBeDefined();
-    });
-
-    it('should include dist in extraResource for packaged app', () => {
-      const extraResource = forgeConfig.packagerConfig.extraResource;
-      expect(extraResource).toBeDefined();
-      expect(extraResource).toContain('./dist');
+    it('should have platform-specific packaging scripts', () => {
+      // electron-builder uses package:win/mac/linux instead of forge's make
+      expect(pkg.scripts['package:win']).toBeDefined();
+      expect(pkg.scripts['package:mac']).toBeDefined();
+      expect(pkg.scripts['package:linux']).toBeDefined();
     });
   });
 
@@ -611,7 +591,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     it('should have bin field with gaia-ui CLI entry', () => {
       expect(pkg.bin).toBeDefined();
       expect(pkg.bin['gaia-ui']).toBeDefined();
-      expect(pkg.bin['gaia-ui']).toContain('bin/gaia-ui.mjs');
+      expect(pkg.bin['gaia-ui']).toContain('bin/gaia-ui');
     });
 
     it('should have files field for npm publish', () => {
@@ -644,12 +624,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     });
 
     it('should have CLI entry point file', () => {
-      const cliPath = path.join(CHAT_APP_PATH, 'bin', 'gaia-ui.mjs');
+      const cliEntry = pkg.bin['gaia-ui'];
+      const cliPath = path.join(CHAT_APP_PATH, cliEntry);
       expect(fs.existsSync(cliPath)).toBe(true);
     });
 
     it('should have valid CLI entry with shebang', () => {
-      const cliPath = path.join(CHAT_APP_PATH, 'bin', 'gaia-ui.mjs');
+      const cliEntry = pkg.bin['gaia-ui'];
+      const cliPath = path.join(CHAT_APP_PATH, cliEntry);
       const content = fs.readFileSync(cliPath, 'utf8');
       expect(content.startsWith('#!/usr/bin/env node')).toBe(true);
     });
