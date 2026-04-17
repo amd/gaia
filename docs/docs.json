@@ -373,11 +373,9 @@
           {
             "group": "Infrastructure",
             "pages": [
-              "plans/mcp-client",
               "plans/cua",
               "plans/docker-containers",
               "plans/mcp-docs",
-              "plans/installer",
               "plans/desktop-installer"
             ]
           },
