@@ -159,6 +159,30 @@ class TestCheckIntegrity:
         service.close_db()
 
 
+class TestScratchpadIntegrity:
+    """ScratchpadService corruption recovery (added in #495 bulletproofing)."""
+
+    def test_corrupt_scratchpad_db_is_rebuilt_on_init(self, tmp_path):
+        """Opening a garbage file as the scratchpad DB silently rebuilds it.
+
+        Without corruption recovery, a user whose ``~/.gaia/scratchpad.db``
+        got clobbered by power loss / disk full would hit a cryptic
+        ``sqlite3.DatabaseError: file is not a database`` on every
+        ``gaia chat`` turn.
+        """
+        db_path = tmp_path / "corrupt_scratch.db"
+        # Write non-SQLite bytes so PRAGMA integrity_check fails hard
+        db_path.write_bytes(b"this is definitely not a sqlite database" * 4)
+
+        service = ScratchpadService(db_path=str(db_path))
+        # After init, the service should be usable: create a table and
+        # insert rows. If recovery didn't fire, this would raise.
+        service.create_table("recovered", "id INTEGER, note TEXT")
+        service.insert_rows("recovered", [{"id": 1, "note": "ok"}])
+        assert service._get_row_count("scratch_recovered") == 1
+        service.close_db()
+
+
 class TestMigrateVersionCurrent:
     """Edge case: migrate() when schema version is already current."""
 

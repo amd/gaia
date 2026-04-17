@@ -80,10 +80,44 @@ class ScratchpadService(DatabaseMixin):
         path = db_path or self.DEFAULT_DB_PATH
         resolved = str(Path(path).expanduser())
         self.init_db(resolved)
-        # Enable WAL mode for concurrent access.
-        # Use _db.execute() directly because PRAGMA does not work reliably
-        # with the mixin's execute() which calls executescript().
+        # Open path: try PRAGMAs, and if anything complains about a
+        # malformed DB, rebuild from scratch. Mirrors
+        # FileSystemIndexService._check_integrity so a corrupted
+        # ``~/.gaia/scratchpad.db`` (power loss, disk full) heals itself
+        # instead of crashing every turn with a cryptic
+        # ``sqlite3.DatabaseError: file is not a database``.
+        if not self._open_or_rebuild(resolved):
+            log.warning("Scratchpad DB at %s was corrupt; rebuilt empty.", resolved)
+
+    def _open_or_rebuild(self, db_path: str) -> bool:
+        """Set PRAGMA journal mode + run integrity check, rebuild on failure.
+
+        Returns True if the existing DB is healthy, False if it had to be
+        rebuilt (caller may want to log).
+        """
+        try:
+            # Both statements fail loudly on a corrupt file — catch together.
+            self._db.execute("PRAGMA journal_mode=WAL")
+            row = self._db.execute("PRAGMA integrity_check").fetchone()
+            if row and row[0] == "ok":
+                return True
+            log.error("Scratchpad integrity_check returned %s", row)
+        except Exception as exc:  # pylint: disable=broad-except
+            log.error("Scratchpad integrity check failed: %s", exc)
+
+        # Rebuild: close, delete the file, re-init.
+        try:
+            self.close_db()
+        except Exception:  # pylint: disable=broad-except
+            pass
+        try:
+            Path(db_path).unlink(missing_ok=True)
+        except OSError as exc:
+            log.error("Failed to delete corrupt scratchpad DB: %s", exc)
+        self.init_db(db_path)
+        # Fresh DB — these now succeed.
         self._db.execute("PRAGMA journal_mode=WAL")
+        return False
 
     def create_table(self, name: str, columns: str) -> str:
         """Create a prefixed scratchpad table.
