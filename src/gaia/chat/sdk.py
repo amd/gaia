@@ -66,12 +66,12 @@ class AgentSDK:
         config = AgentConfig(model=DEFAULT_MODEL_NAME, show_stats=True)
         chat = AgentSDK(config)
 
-        # Single message
-        response = await chat.send("Hello, how are you?")
+        # Single message (synchronous — send() is a regular def)
+        response = chat.send("Hello, how are you?")
         print(response.text)
 
-        # Streaming chat
-        async for chunk in chat.send_stream("Tell me a story"):
+        # Streaming chat (synchronous generator)
+        for chunk in chat.send_stream("Tell me a story"):
             print(chunk.text, end="", flush=True)
 
         # Get conversation history
@@ -1017,13 +1017,13 @@ class SimpleChat:
 
         chat = SimpleChat()
 
-        # Simple question-answer
-        response = await chat.ask("What's the weather like?")
+        # Simple question-answer (synchronous — ask() is a regular def)
+        response = chat.ask("What's the weather like?")
         print(response)
 
         # Chat with memory
-        response1 = await chat.ask("My name is John")
-        response2 = await chat.ask("What's my name?")  # Remembers previous context
+        response1 = chat.ask("My name is John")
+        response2 = chat.ask("What's my name?")  # Remembers previous context
         ```
     """
 
@@ -1039,7 +1039,7 @@ class SimpleChat:
         Args:
             system_prompt: Optional system prompt for the AI
             model: Model to use (defaults to DEFAULT_MODEL_NAME)
-            assistant_name: Name to use for the assistant (defaults to "assistant")
+            assistant_name: Name to use for the assistant (defaults to "gaia")
         """
         config = AgentConfig(
             model=model or DEFAULT_MODEL_NAME,
@@ -1097,13 +1097,17 @@ class AgentSession:
         # Create session manager
         sessions = AgentSession()
 
-        # Create different chat sessions
-        work_chat = sessions.create_session("work", system_prompt="You are a professional assistant")
-        personal_chat = sessions.create_session("personal", system_prompt="You are a friendly companion")
+        # Each session returns an AgentSDK (not a SimpleChat)
+        work_chat = sessions.create_session(
+            "work", system_prompt="You are a professional assistant"
+        )
+        personal_chat = sessions.create_session(
+            "personal", system_prompt="You are a friendly companion"
+        )
 
-        # Chat in different contexts
-        work_response = await work_chat.ask("Draft an email to my team")
-        personal_response = await personal_chat.ask("What's a good recipe for dinner?")
+        # Chat in different contexts — AgentSDK.send() is synchronous
+        work_response = work_chat.send("Draft an email to my team").text
+        personal_response = personal_chat.send("What's a good recipe for dinner?").text
         ```
     """
 

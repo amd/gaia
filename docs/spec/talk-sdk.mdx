@@ -120,6 +120,7 @@ class TalkConfig:
     whisper_model_size: str = "base"
     audio_device_index: Optional[int] = None
     silence_threshold: float = 0.5
+    mic_threshold: float = 0.003   # Microphone amplitude threshold for VAD
     enable_tts: bool = True
     mode: TalkMode = TalkMode.VOICE_AND_TEXT
 
