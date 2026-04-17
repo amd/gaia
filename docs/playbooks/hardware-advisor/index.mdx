@@ -497,7 +497,7 @@ def _register_tools(self):
     client = self.client
     agent = self
 
-    @tool
+    @tool(atomic=True)
     def get_hardware_info() -> Dict[str, Any]:
         """Get detailed system hardware information including RAM, GPU, and NPU."""
         try:
@@ -635,7 +635,7 @@ Add the `list_available_models()` tool with `labels` field and `message` in the 
 **Add this tool** inside the `_register_tools()` method (after the `get_hardware_info` function):
 
 ```python
-@tool
+@tool(atomic=True)
 def list_available_models() -> Dict[str, Any]:
     """List all models available in the catalog with their sizes and download status."""
     try:
@@ -742,7 +742,7 @@ Add the complete `recommend_models()` tool with `estimated_runtime_gb`, `fits_in
 **Add this tool** inside the `_register_tools()` method (after the `list_available_models` function):
 
 ```python
-@tool
+@tool(atomic=True)
 def recommend_models(ram_gb: float, gpu_memory_mb: int = 0) -> Dict[str, Any]:
     """Recommend models based on available system memory.
 
