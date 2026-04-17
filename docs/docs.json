@@ -72,7 +72,6 @@
                   "guides/docker",
                   "guides/routing",
                   "guides/custom-agent",
-                  "guides/custom-installer",
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
