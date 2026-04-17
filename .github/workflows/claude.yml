@@ -43,13 +43,6 @@ on:
     # opened / reopened / ready_for_review: initial review trigger
     # synchronize: re-review on every push (concurrency below cancels in-progress)
     types: [opened, reopened, ready_for_review, synchronize]
-  # TEMPORARY FOR TESTING — REMOVE BEFORE MERGE:
-  # pull_request runs the workflow from the PR head (not the base), which lets us
-  # validate the v1.0.99 migration on PR #797 itself. Same-repo PRs get secrets.
-  # This trigger MUST be removed from this `on:` block AND the `pr-review.if:`
-  # reference to `pull_request` below before merging to main.
-  pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
   pull_request_review_comment:
     types: [created, edited]
   workflow_run:
@@ -65,8 +58,7 @@ jobs:
   # Auto-review new PRs (including forks)
   pr-review:
     if: |
-      (github.event_name == 'pull_request_target' ||
-       github.event_name == 'pull_request') &&
+      github.event_name == 'pull_request_target' &&
       (github.event.pull_request.draft == false ||
        contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
     runs-on: ubuntu-latest
