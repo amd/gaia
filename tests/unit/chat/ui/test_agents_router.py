@@ -210,3 +210,31 @@ class TestExportImportSecurityGuards:
         finally:
             app_with_registry.dependency_overrides.clear()
             del app_with_registry.state.tunnel
+
+
+class TestRouteShadowing:
+    """Confirm that literal /export and /import routes shadow the {agent_id:path} wildcard.
+
+    TestClient sends from host "testclient" (not localhost), so the localhost guard
+    fires 403 — which proves the named route resolved first (405 would mean it didn't).
+    """
+
+    def test_post_export_resolves_named_route_not_wildcard(self, client):
+        resp = client.post("/api/agents/export", headers={"X-Gaia-UI": "1"})
+        assert resp.status_code == 403
+        assert "method not allowed" not in resp.text.lower()
+
+    def test_post_import_resolves_named_route_not_wildcard(self, client):
+        resp = client.post(
+            "/api/agents/import",
+            headers={"X-Gaia-UI": "1"},
+            files={"bundle": ("x.zip", b"", "application/zip")},
+        )
+        assert resp.status_code == 403
+        assert "method not allowed" not in resp.text.lower()
+
+    def test_get_export_returns_404_not_405(self, client):
+        # GET /api/agents/export is handled by the GET /{agent_id:path} route;
+        # "export" is not a registered agent, so 404 is expected — not 405.
+        resp = client.get("/api/agents/export")
+        assert resp.status_code == 404

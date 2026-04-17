@@ -44,12 +44,19 @@ export function CustomAgentsSection() {
     const [status, setStatus] = useState<Status>({ kind: 'idle' });
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const statusClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const errorBannerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         return () => {
             if (statusClearRef.current) clearTimeout(statusClearRef.current);
         };
     }, []);
+
+    useEffect(() => {
+        if (status.kind === 'error') {
+            errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }, [status]);
 
     const flashStatus = useCallback((s: Status, clearAfterMs = 5000) => {
         setStatus(s);
@@ -105,6 +112,7 @@ export function CustomAgentsSection() {
             URL.revokeObjectURL(url);
             flashStatus({ kind: 'success', message: 'Export downloaded.' });
         } catch (err) {
+            console.error('Agent export failed:', err);
             const message = err instanceof Error ? err.message : String(err);
             log.api.error('Agent export failed', err);
             flashStatus({ kind: 'error', message: `Export failed: ${message}` });
@@ -193,6 +201,7 @@ export function CustomAgentsSection() {
                 });
             }
         } catch (err) {
+            console.error('Agent import failed:', err);
             const message = err instanceof Error ? err.message : String(err);
             log.api.error('Agent import failed', err);
             flashStatus({ kind: 'error', message: `Import failed: ${message}` });
@@ -262,6 +271,7 @@ export function CustomAgentsSection() {
 
             {status.kind !== 'idle' && (
                 <div
+                    ref={errorBannerRef}
                     className="danger-warning"
                     style={{
                         marginTop: 12,

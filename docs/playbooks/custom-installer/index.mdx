@@ -69,7 +69,6 @@ Create `build/bundled-agents/zoo-agent/agent.py`:
 ```python title="build/bundled-agents/zoo-agent/agent.py"
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.tools import _TOOL_REGISTRY
 
 
 class ZooAgent(Agent):
@@ -92,7 +91,7 @@ class ZooAgent(Agent):
         return AgentConsole()
 
     def _register_tools(self) -> None:
-        _TOOL_REGISTRY.clear()
+        pass
 ```
 
 **Why this location matters.** The `build/bundled-agents/` directory is the build-time staging area picked up by the `extraResources` entry in `electron-builder.yml`:

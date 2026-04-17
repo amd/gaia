@@ -237,8 +237,16 @@ async function seedBundledAgents() {
 
   if (!fs.existsSync(sourceDir) || !isDirectory(sourceDir)) {
     // Not an error — a build might simply ship without bundled agents.
+    // In a packaged Electron app the directory is expected to exist, so raise
+    // to WARN; in dev/test contexts leave it at INFO.
+    let isPackaged = false;
+    try {
+      isPackaged = require("electron").app?.isPackaged === true;
+    } catch (_) {
+      // not in an Electron context (tests, CLI)
+    }
     log(
-      "INFO",
+      isPackaged ? "WARN" : "INFO",
       `No bundled agents directory at ${sourceDir} — nothing to seed`
     );
     return result;
