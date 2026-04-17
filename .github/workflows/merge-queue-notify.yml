@@ -77,16 +77,18 @@ jobs:
               ? failedJobs.map(job => `  - [${job.name}](${job.html_url})`).join('\n')
               : '  - Check workflow run for details';
 
-            const body = `## Merge Queue Failure
-
-Your PR was removed from the merge queue due to test failures in **${workflowName}**.
-
-**Failed jobs:**
-${failedJobsList}
-
-**Full workflow run:** [View logs](${runUrl})
-
-<sub>This comment was automatically generated.</sub>`;
+            const body = [
+              '## Merge Queue Failure',
+              '',
+              `Your PR was removed from the merge queue due to test failures in **${workflowName}**.`,
+              '',
+              '**Failed jobs:**',
+              failedJobsList,
+              '',
+              `**Full workflow run:** [View logs](${runUrl})`,
+              '',
+              '<sub>This comment was automatically generated.</sub>',
+            ].join('\n');
 
             // Check if we already posted a comment for this run to avoid duplicates
             const { data: comments } = await github.rest.issues.listComments({

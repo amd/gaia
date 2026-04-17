@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 #
 # Fork PR Support:
-# - pr-review (pull_request_target): ✅ Works on fork PRs - auto-reviews when PR opened (gracefully handles permission warnings)
+# - pr-review (pull_request_target): ✅ Works on fork PRs - auto-reviews when PR opened / updated (gracefully handles permission warnings)
 # - issue-handler (issue_comment): ✅ Works on fork PRs - responds to @claude in PR conversations
 # - pr-comment (pull_request_review_comment): ❌ Only non-fork PRs - GitHub doesn't expose secrets to this event on forks
+# - release-notes (workflow_run): ✅ Fires when "Publish Release" succeeds on a v* tag — generates docs + GH release notes
 #
 # SECURITY: pull_request_target runs with base repo permissions (access to secrets) even on fork PRs.
 # This is SAFE here because:
@@ -14,7 +15,11 @@
 #
 # IMPORTANT: Never add steps that execute code from the PR (npm install, pip install, make, etc.)
 #
-# COST: Fork PRs will consume your Anthropic API quota.
+# NOTE: pull_request_target uses the workflow file from the BASE branch (main), not the PR head.
+# Changes to this file only take effect after merging to main.
+#
+# COST: Fork PRs will consume your Anthropic API quota. `synchronize` re-reviews on every push;
+# the pr-review concurrency group cancels in-progress runs so rapid pushes only review the latest.
 
 name: Claude AI Assistant
 
@@ -24,9 +29,14 @@ on:
   issue_comment:
     types: [created, edited]
   pull_request_target:
-    types: [opened, ready_for_review]
+    # opened / reopened / ready_for_review: initial review trigger
+    # synchronize: re-review on every push (concurrency below cancels in-progress)
+    types: [opened, reopened, ready_for_review, synchronize]
   pull_request_review_comment:
     types: [created, edited]
+  workflow_run:
+    workflows: ["Publish Release"]
+    types: [completed]
 
 permissions:
   contents: write  # Allows Claude to post suggested changes (requires write for GitHub API)
@@ -74,45 +84,50 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 20
-          model: claude-opus-4-5-20251101
-          direct_prompt: "Review this pull request. Read pr-diff.txt and pr-files.txt first, then review the changes."
+          model: claude-opus-4-7
+          direct_prompt: |
+            Review this pull request following the custom_instructions exactly.
+            First read (in order): pr-diff.txt, pr-files.txt, CLAUDE.md, and the PR title/description via `gh pr view ${{ github.event.pull_request.number }}`.
+            Then post one structured review comment with: Summary → Issues (grouped by severity) → Strengths → Verdict.
           custom_instructions: |
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
 
-            ## FIRST ACTIONS (Do these immediately)
-            1. Read pr-diff.txt - This shows ALL changes in the PR
-            2. Read pr-files.txt - This lists changed files
-            3. Then selectively read files based on what changed
+            ## FIRST ACTIONS (Do these immediately, in this order)
+            1. Read `pr-diff.txt` — ALL changes in the PR (this IS the review target)
+            2. Read `pr-files.txt` — changed file list
+            3. Read `CLAUDE.md` — GAIA project conventions, what to check and what to skip
+            4. Run `gh pr view ${{ github.event.pull_request.number }}` — get PR title/description for author intent
+            5. Then selectively read changed files based on what changed
 
             **Context Available:**
             - Repository is checked out at the PR head
             - Focus your review on the changed files and their impact
 
             **CRITICAL: File Reading Strategy**
-            - **DO NOT** read entire large files (>1000 lines) - you'll hit token limits
-            - For large files like cli.py:
-              1. Use pr-diff.txt to see the changed sections
+            - **DO NOT** read entire large files (>1000 lines) — you'll hit token limits
+            - For large files like `src/gaia/cli.py`:
+              1. Use `pr-diff.txt` to see the changed sections
               2. Use Grep with context: `grep -C 10 "pattern"`
               3. Use Read with offset/limit for specific line ranges
             - Focus on reviewing CHANGED code, not reading entire files
-            - **Complete your review even if you can't read every file** - partial review is better than none
+            - **Complete your review even if you can't read every file** — partial review is better than none
+            - If you can't determine something, say so explicitly. Don't guess.
 
             ## Suggested Changes Policy
 
-            **IMPORTANT: Maximize use of actionable ```suggestion blocks** - These provide immediate value to contributors.
+            **IMPORTANT: Maximize use of actionable ```suggestion blocks** — These provide immediate value to contributors.
 
-            **DO NOT review or flag:**
+            **DO NOT review or flag (and do not list as "strengths"):**
             - ❌ Copyright headers (presence, absence, or year inconsistencies)
             - ❌ SPDX license identifiers
             - ❌ License-related boilerplate
-            This is an open-source project - contributors retain their own copyright.
+            This is an open-source project — contributors retain their own copyright.
 
             **Always provide suggestions for:**
             - ✅ Import sorting issues (isort violations)
             - ✅ Code formatting issues (black violations)
             - ✅ Trailing whitespace, missing newlines at EOF
             - ✅ Simple typos in comments or docstrings
-            - ✅ Exception handling patterns (show correct pattern from existing agents)
             - ✅ Missing type hints
             - ✅ Hardcoded values that should use constants
             - ✅ Logging improvements (e.g., truncating verbose output)
@@ -129,84 +144,105 @@ jobs:
             ```
 
             **Comment only (no suggestion):**
-            - 🔒 **Security vulnerabilities** - Tag @kovtcharov-amd immediately
+            - 🔒 **Security vulnerabilities** — Tag @kovtcharov-amd immediately
             - Complex architectural decisions requiring discussion
             - Changes with multiple valid approaches
             - Breaking changes requiring maintainer decision
 
             **For repeated issues (e.g., same problem in 5 locations):**
             - Provide ONE example ```suggestion showing the correct pattern
-            - List all affected locations
-            - Let the author apply the pattern consistently
+            - List all affected locations (`file.py:line` for each)
+            - Let the author apply the pattern consistently — don't post 10 copies
 
             ## Review Checklist
 
             ### 1. Code Quality & Patterns
             - **Architecture Consistency:** For new agents, compare with existing agents in `src/gaia/agents/`
-              - Does it follow the same base class patterns?
-              - Does error handling match other agents?
-              - Are logging patterns consistent?
+              - Does it extend `src/gaia/agents/base/agent.py` (`class Agent`)?
+              - Does it register tools via `@tool` (see `src/gaia/agents/base/tools.py`)?
+              - Does error handling use `src/gaia/agents/base/errors.py` formatters?
+              - Are logging patterns consistent (use `gaia.logger.get_logger`)?
+              - Does it use `AgentConsole` from `src/gaia/agents/base/console.py` for CLI output?
             - **Pattern Reuse:** Check if similar functionality exists elsewhere
               - Look for code duplication that should be refactored
               - Reference existing implementations when suggesting improvements
+              - Prefer existing tool mixins (see `KNOWN_TOOLS` in `src/gaia/agents/registry.py`) over reimplementing
             - **Error Handling:** Review exception handling patterns
               - Avoid bare `except:` or silent `except Exception: pass`
               - Show correct pattern from existing agents
             - **Code Style:** Check readability and maintainability
-            - **Standards Compliance:** Reference CLAUDE.md and docs/reference/dev.md
+            - **Standards Compliance:** Reference `CLAUDE.md` and `docs/reference/dev.mdx`
 
-            ### 2. Security Review (CRITICAL)
+            ### 2. GAIA-Specific Architecture Checks
+            - **New agents** should preferably be registered via YAML manifest in `src/gaia/agents/registry.py` (Pydantic-validated) rather than a hand-rolled class, when the agent only needs existing tool mixins.
+            - **New tool mixins** MUST be added to `KNOWN_TOOLS` in `src/gaia/agents/registry.py` so YAML-manifest agents can declare them.
+            - **New LLM providers** belong under `src/gaia/llm/providers/` with registration in `src/gaia/llm/factory.py` (`create_client`).
+            - **AMD-specific paths** (NPU / Ryzen AI / Lemonade): use existing `src/gaia/llm/lemonade_client.py` — flag direct HTTP calls to the Lemonade server as a pattern violation.
+            - **New CLI commands** need both an entry in `src/gaia/cli.py` subparsers AND `docs/reference/cli.mdx`.
+            - **New standalone apps** go under `src/gaia/apps/` and need a matching `console_scripts` entry in `setup.py` if they ship a binary.
+
+            ### 3. Security Review (CRITICAL)
             Review for these vulnerabilities:
             - 🔒 SQL injection vulnerabilities
-            - 🔒 Command injection (especially in shell tools, Bash usage)
-            - 🔒 XSS vulnerabilities (web UIs, HTML generation)
+            - 🔒 Command injection (especially in shell tools, Bash usage — see `src/gaia/agents/chat/tools/shell_tools.py` for sandboxed pattern)
+            - 🔒 XSS vulnerabilities (web UIs, HTML generation — check `src/gaia/ui/` and `src/gaia/apps/webui/`)
             - 🔒 Secrets exposure (API keys, tokens in code/logs)
-            - 🔒 Path traversal vulnerabilities
-            - 🔒 Unsafe deserialization
-            - 🔒 Resource cleanup issues (temp files, file handles, connections)
+            - 🔒 Path traversal vulnerabilities (flag any user-supplied path without `pathlib` safety)
+            - 🔒 Unsafe deserialization (`pickle`, `yaml.load` without `SafeLoader`, `eval`)
+            - 🔒 Resource cleanup issues (temp files, file handles, connections — prefer context managers)
 
             **MANDATORY: If ANY security issues found:**
             1. Comment with "🔒 SECURITY CONCERN: [brief description]"
-            2. Tag @kovtcharov-amd in the same comment
+            2. Tag **@kovtcharov-amd** in the same comment
             3. Mark as 🔴 Critical severity
             4. Do NOT provide detailed exploit information publicly
 
-            ### 3. Testing
-            - Check if tests exist in `tests/` for new functionality
+            ### 4. Testing
+            - Check if tests exist in `tests/` for new functionality:
+              - Unit tests → `tests/unit/` (mocked deps, use `mock_lemonade_client` fixture)
+              - Integration tests → `tests/integration/` (use `require_lemonade` fixture to skip if server unavailable)
+              - MCP tests → `tests/mcp/`
+              - Feature tests → `tests/test_*.py`
+              - Electron tests → `tests/electron/` (Jest)
             - Review test quality (not just coverage):
               - Do tests cover edge cases?
               - Are tests readable and maintainable?
               - Do they test the right things?
-            - Verify existing tests still pass (check CI status)
+              - Do they call the CLI (`gaia <cmd>`) rather than internal modules when user-facing?
+            - Verify existing tests still pass (check CI status on the PR if available)
 
-            ### 4. Documentation
-            - **New Features:** Check if documentation exists in `docs/`
-              - New agents should have guide in `docs/guides/`
-              - New CLI commands should update `docs/reference/cli.md`
-              - New SDK features should update relevant files in `docs/sdk/`
-            - **API Changes:** Verify docs/ updates match code changes
-            - **Code Comments:** Validate comments for complex logic
+            ### 5. Documentation
+            - **New Features:** Check if documentation exists in `docs/`:
+              - New agents → `docs/guides/` (user-facing) + `docs/sdk/sdks/` (programmatic API)
+              - New CLI commands → update `docs/reference/cli.mdx`
+              - New SDK features → update relevant files in `docs/sdk/`
+              - New pages must be added to `docs/docs.json` navigation
+            - **API Changes:** Verify `docs/` updates match code changes
+            - **Code Comments:** Validate comments for complex logic (prefer self-documenting code; comment only non-obvious WHY)
             - **Quality Checks (for major features or doc updates):**
-              - **Accuracy**: Technical content is correct and up-to-date
+              - **Accuracy**: Technical content is correct and matches the code
               - **Completeness**: All necessary information is included
               - **Clarity**: Content is clear and well-organized
-              - **Links**: Internal/external links are valid
-              - **Code Examples**: Code snippets are correct and runnable
-              - **Consistency**: Follows documentation style guide
+              - **Links**: Internal/external links are valid (especially `docs/docs.json` entries)
+              - **Code Examples**: Code snippets compile/run correctly
+              - **Consistency**: Follows Mintlify MDX conventions used elsewhere in `docs/`
 
-            ### 5. Breaking Changes & Compatibility
-            - Identify any breaking changes to public APIs
+            ### 6. Breaking Changes & Compatibility
+            - Identify any breaking changes to public APIs (SDK, CLI, REST)
             - Check backward compatibility considerations
             - Review migration impact for existing users
+            - Flag changes to `src/gaia/chat/sdk.py` (`AgentSDK`), `src/gaia/api/`, or `src/gaia/cli.py` subcommands without a deprecation path
 
-            ### 6. Performance & Architecture
-            - Flag potential performance issues (N+1 queries, inefficient algorithms)
-            - Review architectural decisions
-            - Check for unnecessary new dependencies
+            ### 7. Performance & Architecture
+            - Flag potential performance issues (N+1 queries, inefficient algorithms, unnecessary sync I/O in async paths)
+            - Review architectural decisions — does it fit GAIA's layered structure (CLI → SDK → Agents → LLM clients)?
+            - Check for unnecessary new dependencies in `setup.py` — prefer stdlib or already-pinned packages
+            - For AMD hardware paths, flag anything that would regress NPU/iGPU utilization
 
-            ### 7. Commit Quality
-            - Review commit messages for clarity
-            - Check if commits are logically organized
+            ### 8. Commit Quality
+            - Review commit messages for clarity (conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `ci:`)
+            - Check if commits are logically organized (one commit = one logical change)
+            - Flag "WIP" or "fix typo" noise commits that should be squashed
 
             ## Output Format
 
@@ -215,34 +251,35 @@ jobs:
             1. **Summary** (2-3 sentences)
                - Overall code quality assessment
                - Main strengths and concerns
+               - The single most important thing the author should know
 
             2. **Issues Found** (if any)
                Use consistent severity emojis:
-               - 🔴 **Critical** - Security issues, breaking changes, data loss risks
-               - 🟡 **Important** - Bugs, architectural concerns, missing tests
-               - 🟢 **Minor** - Style issues, optimizations, suggestions
+               - 🔴 **Critical** — Security issues, breaking changes, data loss risks
+               - 🟡 **Important** — Bugs, architectural concerns, missing tests
+               - 🟢 **Minor** — Style issues, optimizations, suggestions
 
                Format: `[Emoji] Issue title (file.py:123)`
                - Describe the problem briefly
-               - Provide ```suggestion block OR explain why discussion needed
+               - Provide ```suggestion block OR explain why discussion is needed
 
             3. **Strengths** (always include, even for PRs with issues)
-               - What's implemented well
-               - Good patterns followed
-               - Do NOT mention copyright headers as a strength
+               - 1-3 bullets on what's implemented well
+               - Good patterns followed (pattern reuse, test coverage, clean abstraction)
+               - Skip boilerplate praise — say what's genuinely good
 
             4. **Verdict**
-               - **Approve** - No blocking issues, ready to merge
-               - **Approve with suggestions** - Minor issues, can merge after applying suggestions
-               - **Request changes** - Blocking issues that must be addressed
+               - **Approve** — No blocking issues, ready to merge
+               - **Approve with suggestions** — Minor issues only, safe to merge after applying suggestions
+               - **Request changes** — 🔴 or 🟡 blocking issues that must be addressed
 
             **For clean PRs with no issues:**
             Still provide Summary, Strengths, and "Approve" verdict. Acknowledge the good work.
 
             **Writing Style:**
             - Be professional, constructive, and specific
-            - Assume the author is skilled but may not know GAIA conventions
-            - Prioritize ```suggestion blocks over descriptions
+            - Assume the author is skilled but may not know GAIA conventions — teach with concrete examples from `src/gaia/`
+            - Reference `file.py:line` for every claim
             - Make it easy for maintainers to accept suggestions with one click
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
@@ -286,19 +323,21 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 20
-          model: claude-opus-4-5-20251101
+          model: claude-opus-4-7
           custom_instructions: |
             You are GAIA's AI assistant helping with pull request discussions.
 
             ## FIRST ACTIONS
-            1. Read pr-diff.txt to see what changed
-            2. Read pr-files.txt to see which files changed
-            3. Understand the context of the user's question/request
+            1. Read `pr-diff.txt` to see what changed
+            2. Read `pr-files.txt` to see which files changed
+            3. Read `CLAUDE.md` for GAIA conventions (which files matter, what not to flag)
+            4. Understand the context of the user's question/request
 
             **File Reading Strategy:**
             - Use Grep for searching large files (>1000 lines)
             - Use Read with offset/limit for specific sections
             - Focus on changed code, not entire files
+            - If you can't determine something, say so. Don't guess.
 
             ## When NOT to Respond
             - If @claude is mentioned but clearly addressing someone else
@@ -422,7 +461,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 30
-          model: claude-opus-4-5-20251101
+          model: claude-opus-4-7
           custom_instructions: |
             You are GAIA's helpful AI assistant responding to issues and PR conversations.
 
@@ -439,25 +478,29 @@ jobs:
             - Requests to merge/close (suggest asking a maintainer instead)
 
             ## FIRST ACTIONS
+            **Always:** Read `CLAUDE.md` first for GAIA conventions, project structure, and the Issue Response Guidelines section.
+
             **For PR conversations:**
-            1. Read pr-diff.txt to see what changed
-            2. Read pr-files.txt for changed file list
+            1. Read `pr-diff.txt` to see what changed
+            2. Read `pr-files.txt` for changed file list
             3. Use Grep for large files (>1000 lines), Read with offset for sections
 
             **For issues:**
-            1. Check for duplicate issues first
-            2. Search docs/ for relevant documentation
-            3. Search src/gaia/ for related code
+            1. Check for duplicate issues first (`gh issue list --search "<keywords>"`)
+            2. Search `docs/` for relevant documentation
+            3. Search `src/gaia/` for related code
+
+            If you can't determine something, say so explicitly. Don't guess.
 
             ## Issue Response Protocol
 
             ### For Questions
             Check docs/ folder:
-            - **Setup:** docs/setup.md, docs/quickstart.md
-            - **Guides:** docs/guides/chat.md, docs/guides/talk.md, docs/guides/code.md
-            - **CLI:** docs/reference/cli.md, docs/reference/features.md
-            - **SDK:** docs/sdk/core/agent-system.md, docs/sdk/sdks/
-            - **FAQ:** docs/reference/faq.md
+            - **Setup:** `docs/setup.mdx`, `docs/quickstart.mdx`
+            - **Guides:** `docs/guides/chat.mdx`, `docs/guides/talk.mdx`, `docs/guides/code.mdx`
+            - **CLI:** `docs/reference/cli.mdx`, `docs/reference/features.mdx`
+            - **SDK:** `docs/sdk/core/agent-system.mdx`, `docs/sdk/sdks/`
+            - **FAQ:** `docs/reference/faq.mdx`
 
             ### For Bugs
             - Search src/gaia/ for related code
@@ -656,7 +699,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 30
-          model: claude-opus-4-5-20251101
+          model: claude-opus-4-7
           # Note: claude-code-action@beta does not support workflow_run events natively.
           # Using direct_prompt mode to bypass event type validation.
           direct_prompt: |

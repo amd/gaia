@@ -279,10 +279,13 @@ class SSEOutputHandler(OutputHandler):
         if isinstance(data, dict) and ("files" in data or "file_list" in data):
             files = data.get("file_list", data.get("files", []))
             if isinstance(files, list):
+                # Keep the UI contract honest: "total" should never claim more accessible
+                # files than we actually include in the event payload.
+                limited_files = files[:20]
                 event["result_data"] = {
                     "type": "file_list",
-                    "files": files[:20],  # Limit to 20 files
-                    "total": data.get("count", len(files)),
+                    "files": limited_files,  # Limit to 20 files
+                    "total": len(limited_files),
                 }
 
         # For search results with chunks, include structured chunk data

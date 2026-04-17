@@ -570,6 +570,80 @@ class TestCreateAgentImplMCP:
 
 
 # ---------------------------------------------------------------------------
+# tools=[...] parameter (tool-mixin composition)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateAgentImplTools:
+    def test_single_tool_rag_generates_mixin(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        result = _create_agent_impl("Research Bot", tools=["rag"])
+        assert not result.startswith("Error:"), result
+        src = (tmp_path / ".gaia" / "agents" / "research-bot" / "agent.py").read_text()
+        ast.parse(src)
+        assert "from gaia.agents.chat.tools.rag_tools import RAGToolsMixin" in src
+        # Agent must come first in the base list (GAIA convention).
+        assert "class ResearchBotAgent(Agent, RAGToolsMixin):" in src
+        assert "self.register_rag_tools()" in src
+        assert "_TOOL_REGISTRY.clear()" in src
+
+    def test_multiple_tools_in_mro_order(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Doc Editor", tools=["rag", "file_io"])
+        src = (tmp_path / ".gaia" / "agents" / "doc-editor" / "agent.py").read_text()
+        ast.parse(src)
+        assert "class DocEditorAgent(Agent, RAGToolsMixin, FileIOToolsMixin):" in src
+        assert "self.register_rag_tools()" in src
+        assert "self.register_file_io_tools()" in src
+
+    def test_tools_combined_with_mcp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Ops Bot", tools=["file_io"], enable_mcp=True)
+        src = (tmp_path / ".gaia" / "agents" / "ops-bot" / "agent.py").read_text()
+        ast.parse(src)
+        # MCPClientMixin must come LAST (after other mixins, after Agent).
+        assert "class OpsBotAgent(Agent, FileIOToolsMixin, MCPClientMixin):" in src
+        assert "self.register_file_io_tools()" in src
+        assert "self.load_mcp_servers_from_config()" in src
+        mcp_json = tmp_path / ".gaia" / "agents" / "ops-bot" / "mcp_servers.json"
+        assert mcp_json.exists()
+
+    def test_invalid_tool_returns_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        result = _create_agent_impl("Bad Bot", tools=["definitely-not-a-tool"])
+        assert result.startswith("Error:")
+        assert "Unknown tool" in result or "definitely-not-a-tool" in result
+        # Nothing should have been written to disk.
+        assert not (tmp_path / ".gaia" / "agents" / "bad-bot").exists()
+
+    def test_all_tools_importable(self, tmp_path, monkeypatch):
+        """Every KNOWN_TOOLS entry can be composed into a generated agent."""
+        from gaia.agents.registry import KNOWN_TOOLS
+
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        for i, tool_name in enumerate(sorted(KNOWN_TOOLS.keys())):
+            _create_agent_impl(f"Tool Test {i}", tools=[tool_name])
+            agent_id = f"tool-test-{i}"
+            py_path = tmp_path / ".gaia" / "agents" / agent_id / "agent.py"
+            assert py_path.exists(), f"agent not created for tool={tool_name}"
+            ast.parse(py_path.read_text())
+
+    def test_no_tools_same_as_basic(self, tmp_path, monkeypatch):
+        """tools=None or tools=[] produces the same output as omitting the arg."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Plain Agent")
+        src_none = (tmp_path / ".gaia" / "agents" / "plain" / "agent.py").read_text()
+
+        # Clean up and recreate with tools=[]
+        import shutil
+
+        shutil.rmtree(tmp_path / ".gaia" / "agents" / "plain")
+        _create_agent_impl("Plain Agent", tools=[])
+        src_empty = (tmp_path / ".gaia" / "agents" / "plain" / "agent.py").read_text()
+        assert src_none == src_empty
+
+
+# ---------------------------------------------------------------------------
 # Registry integration
 # ---------------------------------------------------------------------------
 

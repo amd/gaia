@@ -155,6 +155,35 @@ automatically.
 | `youtube` | `gaia youtube --download-transcript` |
 | `lint` | Standalone lint dependency bundle |
 
+### Step 6: Claude Code Plugins (Optional)
+
+GAIA ships a `.claude/settings.json` that declares two recommended Claude Code plugins from the official Anthropic marketplace:
+
+- **`frontend-design`** — higher-quality, less generic UI generation
+- **`superpowers`** — structured dev methodology (brainstorm → plan → TDD → review)
+
+Plugins are **not auto-installed silently**. The first time you open this repo in [Claude Code](https://claude.com/claude-code) (v2.1.0+), you'll see a prompt:
+
+> *"This project declares plugins. Install them?"*
+
+Accept it once and the plugins become available for the repo. You can verify with:
+
+```bash
+claude --version           # must be >= 2.1.0
+claude plugin list         # shell command — lists installed plugins + status
+# or, inside a Claude Code session, type `/plugin` to open the interactive plugin menu
+```
+
+To opt out, copy the entry into your local `.claude/settings.local.json` with `false`:
+
+```json
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": false
+  }
+}
+```
+
 ### Deactivating
 
 When done working:

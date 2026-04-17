@@ -128,7 +128,8 @@
                     "pages": [
                       "sdk/core/agent-system",
                       "sdk/core/tools",
-                      "sdk/core/console"
+                      "sdk/core/console",
+                      "sdk/patterns"
                     ]
                   },
                   {

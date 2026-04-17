@@ -1,0 +1,320 @@
+---
+title: "Agent Patterns Cookbook"
+icon: "code"
+---
+
+<Note>
+📖 **You are viewing:** Copy-pasteable patterns for common agent scenarios
+
+**See also:** [Agent System Guide](/sdk/core/agent-system) · [Tools Guide](/sdk/core/tools) · [Registry Source](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)
+</Note>
+
+<Info>
+Every pattern below mirrors a production agent in `src/gaia/agents/`. When in doubt, open the referenced file and read the real implementation — it is the source of truth.
+</Info>
+
+---
+
+## Pattern 1: Minimal Python agent
+
+The shortest agent that exercises every required surface area: class attrs, system prompt, tool registration, console, config dataclass.
+
+```python
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""HelloAgent — minimal GAIA agent example."""
+
+import os
+from dataclasses import dataclass
+from typing import Optional
+
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+
+
+@dataclass
+class HelloAgentConfig:
+    base_url: Optional[str] = None
+    model_id: Optional[str] = None
+    max_steps: int = 5
+    streaming: bool = False
+    debug: bool = False
+    show_stats: bool = False
+    silent_mode: bool = False
+    output_dir: Optional[str] = None
+
+
+class HelloAgent(Agent):
+    AGENT_ID = "hello"
+    AGENT_NAME = "Hello Agent"
+    AGENT_DESCRIPTION = "Greets the user and tells them the time."
+    CONVERSATION_STARTERS = ["Say hi", "What time is it?"]
+
+    def __init__(self, config: Optional[HelloAgentConfig] = None):
+        config = config or HelloAgentConfig()
+        super().__init__(
+            base_url=config.base_url
+            or os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1"),
+            model_id=config.model_id or "Qwen3-0.6B-GGUF",
+            max_steps=config.max_steps,
+            streaming=config.streaming,
+            debug=config.debug,
+            show_stats=config.show_stats,
+            silent_mode=config.silent_mode,
+            output_dir=config.output_dir,
+        )
+
+    def _create_console(self) -> AgentConsole:
+        return AgentConsole()
+
+    def _get_system_prompt(self) -> str:
+        return "You are a friendly greeter. Use the `now` tool to tell the user the current time."
+
+    def _register_tools(self) -> None:
+        _TOOL_REGISTRY.clear()
+
+        @tool
+        def now() -> str:
+            """Return the current local time as ISO-8601."""
+            from datetime import datetime
+            return datetime.now().isoformat(timespec="seconds")
+```
+
+**Why every line is there:**
+- `_TOOL_REGISTRY.clear()` — resets state when the agent is re-instantiated (leaks are silent otherwise)
+- `@tool` inside `_register_tools` — the decorator needs `self` scope; module-top-level registration drops the binding
+- `os.getenv("LEMONADE_BASE_URL", ...)` — lets Docker/CI override without changing code
+- Config dataclass separate from `__init__` — eval harness and CLI use `dataclasses.fields` to filter kwargs
+
+---
+
+## Pattern 2: YAML-manifest agent (no Python)
+
+When the agent is a system prompt + known tool mixins, skip Python entirely.
+
+```yaml
+# ~/.gaia/agents/research/agent.yaml
+# yaml-language-server: $schema=https://amd-gaia.ai/schemas/agent-manifest.schema.json
+manifest_version: 1
+id: research
+name: Research Agent
+description: Answers questions by searching local documents.
+instructions: |
+  You are a research assistant. For every question, use the rag tool to find
+  relevant passages before answering. Cite the source path.
+tools:
+  - rag
+  - file_search
+models:
+  - Qwen3.5-35B-A3B-GGUF
+  - Qwen3-0.6B-GGUF
+conversation_starters:
+  - "What does the design doc say about X?"
+  - "Find me the section on authentication."
+```
+
+**Tool names must be keys in `KNOWN_TOOLS`** (`src/gaia/agents/registry.py`). Typos fail Pydantic validation with a helpful error listing the valid names. Editors with the YAML language server surface the `enum` constraint from the schema.
+
+---
+
+## Pattern 3: MCP-enabled agent
+
+`MCPClientMixin` must be initialized *before* `super().__init__()` runs — the base `Agent.__init__` calls `_register_tools`, which may reference `self._mcp_manager`.
+
+```python
+from pathlib import Path
+
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.mcp.client.config import MCPConfig
+from gaia.mcp.client.mcp_client_manager import MCPClientManager
+from gaia.mcp.mixin import MCPClientMixin
+
+
+class WeatherAgent(Agent, MCPClientMixin):
+    AGENT_ID = "weather"
+    AGENT_NAME = "Weather Agent"
+    AGENT_DESCRIPTION = "Reports weather using an MCP server."
+    CONVERSATION_STARTERS = ["Weather in Austin?"]
+
+    def __init__(self, **kwargs):
+        config_file = str(Path(__file__).parent / "mcp_servers.json")
+        self._mcp_manager = MCPClientManager(config=MCPConfig(config_file=config_file))
+        super().__init__(**kwargs)
+
+    def _get_system_prompt(self) -> str:
+        return "You are a weather assistant. Use the MCP tools to answer."
+
+    def _register_tools(self) -> None:
+        _TOOL_REGISTRY.clear()
+
+        @tool
+        def convert_units(value_f: float) -> float:
+            """Convert Fahrenheit to Celsius."""
+            return round((value_f - 32) * 5 / 9, 1)
+
+        # Load MCP tools LAST — they must survive the clear() above.
+        self.load_mcp_servers_from_config()
+```
+
+Companion `mcp_servers.json`:
+
+```json
+{
+  "mcpServers": {
+    "weather": {
+      "command": "uvx",
+      "args": ["mcp-server-weather"]
+    }
+  }
+}
+```
+
+---
+
+## Pattern 4: Composing tool mixins
+
+Pull in reusable capabilities instead of duplicating them. GAIA convention: **`Agent` goes first** in the base list, mixins follow. This matches `ChatAgent`, `SDAgent`, `MedicalIntakeAgent`, and the dynamic class built by the registry for YAML-manifest agents.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
+from gaia.agents.code.tools.file_io import FileIOToolsMixin
+
+
+class DocEditorAgent(Agent, RAGToolsMixin, FileIOToolsMixin):
+    AGENT_ID = "doc-editor"
+    AGENT_NAME = "Doc Editor"
+    AGENT_DESCRIPTION = "Reads RAG context, edits docs in place."
+    CONVERSATION_STARTERS = ["Fix the typos in the setup guide."]
+
+    def _get_system_prompt(self) -> str:
+        return "Search docs with RAG, then edit with file_io tools."
+
+    def _register_tools(self) -> None:
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+        _TOOL_REGISTRY.clear()
+        self.register_rag_tools()
+        self.register_file_io_tools()
+```
+
+The convention is `register_<tool_name>_tools()` — the registry uses this by name for YAML-manifest agents. Keep it if you add a new mixin.
+
+---
+
+## Pattern 5: Custom tool decorated with `@tool`
+
+Inside `_register_tools`, the `@tool` decorator captures `self` via closure. The docstring is what the LLM sees — write it for the LLM, not for Python readers.
+
+```python
+def _register_tools(self) -> None:
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    _TOOL_REGISTRY.clear()
+
+    @tool
+    def lookup_user(user_id: str, fields: list = None) -> dict:
+        """Fetch a user record from the company directory.
+
+        Args:
+            user_id: Employee ID, e.g. "emp-00123".
+            fields: Optional subset of fields to return. Default is all.
+
+        Use this tool when the user asks about a specific person by ID or
+        name. If you only have a name, ask for the ID first.
+
+        Returns:
+            Dict with keys: name, email, department, manager.
+        """
+        return self._directory_client.get(user_id, fields=fields)
+```
+
+---
+
+## Pattern 6: Registering a built-in agent
+
+Add to `AgentRegistry._register_builtin_agents` in `src/gaia/agents/registry.py`. The factory must filter kwargs to valid dataclass fields so callers can pass extra kwargs without crashing.
+
+```python
+def hello_factory(**kwargs):
+    from gaia.agents.hello.agent import HelloAgent, HelloAgentConfig
+    valid_fields = {f.name for f in dataclasses.fields(HelloAgentConfig)}
+    config = HelloAgentConfig(**{k: v for k, v in kwargs.items() if k in valid_fields})
+    return HelloAgent(config=config)
+
+self._register(
+    AgentRegistration(
+        id="hello",
+        name="Hello Agent",
+        description="Greets the user and tells them the time.",
+        source="builtin",
+        conversation_starters=["Say hi", "What time is it?"],
+        factory=hello_factory,
+        agent_dir=None,
+        models=[],
+    )
+)
+```
+
+---
+
+## Pattern 7: Testing with mocked Lemonade
+
+Most unit tests should mock Lemonade. Real inference belongs in integration tests gated by `require_lemonade`.
+
+```python
+# tests/test_hello_agent.py
+import pytest
+from gaia.agents.hello.agent import HelloAgent, HelloAgentConfig
+
+
+def test_hello_agent_registers_now_tool(mock_lemonade_client):
+    agent = HelloAgent(config=HelloAgentConfig())
+    assert "now" in agent.tools
+
+
+def test_hello_agent_integration(require_lemonade):
+    # Skips automatically when Lemonade isn't running.
+    agent = HelloAgent(config=HelloAgentConfig())
+    result = agent.process_query("What time is it?")
+    assert result["answer"]
+```
+
+Fixtures live in `tests/conftest.py`. See [`docs/sdk/testing.mdx`](/sdk/testing) for more.
+
+---
+
+## Pattern 8: Lint your agent before opening a PR
+
+The convention linter catches missing tests, missing docs, missing registry entries, and base-class violations.
+
+```bash
+python util/lint.py --agents        # Convention check — run this first
+python util/lint.py --all --fix     # Full lint suite (black, isort, flake8, pylint, mypy)
+python -m pytest tests/test_hello_agent.py -xvs
+```
+
+---
+
+## Anti-patterns to avoid
+
+| Don't | Why |
+|-------|-----|
+| Skip `_TOOL_REGISTRY.clear()` | Tools from a previous instance leak in silently. |
+| Register `@tool` at module scope | The decorator needs `self`; top-level loses the binding. |
+| Hard-code `http://localhost:8000` | Breaks Docker/CI where Lemonade runs elsewhere. |
+| Mix `time.sleep` into the reasoning loop | Blocks SSE streaming in the UI backend. |
+| Add a mixin without a `KNOWN_TOOLS` entry | YAML-manifest agents cannot opt in by name. |
+| Write `.mdx` docs without updating `docs/docs.json` | Mintlify returns 404 for the page. |
+| Call `subprocess` with user input | Command injection; use `shlex.quote` or a list of args. |
+
+---
+
+## Related
+
+- [Agent System](/sdk/core/agent-system) — reasoning loop and base class reference
+- [Tools](/sdk/core/tools) — tool decorator, LLM contract, parameters
+- [Testing](/sdk/testing) — fixtures, mocking, integration patterns
+- [Best Practices](/sdk/best-practices) — when to extract a mixin, when to inline, naming
+- [Registry source](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py) — `KNOWN_TOOLS` map, `AgentManifest` model
+- [Manifest JSON Schema](https://github.com/amd/gaia/blob/main/schemas/agent-manifest.schema.json) — editor autocomplete for `agent.yaml`
