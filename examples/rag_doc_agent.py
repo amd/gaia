@@ -12,6 +12,7 @@ Requirements:
 - Python 3.12+
 - Lemonade server running for LLM reasoning
 - Documents to index (PDF, TXT, MD, etc.)
+- GAIA installed with RAG extras: `uv pip install -e ".[rag]"`
 
 Run:
     uv run examples/rag_doc_agent.py [document_directory]
