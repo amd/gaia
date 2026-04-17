@@ -22,8 +22,18 @@ This is the GAIA repository (`amd/gaia`) on GitHub: https://github.com/amd/gaia
 - All development work happens in this repository
 - Use pull requests for all changes to main branch
 
-### IMPORTANT: Never Commit Changes
-**NEVER commit changes to the repository unless explicitly requested by the user.** The user will decide when and what to commit. This prevents unwanted changes from being added to the repository history.
+### IMPORTANT: Commit Only When Bulletproof
+
+You may create commits on your own **only when the change is bulletproof**. "Bulletproof" means every one of these has happened:
+
+1. **Validated** — tests run and pass (`pytest` on the affected paths), lint runs and passes (`python util/lint.py --all` or the relevant subset), and — for UI/CLI-visible changes — the golden path is exercised end-to-end.
+2. **Critiqued** — the changes have been read back, contradictions between files (examples in docs vs. real code, generated templates vs. existing patterns, new rule vs. established convention) have been actively hunted for and resolved. Empirical evidence from the actual codebase beats textbook advice every time.
+3. **Scope-clean** — only the files required for the stated task are modified. No drive-by formatting, no unrelated refactors, no "while I'm here" additions.
+4. **No half-finished work** — every function has a body, every import is used, no `TODO` left as a placeholder for missing logic, no tests referencing deleted code.
+
+If *any* of those is uncertain, **do not commit** — surface the uncertainty to the user and wait. "I think this probably works" is not bulletproof. A second opinion from a relevant subagent (e.g. `code-reviewer`, `architecture-reviewer`) is a good proxy for critique when the user isn't immediately available.
+
+**Still prohibited without explicit user instruction:** pushing to remote, force-pushing anywhere, amending existing commits, touching release/publishing branches, committing anything that looks like a secret. When in doubt, ask — the cost of a 10-second confirmation is trivial; the cost of an unwanted commit can be hours of cleanup.
 
 ### IMPORTANT: Always Review Your Changes
 **After making any changes to files, you MUST review your work:**
