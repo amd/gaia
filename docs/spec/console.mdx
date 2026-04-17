@@ -81,8 +81,8 @@ class OutputHandler(ABC):
     # === Core Progress/State Methods (Required) ===
 
     @abstractmethod
-    def print_processing_start(self, query: str, max_steps: int):
-        """Print processing start message."""
+    def print_processing_start(self, query: str, max_steps: int, model_id: str = None):
+        """Print processing start message (optionally showing the active model_id)."""
         ...
 
     @abstractmethod

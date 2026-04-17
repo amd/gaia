@@ -33,7 +33,11 @@ The Agent UI requires two backend services:
 2. **A downloaded model** — the LLM the agent uses to reason
 
 <Note>
-  **Using the npm install?** `gaia-ui` handles prerequisite #1 and #2 automatically on first run (installs Lemonade Server and downloads a minimal model). You can skip to [Install and Launch](#install-and-launch).
+  **Using the desktop installer or npm install?** Both paths download Lemonade
+  Server and the default model on first launch, so you can skip the manual
+  `gaia init` step and jump straight to [Install and Launch](#install-and-launch).
+  Prebuilt `.exe` / `.deb` desktop installers live on the
+  [GitHub Releases page](https://github.com/amd/gaia/releases).
 </Note>
 
 If you're using the Python CLI path, or want the full-size model, run:
@@ -52,13 +56,43 @@ lemonade-server serve
 
 ### Install and Launch
 
-Choose one of the two install paths:
+Pick the install path that fits you best:
 
 <Tabs>
-  <Tab title="npm (Recommended)">
+  <Tab title="Desktop installer (easiest)">
+    Prebuilt desktop installers are published on the
+    [GitHub Releases page](https://github.com/amd/gaia/releases) alongside
+    each tagged release. They bundle the Electron shell; Lemonade Server and
+    the default model are downloaded automatically on first launch. This is
+    the simplest path for non-developer end users.
+
+    **Artifact naming** (`electron-builder.yml`):
+    `gaia-agent-ui-<version>-<arch>-setup.<ext>` — e.g. `gaia-agent-ui-0.17.2-x64-setup.exe`
+    and `gaia-agent-ui-0.17.2-amd64.deb`.
+
+    **Windows (.exe):**
+    1. Download `gaia-agent-ui-<version>-x64-setup.exe` from [Releases](https://github.com/amd/gaia/releases).
+    2. Double-click to install, then launch "GAIA" from the Start Menu (binary: `gaia-desktop`).
+    3. Update by downloading and running the newer installer.
+    4. Uninstall via Windows Settings → Apps → Installed apps → GAIA.
+
+    **Ubuntu (.deb):**
+    ```bash
+    sudo apt install ./gaia-agent-ui-<version>-amd64.deb
+    gaia-desktop
+    # Update: apt install the newer .deb the same way.
+    # Uninstall (apt package name is `gaia-desktop`):
+    sudo apt remove gaia-desktop
+    ```
+
+    See the [Packaging & Distribution](/deployment/ui) page for more detail on
+    the installers, supported platforms, and signing.
+  </Tab>
+
+  <Tab title="npm">
     The npm package bundles everything — on first run it auto-installs the Python backend (uv, Python 3.12, amd-gaia), Lemonade Server, and a minimal model.
 
-    **Requires:** [Node.js 18+](https://nodejs.org) (`winget install OpenJS.NodeJS.LTS` on Windows, `brew install node@20` on macOS)
+    **Requires:** [Node.js 20+](https://nodejs.org) (`winget install OpenJS.NodeJS.LTS` on Windows, `brew install node@20` on macOS)
 
     ```bash
     npm install -g @amd-gaia/agent-ui

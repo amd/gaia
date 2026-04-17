@@ -37,12 +37,34 @@ The Agent UI Server is a FastAPI-based backend that powers the GAIA Chat desktop
 ```
 src/gaia/ui/
   __init__.py          # Package init
-  server.py            # FastAPI app factory and endpoints
+  server.py            # FastAPI app factory and global router wiring
   database.py          # ChatDatabase class (SQLite)
   models.py            # Pydantic request/response models
   sse_handler.py       # SSE output handler for streaming agent events
   tunnel.py            # Tunnel manager for mobile access via ngrok
+  dispatch.py          # Background task dispatcher (agent jobs, session GC, etc.)
+  document_monitor.py  # Watches the library for new/changed files
+  dependencies.py      # FastAPI dependency-injection helpers (shared registry/db)
+  build.py             # Embedded-frontend build bootstrap for prebuilt dist/
+  utils.py             # Cross-router helpers
+  _chat_helpers.py     # Agent factory / session mapping used by the chat router
+  routers/             # One module per API surface (see below)
 ```
+
+### Routers (`src/gaia/ui/routers/`)
+
+As of v0.17.x the HTTP surface is split into focused router modules:
+
+| Module | Mount | Purpose |
+|---|---|---|
+| `agents.py` | `/agents` | List + inspect registered agents (from [`AgentRegistry`](/spec/plugin-registry)). |
+| `chat.py` | `/chat`, `/chat/stream` | Send messages, stream agent events via SSE. |
+| `sessions.py` | `/sessions` | Create/list/delete chat sessions. |
+| `documents.py` | `/documents` | Document library CRUD, metadata, per-session attachment. |
+| `files.py` | `/files` | Raw file uploads and attachments for chat. |
+| `mcp.py` | `/mcp` | Configure and inspect MCP servers used by agents. |
+| `system.py` | `/system` | Health, version, model status, diagnostics. |
+| `tunnel.py` | `/tunnel` | Ngrok/Cloudflared tunnel lifecycle. |
 
 ---
 
@@ -56,15 +78,19 @@ def create_app(db_path: str = None) -> FastAPI:
 
 Creates a configured FastAPI application with:
 - CORS middleware (allows all origins for local use)
-- Database initialization
-- All API endpoint registration
+- Database initialization and shared `AgentRegistry`
+- Router registration (`include_router` for each module above)
 - Static file serving (for web frontend, when `dist/` build exists)
+- Dispatch-queue + document-monitor startup tasks
 
 **Default port:** `4200`
 
 ### Endpoint Registration
 
-All endpoints are registered as closures within `create_app()`, sharing the `db` instance via closure scope. The database is also stored on `app.state.db` for test access.
+Each router under `src/gaia/ui/routers/` is mounted via `app.include_router(...)`.
+Routers receive the shared `ChatDatabase` and `AgentRegistry` through the
+dependency helpers in `dependencies.py`. Database objects remain accessible via
+`app.state.db` for tests.
 
 ### Streaming Implementation
 

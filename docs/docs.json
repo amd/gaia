@@ -337,7 +337,8 @@
             "group": "Packaging & Distribution",
             "pages": [
               "deployment/ui",
-              "deployment/testing-electron"
+              "deployment/testing-electron",
+              "deployment/code-signing"
             ]
           }
         ]
@@ -373,10 +374,10 @@
           {
             "group": "Infrastructure",
             "pages": [
-              "plans/mcp-client",
               "plans/cua",
               "plans/docker-containers",
-              "plans/mcp-docs"
+              "plans/mcp-docs",
+              "plans/desktop-installer"
             ]
           },
           {

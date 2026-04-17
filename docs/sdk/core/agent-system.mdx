@@ -46,9 +46,9 @@ An **agent** is more than just an LLM. Think of the difference like this:
 <Tab title="Without Agent">
 ```python
 # Direct LLM call - limited to text generation
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
-llm = LLMClient()
+llm = create_client()  # LLMClient is abstract; use the factory
 response = llm.generate("What's the weather in Seattle?")
 # Response: "I don't have access to weather data..."
 ```

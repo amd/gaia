@@ -10,7 +10,7 @@ description: Primary install path for non-developers — one-click desktop insta
 **Issue:** [#530](https://github.com/amd/gaia/issues/530) — Desktop installer: one-click install with NSIS, DMG, AppImage + auto-update
 **Branch:** `kalin/desktop-installer` (this plan ships as commit 1; subsequent commits implement it)
 **Approach:** Ground-up implementation using [Lemonade Server's installer](https://github.com/lemonade-sdk/lemonade) as a *reference architecture*. Distributed via GitHub Releases initially; R2 / CDN deferred until the website lands.
-**Companion plan:** [`installer.mdx`](./installer.mdx) covers the **Python CLI** install path. This document covers the **Electron desktop app** installer — which is the **primary install path for non-developer end users**.
+**Companion plan:** the Python CLI install path covers the **Python CLI** install path. This document covers the **Electron desktop app** installer — which is the **primary install path for non-developer end users**.
 </Note>
 
 ---
@@ -238,7 +238,7 @@ gaia uninstall --dry-run          # Show what would be deleted, change nothing
 gaia uninstall --yes              # Skip confirmation prompts (CI / scripted / silent NSIS uninstall)
 ```
 
-**One implementation, four front-ends.** Lives at `src/gaia/installer/uninstall_command.py`. Already listed as a "future command" in the existing [`installer.mdx`](./installer.mdx) (lines 437–442); this plan implements it for real.
+**One implementation, four front-ends.** Lives at `src/gaia/installer/uninstall_command.py`. Already listed as a "future command" in the existing the Python CLI install path (lines 437–442); this plan implements it for real.
 
 ---
 
@@ -338,7 +338,7 @@ Move existing build/install/release scripts from `scripts/` into a focused `inst
   - `installer/README.md` — how to build installers locally + Lemonade reference notes
 - Move from `scripts/`:
   - `build-ui-installer.{ps1,sh}` → `installer/scripts/`
-  - `install.{ps1,sh}` → `installer/scripts/` (still referenced from `installer.mdx`)
+  - `install.{ps1,sh}` → `installer/scripts/` (still referenced from the CLI install path (see `docs/reference/dev.mdx`))
   - `start-agent-ui.{ps1,sh}` → `installer/scripts/`
   - `start-lemonade.{ps1,sh,bat}` → `installer/scripts/`
   - `release-ui.mjs`, `bump-ui-version.mjs` → `installer/version/`
@@ -365,7 +365,7 @@ Move existing build/install/release scripts from `scripts/` into a focused `inst
 - Confirmation prompts skippable via `--yes` AND via stdin-not-a-tty detection (so silent uninstall flows work)
 - Cross-platform path handling via `pathlib`
 - Unit tests in `tests/unit/installer/test_uninstall_command.py` using `pyfakefs` to verify each tier removes the right files and leaves the right files alone
-- Update `installer.mdx` to promote `gaia uninstall` from "future" to "implemented"
+- Update the CLI install path (see `docs/reference/dev.mdx`) to promote `gaia uninstall` from "future" to "implemented"
 
 **Acceptance:**
 
@@ -530,7 +530,7 @@ GitHub Actions workflow that builds and uploads installers on tag push. **Integr
 - **README badges** — download buttons for Win/Mac/Linux pointing at the latest GitHub Release
 - **Release notes template** — must include the manual uninstall step for v0.17.1 Squirrel users
 - **Content for the future `amd-gaia.ai/download` page** — Markdown snippets the website project can consume (asset URLs, install commands, screenshots). The actual website page is a separate project but blocks on this content existing.
-- Update `installer.mdx` (the existing CLI install plan) to cross-reference the new desktop installer plan and clarify the audience split (CLI = developers, desktop = end users)
+- Update the CLI install path (see `docs/reference/dev.mdx`) (the existing CLI install plan) to cross-reference the new desktop installer plan and clarify the audience split (CLI = developers, desktop = end users)
 
 **Acceptance:**
 
@@ -653,7 +653,7 @@ src/gaia/apps/webui/src/components/
 
 src/gaia/cli.py                        # Phase D: register `gaia uninstall` subcommand
 
-docs/plans/installer.mdx               # Phase D + I: cross-reference desktop installer; promote `gaia uninstall`
+docs/reference/cli.mdx                 # Phase D + I: keep `gaia init` / `gaia uninstall` sections in sync with the installer
 docs/quickstart.mdx                    # Phase I: lead with desktop installer
 docs/reference/faq.mdx                 # Phase I: chat storage, uninstall, slow first launch, privacy, offline install
 README.md                              # Phase I: download badges
@@ -888,7 +888,7 @@ v0.17.2 release with desktop installer as the primary install path
 ## §15 References
 
 - Issue: [#530 — Desktop installer: one-click install with NSIS, DMG, AppImage + auto-update](https://github.com/amd/gaia/issues/530)
-- Companion plan: [`installer.mdx`](./installer.mdx) — Python CLI install, `gaia init`, `gaia update`, and (post-Phase D) `gaia uninstall`
+- Companion plan: the Python CLI install path — Python CLI install, `gaia init`, `gaia update`, and (post-Phase D) `gaia uninstall`
 - Related issue (left as polish, not folded in): [#597 — First-run setup wizard](https://github.com/amd/gaia/issues/597)
 - Related stale PR (folded into Phase B): [#341 — Fix installer BOM and logger permissions](https://github.com/amd/gaia/pull/341)
 - Lemonade installer source (reference architecture): [lemonade-sdk/lemonade](https://github.com/lemonade-sdk/lemonade)

@@ -181,10 +181,12 @@ The MCP Server acts as an HTTP bridge between external applications and GAIA's n
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Server health check |
+| `/status` | GET | Bridge status (connected agents, loaded tools, uptime) |
 | `/tools` | GET | List available tools |
 | `/chat` | POST | Conversational chat (with context) |
 | `/llm` | POST | Direct LLM queries (no context) |
 | `/jira` | POST | Jira operations |
+| `/summarize` | POST | Multipart file upload → SSE-streamed summary |
 | `/` | POST | JSON-RPC 2.0 endpoint |
 
 <Note>Docker uses a newer framework using FastMCP-powered server. See examples in [Docker section](#docker-operations-fastmcp-framework) below.</Note>
@@ -480,9 +482,9 @@ Jira-specific MCP tests:
 python tests/mcp/test_mcp_jira.py
 ```
 
-Docker-specific MCP tests:
+Summarize-tool tests:
 ```bash
-python tests/mcp/test_mcp_docker.py
+python tests/mcp/test_mcp_summarize.py
 ```
 
 Integration tests:
@@ -493,9 +495,12 @@ python tests/mcp/test_mcp_integration.py
 <Info>
 The tests validate:
 - Health checks and tool listing
-- Direct endpoints (/chat, /jira, /docker, /llm)
+- Direct endpoints (`/chat`, `/jira`, `/llm`, `/summarize`)
 - JSON-RPC protocol compliance
 - Error handling and CORS headers
+
+Note: `gaia mcp docker` runs a **separate** FastMCP server (`docker_mcp.py`),
+not an endpoint on the main bridge.
 </Info>
 
 ## Security Considerations

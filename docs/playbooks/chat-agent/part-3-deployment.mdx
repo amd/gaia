@@ -146,13 +146,16 @@ def _generate_search_keys(self, query: str) -> List[str]:
   <Tab title="Implementation">
     The `query_documents` tool searches across ALL indexed documents by default. The LLM receives chunks from multiple sources and synthesizes them.
 
-    For more control:
+    For more control, call the RAG SDK directly (tools are also callable via
+    `agent.rag.*` — there is no public `agent.execute_tool()` on the base
+    `Agent` class):
+
     ```python
-    # Query specific files
-    result = agent.execute_tool("query_specific_file", {
-        "file_path": "oil-manual.pdf",
-        "query": "safety protocols"
-    })
+    # Query a specific file via RAGSDK
+    response = agent.rag.query(
+        "safety protocols",
+        target_file="oil-manual.pdf",
+    )
     ```
   </Tab>
 </Tabs>
@@ -232,27 +235,39 @@ def _generate_search_keys(self, query: str) -> List[str]:
 
 <Tabs>
   <Tab title="Server">
-    ```python title="api_server.py"
-    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-    from gaia.api.openai_server import app
-    from gaia.api.agent_registry import registry
-    import uvicorn
+    The OpenAI-compatible API server exposes a **static** `AGENT_MODELS`
+    dict; there is no runtime `registry.register()` API. To add your agent,
+    append an entry to `src/gaia/api/agent_registry.py` and restart the
+    server:
 
-    # Configure agent
-    config = ChatAgentConfig(
-        watch_directories=["./company_docs"],
-        silent_mode=True  # Disable console output for API
-    )
-
-    agent = ChatAgent(config)
-
-    # Register agent with the OpenAI-compatible API server
-    registry.register("doc-qa", lambda: agent)
-
-    # Run server
-    if __name__ == "__main__":
-        uvicorn.run(app, host="0.0.0.0", port=8080)
+    ```python title="src/gaia/api/agent_registry.py (excerpt)"
+    AGENT_MODELS = {
+        "gaia-code": {
+            "class_name": "gaia.agents.routing.agent.RoutingAgent",
+            "init_params": {"api_mode": True, "silent_mode": True, "max_steps": 100},
+            "description": "Default routing agent",
+        },
+        # 👇 Your new agent
+        "doc-qa": {
+            "class_name": "gaia.agents.chat.agent.ChatAgent",
+            "init_params": {
+                "silent_mode": True,
+                # Only kwargs recognised by ChatAgentConfig will be applied;
+                # see ChatAgentConfig in src/gaia/agents/chat/agent.py.
+                "rag_documents": ["./company_docs"],
+            },
+            "description": "Document Q&A agent backed by RAG",
+        },
+    }
     ```
+
+    Then run the server as usual:
+
+    ```bash
+    gaia api start --port 8080
+    ```
+
+    See [API Server](/sdk/infrastructure/api-server) for the full workflow.
   </Tab>
 
   <Tab title="Client">
@@ -549,7 +564,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     )
 
     # Manual cleanup
-    agent.rag.clear_index()      # Clear vector index
+    agent.rag.clear_cache()      # Clear cached embeddings/index
     agent.stop_watching()        # Stop file observers
     ```
 

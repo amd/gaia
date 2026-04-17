@@ -30,23 +30,25 @@ config = SummaryConfig(
 
 app = SummarizerApp(config)
 
-# Summarize meeting transcript
+# Summarize meeting transcript (file_path is the only required arg;
+# there is no output_file kwarg — serialize the returned dict yourself)
 result = app.summarize_file(
-    input_file="meeting_2024-12-11.txt",
-    output_file="summary.json"
+    file_path="meeting_2024-12-11.txt",
+    styles=["executive", "action_items"],
+    input_type="transcript",
 )
 
 print(result["summaries"]["executive"])
 print(result["summaries"]["action_items"])
 
-# Email summarization
+# Email summarization — the method is `summarize()`, not `summarize_text()`
 email_config = SummaryConfig(
     input_type="email",
-    styles=["brief", "action_items"]
+    styles=["brief", "action_items"],
 )
 
 email_app = SummarizerApp(email_config)
-result = email_app.summarize_text(email_content)
+result = email_app.summarize(email_content)
 
 # Output includes:
 # - Executive summary
@@ -61,20 +63,24 @@ result = email_app.summarize_text(email_content)
 ## CLI Usage
 
 ```bash
-# Summarize meeting transcript
-gaia summarize meeting.txt \
-    --type transcript \
-    --styles executive,participants,action_items \
-    --output summary.json
+# Summarize meeting transcript — use -i/--input and -o/--output;
+# --styles takes a space-separated list (nargs="+"), not commas.
+gaia summarize \
+    -i meeting.txt \
+    -t transcript \
+    --styles executive participants action_items \
+    -o summary.json
 
 # Summarize email
-gaia summarize email.txt \
-    --type email \
-    --styles brief,action_items
+gaia summarize \
+    -i email.txt \
+    -t email \
+    --styles brief action_items
 
 # Multiple summary styles
-gaia summarize meeting.txt \
-    --styles brief,detailed,bullets,executive,action_items
+gaia summarize \
+    -i meeting.txt \
+    --styles brief detailed bullets executive action_items
 ```
 
 ---

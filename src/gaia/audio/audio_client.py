@@ -11,7 +11,32 @@ from gaia.logger import get_logger
 
 
 class AudioClient:
-    """Handles all audio-related functionality including TTS, ASR, and voice chat."""
+    """Handles all audio-related functionality including TTS, ASR, and voice chat.
+
+    ``start_voice_chat()`` is ``async`` — drive it from an asyncio event loop.
+
+    Example:
+        ```python
+        import asyncio
+        from gaia.audio.audio_client import AudioClient
+
+        def process_message(text: str) -> str:
+            return f"You said: {text}"
+
+        audio = AudioClient(
+            whisper_model_size="base",       # tiny/base/small/medium/large
+            audio_device_index=None,          # None = default input device
+            silence_threshold=0.5,            # seconds of silence before send
+            mic_threshold=0.003,              # voice-activity energy floor
+            enable_tts=True,
+        )
+        asyncio.run(audio.start_voice_chat(process_message))
+        ```
+
+    To enumerate audio input devices use ``WhisperAsr.list_audio_devices()``
+    from ``gaia.audio.whisper_asr`` — ``AudioClient`` itself does not expose
+    that call.
+    """
 
     def __init__(
         self,

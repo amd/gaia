@@ -379,6 +379,25 @@ Manage configuration files.
 }
 ```
 
+### 11. manage_prisma_client
+
+Regenerate the Prisma client and keep the project's Prisma bindings in sync
+after `manage_data_model` calls. Invoked by the code agent after schema edits
+so subsequent CRUD operations see the new types.
+
+**Parameters:**
+- `project_dir` (str, required): Project directory containing the Prisma schema
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "project_dir": str,
+    "generated": bool,
+    "output": str,  # stdout from `prisma generate`
+}
+```
+
 ---
 
 ## Helper Functions

@@ -151,13 +151,14 @@ gaia summarize --list-configs
 - `email` - Email-ready format with recipients
 - `both` - Generate both JSON and PDF
 
-**Summary styles:**
-- `executive` - High-level executive summary
+**Summary styles** (`--styles ...`, space-separated):
+- `brief` - Concise 2-3 sentence summary
 - `detailed` - Comprehensive detailed summary
-- `action_items` - Extracted action items
-- `key_decisions` - Important decisions made
+- `bullets` - Bullet-point format focused on action items
+- `executive` - High-level executive summary
 - `participants` - Meeting participants and roles
-- `topics` - Main topics discussed
+- `action_items` - Extracted action items with owners/deadlines
+- `all` - Generate every style above
 
 **Platform Availability**: Windows and Linux
 
@@ -258,11 +259,11 @@ The following is a list of the currently supported LLMs in the generic version o
 ## Installing Additional Models
 
 GAIA uses Lemonade Server for model management. Models can be installed through:
-- **GAIA CLI**: Run `gaia init --profile <profile>` to download models for a specific use case (minimal, chat, code, rag, all)
+- **GAIA CLI**: Run `gaia init --profile <profile>` to download models for a specific use case. Valid profiles: `minimal`, `sd`, `chat`, `code`, `rag`, `mcp`, `vlm`, `all`.
 - **System Tray Icon**: Access the Lemonade model manager from the system tray
 - **Web UI**: Manage models through the Lemonade web interface
 
-To remove all downloaded models: `gaia uninstall --models`
+To remove all downloaded models: `gaia uninstall --purge --purge-models --yes` (add `--purge-hf-cache` to also clear `~/.cache/huggingface/hub`).
 
 For detailed instructions on installing and managing models, see the [Lemonade Server documentation](https://github.com/lemonade-sdk/lemonade) or the [CLI Reference](/reference/cli#init-command).
 

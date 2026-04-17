@@ -130,7 +130,8 @@ class RAGResponse:
 
 class RAGSDK:
     """
-    Simple RAG SDK for PDF document Q&A following GAIA patterns.
+    Simple RAG SDK for document Q&A (PDF, TXT, MD, RST, LOG, CSV, JSON, XLSX,
+    HTML, and more) following GAIA patterns.
 
     Example usage:
         ```python

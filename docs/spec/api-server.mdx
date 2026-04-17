@@ -327,83 +327,62 @@ async def health_check():
 
 ### Agent Registry
 
+The API-server's `AgentRegistry` is **not a runtime plug-in registry** — it is
+a hardcoded `AGENT_MODELS` dict in `src/gaia/api/agent_registry.py` plus a
+dynamic import helper. There is no `register_agent()` method today; to add a
+new model you edit `AGENT_MODELS` and restart the server.
+
 ```python
-from typing import Dict, Optional
-from gaia.agents.base import Agent, ApiAgent
+# src/gaia/api/agent_registry.py (simplified)
+from importlib import import_module
+from typing import Any, Dict
+
+AGENT_MODELS: Dict[str, Dict[str, Any]] = {
+    "gaia-code": {
+        "class_name": "gaia.agents.routing.agent.RoutingAgent",
+        "init_params": {"api_mode": True, "silent_mode": True,
+                        "streaming": False, "max_steps": 100},
+        "description": "Intelligent routing agent ...",
+    },
+    # Add entries here to expose more models on /v1/models.
+}
+
 
 class AgentRegistry:
-    """
-    Registry for managing GAIA agents exposed via API.
+    """Resolves model IDs to agent instances by importing the target class
+    on demand. `gaia api start --debug/--show-prompts/--streaming/--step-through`
+    set GAIA_API_* env-vars that are merged into `init_params` at startup."""
 
-    Features:
-    - Dynamic agent registration
-    - Singleton instances
-    - Model ID mapping
-    - Workspace configuration
-    """
+    def get_agent(self, model_id: str):
+        """Load and instantiate the agent for `model_id`.
 
-    def __init__(self):
-        """Initialize agent registry."""
-        self._agents: Dict[str, Agent] = {}
-        self._agent_classes: Dict[str, type] = {}
-
-    def register_agent(self, agent_class: type, model_id: Optional[str] = None):
+        Raises `KeyError` if the model is not registered.
+        A *fresh* agent is created per call — there is no singleton cache.
         """
-        Register an agent class.
+        entry = AGENT_MODELS[model_id]
+        module_path, _, class_name = entry["class_name"].rpartition(".")
+        agent_class = getattr(import_module(module_path), class_name)
+        return agent_class(**entry["init_params"])
 
-        Args:
-            agent_class: Agent class to register
-            model_id: Optional custom model ID (default: from get_model_id())
+    def list_models(self):
+        """Return the models block used by `/v1/models`."""
+        return [
+            {
+                "id": model_id,
+                "object": "model",
+                "owned_by": "amd-gaia",
+                "description": cfg.get("description", ""),
+            }
+            for model_id, cfg in AGENT_MODELS.items()
+        ]
+```
 
-        Example:
-            >>> from gaia.agents.code import CodeAgent
-            >>> registry.register_agent(CodeAgent)
-            >>> registry.register_agent(CodeAgent, model_id="custom-code")
-        """
-        pass
-
-    def get_agent(self, model_id: str, workspace_root: Optional[str] = None) -> Agent:
-        """
-        Get or create agent instance.
-
-        Args:
-            model_id: Model/agent identifier
-            workspace_root: Optional workspace root path
-
-        Returns:
-            Agent instance
-
-        Raises:
-            ValueError: If model_id not found
-
-        Example:
-            >>> agent = registry.get_agent("gaia-code", workspace_root="/path/to/project")
-        """
-        pass
-
-    def list_models(self) -> List[Dict[str, Any]]:
-        """
-        List all registered models.
-
-        Returns:
-            List of model info dictionaries
-
-        Example:
-            >>> models = registry.list_models()
-            >>> [m["id"] for m in models]
-            ["gaia-code", "gaia-jira"]
-        """
-        pass
-
-# Global registry instance
-registry = AgentRegistry()
-
-# Register agents
-from gaia.agents.code import CodeAgent
-from gaia.agents.jira import JiraAgent
-
-registry.register_agent(CodeAgent)
-registry.register_agent(JiraAgent)
+<Note>
+For the richer, manifest-based agent registry used by the **Agent UI** (not the
+OpenAI-style API server), see the
+[Agent Registry spec](/spec/plugin-registry) covering
+`src/gaia/agents/registry.py`, `AgentManifest`, and `~/.gaia/agents/` discovery.
+</Note>
 ```
 
 ### SSE Streaming
@@ -528,14 +507,17 @@ def extract_workspace_root(messages):
 
 ```python
 async def create_chat_completion(request: ChatCompletionRequest):
-    # 1. Extract workspace root
+    # 1. Extract workspace root (carried in the last user message's metadata).
     workspace_root = extract_workspace_root(request.messages)
 
-    # 2. Get agent from registry
+    # 2. Resolve the agent. `get_agent()` takes only model_id; workspace_root
+    #    is applied afterwards (e.g., via agent.config or a per-request setter).
     try:
-        agent = registry.get_agent(request.model, workspace_root)
-    except ValueError:
+        agent = registry.get_agent(request.model)
+    except KeyError:
         raise HTTPException(404, f"Model not found: {request.model}")
+    if workspace_root and hasattr(agent, "set_workspace_root"):
+        agent.set_workspace_root(workspace_root)
 
     # 3. Extract user message
     user_messages = [m for m in request.messages if m.role == "user"]

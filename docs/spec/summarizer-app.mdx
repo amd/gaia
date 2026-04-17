@@ -70,104 +70,68 @@ SUMMARY_STYLES = {
 
 ### SummarizerApp
 
+`SummarizerApp` is a **thin wrapper** that delegates to
+[`SummarizerAgent`](https://github.com/amd/gaia/blob/main/src/gaia/agents/summarize/agent.py)
+for the actual prompt construction, retry logic, and multi-style generation.
+The app class itself exposes just four public methods:
+
 ```python
 class SummarizerApp:
-    """Main application class for summarization"""
+    """Main application class for summarization (delegates to SummarizerAgent)"""
 
     def __init__(self, config: Optional[SummaryConfig] = None):
-        """Initialize the summarizer application"""
-        ...
-
-    def detect_content_type(self, content: str) -> str:
-        """
-        Auto-detect if content is a transcript or email using LLM.
-
-        Uses heuristics first (From:/To: headers, speaker labels),
-        falls back to LLM analysis if unclear.
-
-        Returns:
-            "transcript" or "email"
-        """
-        ...
-
-    def generate_summary_prompt(
-        self, content: str, content_type: str, style: str
-    ) -> str:
-        """Generate the prompt for a specific summary style"""
-        ...
-
-    def generate_combined_prompt(
-        self, content: str, content_type: str, styles: List[str]
-    ) -> str:
-        """Generate a single prompt for multiple summary styles"""
-        ...
-
-    def summarize_with_style(
-        self, content: str, content_type: str, style: str
-    ) -> Dict[str, Any]:
-        """
-        Generate a summary for a specific style with retry logic.
-
-        Returns:
-            {
-                "text": str,
-                "items": List[str] (for action_items),
-                "participants": List[str] (for participants),
-                "performance": {
-                    "total_tokens": int,
-                    "prompt_tokens": int,
-                    "completion_tokens": int,
-                    "time_to_first_token_ms": int,
-                    "tokens_per_second": float,
-                    "processing_time_ms": int
-                }
-            }
-        """
-        ...
-
-    def summarize_combined(
-        self, content: str, content_type: str, styles: List[str]
-    ) -> Dict[str, Dict[str, Any]]:
-        """Generate summaries for multiple styles in a single LLM call"""
+        """Create the underlying SummarizerAgent from a SummaryConfig."""
         ...
 
     def summarize(
-        self, content: str, input_file: Optional[str] = None
+        self,
+        content: str,
+        styles: Optional[List[str]] = None,
+        combined_prompt: Optional[bool] = None,
+        input_type: str = "auto",
     ) -> Dict[str, Any]:
         """
-        Main summarization method.
-
-        Returns:
-            For single style:
-            {
-                "metadata": {...},
-                "summary": {...},
-                "performance": {...},
-                "original_content": str
-            }
-
-            For multiple styles:
-            {
-                "metadata": {...},
-                "summaries": {
-                    "executive": {...},
-                    "participants": {...},
-                    "action_items": {...}
-                },
-                "aggregate_performance": {...},
-                "original_content": str
-            }
+        Summarize raw text. When styles/combined_prompt/input_type are None,
+        the values from SummaryConfig are used.
         """
         ...
 
-    def summarize_file(self, file_path: Path) -> Dict[str, Any]:
-        """Summarize a single file"""
+    def summarize_file(
+        self,
+        file_path: Path,
+        styles: Optional[List[str]] = None,
+        combined_prompt: Optional[bool] = None,
+        input_type: str = "auto",
+    ) -> Dict[str, Any]:
+        """Summarize a single file (path may be str or Path)."""
         ...
 
-    def summarize_directory(self, dir_path: Path) -> List[Dict[str, Any]]:
-        """Summarize all text files in a directory"""
+    def summarize_directory(
+        self,
+        dir_path: Path,
+        styles: Optional[List[str]] = None,
+        combined_prompt: Optional[bool] = None,
+        input_type: str = "auto",
+    ) -> List[Dict[str, Any]]:
+        """Summarize all text files in a directory."""
         ...
 ```
+
+<Note>
+Internal pipeline helpers like `detect_content_type`, `generate_summary_prompt`,
+`generate_combined_prompt`, `summarize_with_style`, and `summarize_combined`
+live on `SummarizerAgent`, not on `SummarizerApp`. Subclass or import
+`SummarizerAgent` directly if you need to override those.
+</Note>
+
+### Module-level helpers
+
+```python
+def validate_email_address(email: str) -> bool
+def validate_email_list(email_list: str) -> list[str]
+```
+
+Utilities for the `gaia summarize --email-to/--email-cc` CLI flags.
 
 ---
 

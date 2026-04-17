@@ -260,7 +260,7 @@ cd src/gaia/apps/webui && npm install && npm run build
 
 # Development with hot reload (two terminals)
 uv run python -m gaia.ui.server --debug   # Terminal 1: backend (port 4200)
-cd src/gaia/apps/webui && npm run dev      # Terminal 2: frontend (port 5173)
+cd src/gaia/apps/webui && npm run dev      # Terminal 2: frontend (port 5174)
 ```
 
 ## Project Structure

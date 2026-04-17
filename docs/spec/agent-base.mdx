@@ -202,9 +202,16 @@ def process_query(
     """
     pass
 
-def execute_tool(self, tool_name: str, tool_args: dict) -> Any:
+def _execute_tool(self, tool_name: str, tool_args: dict) -> Any:
     """
-    Execute a registered tool by name.
+    Execute a registered tool by name (internal — called by the planning loop
+    after parsing LLM output). Not part of the public surface.
+
+    For programmatic tool invocation in tests or custom integrations, call
+    the tool function directly via the registry:
+
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+        result = _TOOL_REGISTRY["my_tool"]["function"](**tool_args)
 
     Args:
         tool_name: Name of the tool to execute
@@ -548,9 +555,10 @@ def test_tool_registration():
     agent.list_tools()  # Should not raise
 
 def test_tool_execution():
-    """Test tool execution."""
-    agent = TestAgent(silent_mode=True)
-    result = agent.execute_tool("test_tool", {"param": "value"})
+    """Test tool execution by calling the registered function directly."""
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    TestAgent(silent_mode=True)  # registers the tool at instance init
+    result = _TOOL_REGISTRY["test_tool"]["function"](param="value")
     assert result["result"] == "value"
 
 def test_json_validation():
