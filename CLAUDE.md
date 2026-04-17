@@ -104,6 +104,8 @@ This self-review step is mandatory - never skip verification of your output.
 
 **Why the rule exists:** fallbacks hide regressions. A review bot silently downgraded from Opus to a smaller model looks fine but produces worse reviews for weeks. A config loader that defaults a missing API key to `""` produces confusing 401s deep in the request pipeline instead of a clear `"ANTHROPIC_API_KEY is not set"` at startup. Better a loud error the user can fix than a quiet wrong answer.
 
+**On existing violations:** the codebase has pre-existing `except Exception: pass` blocks (mostly in `src/gaia/ui/`) that predate this rule. They are **tech debt, not precedent**. When you touch a file that has one, fix it in the same commit — add a specific exception type, log with context, or re-raise. Don't cite existing violations to justify adding new ones.
+
 ### Testing Requirements
 
 **Every new feature requires tests.** The testing structure:
