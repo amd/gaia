@@ -46,6 +46,42 @@ CACHE_HEADER = b"GAIA_CACHE_V1\n"
 MAX_CACHE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
+# --- PDF extraction errors ---------------------------------------------------
+# These inherit from ValueError so existing `except ValueError` blocks in
+# callers (and the index_document error path) keep working, while allowing
+# callers that care to distinguish the specific failure mode.
+
+
+class PDFExtractionError(ValueError):
+    """Base class for PDF extraction failures with actionable messages."""
+
+    #: Short stable status code (e.g. "encrypted", "corrupted", "empty")
+    #: suitable for surfacing in document metadata / telemetry.
+    status: str = "unreadable"
+
+
+class EncryptedPDFError(PDFExtractionError):
+    """Raised when a PDF is password-protected and cannot be decrypted."""
+
+    status = "encrypted"
+
+
+class CorruptedPDFError(PDFExtractionError):
+    """Raised when a PDF is malformed, truncated, or otherwise unreadable."""
+
+    status = "corrupted"
+
+
+class EmptyPDFError(PDFExtractionError):
+    """Raised when a PDF parses successfully but contains no extractable text.
+
+    Typical causes: scanned image-only PDFs (no OCR layer), or documents
+    where all pages are blank / contain only non-text glyphs.
+    """
+
+    status = "empty"
+
+
 @dataclass
 class RAGConfig:
     """Configuration for RAG SDK."""
@@ -475,12 +511,62 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
+            - pdf_status: str ("readable", "encrypted", "corrupted", "empty")
+
+        Raises:
+            EncryptedPDFError: PDF is password-protected.
+            CorruptedPDFError: PDF is malformed / unreadable.
+            EmptyPDFError: PDF parsed OK but contained no extractable text.
         """
         import time as time_module  # pylint: disable=reimported
 
+        file_name = Path(pdf_path).name
+
+        # Step 0: Open the PDF. pypdf raises EmptyFileError / PdfStreamError
+        # (both subclasses of PdfReadError) for empty/corrupted files. We map
+        # those to our own exceptions so callers can react and users get
+        # actionable guidance instead of a generic stack trace.
+        try:
+            from pypdf.errors import (  # pylint: disable=import-outside-toplevel
+                PdfReadError,
+            )
+        except ImportError:  # pragma: no cover - pypdf is required for PDFs
+            PdfReadError = Exception  # type: ignore[assignment,misc]
+
+        try:
+            reader = PdfReader(pdf_path)
+        except PdfReadError as e:
+            msg = (
+                f"Could not read PDF: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted, truncated, or not a valid PDF.\n"
+                "Suggestions:\n"
+                "  1. Re-download or re-export the PDF from the original source\n"
+                "  2. Try opening the file in a PDF viewer to confirm it is readable\n"
+                "  3. If the source is a scan, re-run OCR and export a fresh PDF"
+            )
+            self.log.error(f"Corrupted PDF {pdf_path}: {e}")
+            raise CorruptedPDFError(msg) from e
+
+        # Step 1: Refuse password-protected PDFs up-front. Without this check
+        # pypdf silently returns empty text for every page and the document
+        # gets "indexed" with zero chunks (see issue #451).
+        if getattr(reader, "is_encrypted", False):
+            msg = (
+                f"PDF is password-protected: {file_name}\n"
+                "GAIA cannot index encrypted PDFs.\n"
+                "Suggestions:\n"
+                "  1. Remove the password with qpdf:\n"
+                "     qpdf --decrypt --password=YOUR_PASSWORD input.pdf output.pdf\n"
+                "  2. Or with pdftk:\n"
+                "     pdftk input.pdf input_pw YOUR_PASSWORD output output.pdf\n"
+                "  3. Then re-index the decrypted file"
+            )
+            self.log.error(f"Encrypted PDF rejected: {pdf_path}")
+            raise EncryptedPDFError(msg)
+
         try:
             extract_start = time_module.time()
-            reader = PdfReader(pdf_path)
             total_pages = len(reader.pages)
             self.log.info(f"📄 Extracting text from {total_pages} pages...")
 
@@ -627,6 +713,30 @@ class RAGSDK:
                 f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages)"
             )
 
+            # If pypdf parsed the file but every page came back blank, surface
+            # this as EmptyPDFError rather than pretending it succeeded. The
+            # common cause is a scanned image-only PDF without an OCR layer.
+            #
+            # NOTE: `full_text` always carries `[Page N]` prefix lines even for
+            # blank pages (see the join above), so we can't just check
+            # full_text.strip(). Inspect the per-page content instead.
+            has_any_content = any((p["text"] or "").strip() for p in pages_data)
+            if not has_any_content:
+                msg = (
+                    f"No extractable text in PDF: {file_name}\n"
+                    f"The file has {total_pages} page(s) but none contained "
+                    "machine-readable text.\n"
+                    "Common causes:\n"
+                    "  1. The PDF is a scan with no OCR layer\n"
+                    "  2. All content is rendered as images or vector glyphs\n"
+                    "Suggestions:\n"
+                    "  1. Run OCR on the PDF (e.g. `ocrmypdf input.pdf output.pdf`)\n"
+                    "  2. Or enable VLM image extraction by downloading "
+                    f"{self.config.vlm_model} in Lemonade"
+                )
+                self.log.error(f"Empty PDF (no text): {pdf_path}")
+                raise EmptyPDFError(msg)
+
             # Build metadata
             metadata = {
                 "num_pages": total_pages,
@@ -634,9 +744,14 @@ class RAGSDK:
                 "total_images": total_images_processed,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
+                "pdf_status": "readable",
             }
 
             return full_text, total_pages, metadata
+        except PDFExtractionError:
+            # Already a well-formed extraction error with actionable guidance —
+            # re-raise without wrapping or re-logging (callers will log).
+            raise
         except Exception as e:
             self.log.error(f"Error reading PDF {pdf_path}: {e}")
             raise
@@ -2179,8 +2294,20 @@ These positions indicate where to split the text."""
             stats["num_chunks"] = len(new_chunks)
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)
+            if file_type == ".pdf":
+                stats["pdf_status"] = "readable"
             return stats
 
+        except PDFExtractionError as e:
+            # Specific, user-actionable PDF failure. Surface the short status
+            # code separately so UIs can badge the document (e.g. "encrypted")
+            # rather than showing the full multi-line remediation blob.
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"PDF extraction failed for {file_path}: {e.status}")
+            stats["error"] = str(e)
+            stats["pdf_status"] = e.status
+            return stats
         except Exception as e:
             if self.config.show_stats:
                 print(f"❌ Failed to index {Path(file_path).name}: {e}")
