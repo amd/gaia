@@ -183,6 +183,28 @@ class TestScratchpadIntegrity:
         service.close_db()
 
 
+class TestFileSystemIndexCorruptDbAtInit:
+    """FileSystemIndexService heals a corrupt DB at init (#495 bulletproofing).
+
+    Previously the ``PRAGMA journal_mode=WAL`` statement in ``__init__``
+    raised before ``_check_integrity`` had a chance to rebuild, so a
+    corrupt ``~/.gaia/file_index.db`` broke every ``gaia chat`` startup.
+    """
+
+    def test_garbage_file_is_rebuilt_transparently(self, tmp_path):
+        db_path = tmp_path / "corrupt_index.db"
+        db_path.write_bytes(b"not a sqlite db" * 16)
+
+        # Init must not raise — _rebuild_db kicks in.
+        service = FileSystemIndexService(db_path=str(db_path))
+        # And the usual tables / operations work.
+        assert service.table_exists("files")
+        assert service.table_exists("schema_version")
+        stats = service.scan_directory(str(tmp_path))
+        assert stats["files_scanned"] >= 1  # corrupt file itself was scanned
+        service.close_db()
+
+
 class TestMigrateVersionCurrent:
     """Edge case: migrate() when schema version is already current."""
 

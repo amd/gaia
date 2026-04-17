@@ -163,13 +163,45 @@ class FileSystemIndexService(DatabaseMixin):
         resolved_path = str(Path(db_path or self.DB_PATH).expanduser())
         self.init_db(resolved_path)
 
-        # WAL must be set via direct execute, not executescript
-        self._db.execute("PRAGMA journal_mode=WAL")
+        # WAL + integrity check in a single try so corruption of the on-disk
+        # file (power loss, truncation) doesn't throw out of ``__init__``
+        # before ``_check_integrity`` has a chance to rebuild. Without this,
+        # the line below used to raise ``sqlite3.DatabaseError`` on the very
+        # first startup after a bad shutdown.
+        try:
+            self._db.execute("PRAGMA journal_mode=WAL")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "PRAGMA journal_mode=WAL failed on %s (%s); rebuilding DB",
+                resolved_path,
+                exc,
+            )
+            self._rebuild_db(resolved_path)
 
         self._ensure_schema()
         self._check_integrity()
 
         logger.info("FileSystemIndexService initialized: %s", resolved_path)
+
+    def _rebuild_db(self, db_path: str) -> None:
+        """Close, delete, and re-init a corrupt DB file.
+
+        Used both by ``__init__`` (if the WAL pragma can't even be set) and
+        by ``_check_integrity`` (if the file parses but integrity_check
+        reports corruption). The index DB is safe to rebuild because its
+        contents are derived from the filesystem — a subsequent
+        ``scan_directory`` call will repopulate it.
+        """
+        try:
+            self.close_db()
+        except Exception:  # pylint: disable=broad-except
+            pass
+        try:
+            Path(db_path).unlink(missing_ok=True)
+        except OSError as exc:
+            logger.error("Failed to delete corrupt index DB: %s", exc)
+        self.init_db(db_path)
+        self._db.execute("PRAGMA journal_mode=WAL")
 
     # ------------------------------------------------------------------
     # Schema management
