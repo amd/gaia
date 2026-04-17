@@ -19,9 +19,21 @@ export class ChatUI {
         const contentEl = document.createElement('div');
         contentEl.className = 'message-content';
 
-        // Handle different content types
+        // Handle different content types.
+        //
+        // For 'error' / 'system' messages we MUST NOT pass through
+        // formatMessage + sanitizeHTML: those flows include arbitrary
+        // exception strings (`Error: ${error.message}`) which CodeQL
+        // correctly flags as xss-through-exception / xss-through-dom
+        // sinks. Even though sanitizeHTML strips <script>, forcing these
+        // system-facing messages through textContent is the categorically
+        // safe option — we don't need markdown in an error banner.
         if (typeof content === 'string') {
-            contentEl.innerHTML = this.sanitizeHTML(this.formatMessage(content));
+            if (type === 'error' || type === 'system') {
+                contentEl.textContent = content;
+            } else {
+                contentEl.innerHTML = this.sanitizeHTML(this.formatMessage(content));
+            }
         } else if (content instanceof HTMLElement) {
             contentEl.appendChild(content);
         } else {

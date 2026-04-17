@@ -209,8 +209,9 @@ class TestPromptOverwrite:
         target = tmp_path / "file.txt"
         target.write_text("data")
 
-        with patch("gaia.security._is_interactive", return_value=True), patch(
-            "builtins.input", return_value="y"
+        with (
+            patch("gaia.security._is_interactive", return_value=True),
+            patch("builtins.input", return_value="y"),
         ):
             result = validator._prompt_overwrite(target, 100)
 
@@ -221,8 +222,9 @@ class TestPromptOverwrite:
         target = tmp_path / "file.txt"
         target.write_text("data")
 
-        with patch("gaia.security._is_interactive", return_value=True), patch(
-            "builtins.input", return_value="n"
+        with (
+            patch("gaia.security._is_interactive", return_value=True),
+            patch("builtins.input", return_value="n"),
         ):
             result = validator._prompt_overwrite(target, 100)
 
@@ -233,8 +235,9 @@ class TestPromptOverwrite:
         target = tmp_path / "file.txt"
         target.write_text("data")
 
-        with patch("gaia.security._is_interactive", return_value=True), patch(
-            "builtins.input", return_value="yes"
+        with (
+            patch("gaia.security._is_interactive", return_value=True),
+            patch("builtins.input", return_value="yes"),
         ):
             result = validator._prompt_overwrite(target, 100)
 
@@ -245,8 +248,9 @@ class TestPromptOverwrite:
         target = tmp_path / "file.txt"
         target.write_text("data")
 
-        with patch("gaia.security._is_interactive", return_value=True), patch(
-            "builtins.input", return_value="no"
+        with (
+            patch("gaia.security._is_interactive", return_value=True),
+            patch("builtins.input", return_value="no"),
         ):
             result = validator._prompt_overwrite(target, 100)
 
@@ -258,8 +262,9 @@ class TestPromptOverwrite:
         target.write_text("data")
 
         # Simulate: "maybe" -> "xxx" -> "y"
-        with patch("gaia.security._is_interactive", return_value=True), patch(
-            "builtins.input", side_effect=["maybe", "xxx", "y"]
+        with (
+            patch("gaia.security._is_interactive", return_value=True),
+            patch("builtins.input", side_effect=["maybe", "xxx", "y"]),
         ):
             result = validator._prompt_overwrite(target, 200)
 
@@ -271,8 +276,9 @@ class TestPromptOverwrite:
         target.write_text("data")
 
         # Simulate: "" -> "asdf" -> "n"
-        with patch("gaia.security._is_interactive", return_value=True), patch(
-            "builtins.input", side_effect=["", "asdf", "n"]
+        with (
+            patch("gaia.security._is_interactive", return_value=True),
+            patch("builtins.input", side_effect=["", "asdf", "n"]),
         ):
             result = validator._prompt_overwrite(target, 50)
 
@@ -291,8 +297,9 @@ class TestPromptOverwrite:
                 " ".join(str(x) for x in a)
             ),
         ):
-            with patch("gaia.security._is_interactive", return_value=True), patch(
-                "builtins.input", return_value="y"
+            with (
+                patch("gaia.security._is_interactive", return_value=True),
+                patch("builtins.input", return_value="y"),
             ):
                 validator._prompt_overwrite(target, 2048)
 
@@ -307,9 +314,10 @@ class TestPromptOverwrite:
         target = tmp_path / "file.txt"
         target.write_text("data")
 
-        with patch("gaia.security._is_interactive", return_value=False), patch(
-            "builtins.input"
-        ) as mock_input:
+        with (
+            patch("gaia.security._is_interactive", return_value=False),
+            patch("builtins.input") as mock_input,
+        ):
             result = validator._prompt_overwrite(target, 100)
 
         assert result is True
