@@ -7,6 +7,7 @@ Exposes the registered agents so the frontend can display an agent selector.
 Also provides export/import endpoints for custom agent bundles.
 """
 
+import os
 import tempfile
 import zipfile
 from pathlib import Path
@@ -126,12 +127,10 @@ async def export_agents(background_tasks: BackgroundTasks):
     # shared path, and the file is cleaned up after streaming completes.
     gaia_dir = Path.home() / ".gaia"
     gaia_dir.mkdir(parents=True, exist_ok=True)
-    import os as _os
-
     tmp_fd, tmp_name = tempfile.mkstemp(
         prefix="gaia-export-", suffix=".zip", dir=str(gaia_dir)
     )
-    _os.close(tmp_fd)
+    os.close(tmp_fd)
     tmp_path = Path(tmp_name)
     try:
         export_custom_agents(tmp_path)
@@ -202,8 +201,8 @@ async def import_agents(request: Request, bundle: UploadFile = File(...)):  # no
     finally:
         try:
             tmp_path.unlink()
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.warning("Could not delete import temp file %s: %s", tmp_path, exc)
 
     # Hot-register imported agents into the LIVE server registry (app.state),
     # not a fresh AgentRegistry() instance which would be an orphan.
@@ -220,4 +219,7 @@ async def import_agents(request: Request, bundle: UploadFile = File(...)):  # no
         "imported": result.imported,
         "overwritten": result.overwritten,
         "errors": result.errors,
+        # Overwritten agents require a server restart to fully take effect —
+        # Python module caching means existing sessions keep running old code.
+        "requires_restart": len(result.overwritten) > 0,
     }

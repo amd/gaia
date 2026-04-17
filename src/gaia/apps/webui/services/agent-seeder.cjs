@@ -113,7 +113,6 @@ function copyDirRecursive(src, dest) {
 }
 
 function rmDirRecursive(target) {
-  if (!fs.existsSync(target)) return;
   fs.rmSync(target, { recursive: true, force: true });
 }
 

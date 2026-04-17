@@ -125,11 +125,14 @@ export function CustomAgentsSection() {
         // Best-effort pre-read of bundle.json to show agent IDs in the
         // trust modal. If this fails for any reason, we still show the
         // security confirmation — just without the agent ID list.
+        // Skip pre-read for oversized files — the server will validate them.
         let agentIds: string[] | null = null;
-        try {
-            agentIds = await readBundleAgentIds(file);
-        } catch (err) {
-            log.api.warn('Could not pre-read bundle.json from zip', err);
+        if (file.size <= 100 * 1024 * 1024) {
+            try {
+                agentIds = await readBundleAgentIds(file);
+            } catch (err) {
+                log.api.warn('Could not pre-read bundle.json from zip', err);
+            }
         }
 
         const idsLine = agentIds && agentIds.length > 0
@@ -159,7 +162,7 @@ export function CustomAgentsSection() {
                 try { detail = JSON.parse(text).detail || text; } catch { /* not JSON */ }
                 throw new Error(detail || `Import failed (HTTP ${res.status})`);
             }
-            const data: { imported: string[]; overwritten: string[]; errors: Array<{ id: string; error: string }> } =
+            const data: { imported: string[]; overwritten: string[]; errors: Array<{ id: string; error: string }>; requires_restart?: boolean } =
                 await res.json();
             // imported = all successfully placed agents (new + overwritten).
             // overwritten = subset that replaced an existing agent.
@@ -173,6 +176,9 @@ export function CustomAgentsSection() {
             } else {
                 summary = `Installed ${allInstalled.length} agent(s): ${allInstalled.join(', ')}`;
                 if (overwroteIds.length > 0) summary += ` (replaced: ${overwroteIds.join(', ')})`;
+            }
+            if (data.requires_restart) {
+                summary += ' — restart required for replaced agents to take full effect';
             }
             if (data.errors && data.errors.length > 0) {
                 const errSummary = data.errors.map((e) => `${e.id}: ${e.error}`).join('; ');

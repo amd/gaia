@@ -5882,9 +5882,13 @@ def handle_agent_import(args):
         sys.exit(1)
 
     # Peek at bundle.json so we can show agent ids in the trust prompt.
+    # Guard against a maliciously oversized bundle.json before reading it.
     bundle_agent_ids = []
     try:
         with zipfile.ZipFile(bundle_path) as zf:
+            info = zf.getinfo("bundle.json")
+            if info.file_size > 1 * 1024 * 1024:  # 1 MB hard cap on manifest
+                raise ValueError("bundle.json exceeds 1 MB — bundle appears malformed")
             raw = zf.read("bundle.json")
             manifest = json.loads(raw.decode("utf-8"))
             bundle_agent_ids = manifest.get("agent_ids", []) or []

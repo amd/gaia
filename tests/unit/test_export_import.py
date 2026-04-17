@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from gaia.installer import export_import
 from gaia.installer.export_import import (
     BUNDLE_FORMAT_VERSION,
     BUNDLE_JSON_NAME,

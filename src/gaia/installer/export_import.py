@@ -309,6 +309,9 @@ def import_agent_bundle(bundle_path: Path) -> ImportResult:
             staging_root = Path(staging_root_str)
 
             # Extract every non-bundle.json entry into staging_root.
+            # Track aggregate bytes written to catch zip-bombs that spread
+            # across many entries, each staying under the per-file cap.
+            total_written = 0
             for info in infos:
                 if info.filename == BUNDLE_JSON_NAME:
                     continue
@@ -324,12 +327,21 @@ def import_agent_bundle(bundle_path: Path) -> ImportResult:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 bytes_written = 0
                 with zf.open(info) as src, open(dest, "wb") as out:
-                    for chunk in iter(lambda: src.read(65536), b""):
+                    while True:
+                        chunk = src.read(65536)
+                        if not chunk:
+                            break
                         bytes_written += len(chunk)
+                        total_written += len(chunk)
                         if bytes_written > MAX_UNCOMPRESSED_PER_FILE:
                             raise ValueError(
                                 f"entry {info.filename} exceeds per-file limit "
                                 f"during extraction"
+                            )
+                        if total_written > MAX_UNCOMPRESSED_TOTAL:
+                            raise ValueError(
+                                "bundle exceeds total uncompressed size limit "
+                                "during extraction"
                             )
                         out.write(chunk)
 

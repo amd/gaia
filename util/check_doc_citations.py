@@ -73,8 +73,8 @@ ANCHORS = {
         51: r"^class\s+Agent\b",
     },
     "src/gaia/installer/export_import.py": {
-        126: r"^def\s+export_custom_agents\b",
-        277: r"^def\s+import_agent_bundle\b",
+        125: r"^def\s+export_custom_agents\b",
+        272: r"^def\s+import_agent_bundle\b",
     },
     "src/gaia/apps/webui/services/agent-seeder.cjs": {
         225: r"^async\s+function\s+seedBundledAgents\b",
