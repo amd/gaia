@@ -271,8 +271,35 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// General per-IP rate limiter for all auth endpoints (not just /login).
+// Defined here so it can be applied to every auth route below, closing the
+// "missing rate-limiting" CodeQL alert on /auth/logout and
+// /auth/login-error which would otherwise accept unlimited requests.
+const rateLimitStore = new Map();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX = 100; // max requests per window per IP
+
+function rateLimiter(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress;
+  const now = Date.now();
+  const record = rateLimitStore.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+
+  if (now > record.resetAt) {
+    record.count = 0;
+    record.resetAt = now + RATE_LIMIT_WINDOW;
+  }
+
+  record.count++;
+  rateLimitStore.set(ip, record);
+
+  if (record.count > RATE_LIMIT_MAX) {
+    return res.status(429).send('Too Many Requests');
+  }
+  next();
+}
+
 // Login handler
-app.post('/auth/login', loginLimiter, (req, res) => {
+app.post('/auth/login', loginLimiter, rateLimiter, (req, res) => {
   const { code, nonce } = req.body;
 
   if (code === ACCESS_CODE) {
@@ -305,7 +332,7 @@ app.post('/auth/login', loginLimiter, (req, res) => {
 });
 
 // Login error handler (uses nonce to retrieve redirect URL)
-app.get('/auth/login-error', (req, res) => {
+app.get('/auth/login-error', rateLimiter, (req, res) => {
   // Retrieve redirect URL from server-side storage and re-store for the form
   const originalRedirect = consumeRedirect(req.query.nonce);
   const newNonce = storeRedirect(originalRedirect);
@@ -314,36 +341,12 @@ app.get('/auth/login-error', (req, res) => {
 });
 
 // Logout handler
-app.get('/auth/logout', (req, res) => {
+app.get('/auth/logout', rateLimiter, (req, res) => {
   res.clearCookie(COOKIE_NAME);
   res.redirect('/');
 });
 
-// Simple in-memory rate limiter for general requests (no external dependencies)
-const rateLimitStore = new Map();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX = 100; // max requests per window
-
-function rateLimiter(req, res, next) {
-  const ip = req.ip || req.connection.remoteAddress;
-  const now = Date.now();
-  const record = rateLimitStore.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
-
-  if (now > record.resetAt) {
-    record.count = 0;
-    record.resetAt = now + RATE_LIMIT_WINDOW;
-  }
-
-  record.count++;
-  rateLimitStore.set(ip, record);
-
-  if (record.count > RATE_LIMIT_MAX) {
-    return res.status(429).send('Too Many Requests');
-  }
-  next();
-}
-
-// Apply rate limiter before auth middleware
+// Apply rate limiter before auth middleware for every other route
 app.use(rateLimiter);
 
 // Apply auth middleware
