@@ -1757,6 +1757,10 @@ def create_app(
 
             # Sanitize filename (remove path components, keep only the basename)
             safe_filename = Path(file.filename).name
+            # Additional guard: reject null bytes and empty basenames up-front
+            # so the subsequent open() can't resolve to anything unexpected.
+            if not safe_filename or "\x00" in safe_filename:
+                raise HTTPException(status_code=400, detail="Invalid filename")
 
             # Ensure watch directory exists
             _agent_instance._watch_dir.mkdir(parents=True, exist_ok=True)
@@ -1766,8 +1770,16 @@ def create_app(
             with _api_processing_lock:
                 _api_processing_files.add(safe_filename)
 
-            # Save file to watch directory
-            file_path = _agent_instance._watch_dir / safe_filename
+            # Save file to watch directory. Verify the fully-resolved path
+            # is actually inside the watch directory before opening — defeats
+            # any path-traversal slip that Path.name alone might miss on
+            # exotic filesystems, and closes the CodeQL py/path-injection
+            # sink on the open() below.
+            watch_real = _agent_instance._watch_dir.resolve()
+            file_path = (watch_real / safe_filename).resolve()
+            watch_prefix = str(watch_real).rstrip(os.sep) + os.sep
+            if not str(file_path).startswith(watch_prefix):
+                raise HTTPException(status_code=400, detail="Invalid upload path")
 
             with open(file_path, "wb") as f:
                 f.write(content)
