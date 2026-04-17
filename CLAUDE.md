@@ -35,6 +35,33 @@ If *any* of those is uncertain, **do not commit** — surface the uncertainty to
 
 **Still prohibited without explicit user instruction:** pushing to remote, force-pushing anywhere, amending existing commits, touching release/publishing branches, committing anything that looks like a secret. When in doubt, ask — the cost of a 10-second confirmation is trivial; the cost of an unwanted commit can be hours of cleanup.
 
+### IMPORTANT: PR Descriptions — Tight and Value-Focused
+
+**Keep PR descriptions short. Lead with *why* and *impact*, not *what*.** Reviewers skim; long walls of text get ignored. A PR description is a sales pitch for the change, not a changelog.
+
+**Target shape:**
+
+1. **One-paragraph Summary** — what this PR does, in plain English, and the problem it solves. If a reader stops after this paragraph, they should understand the change's purpose.
+2. **Bullet list of threads** (if the PR has more than one logical thread) — one line each, with a *why this matters* clause for every bullet. Not every file changed — only changes a reviewer needs to evaluate.
+3. **Test plan** — checkbox list of how to verify. Specific commands beat vague prose.
+
+**Hard rules:**
+
+- **No section longer than ~5 lines of prose** before breaking into bullets or cutting.
+- **Every non-trivial claim earns its place with a why.** "Added a linter" is noise; "Added a linter so new agents stop shipping with missing docs/tests" is signal.
+- **Cut exhaustive file-by-file enumeration.** The diff is the source of truth for what files changed. The description is the source of truth for *why they changed*.
+- **No "Generated with Claude Code" tagline** (see attribution rule below).
+- **If the PR really does bundle many threads**, group them — don't list 16 commits. Reviewers scan 4 themes faster than 16 bullets.
+
+**Anti-patterns:**
+
+- ❌ Copy-pasting the commit message log into the PR body
+- ❌ "This PR adds X, Y, Z, A, B, C, D, E, F, G" with no stated value
+- ❌ Mirroring every bullet in the summary inside the test plan (pick one)
+- ❌ Explaining implementation details a reviewer will read from the diff anyway
+
+**Title convention:** conventional commits style (`feat(scope):`, `fix(scope):`, `docs(scope):`, `ci(scope):`), under ~70 chars, descriptive of the *change*, not the *why* (the body carries the why).
+
 ### IMPORTANT: No Claude Attribution of Any Kind
 
 **Never include any mention of Claude authoring or assisting in anything you produce.** Applies to:
