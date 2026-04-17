@@ -35,6 +35,26 @@ If *any* of those is uncertain, **do not commit** — surface the uncertainty to
 
 **Still prohibited without explicit user instruction:** pushing to remote, force-pushing anywhere, amending existing commits, touching release/publishing branches, committing anything that looks like a secret. When in doubt, ask — the cost of a 10-second confirmation is trivial; the cost of an unwanted commit can be hours of cleanup.
 
+### IMPORTANT: No Claude Attribution of Any Kind
+
+**Never include any mention of Claude authoring or assisting in anything you produce.** Applies to:
+
+- PR descriptions and titles
+- PR review comments, issue comments, discussion replies
+- Commit message bodies **including `Co-Authored-By: Claude ...` trailers**
+- Code comments, docstrings, or doc files
+- Any other artifact that ships to users or stakeholders
+
+**Specifically prohibited:**
+- `🤖 Generated with [Claude Code](https://claude.com/claude-code)` footers
+- `Co-Authored-By: Claude Opus ...`, `Co-Authored-By: Claude Sonnet ...`, `Co-Authored-By: <any Claude variant>` trailers
+- "Authored by AI", "AI-generated", "Written by Claude" attributions
+- Inline code comments crediting Claude
+
+Rationale: output is the project's work product. The human contributor is the author of record. AI assistance is a tool like an IDE or linter — tools don't co-author commits.
+
+When crafting commit messages, write as the human author writing them. Skip the trailer section entirely unless you need to credit a real human collaborator.
+
 ### IMPORTANT: Always Review Your Changes
 **After making any changes to files, you MUST review your work:**
 1. Read back files you wrote or edited to verify correctness
