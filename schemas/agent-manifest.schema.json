@@ -1,0 +1,82 @@
+{
+  "description": "Declarative manifest for a GAIA agent loaded from agent.yaml. Validated at load time by AgentManifest in src/gaia/agents/registry.py.",
+  "properties": {
+    "manifest_version": {
+      "default": 1,
+      "title": "Manifest Version",
+      "type": "integer"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "instructions": {
+      "default": "",
+      "title": "Instructions",
+      "type": "string"
+    },
+    "tools": {
+      "default": [
+        "rag",
+        "file_search"
+      ],
+      "items": {
+        "type": "string",
+        "enum": [
+          "file_io",
+          "file_search",
+          "rag",
+          "screenshot",
+          "sd",
+          "shell",
+          "vlm"
+        ],
+        "description": "Name of a tool mixin registered in KNOWN_TOOLS."
+      },
+      "title": "Tools",
+      "type": "array"
+    },
+    "mcp_servers": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "default": {},
+      "title": "Mcp Servers",
+      "type": "object"
+    },
+    "models": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Models",
+      "type": "array"
+    },
+    "conversation_starters": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Conversation Starters",
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "name"
+  ],
+  "title": "GAIA Agent Manifest",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://amd-gaia.ai/schemas/agent-manifest.schema.json"
+}

@@ -64,13 +64,14 @@ All images expose the same ports for consistency:
 |------|---------|---------|
 | 3000 | Next.js dev server | Frontend development |
 | 5173 | Vite dev server | Frontend development |
-| 8000 | GAIA API server | `gaia api start` |
+| 8000 | Lemonade Server (LLM backend) | `lemonade-server serve` |
+| 8080 | GAIA API server | `gaia api start` |
 | 9229 | Node.js debugging | Frontend debugging |
 | 9222 | Chrome DevTools (Electron) | Desktop app debugging |
 
 Map ports when creating container:
 ```bash
-docker run -dit -p 8000:8000 -p 3000:3000 ...
+docker run -dit -p 8080:8080 -p 8000:8000 -p 3000:3000 ...
 ```
 
 ## Image Specifications
@@ -361,7 +362,7 @@ All images require `LEMONADE_BASE_URL` to connect to a Lemonade Server.
 pip install lemonade-server
 
 # Start server
-lemonade-server serve --host 0.0.0.0 --port 8080
+lemonade-server serve --host 0.0.0.0
 ```
 
 ### Container configuration:

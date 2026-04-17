@@ -858,7 +858,7 @@ class LemonadeInstaller:
                 is_root = os.geteuid() == 0
 
             sudo_prefix = [] if is_root else ["sudo"]
-            cmd = sudo_prefix + ["apt", "remove", "-y", "lemonade"]
+            cmd = sudo_prefix + ["apt", "remove", "-y", "lemonade-server"]
 
             log.debug(f"Running: {' '.join(cmd)}")
 

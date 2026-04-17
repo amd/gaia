@@ -35,9 +35,22 @@ def configure_console_encoding():
 
 
 class GaiaLogger:
-    def __init__(self, log_file="gaia.log"):
+    def __init__(self, log_file=None):
         # Configure console encoding for Unicode support first
         configure_console_encoding()
+
+        # Default to the user's ~/.gaia directory so we don't litter the
+        # current working directory with gaia.log files and don't crash
+        # when CWD is not writable (e.g. /, system dirs, read-only mounts).
+        if log_file is None:
+            log_file = Path.home() / ".gaia" / "gaia.log"
+            try:
+                log_file.parent.mkdir(parents=True, exist_ok=True)
+            except (PermissionError, OSError):
+                # Home directory not writable either -- fall through to
+                # the file-handler try/except below which falls back to
+                # a tempfile.
+                pass
 
         self.log_file = Path(log_file)
         self.loggers = {}
@@ -76,15 +89,60 @@ class GaiaLogger:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(console_formatter)
 
-        # Configure file handler with UTF-8 encoding
-        file_handler = logging.FileHandler(self.log_file, encoding="utf-8")
-        file_handler.setFormatter(file_formatter)
+        # Configure file handler with UTF-8 encoding.
+        # Fall back gracefully if the log file can't be opened for writing
+        # (e.g. permission denied, read-only filesystem). We try a couple
+        # of fallback locations before giving up and going console-only.
+        file_handler = None
+        try:
+            file_handler = logging.FileHandler(self.log_file, encoding="utf-8")
+            file_handler.setFormatter(file_formatter)
+        except (PermissionError, OSError) as primary_err:
+            fallback_candidates = []
+
+            home_fallback = Path.home() / ".gaia" / "gaia.log"
+            if Path(self.log_file).resolve() != home_fallback.resolve():
+                fallback_candidates.append(home_fallback)
+
+            try:
+                import tempfile
+
+                fallback_candidates.append(Path(tempfile.gettempdir()) / "gaia.log")
+            except Exception:
+                pass
+
+            print(
+                f"[gaia] Cannot write to {self.log_file} ({primary_err}).",
+                file=sys.stderr,
+            )
+
+            for candidate in fallback_candidates:
+                try:
+                    candidate.parent.mkdir(parents=True, exist_ok=True)
+                    file_handler = logging.FileHandler(candidate, encoding="utf-8")
+                    file_handler.setFormatter(file_formatter)
+                    print(
+                        f"[gaia] Writing logs to: {candidate}",
+                        file=sys.stderr,
+                    )
+                    self.log_file = candidate
+                    break
+                except (PermissionError, OSError):
+                    continue
+
+            if file_handler is None:
+                print(
+                    "[gaia] No writable log location found; "
+                    "continuing with console logging only.",
+                    file=sys.stderr,
+                )
 
         # Configure root logger
         root_logger = logging.getLogger()
         root_logger.setLevel(self.default_level)
         root_logger.addHandler(console_handler)
-        root_logger.addHandler(file_handler)
+        if file_handler is not None:
+            root_logger.addHandler(file_handler)
 
         # Add color filter to console handler
         console_handler.addFilter(self.add_color_filter)

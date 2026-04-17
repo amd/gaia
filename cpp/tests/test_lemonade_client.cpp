@@ -59,6 +59,11 @@ TEST(LemonadeClientTest, LegacyConstructorUrlAlreadyHasApiV1) {
     EXPECT_EQ(client.baseUrl(), "http://192.168.1.100:9000/api/v1");
 }
 
+TEST(LemonadeClientTest, LegacyConstructorUrlPreservesOpenAiV1) {
+    LemonadeClient client("http://192.168.1.100:11434/v1");
+    EXPECT_EQ(client.baseUrl(), "http://192.168.1.100:11434/v1");
+}
+
 // ---------------------------------------------------------------------------
 // URL normalization
 // ---------------------------------------------------------------------------
@@ -71,6 +76,11 @@ TEST(LemonadeClientTest, UrlNormalizationAddsApiV1) {
 TEST(LemonadeClientTest, UrlNormalizationNoopWhenPresent) {
     LemonadeClient client("http://localhost:8000/api/v1");
     EXPECT_EQ(client.baseUrl(), "http://localhost:8000/api/v1");
+}
+
+TEST(LemonadeClientTest, UrlNormalizationPreservesOpenAiV1) {
+    LemonadeClient client("http://localhost:11434/v1");
+    EXPECT_EQ(client.baseUrl(), "http://localhost:11434/v1");
 }
 
 TEST(LemonadeClientTest, UrlNormalizationStripsTrailingSlash) {
@@ -93,6 +103,12 @@ TEST(LemonadeClientTest, SetBaseUrlNoopWhenApiV1Present) {
     LemonadeClient client("http://localhost:8000");
     client.setBaseUrl("http://remotehost:1234/api/v1");
     EXPECT_EQ(client.baseUrl(), "http://remotehost:1234/api/v1");
+}
+
+TEST(LemonadeClientTest, SetBaseUrlNoopWhenOpenAiV1Present) {
+    LemonadeClient client("http://localhost:8000");
+    client.setBaseUrl("http://remotehost:11434/v1");
+    EXPECT_EQ(client.baseUrl(), "http://remotehost:11434/v1");
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +193,28 @@ TEST(LemonadeClientTest, ValidateContextSizeOfflineDoesNotBlock) {
     auto [ok, msg] = client.validateContextSize(4096);
     // Non-fatal: either {true, "Server not running…"} or {true, "Validation skipped…"}
     EXPECT_TRUE(ok);
+}
+
+TEST(LemonadeClientTest, EnsureModelLoadedSkipsForOpenAiCompatibleV1Endpoints) {
+    LemonadeClient client(LemonadeClientConfig{
+        "http://127.0.0.1:19753/v1",
+        "gemma4:e2b",
+        8192,
+        false,
+    });
+
+    EXPECT_NO_THROW(client.ensureModelLoaded());
+}
+
+TEST(LemonadeClientTest, EnsureModelLoadedStillFailsForOfflineLemonadeEndpoint) {
+    LemonadeClient client(LemonadeClientConfig{
+        "http://127.0.0.1:19753/api/v1",
+        "Qwen3-4B-GGUF",
+        8192,
+        false,
+    });
+
+    EXPECT_THROW(client.ensureModelLoaded(), std::exception);
 }
 
 // ---------------------------------------------------------------------------

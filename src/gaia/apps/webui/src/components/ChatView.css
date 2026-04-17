@@ -579,21 +579,6 @@
 .msg-input::placeholder { color: var(--text-muted); opacity: 0.6; font-family: var(--font-sans); }
 .msg-input:disabled { opacity: 0.5; }
 
-/* Blinking block cursor -- pixelated terminal aesthetic */
-.input-cursor {
-    display: inline-block;
-    width: 8px;
-    height: 17px;
-    background: var(--amd-red);
-    animation: cursorBlink 1s step-end infinite;
-    align-self: center;
-    flex-shrink: 0;
-    border-radius: 0;
-    image-rendering: pixelated;
-    box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
-    margin-right: 4px;
-}
-
 .input-btns {
     display: flex;
     gap: 2px;
@@ -735,6 +720,100 @@
     color: var(--text-muted);
 }
 
+/* ── Create agent button (input footer) ──────────────────────────── */
+.create-agent-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: all 0.15s var(--ease);
+    flex-shrink: 0;
+}
+
+.create-agent-btn:hover {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+}
+
+/* ── Agent picker (input footer) ─────────────────────────────────── */
+.agent-picker {
+    position: relative;
+}
+
+.agent-picker-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: all 0.15s var(--ease);
+    white-space: nowrap;
+    line-height: 1;
+    height: 20px;
+}
+
+.agent-picker-btn:hover {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+}
+
+.agent-picker-dropdown {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    min-width: 160px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    padding: 4px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.agent-picker-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.12s var(--ease), color 0.12s var(--ease);
+    text-align: left;
+    white-space: nowrap;
+}
+
+.agent-picker-option:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.agent-picker-option.active {
+    color: #ed1c24;
+    font-weight: 600;
+}
+
 /* ── Attachments ─────────────────────────────────────────────────── */
 
 .input-content {
@@ -742,6 +821,18 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    position: relative;
+}
+
+/* Block cursor — terminal aesthetic, tracks caret position via inline style */
+.input-cursor {
+    position: absolute;
+    width: 10px;
+    height: 18px;
+    background: var(--amd-red);
+    animation: cursorBlink 1s step-end infinite;
+    pointer-events: none;
+    box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
 }
 
 .input-box.has-attachments {

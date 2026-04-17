@@ -55,7 +55,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock
+          # pyfakefs is required by tests/unit/installer/test_uninstall_command.py
+          # which uses the `fs` fixture to build a fake filesystem for testing
+          # tiered uninstall logic cross-platform without touching the real FS.
+          # pytest-mock + beautifulsoup4 are required by the browser/filesystem tool tests.
+          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pyfakefs
           uv pip install --system beautifulsoup4
           uv pip install --system -e ".[api]"
 

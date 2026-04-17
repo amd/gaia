@@ -70,7 +70,7 @@ class TrayManager {
     if (this.tray) return;
 
     this.tray = new Tray(this._icon);
-    this.tray.setToolTip("GAIA Agent UI");
+    this.tray.setToolTip("GAIA");
 
     // Single-click: show/focus window
     this.tray.on("click", () => this._showWindow());

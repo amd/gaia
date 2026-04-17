@@ -293,6 +293,63 @@
     }
 }
 
+/* Activity filter bar */
+.activity-filter-bar {
+    display: flex;
+    gap: 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.activity-filter-input {
+    flex: 1;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border: 1px solid var(--border-light);
+    border-radius: 3px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    outline: none;
+}
+
+.activity-filter-input:focus {
+    border-color: var(--accent-color, #3b82f6);
+}
+
+.activity-filter-select {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 3px 6px;
+    border: 1px solid var(--border-light);
+    border-radius: 3px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    outline: none;
+    cursor: pointer;
+}
+
+/* MCP server badge */
+.flow-tool-mcp-server {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    background: color-mix(in srgb, #7c3aed 10%, transparent);
+    color: #7c3aed;
+    white-space: nowrap;
+    font-weight: 500;
+}
+
+/* Tool latency */
+.flow-tool-latency {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    margin-right: 4px;
+}
+
 /* Chevron */
 .flow-tool-chevron {
     display: flex;

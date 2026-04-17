@@ -8,8 +8,8 @@
  * GAIA uses a single version source of truth in version.py.
  *
  * Usage:
- *   node scripts/bump-ui-version.mjs          # reads version.py and syncs package.json
- *   node scripts/bump-ui-version.mjs --check  # verify package.json matches version.py (used in CI)
+ *   node installer/version/bump-ui-version.mjs          # reads version.py and syncs package.json
+ *   node installer/version/bump-ui-version.mjs --check  # verify package.json matches version.py (used in CI)
  */
 
 import { readFileSync, writeFileSync } from "fs";
@@ -17,7 +17,8 @@ import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const rootDir = resolve(__dirname, "..");
+// Script lives in installer/version/, so repo root is two levels up.
+const rootDir = resolve(__dirname, "..", "..");
 
 const VERSION_PY = resolve(rootDir, "src", "gaia", "version.py");
 const PACKAGE_PATH = resolve(
@@ -58,7 +59,7 @@ if (checkOnly) {
   if (pkg.version !== version) {
     console.log(`FAIL: ${pkg.name}@${pkg.version} -- expected ${version}`);
     console.log(
-      '\nRun "node scripts/bump-ui-version.mjs" to sync package.json to version.py.'
+      '\nRun "node installer/version/bump-ui-version.mjs" to sync package.json to version.py.'
     );
     process.exit(1);
   } else {

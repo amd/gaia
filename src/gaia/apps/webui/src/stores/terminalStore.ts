@@ -222,27 +222,27 @@ export const useTerminalStore = create<TerminalState>((set) => ({
       paused: { ...state.paused, [agentId]: !(state.paused[agentId] ?? false) },
     })),
 
-  setPaused: (agentId, paused) =>
+  setPaused: (agentId: string, paused: boolean) =>
     set((state) => ({
       paused: { ...state.paused, [agentId]: paused },
     })),
 
   // ── Tab Actions ──────────────────────────────────────────────────────
 
-  setActiveTab: (agentId, tab) =>
+  setActiveTab: (agentId: string, tab: TerminalTab) =>
     set((state) => ({
       activeTabs: { ...state.activeTabs, [agentId]: tab },
     })),
 
   // ── UI Actions ───────────────────────────────────────────────────────
 
-  openTerminal: (agentId) =>
+  openTerminal: (agentId: string) =>
     set({ activeTerminalAgentId: agentId, showTerminal: true }),
 
   closeTerminal: () =>
     set({ showTerminal: false }),
 
-  setShowTerminal: (show) =>
+  setShowTerminal: (show: boolean) =>
     set({ showTerminal: show }),
 }));
 

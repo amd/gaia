@@ -137,6 +137,19 @@ def _transaction(self):
 
 Documents are deduplicated by SHA-256 file hash. If a document with the same hash already exists, the existing record is returned with an updated `last_accessed_at` timestamp.
 
+### Document Upload Paths
+
+The server exposes **two** document upload endpoints, each for a different source of truth:
+
+| Endpoint | Input | Used By | Storage |
+|----------|-------|---------|---------|
+| `POST /api/documents/upload-path` | JSON `{filepath}` — absolute server-side path | File browser (user picks an existing file) | Indexes in place; server does NOT own the file |
+| `POST /api/documents/upload` | `multipart/form-data` file blob | Drag-and-drop in browser mode / modern Electron | File is persisted under `~/.gaia/documents/<uuid>.<ext>` and owned by the server |
+
+The blob endpoint exists because browser `File` objects never expose a filesystem path, and since Electron 32 `File.path` has been removed as well (see issue [#728](https://github.com/amd/gaia/issues/728)). It streams the upload with a running size check (capped at 20 MB), computes a SHA-256 hash, short-circuits on dedup by hash, and only then promotes the file into the managed directory via an atomic `os.replace`. On failure, partial and orphan files are cleaned up.
+
+When a server-owned document is deleted (`DELETE /api/documents/{id}`), the on-disk file under `~/.gaia/documents/` is also unlinked as a best-effort cleanup. User-owned files from `upload-path` are left untouched.
+
 ### Cascade Deletes
 
 - Deleting a **session** cascades to its messages and session_documents entries
@@ -163,6 +176,7 @@ All 14 Pydantic models:
 | `DocumentResponse` | Response | Document endpoints |
 | `DocumentListResponse` | Response | `GET /api/documents` |
 | `DocumentUploadRequest` | Request | `POST /api/documents/upload-path` |
+| `UploadFile` (multipart) | Request | `POST /api/documents/upload` (blob) |
 | `AttachDocumentRequest` | Request | `POST /api/sessions/{session_id}/documents` |
 
 ---

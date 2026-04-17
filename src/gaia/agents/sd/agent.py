@@ -132,44 +132,17 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
         return """You are an image generation and storytelling agent.
 
 WORKFLOW for image + story requests:
-1. Create a 2-step plan using dynamic parameter placeholders
+1. Create a 2-step plan using $PREV placeholders to chain results
 2. The plan executes automatically - you'll see results after completion
 3. Provide final answer with the complete story text
 
-DYNAMIC PARAMETER PLACEHOLDERS:
-Use these in multi-step plans to reference previous results:
-- $PREV.field - Get field from previous step result
-- $STEP_0.field - Get field from specific step (0-indexed)
+EXAMPLE multi-step plan (generate image then write story):
+Step 1 tool: generate_image with prompt, model="SDXL-Turbo", size="512x512", steps=4
+Step 2 tool: create_story_from_image with image_path="$PREV.image_path", story_style="whimsical"
 
-CORRECT multi-step plan:
-{
-  "thought": "Creating plan to generate image and story",
-  "plan": [
-    {
-      "tool": "generate_image",
-      "tool_args": {
-        "prompt": "adorable robot kitten with glowing LED eyes...",
-        "model": "SDXL-Turbo",
-        "size": "512x512",
-        "steps": 4
-      }
-    },
-    {
-      "tool": "create_story_from_image",
-      "tool_args": {
-        "image_path": "$PREV.image_path",
-        "story_style": "whimsical"
-      }
-    }
-  ]
-}
+The system automatically substitutes $PREV.image_path with the actual path from step 1.
 
-How it works:
-- Step 1 returns: {"image_path": ".gaia/cache/sd/images/robot_kitten_SDXL_20260203.png", ...}
-- Step 2 receives: {"image_path": ".gaia/cache/sd/images/robot_kitten_SDXL_20260203.png", "story_style": "whimsical"}
-- The system automatically substitutes $PREV.image_path with the actual path
-
-OTHER RULES:
+RULES:
 - Generate ONE image by default (multiple only if explicitly requested: "3 images", "variations")
 - Match story_style to user's request: "whimsical" (cute/playful), "adventure" (action), "dramatic" (intense), "any" (default)
 - Include full story text in answer - users want to read it immediately

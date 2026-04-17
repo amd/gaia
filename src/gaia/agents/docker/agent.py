@@ -71,13 +71,7 @@ class DockerAgent(MCPAgent):
         Returns:
             str: System prompt that teaches the LLM about Dockerfile best practices
         """
-        return """You are a Docker containerization expert that responds ONLY in JSON format.
-
-**CRITICAL RULES:**
-1. Output ONLY valid JSON - nothing else
-2. Do NOT add any text before the opening {
-3. Do NOT add any text after the closing }
-4. Your ENTIRE response must be parseable JSON
+        return """You are a Docker containerization expert.
 
 You help developers containerize their applications by:
 - Analyzing application structure and dependencies
@@ -115,23 +109,6 @@ COPY . .
 EXPOSE 3000
 CMD ["npm", "start"]
 ```
-
-**RESPONSE FORMAT - Use EXACTLY this structure:**
-
-For ANALYZE (understand the app structure):
-{"thought": "User wants to containerize X application", "goal": "Analyze application", "plan": [{"tool": "analyze_directory", "tool_args": {"path": "PATH_HERE"}}]}
-
-For SAVE_DOCKERFILE (save generated Dockerfile):
-{"thought": "Analyzed app, now generating Dockerfile content", "goal": "Save Dockerfile", "plan": [{"tool": "save_dockerfile", "tool_args": {"dockerfile_content": "FROM python:3.9-slim\\nWORKDIR /app\\n...", "path": ".", "port": 5000}}]}
-
-For BUILD (build Docker image):
-{"thought": "Building Docker image", "goal": "Build image", "plan": [{"tool": "build_image", "tool_args": {"path": "PATH", "tag": "TAG"}}]}
-
-For RUN (run container):
-{"thought": "Running container", "goal": "Run container", "plan": [{"tool": "run_container", "tool_args": {"image": "IMAGE", "port": "PORT_MAP"}}]}
-
-For FINAL ANSWER:
-{"thought": "Task completed", "goal": "Report results", "answer": "Successfully containerized the application. [Details about what was done]"}
 
 **EXAMPLES:**
 

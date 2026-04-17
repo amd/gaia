@@ -5,7 +5,8 @@
 // Subclasses gaia::Agent with a single get_current_time tool.
 //
 // Prerequisites:
-//   - LLM server running at http://localhost:8000/api/v1 (e.g. lemonade-server start)
+//   - LLM server running at http://localhost:8000/api/v1 (Lemonade) or
+//     http://localhost:11434/v1 (Ollama-compatible)
 //
 // Build (FetchContent — no install needed):
 //   cmake -B build -S .
