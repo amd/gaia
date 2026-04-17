@@ -301,7 +301,7 @@ jobs:
             - Make it easy for maintainers to accept suggestions with one click
 
           claude_args: |
-            --max-turns 20
+            --max-turns 50
             --model claude-opus-4-7
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
@@ -416,7 +416,7 @@ jobs:
             Maintain a helpful, professional tone.
 
           claude_args: |
-            --max-turns 20
+            --max-turns 50
             --model claude-opus-4-7
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
