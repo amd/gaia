@@ -215,10 +215,20 @@ async def import_agents(request: Request, bundle: UploadFile = File(...)):  # no
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Hot-register failed for %s: %s", agent_id, exc)
 
+    # Errors from ImportResult are "agent_id: message" strings. Convert to
+    # structured objects so the frontend can display them per-agent without
+    # re-parsing, and to avoid surfacing raw exception text as a flat string.
+    structured_errors = []
+    for err in result.errors:
+        parts = err.split(": ", 1)
+        structured_errors.append(
+            {"id": parts[0], "error": parts[1] if len(parts) == 2 else err}
+        )
+
     return {
         "imported": result.imported,
         "overwritten": result.overwritten,
-        "errors": result.errors,
+        "errors": structured_errors,
         # Overwritten agents require a server restart to fully take effect —
         # Python module caching means existing sessions keep running old code.
         "requires_restart": len(result.overwritten) > 0,

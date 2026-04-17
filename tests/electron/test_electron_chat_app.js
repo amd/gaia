@@ -165,8 +165,8 @@ describe('Chat App Integration', () => {
       expect(htmlContent).toContain('viewport');
     });
 
-    it('should have GAIA Agent UI title', () => {
-      expect(htmlContent).toContain('GAIA Agent UI');
+    it('should have GAIA title', () => {
+      expect(htmlContent).toContain('<title>GAIA</title>');
     });
 
     it('should have React root div', () => {
@@ -703,9 +703,11 @@ describe('Chat App Integration', () => {
       expect(pkg.scripts.package).toContain('build');
     });
 
-    it('should have make script for installer creation', () => {
-      expect(pkg.scripts.make).toBeDefined();
-      expect(pkg.scripts.make).toContain('build');
+    it('should have platform-specific packaging scripts', () => {
+      // Uses electron-builder (not electron-forge)
+      expect(pkg.scripts['package:win']).toBeDefined();
+      expect(pkg.scripts['package:mac']).toBeDefined();
+      expect(pkg.scripts['package:linux']).toBeDefined();
     });
 
     it('should have start script for Electron dev', () => {
@@ -713,30 +715,13 @@ describe('Chat App Integration', () => {
       expect(pkg.scripts.start).toContain('electron');
     });
 
-    it('should have Electron Forge CLI as devDependency', () => {
-      expect(pkg.devDependencies['@electron-forge/cli']).toBeDefined();
+    it('should have electron-builder as devDependency', () => {
+      expect(pkg.devDependencies['electron-builder']).toBeDefined();
     });
 
-    it('should have Electron Forge config reference', () => {
-      expect(pkg.config).toBeDefined();
-      expect(pkg.config.forge).toBeDefined();
-      // Forge config can be an inline object or a path to external config file
-      if (typeof pkg.config.forge === 'string') {
-        expect(pkg.config.forge).toContain('forge');
-      } else {
-        expect(pkg.config.forge.packagerConfig).toBeDefined();
-      }
-    });
-
-    it('should have Electron Forge makers available', () => {
-      // Makers are either inline in config or in the external forge config
-      if (typeof pkg.config.forge === 'string') {
-        const forgePath = path.join(CHAT_APP_PATH, pkg.config.forge);
-        expect(fs.existsSync(forgePath)).toBe(true);
-      } else {
-        expect(pkg.config.forge.makers).toBeDefined();
-        expect(pkg.config.forge.makers.length).toBeGreaterThan(0);
-      }
+    it('should have electron-builder config file', () => {
+      const builderConfig = path.join(CHAT_APP_PATH, 'electron-builder.yml');
+      expect(fs.existsSync(builderConfig)).toBe(true);
     });
   });
 
@@ -1070,9 +1055,8 @@ describe('Chat App Integration', () => {
       expect(chatContent).toContain('Drop files to index');
     });
 
-    it('should auto-upload dropped files (no TODO)', () => {
-      expect(chatContent).toContain('uploadDocumentByPath');
-      expect(chatContent).not.toContain('TODO: auto-upload');
+    it('should auto-upload dropped files', () => {
+      expect(chatContent).toContain('uploadDocumentBlob');
     });
 
     it('should have drag active CSS class', () => {
