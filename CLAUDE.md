@@ -93,13 +93,13 @@ This self-review step is mandatory - never skip verification of your output.
 - Retry loops that swallow the final failure and return success.
 
 **Allowed (this is fail-loudly, not "no error handling"):**
-- Catching a specific exception and **re-raising with context**: `raise GaiaError(f"invalid config: {path}") from e`.
+- Catching a specific exception and **re-raising with context** (use `raise ... from e` so the original traceback is preserved): `raise ValueError(f"invalid agent manifest at {path}: {e}") from e`.
 - Translating exceptions at a **system boundary** (REST endpoint → HTTP 500 with a correlation ID; agent tool → structured error object).
-- Explicit **opt-in** retry/backoff when the caller *asked for* resilience (e.g., `ChatSDK(max_retries=3)`) — never a hidden default.
+- Explicit **opt-in** retry/backoff when the caller passed a parameter asking for it (e.g., an explicit `max_retries=3` constructor arg, like `ClaudeClient(max_retries=3)` in [`src/gaia/eval/claude.py`](src/gaia/eval/claude.py)) — never a hidden retry loop inside a function body that the caller didn't request.
 
 **Actionable errors name three things:**
 1. *What failed* — `"Lemonade Server not reachable at http://localhost:8000"`
-2. *What the caller should do* — `"Run `gaia init` to install it, or set GAIA_LEMONADE_URL"`
+2. *What the caller should do* — `"Run `gaia init` to install it, or set LEMONADE_BASE_URL to a running server"`
 3. *Where to look next* — file path, docs link, issue tracker
 
 **Why the rule exists:** fallbacks hide regressions. A review bot silently downgraded from Opus to a smaller model looks fine but produces worse reviews for weeks. A config loader that defaults a missing API key to `""` produces confusing 401s deep in the request pipeline instead of a clear `"ANTHROPIC_API_KEY is not set"` at startup. Better a loud error the user can fix than a quiet wrong answer.
