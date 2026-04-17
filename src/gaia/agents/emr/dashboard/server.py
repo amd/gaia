@@ -63,25 +63,45 @@ def _safe_json_dumps(obj: Any) -> str:
     return json.dumps(obj, default=_safe_json_default)
 
 
+_SANITIZE_MAX_INPUT_BYTES = 100 * 1024  # 100 KB — safe bound for regex ReDoS
+
+
 def _sanitize_response_text(text: str) -> str:
     """Strip stack trace patterns and internal details from response text.
 
     Removes Python tracebacks, file paths, and exception class references
     that could expose internal implementation details to end users.
+
+    Input is truncated to ``_SANITIZE_MAX_INPUT_BYTES`` before regex work
+    to cap the worst-case runtime of the patterns below — CodeQL correctly
+    flags them as ``py/polynomial-redos`` sinks on unbounded input, and
+    while the real-world caller is Python exception text (well under the
+    cap), the defense-in-depth truncation is cheap.
     """
-    # Remove Python traceback blocks (Traceback ... File "..." lines)
+    if len(text) > _SANITIZE_MAX_INPUT_BYTES:
+        text = text[:_SANITIZE_MAX_INPUT_BYTES] + "\n[truncated]"
+
+    # Remove Python traceback blocks. Use [^\n]* (no DOTALL backtracking)
+    # combined with a bounded line-count loop so the pattern can't
+    # catastrophically backtrack even with crafted input.
     text = re.sub(
-        r"Traceback \(most recent call last\):.*?(?=\n\S|\Z)",
+        r"Traceback \(most recent call last\):(?:\n[ \t][^\n]*)*",
         "[internal details removed]",
         text,
-        flags=re.DOTALL,
     )
-    # Remove individual "File ..." lines from stack traces
-    text = re.sub(r'^\s*File ".*?", line \d+.*$', "", text, flags=re.MULTILINE)
+    # Remove individual "File ..." lines from stack traces. Use [^"\n]* to
+    # ensure the quoted path match can't span lines or re-enter.
+    text = re.sub(r'^\s*File "[^"\n]*", line \d+[^\n]*$', "", text, flags=re.MULTILINE)
     # Remove exception class names like "ValueError: ..." or "KeyError: ..."
-    text = re.sub(r"\b\w*(Error|Exception)\b:\s*", "", text)
-    # Remove internal file paths (Unix and Windows)
-    text = re.sub(r"(/[\w./\\-]+\.py|[A-Z]:\\[\w.\\-]+\.py)", "[path]", text)
+    # Tighten \w* to a bounded repetition for ReDoS safety.
+    text = re.sub(r"\b\w{0,64}(Error|Exception)\b:\s*", "", text)
+    # Remove internal file paths (Unix and Windows). Bound the path
+    # character-class repetition to defeat polynomial backtracking.
+    text = re.sub(
+        r"(/[\w./\\-]{1,512}\.py|[A-Z]:\\[\w.\\-]{1,512}\.py)",
+        "[path]",
+        text,
+    )
     # Collapse multiple blank lines left by removals
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
