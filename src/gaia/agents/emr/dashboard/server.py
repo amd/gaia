@@ -2031,8 +2031,14 @@ def create_app(
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         asyncio.run_coroutine_threadsafe(broadcast_event(event), loop)
-                except RuntimeError:
-                    pass
+                except RuntimeError as broadcast_err:
+                    # Expected when no event loop is running in this thread.
+                    # Log internally; never surface to the client response
+                    # (closes CodeQL py/stack-trace-exposure false positive).
+                    logger.debug(
+                        "Skipping SSE broadcast — no running event loop: %s",
+                        broadcast_err,
+                    )
 
                 logger.info(
                     f"Database cleared: {result.get('deleted', {}).get('patients', 0)} patients"
