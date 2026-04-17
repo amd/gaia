@@ -114,11 +114,10 @@ jobs:
 
             **IMPORTANT: Maximize use of actionable ```suggestion blocks** — These provide immediate value to contributors.
 
-            **DO NOT review or flag:**
+            **DO NOT review or flag (and do not list as "strengths"):**
             - ❌ Copyright headers (presence, absence, or year inconsistencies)
             - ❌ SPDX license identifiers
             - ❌ License-related boilerplate
-            - ❌ Don't list "has copyright headers" as a strength, either
             This is an open-source project — contributors retain their own copyright.
 
             **Always provide suggestions for:**
@@ -126,7 +125,6 @@ jobs:
             - ✅ Code formatting issues (black violations)
             - ✅ Trailing whitespace, missing newlines at EOF
             - ✅ Simple typos in comments or docstrings
-            - ✅ Exception handling patterns (show correct pattern from existing agents)
             - ✅ Missing type hints
             - ✅ Hardcoded values that should use constants
             - ✅ Logging improvements (e.g., truncating verbose output)
@@ -230,7 +228,7 @@ jobs:
             - Identify any breaking changes to public APIs (SDK, CLI, REST)
             - Check backward compatibility considerations
             - Review migration impact for existing users
-            - Flag changes to `src/gaia/chat/AgentSDK`, `src/gaia/api/`, or CLI subcommands without deprecation path
+            - Flag changes to `src/gaia/chat/sdk.py` (`AgentSDK`), `src/gaia/api/`, or `src/gaia/cli.py` subcommands without a deprecation path
 
             ### 7. Performance & Architecture
             - Flag potential performance issues (N+1 queries, inefficient algorithms, unnecessary sync I/O in async paths)
@@ -266,7 +264,6 @@ jobs:
                - 1-3 bullets on what's implemented well
                - Good patterns followed (pattern reuse, test coverage, clean abstraction)
                - Skip boilerplate praise — say what's genuinely good
-               - Do NOT mention copyright headers as a strength
 
             4. **Verdict**
                - **Approve** — No blocking issues, ready to merge
@@ -329,14 +326,16 @@ jobs:
             You are GAIA's AI assistant helping with pull request discussions.
 
             ## FIRST ACTIONS
-            1. Read pr-diff.txt to see what changed
-            2. Read pr-files.txt to see which files changed
-            3. Understand the context of the user's question/request
+            1. Read `pr-diff.txt` to see what changed
+            2. Read `pr-files.txt` to see which files changed
+            3. Read `CLAUDE.md` for GAIA conventions (which files matter, what not to flag)
+            4. Understand the context of the user's question/request
 
             **File Reading Strategy:**
             - Use Grep for searching large files (>1000 lines)
             - Use Read with offset/limit for specific sections
             - Focus on changed code, not entire files
+            - If you can't determine something, say so. Don't guess.
 
             ## When NOT to Respond
             - If @claude is mentioned but clearly addressing someone else
@@ -477,25 +476,29 @@ jobs:
             - Requests to merge/close (suggest asking a maintainer instead)
 
             ## FIRST ACTIONS
+            **Always:** Read `CLAUDE.md` first for GAIA conventions, project structure, and the Issue Response Guidelines section.
+
             **For PR conversations:**
-            1. Read pr-diff.txt to see what changed
-            2. Read pr-files.txt for changed file list
+            1. Read `pr-diff.txt` to see what changed
+            2. Read `pr-files.txt` for changed file list
             3. Use Grep for large files (>1000 lines), Read with offset for sections
 
             **For issues:**
-            1. Check for duplicate issues first
-            2. Search docs/ for relevant documentation
-            3. Search src/gaia/ for related code
+            1. Check for duplicate issues first (`gh issue list --search "<keywords>"`)
+            2. Search `docs/` for relevant documentation
+            3. Search `src/gaia/` for related code
+
+            If you can't determine something, say so explicitly. Don't guess.
 
             ## Issue Response Protocol
 
             ### For Questions
             Check docs/ folder:
-            - **Setup:** docs/setup.md, docs/quickstart.md
-            - **Guides:** docs/guides/chat.md, docs/guides/talk.md, docs/guides/code.md
-            - **CLI:** docs/reference/cli.md, docs/reference/features.md
-            - **SDK:** docs/sdk/core/agent-system.md, docs/sdk/sdks/
-            - **FAQ:** docs/reference/faq.md
+            - **Setup:** `docs/setup.mdx`, `docs/quickstart.mdx`
+            - **Guides:** `docs/guides/chat.mdx`, `docs/guides/talk.mdx`, `docs/guides/code.mdx`
+            - **CLI:** `docs/reference/cli.mdx`, `docs/reference/features.mdx`
+            - **SDK:** `docs/sdk/core/agent-system.mdx`, `docs/sdk/sdks/`
+            - **FAQ:** `docs/reference/faq.mdx`
 
             ### For Bugs
             - Search src/gaia/ for related code
