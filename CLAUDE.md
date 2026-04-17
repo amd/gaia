@@ -96,6 +96,7 @@ This self-review step is mandatory - never skip verification of your output.
 - Catching a specific exception and **re-raising with context** (use `raise ... from e` so the original traceback is preserved): `raise ValueError(f"invalid agent manifest at {path}: {e}") from e`.
 - Translating exceptions at a **system boundary** (REST endpoint → HTTP 500 with a correlation ID; agent tool → structured error object).
 - Explicit **opt-in** retry/backoff when the caller passed a parameter asking for it (e.g., an explicit `max_retries=3` constructor arg, like `ClaudeClient(max_retries=3)` in [`src/gaia/eval/claude.py`](src/gaia/eval/claude.py)) — never a hidden retry loop inside a function body that the caller didn't request.
+- **GHA `continue-on-error: true` on specific steps** where the step is known to emit non-fatal permission warnings (e.g., `claude-code-action@beta` on fork PRs). This tolerates the warning without substituting different behavior — the step still runs its intended logic. It's *step-level tolerance*, not silent degradation.
 
 **Actionable errors name three things:**
 1. *What failed* — `"Lemonade Server not reachable at http://localhost:8000"`
