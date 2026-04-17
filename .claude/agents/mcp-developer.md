@@ -99,3 +99,4 @@ CI: `.github/workflows/test_mcp.yml` and `test_agent_mcp_server.yml`.
 - **Secrets in `mcp.json`** — leave placeholders; load real values from env
 - **Port collisions** — default is 8765; make it configurable via `--port`
 - **Registering an MCP tool that duplicates a `KNOWN_TOOLS` mixin** — prefer the mixin when the logic is local to GAIA
+- **Silent fallbacks** (per CLAUDE.md) — if an upstream service is unreachable, raise a specific error (`"Atlassian API returned 503; not retrying"`) rather than returning an empty list or a cached stale response as if it were fresh

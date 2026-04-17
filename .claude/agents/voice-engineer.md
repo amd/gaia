@@ -88,3 +88,4 @@ log = get_logger(__name__)
 - **Blocking the event loop during inference** — run ASR/TTS in workers
 - **Ignoring barge-in** — user speaking over the TTS should stop synthesis immediately
 - **Hardcoded device index** — enumerate, let users pick, persist selection
+- **Silent fallbacks** (per CLAUDE.md) — if ASR returns empty or TTS can't synthesise, surface the error to the UI rather than piping silence / an empty string into the LLM; downstream agents can't distinguish "user said nothing" from "mic broken"

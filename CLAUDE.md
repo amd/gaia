@@ -624,42 +624,42 @@ Looking at your code, the issue is on line 45 where you're using subprocess.call
 
 ## Claude Agents
 
-Specialized agents are available in `.claude/agents/` for specific tasks (23 agents total):
+Specialized agents live in `.claude/agents/` (23 total). Each agent file is the authoritative source for its scope, when-to-use / when-NOT-to-use triggers, and conventions — the summaries below are a pointer, not a replacement.
 
-### Development Agents
-- **gaia-agent-builder** (opus) - Creating new GAIA agents, tool registration, state management
-- **sdk-architect** (opus) - SDK API design, pattern consistency, breaking changes
-- **python-developer** (sonnet) - Python code, refactoring, design patterns
-- **typescript-developer** (sonnet) - TypeScript, Electron apps, type definitions
-- **cli-developer** (opus) - CLI command development, argparse patterns
-- **mcp-developer** (sonnet) - MCP server implementation, WebSocket protocols
+### Development
+- **gaia-agent-builder** — Creating a new GAIA agent (Python class or YAML manifest). Not for tuning an existing agent's prompt or adding a single tool.
+- **sdk-architect** — Public SDK surface design, cross-module consistency, breaking-change planning.
+- **python-developer** — Idiomatic Python 3.10+ inside `src/gaia/` (not new agents — use gaia-agent-builder).
+- **typescript-developer** — Type-safe TS for the Agent UI and Electron IPC.
+- **cli-developer** — `gaia <subcommand>` work in `src/gaia/cli.py` and `docs/reference/cli.mdx`.
+- **mcp-developer** — MCP servers, the MCP bridge, and tool/resource/prompt exposure.
 
-### Quality & Testing Agents
-- **test-engineer** (sonnet) - pytest, CLI testing, AMD hardware validation
-- **eval-engineer** (sonnet) - Evaluation framework, benchmarking, ground truth
-- **code-reviewer** (opus) - Code quality, AMD compliance, security
-- **architecture-reviewer** (opus) - SOLID principles, dependency analysis
+### Quality & testing
+- **test-engineer** — pytest, fixtures, CLI integration tests, hardware validation runs.
+- **eval-engineer** — Evaluation framework (`src/gaia/eval/`), ground truth, batch experiments.
+- **code-reviewer** — Per-file quality, AMD compliance, framework invariants; flags security privately.
+- **architecture-reviewer** — Layering, dependency direction, mixin composition, breaking-change blast radius.
 
-### Specialist Agents
-- **rag-specialist** (opus) - RAG pipelines, document indexing, semantic search
-- **jira-specialist** (sonnet) - Jira integration, NLP-powered issue management
-- **blender-specialist** (sonnet) - Blender 3D automation, procedural modeling
-- **voice-engineer** (sonnet) - Whisper ASR, Kokoro TTS, speech pipelines
-- **lemonade-specialist** (opus) - Lemonade Server, AMD NPU/GPU optimization
-- **prompt-engineer** (opus) - LLM prompt optimization, chain-of-thought
+### Specialists
+- **rag-specialist** — `src/gaia/rag/` and the `rag` tool mixin: chunking, embeddings, retrieval quality.
+- **jira-specialist** — `JiraAgent`, JQL templates, Atlassian integration.
+- **blender-specialist** — `BlenderAgent` and the Blender MCP server/client pair.
+- **voice-engineer** — Whisper ASR, Kokoro TTS, Talk SDK, real-time audio.
+- **lemonade-specialist** — Lemonade Server / provider adapter, NPU/GPU optimisation, model selection.
+- **prompt-engineer** — System prompts, tool docstrings, eval-judge prompts inside GAIA.
 
-### Infrastructure Agents
-- **frontend-developer** (sonnet) - Electron apps, web UIs
-- **docker-specialist** (opus) - Docker containerization, Kubernetes
-- **github-actions-specialist** (opus) - CI/CD workflows, pipeline debugging
-- **github-issues-specialist** (opus) - GitHub Issues/PRs for AI agents
-- **release-manager** (sonnet) - Release management, version bumping
+### Infrastructure
+- **frontend-developer** — React/Vite/Electron Agent UI and standalone apps.
+- **docker-specialist** — Dockerfiles, compose, and the `DockerAgent`.
+- **github-actions-specialist** — `.github/workflows/` authoring and debugging.
+- **github-issues-specialist** — Agent-ready issues/PRs, `AGENTS.md`, repo setup for AI agents.
+- **release-manager** — Version bumps, changelog, publish/PyPI/installer workflows.
 
-### Documentation Agents
-- **api-documenter** (sonnet) - Mintlify MDX documentation, API specs
-- **ui-ux-designer** (opus) - User-centered design, accessibility
+### Documentation & design
+- **api-documenter** — Mintlify MDX docs under `docs/` (SDK specs, guides, CLI reference).
+- **ui-ux-designer** — GAIA user flows, wireframes, accessibility, voice UX.
 
-When invoking a proactive agent from `.claude/agents/`, indicate which agent you are using in your response.
+When invoking a proactive agent, name it in your response. If a user task straddles two agents' scopes, pick the primary owner and hand off rather than duplicating.
 
 ## Claude Code Plugins
 

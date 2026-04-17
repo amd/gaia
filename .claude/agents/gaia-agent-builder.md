@@ -33,7 +33,7 @@ You create new GAIA agents. There are two shapes — Python class or YAML manife
 ### A. Python class — `src/gaia/agents/<id>/agent.py`
 - Full control: custom `process_query`, state machine, `@tool` methods, mixin composition
 - Choose when the agent needs custom logic, a new tool set, or ships as built-in
-- Must: inherit from `Agent`; declare `AGENT_ID`, `AGENT_NAME`, `AGENT_DESCRIPTION`, `CONVERSATION_STARTERS`
+- Must: inherit from `Agent` (or `MCPAgent`); implement `_get_system_prompt` and `_register_tools`
 
 ### B. YAML manifest — `~/.gaia/agents/<id>/agent.yaml`
 - Declarative: registry synthesises the class via `type()` at load time
@@ -47,14 +47,22 @@ Fastest path for end users: `gaia chat --ui` → "+" → **BuilderAgent** (inter
 Missing any of these will fail `python util/lint.py --agents` or silently produce a broken agent.
 
 ### 1. Source file (`src/gaia/agents/<id>/agent.py`)
+
+**Hard requirements** (enforced by `util/check_agent_conventions.py`):
 - [ ] Copyright header: `# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.` + `# SPDX-License-Identifier: MIT`
+- [ ] Defines a class whose name ends in `Agent` (excluding `*Config`)
+- [ ] That class inherits from `Agent`, `*Agent`, or a `*Mixin` chain
+- [ ] Implements `_get_system_prompt(self) -> str` (or inherits it and overrides behaviour)
+- [ ] Implements `_register_tools(self)` (or inherits it)
+- [ ] When `_register_tools` is defined locally, it calls `_TOOL_REGISTRY.clear()` (or `.pop()`) so tools don't leak between agent instances
+
+**Conventions** (not lint-enforced, but every in-tree agent does this):
 - [ ] `from gaia.logger import get_logger`
-- [ ] Inherit from `gaia.agents.base.agent.Agent`
-- [ ] Class attrs: `AGENT_ID` (lowercase-hyphen slug), `AGENT_NAME`, `AGENT_DESCRIPTION`, `CONVERSATION_STARTERS`
-- [ ] `_get_system_prompt(self) -> str`
-- [ ] `_register_tools(self)` — start with `_TOOL_REGISTRY.clear()`, then register via `@tool`
-- [ ] `_create_console(self) -> AgentConsole` (usually `return AgentConsole()`)
-- [ ] `@dataclass` config: `base_url`, `model_id`, `max_steps`, `streaming`, `debug`, `show_stats`, `silent_mode`, `output_dir`
+- [ ] `@dataclass` config class `<Name>AgentConfig` with fields like `base_url`, `model_id`, `max_steps`, `streaming`, `debug`, `show_stats`, `silent_mode`, `output_dir` (see `ChatAgentConfig` for the canonical shape)
+
+**Optional:**
+- `_create_console(self) -> AgentConsole` — only override if you need a custom console; the base class provides a default
+- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — required *only* for agents exposed through the registry/BuilderAgent flow (see `src/gaia/agents/builder/agent.py`). YAML-manifest agents carry these fields in the manifest; most concrete Python agents (`ChatAgent`, `CodeAgent`, `JiraAgent`, …) don't declare them at all.
 
 ### 2. Tools
 - [ ] Every tool decorated with `@tool` inside `_register_tools` so `self` is in closure scope
@@ -102,7 +110,7 @@ Missing any of these will fail `python util/lint.py --agents` or silently produc
 | Stable Diffusion | `SDToolsMixin` (`sd`) | `src/gaia/sd/mixin.py` |
 | Vision / structured extraction | `VLMToolsMixin` (`vlm`) | `src/gaia/vlm/mixin.py` |
 
-**MRO rule:** `Agent` is **last** so mixin `__init__`s can `super().__init__(**kwargs)` down to it.
+**MRO rule (GAIA convention, verified against the tree):** `Agent` is **first**, mixins after. Matches `ChatAgent`, `SDAgent`, `MedicalIntakeAgent`, and the registry's dynamic class in `registry.py:358`. Works because `Agent.__init__` does not call `super().__init__()` and the mixins that do have `__init__` (e.g. `ShellToolsMixin`) defensively initialize state lazily with `hasattr` guards. If you ever add a mixin whose `__init__` must run at construction, either (a) make it lazy-init like `ShellToolsMixin` or (b) override `__init__` on the concrete agent class and call the mixin's setup explicitly — do **not** silently flip the MRO, which would diverge from every other agent in the tree.
 
 ## Default models (verified)
 
@@ -125,7 +133,7 @@ Surface failures with: what failed, which resource, what the user should do.
 
 - **Forgot `_TOOL_REGISTRY.clear()`** at the top of `_register_tools` — tools from a prior agent leak in
 - **`@tool` at module top-level** — decorator needs `self` in closure; silently drops `self` binding
-- **Wrong MRO** — `class X(Agent, MyMixin)` swallows mixin `__init__`; `class X(MyMixin, Agent)` is correct
+- **MRO departure from convention** — every in-tree agent uses `class X(Agent, MyMixin)`; don't flip to `class X(MyMixin, Agent)` "for textbook Python MRO reasons." Agent-first works because `Agent.__init__` doesn't `super().__init__()` and mixins handle it (see the MRO note above). If your mixin must run custom init, make it lazy or override `__init__` on the concrete class.
 - **New tool mixin not added to `KNOWN_TOOLS`** — YAML manifests can't opt in by name
 - **Subprocess injection** — never pass user input directly to `subprocess.call`; use list args or `shlex.quote`
 - **`docs.json` not updated** — `.mdx` exists but Mintlify shows 404

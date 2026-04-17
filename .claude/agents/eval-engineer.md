@@ -85,3 +85,4 @@ Eval workflows run in `.github/workflows/test_eval.yml`. Keep runtime under the 
 - **Unit-less metrics** — always report units (tokens, ms, %)
 - **No baseline** — always compare against a cheap reference model (e.g. `Qwen3-0.6B-GGUF`)
 - **Running against a warm cache but calling it cold-start** — mark and separate cold/warm benchmarks explicitly
+- **Silent fallback to a different model mid-run** (per CLAUDE.md) — if the target model is unavailable, fail the run with an actionable error; never auto-swap models inside an eval and report the result as if it ran against the intended target
