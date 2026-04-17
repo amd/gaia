@@ -126,6 +126,10 @@ class TestRAGSDK:
 
             # Mock PDF reader
             mock_pdf_instance = Mock()
+            # Default mocks to "not encrypted"; without this, Mock auto-creates
+            # is_encrypted as a truthy Mock attribute and the PDF extractor's
+            # encryption guard (added in #451) would short-circuit.
+            mock_pdf_instance.is_encrypted = False
             mock_pdf_instance.pages = [Mock()]
             mock_pdf_instance.pages[0].extract_text.return_value = (
                 "Sample PDF content for testing."
@@ -837,6 +841,10 @@ class TestMemoryLimits:
             mock_lemonade.return_value = mock_lemonade_instance
 
             mock_pdf_instance = Mock()
+            # Default mocks to "not encrypted"; without this, Mock auto-creates
+            # is_encrypted as a truthy Mock attribute and the PDF extractor's
+            # encryption guard (added in #451) would short-circuit.
+            mock_pdf_instance.is_encrypted = False
             mock_pdf_instance.pages = [Mock()]
             mock_pdf_instance.pages[0].extract_text.return_value = (
                 "Sample PDF content for testing."
