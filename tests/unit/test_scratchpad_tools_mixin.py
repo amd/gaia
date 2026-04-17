@@ -777,6 +777,30 @@ class TestScratchpadToolsEdgeCases:
         assert "Error" in result
         assert "JSON array" in result
 
+    def test_insert_data_oversized_payload_rejected(self, monkeypatch):
+        """insert_data refuses JSON strings exceeding _MAX_INSERT_JSON_BYTES.
+
+        Protects the agent process from OOM: json.loads materializes the
+        whole payload before we can inspect it, so the guard must happen
+        *before* parsing. (#495 bulletproofing pass.)
+        """
+        monkeypatch.setattr(
+            "gaia.agents.tools.scratchpad_tools._MAX_INSERT_JSON_BYTES", 128
+        )
+        huge = "[" + ",".join([f'{{"v": "{i}"}}' for i in range(30)]) + "]"
+        result = self.tools["insert_data"]("test", huge)
+        assert "too large" in result.lower()
+
+    def test_insert_data_too_many_rows_rejected(self, monkeypatch):
+        """insert_data refuses row counts exceeding the per-call cap."""
+        monkeypatch.setattr(
+            "gaia.agents.tools.scratchpad_tools._MAX_INSERT_ROWS_PER_CALL", 3
+        )
+        rows = json.dumps([{"v": str(i)} for i in range(10)])
+        result = self.tools["insert_data"]("test", rows)
+        assert "too many rows" in result.lower()
+        assert "batches" in result.lower()
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

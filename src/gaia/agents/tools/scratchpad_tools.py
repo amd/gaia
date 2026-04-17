@@ -16,6 +16,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on the JSON string the LLM may pass to insert_data in a single
+# call. The scratchpad's own MAX_ROWS_PER_TABLE caps the *row* count, but
+# json.loads still parses the full string before we see it — so a 500 MB
+# JSON blob OOMs before any row counting. 10 MB is ~10× larger than a
+# reasonable bulk insert but small enough to parse safely.
+_MAX_INSERT_JSON_BYTES = 10 * 1024 * 1024
+_MAX_INSERT_ROWS_PER_CALL = 10_000
+
 
 class ScratchpadToolsMixin:
     """SQLite scratchpad tools for structured data analysis.
@@ -106,6 +114,17 @@ class ScratchpadToolsMixin:
             try:
                 # Parse JSON data
                 if isinstance(data, str):
+                    # Guard against OOM: json.loads materializes the whole
+                    # payload before we can inspect it. Refuse blobs larger
+                    # than the 10 MB cap up-front with a clear message.
+                    payload_size = len(data.encode("utf-8", errors="replace"))
+                    if payload_size > _MAX_INSERT_JSON_BYTES:
+                        return (
+                            f"Error: JSON payload too large "
+                            f"({payload_size / (1024 * 1024):.1f} MB). "
+                            f"Max: {_MAX_INSERT_JSON_BYTES // (1024 * 1024)} MB. "
+                            "Split the insert into smaller batches."
+                        )
                     try:
                         parsed = json.loads(data)
                     except json.JSONDecodeError as e:
@@ -118,6 +137,17 @@ class ScratchpadToolsMixin:
 
                 if not parsed:
                     return "Error: Data array is empty."
+
+                # Per-call row-count cap. ScratchpadService enforces a global
+                # MAX_ROWS_PER_TABLE (1M), but we want to fail fast in the
+                # tool layer when a single call is unreasonable (the LLM
+                # should batch large inserts).
+                if len(parsed) > _MAX_INSERT_ROWS_PER_CALL:
+                    return (
+                        f"Error: Too many rows in one insert "
+                        f"({len(parsed)}). Max per call: "
+                        f"{_MAX_INSERT_ROWS_PER_CALL}. Split into batches."
+                    )
 
                 # Validate each item is a dict
                 for i, item in enumerate(parsed):
