@@ -312,27 +312,29 @@ app.post('/auth/login', loginLimiter, rateLimiter, (req, res) => {
       maxAge: COOKIE_MAX_AGE,
       sameSite: 'lax'
     });
-    // Retrieve redirect URL from server-side storage and validate with url.parse()
+    // Server-side redirect target. Instead of validating the user-supplied
+    // pathname and forwarding it (which CodeQL's
+    // js/server-side-unvalidated-url-redirection analyzer can't prove safe),
+    // we maintain an explicit allowlist of post-login destinations and
+    // round-trip the incoming pathname through it. Anything that doesn't
+    // exactly match a known-safe path falls back to '/'.
+    const ALLOWED_POST_LOGIN_PATHS = new Set([
+      '/',
+      '/index.html',
+    ]);
     const target = consumeRedirect(nonce);
     const parsed = url.parse(target || '');
-    // Strict allowlist regex: must be an absolute-path reference (single
-    // leading slash, no second slash, no scheme, no authority, no CR/LF,
-    // no backslashes), and must NOT contain ``..`` segments. This is the
-    // pattern CodeQL's js/server-side-unvalidated-url-redirection rule
-    // recognizes as a sanitization sink.
-    const SAFE_PATH_RE = /^\/(?!\/)[A-Za-z0-9\-_~.%/?&=:@#[\]!$'()*+,;]*$/;
-    const pathname = parsed.pathname || '';
-    const isSafePath =
+    const pathname = parsed.pathname || '/';
+    // Block open-redirects and traversal before the allowlist check.
+    const structurallySafe =
       !parsed.host &&
       !parsed.protocol &&
-      pathname &&
-      SAFE_PATH_RE.test(pathname) &&
+      pathname.startsWith('/') &&
+      !pathname.startsWith('//') &&
       !pathname.split('/').includes('..');
-    if (isSafePath) {
-      res.redirect(303, pathname);
-    } else {
-      res.redirect(303, '/');
-    }
+    const resolvedPath =
+      structurallySafe && ALLOWED_POST_LOGIN_PATHS.has(pathname) ? pathname : '/';
+    res.redirect(303, resolvedPath);
   } else {
     // Retrieve the original redirect URL and re-store with a new nonce for retry
     const originalRedirect = consumeRedirect(nonce);

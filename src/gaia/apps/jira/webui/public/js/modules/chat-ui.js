@@ -53,13 +53,29 @@ export class ChatUI {
     }
 
     formatMessage(text) {
-        // Convert markdown-like formatting to HTML
-        return text
+        // HTML-escape FIRST so any <, >, &, ", ' in user input become
+        // entities and can't introduce tags. Then apply the markdown-like
+        // replacements on the escaped string — our regexes only produce a
+        // small fixed set of tags (strong/em/code/br/a), all of which were
+        // absent from the escaped source.
+        //
+        // This means ``html`` passed to sanitizeInto() is derived entirely
+        // from our own tag templates plus escaped user text — no untrusted
+        // HTML ever reaches the DOMParser sink, which is also what CodeQL
+        // (xss-through-dom / xss-through-exception) wants to see.
+        const esc = text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+
+        return esc
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
             .replace(/`(.*?)`/g, '<code>$1</code>')
             .replace(/\n/g, '<br>')
-            .replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
+            .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank">$1</a>');
     }
 
     sanitizeInto(targetEl, html) {

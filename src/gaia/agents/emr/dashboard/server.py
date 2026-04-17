@@ -1693,9 +1693,14 @@ def create_app(
                 detail="Symbolic links in watch directory paths are not allowed",
             )
 
-        # Ensure the path is under the user's home directory or a safe root
+        # Ensure the path is under the user's home directory or a safe root.
+        # Use ``<home>/`` as the prefix check so ``/Users/alice`` can't
+        # match ``/Users/alice-evil`` — same defense-in-depth pattern used
+        # in WebClient.download and PathValidator.is_write_blocked.
         user_home = Path.home().resolve()
-        if not str(new_dir).startswith(str(user_home)):
+        home_prefix = str(user_home).rstrip(os.sep) + os.sep
+        new_dir_str = str(new_dir)
+        if not (new_dir_str == str(user_home) or new_dir_str.startswith(home_prefix)):
             raise HTTPException(
                 status_code=400,
                 detail="Watch directory must be under the user's home directory",
