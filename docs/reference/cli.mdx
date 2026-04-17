@@ -68,8 +68,9 @@ gaia --cli      # Launch interactive CLI chat instead
 |------|-------------|
 | `--ui` | Launch the Agent UI (browser-based chat interface) — this is the default |
 | `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
+| `--ui-dist <path>` | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the installed package |
 | `--cli` | Launch interactive CLI chat |
-| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:8000/api/v1`). |
+| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:8000/api/v1`). Also accepted as a global option on most subcommands (e.g. `gaia chat --base-url ...`). |
 
 **Examples:**
 
@@ -137,20 +138,26 @@ gaia init [OPTIONS]
 
 **Available Profiles:**
 
+The `--profile` flag accepts one of the following values (see
+[`src/gaia/cli.py`](https://github.com/amd/gaia/blob/main/src/gaia/cli.py) for the
+canonical choices list):
+
 | Profile | Models | Description | Approx Size |
 |---------|--------|-------------|-------------|
 | `minimal` | Qwen3-0.6B | Fast setup with lightweight model | ~400 MB |
 | `sd` | SD-Turbo | Image generation with Stable Diffusion | ~8 GB |
 | `chat` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Interactive chat with RAG and vision | ~25 GB |
 | `code` | Qwen3.5-35B | Autonomous coding assistant | ~18 GB |
-| `talk` | Qwen3.5-35B | Voice-enabled chat | ~18 GB |
 | `rag` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Document Q&A with retrieval and vision | ~25 GB |
-| `blender` | Qwen3.5-35B | 3D content generation in Blender | ~18 GB |
-| `jira` | Qwen3.5-35B | Jira issue management | ~18 GB |
-| `docker` | Qwen3.5-35B | Docker container management | ~18 GB |
 | `mcp` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Model Context Protocol bridge server with vision | ~25 GB |
 | `vlm` | Qwen3-VL-4B | Image understanding and analysis | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
+
+<Note>
+The `talk`, `blender`, `jira`, and `docker` agents all rely on the `chat` profile
+(Qwen3.5-35B family) — there is no dedicated profile for each. Run
+`gaia init --profile chat` (or `all`) to prepare their dependencies.
+</Note>
 
 <Note>
 All profiles also include the lightweight `Qwen3-0.6B` model used by `gaia llm` for quick queries.
@@ -408,20 +415,22 @@ gaia chat [MESSAGE] [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
-| `--model` | string | Qwen3.5-35B-A3B-GGUF | Model name to use |
+| `--model` | string | auto-selected by agent | Override the model used by `ChatAgent` (`None` means let the agent pick; see `ChatAgentConfig.model_id`) |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
 | `--chunk-size` | integer | 500 | Document chunk size for RAG |
 | `--max-chunks` | integer | 3 | Maximum chunks to retrieve for RAG |
 | `--max-indexed-files` | integer | 100 | Maximum number of files to keep indexed. Evicts least-recently-accessed files when LRU eviction is enabled; rejects new files when disabled. |
 | `--max-total-chunks` | integer | 10000 | Maximum total chunks across all indexed files. Same eviction behavior as `--max-indexed-files`. |
-| `--stats` | flag | false | Show performance statistics |
-| `--streaming` | flag | false | Enable streaming responses |
+| `--allowed-paths` | path(s) | - | Restrict RAG/file tools to these directories (security sandbox) |
+| `--stats`, `--show-stats` | flag | false | Show performance statistics |
+| `--stream` | flag | false | Enable streaming responses |
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
 | `--debug` | flag | false | Enable debug output |
 | `--list-tools` | flag | false | List available tools and exit |
 | `--ui` | flag | false | Launch the Chat Web UI (browser-based interface on port 4200) |
 | `--ui-port` | integer | 4200 | Port for the Agent UI server (used with `--ui`) |
+| `--ui-dist` | path | - | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the package |
 
 **Examples:**
 
@@ -449,7 +458,7 @@ gaia chat --index report.pdf --query "Summarize the report"
 ```bash Custom Settings
 gaia chat \
   --model Qwen3.5-35B-A3B-GGUF \
-  --streaming \
+  --stream \
   --show-stats
 ```
 
@@ -749,9 +758,12 @@ curl http://localhost:8080/health
 
     **Options:**
     - `--host` - Server host (default: localhost)
-    - `--port` - Server port (default: 8080)
+    - `--port` - Server port (default: 8080). <Warning>The `gaia mcp docker` bridge defaults to the same port — run them on different ports if you need both.</Warning>
     - `--background` - Run in background
     - `--debug` - Enable debug logging
+    - `--show-prompts` - Log the prompts sent to the LLM for every request (useful for debugging)
+    - `--streaming` - Stream tokens to clients via SSE (OpenAI-style)
+    - `--step-through` - Pause between agent steps for manual inspection (development aid)
 
     **Examples:**
 
@@ -768,6 +780,11 @@ curl http://localhost:8080/health
     Custom host/port:
     ```bash
     gaia api start --host 0.0.0.0 --port 8888
+    ```
+
+    Streaming mode with prompt logging:
+    ```bash
+    gaia api start --streaming --show-prompts
     ```
   </Tab>
 
@@ -948,9 +965,43 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `start` | Start the MCP bridge server |
 | `status` | Check MCP server status |
 | `stop` | Stop background MCP bridge server |
-| `test` | Test MCP bridge functionality |
-| `agent` | Test MCP orchestrator agent |
-| `docker` | Start Docker MCP server |
+| `test` | Test MCP bridge functionality (optionally against a specific `--tool`) |
+| `agent` | Invoke the MCP orchestrator agent (positional `request` arg + `--domain`, `--context`) |
+| `docker` | Start the Docker MCP server (default port 8080) |
+
+#### `gaia mcp start` options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--host` | `localhost` | Bind address |
+| `--port` | `8765` | Port for the MCP bridge |
+| `--auth-token` | _none_ | If set, require `Authorization: Bearer <token>` on every request |
+| `--no-streaming` | off | Disable SSE streaming; reply synchronously |
+| `--background` | off | Detach; use `gaia mcp stop` to terminate |
+| `--log-file` | stdout | Write logs to this path (useful with `--background`) |
+| `--verbose` | off | Verbose logging |
+| `--ctx-size` | `32768` | Context window hint passed to Lemonade for loaded models |
+
+#### `gaia mcp test` options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--query` | _required_ | Text to send to the server |
+| `--tool` | `gaia.chat` | Which MCP tool to invoke when testing |
+
+#### `gaia mcp agent`
+
+```bash
+gaia mcp agent <request> [--domain DOMAIN] [--context CONTEXT]
+```
+
+Pass a natural-language `request` and, optionally, a `--domain` (e.g. `jira`,
+`docker`) and free-form `--context` string to steer the orchestrator.
+
+#### `gaia mcp docker` options
+
+`--port` defaults to `8080`. <Warning>This is the **same default** as `gaia api
+start` — run them on different ports if you need both alive at once.</Warning>
 
 [→ Full MCP Integration Guide](/integrations/mcp)
 
@@ -975,6 +1026,7 @@ gaia download [OPTIONS]
 | `--timeout` | integer | 1800 | Timeout per model in seconds |
 | `--host` | string | localhost | Lemonade server host |
 | `--port` | integer | 8000 | Lemonade server port |
+| `--clear-cache` | flag | false | Remove cached download progress/metadata before running |
 
 **Available Agents:**
 chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp
@@ -1247,6 +1299,48 @@ gaia youtube \
   --download-transcript "https://youtube.com/watch?v=..." \
   --output-path transcript.txt
 ```
+
+---
+
+### Cache Command
+
+Inspect or clear GAIA's on-disk caches (document-Q7 metadata, chat history,
+context7 library docs, etc.). Caches live under `~/.gaia/cache/` (Windows:
+`%LOCALAPPDATA%/gaia/cache/`).
+
+```bash
+gaia cache {status,clear} [OPTIONS]
+```
+
+**Actions:**
+
+| Action | Description |
+|--------|-------------|
+| `status` | Print size and location of each cache directory |
+| `clear` | Remove cache contents (scoped by flags below) |
+
+**Flags for `clear`:**
+
+| Flag | Description |
+|------|-------------|
+| `--all` | Remove every cache directory (safe: preserves models under `~/.gaia/models/`) |
+| `--context7` | Clear only the Context7 MCP library-docs cache |
+
+**Examples:**
+
+<CodeGroup>
+```bash Inspect caches
+gaia cache status
+```
+
+```bash Clear just the Context7 library cache
+gaia cache clear --context7
+```
+
+```bash Clear all caches
+gaia cache clear --all
+```
+</CodeGroup>
 
 ---
 

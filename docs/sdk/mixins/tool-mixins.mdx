@@ -18,35 +18,30 @@ icon: "puzzle-piece"
 </Note>
 ---
 
-<Badge text="development" color="orange" />
 
 **Purpose:** Reusable tool sets that can be mixed into your agents.
 
 **Available Mixins:** For complete API specifications of all 17 mixins, see [Specifications → Tool Mixins](/spec/file-tools-mixin)
 
-## 9.1 File Operations Mixin
+## 9.1 File Watching Mixin
 
 **Detailed Spec:** [FileToolsMixin](/spec/file-tools-mixin)
+
+The chat-tools `FileToolsMixin` is narrowly scoped to **watching** directories
+for new documents; it does not register read/write/list tools. Use
+`FileSearchToolsMixin` (§9.4 below) when you need generic filesystem I/O.
 
 ```python
 from gaia.agents.base.agent import Agent
 from gaia.agents.chat.tools.file_tools import FileToolsMixin
 
 class MyAgent(Agent, FileToolsMixin):
-    """Agent with file operation tools."""
+    """Agent that can watch directories for new files."""
 
     def _register_tools(self):
-        # FileToolsMixin provides these tools automatically:
-        # - read_file(file_path: str) -> dict
-        # - write_file(file_path: str, content: str) -> dict
-        # - append_to_file(file_path: str, content: str) -> dict
-        # - list_directory(directory_path: str) -> dict
-        pass
-
-# Usage
-agent = MyAgent()
-result = agent.process_query("Read the config.json file")
-# Agent uses read_file tool automatically
+        super()._register_tools()
+        self.register_file_tools()
+        # Registers: add_watch_directory(directory: str) -> dict
 ```
 
 ---
@@ -68,16 +63,19 @@ class MyAgent(Agent, RAGToolsMixin):
         super().__init__(**kwargs)
 
     def _register_tools(self):
-        # RAGToolsMixin provides:
-        # - index_documents(path: str) -> dict
-        # - search_documents(query: str) -> dict
-        # - list_indexed_documents() -> dict
-        pass
-
-# Usage
-agent = MyAgent(documents_path="./manuals")
-result = agent.process_query("What does the manual say about installation?")
-# Agent searches indexed documents automatically
+        super()._register_tools()
+        self.register_rag_tools()
+        # Registers:
+        # - query_documents(query, max_chunks=...)
+        # - query_specific_file(file_path, query, max_chunks=...)
+        # - search_indexed_chunks(query, limit=...)
+        # - index_document(file_path)            # singular — one file per call
+        # - index_directory(directory_path)
+        # - list_indexed_documents()
+        # - summarize_document(file_path, summary_type="detailed")
+        # - dump_document(file_path)
+        # - evaluate_retrieval(query)
+        # - rag_status()
 ```
 
 ---
@@ -95,14 +93,10 @@ class MyAgent(Agent, ShellToolsMixin):
     """Agent that can execute shell commands."""
 
     def _register_tools(self):
-        # ShellToolsMixin provides:
-        # - execute_shell_command(command: str) -> dict
-        pass
-
-# Usage
-agent = MyAgent()
-result = agent.process_query("List files in the current directory")
-# Agent uses execute_shell_command("ls") automatically
+        super()._register_tools()
+        self.register_shell_tools()
+        # Registers:
+        # - run_shell_command(command, working_directory=None, timeout=30)
 ```
 
 ---
@@ -112,18 +106,29 @@ result = agent.process_query("List files in the current directory")
 **Import:** `from gaia.agents.tools.file_tools import FileSearchToolsMixin`
 **Detailed Spec:** [FileSearchToolsMixin](/spec/file-search-mixin)
 
+`FileSearchToolsMixin` is the general-purpose filesystem toolbox — it's what
+powers `read_file` / `write_file` in the chat agent.
+
 ```python
 from gaia.agents.base.agent import Agent
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
 
 class MyAgent(Agent, FileSearchToolsMixin):
-    """Agent with file search capabilities."""
+    """Agent with generic file I/O and search capabilities."""
 
     def _register_tools(self):
-        # FileSearchToolsMixin provides:
-        # - search_files(pattern: str, directory: str) -> dict
-        # - find_file(filename: str) -> dict
-        pass
+        super()._register_tools()
+        self.register_file_search_tools()
+        # Registers:
+        # - search_file(filename, directory=".")
+        # - search_directory(pattern, directory=".")
+        # - search_file_content(pattern, directory=".", file_pattern="*")
+        # - read_file(file_path, start_line=None, end_line=None)
+        # - write_file(file_path, content, append=False)
+        # - browse_directory(directory_path=None, show_hidden=False, sort_by="name")
+        # - get_file_info(file_path)
+        # - analyze_data_file(file_path, ...)
+        # - list_recent_files(location="all", ...)
 ```
 
 ---
