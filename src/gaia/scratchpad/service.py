@@ -206,6 +206,21 @@ class ScratchpadService(DatabaseMixin):
                 f"Adding: {len(data)}, Max: {self.MAX_ROWS_PER_TABLE}"
             )
 
+        # Enforce the global scratchpad size cap. Without this, an agent
+        # could fill 100 tables * 1 M rows * ~200 bytes = 20 GB by staying
+        # under each individual cap. get_size_bytes() is an estimate (200
+        # bytes/row average) — acceptable given the ~30% slack in the cap
+        # and that a real enforcement via PRAGMA page_count is too
+        # SQLite-version-specific to rely on here.
+        current_size = self.get_size_bytes()
+        if current_size >= self.MAX_TOTAL_SIZE_BYTES:
+            raise ValueError(
+                f"Scratchpad size limit reached "
+                f"({current_size / (1024 * 1024):.1f} MB "
+                f"/ {self.MAX_TOTAL_SIZE_BYTES // (1024 * 1024)} MB). "
+                "Drop unused tables before inserting more rows."
+            )
+
         count = 0
         with self.transaction():
             for row in data:

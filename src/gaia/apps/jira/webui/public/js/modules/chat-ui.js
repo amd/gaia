@@ -22,17 +22,21 @@ export class ChatUI {
         // Handle different content types.
         //
         // For 'error' / 'system' messages we MUST NOT pass through
-        // formatMessage + sanitizeHTML: those flows include arbitrary
+        // formatMessage + sanitizeInto: those flows include arbitrary
         // exception strings (`Error: ${error.message}`) which CodeQL
         // correctly flags as xss-through-exception / xss-through-dom
-        // sinks. Even though sanitizeHTML strips <script>, forcing these
-        // system-facing messages through textContent is the categorically
-        // safe option — we don't need markdown in an error banner.
+        // sinks. Errors / system banners use textContent directly.
+        //
+        // For user/assistant messages we hand the sanitizer a live target
+        // DOM node — it parses, strips dangerous elements/attrs, and
+        // appends the sanitized children. We never route the sanitized
+        // HTML back through ``innerHTML = str``, which closes the final
+        // CodeQL xss-through-dom sink on line 70.
         if (typeof content === 'string') {
             if (type === 'error' || type === 'system') {
                 contentEl.textContent = content;
             } else {
-                contentEl.innerHTML = this.sanitizeHTML(this.formatMessage(content));
+                this.sanitizeInto(contentEl, this.formatMessage(content));
             }
         } else if (content instanceof HTMLElement) {
             contentEl.appendChild(content);
@@ -58,7 +62,7 @@ export class ChatUI {
             .replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
     }
 
-    sanitizeHTML(html) {
+    sanitizeInto(targetEl, html) {
         // URL-bearing attributes where an unsafe scheme could execute script.
         const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'action', 'formaction']);
         // Schemes that can execute JS in at least one browser — covered per
@@ -66,13 +70,17 @@ export class ChatUI {
         // a future reviewer can audit exactly what is blocked.
         const DANGEROUS_SCHEMES = ['javascript:', 'data:', 'vbscript:'];
 
-        const div = document.createElement('div');
-        div.innerHTML = html;
+        // Build off-DOM so no untrusted script ever lives in the live tree.
+        const scratch = document.createElement('template');
+        scratch.innerHTML = html;
+        const frag = scratch.content;
+
         // Remove dangerous elements
-        const dangerous = div.querySelectorAll('script,iframe,object,embed,form,input,textarea,link,style,meta,base');
-        dangerous.forEach(el => el.remove());
+        frag.querySelectorAll('script,iframe,object,embed,form,input,textarea,link,style,meta,base')
+            .forEach(el => el.remove());
+
         // Remove event handlers and unsafe URL schemes on any URL-bearing attribute
-        div.querySelectorAll('*').forEach(el => {
+        frag.querySelectorAll('*').forEach(el => {
             [...el.attributes].forEach(attr => {
                 const name = attr.name.toLowerCase();
                 const value = attr.value.trimStart().toLowerCase();
@@ -83,7 +91,13 @@ export class ChatUI {
                 }
             });
         });
-        return div.innerHTML;
+
+        // Mount the sanitized DocumentFragment directly. We never round-trip
+        // through ``return div.innerHTML`` → ``targetEl.innerHTML = s``, which
+        // is what CodeQL flagged as xss-through-dom/xss-through-exception —
+        // once the sanitizer pass is done, we keep the nodes.
+        targetEl.textContent = '';  // clear any prior content
+        targetEl.appendChild(frag);
     }
 
     clearMessages() {

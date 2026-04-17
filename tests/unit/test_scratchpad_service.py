@@ -461,3 +461,24 @@ class TestInsertRowsKeyValidation:
         scratchpad.create_table("t", "id INTEGER, name TEXT")
         count = scratchpad.insert_rows("t", [{"id": 1, "name": "alice"}])
         assert count == 1
+
+
+class TestTotalSizeLimit:
+    """#495 bulletproofing: MAX_TOTAL_SIZE_BYTES must be enforced on insert."""
+
+    def test_insert_refused_when_total_size_exceeded(self, scratchpad, monkeypatch):
+        """When the scratchpad exceeds MAX_TOTAL_SIZE_BYTES, inserts fail loudly.
+
+        Previously this constant existed but was never checked — an agent
+        could accumulate up to 100 tables * 1M rows (≈20 GB) while staying
+        under each individual cap. Make the cap real.
+        """
+        # Shrink the cap to 1 KB so the test doesn't actually allocate 100 MB.
+        monkeypatch.setattr(scratchpad, "MAX_TOTAL_SIZE_BYTES", 1024)
+        scratchpad.create_table("big", "val TEXT")
+        # 10 rows * 200 bytes = 2000 bytes > 1024 cap
+        scratchpad.insert_rows("big", [{"val": f"row_{i}"} for i in range(10)])
+
+        # Next insert should be rejected.
+        with pytest.raises(ValueError, match="size limit reached"):
+            scratchpad.insert_rows("big", [{"val": "more"}])
