@@ -370,7 +370,19 @@ def import_agent_bundle(bundle_path: Path) -> ImportResult:
                             os.replace(staging_root / f".backup-{agent_id}", final_dir)
                         except OSError:
                             pass
-                    result.errors.append(f"{agent_id}: {exc}")
+                    # Log full exception detail server-side; surface only a
+                    # generic message to the caller so OS-level paths and
+                    # implementation details do not leak into HTTP responses
+                    # (CodeQL py/stack-trace-exposure).
+                    log.warning(
+                        "Failed to move staged agent %s into place: %s",
+                        agent_id,
+                        exc,
+                    )
+                    result.errors.append(
+                        f"{agent_id}: failed to move to final location "
+                        f"(see server logs)"
+                    )
                     continue
 
                 if existed:
