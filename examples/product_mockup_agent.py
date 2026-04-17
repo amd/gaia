@@ -35,10 +35,13 @@ class ProductMockupAgent(Agent):
 
         Args:
             output_dir: Directory to save generated HTML files
-            **kwargs: Additional arguments passed to Agent
+            **kwargs: Additional arguments passed to Agent (e.g. ``model_id``,
+                ``max_steps``).  A compact 4B model is used as the default.
         """
-        # Use lightweight model for faster mockup generation
-        super().__init__(model_id="Qwen3-4B-GGUF", **kwargs)
+        # Use a lightweight model for faster mockup generation.  ``setdefault``
+        # lets callers override via kwargs (e.g. for the integration tests).
+        kwargs.setdefault("model_id", "Qwen3-4B-GGUF")
+        super().__init__(**kwargs)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 

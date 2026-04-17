@@ -83,7 +83,7 @@ and any weather alerts if available."""
             print("  ✅ Connected to weather MCP server")
         else:
             print("  ❌ Failed to connect to weather MCP server")
-            print("  Make sure to install: uvx mcp-server-weather")
+            print("  Make sure `uv` is installed so `uvx` can fetch open-meteo-mcp.")
 
 
 def main():

@@ -66,8 +66,11 @@ class DocAgent(Agent):
             )
         )
 
-        # Use the compact 4B model for faster local inference.
-        super().__init__(model_id="Qwen3-4B-GGUF", **kwargs)
+        # Use the compact 4B model for faster local inference.  ``setdefault``
+        # lets callers override the model via kwargs (used by the integration
+        # tests to pin to whatever model is loaded by the CI Lemonade server).
+        kwargs.setdefault("model_id", "Qwen3-4B-GGUF")
+        super().__init__(**kwargs)
 
         # Index any documents already in the directory.
         self._index_directory()
