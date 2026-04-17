@@ -4,8 +4,9 @@
 """
 Weather Agent Example
 
-A simple agent that provides real-time weather information using MCP weather server.
-This demonstrates GAIA's MCP client integration with external APIs.
+A simple agent that provides real-time weather information using an MCP
+weather server. Demonstrates how to compose ``Agent`` with
+``MCPClientMixin`` and connect to a stdio-based MCP server at runtime.
 
 Requirements:
 - Python 3.12+
@@ -23,33 +24,35 @@ Examples:
 
 from gaia import Agent
 from gaia.mcp import MCPClientMixin
+from gaia.mcp.client.config import MCPConfig
+from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
 
 class WeatherAgent(Agent, MCPClientMixin):
-    """Agent that provides weather information via MCP weather server."""
+    """Agent that provides weather information via an MCP weather server."""
+
+    # Connection spec for the public Open-Meteo MCP server (no API key needed).
+    WEATHER_SERVER = {
+        "name": "weather",
+        "config": {"command": "uvx", "args": ["mcp-server-weather"]},
+    }
 
     def __init__(self, **kwargs):
         """Initialize the Weather Agent.
 
-        Args:
-            **kwargs: Additional arguments passed to Agent
+        The MCP client manager has to be wired up BEFORE ``super().__init__()``
+        because :py:meth:`Agent.__init__` calls ``_register_tools``, which in
+        turn triggers the MCP connection.
         """
-        # Initialize Agent with lightweight model for faster inference
-        Agent.__init__(self, max_steps=10, model_id="Qwen3-4B-GGUF", **kwargs)
+        # Create an MCP client manager without loading any shared config so the
+        # agent only sees the MCP server we attach below.
+        self._mcp_manager = MCPClientManager(config=MCPConfig(config_file=None))
 
-        # Initialize MCPClientMixin
-        MCPClientMixin.__init__(self, auto_load_config=False)
-
-        # Connect to Open-Meteo weather MCP server (free, no API key needed!)
-        print("Connecting to MCP weather server...")
-        success = self.connect_mcp_server(
-            "weather", {"command": "uvx", "args": ["mcp-server-weather"]}
-        )
-        if success:
-            print("  ✅ Connected to weather MCP server")
-        else:
-            print("  ❌ Failed to connect to weather MCP server")
-            print("  Make sure to install: uvx mcp-server-weather")
+        # Use the compact 4B model for faster local inference. Extra kwargs are
+        # forwarded to Agent (e.g. ``max_steps``, ``debug``).
+        kwargs.setdefault("model_id", "Qwen3-4B-GGUF")
+        kwargs.setdefault("max_steps", 10)
+        super().__init__(**kwargs)
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the agent."""
@@ -62,12 +65,20 @@ Be conversational and helpful. Include relevant details like temperature, condit
 and any weather alerts if available."""
 
     def _register_tools(self) -> None:
-        """Register agent tools.
+        """Connect to the weather MCP server and register its tools.
 
-        MCP tools are automatically registered by MCPClientMixin
-        when connect_mcp_server() is called.
+        ``Agent.__init__`` calls this after the client manager is wired up, so
+        the MCP tools are available for the first user query.
         """
-        pass
+        print("Connecting to MCP weather server...")
+        success = self.connect_mcp_server(
+            self.WEATHER_SERVER["name"], self.WEATHER_SERVER["config"]
+        )
+        if success:
+            print("  ✅ Connected to weather MCP server")
+        else:
+            print("  ❌ Failed to connect to weather MCP server")
+            print("  Make sure to install: uvx mcp-server-weather")
 
 
 def main():

@@ -27,13 +27,20 @@ Examples:
 import sys
 from pathlib import Path
 
-from gaia import Agent
-from gaia.agents.chat.tools import RAGToolsMixin
+from gaia import Agent, tool
 from gaia.rag.sdk import RAGSDK, RAGConfig
 
 
-class DocAgent(Agent, RAGToolsMixin):
-    """Agent that answers questions using indexed documents."""
+class DocAgent(Agent):
+    """Agent that answers questions using indexed documents.
+
+    This example uses RAGSDK directly with a single custom `query_documents`
+    tool rather than inheriting from the ChatAgent-specific RAGToolsMixin,
+    keeping the example small and self-contained.
+    """
+
+    # File types we ship as RAG-ready out of the box.
+    SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf"}
 
     def __init__(self, index_dir: str = "./docs", **kwargs):
         """Initialize the Document Q&A Agent.
@@ -42,32 +49,47 @@ class DocAgent(Agent, RAGToolsMixin):
             index_dir: Directory containing documents to index
             **kwargs: Additional arguments passed to Agent
         """
-        # Initialize Agent with lightweight model for faster inference
-        Agent.__init__(self, model_id="Qwen3-4B-GGUF", **kwargs)
-
-        # Store the index directory
+        # Store the index directory before super().__init__() so that any
+        # early hook (like _get_system_prompt) can reference it safely.
         self.index_dir = Path(index_dir)
-
-        # Create directory if it doesn't exist
         self.index_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize RAG SDK
-        rag_config = RAGConfig(chunk_size=500, chunk_overlap=100, max_chunks=5)
-        self.rag = RAGSDK(rag_config)
+        # Initialize the shared RAG SDK. We keep chunk sizes small so answers
+        # fit in the Qwen3-4B context window, and we allow-list the index
+        # directory so RAGSDK's path validator lets us read files from it.
+        self.rag = RAGSDK(
+            RAGConfig(
+                chunk_size=500,
+                chunk_overlap=100,
+                max_chunks=5,
+                allowed_paths=[str(self.index_dir.resolve())],
+            )
+        )
 
-        # Index documents in the directory
-        if self.index_dir.exists() and any(self.index_dir.iterdir()):
-            print(f"Indexing documents from: {self.index_dir}")
-            for doc_path in self.index_dir.rglob("*"):
-                if doc_path.is_file() and doc_path.suffix in [".txt", ".md", ".pdf"]:
-                    self.rag.index_document(str(doc_path))
-            print(f"  ✅ Indexed documents from {self.index_dir}")
-        else:
+        # Use the compact 4B model for faster local inference.
+        super().__init__(model_id="Qwen3-4B-GGUF", **kwargs)
+
+        # Index any documents already in the directory.
+        self._index_directory()
+
+    def _index_directory(self) -> None:
+        """Index every supported file in `self.index_dir`."""
+        if not self.index_dir.exists() or not any(self.index_dir.iterdir()):
             print(f"⚠️  No documents found in {self.index_dir}")
             print("  Add some documents (PDF, TXT, MD) to this directory first.")
+            return
 
-        # Register RAG tools from mixin
-        self.register_rag_tools()
+        print(f"Indexing documents from: {self.index_dir}")
+        indexed = 0
+        for doc_path in self.index_dir.rglob("*"):
+            if (
+                doc_path.is_file()
+                and doc_path.suffix.lower() in self.SUPPORTED_SUFFIXES
+            ):
+                result = self.rag.index_document(str(doc_path))
+                if result.get("success"):
+                    indexed += 1
+        print(f"  ✅ Indexed {indexed} document(s) from {self.index_dir}")
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the agent."""
@@ -84,12 +106,26 @@ When answering:
 All data stays local - perfect for sensitive/private documents."""
 
     def _register_tools(self) -> None:
-        """Register agent tools.
+        """Register a minimal RAG query tool bound to this agent."""
+        agent = self
 
-        RAG tools are registered via register_rag_tools() in __init__.
-        """
-        # RAG tools already registered in __init__
-        pass
+        @tool
+        def query_documents(question: str) -> dict:
+            """Query indexed documents for information relevant to `question`.
+
+            Args:
+                question: The natural-language question to answer with RAG.
+
+            Returns:
+                dict with the retrieved answer text, the chunks that were
+                retrieved, and the list of source files.
+            """
+            response = agent.rag.query(question, include_metadata=True)
+            return {
+                "answer": response.text,
+                "chunks": response.chunks or [],
+                "source_files": response.source_files or [],
+            }
 
 
 def main():

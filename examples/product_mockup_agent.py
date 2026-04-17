@@ -156,7 +156,9 @@ def main():
     # Create agent (uses local Lemonade server by default)
     try:
         agent = ProductMockupAgent()
-        print(f"Product Mockup Agent ready! Files saved to: {agent.output_dir.absolute()}\n")
+        print(
+            f"Product Mockup Agent ready! Files saved to: {agent.output_dir.absolute()}\n"
+        )
     except Exception as e:
         print(f"Error initializing agent: {e}")
         print("\nMake sure Lemonade server is running:")

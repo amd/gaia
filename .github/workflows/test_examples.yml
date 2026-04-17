@@ -1,9 +1,15 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# This workflow runs integration tests for example agents
-# Tests verify: agent execution, tool registration, response validation
-# Platform: Windows (self-hosted Strix runner with Lemonade server)
+# This workflow runs integration tests for example agents under examples/.
+# Two jobs:
+#   - test-examples-unit: runs on ubuntu-latest, validates Python syntax and
+#     structure-only tests (no LLM required). These tests verify that every
+#     example imports correctly, exposes the required methods, and does not
+#     bit-rot against SDK changes.
+#   - test-examples-integration: runs on the self-hosted Strix (stx) runner
+#     with a live Lemonade server. Executes the full test_example_agents.py
+#     suite including tests that instantiate agents and issue LLM queries.
 
 name: Example Agents Integration Tests
 
@@ -12,17 +18,19 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'examples/**/*.py'
-      - 'src/gaia/**/*.py'
+      - 'examples/**'
+      - 'src/gaia/**'
       - 'tests/integration/test_example_agents.py'
+      - 'setup.py'
       - '.github/workflows/test_examples.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'examples/**/*.py'
-      - 'src/gaia/**/*.py'
+      - 'examples/**'
+      - 'src/gaia/**'
       - 'tests/integration/test_example_agents.py'
+      - 'setup.py'
       - '.github/workflows/test_examples.yml'
   merge_group:
   workflow_dispatch:
@@ -36,9 +44,9 @@ permissions:
   contents: read
 
 jobs:
-  test-examples:
-    name: Example Agents Integration Tests
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+  test-examples-unit:
+    name: Example Agents Unit Tests
+    runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
@@ -47,99 +55,112 @@ jobs:
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
+          install-package: '.[dev,mcp,rag]'
+          extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
-      - name: Install uv
+      - name: Install pytest-timeout
         run: |
-          irm https://astral.sh/uv/install.ps1 | iex
-          echo "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        shell: pwsh
+          uv pip install pytest-timeout --python .venv/bin/python
 
-      - name: Install dependencies
+      - name: Validate example syntax
         run: |
-          uv pip install --system -e .[dev,mcp,rag]
-          uv pip install --system pytest pytest-timeout
-        shell: pwsh
+          echo "=== Validating Python syntax for example agents ==="
+          set -e
+          for file in examples/*.py; do
+            echo "  Checking ${file}..."
+            python -m py_compile "${file}"
+          done
+          echo "[OK] All example files have valid Python syntax"
 
-      - name: Start Lemonade Server
+      - name: Run example agent tests (Lemonade-requiring tests auto-skip)
         run: |
-          Write-Host "Starting Lemonade server with Qwen3-4B-GGUF..."
-          Start-Process -FilePath "lemonade-server" -ArgumentList "serve","--model","Qwen3-4B-GGUF","--ctx-size","8192" -NoNewWindow
-          Start-Sleep -Seconds 15
-          Write-Host "✅ Lemonade server started"
-        shell: pwsh
+          echo "=== Running example agent tests ==="
+          # Tests decorated with @requires_lemonade automatically skip when
+          # the Lemonade server is unreachable, so the structure/import tests
+          # run here and the LLM-driven tests run on the stx job below.
+          python -m pytest tests/integration/test_example_agents.py \
+            -v --tb=short --timeout=120
+          echo "[OK] Example agent unit/structure tests passed"
 
-      - name: Validate Python Syntax
+  test-examples-integration:
+    name: Example Agents Integration Tests (stx)
+    needs: test-examples-unit
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[dev,mcp,rag]'
+          extra-index-url: 'https://download.pytorch.org/whl/cpu'
+
+      - name: Install pytest-timeout
+        shell: powershell
         run: |
-          Write-Host "Validating Python syntax for all examples..."
-          Get-ChildItem examples/*.py | ForEach-Object {
-            Write-Host "  Checking $($_.Name)..."
-            python -m py_compile $_.FullName
-            if ($LASTEXITCODE -ne 0) { throw "Syntax error in $($_.Name)" }
-          }
-          Write-Host "✅ All example files have valid Python syntax"
-        shell: pwsh
+          uv pip install pytest-timeout --python .venv\Scripts\python.exe
 
-      - name: Run Integration Tests
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Start Lemonade Server and run integration tests
+        shell: powershell
         env:
           GAIA_SUPPRESS_WARNINGS: "1"
         run: |
-          Write-Host "Running integration tests for example agents..."
-          pytest tests/integration/test_example_agents.py -v --tb=short --timeout=300
-          Write-Host "✅ All example integration tests passed"
-        shell: pwsh
+          # UTF-8 console configuration for Unicode support in agent output
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+          $OutputEncoding = [System.Text.Encoding]::UTF8
+          $env:PYTHONIOENCODING = "utf-8"
+          $env:PYTHONUTF8 = "1"
+          chcp 65001 | Out-Null
 
-      - name: Test Tool Decorator
-        run: |
-          Write-Host "Testing tool registration mechanisms..."
-          @(
-            "from gaia.agents.base.tools import tool, _TOOL_REGISTRY",
-            "",
-            "@tool",
-            "def test_tool(arg1: str) -> dict:",
-            "    '''Test tool for validation.'''",
-            "    return {'result': arg1}",
-            "",
-            "assert 'test_tool' in _TOOL_REGISTRY, 'Tool decorator not working'",
-            "assert hasattr(_TOOL_REGISTRY['test_tool'], '__doc__'), 'Tool missing docstring'",
-            "print('Tool decorator working correctly')"
-          ) | Set-Content -Path _test_tool.py -Encoding utf8
-          python _test_tool.py
-          Remove-Item _test_tool.py
-        shell: pwsh
+          try {
+              # Start Lemonade server and load the compact Qwen3-4B model.
+              # We reuse the repo helper so we share the health-check and
+              # cleanup logic used by the rest of the stx workflows.
+              .\installer\scripts\start-lemonade.ps1 `
+                  -ModelName "Qwen3-4B-Instruct-2507-GGUF" `
+                  -Port 8000 `
+                  -CtxSize 8192 `
+                  -InitWaitTime 15
 
-      - name: Validate Example File Structure
-        run: |
-          Write-Host "Validating example file structure and documentation..."
-          $failed = $false
-          Get-ChildItem examples/*.py | ForEach-Object {
-            $content = Get-Content $_.FullName -Raw
-            if ($content -notmatch '"""') {
-              Write-Host "Missing module docstring: $($_.Name)"
-              $failed = $true
-            }
+              Write-Host "=== Running example agent integration tests ==="
+              python -m pytest tests/integration/test_example_agents.py `
+                  -v --tb=short --timeout=300
+              $testExit = $LASTEXITCODE
+              if ($testExit -ne 0) {
+                  throw "pytest failed with exit code $testExit"
+              }
+              Write-Host "[OK] Example agent integration tests passed"
           }
-          if ($failed) { throw "Some examples are missing docstrings" }
-          Write-Host "All examples have docstrings"
-        shell: pwsh
+          catch {
+              Write-Host "[ERROR] $($_.Exception.Message)"
+              throw
+          }
+          finally {
+              # Cleanup: stop Lemonade server launched by the helper script.
+              if ($env:LEMONADE_PROCESS_ID) {
+                  Write-Host "Stopping Lemonade server (pid $env:LEMONADE_PROCESS_ID)..."
+                  Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+              }
+          }
 
-      - name: Summary
+      - name: Upload Lemonade logs
         if: always()
-        run: |
-          Write-Host "=== Example Agents Integration Test Summary ==="
-          Write-Host "Job status: ${{ job.status }}"
-          Write-Host ""
-          Write-Host "Coverage:"
-          Write-Host "  - weather_agent.py - MCP weather integration"
-          Write-Host "  - rag_doc_agent.py - RAG document Q&A"
-          Write-Host "  - product_mockup_agent.py - HTML mockup generation"
-          Write-Host "  - file_watcher_agent.py - File watching automation"
-          Write-Host "  - notes_agent.py - Database CRUD operations"
-          Write-Host "  - hardware_advisor_agent.py - System analysis"
-          Write-Host "  - mcp_config_based_agent.py - MCP config loading"
-          Write-Host ""
-          Write-Host "Note: Full functional tests with LLM queries require Lemonade server"
-        shell: pwsh
+        uses: actions/upload-artifact@v6
+        with:
+          name: example-agents-lemonade-logs
+          path: |
+            lemonade-server-stdout.log
+            lemonade-server-stderr.log
+            lemonade-server.log
