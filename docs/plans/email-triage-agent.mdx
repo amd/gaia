@@ -159,7 +159,7 @@ almost no new plumbing — then layer capabilities on top.
 | VIP sender cache | SQLite table via `DatabaseMixin` (no MemoryMixin needed) | ~30 LOC |
 | Master on/off toggle | Settings JSON + tool registration guard | ~20 LOC |
 | Daily Brief panel | Existing SSE + existing React components + one new tsx | ~150 LOC frontend |
-| **Slack brief delivery (webhook)** | POST formatted Block Kit message to user-configured `SLACK_WEBHOOK_URL` — see §12.18 | ~50 LOC Python + 1 config field |
+| **Slack brief delivery (webhook)** | POST formatted Block Kit message to user-configured `SLACK_WEBHOOK_URL` — see §12.20 | ~50 LOC Python + 1 config field |
 
 **What makes MVT possible:** every primitive listed in §2.5 is already in-tree
 and reusable. See the table there for specifics. No new plumbing is needed.
@@ -617,8 +617,14 @@ compatible with the GongRzhe convention.
 ### 7.5 Pre-configuration in the MCP Settings Catalog
 
 All three servers are pre-configured in `~/.gaia/mcp_servers.json` templates shipped
-with the installer; the Settings UI shows a one-click "Enable Gmail" / "Enable Outlook"
-flow driven by §11 Auto-Discovery.
+with the installer (cross-references the first-launch seeder work in
+[PR #795](https://github.com/amd/gaia/pull/795)). The Agent UI Settings surface
+(§12.18 for the complete spec — catalog cards, Connect-Flow modal, health panel,
+bulk actions) provides a one-click "Connect Gmail / Outlook / Slack" experience
+driven by §11 auto-discovery. If the [Connector Hub](https://github.com/amd/gaia/issues/735)
+(Phase 1 [#736](https://github.com/amd/gaia/issues/736), Phase 2
+[#737](https://github.com/amd/gaia/issues/737)) ships before or alongside C1, the
+email agent consumes that catalog rather than shipping a bespoke Settings surface.
 
 ---
 
@@ -1015,9 +1021,9 @@ If phases slip, cut from the bottom. **MVT (§1.3) is the smallest ship-now subs
 
 | Priority | MVT (ship first) | C1 Polish | C2 |
 |----------|----|----|----|
-| **P0 (must-ship)** | Master on/off toggle (§13.1), basic Email panel with Daily Brief placeholder (§12.3 stripped to email-only), Thread view with send-confirm modal (§12.4 core subset), "Connect" flow for one provider (§12.1 manual-email-entry variant), empty state (§12.12), observable kill switch (§13.6) | Auto-discovery across OS signals (§11.1 full), Speech-act badges + priority "why" tooltip (§12.4), Daily Brief calendar section (§12.3 C1 data sources), error/offline states (§12.12) | Split Inbox tabs (§12.5), Agent Inbox panel (§12.6), Inbox-Zero mode (§12.7), Activity Feed integration (§12.10), full Notifications (§12.14) |
-| **P1 (ship if time)** | Search box (§12.9) using MCP search passthrough | Compose ghost-text (§12.8), keyboard shortcuts subset (§12.13: j/k/e/r/s/l) | Custom AI Labels management UI (§12.2), drag-to-train (§12.5), voice-first brief readout (§12.15), full keyboard shortcut set (§12.13) |
-| **P2 (nice-to-have)** | — | Observability surfaces (§12.11), accessibility polish (§12.16) | Voice approval during triage review (§12.15), model-tier advanced overrides (§12.2), per-recipient profile browser (§12.2), mobile-ready data model (§12.17) |
+| **P0 (must-ship)** | Master on/off toggle (§13.1), basic Email panel with Daily Brief placeholder (§12.3 stripped), Thread view with send-confirm modal (§12.4 core subset), Connect flow for one provider (§12.18.2 Connect-Flow Modal), minimum MCP catalog card (§12.18.1) for Gmail, Inbox-summary card grammar (§12.19.1), tool cards grammar (§12.19.2), empty state (§12.12), observable kill switch (§13.6), Slack webhook output (§12.20 MVT tier) | Auto-discovery across OS signals (§11.1 full), Speech-act badges + priority "why" tooltip (§12.4 / §12.19.3), Daily Brief calendar section (§12.3 C1 data sources), MCP server health panel (§12.18.4), error/offline states (§12.12) | Split Inbox tabs (§12.5), Agent Inbox panel (§12.6), Inbox-Zero mode (§12.7), Activity Feed integration (§12.10), full Notifications (§12.14), Slack interactive approve/edit/reject (§12.20 C2 tier) |
+| **P1 (ship if time)** | Search box (§12.9) using MCP search passthrough, Daily Brief "Copy as markdown" (§12.19.5), confidence surfacing (§12.19.6) | Compose ghost-text (§12.8), keyboard shortcuts subset (§12.13: j/k/e/r/s/l), Bulk actions in catalog (§12.18.5) | Custom AI Labels management UI (§12.2), drag-to-train (§12.5), voice-first brief readout (§12.15 / §12.19.7), full keyboard shortcut set (§12.13) |
+| **P2 (nice-to-have)** | — | Observability surfaces (§12.11), accessibility polish (§12.16), Printable brief (§12.19.5) | Voice approval during triage review (§12.15), model-tier advanced overrides (§12.2), per-recipient profile browser (§12.2), mobile-ready data model (§12.17) |
 
 Rationale:
 - **MVT P0** is the smallest set that lets a user say "summarize my inbox" and
@@ -1292,7 +1298,247 @@ Not in C1 or C2 scope. The Agent UI is desktop-first. When a mobile companion sh
 primary gesture. This spec marks mobile as "designed-to-not-preclude" — the data
 model, API, and keyboard shortcuts map cleanly to mobile later.
 
-### 12.18 Slack as an Output Channel
+### 12.18 MCP Settings & One-Click Integration
+
+The Agent UI is the user's only contact point for enabling Gmail / Outlook / Slack.
+CLI hand-editing of `~/.gaia/mcp_servers.json` is explicitly not part of the user
+flow. This subsection specifies what the MCP-settings surface must look like and
+names the upstream work items it depends on.
+
+**Upstream alignment (see §22.4 Tier 3):**
+- [#735](https://github.com/amd/gaia/issues/735) Connector Hub — parent epic.
+- [#736](https://github.com/amd/gaia/issues/736) Phase 1 — Catalog UI + Obsidian smoke test.
+- [#737](https://github.com/amd/gaia/issues/737) Phase 2 — Token-auth connectors: Slack / GitHub / Notion.
+- [#738](https://github.com/amd/gaia/issues/738) Phase 3 — OAuth device-flow + Playwright connectors.
+- [#714](https://github.com/amd/gaia/issues/714) Curated MCP server catalogue with one-click enable/disable.
+
+If the Connector Hub ships before or alongside C1, the email agent **consumes**
+the catalog UI rather than shipping a bespoke Settings surface. What follows is
+the minimum grammar we need regardless of where it lives — so if the hub slips,
+the email agent still has a usable Settings page.
+
+#### 12.18.1 The Catalog Card (per provider)
+
+Each provider appears as a card in Settings → Integrations → Email. Consistent
+shape across Gmail, Outlook, Slack:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ [icon]  Gmail                               [Connect]  ⓘ    │
+│         Read, label, draft, archive (local inference)       │
+│         Status: Not connected                               │
+│         Requires: gmail.modify scope                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+After connection:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ [icon]  Gmail · user@example.com       [Disconnect]  [⋮]    │
+│         Read, label, draft, archive (local inference)       │
+│         Status: ✓ Connected — last sync 2 min ago           │
+│         Scopes: gmail.modify                                │
+│         ┌────────────────────────────────────────────────┐  │
+│         │ Enabled (toggle)                           [●] │  │
+│         │ Auto-sync new accounts weekly (opt-in)     [○] │  │
+│         │ Send scope (required for L5 templates)     [○] │  │
+│         └────────────────────────────────────────────────┘  │
+│         Tools registered: 12 (list_messages, search_…)      │
+│         [How we detected this ▸]                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Fields per card:
+- **Icon + provider name** (Gmail, Outlook, Slack).
+- **One-line value prop** so users know why they'd enable it.
+- **Status line** — Not connected / Connecting… / Connected / Error (with
+  actionable CTA — "Reconnect", "Re-auth", "Report issue").
+- **Scope list** — human-readable scope names (not raw OAuth scope strings).
+- **Primary action** — Connect / Disconnect button.
+- **Per-provider toggle** — Enabled on/off (disable without disconnecting).
+- **Advanced toggles** — weekly auto-discovery rescan (§11.5), send scope opt-in
+  (§14.4), per-cohort autonomy link.
+- **Tool count** — how many MCP tools this provider registered.
+- **"How we detected this" disclosure** (§11.6) — expandable provenance panel.
+- **⋮ overflow** — Rotate token, View audit log, Export config, Delete all data.
+
+#### 12.18.2 Connect-Flow Modal
+
+Triggered by the Connect button on any provider card. Progressive disclosure:
+
+1. **Pre-flight check** — detects whether the user has the MCP server binary
+   cached, needs `npx` install, or needs a Python package. Shows a 1-line
+   status.
+2. **Scope preview** — lists each scope GAIA will request, in plain English.
+   "Read emails" / "Create drafts" / "Apply labels". The user approves the scope
+   list before the browser opens (not just the provider's consent screen).
+3. **Launch system browser** — opens the provider OAuth URL in the default
+   browser; shows a spinner + "Waiting for provider approval…" with a **Cancel**
+   button.
+4. **Callback intercept** — localhost ephemeral-port callback; completes
+   automatically on success.
+5. **First-sync progress** — progress bar for the initial History-API / Graph
+   delta sync. Typical < 60 s.
+6. **Success state** — "Connected ✓" + three sample queries as suggestion chips:
+   "Summarize my inbox", "What's urgent?", "Draft a reply to the latest from X".
+
+Error states per step (permission denied, port in use, scope downgrade, token
+exchange failed) each have an actionable recovery CTA — never a raw stack trace.
+
+#### 12.18.3 Discovery & Empty States
+
+- **Nothing connected:** Big CTA "Connect your first email" with the
+  auto-discovered candidates (§11.1) listed as pre-filled options.
+- **Manual entry fallback:** always visible. User types an email address →
+  domain-based provider inference (§11.2) → appropriate Connect flow fires.
+- **No candidates found:** a single-line explainer + manual entry field, not a
+  dead-end.
+
+#### 12.18.4 MCP Server Health Panel
+
+A collapsible "Details" pane per provider card exposes operational state so
+users can self-diagnose:
+
+- Server process status (running / exited / crashed).
+- Last N tool calls with timestamps + duration.
+- Recent errors with stderr tail.
+- API quota consumption (Gmail units/sec budget per §15.1).
+- "Restart server" button.
+
+This is the Agent-UI-native equivalent of reading `journalctl`. Matches the
+[observability dashboard](agent-ui.mdx) pattern rather than duplicating it.
+
+#### 12.18.5 Bulk Actions
+
+- **"Disable all email integration"** — single button at the top of the Email
+  section. Equivalent to master toggle (§13.1) but visible here for users
+  scanning for it.
+- **"Export my email config"** — produces a JSON the user can version-control
+  or migrate between machines. Tokens are redacted.
+- **"Delete all cached email data"** — with double-confirm modal and scope
+  preview ("This removes: 1,243 cached message summaries, 8 drafts in local
+  ledger, sender reputation for 612 contacts. OAuth tokens are preserved").
+
+### 12.19 Output Formatting Grammar
+
+This subsection specifies the visual grammar the email agent uses for every
+user-facing output — so responses are consistent, skimmable, and distinct from
+generic chat-bot text walls.
+
+#### 12.19.1 Inbox Summary (Response to "Summarize my inbox")
+
+Rendered in the Agent UI chat pane as a **structured card**, not a paragraph.
+
+```
+┌─ Inbox summary — 23 new since 8:42 am ─────────────────────┐
+│                                                            │
+│  🔥 Urgent (2)                                             │
+│   • Sarah Chen — Q2 budget review due today        5 min   │
+│     "Can you approve the attached before 2pm?"             │
+│   • Acme Corp — Contract question                  22 min  │
+│     "Quick clarification on clause 4.2"                    │
+│                                                            │
+│  📬 Actionable (4)                                         │
+│   • PR #427 needs review (Alex)                    1h      │
+│   • Follow-up on Feb 12 proposal (Jordan)          3h      │
+│   • … 2 more ▸                                             │
+│                                                            │
+│  ℹ️ Informational (6)           [expand]                    │
+│  🗃️ Auto-archived (11)          [expand]                    │
+│                                                            │
+│  [Start triage review]  [Draft replies]  [Read aloud]     │
+└────────────────────────────────────────────────────────────┘
+```
+
+Rules:
+- **Emoji prefix per bucket** — 🔥 urgent / 📬 actionable / ℹ️ informational /
+  🗃️ archived — consistent across UI, Slack, and CLI (voice uses spoken names).
+- **Three lines per thread max** — sender · subject · one-line summary · age.
+- **Collapsed low-priority buckets** — informational and archived collapsed by
+  default with expand affordance.
+- **Action strip at bottom** — the obvious next actions, not a menu dive.
+- **No prose paragraphs** — never respond with "You have 2 urgent emails from…"
+  as free text. Always the card.
+
+#### 12.19.2 Tool Cards (Per-Action Agent UI Rendering)
+
+Every MCP tool call the agent makes is rendered as a collapsed tool card in the
+activity strip, expandable to show arguments and result. Shape:
+
+```
+┌─ archive_message          ✓ 120 ms   [undo]  [why?] ─┐
+│   message_id: 18f…9a2                                 │
+│   Because: classified as newsletter (cohort L5)       │
+└───────────────────────────────────────────────────────┘
+```
+
+Rules:
+- **Tool name + duration + result icon** always visible collapsed.
+- **Undo link** for reversible actions (§9.3) — one-click reverse.
+- **"Why?" link** opens a popover with the classification reason (§5.2 priority
+  reason) and the policy that authorized the action (cohort + level).
+- **Risk-tier ribbon** — read = no ribbon, write = amber ribbon, destructive =
+  red ribbon (§8 risk-tier work).
+- **Groups collapse** — when the agent performs a triage run (e.g. 23 label
+  actions), the cards collapse into a single "Morning triage · 23 actions ·
+  undo all" meta-card in the feed.
+
+#### 12.19.3 Thread View Headers
+
+See §12.4 for the full structure. Formatting grammar:
+- **Priority badge** — colored pill (red / amber / gray) with number, not text;
+  tooltip has the "why this?" sentence.
+- **Speech-act badge** — verb-only, lowercase pill (`request`, `propose`,
+  `deliver`). Links to §5.1 definitions on hover.
+- **Entity chips** — pill shape, click-through to the creation action (calendar
+  event / task / contact).
+- **Summary stripe** — one-line block above first message, updates live as new
+  messages arrive. Uses the same emoji prefix as buckets.
+
+#### 12.19.4 Draft Preview
+
+When the agent produces a draft, render it inline with:
+- **Provenance indicator** — "Drafted by 35B · 4.2 s · grounded in 3 prior
+  messages" — tiny text under the draft.
+- **Edit affordances** — tone selector row, length slider, voice-dictate button.
+- **Send confirmation banner** — recipient chips (cross-org recipients highlighted
+  red per §14.5), subject, one-line dry-run summary of the send payload.
+- **Never a separate tab** — inline editing in the thread view.
+
+#### 12.19.5 Daily Brief — Rich Format
+
+The Daily Brief panel (§12.3) uses the same buckets as the inbox summary but
+with richer sections:
+- **Email section** — 4 buckets as above.
+- **Calendar section** — next N events with a prep-note link per event.
+- **Follow-ups section** — "You owe / They owe" columns with thread links.
+- **Optional News section** — only if [#669](https://github.com/amd/gaia/issues/669) (web search) is enabled.
+
+Rendering constraints:
+- Fits on one screen without scrolling on a 1080p laptop.
+- **Printable** — "Print" button produces a clean single-page PDF with the same grammar.
+- **Shareable** — "Copy as markdown" produces the brief as plain markdown the
+  user can paste into Slack or Notion (independent of the native Slack output
+  channel in §12.20).
+
+#### 12.19.6 Classification Confidence Surfacing
+
+When confidence is below threshold:
+- **Amber outline** around the bucket label or priority badge.
+- **"Review this" prompt** in the activity feed.
+- **Don't silently auto-act on low-confidence classifications** — drop the
+  cohort one level when confidence is below threshold (L4 → L3, L3 → L2).
+
+#### 12.19.7 Voice Output (C2, v0.21.0 voice integration)
+
+When the brief is read aloud (§12.15), the same grammar applies:
+- Bucket names spoken ("urgent", "actionable") — emoji are display-only.
+- Thread titles truncated to first 8 words for speech.
+- Interactive — user can say "skip" to advance, "more" to get the full summary.
+- Uses [`TalkSDK`](../sdk/sdks/audio.mdx) with Kokoro TTS per §2.5.
+
+### 12.20 Slack as an Output Channel
 
 Slack is a first-class channel for the email agent to communicate with the user.
 Many users live in Slack during the workday — pushing the morning brief and
@@ -1668,7 +1914,7 @@ Each row shows two estimates:
 | 19 | Unit tests (classifier, draft, ledger reads, discovery) | 1d | 0.4d | ║ (per module) |
 | 20 | MCP integration tests with mocked Gmail responses | 0.5d | 0.2d | |
 | 21 | Injection-fixture red-team tests (basic) | 0.5d | 0.3d | (requires adversarial creativity) |
-| 22 | **Slack webhook output channel** (§12.18 MVT tier) — block-kit formatter, config field, `gaia email slack-setup` | 0.5d | 0.2d | |
+| 22 | **Slack webhook output channel** (§12.20 MVT tier) — block-kit formatter, config field, `gaia email slack-setup` | 0.5d | 0.2d | |
 | 23 | Documentation: [`docs/guides/email.mdx`](../guides/email.mdx) + SDK cross-reference | 0.5d | 0.1d | |
 
 **Totals:**
@@ -1775,8 +2021,8 @@ Same two-column format as §16.2 (Human vs CC-assisted with parallelism).
 | 26 | Voice-first integration — voice brief readout, voice-drafted replies | 1d | 0.4d | |
 | 27 | Accessibility audit (§12.16) | 0.5d | 0.3d | (requires human screen-reader test) |
 | 28 | Comprehensive test suite — eval fixtures with 200+ labeled messages | 3d | 1.0d | ║ (fixture generation + runner in parallel) |
-| 29 | **Slack MCP bidirectional integration** (§12.18 C1 Polish tier) — pre-configured Slack MCP server, auto-registered tools (`send_slack_message`, `read_channel`, `search_slack`), DM-based query flow | 1d | 0.4d | ║ (with #17) |
-| 30 | **Slack interactive approval flow** (§12.18 C2 tier) — Slack app + Events API + Block Kit approve/edit/reject buttons for drafts | 2d | 0.8d | |
+| 29 | **Slack MCP bidirectional integration** (§12.20 C1 Polish tier) — pre-configured Slack MCP server, auto-registered tools (`send_slack_message`, `read_channel`, `search_slack`), DM-based query flow | 1d | 0.4d | ║ (with #17) |
+| 30 | **Slack interactive approval flow** (§12.20 C2 tier) — Slack app + Events API + Block Kit approve/edit/reject buttons for drafts | 2d | 0.8d | |
 | 31 | Documentation: [`docs/guides/email.mdx`](../guides/email.mdx) expanded, [`docs/sdk/sdks/email.mdx`](../sdk/sdks/email.mdx) | 1d | 0.2d | |
 
 **Totals:**
@@ -1872,7 +2118,7 @@ gaia email search "contract renewal"      # Semantic search
 gaia email pause / resume                 # Runtime pause/resume
 gaia email status                         # Connection + cohort counts + last triage
 gaia email enable / disable               # Master toggle
-gaia email slack-setup                    # Configure Slack webhook URL (§12.18 MVT)
+gaia email slack-setup                    # Configure Slack webhook URL (§12.20 MVT)
 gaia email brief --to slack               # Send today's brief to Slack now
 ```
 
@@ -2030,7 +2276,7 @@ were merged; if any do merge, the MVT workarounds get simpler accordingly.
 
 | Issue | Title | Relationship |
 |-------|-------|--------------|
-| [#737](https://github.com/amd/gaia/issues/737) | `[Connector Hub Phase 2] Token-auth connectors: Slack, GitHub, Notion` | **Directly covers our Slack auth story** — ships a Slack connector with vault-backed token storage, lifecycle (connect/test/disconnect/rotate), and per-agent enablement. If this lands, §12.18 C1 Polish (Slack MCP bidirectional) reduces to wiring an existing connector rather than writing fresh integration code. |
+| [#737](https://github.com/amd/gaia/issues/737) | `[Connector Hub Phase 2] Token-auth connectors: Slack, GitHub, Notion` | **Directly covers our Slack auth story** — ships a Slack connector with vault-backed token storage, lifecycle (connect/test/disconnect/rotate), and per-agent enablement. If this lands, §12.20 C1 Polish (Slack MCP bidirectional) reduces to wiring an existing connector rather than writing fresh integration code. |
 | [#714](https://github.com/amd/gaia/issues/714) | `Agent UI: Curated MCP server catalogue with one-click enable/disable` | Matches our "pre-configured Gmail/Outlook/Slack MCP" design (§7.5). If shipped, the Connect flow in §11.3 is a catalog click, not a fresh implementation. |
 | [#736](https://github.com/amd/gaia/issues/736) | `[Connector Hub Phase 1] Catalog UI + Obsidian smoke test` | Catalog UI we plug Gmail/Outlook/Slack entries into. Phase 1 prerequisite for #737. |
 | [#738](https://github.com/amd/gaia/issues/738) | `[Connector Hub Phase 3] OAuth device-flow + Playwright connectors` | OAuth device-flow handling — reusable for the Gmail/Outlook OAuth path in §11.3. |
@@ -2041,8 +2287,8 @@ were merged; if any do merge, the MVT workarounds get simpler accordingly.
 | [#676](https://github.com/amd/gaia/issues/676) | `Shared memory database with per-agent namespaces for multi-agent architecture` | If we adopt namespaces, the email ledger becomes one namespace in a shared DB rather than a standalone SQLite file. Cleaner long-term. |
 | [#700](https://github.com/amd/gaia/issues/700) | `Meeting notes capture with speaker diarization` | Synergistic with meeting-prep assembly (§17.2 item 16). |
 | [#704](https://github.com/amd/gaia/issues/704) | `Personal CRM with AI-managed contact profiles and per-person tone matching` | Feeds per-relationship writing voice (§17.2 item 8). |
-| [#690](https://github.com/amd/gaia/issues/690) | `Messaging security: restricted default tool set and input sanitization` | Applies to our Slack bidirectional path (§12.18 C1) — Slack DMs are untrusted input per [Security Model](security-model.mdx) §12. |
-| [#689](https://github.com/amd/gaia/issues/689) | `Messaging adapter rate limiting infrastructure` | Applies to §12.18 C2 interactive approval flow (Slack rate limits). |
+| [#690](https://github.com/amd/gaia/issues/690) | `Messaging security: restricted default tool set and input sanitization` | Applies to our Slack bidirectional path (§12.20 C1) — Slack DMs are untrusted input per [Security Model](security-model.mdx) §12. |
+| [#689](https://github.com/amd/gaia/issues/689) | `Messaging adapter rate limiting infrastructure` | Applies to §12.20 C2 interactive approval flow (Slack rate limits). |
 
 #### 22.4.4 Conflict: Two Memory PRs in Flight
 
