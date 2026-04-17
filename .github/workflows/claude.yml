@@ -85,7 +85,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 20
           model: claude-opus-4-7
-          fallback_model: claude-sonnet-4-6  # Used if Opus 4.7 is overloaded / API error
           direct_prompt: |
             Review this pull request following the custom_instructions exactly.
             First read (in order): pr-diff.txt, pr-files.txt, CLAUDE.md, and the PR title/description via `gh pr view ${{ github.event.pull_request.number }}`.
@@ -325,7 +324,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 20
           model: claude-opus-4-7
-          fallback_model: claude-sonnet-4-6
           custom_instructions: |
             You are GAIA's AI assistant helping with pull request discussions.
 
@@ -464,7 +462,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 30
           model: claude-opus-4-7
-          fallback_model: claude-sonnet-4-6
           custom_instructions: |
             You are GAIA's helpful AI assistant responding to issues and PR conversations.
 
@@ -703,7 +700,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           max_turns: 30
           model: claude-opus-4-7
-          fallback_model: claude-sonnet-4-6
           # Note: claude-code-action@beta does not support workflow_run events natively.
           # Using direct_prompt mode to bypass event type validation.
           direct_prompt: |

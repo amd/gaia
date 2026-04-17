@@ -82,6 +82,26 @@ This self-review step is mandatory - never skip verification of your output.
 2. Check existing mixins in agent subdirectories (e.g., `chat/tools/`, `code/tools/`)
 3. Extract shared logic into base classes or mixins when patterns repeat
 
+### No Silent Fallbacks — Fail Loudly
+
+**Do not add fallbacks, default-to-something-that-works-ish behavior, or silent degradation paths.** Either the operation succeeds as intended, or it raises an actionable error.
+
+This applies to every layer: agents, LLM clients, CLI commands, CI workflows, config loaders, RAG indexers, API server, Electron apps. If the primary path fails:
+
+- **Raise/return a specific error** that names *what failed* and *what the caller should do*.
+- **Do not substitute** a different model, a cached result, a placeholder string, an empty list, or a "best-effort" path unless the caller explicitly asked for it.
+- **Do not swallow exceptions** to keep flows green. `except Exception: pass` and `try: ... except: return None` are prohibited in production paths.
+- **Do not wire model-level `fallback_model` / `fallback_client` / "try-the-other-provider" glue** in CI workflows or runtime code. If Opus is down, the right behavior is a clear failure message, not a silent switch to Sonnet.
+
+**Why:** fallbacks hide regressions. A review bot that silently downgrades from Opus to a smaller model looks like it's working but produces worse reviews for weeks before anyone notices. A config loader that "defaults" a missing API key to empty string produces confusing 401s deep in the request pipeline instead of a clear "ANTHROPIC_API_KEY is not set" at startup.
+
+**Actionable errors include:**
+- The name of the missing/failed resource (`"Lemonade Server not reachable at http://localhost:8000"`)
+- What the user can do (`"Run `gaia init` to install it, or set GAIA_LEMONADE_URL"`)
+- Where to look next (file path, docs link, issue tracker)
+
+When in doubt, fail and say why. Better a loud error the user can fix than a quiet wrong answer.
+
 ### Testing Requirements
 
 **Every new feature requires tests.** The testing structure:
