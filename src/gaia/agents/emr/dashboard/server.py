@@ -1672,9 +1672,26 @@ def create_app(
         if not _agent_instance:
             raise HTTPException(status_code=503, detail="Agent not initialized")
 
+        raw_watch_dir = config.watch_dir
+
+        # Up-front character-class allowlist so CodeQL recognizes the
+        # sanitization before we hand the string to ``Path(...).resolve()``.
+        # Accept alphanumerics plus the minimal set of punctuation needed
+        # for real directory paths on Windows/macOS/Linux: / \ : . _ - ~
+        # and single spaces. Anything outside this set (including control
+        # chars, newlines, shell metacharacters) is rejected.
+        if not raw_watch_dir or len(raw_watch_dir) > 4096:
+            raise HTTPException(
+                status_code=400, detail="Invalid watch directory length"
+            )
+        if not re.fullmatch(r"[A-Za-z0-9_\-./\\: ~]{1,4096}", raw_watch_dir):
+            raise HTTPException(
+                status_code=400,
+                detail="Watch directory contains disallowed characters",
+            )
+
         # Reject path traversal segments before resolution to prevent
         # directory traversal attacks (e.g., "../../etc/passwd")
-        raw_watch_dir = config.watch_dir
         if ".." in raw_watch_dir.replace("\\", "/").split("/"):
             raise HTTPException(
                 status_code=400,
@@ -2050,10 +2067,14 @@ def create_app(
                     "message": result.get("message", "Database cleared successfully"),
                 }
             else:
-                raise HTTPException(
-                    status_code=500,
-                    detail=result.get("error", "Failed to clear database"),
-                )
+                # Sanitize the error before surfacing it — clear_database()
+                # might place str(exception) in ``error``, which can leak a
+                # Python traceback / internal path to the client. The
+                # sanitizer strips tracebacks, File-line refs, and exception
+                # class names. Closes py/stack-trace-exposure on this branch.
+                raw_error = result.get("error", "Failed to clear database")
+                safe_error = _sanitize_response_text(str(raw_error))
+                raise HTTPException(status_code=500, detail=safe_error)
         except HTTPException:
             raise
         except Exception as e:
