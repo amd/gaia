@@ -2083,24 +2083,17 @@ def create_app(
                 logger.info(
                     f"Database cleared: {result.get('deleted', {}).get('patients', 0)} patients"
                 )
-                # Return only known-safe fields to avoid exposing internal details.
-                # Sanitize the message through _sanitize_response_text so a
-                # tracback / file-path / exception-name can't flow into the
-                # JSON body even if ``result["message"]`` was built from
-                # ``str(exception)``. Closes py/stack-trace-exposure on this
-                # return branch.
-                raw_message = result.get("message", "Database cleared successfully")
-                safe_message = _sanitize_response_text(str(raw_message))
+                # Return only known-safe fields. Success branch uses a
+                # compile-time constant message — never flows user /
+                # exception text to the response body. Closes
+                # py/stack-trace-exposure unconditionally.
                 deleted = result.get("deleted", {})
-                # Ensure ``deleted`` is a plain dict of known-safe types
-                # (int counts), not an arbitrary structure that might carry
-                # exception text.
                 if not isinstance(deleted, dict):
                     deleted = {}
                 return {
-                    "success": bool(result.get("success", True)),
+                    "success": True,
                     "deleted": {k: v for k, v in deleted.items() if isinstance(v, int)},
-                    "message": safe_message,
+                    "message": "Database cleared successfully",
                 }
             else:
                 # Sanitize the error before surfacing it — clear_database()
