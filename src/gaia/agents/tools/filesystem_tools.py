@@ -504,10 +504,13 @@ class FileSystemToolsMixin:
 
                     elif ext == ".pdf":
                         try:
-                            import PyPDF2
+                            try:
+                                import pypdf as _pdf
+                            except ImportError:
+                                import PyPDF2 as _pdf  # legacy fallback
 
                             with open(resolved, "rb") as f:
-                                reader = PyPDF2.PdfReader(f)
+                                reader = _pdf.PdfReader(f)
                                 lines.append(f"  Pages:     {len(reader.pages)}")
                                 if reader.metadata:
                                     if reader.metadata.title:
@@ -519,9 +522,10 @@ class FileSystemToolsMixin:
                                             f"  Author:    {reader.metadata.author}"
                                         )
                         except ImportError:
-                            lines.append("  Pages:     (install PyPDF2 for PDF info)")
-                        except Exception:
-                            pass
+                            lines.append("  Pages:     (install pypdf for PDF info)")
+                        except Exception as exc:
+                            # Log at debug; returning partial info is fine.
+                            logger.debug("PDF metadata read failed for %s: %s", resolved, exc)
 
                     elif ext in {
                         ".jpg",
@@ -1420,14 +1424,23 @@ class FileSystemToolsMixin:
 
         def _read_pdf(path, mode):
             """Read PDF file."""
+            # Prefer ``pypdf`` (the modern maintained fork). Fall back to
+            # ``PyPDF2`` (deprecated legacy name) for older installs. The
+            # two share an identical API on the surface we use.
             try:
-                import PyPDF2
+                import pypdf as _pdf
             except ImportError:
-                return "PDF reading requires PyPDF2. Install with: pip install PyPDF2"
+                try:
+                    import PyPDF2 as _pdf
+                except ImportError:
+                    return (
+                        "PDF reading requires pypdf. "
+                        "Install with: pip install pypdf"
+                    )
 
             try:
                 with open(path, "rb") as f:
-                    reader = PyPDF2.PdfReader(f)
+                    reader = _pdf.PdfReader(f)
                     num_pages = len(reader.pages)
 
                     lines = [f"File: {path} (PDF, {num_pages} pages)"]
