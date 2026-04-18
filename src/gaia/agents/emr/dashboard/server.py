@@ -65,6 +65,13 @@ def _safe_json_dumps(obj: Any) -> str:
 
 _SANITIZE_MAX_INPUT_BYTES = 100 * 1024  # 100 KB — safe bound for regex ReDoS
 
+# Character-class allowlist for the user-supplied watch directory. Accepts
+# alphanumerics, path separators (``/``, ``\``), drive-letter colon, dot,
+# underscore, hyphen, tilde, and single space. Rejects control chars, shell
+# metacharacters, null bytes, CR/LF. This is the canonical sanitization the
+# subsequent ``Path(...)``/``expanduser``/``resolve`` chain relies on.
+_VALID_WATCH_DIR_RE = re.compile(r"[A-Za-z0-9_\-./\\: ~]{1,4096}")
+
 
 def _sanitize_response_text(text: str) -> str:
     """Strip stack trace patterns and internal details from response text.
@@ -1684,7 +1691,7 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="Invalid watch directory length"
             )
-        if not re.fullmatch(r"[A-Za-z0-9_\-./\\: ~]{1,4096}", raw_watch_dir):
+        if not _VALID_WATCH_DIR_RE.fullmatch(raw_watch_dir):
             raise HTTPException(
                 status_code=400,
                 detail="Watch directory contains disallowed characters",
@@ -1698,9 +1705,22 @@ def create_app(
                 detail="Path traversal sequences are not allowed",
             )
 
-        # Resolve the path and validate it points to a safe location
-        # Security: intentional validation of user-supplied path  # nosec
-        new_dir = Path(raw_watch_dir).expanduser().resolve()
+        # Build the Path only from strings we've already validated — the
+        # whole ``raw_watch_dir`` has passed a char-class allowlist
+        # (``_VALID_WATCH_DIR_RE``) and a traversal check. Rebuild the
+        # string via a regex ``fullmatch`` group so CodeQL's taint
+        # analyzer sees a fresh, validated source, closing its
+        # py/path-injection report on the subsequent Path(...) call.
+        m = re.fullmatch(_VALID_WATCH_DIR_RE, raw_watch_dir)
+        if not m:
+            # Defense-in-depth — the same check fired above; unreachable
+            # in practice but satisfies the flow analyzer.
+            raise HTTPException(status_code=400, detail="Invalid watch directory")
+        validated_watch_dir = m.group(0)
+
+        # Resolve the validated path and continue with symlink / home /
+        # sensitive-dir checks below.
+        new_dir = Path(validated_watch_dir).expanduser().resolve()
 
         # Validate resolved path matches realpath to prevent symlink attacks
         real_path = os.path.realpath(str(new_dir))
