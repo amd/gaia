@@ -314,6 +314,36 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
     return list(dirs)
 
 
+def _session_agent_kwargs(
+    *,
+    rag_file_paths: list,
+    library_paths: list,
+    allowed: list,
+    session_id: str,
+) -> dict:
+    """Build the session-scoped ChatAgentConfig fields.
+
+    Every agent registered in ``AgentRegistry`` that is backed by ChatAgent
+    (e.g. the built-in ``chat-lite``) needs the same per-session context:
+    which docs to auto-index, which are available on-demand, which paths
+    the PathValidator should allow, and the session ID so ChatAgent can
+    persist state. Collecting them here means both the direct-construction
+    path and the ``registry.create_agent(...)`` call sites forward an
+    identical bundle — this PR's blocker bug was one of them forgetting a
+    field.
+
+    Unknown kwargs are filtered by each factory (manifest agents via
+    ``dataclasses.fields`` / ``AgentManifest``) so this stays safe to pass
+    to agents that don't need RAG or a path validator.
+    """
+    return {
+        "rag_documents": rag_file_paths,
+        "library_documents": library_paths,
+        "allowed_paths": allowed,
+        "ui_session_id": session_id,
+    }
+
+
 def _find_last_tool_step(steps: list) -> dict | None:
     """Find the last tool step in captured_steps, searching backwards."""
     for i in range(len(steps) - 1, -1, -1):
@@ -541,15 +571,18 @@ async def _get_chat_response(
                 "chat: Creating new chat agent (ChatAgent) for session %s",
                 session_id[:8],
             )
+            _session_kwargs = _session_agent_kwargs(
+                rag_file_paths=rag_file_paths,
+                library_paths=library_paths,
+                allowed=allowed,
+                session_id=session_id,
+            )
             config = ChatAgentConfig(
                 model_id=model_id,
                 max_steps=10,
                 silent_mode=True,
                 debug=False,
-                rag_documents=rag_file_paths,
-                library_documents=library_paths,
-                allowed_paths=allowed,
-                ui_session_id=session_id,
+                **_session_kwargs,
             )
             agent = ChatAgent(config)
             _store_agent(session_id, model_id, document_ids, agent, agent_type)
@@ -573,15 +606,18 @@ async def _get_chat_response(
                 agent_type = "chat"
                 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
+                _session_kwargs = _session_agent_kwargs(
+                    rag_file_paths=rag_file_paths,
+                    library_paths=library_paths,
+                    allowed=allowed,
+                    session_id=session_id,
+                )
                 config = ChatAgentConfig(
                     model_id=model_id,
                     max_steps=10,
                     silent_mode=True,
                     debug=False,
-                    rag_documents=rag_file_paths,
-                    library_documents=library_paths,
-                    allowed_paths=allowed,
-                    ui_session_id=session_id,
+                    **_session_kwargs,
                 )
                 agent = ChatAgent(config)
                 _store_agent(session_id, model_id, document_ids, agent, agent_type)
@@ -591,20 +627,21 @@ async def _get_chat_response(
                     agent_type,
                     session_id[:8],
                 )
-                # Pass the same RAG/path/session fields the built-in Chat path
-                # uses. Agent factories that share ChatAgent's config (e.g.
-                # chat-lite) need these so indexed session docs are reachable
-                # by the agent's own RAG and PathValidator. Factories that
-                # don't recognise a field filter it out via ``valid_fields``.
+                # Registered agents backed by ChatAgent (e.g. chat-lite) need
+                # the same session-scoped context as the built-in path above.
+                # Agent factories that don't recognise a field filter it out
+                # via ``dataclasses.fields``/``AgentManifest`` validation.
                 agent = registry.create_agent(
                     agent_type,
                     model_id=model_id,
                     silent_mode=True,
                     debug=False,
-                    rag_documents=rag_file_paths,
-                    library_documents=library_paths,
-                    allowed_paths=allowed,
-                    ui_session_id=session_id,
+                    **_session_agent_kwargs(
+                        rag_file_paths=rag_file_paths,
+                        library_paths=library_paths,
+                        allowed=allowed,
+                        session_id=session_id,
+                    ),
                 )
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
@@ -831,16 +868,19 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         "chat: Creating new chat agent (ChatAgent) for session %s",
                         session_id[:8],
                     )
+                    _session_kwargs = _session_agent_kwargs(
+                        rag_file_paths=[],  # streaming path indexes separately below
+                        library_paths=library_paths,
+                        allowed=allowed,
+                        session_id=session_id,
+                    )
                     config = ChatAgentConfig(
                         model_id=model_id,
                         max_steps=10,
                         streaming=True,
                         silent_mode=False,
                         debug=False,
-                        rag_documents=[],
-                        library_documents=library_paths,
-                        allowed_paths=allowed,
-                        ui_session_id=session_id,
+                        **_session_kwargs,
                     )
 
                     t_construct = _time.monotonic()
@@ -940,10 +980,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             streaming=True,
                             silent_mode=False,
                             debug=False,
-                            rag_documents=[],
-                            library_documents=library_paths,
-                            allowed_paths=allowed,
-                            ui_session_id=session_id,
+                            **_session_agent_kwargs(
+                                rag_file_paths=[],
+                                library_paths=library_paths,
+                                allowed=allowed,
+                                session_id=session_id,
+                            ),
                         )
                         agent = ChatAgent(config)
                         agent.console = sse_handler
@@ -959,21 +1001,22 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             session_id[:8],
                         )
                         t_construct = _time.monotonic()
-                        # See the non-streaming branch above: registered
-                        # agents backed by ChatAgent (e.g. chat-lite) need
-                        # RAG + path + session context so session docs are
-                        # reachable and ChatAgent's PathValidator accepts
-                        # their absolute paths.
+                        # Same session-scoped kwargs as the built-in Chat
+                        # streaming path. Registered agents backed by ChatAgent
+                        # (e.g. chat-lite) need these so session docs are
+                        # reachable and PathValidator accepts absolute paths.
                         agent = registry.create_agent(
                             agent_type,
                             model_id=model_id,
                             streaming=True,
                             silent_mode=False,
                             debug=False,
-                            rag_documents=rag_file_paths,
-                            library_documents=library_paths,
-                            allowed_paths=allowed,
-                            ui_session_id=session_id,
+                            **_session_agent_kwargs(
+                                rag_file_paths=rag_file_paths,
+                                library_paths=library_paths,
+                                allowed=allowed,
+                                session_id=session_id,
+                            ),
                         )
                         agent.console = sse_handler
                         logger.info(

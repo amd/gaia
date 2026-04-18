@@ -14,11 +14,13 @@ import time
 from enum import Enum
 from typing import Optional
 
-from gaia.llm.lemonade_client import LemonadeClient
+from gaia.llm.lemonade_client import DEFAULT_CONTEXT_SIZE, LemonadeClient
 from gaia.logger import get_logger
 
-# Default context size for GAIA agents (supports most complex tasks)
-DEFAULT_CONTEXT_SIZE = 32768
+# Re-export for backwards compatibility — existing callers import
+# ``DEFAULT_CONTEXT_SIZE`` from this module. Single source of truth lives
+# in ``gaia.llm.lemonade_client``.
+__all__ = ["DEFAULT_CONTEXT_SIZE", "LemonadeManager", "MessageType"]
 DEFAULT_LEMONADE_URL = "http://localhost:8000"
 
 
