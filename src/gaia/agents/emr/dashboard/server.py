@@ -2089,9 +2089,7 @@ def create_app(
                 deleted_patients = int(
                     result.get("deleted", {}).get("patients", 0) or 0
                 )
-                deleted_records = int(
-                    result.get("deleted", {}).get("records", 0) or 0
-                )
+                deleted_records = int(result.get("deleted", {}).get("records", 0) or 0)
                 return {
                     "success": True,
                     "deleted": {
