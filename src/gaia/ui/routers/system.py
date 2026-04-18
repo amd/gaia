@@ -13,7 +13,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_dispatch_queue
@@ -27,6 +27,8 @@ from ..models import (
     TaskResponse,
 )
 
+from gaia.llm.lemonade_client import DEFAULT_CONTEXT_SIZE
+
 logger = logging.getLogger(__name__)
 
 # Hold references to background tasks to prevent GC
@@ -37,8 +39,9 @@ router = APIRouter(tags=["system"])
 # Default model required for GAIA Chat agent
 _DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 # Minimum context window (tokens) needed for reliable agent operation.
-# Must match DEFAULT_CONTEXT_SIZE in gaia.llm.lemonade_manager.
-_MIN_CONTEXT_SIZE = 32768
+# Sourced from ``gaia.llm.lemonade_client`` to keep the GAIA-wide ctx
+# requirement in a single module (see that module's ``DEFAULT_CONTEXT_SIZE``).
+_MIN_CONTEXT_SIZE = DEFAULT_CONTEXT_SIZE
 
 
 def _get_lemonade_base_url() -> str:
@@ -462,7 +465,10 @@ async def health(db: ChatDatabase = Depends(get_db)):
 
 class LoadModelRequest(BaseModel):
     model_name: str
-    ctx_size: Optional[int] = None
+    # ctx_size must be positive. Lemonade silently accepts 0 or negative values
+    # and then fails deep in the backend with no actionable error — enforce at
+    # the boundary so callers get a 422 immediately.
+    ctx_size: Optional[int] = Field(None, gt=0)
 
 
 @router.post("/api/system/load-model", status_code=202)
