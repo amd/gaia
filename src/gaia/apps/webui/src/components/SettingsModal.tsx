@@ -72,7 +72,10 @@ export function SettingsModal() {
 
     const saveCustomModel = useCallback(async () => {
         const trimmed = customModel.trim();
-        const payload = trimmed.length > 0 ? trimmed : null;
+        // Backend distinguishes "not sent" (no-op) from "explicit empty string"
+        // (clear). Sending null would be interpreted as no-op because Pydantic
+        // defaults unset fields to None. Use "" to clear.
+        const payload = trimmed.length > 0 ? trimmed : '';
         setSavingModel(true);
         setSaveError(null);
         setJustSaved(false);

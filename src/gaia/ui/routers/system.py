@@ -424,8 +424,11 @@ async def update_settings(
 ):
     """Update user settings.
 
-    Setting custom_model to an empty string or null clears the override
-    and reverts to the default model.
+    Setting ``custom_model`` to an **empty string** clears the override
+    and reverts to the default model. Sending ``null`` (or omitting the
+    field) is a no-op because Pydantic cannot distinguish an explicit
+    ``null`` from an unset field — callers wanting to clear must send
+    ``""``.
     """
     if request.custom_model is not None:
         value = request.custom_model.strip() if request.custom_model else None

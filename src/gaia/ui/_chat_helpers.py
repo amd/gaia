@@ -591,11 +591,20 @@ async def _get_chat_response(
                     agent_type,
                     session_id[:8],
                 )
+                # Pass the same RAG/path/session fields the built-in Chat path
+                # uses. Agent factories that share ChatAgent's config (e.g.
+                # chat-lite) need these so indexed session docs are reachable
+                # by the agent's own RAG and PathValidator. Factories that
+                # don't recognise a field filter it out via ``valid_fields``.
                 agent = registry.create_agent(
                     agent_type,
                     model_id=model_id,
                     silent_mode=True,
                     debug=False,
+                    rag_documents=rag_file_paths,
+                    library_documents=library_paths,
+                    allowed_paths=allowed,
+                    ui_session_id=session_id,
                 )
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
@@ -950,12 +959,21 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             session_id[:8],
                         )
                         t_construct = _time.monotonic()
+                        # See the non-streaming branch above: registered
+                        # agents backed by ChatAgent (e.g. chat-lite) need
+                        # RAG + path + session context so session docs are
+                        # reachable and ChatAgent's PathValidator accepts
+                        # their absolute paths.
                         agent = registry.create_agent(
                             agent_type,
                             model_id=model_id,
                             streaming=True,
                             silent_mode=False,
                             debug=False,
+                            rag_documents=rag_file_paths,
+                            library_documents=library_paths,
+                            allowed_paths=allowed,
+                            ui_session_id=session_id,
                         )
                         agent.console = sse_handler
                         logger.info(
