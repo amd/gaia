@@ -92,6 +92,14 @@ def _get_lemonade_config() -> tuple:
 # in minimal setups. The UI default lives in ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
+# Context size to use when auto-loading a model that is NOT in the built-in
+# ``MODELS`` registry. Lemonade's bare default is 4096 which silently
+# truncates GAIA's large agent system prompts (ChatAgent's is >7000 tokens)
+# and causes the model to return an empty response. 32768 matches the agent
+# ``_MIN_CONTEXT_SIZE`` used elsewhere and fits a typical agent prompt with
+# comfortable headroom. Override by registering the model in ``MODELS``.
+_DEFAULT_UNKNOWN_MODEL_CTX_SIZE = 32768
+
 # =========================================================================
 # Request Configuration Defaults
 # =========================================================================
@@ -2427,8 +2435,16 @@ class LemonadeClient:
                     break
 
             if ctx_size is None:
-                self.log.debug(
-                    f"Model '{model}' not in MODELS registry; using server default ctx_size"
+                # Model not in the built-in registry (e.g. a custom or
+                # community model surfaced via an agent's ``models`` list).
+                # Loading with Lemonade's 4096-token default would silently
+                # truncate GAIA's large system prompts (ChatAgent's is >7k
+                # tokens) and yield empty responses. Fall back to a default
+                # that fits a typical agent prompt with comfortable headroom.
+                ctx_size = _DEFAULT_UNKNOWN_MODEL_CTX_SIZE
+                self.log.info(
+                    f"Model '{model}' not in MODELS registry; "
+                    f"defaulting to ctx_size={ctx_size} to fit agent prompts"
                 )
 
             self.load_model(model, auto_download=True, prompt=False, ctx_size=ctx_size)

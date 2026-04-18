@@ -153,14 +153,28 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
 
-                # Validate that the loaded model matches what GAIA Chat expects.
-                # Respects custom_model override if the user has configured one.
+                # Validate that the loaded model matches what GAIA Chat (or any
+                # registered agent) expects. A custom_model override wins over
+                # everything; otherwise the loaded model is "expected" if it
+                # matches the baseline default *or* any registered agent's
+                # preferred model list. This stops Chat Lite's 4B (or any other
+                # non-default agent model) from tripping a "Wrong model" banner.
                 if status.model_loaded:
                     custom_model = db.get_setting("custom_model")
-                    expected = (custom_model or _DEFAULT_MODEL_NAME).lower()
-                    status.expected_model_loaded = (
-                        status.model_loaded.lower() == expected
-                    )
+                    loaded_lower = status.model_loaded.lower()
+                    if custom_model:
+                        status.expected_model_loaded = (
+                            loaded_lower == custom_model.lower()
+                        )
+                    else:
+                        acceptable = {_DEFAULT_MODEL_NAME.lower()}
+                        registry = getattr(request.app.state, "agent_registry", None)
+                        if registry is not None:
+                            for reg in registry.list():
+                                for m in reg.models:
+                                    if m:
+                                        acceptable.add(m.lower())
+                        status.expected_model_loaded = loaded_lower in acceptable
                     # Surface the actual expected name in the response so the
                     # frontend can name it precisely in the warning banner.
                     status.default_model_name = custom_model or _DEFAULT_MODEL_NAME

@@ -406,17 +406,42 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         data = resp.json()
         all_models = data.get("all_models_loaded", [])
 
-        # Fast path: any LLM or VLM is already active — nothing to do.
-        # Embedding-only or empty list means we must load the expected model.
-        has_chat_model = any(m.get("type") in ("llm", "vlm") for m in all_models)
-        if has_chat_model:
+        # Determine whether we need to (re)load. We need to load if:
+        #   1. No chat-capable model is active, OR
+        #   2. The active chat model is NOT the one we expect (e.g. user
+        #      switched agents — chat-lite wants 4B but 0.6B is loaded), OR
+        #   3. The active model is the right one but its context is smaller
+        #      than what agents need (ChatAgent system prompt is >7k tokens
+        #      so 4096 ctx truncates and yields empty responses).
+        expected_lower = model_id.lower()
+        chat_models = [m for m in all_models if m.get("type") in ("llm", "vlm")]
+        active_is_expected = any(
+            (m.get("model_name") or "").lower() == expected_lower for m in chat_models
+        )
+        active_ctx = 0
+        for m in chat_models:
+            if (m.get("model_name") or "").lower() == expected_lower:
+                active_ctx = m.get("recipe_options", {}).get("ctx_size") or 0
+                break
+        needs_load = (
+            not chat_models
+            or not active_is_expected
+            or (active_ctx and active_ctx < DEFAULT_CONTEXT_SIZE)
+        )
+        if not needs_load:
             return
 
-        logger.info(
-            "No chat-capable model active (loaded=%s); loading: %s",
-            [m.get("type") for m in all_models] or "<none>",
-            model_id,
+        reason = (
+            "no chat model loaded"
+            if not chat_models
+            else (
+                f"wrong model active ({[m.get('model_name') for m in chat_models]}); "
+                f"need {model_id}"
+                if not active_is_expected
+                else f"ctx={active_ctx} < required {DEFAULT_CONTEXT_SIZE}"
+            )
         )
+        logger.info("Pre-flight load: %s → loading %s", reason, model_id)
         if sse_handler is not None:
             sse_handler._emit(
                 {"type": "status", "status": "info", "message": "Loading LLM model..."}
@@ -426,12 +451,24 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
         with model_load_lock:
             # Re-check after acquiring the lock: another thread may have
-            # already loaded the model while we were waiting.
+            # already loaded the expected model with sufficient context.
             resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
             if resp2.status_code == 200:
-                all_models2 = resp2.json().get("all_models_loaded", [])
-                if any(m.get("type") in ("llm", "vlm") for m in all_models2):
-                    logger.debug("Model loaded by concurrent thread; skipping load")
+                models2 = [
+                    m
+                    for m in resp2.json().get("all_models_loaded", [])
+                    if m.get("type") in ("llm", "vlm")
+                ]
+                if any(
+                    (m.get("model_name") or "").lower() == expected_lower
+                    and (m.get("recipe_options", {}).get("ctx_size") or 0)
+                    >= DEFAULT_CONTEXT_SIZE
+                    for m in models2
+                ):
+                    logger.debug(
+                        "Expected model loaded with sufficient ctx by concurrent "
+                        "thread; skipping load"
+                    )
                     return
             LemonadeClient(verbose=False).load_model(
                 model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False

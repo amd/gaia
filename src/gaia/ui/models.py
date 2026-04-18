@@ -118,6 +118,11 @@ class AgentInfo(BaseModel):
     source: Literal["builtin", "custom_python"]
     conversation_starters: List[str] = Field(default_factory=list)
     models: List[str] = Field(default_factory=list)
+    # Minimum free system memory (GB) the agent recommends before loading its
+    # preferred model. `None` means the agent hasn't declared a requirement —
+    # the frontend skips the memory-warning check. Populated from
+    # ``AgentRegistration.min_memory_gb``.
+    min_memory_gb: Optional[float] = None
 
 
 class AgentListResponse(BaseModel):

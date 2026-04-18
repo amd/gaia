@@ -22,6 +22,8 @@ export interface AgentInfo {
     source: string;
     conversation_starters: string[];
     models: string[];
+    /** Minimum recommended free RAM in GB for this agent. Null = no declared requirement. */
+    min_memory_gb?: number | null;
 }
 
 export interface InferenceStats {
