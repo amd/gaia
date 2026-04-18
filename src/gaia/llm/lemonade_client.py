@@ -709,7 +709,6 @@ class LemonadeClient:
                     stderr=self._log_file,
                     text=True,
                     bufsize=1,
-                    shell=True,
                 )
             except Exception:
                 self._log_file.close()
@@ -723,7 +722,6 @@ class LemonadeClient:
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
-                shell=True,
             )
 
             # Print stdout and stderr in real-time only for foreground mode
