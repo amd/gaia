@@ -2082,16 +2082,22 @@ def create_app(
                 logger.info(
                     f"Database cleared: {result.get('deleted', {}).get('patients', 0)} patients"
                 )
-                # Return only known-safe fields. Success branch uses a
-                # compile-time constant message — never flows user /
-                # exception text to the response body. Closes
-                # py/stack-trace-exposure unconditionally.
-                deleted = result.get("deleted", {})
-                if not isinstance(deleted, dict):
-                    deleted = {}
+                # Return only integer counts from known keys + a static
+                # message. Extracting named fields individually (instead of
+                # a dict comprehension over untrusted keys) keeps the shape
+                # fixed and closes any stack-trace-exposure taint path.
+                deleted_patients = int(
+                    result.get("deleted", {}).get("patients", 0) or 0
+                )
+                deleted_records = int(
+                    result.get("deleted", {}).get("records", 0) or 0
+                )
                 return {
                     "success": True,
-                    "deleted": {k: v for k, v in deleted.items() if isinstance(v, int)},
+                    "deleted": {
+                        "patients": deleted_patients,
+                        "records": deleted_records,
+                    },
                     "message": "Database cleared successfully",
                 }
             else:
