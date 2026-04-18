@@ -46,6 +46,11 @@ class AgentManifest(BaseModel):
     mcp_servers: Dict[str, Dict[str, Any]] = {}
     models: List[str] = []  # Ordered preference list
     conversation_starters: List[str] = []
+    # Minimum free system memory (GB) the agent recommends before loading its
+    # preferred model. `None` means no requirement declared — the UI skips the
+    # memory-warning check for that agent. Used to surface an upfront warning
+    # before the user wastes time on a model that can't fit.
+    min_memory_gb: Optional[float] = None
 
     @field_validator("tools")
     @classmethod
@@ -81,6 +86,11 @@ class AgentRegistration:
     agent_dir: Optional[Path]
     models: List[str]  # ordered preference list
     hidden: bool = False  # hidden agents are excluded from the UI agent selector
+    # Minimum free system memory (GB) recommended before loading this agent's
+    # preferred model. `None` = no requirement declared. The UI shows a warning
+    # in Settings when memory_available_gb < min_memory_gb so the user isn't
+    # surprised by a load failure or heavy swapping mid-session.
+    min_memory_gb: Optional[float] = None
 
 
 class AgentRegistry:
@@ -167,6 +177,48 @@ class AgentRegistry:
             )
         )
         logger.info("registry: Registered built-in agent: chat (ChatAgent)")
+
+        # --- Chat Lite (smaller 4B model, Mac/low-memory friendly) ---
+        # Reuses the full ChatAgent feature set but presets model_id to a 4B
+        # checkpoint so it runs on hardware that can't host the 35B default.
+        # The preset is applied via setdefault so callers can still override
+        # (e.g. for tests or an explicit user-chosen model).
+        def chat_lite_factory(**kwargs):
+            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
+            filtered.setdefault("model_id", "Qwen3-4B-Instruct-2507-GGUF")
+            config = ChatAgentConfig(**filtered)
+            return ChatAgent(config=config)
+
+        self._register(
+            AgentRegistration(
+                id="chat-lite",
+                name="Chat Lite",
+                description=(
+                    "Lightweight document Q&A assistant — same features as Chat "
+                    "Agent but runs on a 4B model, suitable for Mac and other "
+                    "hardware that cannot host the 35B default."
+                ),
+                source="builtin",
+                conversation_starters=[
+                    "What can you help me with?",
+                    "Summarize this document",
+                    "Search my files for...",
+                ],
+                factory=chat_lite_factory,
+                agent_dir=None,
+                models=["Qwen3-4B-Instruct-2507-GGUF", "Qwen3-4B-GGUF"],
+                # Qwen3-4B Q4_K_M weights are ~2.5 GB; add context + runtime
+                # headroom → 5 GB is the comfortable floor. Under this the UI
+                # warns that load may fail or swap heavily.
+                min_memory_gb=5.0,
+            )
+        )
+        logger.info(
+            "registry: Registered built-in agent: chat-lite (ChatAgent with Qwen3-4B)"
+        )
 
         # --- BuilderAgent ---
         try:
@@ -340,6 +392,7 @@ class AgentRegistry:
                 factory=manifest_factory,
                 agent_dir=agent_dir,
                 models=manifest.models,
+                min_memory_gb=manifest.min_memory_gb,
             )
         )
         logger.info(

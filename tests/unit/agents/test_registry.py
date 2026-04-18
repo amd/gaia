@@ -115,6 +115,84 @@ class TestBuiltinRegistration:
         visible_ids = [r.id for r in registry.list() if not r.hidden]
         assert "builder" not in visible_ids
 
+    # ---- chat-lite (Mac/low-memory ChatAgent with 4B model) ----
+
+    def test_chat_lite_registered(self):
+        registry = AgentRegistry()
+        registry.discover()
+        reg = registry.get("chat-lite")
+        assert reg is not None, "chat-lite should be registered as a built-in"
+        assert reg.source == "builtin"
+        assert reg.hidden is False
+
+    def test_chat_lite_visible_in_list(self):
+        registry = AgentRegistry()
+        registry.discover()
+        visible_ids = [r.id for r in registry.list() if not r.hidden]
+        assert "chat-lite" in visible_ids
+
+    def test_chat_lite_prefers_4b_model(self):
+        """The UI reads ``models`` to show/validate the preferred checkpoint."""
+        registry = AgentRegistry()
+        registry.discover()
+        reg = registry.get("chat-lite")
+        assert reg.models, "chat-lite should list preferred models"
+        # The primary preference must be a 4B GGUF checkpoint — that's the
+        # whole reason this agent exists alongside ChatAgent.
+        assert reg.models[0] == "Qwen3-4B-Instruct-2507-GGUF"
+        assert all("4B" in m for m in reg.models), reg.models
+
+    def test_chat_lite_factory_presets_model_id(self):
+        """Factory must preset ``model_id`` so ChatAgent skips the 35B default."""
+        registry = AgentRegistry()
+        registry.discover()
+        reg = registry.get("chat-lite")
+
+        # Mock ChatAgent to avoid needing a live LLM, but let ChatAgentConfig
+        # construct normally so we can read the resolved model_id off it.
+        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+            reg.factory()  # no kwargs — factory must still set model_id
+        mock_agent.assert_called_once()
+        config = mock_agent.call_args.kwargs["config"]
+        assert config.model_id == "Qwen3-4B-Instruct-2507-GGUF"
+
+    def test_chat_lite_factory_respects_caller_override(self):
+        """Explicit ``model_id`` from the caller wins over the preset default."""
+        registry = AgentRegistry()
+        registry.discover()
+        reg = registry.get("chat-lite")
+
+        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+            reg.factory(model_id="Custom-Model-Override")
+        config = mock_agent.call_args.kwargs["config"]
+        assert config.model_id == "Custom-Model-Override"
+
+    def test_chat_and_chat_lite_coexist(self):
+        """Creating chat-lite must not perturb the default Chat Agent."""
+        registry = AgentRegistry()
+        registry.discover()
+        assert registry.get("chat") is not None
+        assert registry.get("chat-lite") is not None
+        # Distinct registrations — not aliases.
+        assert registry.get("chat") is not registry.get("chat-lite")
+        # Chat must keep an empty models preference list (unchanged default).
+        assert registry.get("chat").models == []
+
+    def test_chat_lite_declares_memory_requirement(self):
+        """chat-lite should declare min_memory_gb so the UI can warn."""
+        registry = AgentRegistry()
+        registry.discover()
+        reg = registry.get("chat-lite")
+        # 4B Q4_K_M is ~2.5 GB on disk; 5 GB free is the comfortable load floor.
+        assert reg.min_memory_gb == 5.0
+
+    def test_chat_has_no_memory_requirement_by_default(self):
+        """Chat (35B default) leaves min_memory_gb unset — existing behaviour."""
+        registry = AgentRegistry()
+        registry.discover()
+        reg = registry.get("chat")
+        assert reg.min_memory_gb is None
+
 
 # ---------------------------------------------------------------------------
 # YAML manifest agent loading
@@ -165,6 +243,37 @@ class TestManifestAgentLoading:
 
         reg = registry.get("model-bot")
         assert reg.models == ["Qwen3.5-35B-A3B-GGUF", "Qwen3-0.6B-GGUF"]
+
+    def test_manifest_min_memory_gb_propagates(self, tmp_path):
+        """min_memory_gb in YAML must reach the registration so the UI can warn."""
+        agent_dir = tmp_path / "hungry-bot"
+        agent_dir.mkdir()
+        (agent_dir / "agent.yaml").write_text(textwrap.dedent("""
+            id: hungry-bot
+            name: Hungry Bot
+            min_memory_gb: 12.5
+        """))
+
+        registry = AgentRegistry()
+        registry._load_manifest_agent(agent_dir, agent_dir / "agent.yaml")
+
+        reg = registry.get("hungry-bot")
+        assert reg.min_memory_gb == 12.5
+
+    def test_manifest_min_memory_gb_defaults_to_none(self, tmp_path):
+        """Manifests without min_memory_gb leave the registration's value as None."""
+        agent_dir = tmp_path / "lazy-bot"
+        agent_dir.mkdir()
+        (agent_dir / "agent.yaml").write_text(textwrap.dedent("""
+            id: lazy-bot
+            name: Lazy Bot
+        """))
+
+        registry = AgentRegistry()
+        registry._load_manifest_agent(agent_dir, agent_dir / "agent.yaml")
+
+        reg = registry.get("lazy-bot")
+        assert reg.min_memory_gb is None
 
     def test_manifest_prompt_used_as_system_prompt(self, tmp_path):
         agent_dir = tmp_path / "prompt-bot"

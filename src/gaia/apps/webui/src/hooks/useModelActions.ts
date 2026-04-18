@@ -62,12 +62,13 @@ export function useModelActions(defaultModelName?: string) {
 
     const modelName = defaultModelName ?? DEFAULT_MODEL_NAME;
 
-    const loadModel = useCallback(async (name?: string) => {
+    const loadModel = useCallback(async (name?: string, ctxSize?: number) => {
         const target = name ?? modelName;
+        const ctx = ctxSize ?? MIN_CONTEXT_SIZE;
         setIsLoadingModel(true);
         try {
-            await api.loadModel(target, MIN_CONTEXT_SIZE);
-            log.system.info(`Load model triggered: ${target}`);
+            await api.loadModel(target, ctx);
+            log.system.info(`Load model triggered: ${target} (ctx=${ctx})`);
             if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
             loadTimerRef.current = setTimeout(() => setIsLoadingModel(false), LOAD_SPINNER_TIMEOUT_MS);
             startPolling(target, 'load');
