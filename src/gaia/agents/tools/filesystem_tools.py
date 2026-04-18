@@ -525,7 +525,9 @@ class FileSystemToolsMixin:
                             lines.append("  Pages:     (install pypdf for PDF info)")
                         except Exception as exc:
                             # Log at debug; returning partial info is fine.
-                            logger.debug("PDF metadata read failed for %s: %s", resolved, exc)
+                            logger.debug(
+                                "PDF metadata read failed for %s: %s", resolved, exc
+                            )
 
                     elif ext in {
                         ".jpg",
@@ -1434,8 +1436,7 @@ class FileSystemToolsMixin:
                     import PyPDF2 as _pdf
                 except ImportError:
                     return (
-                        "PDF reading requires pypdf. "
-                        "Install with: pip install pypdf"
+                        "PDF reading requires pypdf. " "Install with: pip install pypdf"
                     )
 
             try:
