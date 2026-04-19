@@ -1773,11 +1773,15 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
 
         # Pre-activate RAG bundle when documents are already indexed
 <<<<<<< HEAD
+<<<<<<< HEAD
         if (
             hasattr(self, "rag")
             and self.rag
             and getattr(self.rag, "indexed_files", None)
         ):
+=======
+        if hasattr(self, "rag") and self.rag and getattr(self.rag, "indexed_files", None):
+>>>>>>> 2f79fa97 (trying to address the issue in::Tool-registry scaling: resolve scratchpad/memory collision via #688 dynamic loading #800)
 =======
         if hasattr(self, "rag") and self.rag and getattr(self.rag, "indexed_files", None):
 >>>>>>> 2f79fa97 (trying to address the issue in::Tool-registry scaling: resolve scratchpad/memory collision via #688 dynamic loading #800)
@@ -1941,7 +1945,13 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
         # Log the bundle configuration
         total = len(_TOOL_REGISTRY)
 <<<<<<< HEAD
+<<<<<<< HEAD
         bundled = sum(len(b.tools) for b in self.tool_loader._bundles.values())
+=======
+        bundled = sum(
+            len(b.tools) for b in self.tool_loader._bundles.values()
+        )
+>>>>>>> 2f79fa97 (trying to address the issue in::Tool-registry scaling: resolve scratchpad/memory collision via #688 dynamic loading #800)
 =======
         bundled = sum(
             len(b.tools) for b in self.tool_loader._bundles.values()
