@@ -188,7 +188,9 @@ class ToolLoader:
                     continue
 
         # Include any registered tools that are NOT in any bundle (backwards compat).
-        unbundled = {t for t in registry if t not in self._tool_to_bundle}
+        unbundled = {
+            t for t in registry if t not in self._tool_to_bundle
+        }
         active_names.update(unbundled)
 
         logger.debug(
@@ -234,7 +236,9 @@ class ToolLoader:
 
     # ── internals ────────────────────────────────────────────────────────
 
-    def _keywords_match(self, keywords: FrozenSet[str], message: str) -> bool:
+    def _keywords_match(
+        self, keywords: FrozenSet[str], message: str
+    ) -> bool:
         """Return True if any keyword pattern matches *message*."""
         for pattern in keywords:
             try:

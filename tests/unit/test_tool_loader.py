@@ -22,6 +22,7 @@ from gaia.agents.base.tool_loader import (
     ToolLoader,
 )
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -115,9 +116,7 @@ RAG_BUNDLE = ToolBundle(
 
 FILESYSTEM_BUNDLE = ToolBundle(
     name="filesystem",
-    tools=frozenset(
-        {"browse_directory", "tree", "file_info", "find_files", "bookmark"}
-    ),
+    tools=frozenset({"browse_directory", "tree", "file_info", "find_files", "bookmark"}),
     policy=ActivationPolicy.KEYWORD,
     keywords=frozenset({r"file|folder|directory|path|browse|tree"}),
 )
