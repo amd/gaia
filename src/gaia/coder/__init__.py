@@ -12,9 +12,21 @@ participate in the ``src/gaia/agents/`` product-agent ecosystem.
 
 See ``docs/plans/coder-agent.mdx`` for the full spec.
 
-This module is the Phase 1 scaffold entry point. ``CoderAgent`` and
-``DEFAULT_LOOP`` are added as re-exports once the corresponding modules
-land in follow-up commits on this same branch.
+Phase 1 scaffolding exports:
+
+* :class:`gaia.coder.base.CoderAgent` — her own base class (NOT inheriting
+  from ``gaia.agents.base.Agent``).
+* :data:`gaia.coder.loop.DEFAULT_LOOP` — the canonical 20-state ReAct loop
+  from §15.3 of the spec, editable per §7.8.
 """
 
-__all__: list[str] = []
+from gaia.coder.base import CoderAgent
+from gaia.coder.loop import DEFAULT_LOOP, Loop, State, Transition
+
+__all__ = [
+    "CoderAgent",
+    "DEFAULT_LOOP",
+    "Loop",
+    "State",
+    "Transition",
+]
