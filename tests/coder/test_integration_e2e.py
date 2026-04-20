@@ -27,6 +27,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -221,6 +222,7 @@ def test_full_flow_feedback_to_fix(
     e2e_repo: Path,
     gaia_coder_home: Path,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Full §7.3 / §7.4 round-trip with every external boundary mocked."""
 
@@ -377,8 +379,13 @@ def test_full_flow_feedback_to_fix(
     # Point at the same Python interpreter pytest is running with so the
     # subprocess `python -m pytest` call inside verify_on_merge can find
     # pytest. Windows CI occasionally resolves `sys.executable` to a path
-    # that the subprocess loses, so we set it explicitly on PATH too.
-    os.environ["PATH"] = os.environ.get("PATH", "")
+    # that the subprocess loses, so we prepend its directory to PATH.
+    # Uses monkeypatch so the change reverts after the test (no leak to
+    # sibling tests). Cf. #829 auto-review.
+    py_dir = str(Path(sys.executable).parent)
+    current_path = os.environ.get("PATH", "")
+    if py_dir not in current_path.split(os.pathsep):
+        monkeypatch.setenv("PATH", py_dir + os.pathsep + current_path)
     verify_result = verify_on_merge(
         merged_sha=merged_sha,
         feedback_id="fb-e2e-1",

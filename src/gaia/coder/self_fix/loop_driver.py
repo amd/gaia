@@ -104,13 +104,26 @@ def _now_iso() -> str:
 
 
 def _append_notes(existing: str, entry: Mapping[str, Any]) -> str:
-    """Append a state-transition note to the feedback row's JSON array."""
-    try:
-        parsed = json.loads(existing or "[]")
-    except json.JSONDecodeError:
-        parsed = []
-    if not isinstance(parsed, list):
-        parsed = []
+    """Append a state-transition note to the feedback row's JSON array.
+
+    ``notes_json`` is the canonical audit trail per the module docstring —
+    silently replacing corrupted / mistyped content with ``[]`` would hide
+    a real regression. Fail loudly per CLAUDE.md. Cf. #825 auto-review.
+    """
+    if not existing:
+        parsed: list = []
+    else:
+        try:
+            parsed = json.loads(existing)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"feedback notes_json is corrupted and cannot be extended: {exc}"
+            ) from exc
+        if not isinstance(parsed, list):
+            raise ValueError(
+                f"feedback notes_json must be a JSON array, got "
+                f"{type(parsed).__name__}"
+            )
     parsed.append(dict(entry))
     return json.dumps(parsed)
 
@@ -365,9 +378,11 @@ class FeedbackLoopDriver:
                     feedback_body=row.body,
                 )
                 drive.notes.append(f"review gate overall={review_gate_result.overall}")
-            except Exception as exc:  # pylint: disable=broad-except
-                # Loose coupling: a Phase-4 runtime problem must not block a
-                # Phase-6 drive. Re-raise only for clear programming errors.
+            except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
+                # Loose coupling to Phase 4: a runtime/subprocess/IO problem
+                # in the review gate must not block a Phase-6 drive.
+                # Programming errors (AttributeError/TypeError/etc.) still
+                # surface per CLAUDE.md fail-loudly. Cf. #825 auto-review.
                 logger.warning(
                     "review gate runner failed for feedback %s: %s",
                     row.id,
@@ -417,9 +432,10 @@ class FeedbackLoopDriver:
                 gh_runner=self._gh_runner,
             )
             drive.notes.append("notified EM")
-        except Exception as exc:  # pylint: disable=broad-except
-            # Fail-loudly translation: surface as a DriveResult note but do
-            # not throw away the already-open PR.
+        except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
+            # Same shape as the review-gate block: tolerate runtime / subprocess
+            # / IO failures of the notification step without discarding the
+            # open PR. Programming errors still surface. Cf. #825 auto-review.
             logger.warning("notify_em failed for feedback %s: %s", row.id, exc)
             drive.notes.append(f"notify_em failed: {exc}")
 
