@@ -2376,10 +2376,10 @@ If helpful, use search_code to locate candidate files before you decide.
 Respond with JSON only:
 {
   "fix_class": "<one of: prompt|doc|test|tool|policy|architectural|state-machine|out-of-scope>",
-  "root_cause_hypothesis": "&lt;2-3 sentences citing evidence>",
+  "root_cause_hypothesis": "<2-3 sentences citing evidence>",
   "candidate_files": [{"path": "<file:line-range>", "why": "<short>"}],
   "prior_pattern_hit": "<memory id or null>",
-  "confidence": &lt;0-100>
+  "confidence": <0-100>
 }
 ```
 
@@ -2508,7 +2508,7 @@ Also emit confidence_score 0-100 measuring how tightly the diff maps to the crit
   90-100: does exactly the criterion, nothing more/less
   75-89:  achieves with scope creep OR minor gaps
   60-74:  partially; mismatch or missed sub-requirements
-  &lt;60:    does not achieve OR unrelated
+  <60:    does not achieve OR unrelated
 
 {
   "findings": [{"file_line":"...","severity":"...","description":"...","fix":"..."}],
@@ -2576,8 +2576,8 @@ Be CONSERVATIVE. When uncertain, classify external (a wrong self-code diagnosis 
 
 {
   "kind":"user-task|self-code|external",
-  "evidence":"&lt;2-3 sentences>",
-  "confidence":&lt;0-100>,
+  "evidence":"<2-3 sentences>",
+  "confidence":<0-100>,
   "suggested_next_action":"<imperative>"
 }
 
@@ -2596,7 +2596,7 @@ Intents:
 Message: """{{em_message}}"""
 
 JSON only:
-{"intent":"<name>","args":{...},"confidence":&lt;0-100>}
+{"intent":"<name>","args":{...},"confidence":<0-100>}
 
 If no intent matches with confidence ≥ 70, respond:
 {"intent":"free_form","args":{},"confidence":0}
