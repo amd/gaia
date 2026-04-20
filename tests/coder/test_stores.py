@@ -477,3 +477,75 @@ def test_ci_history_check_constraints(tmp_path: Path) -> None:
             ci_history.insert_row(conn, row)
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# memory
+# ---------------------------------------------------------------------------
+
+
+def test_create_memory(tmp_path: Path) -> None:
+    conn = memory.open_store(tmp_path / "memory.db")
+    try:
+        assert _table_exists(conn, "memory")
+    finally:
+        conn.close()
+
+
+def test_round_trip_memory(tmp_path: Path) -> None:
+    conn = memory.open_store(tmp_path / "memory.db")
+    try:
+        row = memory.MemoryRow(
+            id="m_1",
+            topic="review_patterns",
+            created_at=_ISO,
+            source_kind="pr",
+            source_id="pr_941",
+            payload_json=json.dumps({"pattern": "always cite file:line"}),
+            embedding_key="faiss_0001",
+            confidence=85,
+        )
+        memory.insert_row(conn, row)
+
+        fetched = memory.get_row(conn, "m_1")
+        assert fetched is not None
+        assert fetched.topic == "review_patterns"
+        assert fetched.recall_count == 0
+
+        memory.update_row(
+            conn,
+            "m_1",
+            {"last_recalled_at": _ISO, "recall_count": 1},
+        )
+        updated = memory.get_row(conn, "m_1")
+        assert updated is not None
+        assert updated.recall_count == 1
+
+        rows = memory.list_rows(conn, {"topic": "review_patterns"})
+        assert len(rows) == 1
+    finally:
+        conn.close()
+
+
+def test_memory_check_constraints(tmp_path: Path) -> None:
+    conn = memory.open_store(tmp_path / "memory.db")
+    try:
+        # Invalid topic — CHECK should reject.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO memory (id, topic, created_at, source_kind, payload_json, embedding_key) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("bad_1", "launch_codes", _ISO, "pr", "{}", "faiss_x"),
+            )
+        conn.rollback()
+
+        # confidence out of range — CHECK should reject.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO memory (id, topic, created_at, source_kind, payload_json, embedding_key, confidence) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("bad_2", "review_patterns", _ISO, "pr", "{}", "faiss_x", 101),
+            )
+        conn.rollback()
+    finally:
+        conn.close()
