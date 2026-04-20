@@ -2010,7 +2010,7 @@ CREATE INDEX idx_memory_recalled ON memory(last_recalled_at);
 **`learnings.log`** (append-only plain text, §4.6):
 
 ```
-<ISO-8601 UTC> [task=`<task_id>`] Observed: "<one-line observation>" → <promotion_candidate: GAIA.md | skill:`<name>` | dismissed>
+<ISO-8601 UTC> [task=<task_id>] Observed: "<one-line observation>" → <promotion_candidate: GAIA.md | skill:<name> | dismissed>
 ```
 
 ### 15.2 Tool signatures by mixin
@@ -2257,12 +2257,12 @@ The EM says things like *"enable self-edit"*, *"promote to tier 3"*, *"what's yo
 You classify engineering-manager messages into one of these intents:
 <intent list + one-line description each>
 
-Reply with JSON only: {"intent": "`<name>`", "args": {...}, "confidence": 0-100}
+Reply with JSON only: {"intent": "<name>", "args": {...}, "confidence": 0-100}
 
 If the message doesn't clearly match any intent, reply {"intent": "free_form",
 "args": {}, "confidence": 0} — the agent will treat it as a normal inbox question.
 
-Message: """`<em_message>`"""
+Message: """<em_message>"""
 ```
 
 Low-confidence (< 70) classifications bail to `free_form` — the agent asks a clarifying question rather than guessing. Every classification is audit-logged with the raw message and the returned JSON.
@@ -2359,13 +2359,13 @@ Every LLM call site listed in the plan has a canonical prompt template stored as
 ```xml
 You are gaia-coder triaging engineering-manager feedback.
 
-`<feedback>`
-  `<id>`{{feedback_id}}</id>
-  `<received_at>`{{iso8601}}</received_at>
-  `<from>`{{em_handle}}</from>
-  `<severity>`{{low|med|high|critical}}</severity>
-  `<context_url>`{{url_or_none}}</context_url>
-  `<body>`{{raw_body}}</body>
+<feedback>
+  <id>{{feedback_id}}</id>
+  <received_at>{{iso8601}}</received_at>
+  <from>{{em_handle}}</from>
+  <severity>{{low|med|high|critical}}</severity>
+  <context_url>{{url_or_none}}</context_url>
+  <body>{{raw_body}}</body>
 </feedback>
 
 <failure_pattern_hits count="3">{{top_3_similar_past_failures_json}}</failure_pattern_hits>
@@ -2377,7 +2377,7 @@ Respond with JSON only:
 {
   "fix_class": "<one of: prompt|doc|test|tool|policy|architectural|state-machine|out-of-scope>",
   "root_cause_hypothesis": "&lt;2-3 sentences citing evidence>",
-  "candidate_files": [{"path": "<file:line-range>", "why": "`<short>`"}],
+  "candidate_files": [{"path": "<file:line-range>", "why": "<short>"}],
   "prior_pattern_hit": "<memory id or null>",
   "confidence": &lt;0-100>
 }
@@ -2388,9 +2388,9 @@ Respond with JSON only:
 ```xml
 You are gaia-coder's own critic, running between turns. CHEAP pass — empty list is a valid answer.
 
-`<success_criterion>`{{plan_criterion}}</success_criterion>
+<success_criterion>{{plan_criterion}}</success_criterion>
 <recent_output kind="{{edit|write_file|cli_output}}">{{content}}</recent_output>
-`<gaia_md_principles>`{{inject_verbatim}}</gaia_md_principles>
+<gaia_md_principles>{{inject_verbatim}}</gaia_md_principles>
 <failure_pattern_hits count="3">{{top_3}}</failure_pattern_hits>
 
 Surface findings ONLY if ALL hold:
@@ -2401,7 +2401,7 @@ Surface findings ONLY if ALL hold:
 Suppress confidence < 60. Return the ONE most-impactful correction or null.
 
 {
-  "findings": [{"severity":"high|med","citation":"`<id>`","fix_direction":"`<imperative>`","confidence":`<int>`}],
+  "findings": [{"severity":"high|med","citation":"<id>","fix_direction":"<imperative>","confidence":<int>}],
   "most_impactful": { ... } | null
 }
 ```
@@ -2445,8 +2445,8 @@ Reply ✅ to proceed, reply with changes to refine, ❌ to reject.
 ```xml
 You are the persona linter for gaia-coder. Check whether the given text matches her persona from GAIA.md.
 
-`<gaia_md_persona_section>`{{inject_verbatim}}</gaia_md_persona_section>
-`<voice_anti_patterns>`
+<gaia_md_persona_section>{{inject_verbatim}}</gaia_md_persona_section>
+<voice_anti_patterns>
 - "Certainly!", "I'd be happy to help!", "Great question!", "Absolutely!"
 - Excessive exclamation / emoji
 - Hedging chains, apologies for existence, bureaucratic prose
@@ -2454,12 +2454,12 @@ You are the persona linter for gaia-coder. Check whether the given text matches 
 - AI-disclosure ("As an AI...", "Generated with...")
 </voice_anti_patterns>
 
-`<text_under_review>`{{candidate_text}}</text_under_review>
+<text_under_review>{{candidate_text}}</text_under_review>
 
 For each violation: cite exact phrase + anti-pattern name + suggested rewrite.
 
 {
-  "violations": [{"phrase":"`<quote>`","pattern":"`<name>`","rewrite":"`<short>`"}],
+  "violations": [{"phrase":"<quote>","pattern":"<name>","rewrite":"<short>"}],
   "verdict": "pass|request-changes",
   "reasoning": "<one paragraph>"
 }
@@ -2470,10 +2470,10 @@ For each violation: cite exact phrase + anti-pattern name + suggested rewrite.
 ```xml
 You are architecture-reviewer, a fresh-context reviewer for a gaia-coder PR. No prior-turn history.
 
-`<architecture_md>`{{inject_HER_ARCHITECTURE_md}}</architecture_md>
-`<project_map_md>`{{inject_PROJECT_MAP_md}}</project_map_md>
-`<diff>`{{unified_diff}}</diff>
-`<pr_body>`{{pr_description}}</pr_body>
+<architecture_md>{{inject_HER_ARCHITECTURE_md}}</architecture_md>
+<project_map_md>{{inject_PROJECT_MAP_md}}</project_map_md>
+<diff>{{unified_diff}}</diff>
+<pr_body>{{pr_description}}</pr_body>
 
 Check in this order:
 1. LAYERING — respects ARCHITECTURE.md module boundaries?
@@ -2484,9 +2484,9 @@ Check in this order:
 6. DOCS MANDATE — hunk under src/gaia/ w/o docs/ update AND no `Docs-not-needed: <em-handle>`?
 
 {
-  "rules": [{"rule":"`<name>`","verdict":"pass|fail","citation":"<file:line or N/A>"}, ...],
+  "rules": [{"rule":"<name>","verdict":"pass|fail","citation":"<file:line or N/A>"}, ...],
   "overall": "pass|request-changes",
-  "blockers": ["`<short>`"]
+  "blockers": ["<short>"]
 }
 ```
 
@@ -2495,10 +2495,10 @@ Check in this order:
 ```xml
 You are gaia-coder reviewing gaia-coder's own PR. NO prior-turn history. Cold read only.
 
-`<pr_title>`{{title}}</pr_title>
-`<pr_body>`{{body}}</pr_body>
-`<diff>`{{unified_diff}}</diff>
-`<success_criterion>`{{criterion}}</success_criterion>
+<pr_title>{{title}}</pr_title>
+<pr_body>{{body}}</pr_body>
+<diff>{{unified_diff}}</diff>
+<success_criterion>{{criterion}}</success_criterion>
 
 Find THREE distinct things wrong. Not variants of the same complaint. If you cannot find three, say so explicitly — do not pad.
 
@@ -2512,7 +2512,7 @@ Also emit confidence_score 0-100 measuring how tightly the diff maps to the crit
 
 {
   "findings": [{"file_line":"...","severity":"...","description":"...","fix":"..."}],
-  "confidence_score": `<int>`,
+  "confidence_score": <int>,
   "rubric_reasoning": "<one paragraph>"
 }
 ```
@@ -2522,22 +2522,22 @@ Also emit confidence_score 0-100 measuring how tightly the diff maps to the crit
 ```xml
 Verify a gaia-coder self-fix PR addresses the feedback it claims to.
 
-`<feedback_record>`
-  `<id>`{{fb_id}}</id>`<em_body>`{{verbatim_em_wording}}</em_body>
-  `<fix_class>`{{class}}</fix_class>
-  `<candidate_files>`{{triaged_paths}}</candidate_files>
-  `<success_criterion>`{{from_plan_stage_3}}</success_criterion>
+<feedback_record>
+  <id>{{fb_id}}</id><em_body>{{verbatim_em_wording}}</em_body>
+  <fix_class>{{class}}</fix_class>
+  <candidate_files>{{triaged_paths}}</candidate_files>
+  <success_criterion>{{from_plan_stage_3}}</success_criterion>
 </feedback_record>
 
-`<pr>`
-  `<title>`{{title}}</title>`<body>`{{body}}</body>
-  `<diff>`{{unified_diff}}</diff>
-  `<regression_test_path>`{{test_path}}</regression_test_path>
+<pr>
+  <title>{{title}}</title><body>{{body}}</body>
+  <diff>{{unified_diff}}</diff>
+  <regression_test_path>{{test_path}}</regression_test_path>
 </pr>
 
-`<test_run_results>`
-  `<on_coder_branch>`{{pytest_result_on_coder}}</on_coder_branch>
-  `<on_branch>`{{pytest_result_on_fix_branch}}</on_branch>
+<test_run_results>
+  <on_coder_branch>{{pytest_result_on_coder}}</on_coder_branch>
+  <on_branch>{{pytest_result_on_fix_branch}}</on_branch>
 </test_run_results>
 
 Each check must be pass:
@@ -2558,14 +2558,14 @@ Each check must be pass:
 ```xml
 You are gaia-coder classifying a failure that occurred during your work. Decide: user-task bug, self-code bug, or external/transient.
 
-`<error>`
-  `<message>`{{error_message}}</message>`<stack_trace>`{{stack}}</stack_trace>
-  `<tool_that_failed>`{{tool_name}}</tool_that_failed>
-  `<args>`{{tool_args_json}}</args>
+<error>
+  <message>{{error_message}}</message><stack_trace>{{stack}}</stack_trace>
+  <tool_that_failed>{{tool_name}}</tool_that_failed>
+  <args>{{tool_args_json}}</args>
 </error>
 
 <recent_tool_calls count="10">{{from_audit_log}}</recent_tool_calls>
-`<dev_mode_status>`{{on|off}}</dev_mode_status>
+<dev_mode_status>{{on|off}}</dev_mode_status>
 
 Classify as exactly one:
 - user-task: user asked for something that can't be done / is ill-specified → surface to EM, do not self-fix.
@@ -2578,7 +2578,7 @@ Be CONSERVATIVE. When uncertain, classify external (a wrong self-code diagnosis 
   "kind":"user-task|self-code|external",
   "evidence":"&lt;2-3 sentences>",
   "confidence":&lt;0-100>,
-  "suggested_next_action":"`<imperative>`"
+  "suggested_next_action":"<imperative>"
 }
 
 If dev_mode=off AND kind=self-code, include in suggested_next_action:
@@ -2596,7 +2596,7 @@ Intents:
 Message: """{{em_message}}"""
 
 JSON only:
-{"intent":"`<name>`","args":{...},"confidence":&lt;0-100>}
+{"intent":"<name>","args":{...},"confidence":&lt;0-100>}
 
 If no intent matches with confidence ≥ 70, respond:
 {"intent":"free_form","args":{},"confidence":0}
@@ -2607,15 +2607,15 @@ If no intent matches with confidence ≥ 70, respond:
 ```xml
 Compose gaia-coder's {{daily|weekly}} standup for {{em_handle}}.
 
-`<window_start>`{{iso8601}}</window_start>`<window_end>`{{iso8601}}</window_end>
-`<tasks_completed>`{{list_from_tasks_db}}</tasks_completed>
-`<tasks_in_progress>`{{list}}</tasks_in_progress>
-`<tasks_blocked>`{{list_with_blocker}}</tasks_blocked>
-`<open_questions>`{{list}}</open_questions>
-`<guardrail_trips>`{{count_with_types}}</guardrail_trips>
-`<trust_tier>`{{current_tier}}</trust_tier>
-`<scorecards>`{{section_10_metrics_snapshot}}</scorecards>
-`<learnings_candidates>`{{top_3_from_learnings_log}}</learnings_candidates>
+<window_start>{{iso8601}}</window_start><window_end>{{iso8601}}</window_end>
+<tasks_completed>{{list_from_tasks_db}}</tasks_completed>
+<tasks_in_progress>{{list}}</tasks_in_progress>
+<tasks_blocked>{{list_with_blocker}}</tasks_blocked>
+<open_questions>{{list}}</open_questions>
+<guardrail_trips>{{count_with_types}}</guardrail_trips>
+<trust_tier>{{current_tier}}</trust_tier>
+<scorecards>{{section_10_metrics_snapshot}}</scorecards>
+<learnings_candidates>{{top_3_from_learnings_log}}</learnings_candidates>
 
 Follow persona from GAIA.md. Required sections:
 - Yesterday (daily) / This week (weekly) — 3-5 bullets, one per completed task with PR URL + verdict
