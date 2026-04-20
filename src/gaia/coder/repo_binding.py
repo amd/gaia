@@ -29,7 +29,6 @@ import hashlib
 import hmac
 import logging
 import os
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Literal, Optional
@@ -98,9 +97,7 @@ class RepoBinding(BaseModel):
     @classmethod
     def _validate_repo(cls, v: str) -> str:
         if "/" not in v or v.count("/") != 1 or not all(v.split("/")):
-            raise ValueError(
-                f"repo must be in 'owner/name' form, got {v!r}"
-            )
+            raise ValueError(f"repo must be in 'owner/name' form, got {v!r}")
         return v
 
     @field_validator("github_app_id", "github_installation_id")
@@ -126,9 +123,7 @@ def load_repo_binding(path: str | Path) -> RepoBinding:
     try:
         import tomllib  # type: ignore[import-not-found]
     except ImportError as e:  # pragma: no cover
-        raise RepoBindingError(
-            "tomllib not available; need Python 3.11+"
-        ) from e
+        raise RepoBindingError("tomllib not available; need Python 3.11+") from e
 
     p = Path(path)
     if not p.exists():
@@ -139,9 +134,7 @@ def load_repo_binding(path: str | Path) -> RepoBinding:
     try:
         data = tomllib.loads(p.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
-        raise RepoBindingError(
-            f"malformed TOML in {p}: {e}"
-        ) from e
+        raise RepoBindingError(f"malformed TOML in {p}: {e}") from e
     try:
         return RepoBinding(**data)
     except ValidationError as e:
@@ -229,9 +222,7 @@ def doctor(
 
     checks.append(_check_app_install(binding, runner))
     checks.append(_check_private_key_decrypts(binding, getter))
-    checks.append(
-        _check_webhook_signature_round_trip(binding, getter, sample_payload)
-    )
+    checks.append(_check_webhook_signature_round_trip(binding, getter, sample_payload))
     checks.append(_check_coder_branch_exists(binding, runner))
 
     return DoctorResult(
@@ -245,14 +236,10 @@ def doctor(
 # ---------------------------------------------------------------------------
 
 
-def _check_app_install(
-    binding: RepoBinding, runner: Any
-) -> DoctorCheck:
+def _check_app_install(binding: RepoBinding, runner: Any) -> DoctorCheck:
     """Verify ``gh api /app`` authenticates as the right App."""
     try:
-        raw = runner(
-            ["api", f"/app", "-H", "Accept: application/vnd.github+json"]
-        )
+        raw = runner(["api", "/app", "-H", "Accept: application/vnd.github+json"])
     except Exception as e:  # noqa: BLE001 — doctor aggregates
         return DoctorCheck(
             name="github_app_install",
@@ -286,9 +273,7 @@ def _check_app_install(
     )
 
 
-def _check_private_key_decrypts(
-    binding: RepoBinding, getter: Any
-) -> DoctorCheck:
+def _check_private_key_decrypts(binding: RepoBinding, getter: Any) -> DoctorCheck:
     """Pull the private key from the keyring and verify it looks like a PEM."""
     try:
         material = getter(binding.private_key_keyring_slot)
@@ -308,9 +293,11 @@ def _check_private_key_decrypts(
             ),
         )
     # Cheap structural check — full RSA decode would need an extra dep.
-    text = material.decode("utf-8", errors="replace") if isinstance(
-        material, bytes
-    ) else material
+    text = (
+        material.decode("utf-8", errors="replace")
+        if isinstance(material, bytes)
+        else material
+    )
     if "BEGIN" not in text or "PRIVATE KEY" not in text:
         return DoctorCheck(
             name="private_key_decrypts",
@@ -349,12 +336,8 @@ def _check_webhook_signature_round_trip(
             status="fail",
             detail="keyring returned empty webhook secret",
         )
-    secret_bytes = (
-        secret.encode("utf-8") if isinstance(secret, str) else secret
-    )
-    signature = "sha256=" + hmac.new(
-        secret_bytes, payload, hashlib.sha256
-    ).hexdigest()
+    secret_bytes = secret.encode("utf-8") if isinstance(secret, str) else secret
+    signature = "sha256=" + hmac.new(secret_bytes, payload, hashlib.sha256).hexdigest()
     if not verify_webhook_signature(secret_bytes, payload, signature):
         return DoctorCheck(
             name="webhook_signature_round_trip",
@@ -368,9 +351,7 @@ def _check_webhook_signature_round_trip(
     )
 
 
-def _check_coder_branch_exists(
-    binding: RepoBinding, runner: Any
-) -> DoctorCheck:
+def _check_coder_branch_exists(binding: RepoBinding, runner: Any) -> DoctorCheck:
     """Verify the bound repo has a ``coder`` branch (§5.7)."""
     try:
         raw = runner(
@@ -421,9 +402,7 @@ def _check_coder_branch_exists(
 # ---------------------------------------------------------------------------
 
 
-def verify_webhook_signature(
-    secret: bytes, body: bytes, header_value: str
-) -> bool:
+def verify_webhook_signature(secret: bytes, body: bytes, header_value: str) -> bool:
     """Constant-time check of a ``X-Hub-Signature-256`` header.
 
     Returns ``True`` on match. Implementation mirrors GitHub's canonical

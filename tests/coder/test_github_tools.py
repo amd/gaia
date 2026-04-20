@@ -9,7 +9,6 @@ Every tool gets a happy-path test + a failure-path test + a registration check.
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
 
 import pytest
 
@@ -20,7 +19,6 @@ from gaia.coder.tools.github import (
     GitHubCLIMissingError,
     GitHubToolsMixin,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -92,9 +90,7 @@ def test_gh_pr_create_happy_path(gh_mixin, monkeypatch):
     url = "https://github.com/amd/gaia/pull/9001"
     monkeypatch.setattr(gh_mod, "_run_gh", lambda argv, **kw: url + "\n")
     tool = _get_tool("gh_pr_create")
-    handle = tool(
-        title="feat: x", body="body", head="auto/x", base="coder", draft=True
-    )
+    handle = tool(title="feat: x", body="body", head="auto/x", base="coder", draft=True)
     assert handle["number"] == 9001
     assert handle["url"] == url
     assert handle["draft"] is True
@@ -112,9 +108,7 @@ def test_gh_pr_create_non_zero_exit_raises(gh_mixin, monkeypatch):
     assert "auth required" in str(exc.value)
 
 
-def test_gh_pr_create_forwards_labels_and_assignees(
-    gh_mixin, monkeypatch
-):
+def test_gh_pr_create_forwards_labels_and_assignees(gh_mixin, monkeypatch):
     captured = {}
 
     def _capture(argv, **_):
@@ -171,9 +165,7 @@ def test_gh_pr_view_parses_json(gh_mixin, monkeypatch):
         "mergeable": "MERGEABLE",
         "mergeStateStatus": "CLEAN",
     }
-    monkeypatch.setattr(
-        gh_mod, "_run_gh", lambda argv, **kw: json.dumps(payload)
-    )
+    monkeypatch.setattr(gh_mod, "_run_gh", lambda argv, **kw: json.dumps(payload))
     state = _get_tool("gh_pr_view")(7)
     assert state["number"] == 7
     assert state["base"] == "coder"
@@ -328,9 +320,7 @@ def test_gh_run_list_parses_rows(gh_mixin, monkeypatch):
             "createdAt": "2026-04-20T01:00:00Z",
         },
     ]
-    monkeypatch.setattr(
-        gh_mod, "_run_gh", lambda argv, **kw: json.dumps(payload)
-    )
+    monkeypatch.setattr(gh_mod, "_run_gh", lambda argv, **kw: json.dumps(payload))
     rows = _get_tool("gh_run_list")(limit=5)
     assert len(rows) == 2
     assert rows[0]["id"] == 10
@@ -408,9 +398,7 @@ def test_gh_release_create_draft_default(gh_mixin, monkeypatch):
         return "https://github.com/amd/gaia/releases/tag/v1.0.0\n"
 
     monkeypatch.setattr(gh_mod, "_run_gh", _capture)
-    handle = _get_tool("gh_release_create")(
-        tag="v1.0.0", title="v1.0.0", notes="notes"
-    )
+    handle = _get_tool("gh_release_create")(tag="v1.0.0", title="v1.0.0", notes="notes")
     assert handle["tag"] == "v1.0.0"
     assert handle["draft"] is True
     assert "--draft" in captured["argv"]

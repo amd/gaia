@@ -32,9 +32,9 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,9 @@ class FreshnessContract:
         for c in self.corpora:
             if c.name == name:
                 return c
-        raise KeyError(f"unknown corpus {name!r}; known: {[c.name for c in self.corpora]}")
+        raise KeyError(
+            f"unknown corpus {name!r}; known: {[c.name for c in self.corpora]}"
+        )
 
     @classmethod
     def default(cls) -> "FreshnessContract":
@@ -199,9 +201,7 @@ StatusProvider = Callable[[], Dict[str, CorpusStatus]]
 # ---------------------------------------------------------------------------
 
 
-def verdict_for(
-    status: CorpusStatus, contract: CorpusContract
-) -> FreshnessVerdict:
+def verdict_for(status: CorpusStatus, contract: CorpusContract) -> FreshnessVerdict:
     """Compare a live :class:`CorpusStatus` against its :class:`CorpusContract`."""
     if status.last_indexed_at is None:
         return FreshnessVerdict(
@@ -230,9 +230,7 @@ def verdict_for(
     )
 
 
-def ensure_fresh_or_raise(
-    status: CorpusStatus, contract: CorpusContract
-) -> None:
+def ensure_fresh_or_raise(status: CorpusStatus, contract: CorpusContract) -> None:
     """Raise :class:`StaleIndexError` if ``status`` violates ``contract``.
 
     Used by the RAG query wrapper as the hard gate before surfacing any
@@ -397,9 +395,7 @@ class RagStatusReport:
                     "document_count": c.document_count,
                     "pending_reindex": c.pending_reindex,
                     "last_indexed_at": (
-                        c.last_indexed_at.isoformat()
-                        if c.last_indexed_at
-                        else None
+                        c.last_indexed_at.isoformat() if c.last_indexed_at else None
                     ),
                     "age_hours": c.age_hours,
                 }

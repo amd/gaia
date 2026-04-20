@@ -26,7 +26,6 @@ from gaia.coder.repo_binding import (
     verify_webhook_signature,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
@@ -94,9 +93,7 @@ def test_load_repo_binding_rejects_bad_repo_slug(tmp_path):
 
 
 def test_load_repo_binding_rejects_negative_app_id(tmp_path):
-    bad = VALID_TOML.replace(
-        "github_app_id = 123456", "github_app_id = -1"
-    )
+    bad = VALID_TOML.replace("github_app_id = 123456", "github_app_id = -1")
     p = _write_toml(tmp_path, bad)
     with pytest.raises(RepoBindingError):
         load_repo_binding(p)
@@ -105,9 +102,7 @@ def test_load_repo_binding_rejects_negative_app_id(tmp_path):
 def test_load_repo_binding_missing_required_field(tmp_path):
     # Drop the `github_installation_id` line.
     bad = "\n".join(
-        line
-        for line in VALID_TOML.splitlines()
-        if "github_installation_id" not in line
+        line for line in VALID_TOML.splitlines() if "github_installation_id" not in line
     )
     p = _write_toml(tmp_path, bad)
     with pytest.raises(RepoBindingError):
@@ -124,9 +119,7 @@ def _happy_gh_runner(binding: RepoBinding):
         if argv[:2] == ["api", "/app"]:
             return json.dumps({"id": binding.github_app_id})
         if argv[:2] == ["api", f"/repos/{binding.repo}/branches/coder"]:
-            return json.dumps(
-                {"name": "coder", "commit": {"sha": "deadbeef"}}
-            )
+            return json.dumps({"name": "coder", "commit": {"sha": "deadbeef"}})
         raise AssertionError(f"unexpected argv: {argv}")
 
     return _run
@@ -243,9 +236,7 @@ def test_doctor_aggregates_all_failures_not_short_circuit():
     def _broken_gh(argv):
         raise RuntimeError("network down")
 
-    result = doctor(
-        binding, keyring_getter=_broken_getter, gh_runner=_broken_gh
-    )
+    result = doctor(binding, keyring_getter=_broken_getter, gh_runner=_broken_gh)
     assert result.green is False
     assert len(result.failed()) == 4  # every check reports
 
@@ -258,17 +249,13 @@ def test_doctor_aggregates_all_failures_not_short_circuit():
 def test_verify_webhook_signature_round_trip():
     secret = b"hunter2"
     body = b'{"action":"opened"}'
-    signature = (
-        "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
-    )
+    signature = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
     assert verify_webhook_signature(secret, body, signature) is True
 
 
 def test_verify_webhook_signature_rejects_wrong_secret():
     body = b"x"
-    signature = (
-        "sha256=" + hmac.new(b"right", body, hashlib.sha256).hexdigest()
-    )
+    signature = "sha256=" + hmac.new(b"right", body, hashlib.sha256).hexdigest()
     assert verify_webhook_signature(b"wrong", body, signature) is False
 
 

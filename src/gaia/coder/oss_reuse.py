@@ -38,10 +38,9 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Literal, Optional, Sequence, TypedDict
+from typing import List, Optional, Sequence, TypedDict
 
 from gaia.agents.base.tools import tool
 from gaia.coder.tools.github import _run_gh
@@ -186,9 +185,7 @@ def _gh_api(path: str, *, method: str = "GET") -> dict:
     try:
         return json.loads(raw)
     except json.JSONDecodeError as e:
-        raise RuntimeError(
-            f"gh api returned non-JSON ({path}): {e.msg}"
-        ) from e
+        raise RuntimeError(f"gh api returned non-JSON ({path}): {e.msg}") from e
 
 
 def _fetch_raw(url: str) -> str:
@@ -199,9 +196,7 @@ def _fetch_raw(url: str) -> str:
     """
     import urllib.request
 
-    req = urllib.request.Request(
-        url, headers={"User-Agent": "gaia-coder (amd/gaia)"}
-    )
+    req = urllib.request.Request(url, headers={"User-Agent": "gaia-coder (amd/gaia)"})
     with urllib.request.urlopen(req, timeout=60) as resp:
         return resp.read().decode("utf-8")
 
@@ -428,9 +423,7 @@ def _validate_license_filter(
     requested = frozenset(license_filter)
     bad = requested & BLOCKED_LICENSES
     if bad:
-        raise LicenseIncompatibleError(
-            "<filter>", ",".join(sorted(bad))
-        )
+        raise LicenseIncompatibleError("<filter>", ",".join(sorted(bad)))
     # Silently drop entries that aren't permissive — we never widen.
     return requested & PERMISSIVE_LICENSES
 

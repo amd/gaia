@@ -10,11 +10,7 @@ real ``git clone`` happens.
 
 from __future__ import annotations
 
-import os
-import shutil
-import time
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
@@ -27,7 +23,6 @@ from gaia.coder.subagents.codebase_research import (
     StructuredAnalysis,
     research,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -109,9 +104,7 @@ def test_structured_analysis_schema_fields():
         question="Q",
         answer="A",
         key_files=[KeyFile(path="x.py", line_range=(1, 10), why_cited="y")],
-        patterns_worth_adopting=[
-            Pattern(pattern="p", evidence_path="e", caveat="c")
-        ],
+        patterns_worth_adopting=[Pattern(pattern="p", evidence_path="e", caveat="c")],
         license="MIT",
         attribution_note="n",
         confidence=80,
@@ -214,9 +207,7 @@ def test_research_keep_flag_preserves_workspace(tmp_path):
 
 def test_research_remote_url_uses_cloner(tmp_path):
     engine = _FixedEngine(
-        StructuredAnalysis(
-            source="x", question="q", answer="from clone", confidence=70
-        )
+        StructuredAnalysis(source="x", question="q", answer="from clone", confidence=70)
     )
     scratch = tmp_path / "scratch"
     result = research(

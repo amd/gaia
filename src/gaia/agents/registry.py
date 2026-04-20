@@ -31,6 +31,9 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     "screenshot": ("gaia.agents.tools.screenshot_tools", "ScreenshotToolsMixin"),
     "sd": ("gaia.sd.mixin", "SDToolsMixin"),
     "vlm": ("gaia.vlm.mixin", "VLMToolsMixin"),
+    # gaia-coder mixins (per docs/plans/coder-agent.mdx §15.2)
+    "github": ("gaia.coder.tools.github", "GitHubToolsMixin"),
+    "oss_reuse": ("gaia.coder.oss_reuse", "OSSReuseMixin"),
 }
 
 

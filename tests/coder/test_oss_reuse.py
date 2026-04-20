@@ -9,21 +9,20 @@ No network I/O. The two external boundaries
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.coder import oss_reuse
 from gaia.coder.oss_reuse import (
-    AttributionError as OSSAttributionError,
     BLOCKED_LICENSES,
+    PERMISSIVE_LICENSES,
+)
+from gaia.coder.oss_reuse import AttributionError as OSSAttributionError
+from gaia.coder.oss_reuse import (
     LicenseIncompatibleError,
     LicenseReport,
     OSSReuseMixin,
-    PERMISSIVE_LICENSES,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -180,14 +179,10 @@ def test_gh_search_code_drops_blocked_licenses(oss_mixin, monkeypatch):
 
 def test_gh_search_code_cannot_widen_filter_to_blocked(oss_mixin):
     with pytest.raises(LicenseIncompatibleError):
-        _get_tool("gh_search_code")(
-            "q", license_filter=["MIT", "GPL-3.0"]
-        )
+        _get_tool("gh_search_code")("q", license_filter=["MIT", "GPL-3.0"])
 
 
-def test_gh_search_repos_applies_server_and_client_filter(
-    oss_mixin, monkeypatch
-):
+def test_gh_search_repos_applies_server_and_client_filter(oss_mixin, monkeypatch):
     def _api(path, **_):
         # license qualifiers are URL-encoded as `license%3A<key>`.
         assert "license%3Amit" in path or "license%3Aapache-2.0" in path
@@ -250,7 +245,7 @@ def test_import_success_writes_header_and_notices(oss_mixin, monkeypatch, tmp_pa
     text = dest.read_text()
     assert text.startswith(f"# Adapted from pallets/click @ {sha} — MIT\n")
     assert "Used for CLI help layout." in text
-    assert 'def greet():' in text
+    assert "def greet():" in text
 
     notices = (tmp_path / "THIRD_PARTY_NOTICES.md").read_text()
     assert "pallets/click" in notices

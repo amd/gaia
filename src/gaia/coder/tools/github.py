@@ -29,7 +29,7 @@ import logging
 import os
 import shutil
 import subprocess
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, List, Literal, Optional, TypedDict
 
 from gaia.agents.base.tools import tool
 
@@ -270,9 +270,7 @@ class GitHubToolsMixin:
                 raise GitHubCLIError(
                     argv, 0, f"could not parse PR number from url {url!r}"
                 ) from e
-            return PRHandle(
-                number=number, url=url, head=head, base=base, draft=draft
-            )
+            return PRHandle(number=number, url=url, head=head, base=base, draft=draft)
 
         @tool
         def gh_pr_view(number: int, repo: Optional[str] = None) -> PRState:

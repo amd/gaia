@@ -8,19 +8,16 @@ No real RAG backend, no real ``git``. Every external call is stubbed.
 from __future__ import annotations
 
 import datetime as dt
-import subprocess
 from typing import Dict
 
 import pytest
 
 from gaia.coder.rag_freshness import (
     CitationStaleError,
-    CorpusContract,
     CorpusStatus,
     FreshnessContract,
     RagStatusReport,
     StaleIndexError,
-    WatchdogAlert,
     check_citation_valid,
     ensure_fresh_or_raise,
     rag_rebuild,
@@ -29,7 +26,6 @@ from gaia.coder.rag_freshness import (
     reindex_watchdog,
     verdict_for,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,9 +36,7 @@ def _now_minus_hours(h: float) -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=h)
 
 
-def _status(
-    name: str, *, hours_old: float = 0.5, docs: int = 100
-) -> CorpusStatus:
+def _status(name: str, *, hours_old: float = 0.5, docs: int = 100) -> CorpusStatus:
     return CorpusStatus(
         name=name,
         last_indexed_at=_now_minus_hours(hours_old),
@@ -187,10 +181,7 @@ def test_watchdog_fires_when_corpus_missing_entirely():
     """A provider that doesn't return a row for a known corpus trips the watchdog."""
     contract = FreshnessContract.default()
     # Only three of five corpora present.
-    statuses = {
-        c.name: _status(c.name, hours_old=5)
-        for c in contract.corpora[:3]
-    }
+    statuses = {c.name: _status(c.name, hours_old=5) for c in contract.corpora[:3]}
     alert = reindex_watchdog(contract, _provider(statuses))
     assert alert.fired is True
     # The two missing corpora are reported.

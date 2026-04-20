@@ -31,16 +31,14 @@ the other phases use.
 
 from __future__ import annotations
 
-import datetime as dt
 import logging
-import os
 import shutil
 import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
+from typing import Callable, List, Optional, Protocol, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -63,7 +61,9 @@ class ResearchBudget:
 
     # Lambda (not bare ``time.monotonic``) so tests that monkeypatch
     # ``time.monotonic`` on the module also affect ``started_at``.
-    started_at: float = field(default_factory=lambda: time.monotonic())
+    started_at: float = field(
+        default_factory=lambda: time.monotonic()  # pylint: disable=unnecessary-lambda
+    )
     max_duration_minutes: float = 10.0
     max_cost_usd: float = 2.0
     max_tool_calls: int = 40
@@ -148,7 +148,9 @@ class BudgetExceededError(CodebaseResearchError):
     the ceiling fired.
     """
 
-    def __init__(self, reason: str, partial: Optional[StructuredAnalysis] = None) -> None:
+    def __init__(
+        self, reason: str, partial: Optional[StructuredAnalysis] = None
+    ) -> None:
         self.reason = reason
         self.partial = partial
         super().__init__(reason)
@@ -188,9 +190,7 @@ def _prepare_workspace(
     else:
         src_path = Path(source).expanduser().resolve()
         if not src_path.exists():
-            raise CodebaseResearchError(
-                f"local source path does not exist: {src_path}"
-            )
+            raise CodebaseResearchError(f"local source path does not exist: {src_path}")
         # Copy rather than symlink — subagent must not accidentally write
         # back to the real repo.
         shutil.copytree(src_path, workdir)
