@@ -1,0 +1,23 @@
+# gaia-coder skills catalog (§4.7).
+#
+# Phase 1 placeholder. This file is the machine-readable index of
+# context-loaded skills — rules that only apply in specific contexts
+# (touching release scripts, responding to an external contributor,
+# triaging a CI failure on main, etc.).
+#
+# Real skill entries are added as Phase 2+ proceeds. Each entry has the
+# shape:
+#
+#     [[skill]]
+#     name = "touching-release-scripts"
+#     path = "skills/touching-release-scripts.md"
+#     priority = "high"
+#     description = "Rules when editing files under .github/workflows/release-*"
+#     triggers = [
+#         { kind = "path_glob", value = ".github/workflows/release-*" },
+#     ]
+#
+# See docs/plans/coder-agent.mdx §4.7 for the full schema and loading
+# algorithm.
+
+skills = []
