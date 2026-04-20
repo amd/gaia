@@ -377,7 +377,19 @@ class OSSReuseMixin:
             if lic is None or lic not in PERMISSIVE_LICENSES:
                 raise LicenseIncompatibleError(owner_name, lic)
             root = Path(repo_root) if repo_root else Path.cwd()
-            dest = root / dest_path
+            root_resolved = root.resolve()
+            # dest_path is @tool-exposed — LLM-controlled. Reject absolute
+            # paths and ``..`` traversal before any write. Fail loudly per
+            # CLAUDE.md. See PR #827 auto-review.
+            candidate = (root / dest_path).resolve()
+            try:
+                candidate.relative_to(root_resolved)
+            except ValueError as e:
+                raise AttributionError(
+                    f"dest_path {dest_path!r} escapes repo_root {root_resolved} — "
+                    "absolute paths and `..` traversal are forbidden"
+                ) from e
+            dest = candidate
             dest.parent.mkdir(parents=True, exist_ok=True)
 
             raw_url = _to_raw_url(owner_name, commit_sha, src_path)
@@ -424,8 +436,17 @@ def _validate_license_filter(
     bad = requested & BLOCKED_LICENSES
     if bad:
         raise LicenseIncompatibleError("<filter>", ",".join(sorted(bad)))
-    # Silently drop entries that aren't permissive — we never widen.
-    return requested & PERMISSIVE_LICENSES
+    # Reject anything that isn't in the permissive allowlist rather than
+    # silently dropping — a typo in a user-supplied filter ("MIT-License"
+    # instead of "MIT") would otherwise produce an empty search with no
+    # feedback. Per CLAUDE.md fail-loudly rule.
+    unknown = requested - PERMISSIVE_LICENSES
+    if unknown:
+        raise ValueError(
+            f"Unknown SPDX license id(s) in license_filter: {sorted(unknown)!r}. "
+            f"Allowed: {sorted(PERMISSIVE_LICENSES)!r}"
+        )
+    return requested
 
 
 def _urlencode(text: str) -> str:

@@ -385,7 +385,12 @@ def add_instrumented_trace(
     template_line = lines[line - 1] if line <= len(lines) else lines[-1]
     indent_match = re.match(r"^(\s*)", template_line)
     indent = indent_match.group(1) if indent_match else ""
-    inserted = f"{indent}logger.debug({json.dumps(message)})  # gaia-coder probe\n"
+    # Inline the logging lookup so the probe is safe even when the target
+    # file does not bind ``logger`` at module scope. Cf. #828 auto-review.
+    inserted = (
+        f"{indent}__import__('logging').getLogger(__name__)"
+        f".debug({json.dumps(message)})  # gaia-coder probe\n"
+    )
     new_lines = lines[: line - 1] + [inserted] + lines[line - 1 :]
     target.write_text("".join(new_lines), encoding="utf-8")
 
@@ -460,6 +465,17 @@ def diff_behavior(
     repo_root = Path(cwd) if cwd else Path.cwd()
     argv = _shell_split(harness_script)
 
+    # Capture the original ref BEFORE the first switch. ``git switch -`` only
+    # returns to the previous ref, which after two detached switches is the
+    # first detached ref, not the caller's original HEAD. Cf. #828 auto-review.
+    sym = _run(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=repo_root)
+    if sym.returncode == 0 and sym.stdout.strip():
+        original_head = sym.stdout.strip()
+        original_is_branch = True
+    else:
+        original_head = _run(["git", "rev-parse", "HEAD"], cwd=repo_root).stdout.strip()
+        original_is_branch = False
+
     # Stash first to keep the working tree clean.
     stash = _run(
         ["git", "stash", "push", "--include-untracked", "-m", "gaia-coder-debug"],
@@ -482,7 +498,10 @@ def diff_behavior(
         good_output = _run_on(good_ref)
         bad_output = _run_on(bad_ref)
     finally:
-        _run(["git", "switch", "-"], cwd=repo_root)
+        if original_is_branch:
+            _run(["git", "switch", original_head], cwd=repo_root)
+        else:
+            _run(["git", "switch", "--detach", original_head], cwd=repo_root)
         if stashed:
             _run(["git", "stash", "pop"], cwd=repo_root)
 

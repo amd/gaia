@@ -349,19 +349,27 @@ class GitHubToolsMixin:
             number: int,
             method: Literal["merge", "squash", "rebase"] = "squash",
             repo: Optional[str] = None,
+            admin_override: bool = False,
         ) -> MergeResult:
             """Merge a PR. Sensitive-class per §4.3 — callers must elevate.
 
             ``--repo coder`` restrictions from §5.7 are enforced *one layer
             up* at the trust-tier check, not inside this tool — this tool is
             the low-level shell and must stay general.
+
+            ``admin_override=True`` adds ``gh pr merge --admin`` which bypasses
+            branch protection. Reserved for emergency operator use; every
+            normal agent path must leave it ``False`` so merges go through
+            normal review rules.
             """
             flag_map = {
                 "merge": "--merge",
                 "squash": "--squash",
                 "rebase": "--rebase",
             }
-            argv = ["pr", "merge", str(number), flag_map[method], "--admin"]
+            argv = ["pr", "merge", str(number), flag_map[method]]
+            if admin_override:
+                argv.append("--admin")
             argv = _with_repo_flag(argv, repo)
             _run_gh(argv)  # gh prints a human summary; we don't need it
             # Re-fetch the PR to get the merge commit SHA.
