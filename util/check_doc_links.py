@@ -40,7 +40,7 @@ class LinkResult(NamedTuple):
 # Matches [text](url) but not ![image](url) image tags with broken links
 MD_LINK_RE = re.compile(r'(?<!!)\[([^\]]*)\]\(([^)]+)\)')
 # Matches bare URLs in text
-BARE_URL_RE = re.compile(r'(?<=["\s(])https?://[^\s)"\'<>]+')
+BARE_URL_RE = re.compile(r'(?<=["\s(`])https?://[^\s)"\'`<>]+')
 # Matches href="url" in HTML/JSX
 HREF_RE = re.compile(r'href=["\']([^"\']+)["\']')
 # Matches src="url" in HTML/JSX
@@ -70,6 +70,8 @@ SKIP_PATTERNS = [
     r"github\.com/amd/gaia/compare/",  # Release compare URLs (tags may not exist yet)
     r"github\.com/amd/gaia/(blob|tree)/main/",  # Same-repo links (may 404 during PRs before merge)
     r"https?://(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)",  # RFC1918 private IPs (example URLs in docs)
+    r"https?://\{[a-zA-Z_][\w-]*\}",  # Single-brace placeholders like http://{host}:{port}/…
+    r"https?://host(:|/)",  # Literal "host" placeholder hostname in CLI examples
 ]
 
 
