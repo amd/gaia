@@ -29,10 +29,23 @@ import types
 
 
 def _try_real_import() -> bool:
-    """Attempt the real import; return True on success."""
+    """Attempt the real import; return True on success.
+
+    Narrowed to ``ImportError`` / ``ModuleNotFoundError`` only — any other
+    exception (syntax error in stores, AttributeError at import time, etc.)
+    is a real bug we want pytest to surface, not silently stub over.
+    Per CLAUDE.md fail-loudly rule.
+    """
     try:
         import gaia.coder  # noqa: F401
-    except Exception:
+    except (ImportError, ModuleNotFoundError) as e:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "gaia.coder import failed during test setup (%s); falling back to stubs. "
+            "If you see this on a post-scaffold branch, stores/conftest.py is masking a real bug.",
+            e,
+        )
         return False
     return True
 
