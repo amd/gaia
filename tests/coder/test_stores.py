@@ -692,3 +692,55 @@ def test_learnings_log_rejects_multiline_observation() -> None:
             observation="line one\nline two",
             promotion_candidate="dismissed",
         )
+
+
+# ---------------------------------------------------------------------------
+# create_all_stores
+# ---------------------------------------------------------------------------
+
+
+def test_create_all_stores(tmp_path: Path) -> None:
+    paths = create_all_stores(tmp_path)
+
+    expected_keys = {
+        "em_inbox",
+        "tasks",
+        "feedback",
+        "spend",
+        "audit",
+        "ci_history",
+        "memory",
+        "paused_tasks",
+        "self_edits_log",
+        "learnings_log",
+    }
+    assert set(paths.keys()) == expected_keys
+
+    # Every SQLite db exists on disk with its expected table.
+    sqlite_stores = {
+        "em_inbox": "em_inbox",
+        "tasks": "tasks",
+        "feedback": "feedback",
+        "spend": "spend",
+        "audit": "audit",
+        "ci_history": "ci_history",
+        "memory": "memory",
+    }
+    for store_name, table in sqlite_stores.items():
+        db_path = paths[store_name]
+        assert db_path.exists()
+        conn = sqlite3.connect(db_path)
+        try:
+            assert _table_exists(conn, table)
+        finally:
+            conn.close()
+
+    # paused-tasks is a directory; the log files are not yet materialised but
+    # their parents exist.
+    assert paths["paused_tasks"].is_dir()
+    assert paths["self_edits_log"].parent.exists()
+    assert paths["learnings_log"].parent.exists()
+
+    # Idempotent re-run.
+    second = create_all_stores(tmp_path)
+    assert second == paths
