@@ -127,3 +127,68 @@ def test_em_inbox_check_constraints(tmp_path: Path) -> None:
         conn.rollback()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# tasks
+# ---------------------------------------------------------------------------
+
+
+def test_create_tasks(tmp_path: Path) -> None:
+    conn = tasks.open_store(tmp_path / "tasks.db")
+    try:
+        assert _table_exists(conn, "tasks")
+    finally:
+        conn.close()
+
+
+def test_round_trip_tasks(tmp_path: Path) -> None:
+    conn = tasks.open_store(tmp_path / "tasks.db")
+    try:
+        row = tasks.TaskRow(
+            id="t_1",
+            priority=70,
+            created_at=_ISO,
+            inputs_json=json.dumps({"prompt": "scaffold weather agent"}),
+            loop_version=1,
+        )
+        tasks.insert_row(conn, row)
+
+        fetched = tasks.get_row(conn, "t_1")
+        assert fetched is not None
+        assert fetched.priority == 70
+        assert fetched.cost_usd == 0.0
+
+        tasks.update_row(conn, "t_1", {"state": "running", "cost_usd": 0.23})
+        updated = tasks.get_row(conn, "t_1")
+        assert updated is not None
+        assert updated.state == "running"
+        assert updated.cost_usd == pytest.approx(0.23)
+
+        # list_rows ordering: priority DESC, created_at — insert a second row.
+        row2 = tasks.TaskRow(
+            id="t_2",
+            priority=90,
+            created_at=_ISO,
+            inputs_json="{}",
+            loop_version=1,
+        )
+        tasks.insert_row(conn, row2)
+        rows = tasks.list_rows(conn)
+        assert [r.id for r in rows] == ["t_2", "t_1"]
+    finally:
+        conn.close()
+
+
+def test_tasks_check_constraints(tmp_path: Path) -> None:
+    conn = tasks.open_store(tmp_path / "tasks.db")
+    try:
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO tasks (id, created_at, inputs_json, state, loop_version) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("bad_state", _ISO, "{}", "interpretive-dance", 1),
+            )
+        conn.rollback()
+    finally:
+        conn.close()
