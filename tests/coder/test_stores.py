@@ -413,3 +413,67 @@ def test_audit_check_constraints(tmp_path: Path) -> None:
         assert second > first
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# ci_history
+# ---------------------------------------------------------------------------
+
+
+def test_create_ci_history(tmp_path: Path) -> None:
+    conn = ci_history.open_store(tmp_path / "ci_history.db")
+    try:
+        assert _table_exists(conn, "ci_history")
+    finally:
+        conn.close()
+
+
+def test_round_trip_ci_history(tmp_path: Path) -> None:
+    conn = ci_history.open_store(tmp_path / "ci_history.db")
+    try:
+        row = ci_history.CiHistoryRow(
+            workflow_name="ci.yml",
+            branch="feature/x",
+            run_id=42,
+            started_at=_ISO,
+        )
+        ci_history.insert_row(conn, row)
+
+        fetched = ci_history.get_row(conn, "ci.yml", "feature/x", 42)
+        assert fetched is not None
+        assert fetched.duration_s is None
+
+        ci_history.update_row(
+            conn,
+            "ci.yml",
+            "feature/x",
+            42,
+            {"completed_at": _ISO, "duration_s": 300, "conclusion": "success"},
+        )
+        updated = ci_history.get_row(conn, "ci.yml", "feature/x", 42)
+        assert updated is not None
+        assert updated.duration_s == 300
+        assert updated.conclusion == "success"
+
+        rows = ci_history.list_rows(conn, {"workflow_name": "ci.yml"})
+        assert len(rows) == 1
+    finally:
+        conn.close()
+
+
+def test_ci_history_check_constraints(tmp_path: Path) -> None:
+    """``ci_history`` has no CHECK enums; verify compound PK uniqueness is enforced."""
+    conn = ci_history.open_store(tmp_path / "ci_history.db")
+    try:
+        row = ci_history.CiHistoryRow(
+            workflow_name="ci.yml",
+            branch="main",
+            run_id=1,
+            started_at=_ISO,
+        )
+        ci_history.insert_row(conn, row)
+        # Duplicate PK — must fail.
+        with pytest.raises(sqlite3.IntegrityError):
+            ci_history.insert_row(conn, row)
+    finally:
+        conn.close()
