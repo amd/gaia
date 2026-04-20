@@ -74,6 +74,15 @@ setup(
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
+        "gaia.coder",
+        "gaia.coder.prompts",
+        "gaia.coder.stores",
+        "gaia.coder.tools",
+        "gaia.coder.review",
+        "gaia.coder.introspect",
+        "gaia.coder.self_fix",
+        "gaia.coder.tests",
+        "gaia.coder.skills",
     ],
     package_data={
         "gaia.eval": [
@@ -83,6 +92,14 @@ setup(
             "webapp/public/*.html",
             "webapp/public/*.css",
             "webapp/public/*.js",
+        ],
+        "gaia.coder": [
+            "GAIA.md",
+            "ARCHITECTURE.md",
+            "PROJECT_MAP.md",
+        ],
+        "gaia.coder.skills": [
+            "catalog.toml",
         ],
     },
     install_requires=[
@@ -199,6 +216,7 @@ setup(
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
             "gaia-emr = gaia.agents.emr.cli:main",
             "gaia-code = gaia.agents.code.cli:main",
+            "gaia-coder = gaia.coder.cli:main",
         ]
     },
     python_requires=">=3.10",
