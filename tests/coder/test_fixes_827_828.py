@@ -13,8 +13,6 @@ Each test corresponds to one of the six fixes in the follow-up PR:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from gaia.coder import oss_reuse

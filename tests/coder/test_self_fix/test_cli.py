@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from gaia.coder import cli as coder_cli
 from gaia.coder.stores import feedback as feedback_store
 
@@ -53,8 +55,14 @@ def test_cli_feedback_enqueues(
 
 
 def test_cli_feedback_rejects_invalid_severity(capsys) -> None:
-    """argparse enforces the severity enum."""
-    try:
+    """argparse enforces the severity enum.
+
+    Uses ``pytest.raises`` so that an argparse regression that *silently
+    accepts* the invalid value fails this test. The earlier
+    ``try/except SystemExit`` pattern passed with zero assertions in
+    that scenario. Cf. #825 and #829 auto-reviews.
+    """
+    with pytest.raises(SystemExit) as excinfo:
         coder_cli.main(
             [
                 "feedback",
@@ -63,9 +71,7 @@ def test_cli_feedback_rejects_invalid_severity(capsys) -> None:
                 "nonsense",
             ]
         )
-    except SystemExit as exc:
-        # argparse raises SystemExit on invalid args.
-        assert exc.code != 0
+    assert excinfo.value.code != 0
 
 
 def test_cli_self_fix_subcommand_without_action_prints_help(capsys) -> None:

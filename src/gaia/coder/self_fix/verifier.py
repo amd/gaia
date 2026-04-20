@@ -97,13 +97,26 @@ def _run_regression_test(
 
 
 def _append_note(existing_notes_json: str, entry: Mapping[str, Any]) -> str:
-    """Append a note to the JSON array stored in ``feedback.notes_json``."""
-    try:
-        parsed = json.loads(existing_notes_json or "[]")
-    except json.JSONDecodeError:
-        parsed = []
-    if not isinstance(parsed, list):
-        parsed = []
+    """Append a note to the JSON array stored in ``feedback.notes_json``.
+
+    Corrupted / wrong-type content raises — the audit trail is canonical
+    and silently replacing it with ``[]`` would hide a regression.
+    Cf. #825 auto-review. Mirrors :func:`loop_driver._append_notes`.
+    """
+    if not existing_notes_json:
+        parsed: list = []
+    else:
+        try:
+            parsed = json.loads(existing_notes_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"feedback notes_json is corrupted and cannot be extended: {exc}"
+            ) from exc
+        if not isinstance(parsed, list):
+            raise ValueError(
+                f"feedback notes_json must be a JSON array, got "
+                f"{type(parsed).__name__}"
+            )
     parsed.append(dict(entry))
     return json.dumps(parsed)
 
