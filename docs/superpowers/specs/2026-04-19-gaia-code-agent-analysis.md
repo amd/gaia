@@ -27,7 +27,7 @@ Grant the rewrite **scoped self-governance** on day one: the ability to read and
 
 ## 1. Architecture Map
 
-The surface area looks like a ReAct agent but the control flow of `gaia-code` **does not use the base `Agent` ReAct loop at all**. The `CodeAgent.process_query` override in [`src/gaia/agents/code/agent.py:201-353`](../../src/gaia/agents/code/agent.py) routes every query through a single deterministic path:
+The surface area looks like a ReAct agent but the control flow of `gaia-code` **does not use the base `Agent` ReAct loop at all**. The `CodeAgent.process_query` override in [`src/gaia/agents/code/agent.py:201-353`](../../../src/gaia/agents/code/agent.py) routes every query through a single deterministic path:
 
 ```
 gaia-code "..."
@@ -54,13 +54,13 @@ gaia-code "..."
 **There is exactly one code path.** The `step_through` flag does *not* enable a different loop — it just pauses between checklist items. The interactive REPL (`cli.py:19-66`) is also just a thin wrapper over the same single-shot `process_query` per prompt.
 
 Dead structural layers — imported but never invoked by the orchestrator:
-- [`orchestration/factories/`](../../src/gaia/agents/code/orchestration/factories/) — `ProjectFactory`, `NextJSFactory`, `PythonFactory`. `grep` for `NextJSFactory|PythonFactory|ProjectFactory` outside the factories tree returns **zero** hits.
-- [`orchestration/workflows/`](../../src/gaia/agents/code/orchestration/workflows/) — `create_nextjs_workflow`, `create_python_workflow`. Only referenced from `factories/`.
-- [`orchestration/steps/`](../../src/gaia/agents/code/orchestration/steps/) — `CreateNextAppStep`, `SetupPrismaStep`, etc. Only referenced from `workflows/`.
+- [`orchestration/factories/`](../../../src/gaia/agents/code/orchestration/factories/) — `ProjectFactory`, `NextJSFactory`, `PythonFactory`. `grep` for `NextJSFactory|PythonFactory|ProjectFactory` outside the factories tree returns **zero** hits.
+- [`orchestration/workflows/`](../../../src/gaia/agents/code/orchestration/workflows/) — `create_nextjs_workflow`, `create_python_workflow`. Only referenced from `factories/`.
+- [`orchestration/steps/`](../../../src/gaia/agents/code/orchestration/steps/) — `CreateNextAppStep`, `SetupPrismaStep`, etc. Only referenced from `workflows/`.
 
 Together that's ~60K bytes of code (`factories/` + `workflows/` + `steps/nextjs.py` + `steps/python.py`) that exists purely as archaeology from a previous architecture. **Two files under `steps/` are still live and must not be deleted:** `steps/base.py` (dataclasses `UserContext`, `StepResult`, `StepStatus`, `ToolExecutor` typedef, `ErrorCategory` enum — imported by orchestrator/executor) and `steps/error_handler.py` (`ErrorHandler`, `RecoveryAction` — imported by `orchestrator.py:30` and `checklist_executor.py:34`, instantiated at `orchestrator.py:162`). None of the abstract `BaseStep` subclasses are used.
 
-**Task decomposition** happens exactly once: `ChecklistGenerator.generate_initial_checklist` ([`checklist_generator.py:231`](../../src/gaia/agents/code/orchestration/checklist_generator.py)) sends one prompt to the LLM with the full template catalog; the LLM returns a flat list of template invocations; they execute in order. If validation fails, `generate_debug_checklist` is called at the top of the next iteration with the prior logs. There is no hierarchical plan, no sub-tasks, no tree search.
+**Task decomposition** happens exactly once: `ChecklistGenerator.generate_initial_checklist` ([`checklist_generator.py:231`](../../../src/gaia/agents/code/orchestration/checklist_generator.py)) sends one prompt to the LLM with the full template catalog; the LLM returns a flat list of template invocations; they execute in order. If validation fails, `generate_debug_checklist` is called at the top of the next iteration with the prior logs. There is no hierarchical plan, no sub-tasks, no tree search.
 
 ## 2. Tool Inventory
 
@@ -129,7 +129,7 @@ Together that's ~60K bytes of code (`factories/` + `workflows/` + `steps/nextjs.
 
 ## 3. Prompt Strategy
 
-**Composition** (see [`system_prompt.py:17-41`](../../src/gaia/agents/code/system_prompt.py)):
+**Composition** (see [`system_prompt.py:17-41`](../../../src/gaia/agents/code/system_prompt.py)):
 
 ```python
 if language == "typescript":
@@ -138,7 +138,7 @@ else:
     return get_python_prompt(gaia_md_path)                   # base + python block = 2734 + 5157 ≈ 7891 bytes
 ```
 
-Then `CodeAgent.process_query` ([agent.py:285-290](../../src/gaia/agents/code/agent.py)) appends schema context, workspace context, and the formatted tool list:
+Then `CodeAgent.process_query` ([agent.py:285-290](../../../src/gaia/agents/code/agent.py)) appends schema context, workspace context, and the formatted tool list:
 
 ```python
 self.system_prompt = (
@@ -151,8 +151,8 @@ self.system_prompt = (
 
 **Effective system prompt:** ~12–18 KB depending on language and tool registrations. Given `max_steps=100` and `max_checklist_loops=10`, each loop's generator prompt is `system_prompt + CHECKLIST_SYSTEM_PROMPT + get_catalog_prompt()`:
 
-- `CHECKLIST_SYSTEM_PROMPT` ([checklist_generator.py:124-212](../../src/gaia/agents/code/orchestration/checklist_generator.py)) — ~4KB of rigid rules (always start with `create_next_app`, end with `validate_styles`, etc.)
-- `get_catalog_prompt()` ([template_catalog.py:408-436](../../src/gaia/agents/code/orchestration/template_catalog.py)) — ~3KB describing the 13 templates
+- `CHECKLIST_SYSTEM_PROMPT` ([checklist_generator.py:124-212](../../../src/gaia/agents/code/orchestration/checklist_generator.py)) — ~4KB of rigid rules (always start with `create_next_app`, end with `validate_styles`, etc.)
+- `get_catalog_prompt()` ([template_catalog.py:408-436](../../../src/gaia/agents/code/orchestration/template_catalog.py)) — ~3KB describing the 13 templates
 
 **However, the assembled `CodeAgent.system_prompt` is never actually sent to the LLM.** It's prepared (`agent.py:285`) but the orchestrator bypasses the base Agent's ReAct loop entirely and sends its own self-contained checklist prompt via `llm_client.send(...)`. The `tools_description` accumulated in the system prompt is wasted work.
 
@@ -177,8 +177,8 @@ Plan-then-execute, with iteration. **Not** interleaved ReAct. Flow inside `Orche
 2. **Execute** — `ChecklistExecutor.execute` walks items in order. For each item:
    - If `template in DETERMINISTIC_TEMPLATES` (create_next_app, setup_prisma, prisma_db_sync, setup_testing, run_typescript_check, validate_styles, generate_style_tests, run_tests, fix_code) → dispatch to a registered tool directly.
    - If `template in LLM_GENERATED_TEMPLATES` (generate_react_component, generate_api_route, setup_app_styling, update_landing_page) → call the LLM per-item to generate the file contents, then write.
-3. **Assess** — `_assess_checkpoint` ([orchestrator.py:463](../../src/gaia/agents/code/orchestration/orchestrator.py)) sends the aggregated validation logs to the LLM and asks for `{"status": "complete" | "needs_fix", ...}`.
-4. **Iterate** — if `needs_fix`, call `generate_debug_checklist` with the prior errors and go again. Max 10 loops ([orchestrator.py:145](../../src/gaia/agents/code/orchestration/orchestrator.py)).
+3. **Assess** — `_assess_checkpoint` ([orchestrator.py:463](../../../src/gaia/agents/code/orchestration/orchestrator.py)) sends the aggregated validation logs to the LLM and asks for `{"status": "complete" | "needs_fix", ...}`.
+4. **Iterate** — if `needs_fix`, call `generate_debug_checklist` with the prior errors and go again. Max 10 loops ([orchestrator.py:145](../../../src/gaia/agents/code/orchestration/orchestrator.py)).
 
 Differences from Claude Code's turn-based ReAct loop:
 
@@ -197,7 +197,7 @@ The model is closer to a **terraform-apply-with-retry** than an agent. The LLM w
 
 ## 5. Validators
 
-All four validators in [`src/gaia/agents/code/validators/`](../../src/gaia/agents/code/validators/) are **Python-only** (AST-based):
+All four validators in [`src/gaia/agents/code/validators/`](../../../src/gaia/agents/code/validators/) are **Python-only** (AST-based):
 
 | Validator | File | Purpose | Multi-language? |
 |-----------|------|---------|-----------------|
@@ -206,7 +206,7 @@ All four validators in [`src/gaia/agents/code/validators/`](../../src/gaia/agent
 | `ASTAnalyzer` | `ast_analyzer.py` (198 LoC) | Symbol extraction (functions, classes, imports), docstrings, signatures | No — Python |
 | `RequirementsValidator` | `requirements_validator.py` (146 LoC) | Detects hallucinated packages in `requirements.txt` (e.g., `flask-graphql-x-x-x-x`) | No — Python/pip |
 
-They are instantiated as `self.syntax_validator`, `self.antipattern_checker`, etc. in `CodeAgent.__init__` ([agent.py:149-152](../../src/gaia/agents/code/agent.py)) and used via `validation_parsing.ValidationAndParsingMixin` and two `_fix_code_with_llm` call sites ([code_tools.py:736](../../src/gaia/agents/code/tools/code_tools.py), [error_fixing.py:1245](../../src/gaia/agents/code/tools/error_fixing.py)).
+They are instantiated as `self.syntax_validator`, `self.antipattern_checker`, etc. in `CodeAgent.__init__` ([agent.py:149-152](../../../src/gaia/agents/code/agent.py)) and used via `validation_parsing.ValidationAndParsingMixin` and two `_fix_code_with_llm` call sites ([code_tools.py:736](../../../src/gaia/agents/code/tools/code_tools.py), [error_fixing.py:1245](../../../src/gaia/agents/code/tools/error_fixing.py)).
 
 **They are never invoked on the Next.js path.** TypeScript validation happens by shelling out to `tsc --noEmit` via `validate_typescript` in `validation_tools.py`. No TypeScript AST analysis, no ESLint wrapper.
 
@@ -216,28 +216,28 @@ The validators are **post-generation checks** — they operate on string `conten
 
 **Hypothesis confirmed.** The agent is overwhelmingly a Next.js CRUD scaffolder. Evidence:
 
-1. **Template catalog is 100% Next.js/Prisma** ([template_catalog.py:93-381](../../src/gaia/agents/code/orchestration/template_catalog.py)). Every one of the 13 templates — `create_next_app`, `setup_app_styling`, `setup_prisma`, `setup_testing`, `generate_prisma_model`, `prisma_db_sync`, `generate_api_route`, `generate_react_component`, `update_landing_page`, `run_typescript_check`, `validate_styles`, `generate_style_tests`, `fix_code` — presumes a Next.js project. `fix_code` is the only one that's even arguably general.
+1. **Template catalog is 100% Next.js/Prisma** ([template_catalog.py:93-381](../../../src/gaia/agents/code/orchestration/template_catalog.py)). Every one of the 13 templates — `create_next_app`, `setup_app_styling`, `setup_prisma`, `setup_testing`, `generate_prisma_model`, `prisma_db_sync`, `generate_api_route`, `generate_react_component`, `update_landing_page`, `run_typescript_check`, `validate_styles`, `generate_style_tests`, `fix_code` — presumes a Next.js project. `fix_code` is the only one that's even arguably general.
 
-2. **Orchestrator REQUIRES setup_app_styling + setup_testing + generate_style_tests + run_typescript_check + validate_styles** ([checklist_generator.py:157-171](../../src/gaia/agents/code/orchestration/checklist_generator.py)):
+2. **Orchestrator REQUIRES setup_app_styling + setup_testing + generate_style_tests + run_typescript_check + validate_styles** ([checklist_generator.py:157-171](../../../src/gaia/agents/code/orchestration/checklist_generator.py)):
 
    > "REQUIRED: Include `setup_app_styling` after `create_next_app`
    > REQUIRED: Include `setup_testing` after `setup_app_styling`
    > REQUIRED: End with `run_typescript_check`, then `validate_styles` as the last 2 commands
    > These setup and validation commands are mandatory — a plan without them is INVALID."
 
-3. **User-facing docs confirm scope** ([`docs/guides/code.mdx:14`](../../docs/guides/code.mdx)):
+3. **User-facing docs confirm scope** ([`docs/guides/code.mdx:14`](../../../docs/guides/code.mdx)):
 
    > "The Code Agent now focuses on generating full-stack TypeScript web applications (Next.js + Prisma + Tailwind). **Python code generation is no longer supported.**"
 
-4. **CLI examples are all Next.js CRUD apps** ([`cli.py:233-252`](../../src/gaia/agents/code/cli.py)): "Build me a todo tracking app," "Build me a movie tracking app in nextjs," etc.
+4. **CLI examples are all Next.js CRUD apps** ([`cli.py:233-252`](../../../src/gaia/agents/code/cli.py)): "Build me a todo tracking app," "Build me a movie tracking app in nextjs," etc.
 
 5. **`code_patterns.py` = 67KB of Next.js template strings**. `grep` shows 24 top-level template constants, all Next.js/React/Prisma/Vitest code.
 
 6. **`web_dev_tools.py` = 1758 LoC** of Next.js-specific tool implementations (manage_api_endpoint, manage_react_component, manage_data_model, setup_app_styling, update_landing_page, setup_nextjs_testing, generate_crud_scaffold, manage_prisma_client, manage_web_config, generate_style_tests, validate_crud_completeness — every tool bound to a Next.js file path).
 
-7. **Project directory preparation assumes create-next-app semantics** ([orchestrator.py:566-612](../../src/gaia/agents/code/orchestration/orchestrator.py)). `_prepare_project_directory` specifically works around `create-next-app` failing on non-empty directories by asking the LLM to pick a subdirectory name.
+7. **Project directory preparation assumes create-next-app semantics** ([orchestrator.py:566-612](../../../src/gaia/agents/code/orchestration/orchestrator.py)). `_prepare_project_directory` specifically works around `create-next-app` failing on non-empty directories by asking the LLM to pick a subdirectory name.
 
-8. **The final success message in `display_result`** ([agent.py:530-532](../../src/gaia/agents/code/agent.py)) hard-codes Next.js dev workflow:
+8. **The final success message in `display_result`** ([agent.py:530-532](../../../src/gaia/agents/code/agent.py)) hard-codes Next.js dev workflow:
 
    ```python
    self.console.print("  1. cd {project_dir}")
@@ -306,20 +306,20 @@ What GAIA CodeAgent has that Claude Code arguably does not:
 - `error_fixing.py::create_architectural_plan`, `implement_from_plan`, `create_project_structure`, `create_workflow_plan` — registered as tools but the orchestrator never schedules them
 - `tests/test_code_agent.py` tests assert tools like `generate_function`, `generate_class`, `generate_test` exist; these tools are only useful on the (deprecated) Python path
 
-**"No silent fallbacks" rule** (per [`CLAUDE.md`](../../CLAUDE.md)):
+**"No silent fallbacks" rule** (per [`CLAUDE.md`](../../../CLAUDE.md)):
 - 12 `pass` blocks inside `except` across `src/gaia/agents/code/`. Examples:
-  - [`prompts/base_prompt.py:34-35`](../../src/gaia/agents/code/prompts/base_prompt.py) — silently swallow any error reading `GAIA.md`. Violates the rule.
-  - [`validators/antipattern_checker.py:101-102`](../../src/gaia/agents/code/validators/antipattern_checker.py) — `except SyntaxError: pass` (comment says "let pylint handle" — OK but should raise-and-translate).
-  - [`validators/syntax_validator.py`](../../src/gaia/agents/code/validators/syntax_validator.py) — multiple `except: pass` patterns.
-  - [`tools/code_tools.py`](../../src/gaia/agents/code/tools/code_tools.py) — 7 occurrences.
+  - [`prompts/base_prompt.py:34-35`](../../../src/gaia/agents/code/prompts/base_prompt.py) — silently swallow any error reading `GAIA.md`. Violates the rule.
+  - [`validators/antipattern_checker.py:101-102`](../../../src/gaia/agents/code/validators/antipattern_checker.py) — `except SyntaxError: pass` (comment says "let pylint handle" — OK but should raise-and-translate).
+  - [`validators/syntax_validator.py`](../../../src/gaia/agents/code/validators/syntax_validator.py) — multiple `except: pass` patterns.
+  - [`tools/code_tools.py`](../../../src/gaia/agents/code/tools/code_tools.py) — 7 occurrences.
 
 **Broad `except Exception`** handlers across 76+ sites in the code tree. Many return `{"success": False, "error": str(e)}` and continue — tolerable at tool boundaries but rampant enough that errors rarely surface with full context.
 
 **Duplicate tool registration** — both `typescript_tools.py:29` and `validation_tools.py:402` register `validate_typescript`. Last-registered wins silently; unit tests don't catch this.
 
 **Coupling that blocks a rewrite**:
-- `CodeAgent` inherits **13 mixins** ([agent.py:63-79](../../src/gaia/agents/code/agent.py)). Any shared state (`self.chat`, `self.path_validator`, `self.workspace_root`, `self.cache_dir`, `self.console`, `self.background_processes`, `self.port_registry`) is implicitly coupled across every mixin's `register_*_tools` call. No protocol/interface definitions — just attribute duck-typing.
-- `_TOOL_REGISTRY` is a **module-level global** ([`base/tools.py:16`](../../src/gaia/agents/base/tools.py)). Tests `_TOOL_REGISTRY.clear()` in `tearDown` ([test_code_agent.py:47](../../tests/test_code_agent.py)) to reset state. Any two CodeAgent instances in the same process share the registry; running multiple agents concurrently is unsafe.
+- `CodeAgent` inherits **13 mixins** ([agent.py:63-79](../../../src/gaia/agents/code/agent.py)). Any shared state (`self.chat`, `self.path_validator`, `self.workspace_root`, `self.cache_dir`, `self.console`, `self.background_processes`, `self.port_registry`) is implicitly coupled across every mixin's `register_*_tools` call. No protocol/interface definitions — just attribute duck-typing.
+- `_TOOL_REGISTRY` is a **module-level global** ([`base/tools.py:16`](../../../src/gaia/agents/base/tools.py)). Tests `_TOOL_REGISTRY.clear()` in `tearDown` ([test_code_agent.py:47](../../../tests/test_code_agent.py)) to reset state. Any two CodeAgent instances in the same process share the registry; running multiple agents concurrently is unsafe.
 - Registration happens **at decorator execution time inside a `register_*` method**, meaning tools are only registered once the agent is instantiated. If you want to know the tool list without instantiating the agent, you can't.
 
 ## 9. Test Coverage
@@ -328,10 +328,10 @@ What GAIA CodeAgent has that Claude Code arguably does not:
 
 | File | LoC | What it covers |
 |------|-----|----------------|
-| [`tests/test_code_agent.py`](../../tests/test_code_agent.py) | 1,093 | Tool-registration sanity checks, file I/O, code-gen tools (Python path). **No orchestrator end-to-end.** All LLM calls mocked. |
-| [`tests/test_code_agent_mixins.py`](../../tests/test_code_agent_mixins.py) | 431 | Each mixin in isolation; mocked SDK |
-| [`tests/test_checklist_orchestration.py`](../../tests/test_checklist_orchestration.py) | 1,728 | Orchestrator / generator / executor path, but with mocked `chat.send(...)` returning hand-crafted JSON checklists. Catches parsing/validation regressions, not agent quality. |
-| [`tests/test_typescript_tools.py`](../../tests/test_typescript_tools.py) | 229 | `validate_typescript` smoke |
+| [`tests/test_code_agent.py`](../../../tests/test_code_agent.py) | 1,093 | Tool-registration sanity checks, file I/O, code-gen tools (Python path). **No orchestrator end-to-end.** All LLM calls mocked. |
+| [`tests/test_code_agent_mixins.py`](../../../tests/test_code_agent_mixins.py) | 431 | Each mixin in isolation; mocked SDK |
+| [`tests/test_checklist_orchestration.py`](../../../tests/test_checklist_orchestration.py) | 1,728 | Orchestrator / generator / executor path, but with mocked `chat.send(...)` returning hand-crafted JSON checklists. Catches parsing/validation regressions, not agent quality. |
+| [`tests/test_typescript_tools.py`](../../../tests/test_typescript_tools.py) | 229 | `validate_typescript` smoke |
 
 Everything is **unit-scoped with mocked LLMs**. There is **no test that runs `gaia-code "build me a todo app"` end-to-end and asserts the resulting app compiles and serves**. The integration test directory `tests/integration/` has folders for `chat/`, `installer/`, `mcp/`, `rag/` but **none for `code/`**. The `fix_code_testbench` under `src/gaia/eval/fix_code_testbench/` is a prompt-tuning harness for one tool, not an agent benchmark.
 
