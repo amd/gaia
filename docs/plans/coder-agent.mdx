@@ -1169,7 +1169,7 @@ Three categories that are deliberately **excluded** from MemoryStore writes:
 
 #### 6.8.5 Metrics (feeding §10)
 
-- **Useful-recall rate.** Of memory queries during `triage`, what fraction returned a hit that the agent cited in her plan? Healthy range: 15–40%; <5% means the memory is sparse or the retrieval is miscalibrated.
+- **Useful-recall rate.** Of memory queries during `triage`, what fraction returned a hit that the agent cited in her plan? Healthy range: 15–40%; &lt;5% means the memory is sparse or the retrieval is miscalibrated.
 - **Memory-cache hit rate.** Anthropic prompt-cache hit rate on the memory-prefix segments. Falling rate means the memory content is churning faster than the cache TTL — signal to the agent to batch fewer writes.
 - **Pattern-repeat suppression.** Failure patterns she recognised and short-circuited via prior fix vs. rediscovered from scratch. Rising suppression = memory is doing its job.
 - **Stale-memory rate.** Records last-recalled > 120 days ago. Above 30% of the store = consolidation pass is overdue.
@@ -1325,7 +1325,7 @@ Return structured: { findings: [...], most_impactful_correction, confidence }
 
 - **High-confidence findings** (≥80% confidence, cites an invariant or memory pattern) → surface inline; the agent addresses them *before* the next state transition. "Addressed" means either fixing it or explicitly annotating in the audit log why the finding does not apply.
 - **Medium-confidence findings** (60-79%) → log to trace; she considers them at `self_review` but does not block this turn.
-- **Low-confidence findings** (<60%) → discarded; an uncertain critique would be noise.
+- **Low-confidence findings** (&lt;60%) → discarded; an uncertain critique would be noise.
 
 **What this is NOT:**
 
@@ -1688,9 +1688,9 @@ Each check is 0 or 1. Task passes if `score >= 0.8`. Suite score is average of t
 
 ### 10.3 Repo-binding scorecard (`amd/gaia` lifecycle)
 
-- **Issue-triage latency** — median time from `auto-triage` open → first-pass classification. **Target <10 min.**
+- **Issue-triage latency** — median time from `auto-triage` open → first-pass classification. **Target &lt;10 min.**
 - **PR-from-issue rate** — `@gaia-coder` issues reaching draft PR within 24h with passing CI. **Target ≥40% in v1.**
-- **CI-failure-to-fix-PR latency** — median time from a failed CI run (on `main` OR on the `coder` branch) → draft fix PR opened against `coder`. She never pushes to `main` directly; `main` failures get a `coder`-branch fix that rolls up via a future integration PR. **Target <30 min.**
+- **CI-failure-to-fix-PR latency** — median time from a failed CI run (on `main` OR on the `coder` branch) → draft fix PR opened against `coder`. She never pushes to `main` directly; `main` failures get a `coder`-branch fix that rolls up via a future integration PR. **Target &lt;30 min.**
 - **Attribution compliance** — imported third-party files with valid `THIRD_PARTY_NOTICES.md` entries. **Target 100%.**
 - **License-rejection rate** — `vet_license` rejections per week. Rising = healthy (searching widely).
 - **Human-override rate** — guardrail elevations granted vs. requested. Trend toward fewer = improving judgement.
@@ -1711,10 +1711,10 @@ Surfaced via `gaia-coder status --autonomy` (CLI) and the TUI's `[a] Autonomy` p
 
 This is the loop the trust contract is built around. Every metric is published in the daily standup and on `gaia-coder status --feedback`.
 
-- **Feedback ingest latency** — median time from EM feedback received → acknowledgement. **Target <60s.**
-- **Triage latency** — median time from `pending` → `triaged`. **Target <10 min.**
-- **Fix-PR latency** — median time from `triaged` → `fix-pr-open`. **Target <2h for prompt/doc, <24h for tool/policy.**
-- **Verification latency** — median time from PR merged → feedback record `verified` (regression test confirmed). **Target <5 min** (triggered on `EventBridge` PR-merge event).
+- **Feedback ingest latency** — median time from EM feedback received → acknowledgement. **Target &lt;60s.**
+- **Triage latency** — median time from `pending` → `triaged`. **Target &lt;10 min.**
+- **Fix-PR latency** — median time from `triaged` → `fix-pr-open`. **Target &lt;2h for prompt/doc, &lt;24h for tool/policy.**
+- **Verification latency** — median time from PR merged → feedback record `verified` (regression test confirmed). **Target &lt;5 min** (triggered on `EventBridge` PR-merge event).
 - **Repeat-feedback rate** — same root-cause class flagged twice within 30 days. Target trending toward zero.
 - **Self-detected-bug rate (dev mode)** — bugs the agent caught in itself mid-task vs. bugs the EM had to flag after the fact. Higher is better — it means the agent is finding its own bugs before the EM does.
 - **Self-fix PR merge rate** — fraction of self-fix PRs merged on first review (vs. rejected or requiring rework). High rate = the agent's fixes are landing cleanly.
@@ -1728,7 +1728,7 @@ This is the loop the trust contract is built around. Every metric is published i
 - **Concealment incidents** — must be zero. One is grounds for full demotion.
 - **Daily report compliance** — % of days the agent posted its standup. Target 100%.
 - **EM satisfaction (qualitative)** — Friday weekly note from the EM, captured in the agent's memory.
-- **EM-inbox ack latency** — median time from message-received to auto-ack. **Target <5s.**
+- **EM-inbox ack latency** — median time from message-received to auto-ack. **Target &lt;5s.**
 - **EM-inbox response latency** — median time from `pending` → `answered`, segmented by severity. **Targets:** `info` ≤ next standup; `question` ≤ 30 min; `critical` ≤ 5 min.
 - **Inbox-to-feedback escalation rate** — fraction of inbox messages reclassified as feedback. Healthy trend depends on context; sudden spikes indicate the EM is using the inbox as a feedback channel and the routing prompt should be tightened.
 - **Persona-drift incidents** — Pass-5 persona-linter rejections per week on the agent's first PR draft attempt. Should trend toward zero as the persona prompt stabilises; rising count → audit `prompts/persona.md` and consider an EM review of the canonical block.
@@ -1777,7 +1777,7 @@ Sources consulted and incorporated into this spec. Citations are inline where re
 - [Claude Code CLI tools reference](https://code.claude.com/docs/en/tools-reference) — surveyed for §5.7 tool-gap analysis.
 - [Claude Code custom-tools guide](https://code.claude.com/docs/en/agent-sdk/custom-tools) — informs the mixin composition pattern.
 - Anthropic prompt-caching contract (referenced in §3.2, §6.7 mandatory prompt caching for cost control).
-- `ScheduleWakeup` semantic (referenced in §6.1 heartbeat design: sleeps <300s stay cache-warm, longer sleeps amortise cache miss).
+- `ScheduleWakeup` semantic (referenced in §6.1 heartbeat design: sleeps &lt;300s stay cache-warm, longer sleeps amortise cache miss).
 
 **Andrej Karpathy — `CLAUDE.md` for coding agents:**
 - [forrestchang/andrej-karpathy-skills](https://github.com/forrestchang/andrej-karpathy-skills/blob/main/CLAUDE.md) — the four working-style principles (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution) are incorporated **verbatim** into `GAIA.md` (§4.6) with attribution preserved in the system-prompt block.
@@ -2376,10 +2376,10 @@ If helpful, use search_code to locate candidate files before you decide.
 Respond with JSON only:
 {
   "fix_class": "<one of: prompt|doc|test|tool|policy|architectural|state-machine|out-of-scope>",
-  "root_cause_hypothesis": "<2-3 sentences citing evidence>",
+  "root_cause_hypothesis": "&lt;2-3 sentences citing evidence>",
   "candidate_files": [{"path": "<file:line-range>", "why": "<short>"}],
   "prior_pattern_hit": "<memory id or null>",
-  "confidence": <0-100>
+  "confidence": &lt;0-100>
 }
 ```
 
@@ -2508,7 +2508,7 @@ Also emit confidence_score 0-100 measuring how tightly the diff maps to the crit
   90-100: does exactly the criterion, nothing more/less
   75-89:  achieves with scope creep OR minor gaps
   60-74:  partially; mismatch or missed sub-requirements
-  <60:    does not achieve OR unrelated
+  &lt;60:    does not achieve OR unrelated
 
 {
   "findings": [{"file_line":"...","severity":"...","description":"...","fix":"..."}],
@@ -2576,8 +2576,8 @@ Be CONSERVATIVE. When uncertain, classify external (a wrong self-code diagnosis 
 
 {
   "kind":"user-task|self-code|external",
-  "evidence":"<2-3 sentences>",
-  "confidence":<0-100>,
+  "evidence":"&lt;2-3 sentences>",
+  "confidence":&lt;0-100>,
   "suggested_next_action":"<imperative>"
 }
 
@@ -2596,7 +2596,7 @@ Intents:
 Message: """{{em_message}}"""
 
 JSON only:
-{"intent":"<name>","args":{...},"confidence":<0-100>}
+{"intent":"<name>","args":{...},"confidence":&lt;0-100>}
 
 If no intent matches with confidence ≥ 70, respond:
 {"intent":"free_form","args":{},"confidence":0}
