@@ -332,3 +332,84 @@ def test_spend_check_constraints(tmp_path: Path) -> None:
         conn.rollback()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# audit
+# ---------------------------------------------------------------------------
+
+
+def test_create_audit(tmp_path: Path) -> None:
+    conn = audit.open_store(tmp_path / "audit.log.db")
+    try:
+        assert _table_exists(conn, "audit")
+    finally:
+        conn.close()
+
+
+def test_round_trip_audit(tmp_path: Path) -> None:
+    conn = audit.open_store(tmp_path / "audit.log.db")
+    try:
+        row = audit.AuditRow(
+            occurred_at=_ISO,
+            task_id="t_1",
+            stage="Build",
+            state_name="edit",
+            tool_name="write_file",
+            args_json=json.dumps({"path": "foo.py"}),
+            result_json=json.dumps({"bytes": 42}),
+            duration_ms=17,
+            loop_version=1,
+        )
+        row_id = audit.insert_row(conn, row)
+        assert isinstance(row_id, int) and row_id >= 1
+
+        fetched = audit.get_row(conn, row_id)
+        assert fetched is not None
+        assert fetched.tool_name == "write_file"
+        assert fetched.error is None
+
+        audit.update_row(conn, row_id, {"error": "TimeoutError"})
+        err = audit.get_row(conn, row_id)
+        assert err is not None and err.error == "TimeoutError"
+
+        rows = audit.list_rows(conn, {"task_id": "t_1"})
+        assert len(rows) == 1
+    finally:
+        conn.close()
+
+
+def test_audit_check_constraints(tmp_path: Path) -> None:
+    """``audit`` has no CHECK enums; verify NOT NULL columns + AUTOINCREMENT semantics."""
+    conn = audit.open_store(tmp_path / "audit.log.db")
+    try:
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO audit (occurred_at, tool_name, loop_version) "
+                "VALUES (?, ?, ?)",
+                (_ISO, "write_file", 1),
+            )
+        conn.rollback()
+
+        # Two inserts should get strictly-increasing ids (AUTOINCREMENT semantics).
+        first = audit.insert_row(
+            conn,
+            audit.AuditRow(
+                occurred_at=_ISO,
+                tool_name="read_file",
+                args_json="{}",
+                loop_version=1,
+            ),
+        )
+        second = audit.insert_row(
+            conn,
+            audit.AuditRow(
+                occurred_at=_ISO,
+                tool_name="read_file",
+                args_json="{}",
+                loop_version=1,
+            ),
+        )
+        assert second > first
+    finally:
+        conn.close()
