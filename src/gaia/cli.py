@@ -874,6 +874,65 @@ def _show_interactive_menu(log=None):
         print("  Run 'gaia --help' for all commands.")
 
 
+def _handle_coder_eval(args) -> None:
+    """Route ``gaia eval agent --target gaia-coder`` (§10.2).
+
+    Kept as a top-level function so the main CLI dispatch stays tight.
+    Imports the harness locally so an unrelated ``gaia`` invocation
+    does not pay the import cost.
+    """
+    # Local import — eval harness pulls in yaml + subprocess glue and we
+    # only want that on the hot path when actually running the suite.
+    import json as _json
+
+    from gaia.eval.suites.gaia_internal_20.harness import run_suite
+
+    suite_id = getattr(args, "suite", None) or "gaia-internal-20"
+    if suite_id != "gaia-internal-20":
+        raise SystemExit(
+            f"gaia eval agent --target gaia-coder: unknown suite "
+            f"{suite_id!r}. Known: gaia-internal-20."
+        )
+
+    repo_root = getattr(args, "repo_root", None)
+    if repo_root:
+        repo_root_path = Path(repo_root).resolve()
+    else:
+        # Fall back to the repo holding this CLI.
+        repo_root_path = Path(__file__).resolve().parents[2]
+
+    output = getattr(args, "output", None)
+    output_path = Path(output).resolve() if output else None
+
+    report = run_suite(
+        target="gaia-coder",
+        task_id=getattr(args, "task_id", None),
+        repo_root=repo_root_path,
+        sandbox_ref=getattr(args, "sandbox_ref", "coder"),
+        tier=getattr(args, "capability_tier", 0),
+        timeout_min=getattr(args, "task_timeout_min", 20),
+        output=output_path,
+    )
+
+    # Short one-block summary to stdout — same style as AgentEvalRunner's
+    # ``_print_summary``. Full detail goes to --output.
+    agg = report.aggregate
+    print()
+    print("=" * 60)
+    print(f"SUITE: {report.suite_id} (target={report.target})")
+    print(
+        f"Results: {agg.get('passed', 0)}/{agg.get('total', 0)} passed "
+        f"({agg.get('pass_rate', 0.0) * 100:.0f}%)"
+    )
+    print(f"Avg score: {agg.get('avg_score', 0.0):.2f}/1.00")
+    if output_path:
+        print(f"Report: {output_path}")
+    else:
+        # No output path — dump the full JSON so the invoker can pipe it.
+        print(_json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    print("=" * 60)
+
+
 def main():
     import argparse
 
@@ -2039,6 +2098,65 @@ Examples:
         "--keep-sessions",
         action="store_true",
         help="Do not delete Agent UI sessions after eval — leave them for manual inspection",
+    )
+    # --- Phase 2 (§10.2): CLI-driven coder eval harness -----------------
+    agent_eval_parser.add_argument(
+        "--target",
+        default=None,
+        choices=("gaia-coder",),
+        help=(
+            "Route eval through a non-default target. Currently only "
+            "'gaia-coder' is supported — runs the GAIA-Internal-20 "
+            "suite via the gaia-coder CLI (§10.2)."
+        ),
+    )
+    agent_eval_parser.add_argument(
+        "--suite",
+        default=None,
+        help=(
+            "Eval suite id. Required with --target=gaia-coder. Current "
+            "suites: gaia-internal-20."
+        ),
+    )
+    agent_eval_parser.add_argument(
+        "--task-id",
+        default=None,
+        help="Run only this task (e.g. T18) instead of the full suite.",
+    )
+    agent_eval_parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to write the JSON eval report (--target=gaia-coder).",
+    )
+    agent_eval_parser.add_argument(
+        "--sandbox-ref",
+        default="coder",
+        help=(
+            "Git ref to check out into the sandbox worktree "
+            "(--target=gaia-coder). Default: 'coder'."
+        ),
+    )
+    agent_eval_parser.add_argument(
+        "--task-timeout-min",
+        type=float,
+        default=20.0,
+        help="Per-task wall-clock timeout (minutes). Fractional values "
+        "allowed (e.g. --task-timeout-min 0.2 = 12s) — useful in CI "
+        "and for smoke tests. Default: 20.",
+    )
+    agent_eval_parser.add_argument(
+        "--capability-tier",
+        type=int,
+        default=0,
+        help="Capability tier passed to `gaia-coder daemon`. Default: 0.",
+    )
+    agent_eval_parser.add_argument(
+        "--repo-root",
+        default=None,
+        help=(
+            "Path to the bound repo (source of sandbox worktrees). "
+            "Defaults to the repo holding this CLI."
+        ),
     )
 
     # Add new subparser for generating summary reports from evaluation directories
@@ -3961,6 +4079,13 @@ Let me know your answer!
     # Handle evaluation
     if args.action == "eval":
         if getattr(args, "eval_command", None) == "agent":
+            # --- Phase 2 (§10.2): --target gaia-coder routes through the
+            # CLI-driven coder harness, NOT the default Agent UI runner.
+            # Handled first so the generic runner never sees --target.
+            target = getattr(args, "target", None)
+            if target == "gaia-coder":
+                return _handle_coder_eval(args)
+
             # --capture-session: convert Agent UI session → YAML scenario
             capture_sid = getattr(args, "capture_session", None)
             if capture_sid:
