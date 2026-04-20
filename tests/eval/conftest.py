@@ -1,15 +1,10 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Skip Phase 2 eval tests pending CLI unification follow-up.
+"""Eval test-package conftest.
 
-The eval harness code is landed and usable; the tests that exercise it
-import from ``gaia.coder.cli`` which needs a follow-up to merge Phase 2's
-daemon/wait subcommands with Phase 5's trust/ask/inbox verbs.
+The Phase 2 eval-harness tests (``test_coder_cli_runner.py``,
+``test_gaia_internal_20_suite.py``) were temporarily skipped pending the
+Phase 11 CLI unification. That unification has landed — the tests now
+exercise the full ``gaia-coder daemon`` / ``ask`` / ``wait`` / ``stop``
+surface, so the gate is removed.
 """
-
-import pytest
-
-collect_ignore_glob = [
-    "test_coder_cli_runner.py",
-    "test_gaia_internal_20_suite.py",
-]
