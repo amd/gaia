@@ -331,8 +331,9 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 |--------|-------------|---------|
 | `gaia` / `gaia-cli` | `gaia.cli:main` | Main CLI — all `gaia <subcommand>` |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge binary |
-| `gaia-code` | `gaia.agents.code.cli:main` | CodeAgent standalone entry (NOT `gaia code`) |
+| `gaia-code` | `gaia.agents.code.cli:main` | Legacy CodeAgent (Next.js scaffolder — see [`docs/plans/coder-agent.mdx`](docs/plans/coder-agent.mdx) §1). Not `gaia code`. |
 | `gaia-emr` | `gaia.agents.emr.cli:main` | EMR/MedicalIntake standalone entry |
+| `gaia-coder` | `gaia.coder.cli:main` | Dev-tooling coding agent for building/maintaining GAIA itself. Separate from the product; see [`docs/plans/coder-agent.mdx`](docs/plans/coder-agent.mdx). |
 
 ## Architecture
 
@@ -433,7 +434,8 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia visualize` / `gaia perf-vis` - Visualize results
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):
-- `gaia-code` - CodeAgent entry (`src/gaia/agents/code/cli.py`)
+- `gaia-code` - Legacy CodeAgent / Next.js scaffolder (`src/gaia/agents/code/cli.py`)
+- `gaia-coder` - Dev-tooling coding agent for building GAIA (`src/gaia/coder/cli.py`)
 - `gaia-emr` - Medical intake entry (`src/gaia/agents/emr/cli.py`)
 - `gaia-mcp` - Standalone MCP bridge binary
 
