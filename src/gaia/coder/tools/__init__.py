@@ -4,5 +4,11 @@
 
 from gaia.coder.tools.cli import CLIToolsMixin, ShellDeniedError
 from gaia.coder.tools.file import FileToolsMixin
+from gaia.coder.tools.search import SearchToolsMixin
 
-__all__ = ["CLIToolsMixin", "FileToolsMixin", "ShellDeniedError"]
+__all__ = [
+    "CLIToolsMixin",
+    "FileToolsMixin",
+    "SearchToolsMixin",
+    "ShellDeniedError",
+]

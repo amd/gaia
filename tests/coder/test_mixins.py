@@ -13,6 +13,7 @@ See docs/plans/coder-agent.mdx §15.2 for signatures.
 from __future__ import annotations
 
 import sys
+import textwrap
 import time
 
 import pytest
@@ -20,6 +21,7 @@ import pytest
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.coder.tools.cli import CLIToolsMixin, ShellDeniedError
 from gaia.coder.tools.file import FileToolsMixin
+from gaia.coder.tools.search import SearchToolsMixin
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -46,6 +48,13 @@ def file_mixin(registry_snapshot):
 def cli_mixin(registry_snapshot):
     m = CLIToolsMixin()
     m.register_cli_tools()
+    return m
+
+
+@pytest.fixture
+def search_mixin(registry_snapshot):
+    m = SearchToolsMixin()
+    m.register_search_tools()
     return m
 
 
@@ -398,4 +407,108 @@ def test_cli_tools_all_registered(cli_mixin):
         "list_processes",
         "get_process_logs",
     }
+    assert expected.issubset(_TOOL_REGISTRY.keys())
+
+
+# ---------------------------------------------------------------------------
+# SearchToolsMixin — grep
+# ---------------------------------------------------------------------------
+
+
+def test_grep_happy_path(tmp_path, search_mixin):
+    (tmp_path / "a.py").write_text("import os\n")
+    grep = _get_tool("grep")
+    hits = grep(r"import", path=str(tmp_path))
+    assert len(hits) == 1
+    assert hits[0]["line_text"].strip() == "import os"
+
+
+def test_grep_no_matches(tmp_path, search_mixin):
+    (tmp_path / "a.py").write_text("hello\n")
+    grep = _get_tool("grep")
+    assert grep("nonexistent_xyz123", path=str(tmp_path)) == []
+
+
+# ---------------------------------------------------------------------------
+# SearchToolsMixin — find_symbol
+# ---------------------------------------------------------------------------
+
+
+def test_find_symbol_function(tmp_path, search_mixin, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    src = textwrap.dedent("""
+        def foo():
+            pass
+
+        def bar():
+            pass
+        """)
+    (tmp_path / "m.py").write_text(src)
+    find_symbol = _get_tool("find_symbol")
+    hits = find_symbol("foo")
+    assert any(h["kind"] == "function" and h["qualname"] == "foo" for h in hits)
+
+
+def test_find_symbol_class_filter(tmp_path, search_mixin, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    src = textwrap.dedent("""
+        class Foo:
+            def method(self): pass
+
+        def foo():
+            pass
+        """)
+    (tmp_path / "m.py").write_text(src)
+    find_symbol = _get_tool("find_symbol")
+    hits = find_symbol("Foo", kind="class")
+    assert len(hits) == 1
+    assert hits[0]["kind"] == "class"
+    assert hits[0]["qualname"] == "Foo"
+
+
+def test_find_symbol_unsupported_language(tmp_path, search_mixin, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    # No .py files, only .js
+    (tmp_path / "x.js").write_text("function foo() {}\n")
+    find_symbol = _get_tool("find_symbol")
+    import logging as _logging
+
+    with caplog.at_level(_logging.WARNING):
+        hits = find_symbol("foo")
+    assert hits == []
+
+
+# ---------------------------------------------------------------------------
+# SearchToolsMixin — list_files
+# ---------------------------------------------------------------------------
+
+
+def test_list_files_recursive(tmp_path, search_mixin):
+    (tmp_path / "a.py").write_text("")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "b.py").write_text("")
+    list_files = _get_tool("list_files")
+    results = list_files(str(tmp_path), pattern="*.py", recursive=True)
+    assert len(results) == 2
+
+
+def test_list_files_excludes_directories(tmp_path, search_mixin):
+    (tmp_path / "a.py").write_text("")
+    (tmp_path / "sub").mkdir()
+    list_files = _get_tool("list_files")
+    results = list_files(str(tmp_path), pattern="*", recursive=False)
+    # Directory 'sub' should not appear
+    from pathlib import Path as _P
+
+    assert all(not _P(r).is_dir() for r in results)
+
+
+# ---------------------------------------------------------------------------
+# SearchToolsMixin — registration
+# ---------------------------------------------------------------------------
+
+
+def test_search_tools_all_registered(search_mixin):
+    expected = {"grep", "find_symbol", "list_files"}
     assert expected.issubset(_TOOL_REGISTRY.keys())
