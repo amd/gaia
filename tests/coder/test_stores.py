@@ -592,3 +592,48 @@ def test_paused_tasks_rejects_path_traversal(tmp_path: Path) -> None:
 def test_paused_tasks_missing_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         paused_tasks.read_snapshot(tmp_path, "never_written")
+
+
+# ---------------------------------------------------------------------------
+# self_edits_log
+# ---------------------------------------------------------------------------
+
+
+def test_round_trip_self_edits_log(tmp_path: Path) -> None:
+    path = tmp_path / "self-edits.log"
+    record = self_edits_log.SelfEditRecord(
+        ts=_ISO,
+        pr="https://github.com/amd/gaia/pull/941",
+        fix_class="prompt",
+        files=["src/gaia/coder/GAIA.md"],
+        before_sha="abc123",
+        after_sha="def456",
+        review_passes=self_edits_log.ReviewPasses(
+            static="pass",
+            functional="pass",
+            arch="pass",
+            security="pass",
+            prose="pass",
+            adversarial="pass",
+            feedback_binding="pass",
+        ),
+        confidence=94,
+        em_review="approved",
+        auto_merged=False,
+        feedback_id="fb_01HA",
+    )
+    self_edits_log.append(path, record)
+    self_edits_log.append(path, record)  # append again — log must grow, not overwrite.
+
+    records = self_edits_log.read_all(path)
+    assert len(records) == 2
+    assert records[0].pr == "https://github.com/amd/gaia/pull/941"
+    assert records[0].review_passes.adversarial == "pass"
+
+
+def test_self_edits_log_rejects_bad_schema(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        self_edits_log.append_dict(
+            tmp_path / "self-edits.log",
+            {"ts": _ISO, "pr": "x", "fix_class": "prompt"},  # missing required fields
+        )
