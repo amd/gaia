@@ -192,3 +192,77 @@ def test_tasks_check_constraints(tmp_path: Path) -> None:
         conn.rollback()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# feedback
+# ---------------------------------------------------------------------------
+
+
+def test_create_feedback(tmp_path: Path) -> None:
+    conn = feedback.open_store(tmp_path / "feedback.db")
+    try:
+        assert _table_exists(conn, "feedback")
+    finally:
+        conn.close()
+
+
+def test_round_trip_feedback(tmp_path: Path) -> None:
+    conn = feedback.open_store(tmp_path / "feedback.db")
+    try:
+        # Exercise all 8 fix_class values.
+        valid_classes = [
+            "prompt",
+            "doc",
+            "test",
+            "tool",
+            "policy",
+            "architectural",
+            "state-machine",
+            "out-of-scope",
+        ]
+        for idx, fc in enumerate(valid_classes):
+            row = feedback.FeedbackRow(
+                id=f"fb_{idx}",
+                received_at=_ISO,
+                from_handle="kovtcharov-amd",
+                channel="cli",
+                severity="high",
+                body=f"feedback #{idx}",
+                fix_class=fc,
+            )
+            feedback.insert_row(conn, row)
+
+        assert len(feedback.list_rows(conn)) == len(valid_classes)
+        assert len(feedback.list_rows(conn, {"fix_class": "doc"})) == 1
+
+        feedback.update_row(conn, "fb_0", {"state": "triaged"})
+        triaged = feedback.get_row(conn, "fb_0")
+        assert triaged is not None
+        assert triaged.state == "triaged"
+    finally:
+        conn.close()
+
+
+def test_feedback_check_constraints(tmp_path: Path) -> None:
+    conn = feedback.open_store(tmp_path / "feedback.db")
+    try:
+        # Invalid fix_class — CHECK should reject.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO feedback (id, received_at, from_handle, channel, severity, body, fix_class) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("bad_1", _ISO, "em", "cli", "high", "body", "vibes"),
+            )
+        conn.rollback()
+
+        # Invalid severity — CHECK should reject.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO feedback (id, received_at, from_handle, channel, severity, body) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("bad_2", _ISO, "em", "cli", "maybe", "body"),
+            )
+        conn.rollback()
+    finally:
+        conn.close()
