@@ -132,8 +132,11 @@ def _spawn_reader(
         finally:
             try:
                 stream.close()
-            except Exception:  # pylint: disable=broad-except
-                pass
+            except OSError as close_err:
+                # Torn-down pipe on subprocess termination — real but not
+                # recoverable here. Log with context per CLAUDE.md fail-loudly
+                # rule; do not silently swallow.
+                logger.debug("reader thread: stream close failed (%s)", close_err)
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
