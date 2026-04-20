@@ -782,9 +782,9 @@ Target: ≥80% pass on v1. Regressions block merges.
 
 Measured continuously against live repo activity:
 
-- **Issue triage latency** — median time between an `auto-triage` issue opening and the agent posting a first-pass classification. Target: <10 minutes.
+- **Issue triage latency** — median time between an `auto-triage` issue opening and the agent posting a first-pass classification. Target: &lt;10 minutes.
 - **PR-from-issue rate** — of `@gaia-coder`-mentioned issues, what fraction reach a draft PR within 24h with passing CI? Target: ≥40% in v1.
-- **CI-failure-to-fix-PR latency** — median time from a failed `main` workflow run to a draft fix PR. Target: <30 minutes.
+- **CI-failure-to-fix-PR latency** — median time from a failed `main` workflow run to a draft fix PR. Target: &lt;30 minutes.
 - **Attribution compliance** — of imported third-party files, the percent with valid `THIRD_PARTY_NOTICES.md` entries and license-compatible upstreams. Target: 100%.
 - **License-rejection rate** — `vet_license` rejections per week. Rising rate is healthy (the agent is searching widely); zero rate is suspicious (it's not trying).
 - **Human-override rate** — guardrail elevations granted vs. requested. Trend toward fewer elevations means the agent's judgement is improving.
