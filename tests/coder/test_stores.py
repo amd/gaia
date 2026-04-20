@@ -637,3 +637,58 @@ def test_self_edits_log_rejects_bad_schema(tmp_path: Path) -> None:
             tmp_path / "self-edits.log",
             {"ts": _ISO, "pr": "x", "fix_class": "prompt"},  # missing required fields
         )
+
+
+# ---------------------------------------------------------------------------
+# learnings_log
+# ---------------------------------------------------------------------------
+
+
+def test_round_trip_learnings_log(tmp_path: Path) -> None:
+    path = tmp_path / "learnings.log"
+    entry = learnings_log.LearningEntry(
+        ts="2026-05-03",
+        task_id="t_8f2",
+        observation="I added a defensive try/except that the EM rejected",
+        promotion_candidate="GAIA.md",
+    )
+    learnings_log.append(path, entry)
+    learnings_log.append(
+        path,
+        learnings_log.LearningEntry(
+            ts="2026-05-04",
+            task_id="t_914",
+            observation="EM prefers PR bodies that cite the exact CLAUDE.md rule",
+            promotion_candidate="skill:em-kalin-preferences",
+        ),
+    )
+
+    entries = learnings_log.read_all(path)
+    assert len(entries) == 2
+    assert entries[0].promotion_candidate == "GAIA.md"
+    assert entries[1].promotion_candidate == "skill:em-kalin-preferences"
+
+    # Human-readable single-line format is preserved on disk.
+    lines = path.read_text().splitlines()
+    assert lines[0].startswith("2026-05-03 [task=t_8f2] Observed: ")
+    assert lines[0].endswith("→ GAIA.md")
+
+
+def test_learnings_log_rejects_bad_candidate() -> None:
+    with pytest.raises(ValidationError):
+        learnings_log.LearningEntry(
+            ts=_ISO,
+            task_id="t_1",
+            observation="x",
+            promotion_candidate="promote",  # invalid
+        )
+
+
+def test_learnings_log_rejects_multiline_observation() -> None:
+    with pytest.raises(ValidationError):
+        learnings_log.LearningEntry(
+            ts=_ISO,
+            task_id="t_1",
+            observation="line one\nline two",
+            promotion_candidate="dismissed",
+        )
