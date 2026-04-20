@@ -266,3 +266,69 @@ def test_feedback_check_constraints(tmp_path: Path) -> None:
         conn.rollback()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# spend
+# ---------------------------------------------------------------------------
+
+
+def test_create_spend(tmp_path: Path) -> None:
+    conn = spend.open_store(tmp_path / "spend.db")
+    try:
+        assert _table_exists(conn, "spend")
+    finally:
+        conn.close()
+
+
+def test_round_trip_spend(tmp_path: Path) -> None:
+    conn = spend.open_store(tmp_path / "spend.db")
+    try:
+        row = spend.SpendRow(
+            id="s_1",
+            occurred_at=_ISO,
+            task_id="t_1",
+            call_site="pass_6_adversarial",
+            model="claude-opus-4-7",
+            input_tokens=1000,
+            cache_read_tokens=800,
+            cache_create_tokens=200,
+            output_tokens=500,
+            usd=0.042,
+        )
+        spend.insert_row(conn, row)
+
+        fetched = spend.get_row(conn, "s_1")
+        assert fetched is not None
+        assert fetched.cache_read_tokens == 800
+        assert fetched.usd == pytest.approx(0.042)
+
+        rows = spend.list_rows(conn, {"task_id": "t_1"})
+        assert len(rows) == 1
+    finally:
+        conn.close()
+
+
+def test_spend_check_constraints(tmp_path: Path) -> None:
+    """``spend`` has no enum CHECK constraints — verify the NOT NULL columns are enforced."""
+    conn = spend.open_store(tmp_path / "spend.db")
+    try:
+        # Missing required `usd` (NOT NULL) should fail.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO spend (id, occurred_at, call_site, model, input_tokens, output_tokens) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("bad_1", _ISO, "triage", "claude-opus-4-7", 100, 50),
+            )
+        conn.rollback()
+
+        # Missing required `input_tokens` (NOT NULL) should fail.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO spend (id, occurred_at, call_site, model, output_tokens, usd) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("bad_2", _ISO, "triage", "claude-opus-4-7", 50, 0.001),
+            )
+        conn.rollback()
+    finally:
+        conn.close()
