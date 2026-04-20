@@ -100,11 +100,35 @@ class AgentRegistry:
     and the ``~/.gaia/agents/`` directory for custom agents.
     """
 
+    # Legacy agent IDs that were renamed. Existing UI sessions store the old
+    # ID in ``sessions.agent_type`` in the ChatDatabase; silently resolving
+    # the alias keeps those sessions working without a DB migration. All
+    # lookups (``get``, ``create_agent``, ``resolve_model``) honour the map.
+    _LEGACY_ID_ALIASES: Dict[str, str] = {
+        "chat-lite": "gaia-lite",
+    }
+
     def __init__(self):
         self._agents: Dict[str, AgentRegistration] = {}
         self._lemonade_models: Optional[List[str]] = None  # cache
         self._lemonade_models_last_fail: Optional[float] = None  # monotonic timestamp
         self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Legacy ID resolution
+    # ------------------------------------------------------------------
+
+    def canonical_id(self, agent_id: str) -> str:
+        """Return the current canonical ID for *agent_id*, resolving aliases.
+
+        Returns the input unchanged when no alias exists so callers can use
+        the result as a stable cache key — two requests for ``chat-lite`` and
+        ``gaia-lite`` both produce ``gaia-lite``, so the per-session agent
+        cache doesn't thrash when a client mixes the old and new names.
+        """
+        if agent_id in self._agents:
+            return agent_id
+        return self._LEGACY_ID_ALIASES.get(agent_id, agent_id)
 
     # ------------------------------------------------------------------
     # Discovery
@@ -178,12 +202,14 @@ class AgentRegistry:
         )
         logger.info("registry: Registered built-in agent: chat (ChatAgent)")
 
-        # --- Chat Lite (smaller 4B model, Mac/low-memory friendly) ---
+        # --- Gaia Lite (smaller 4B model, Mac/low-memory friendly) ---
         # Reuses the full ChatAgent feature set but presets model_id to a 4B
         # checkpoint so it runs on hardware that can't host the 35B default.
-        # The preset is applied via setdefault so callers can still override
-        # (e.g. for tests or an explicit user-chosen model).
-        def chat_lite_factory(**kwargs):
+        # It's an agent (tools + RAG + MCP), not a bare chat bot — the "Lite"
+        # refers only to the model size. The preset is applied via setdefault
+        # so callers can still override (e.g. for tests or explicit user
+        # selection).
+        def gaia_lite_factory(**kwargs):
             from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
             valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
@@ -194,12 +220,13 @@ class AgentRegistry:
 
         self._register(
             AgentRegistration(
-                id="chat-lite",
-                name="Chat Lite",
+                id="gaia-lite",
+                name="Gaia Lite",
                 description=(
-                    "Lightweight document Q&A assistant — same features as Chat "
-                    "Agent but runs on a 4B model, suitable for Mac and other "
-                    "hardware that cannot host the 35B default."
+                    "Lightweight GAIA agent — same features as the default Chat "
+                    "Agent (RAG, file tools, MCP) but runs on a 4B model, "
+                    "suitable for Mac and other hardware that cannot host the "
+                    "35B default."
                 ),
                 source="builtin",
                 conversation_starters=[
@@ -207,7 +234,7 @@ class AgentRegistry:
                     "Summarize this document",
                     "Search my files for...",
                 ],
-                factory=chat_lite_factory,
+                factory=gaia_lite_factory,
                 agent_dir=None,
                 models=["Qwen3-4B-Instruct-2507-GGUF", "Qwen3-4B-GGUF"],
                 # Qwen3-4B Q4_K_M weights are ~2.5 GB; add context + runtime
@@ -217,7 +244,7 @@ class AgentRegistry:
             )
         )
         logger.info(
-            "registry: Registered built-in agent: chat-lite (ChatAgent with Qwen3-4B)"
+            "registry: Registered built-in agent: gaia-lite (ChatAgent with Qwen3-4B)"
         )
 
         # --- BuilderAgent ---
@@ -379,8 +406,47 @@ class AgentRegistry:
 
         klass = agent_class
 
-        def manifest_factory(klass=klass, **kwargs):
-            return klass(**kwargs)  # pylint: disable=abstract-class-instantiated
+        # Resolve the set of kwargs the dynamic class will ultimately
+        # forward to BaseAgent.__init__. Session-aware kwargs (``rag_documents``,
+        # ``library_documents``, ``allowed_paths``, ``ui_session_id``) are
+        # injected by ``_chat_helpers`` for all registered agents — built-in
+        # ChatAgent-derived factories already filter these via
+        # ``dataclasses.fields(ChatAgentConfig)``, but a bare YAML-manifest
+        # agent inherits from BaseAgent which doesn't accept them and would
+        # raise TypeError at construction.
+        #
+        # The dynamic ``__init__`` built by ``_create_manifest_agent_class``
+        # takes ``**kwargs`` and forwards them to ``super().__init__(**kwargs)``
+        # so the effective constraint is ``BaseAgent.__init__``. Inspecting
+        # the dynamic class directly would see **kwargs and let everything
+        # through — only to TypeError one frame down.
+        #
+        # If a future mixin starts declaring its own named ``__init__`` params,
+        # add it explicitly here rather than walking the MRO blindly (mixins
+        # tend to intercept named kwargs selectively; blanket forwarding is a
+        # footgun).
+        from gaia.agents.base.agent import Agent as _BaseAgent
+
+        _manifest_accepted = {
+            p.name
+            for p in inspect.signature(_BaseAgent.__init__).parameters.values()
+            if p.name != "self"
+            and p.kind
+            not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        }
+
+        def manifest_factory(klass=klass, accepted=_manifest_accepted, **kwargs):
+            # Drop kwargs the underlying BaseAgent.__init__ doesn't accept.
+            # Logged at debug to help diagnose cases where a caller expected
+            # a field to be forwarded (e.g. ChatAgent's ``rag_documents``).
+            filtered = {k: v for k, v in kwargs.items() if k in accepted}
+            dropped = set(kwargs) - set(filtered)
+            if dropped:
+                logger.debug(
+                    "registry: manifest factory dropping unsupported kwargs: %s",
+                    sorted(dropped),
+                )
+            return klass(**filtered)  # pylint: disable=abstract-class-instantiated
 
         self._register(
             AgentRegistration(
@@ -578,8 +644,13 @@ class AgentRegistry:
             self._agents[registration.id] = registration
 
     def get(self, agent_id: str) -> Optional[AgentRegistration]:
-        """Return the registration for *agent_id*, or ``None``."""
-        return self._agents.get(agent_id)
+        """Return the registration for *agent_id*, or ``None``.
+
+        Legacy aliases (e.g. ``chat-lite`` → ``gaia-lite``) are resolved
+        transparently so existing persisted sessions keep working after a
+        rename.
+        """
+        return self._agents.get(self.canonical_id(agent_id))
 
     def list(self) -> List[AgentRegistration]:
         """Return all registered agents."""
@@ -591,13 +662,17 @@ class AgentRegistry:
         Raises:
             ValueError: If *agent_id* is not registered.
         """
-        reg = self._agents.get(agent_id)
+        # Route through get() so legacy aliases (e.g. chat-lite → gaia-lite)
+        # resolve consistently with lookups.
+        reg = self.get(agent_id)
         if reg is None:
             raise ValueError(
                 f"Unknown agent ID: '{agent_id}'. "
                 f"Available: {list(self._agents.keys())}"
             )
-        logger.info("registry: Creating agent '%s'", agent_id)
+        logger.info(
+            "registry: Creating agent '%s' (resolved id='%s')", agent_id, reg.id
+        )
         return reg.factory(**kwargs)
 
     # ------------------------------------------------------------------
@@ -612,11 +687,18 @@ class AgentRegistry:
         """Return first preferred model that is available, or ``None``.
 
         Args:
-            agent_id: Registered agent identifier.
+            agent_id: Registered agent identifier. Legacy aliases (see
+                :attr:`_LEGACY_ID_ALIASES`) are resolved transparently so
+                stored session IDs that pre-date a rename still pick up
+                the canonical agent's preferred model list.
             available_models: Pre-fetched list of model IDs.  When
                 ``None``, queries the Lemonade server automatically.
         """
-        reg = self._agents.get(agent_id)
+        # Use get() not _agents.get() so alias → canonical mapping applies.
+        # Otherwise a session stored with agent_type="chat-lite" would fall
+        # through to the default 35B model instead of the 4B preset, silently
+        # regressing the whole reason gaia-lite exists.
+        reg = self.get(agent_id)
         if not reg or not reg.models:
             return None
 

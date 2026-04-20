@@ -111,16 +111,16 @@ class TestAgentWithMemoryRequirement:
         app = create_app(db_path=":memory:")
         app.state.agent_registry = make_mock_registry(
             ("chat", "Chat Agent"),
-            ("chat-lite", "Chat Lite", 5.0),
+            ("gaia-lite", "Gaia Lite", 5.0),
         )
         client = TestClient(app)
 
-        data = client.get("/api/agents/chat-lite").json()
+        data = client.get("/api/agents/gaia-lite").json()
         assert data["min_memory_gb"] == 5.0
 
         # List endpoint surfaces it too.
         list_data = client.get("/api/agents").json()
-        lite = next(a for a in list_data["agents"] if a["id"] == "chat-lite")
+        lite = next(a for a in list_data["agents"] if a["id"] == "gaia-lite")
         chat = next(a for a in list_data["agents"] if a["id"] == "chat")
         assert lite["min_memory_gb"] == 5.0
         assert chat["min_memory_gb"] is None

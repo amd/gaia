@@ -360,7 +360,16 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                                     <img src={gaiaRobot} alt="" />
                                 </div>
                                 <span className="msg-role-brand">GAIA</span>
-                                {agentName && <span className="msg-role-agent">{agentName}</span>}
+                                {(() => {
+                                    // Strip a leading "Gaia" / "GAIA" from the agent name so
+                                    // "Gaia Lite" renders as "GAIA Lite" (not "GAIA Gaia Lite").
+                                    // Word-boundary match: "Gaiadocs" (hypothetical) stays intact.
+                                    const trimmed = agentName?.trim() ?? '';
+                                    const stripped = trimmed.replace(/^gaia\b\s*/i, '');
+                                    return stripped ? (
+                                        <span className="msg-role-agent">{stripped}</span>
+                                    ) : null;
+                                })()}
                                 {(isStreaming || message.created_at) && (
                                     <span className="msg-header-sep">|</span>
                                 )}
