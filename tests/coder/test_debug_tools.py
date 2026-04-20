@@ -132,8 +132,18 @@ def test_add_instrumented_trace_inserts_logger_debug(tmp_path, monkeypatch):
         "mymod.py", 2, "probe message", cwd=tmp_path
     )
     text = target.read_text()
-    assert "logger.debug" in text
+    # The probe inlines the logging lookup so it works even when the target
+    # file has no module-level ``logger`` binding — see #828 fix.
+    assert "__import__('logging').getLogger(__name__).debug" in text
     assert "probe message" in text
+    # The mutated module must actually import successfully — previous probe
+    # generated ``logger.debug(...)`` which raised NameError at import.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("mymod_probe", target)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # must not raise
     assert calls["head_resolved"] and calls["branch_created"]
     assert result["revert_handle"] == "abc123"
     assert result["branch"].startswith("auto/gaia-coder-probe-")
@@ -187,12 +197,14 @@ def test_diff_behavior_returns_unified_diff(monkeypatch, tmp_path):
     """good/bad outputs differ → diff string includes @@ markers."""
     sequence = iter(
         [
+            # Capture original HEAD — new in the #828 fix:
+            _FakeCompleted(stdout="main\n", returncode=0),  # symbolic-ref
             _FakeCompleted(stdout="stashed\n"),  # stash push
             _FakeCompleted(returncode=0),  # switch good
             _FakeCompleted(stdout="pass 42\n", returncode=0),  # good harness
             _FakeCompleted(returncode=0),  # switch bad
             _FakeCompleted(stdout="fail 42\n", returncode=1),  # bad harness
-            _FakeCompleted(returncode=0),  # switch -
+            _FakeCompleted(returncode=0),  # switch back to original
             _FakeCompleted(returncode=0),  # stash pop
         ]
     )

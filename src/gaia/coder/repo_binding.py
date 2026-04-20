@@ -344,10 +344,28 @@ def _check_webhook_signature_round_trip(
             status="fail",
             detail="self-signed payload failed own verifier — secret round-trip broken",
         )
+    # Negative test: verifier must reject a wrong signature. Without this,
+    # a verifier that always returned True would still pass the positive
+    # check above. Cf. #827 auto-review.
+    wrong_signature = "sha256=" + "0" * 64
+    if verify_webhook_signature(secret_bytes, payload, wrong_signature):
+        return DoctorCheck(
+            name="webhook_signature_round_trip",
+            status="fail",
+            detail="verifier accepted a known-wrong signature — discrimination broken",
+        )
+    # Discrimination on payload: same secret, different payload must not verify.
+    other_sig = "sha256=" + hmac.new(secret_bytes, payload + b"x", hashlib.sha256).hexdigest()
+    if verify_webhook_signature(secret_bytes, payload, other_sig):
+        return DoctorCheck(
+            name="webhook_signature_round_trip",
+            status="fail",
+            detail="verifier accepted a signature computed over a different payload",
+        )
     return DoctorCheck(
         name="webhook_signature_round_trip",
         status="pass",
-        detail="HMAC-SHA256 signature round-trip OK",
+        detail="HMAC-SHA256 round-trip OK; verifier discriminates on both wrong-sig and wrong-payload",
     )
 
 
