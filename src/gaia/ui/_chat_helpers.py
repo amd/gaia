@@ -73,6 +73,11 @@ _agent_cache: dict[str, dict] = (
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
+# Matches the fallback default in gaia.ui.database.create_session (~line 233).
+# Kept local to avoid widening _chat_helpers.py's coupling to database.py for
+# a cosmetic rename. If that value changes, update here too.
+_DB_DEFAULT_MODEL = "Qwen3.5-35B-A3B-GGUF"
+
 # Last known MCP runtime status — updated after each agent setup so
 # GET /api/mcp/status can return it without needing a running chat.
 _mcp_status_cache: list[dict] = []
@@ -554,19 +559,38 @@ async def _get_chat_response(
                     agent_type,
                     session_id[:8],
                 )
-                agent = registry.create_agent(
-                    agent_type,
-                    model_id=model_id,
-                    silent_mode=True,
-                    debug=False,
-                )
+                create_kwargs: dict = {"silent_mode": True, "debug": False}
+                if custom_model:
+                    create_kwargs["model_id"] = custom_model
+                    logger.info(
+                        "create_agent: custom_model override -> %r", custom_model
+                    )
+                elif model_id and model_id != _DB_DEFAULT_MODEL:
+                    create_kwargs["model_id"] = model_id
+                    logger.info("create_agent: session-explicit model -> %r", model_id)
+                else:
+                    # Omit model_id so kwargs.setdefault in the agent's __init__ fires.
+                    # setdefault only works when the key is ABSENT — passing None or the
+                    # DB default explicitly defeats it. This is the fix for issue #841.
+                    logger.info(
+                        "create_agent: omitting model_id kwarg (session at DB default %r); "
+                        "agent's kwargs.setdefault or AgentConfig fallback will govern",
+                        _DB_DEFAULT_MODEL,
+                    )
+                agent = registry.create_agent(agent_type, **create_kwargs)
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
                     agent_type,
                     session_id[:8],
-                    model_id,
+                    getattr(agent, "model_id", model_id),
                 )
-                _store_agent(session_id, model_id, document_ids, agent, agent_type)
+                _store_agent(
+                    session_id,
+                    getattr(agent, "model_id", None) or model_id,
+                    document_ids,
+                    agent,
+                    agent_type,
+                )
 
         # Restore conversation history (limited to prevent context overflow).
         # Always re-inject from DB so the history is consistent with what was
@@ -585,8 +609,11 @@ async def _get_chat_response(
             agent.conversation_history.append({"role": "user", "content": u})
             agent.conversation_history.append({"role": "assistant", "content": a})
 
-        # Pre-flight: same fix as the streaming path — see _maybe_load_expected_model.
-        _maybe_load_expected_model(model_id)
+        # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
+        # omitted above, the agent's __init__ set model_id via kwargs.setdefault —
+        # a value invisible to us pre-construction. Using agent.model_id preserves
+        # the existing 100-900s silent-hang protection for all code paths.
+        _maybe_load_expected_model(getattr(agent, "model_id", None) or model_id)
 
         result = agent.process_query(request.message)
         if isinstance(result, dict):
@@ -913,19 +940,36 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             session_id[:8],
                         )
                         t_construct = _time.monotonic()
-                        agent = registry.create_agent(
-                            agent_type,
-                            model_id=model_id,
-                            streaming=True,
-                            silent_mode=False,
-                            debug=False,
-                        )
+                        create_kwargs = {
+                            "streaming": True,
+                            "silent_mode": False,
+                            "debug": False,
+                        }
+                        if custom_model:
+                            create_kwargs["model_id"] = custom_model
+                            logger.info(
+                                "create_agent: custom_model override -> %r (streaming)",
+                                custom_model,
+                            )
+                        elif model_id and model_id != _DB_DEFAULT_MODEL:
+                            create_kwargs["model_id"] = model_id
+                            logger.info(
+                                "create_agent: session-explicit model -> %r (streaming)",
+                                model_id,
+                            )
+                        else:
+                            logger.info(
+                                "create_agent: omitting model_id kwarg (session at DB default %r); "
+                                "agent's kwargs.setdefault or AgentConfig fallback will govern (streaming)",
+                                _DB_DEFAULT_MODEL,
+                            )
+                        agent = registry.create_agent(agent_type, **create_kwargs)
                         agent.console = sse_handler
                         logger.info(
                             "chat: Invoking agent %s for session %s, model=%s took=%.3fs",
                             agent_type,
                             session_id[:8],
-                            model_id,
+                            getattr(agent, "model_id", model_id),
                             _time.monotonic() - t_construct,
                         )
 
@@ -937,7 +981,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             _index_rag_with_progress(agent, rag_file_paths, sse_handler)
 
                         _store_agent(
-                            session_id, model_id, document_ids, agent, agent_type
+                            session_id,
+                            getattr(agent, "model_id", None) or model_id,
+                            document_ids,
+                            agent,
+                            agent_type,
                         )
 
                     sse_handler._emit(
@@ -987,10 +1035,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 if sse_handler.cancelled.is_set():
                     return
 
-                # Pre-flight: ensure a chat-capable LLM is active before sending the query.
-                # Lemonade silently hangs when no model is loaded or the embedding model is
-                # active — no error is returned, so _execute_with_auto_download never fires.
-                _maybe_load_expected_model(model_id, sse_handler)
+                # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
+                # omitted, the agent's __init__ set model_id via kwargs.setdefault — a value
+                # invisible pre-construction. Using agent.model_id preserves the existing
+                # 100-900s silent-hang protection for all code paths including setdefault.
+                _maybe_load_expected_model(
+                    getattr(agent, "model_id", None) or model_id, sse_handler
+                )
 
                 # -- Phase 5: Query processing --
                 t_query = _time.monotonic()
