@@ -11,8 +11,6 @@ from gaia.coder import cli as coder_cli
 from gaia.coder.stores import feedback as feedback_store
 
 
-import pytest
-@pytest.mark.skip(reason="Phase 6 CLI handlers deferred; see follow-up")
 def test_cli_feedback_enqueues(
     capsys,
     feedback_db_path: Path,
@@ -70,7 +68,6 @@ def test_cli_feedback_rejects_invalid_severity(capsys) -> None:
         assert exc.code != 0
 
 
-@pytest.mark.skip(reason="Phase 6 CLI handlers deferred; see follow-up")
 def test_cli_self_fix_subcommand_without_action_prints_help(capsys) -> None:
     """``gaia-coder self-fix`` with no action prints help and exits 0."""
     rc = coder_cli.main(["self-fix"])
