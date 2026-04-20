@@ -326,3 +326,115 @@ class TestFindLastToolStep:
         ]
         result = _find_last_tool_step(steps)
         assert result["label"] == "has_type"
+
+
+# ── Regression: registered-agent streaming path must not double-index ─────
+
+
+class TestSessionAgentKwargsShape:
+    """Tests for _session_agent_kwargs() — the single source of truth for
+    per-session ChatAgentConfig field forwarding.
+
+    Every registered-agent code path in ``_chat_helpers`` builds its factory
+    kwargs via this helper. The streaming registered-agent branch
+    (``_stream_chat_response``) passes ``rag_file_paths=[]`` on purpose so
+    ``ChatAgent.__init__`` skips its silent auto-index, leaving the
+    user-visible ``_index_rag_with_progress`` call as the sole indexer.
+    Passing the real paths here double-indexes on every cache miss and
+    surfaces a noisy "Used tool index_documents" card for a 0-work hash-cache
+    hit on casual chat turns — see the commit that added this test.
+    """
+
+    def test_returns_exactly_the_four_session_fields(self):
+        from gaia.ui._chat_helpers import _session_agent_kwargs
+
+        kwargs = _session_agent_kwargs(
+            rag_file_paths=["/a.md"],
+            library_paths=["/b.md"],
+            allowed=["/root"],
+            session_id="sess-1",
+        )
+        assert set(kwargs) == {
+            "rag_documents",
+            "library_documents",
+            "allowed_paths",
+            "ui_session_id",
+        }
+
+    def test_empty_rag_file_paths_propagates_to_rag_documents(self):
+        """Invariant checked by ``test_streaming_registered_agent_does_not_double_index``.
+
+        If this ever returns a non-empty list when given ``[]``, the
+        regression test below still catches it — but this is the cheapest
+        failing assertion to debug.
+        """
+        from gaia.ui._chat_helpers import _session_agent_kwargs
+
+        kwargs = _session_agent_kwargs(
+            rag_file_paths=[],
+            library_paths=["/lib.md"],
+            allowed=["/root"],
+            session_id="sess-1",
+        )
+        assert kwargs["rag_documents"] == []
+        assert kwargs["library_documents"] == ["/lib.md"]
+
+    def test_rag_file_paths_round_trip_when_nonempty(self):
+        """Built-in chat's non-streaming path DOES forward the real list —
+        verify the helper itself is a faithful passthrough and the
+        caller-side choice of ``[]`` vs the real list is what varies."""
+        from gaia.ui._chat_helpers import _session_agent_kwargs
+
+        paths = ["/docs/a.pdf", "/docs/b.txt"]
+        kwargs = _session_agent_kwargs(
+            rag_file_paths=paths,
+            library_paths=[],
+            allowed=["/docs"],
+            session_id="sess-2",
+        )
+        assert kwargs["rag_documents"] == paths
+
+
+class TestStreamingRegisteredAgentDoesNotDoubleIndex:
+    """Source-shape regression: ensure the streaming registered-agent branch
+    forwards ``rag_file_paths=[]`` into ``_session_agent_kwargs``.
+
+    We check the source rather than driving ``_stream_chat_response`` because
+    the streaming generator threads through Lemonade HTTP, SSE queues, and a
+    background thread that all require heavy mocking — a shape test gives
+    the regression the same ratcheting effect at a fraction of the cost.
+    """
+
+    def test_streaming_registered_agent_passes_empty_rag_file_paths(self):
+        import re
+        from pathlib import Path as _Path
+
+        src = (
+            _Path(__file__).parents[4] / "src" / "gaia" / "ui" / "_chat_helpers.py"
+        ).read_text()
+
+        # Locate the streaming registered-agent factory call. It's the only
+        # ``registry.create_agent(`` invocation in ``_stream_chat_response``
+        # (non-streaming ``_get_chat_response`` uses a separate branch).
+        m = re.search(
+            r"registry\.create_agent\(\s*agent_type,\s*model_id=model_id,\s*"
+            r"streaming=True,[^)]*?\*\*_session_agent_kwargs\(([^)]+)\)",
+            src,
+            re.DOTALL,
+        )
+        assert m, (
+            "Could not locate the streaming registered-agent factory call "
+            "in _chat_helpers.py. Did the call-site structure change? "
+            "Update this regex or re-assert the invariant another way."
+        )
+        block = m.group(1)
+        # The critical invariant: rag_file_paths must be [] (literal empty
+        # list), NOT the outer rag_file_paths variable. Otherwise
+        # ChatAgent.__init__ auto-indexes AND _index_rag_with_progress
+        # indexes again, double-surfacing the index_documents SSE card.
+        assert "rag_file_paths=[]" in block.replace(" ", "").replace("\n", ""), (
+            "Streaming registered-agent branch must pass rag_file_paths=[]. "
+            "Passing the real list causes double-indexing on every cache "
+            "miss. See src/gaia/ui/_chat_helpers.py comment at that call "
+            "site for the full rationale."
+        )

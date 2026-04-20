@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from gaia.llm.lemonade_client import DEFAULT_CONTEXT_SIZE
+
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_dispatch_queue
 from ..models import (
@@ -26,8 +28,6 @@ from ..models import (
     TaskListResponse,
     TaskResponse,
 )
-
-from gaia.llm.lemonade_client import DEFAULT_CONTEXT_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 # registered agent) expects. A custom_model override wins over
                 # everything; otherwise the loaded model is "expected" if it
                 # matches the baseline default *or* any registered agent's
-                # preferred model list. This stops Chat Lite's 4B (or any other
+                # preferred model list. This stops Gaia Lite's 4B (or any other
                 # non-default agent model) from tripping a "Wrong model" banner.
                 if status.model_loaded:
                     custom_model = db.get_setting("custom_model")

@@ -143,11 +143,31 @@ def get_cached_mcp_status() -> list[dict]:
         return copy.deepcopy(_mcp_status_cache)
 
 
+def _canonical_agent_type(agent_type: str) -> str:
+    """Resolve legacy agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``).
+
+    Keeps the per-session agent cache from thrashing when a client mixes the
+    old and new IDs within the same session — both resolve to the same
+    canonical ID and therefore the same cache entry.
+    """
+    registry = _agent_registry
+    if registry is None:
+        return agent_type
+    try:
+        return registry.canonical_id(agent_type)
+    except Exception:  # pragma: no cover — defensive; canonical_id is pure
+        return agent_type
+
+
 def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
     """Return the cached agent for *session_id* if model and agent_type match, else None.
 
-    Evicts the entry when the model or agent type has changed.
+    Evicts the entry when the model or agent type has changed. Legacy
+    agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``) are normalised
+    before comparison so stored sessions that pre-date a rename continue to
+    hit the cache instead of reconstructing the agent on every turn.
     """
+    canonical = _canonical_agent_type(agent_type)
     with _agent_cache_lock:
         entry = _agent_cache.get(session_id)
         if entry is None:
@@ -158,7 +178,7 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
                 "Agent cache miss (model change) for session %s", session_id[:8]
             )
             return None
-        if entry.get("agent_type", "chat") != agent_type:
+        if _canonical_agent_type(entry.get("agent_type", "chat")) != canonical:
             del _agent_cache[session_id]
             logger.debug(
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
@@ -174,7 +194,12 @@ def _store_agent(
     agent,
     agent_type: str = "chat",
 ) -> None:
-    """Cache *agent* for *session_id*.  Evicts the oldest entry if over the limit."""
+    """Cache *agent* for *session_id*.  Evicts the oldest entry if over the limit.
+
+    The agent_type is stored in canonical form so a later lookup with a
+    legacy alias still matches (see ``_canonical_agent_type``).
+    """
+    canonical = _canonical_agent_type(agent_type)
     with _agent_cache_lock:
         if session_id not in _agent_cache and len(_agent_cache) >= _MAX_CACHED_AGENTS:
             oldest = next(iter(_agent_cache))
@@ -182,14 +207,14 @@ def _store_agent(
             logger.debug("Agent cache full; evicted session %s", oldest[:8])
         _agent_cache[session_id] = {
             "model_id": model_id,
-            "agent_type": agent_type,
+            "agent_type": canonical,
             "document_ids": list(document_ids or []),
             "agent": agent,
         }
         logger.debug(
             "Cached agent for session %s agent_type=%s (cache size: %d)",
             session_id[:8],
-            agent_type,
+            canonical,
             len(_agent_cache),
         )
 
@@ -377,7 +402,7 @@ def _session_agent_kwargs(
     """Build the session-scoped ChatAgentConfig fields.
 
     Every agent registered in ``AgentRegistry`` that is backed by ChatAgent
-    (e.g. the built-in ``chat-lite``) needs the same per-session context:
+    (e.g. the built-in ``gaia-lite``) needs the same per-session context:
     which docs to auto-index, which are available on-demand, which paths
     the PathValidator should allow, and the session ID so ChatAgent can
     persist state. Collecting them here means both the direct-construction
@@ -439,7 +464,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         # Determine whether we need to (re)load. We need to load if:
         #   1. No chat-capable model is active, OR
         #   2. The active chat model is NOT the one we expect (e.g. user
-        #      switched agents — chat-lite wants 4B but 0.6B is loaded), OR
+        #      switched agents — gaia-lite wants 4B but 0.6B is loaded), OR
         #   3. The active model is the right one but its context is smaller
         #      than what agents need (ChatAgent system prompt is >7k tokens
         #      so 4096 ctx truncates and yields empty responses).
@@ -680,10 +705,20 @@ async def _get_chat_response(
                     agent_type,
                     session_id[:8],
                 )
-                # Registered agents backed by ChatAgent (e.g. chat-lite) need
+                # Registered agents backed by ChatAgent (e.g. gaia-lite) need
                 # the same session-scoped context as the built-in path above.
                 # Agent factories that don't recognise a field filter it out
                 # via ``dataclasses.fields``/``AgentManifest`` validation.
+                #
+                # Non-streaming vs streaming asymmetry — read before refactoring:
+                # This path forwards ``rag_file_paths`` (the real list) because
+                # non-streaming has no SSE handler, so ChatAgent's silent
+                # ``_index_documents`` in __init__ is the only indexer and must
+                # see the paths. The STREAMING registered-agent path, by
+                # contrast, passes ``rag_file_paths=[]`` and does the indexing
+                # in ``_index_rag_with_progress`` so the user sees progress
+                # events; forwarding the real list there would double-index
+                # (see the regression test in test_chat_helpers.py).
                 agent = registry.create_agent(
                     agent_type,
                     **_build_create_kwargs(
@@ -1065,8 +1100,16 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         t_construct = _time.monotonic()
                         # Same session-scoped kwargs as the built-in Chat
                         # streaming path. Registered agents backed by ChatAgent
-                        # (e.g. chat-lite) need these so session docs are
+                        # (e.g. gaia-lite) need these so session docs are
                         # reachable and PathValidator accepts absolute paths.
+                        #
+                        # IMPORTANT: pass ``rag_file_paths=[]`` so ChatAgent
+                        # doesn't silently auto-index in ``__init__`` — we do
+                        # the indexing below via ``_index_rag_with_progress``
+                        # so the user sees progress events. Otherwise the file
+                        # would be indexed twice on every cache miss, surfacing
+                        # a noisy "Used tool index_documents" card for a
+                        # 0-work hash-cache hit on casual chat turns.
                         agent = registry.create_agent(
                             agent_type,
                             **_build_create_kwargs(
@@ -1075,7 +1118,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                 streaming=True,
                             ),
                             **_session_agent_kwargs(
-                                rag_file_paths=rag_file_paths,
+                                rag_file_paths=[],
                                 library_paths=library_paths,
                                 allowed=allowed,
                                 session_id=session_id,
@@ -1093,7 +1136,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         if sse_handler.cancelled.is_set():
                             return
 
-                        # Index session-attached RAG docs
+                        # Index session-attached RAG docs (single pass, with SSE progress).
                         if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                             _index_rag_with_progress(agent, rag_file_paths, sse_handler)
 

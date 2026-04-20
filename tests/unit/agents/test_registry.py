@@ -86,38 +86,39 @@ class TestBuiltinRegistration:
         visible_ids = [r.id for r in registry.list() if not r.hidden]
         assert "builder" not in visible_ids
 
-    # ---- chat-lite (Mac/low-memory ChatAgent with 4B model) ----
+    # ---- gaia-lite (Mac/low-memory ChatAgent with 4B model) ----
 
-    def test_chat_lite_registered(self):
+    def test_gaia_lite_registered(self):
         registry = AgentRegistry()
         registry.discover()
-        reg = registry.get("chat-lite")
-        assert reg is not None, "chat-lite should be registered as a built-in"
+        reg = registry.get("gaia-lite")
+        assert reg is not None, "gaia-lite should be registered as a built-in"
         assert reg.source == "builtin"
         assert reg.hidden is False
+        assert reg.name == "Gaia Lite"
 
-    def test_chat_lite_visible_in_list(self):
+    def test_gaia_lite_visible_in_list(self):
         registry = AgentRegistry()
         registry.discover()
         visible_ids = [r.id for r in registry.list() if not r.hidden]
-        assert "chat-lite" in visible_ids
+        assert "gaia-lite" in visible_ids
 
-    def test_chat_lite_prefers_4b_model(self):
+    def test_gaia_lite_prefers_4b_model(self):
         """The UI reads ``models`` to show/validate the preferred checkpoint."""
         registry = AgentRegistry()
         registry.discover()
-        reg = registry.get("chat-lite")
-        assert reg.models, "chat-lite should list preferred models"
+        reg = registry.get("gaia-lite")
+        assert reg.models, "gaia-lite should list preferred models"
         # The primary preference must be a 4B GGUF checkpoint — that's the
         # whole reason this agent exists alongside ChatAgent.
         assert reg.models[0] == "Qwen3-4B-Instruct-2507-GGUF"
         assert all("4B" in m for m in reg.models), reg.models
 
-    def test_chat_lite_factory_presets_model_id(self):
+    def test_gaia_lite_factory_presets_model_id(self):
         """Factory must preset ``model_id`` so ChatAgent skips the 35B default."""
         registry = AgentRegistry()
         registry.discover()
-        reg = registry.get("chat-lite")
+        reg = registry.get("gaia-lite")
 
         # Mock ChatAgent to avoid needing a live LLM, but let ChatAgentConfig
         # construct normally so we can read the resolved model_id off it.
@@ -127,35 +128,93 @@ class TestBuiltinRegistration:
         config = mock_agent.call_args.kwargs["config"]
         assert config.model_id == "Qwen3-4B-Instruct-2507-GGUF"
 
-    def test_chat_lite_factory_respects_caller_override(self):
+    def test_gaia_lite_factory_respects_caller_override(self):
         """Explicit ``model_id`` from the caller wins over the preset default."""
         registry = AgentRegistry()
         registry.discover()
-        reg = registry.get("chat-lite")
+        reg = registry.get("gaia-lite")
 
         with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
             reg.factory(model_id="Custom-Model-Override")
         config = mock_agent.call_args.kwargs["config"]
         assert config.model_id == "Custom-Model-Override"
 
-    def test_chat_and_chat_lite_coexist(self):
-        """Creating chat-lite must not perturb the default Chat Agent."""
+    def test_chat_and_gaia_lite_coexist(self):
+        """Creating gaia-lite must not perturb the default Chat Agent."""
         registry = AgentRegistry()
         registry.discover()
         assert registry.get("chat") is not None
-        assert registry.get("chat-lite") is not None
+        assert registry.get("gaia-lite") is not None
         # Distinct registrations — not aliases.
-        assert registry.get("chat") is not registry.get("chat-lite")
+        assert registry.get("chat") is not registry.get("gaia-lite")
         # Chat must keep an empty models preference list (unchanged default).
         assert registry.get("chat").models == []
 
-    def test_chat_lite_declares_memory_requirement(self):
-        """chat-lite should declare min_memory_gb so the UI can warn."""
+    def test_gaia_lite_declares_memory_requirement(self):
+        """gaia-lite should declare min_memory_gb so the UI can warn."""
         registry = AgentRegistry()
         registry.discover()
-        reg = registry.get("chat-lite")
+        reg = registry.get("gaia-lite")
         # 4B Q4_K_M is ~2.5 GB on disk; 5 GB free is the comfortable load floor.
         assert reg.min_memory_gb == 5.0
+
+    def test_legacy_chat_lite_id_resolves_to_gaia_lite(self):
+        """Persisted sessions with the old ``chat-lite`` agent_type must still work.
+
+        The registry should resolve the legacy ID to the renamed ``gaia-lite``
+        registration so we don't need a database migration for existing UI
+        sessions.
+        """
+        registry = AgentRegistry()
+        registry.discover()
+        aliased = registry.get("chat-lite")
+        canonical = registry.get("gaia-lite")
+        assert aliased is not None, "chat-lite alias should resolve"
+        assert (
+            aliased is canonical
+        ), "chat-lite should alias to the same registration as gaia-lite"
+
+    def test_legacy_chat_lite_create_agent_routes_to_gaia_lite(self):
+        """``create_agent('chat-lite')`` should build the renamed agent."""
+        registry = AgentRegistry()
+        registry.discover()
+        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+            registry.create_agent("chat-lite")
+        mock_agent.assert_called_once()
+        config = mock_agent.call_args.kwargs["config"]
+        # Same 4B preset as gaia-lite — confirming the alias hit.
+        assert config.model_id == "Qwen3-4B-Instruct-2507-GGUF"
+
+    def test_legacy_chat_lite_resolve_model_returns_4b(self):
+        """``resolve_model('chat-lite')`` must honour the alias.
+
+        Regression: before routing ``resolve_model`` through ``get()``, a
+        session stored with ``agent_type='chat-lite'`` would bypass the
+        registration lookup, return ``None``, and fall through to whatever
+        35B default was loaded — silently defeating the 4B preset that's
+        the whole reason gaia-lite exists.
+        """
+        registry = AgentRegistry()
+        registry.discover()
+        # Supply an explicit model list to keep the test hermetic (no
+        # Lemonade HTTP call).
+        resolved = registry.resolve_model(
+            "chat-lite",
+            available_models=["Qwen3-4B-Instruct-2507-GGUF", "Something-Else"],
+        )
+        assert resolved == "Qwen3-4B-Instruct-2507-GGUF"
+
+    def test_canonical_id_maps_aliases_and_passes_through_known_ids(self):
+        """``canonical_id`` is the single source of alias truth."""
+        registry = AgentRegistry()
+        registry.discover()
+        assert registry.canonical_id("chat-lite") == "gaia-lite"
+        # Known IDs pass through unchanged.
+        assert registry.canonical_id("gaia-lite") == "gaia-lite"
+        assert registry.canonical_id("chat") == "chat"
+        # Unknown IDs pass through so callers can surface the miss themselves
+        # (``get`` returns ``None``, ``create_agent`` raises ValueError).
+        assert registry.canonical_id("unknown-agent") == "unknown-agent"
 
     def test_chat_has_no_memory_requirement_by_default(self):
         """Chat (35B default) leaves min_memory_gb unset — existing behaviour."""
