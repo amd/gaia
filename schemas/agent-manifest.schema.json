@@ -34,6 +34,8 @@
         "enum": [
           "file_io",
           "file_search",
+          "github",
+          "oss_reuse",
           "rag",
           "screenshot",
           "sd",
