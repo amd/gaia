@@ -12,9 +12,13 @@ See docs/plans/coder-agent.mdx §15.2 for signatures.
 
 from __future__ import annotations
 
+import sys
+import time
+
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.coder.tools.cli import CLIToolsMixin, ShellDeniedError
 from gaia.coder.tools.file import FileToolsMixin
 
 # ---------------------------------------------------------------------------
@@ -35,6 +39,13 @@ def registry_snapshot():
 def file_mixin(registry_snapshot):
     m = FileToolsMixin()
     m.register_file_tools()
+    return m
+
+
+@pytest.fixture
+def cli_mixin(registry_snapshot):
+    m = CLIToolsMixin()
+    m.register_cli_tools()
     return m
 
 
@@ -228,5 +239,163 @@ def test_file_tools_all_registered(file_mixin):
         "search_code",
         "glob",
         "generate_diff",
+    }
+    assert expected.issubset(_TOOL_REGISTRY.keys())
+
+
+# ---------------------------------------------------------------------------
+# CLIToolsMixin — run_cli_command
+# ---------------------------------------------------------------------------
+
+
+def test_run_cli_command_happy_path(cli_mixin):
+    run_cli_command = _get_tool("run_cli_command")
+    result = run_cli_command([sys.executable, "-c", "print('ok')"])
+    assert result["returncode"] == 0
+    assert "ok" in result["stdout"]
+    assert result["stderr"] == ""
+    assert result["duration_ms"] >= 0
+    assert result["pid"] is None  # not background
+
+
+def test_run_cli_command_nonzero_exit(cli_mixin):
+    run_cli_command = _get_tool("run_cli_command")
+    result = run_cli_command([sys.executable, "-c", "import sys; sys.exit(3)"])
+    assert result["returncode"] == 3
+
+
+def test_run_cli_command_denylist(cli_mixin):
+    run_cli_command = _get_tool("run_cli_command")
+    with pytest.raises(ShellDeniedError):
+        run_cli_command(["rm", "-rf", "/"])
+
+
+def test_run_cli_command_denylist_sudo(cli_mixin):
+    run_cli_command = _get_tool("run_cli_command")
+    with pytest.raises(ShellDeniedError):
+        run_cli_command(["sudo", "ls"])
+
+
+def test_run_cli_command_background(cli_mixin):
+    run_cli_command = _get_tool("run_cli_command")
+    list_processes = _get_tool("list_processes")
+    stop_process = _get_tool("stop_process")
+
+    result = run_cli_command(
+        [sys.executable, "-c", "import time; time.sleep(30)"], background=True
+    )
+    pid = result["pid"]
+    assert pid is not None
+    try:
+        procs = list_processes()
+        assert any(p["pid"] == pid for p in procs)
+    finally:
+        stop_process(pid, force=True)
+
+
+# ---------------------------------------------------------------------------
+# CLIToolsMixin — stop_process
+# ---------------------------------------------------------------------------
+
+
+def test_stop_process_happy_path(cli_mixin):
+    run_cli_command = _get_tool("run_cli_command")
+    stop_process = _get_tool("stop_process")
+    list_processes = _get_tool("list_processes")
+
+    result = run_cli_command(
+        [sys.executable, "-c", "import time; time.sleep(30)"], background=True
+    )
+    pid = result["pid"]
+    stop_result = stop_process(pid, force=True)
+    assert stop_result["stopped"] is True
+    # Registry should be cleaned up
+    assert all(p["pid"] != pid for p in list_processes())
+
+
+def test_stop_process_unknown_pid(cli_mixin):
+    stop_process = _get_tool("stop_process")
+    with pytest.raises(ValueError, match="unknown pid"):
+        stop_process(999999)
+
+
+# ---------------------------------------------------------------------------
+# CLIToolsMixin — list_processes
+# ---------------------------------------------------------------------------
+
+
+def test_list_processes_empty(cli_mixin):
+    from gaia.coder.tools.cli import _PROCESS_REGISTRY
+
+    _PROCESS_REGISTRY.clear()
+    list_processes = _get_tool("list_processes")
+    assert list_processes() == []
+
+
+def test_list_processes_tracks_background(cli_mixin):
+    run_cli_command = _get_tool("run_cli_command")
+    list_processes = _get_tool("list_processes")
+    stop_process = _get_tool("stop_process")
+
+    result = run_cli_command(
+        [sys.executable, "-c", "import time; time.sleep(30)"], background=True
+    )
+    pid = result["pid"]
+    try:
+        procs = list_processes()
+        pids = [p["pid"] for p in procs]
+        assert pid in pids
+    finally:
+        stop_process(pid, force=True)
+
+
+# ---------------------------------------------------------------------------
+# CLIToolsMixin — get_process_logs
+# ---------------------------------------------------------------------------
+
+
+def test_get_process_logs_happy_path(cli_mixin):
+    run_cli_command = _get_tool("run_cli_command")
+    get_process_logs = _get_tool("get_process_logs")
+    stop_process = _get_tool("stop_process")
+
+    result = run_cli_command(
+        [
+            sys.executable,
+            "-c",
+            "import time\n"
+            "for i in range(5):\n"
+            "    print('line', i, flush=True)\n"
+            "    time.sleep(0.05)\n"
+            "time.sleep(30)",
+        ],
+        background=True,
+    )
+    pid = result["pid"]
+    try:
+        time.sleep(0.8)
+        logs = get_process_logs(pid, tail_lines=10)
+        assert "line" in logs
+    finally:
+        stop_process(pid, force=True)
+
+
+def test_get_process_logs_unknown_pid(cli_mixin):
+    get_process_logs = _get_tool("get_process_logs")
+    with pytest.raises(ValueError, match="unknown pid"):
+        get_process_logs(999999)
+
+
+# ---------------------------------------------------------------------------
+# CLIToolsMixin — registration
+# ---------------------------------------------------------------------------
+
+
+def test_cli_tools_all_registered(cli_mixin):
+    expected = {
+        "run_cli_command",
+        "stop_process",
+        "list_processes",
+        "get_process_logs",
     }
     assert expected.issubset(_TOOL_REGISTRY.keys())
