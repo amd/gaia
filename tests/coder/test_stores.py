@@ -549,3 +549,46 @@ def test_memory_check_constraints(tmp_path: Path) -> None:
         conn.rollback()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# paused_tasks
+# ---------------------------------------------------------------------------
+
+
+def test_round_trip_paused_tasks(tmp_path: Path) -> None:
+    root = tmp_path / "paused-tasks"
+    data = {
+        "task_id": "t_abc",
+        "paused_at": _ISO,
+        "reason": "self-bug",
+        "resume_hint": "re-enter state=edit",
+        "cwd": "/tmp/gaia",
+        "original_prompt": "scaffold agent",
+        "tool_call_history": [],
+        "partial_outputs": {},
+        "context_hash": "sha256-deadbeef",
+        "loop_version": 1,
+        "stage_at_pause": "Build",
+        "state_at_pause": "edit",
+    }
+    written = paused_tasks.write_snapshot(root, "t_abc", data)
+    assert written.exists()
+    assert written.name == "t_abc.json"
+
+    read = paused_tasks.read_snapshot(root, "t_abc")
+    assert read == data
+
+    assert paused_tasks.list_snapshots(root) == ["t_abc"]
+
+
+def test_paused_tasks_rejects_path_traversal(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        paused_tasks.write_snapshot(tmp_path, "../escape", {})
+    with pytest.raises(ValueError):
+        paused_tasks.write_snapshot(tmp_path, "a/b", {})
+
+
+def test_paused_tasks_missing_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        paused_tasks.read_snapshot(tmp_path, "never_written")
