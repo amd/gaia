@@ -54,12 +54,17 @@ class SearchToolsMixin(FileToolsMixin):
             glob: Optional[str] = None,
         ) -> List[SearchHit]:
             """Thin wrapper around :func:`search_code` with its default flags."""
-            # Fetch search_code from the registry rather than re-importing so
-            # tests that monkey-patch it still work.
-            from gaia.agents.base.tools import _TOOL_REGISTRY
+            # Fetch via the public accessor rather than reaching into the
+            # private registry; preserves monkey-patch behaviour in tests.
+            from gaia.agents.base.tools import get_tool_metadata
 
-            search_code = _TOOL_REGISTRY["search_code"]["function"]
-            return search_code(pattern, path=path, glob=glob)
+            meta = get_tool_metadata("search_code")
+            if meta is None:
+                raise RuntimeError(
+                    "grep(): search_code tool is not registered — "
+                    "SearchToolsMixin must be registered after FileToolsMixin."
+                )
+            return meta["function"](pattern, path=path, glob=glob)
 
         @tool
         def find_symbol(
