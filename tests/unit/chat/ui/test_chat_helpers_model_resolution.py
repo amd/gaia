@@ -18,9 +18,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# DB default must match the value used by gaia.ui.database.create_session
-_DB_DEFAULT = "Qwen3.5-35B-A3B-GGUF"
-
+from gaia.ui.database import SESSION_DEFAULT_MODEL as _DB_DEFAULT
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -211,9 +209,10 @@ class TestStaticRegressionGuard:
         import re
 
         src = (Path(__file__).parents[4] / "src/gaia/ui/_chat_helpers.py").read_text()
-        # Matches the old antipattern: create_agent(... model_id=model_id ...)
-        # Uses DOTALL so it catches multiline calls.
-        match = re.search(r"create_agent\([^)]*model_id=model_id", src, re.DOTALL)
+        # Matches the old antipattern: create_agent(... model_id=model_id ...) as a
+        # DIRECT kwarg (not inside a nested call like _build_create_kwargs).
+        # [^()]* stops at any parenthesis so nested helper calls aren't matched.
+        match = re.search(r"create_agent\([^()]*model_id=model_id", src, re.DOTALL)
         assert not match, (
             "Issue #841 regression: registry.create_agent must not receive "
             "model_id=model_id as a direct kwarg. Build create_kwargs conditionally "
