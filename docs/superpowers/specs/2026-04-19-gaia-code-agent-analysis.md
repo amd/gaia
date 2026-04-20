@@ -635,7 +635,7 @@ Every running instance of the agent is bound to **one** engineering manager (the
 - **Storage.** The answer is written to `~/.gaia/coder/em.toml` AND mirrored into long-term memory (`MemoryStore`) under the `engineering_manager` topic, so the binding survives across sessions and is recallable from prompt context.
 - **Hand-off.** When the EM changes (e.g. Kalin → Tomasz), the *outgoing* EM signs a hand-off (`gaia coder em-handoff --to <handle>`) which the agent records in its audit log. No silent EM swaps; every change is an explicit, auditable act.
 - **Multi-EM scenarios.** Only one EM is *primary* at any time. Others can be added to a `reviewers` list whose approval the agent solicits in PRs but whose authority is read-only.
-- **Unknown EM = no work.** If the agent is asked to do something by a user who is *not* the EM, and the EM has not pre-authorised that user, the agent's response is: *"I need approval from <em-handle> before I can act on this. Want me to open an issue and tag them?"* It does not fall back to "best effort."
+- **Unknown EM = no work.** If the agent is asked to do something by a user who is *not* the EM, and the EM has not pre-authorised that user, the agent's response is: *"I need approval from `<em-handle>` before I can act on this. Want me to open an issue and tag them?"* It does not fall back to "best effort."
 
 ### 15.2 Capability tiers (the trust ladder)
 
