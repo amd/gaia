@@ -501,7 +501,7 @@ def _parse_task_id_from_body(body: str) -> Optional[str]:
         if stripped == "---":
             return None
         if stripped.startswith("id:"):
-            raw = stripped[len("id:"):].strip()
+            raw = stripped[len("id:") :].strip()
             if (raw.startswith('"') and raw.endswith('"')) or (
                 raw.startswith("'") and raw.endswith("'")
             ):
@@ -823,9 +823,7 @@ def _handle_self_fix_process(args: argparse.Namespace) -> int:
     from gaia.coder.self_fix import FeedbackLoopDriver, LoopDriverConfig
 
     repo_root = Path(args.repo_root).resolve() if args.repo_root else Path.cwd()
-    feedback_db = (
-        Path(args.feedback_db) if args.feedback_db else _feedback_db_path()
-    )
+    feedback_db = Path(args.feedback_db) if args.feedback_db else _feedback_db_path()
     memory_db = Path(args.memory_db) if args.memory_db else _memory_db_path()
 
     config = LoopDriverConfig(
@@ -966,7 +964,9 @@ def _handle_dev_mode_status(_args: argparse.Namespace) -> int:
     )
 
     print(f"dev-mode enabled:           {'ON' if enabled else 'OFF'}")
-    print(f"hard precondition (§7.1):   {'met' if status.editable_install else 'NOT met'}")
+    print(
+        f"hard precondition (§7.1):   {'met' if status.editable_install else 'NOT met'}"
+    )
     print(f"em.toml allowlist flag:     {'on' if status.em_allowlist else 'off'}")
     print(f"session flag:               {'on' if session_flag else 'off'}")
     if status.origin_url:
@@ -1265,9 +1265,7 @@ def _build_parser(
             "which runs the full §7.4 self-correction pipeline."
         ),
     )
-    feedback_parser.add_argument(
-        "body", help="Feedback text (the EM's critique)."
-    )
+    feedback_parser.add_argument("body", help="Feedback text (the EM's critique).")
     feedback_parser.add_argument(
         "--severity",
         required=True,
@@ -1314,9 +1312,7 @@ def _build_parser(
         help="Process one pending feedback row (no-op if queue is empty).",
     )
     self_fix_process.add_argument("--repo-root", dest="repo_root", default=None)
-    self_fix_process.add_argument(
-        "--feedback-db", dest="feedback_db", default=None
-    )
+    self_fix_process.add_argument("--feedback-db", dest="feedback_db", default=None)
     self_fix_process.add_argument("--memory-db", dest="memory_db", default=None)
     self_fix_process.set_defaults(handler=_handle_self_fix_process)
     self_fix_parser.set_defaults(
@@ -1370,9 +1366,7 @@ def _build_parser(
             "the Phase 11 production swap."
         ),
     )
-    debug_sub = debug_parser.add_subparsers(
-        dest="debug_action", metavar="<action>"
-    )
+    debug_sub = debug_parser.add_subparsers(dest="debug_action", metavar="<action>")
     for name, help_text in _DEBUG_SUBCOMMANDS:
         sp = debug_sub.add_parser(name, help=help_text, description=help_text)
         sp.set_defaults(handler=_handle_debug_stub(name))
