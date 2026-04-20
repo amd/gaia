@@ -246,9 +246,17 @@ def test_cli_inbox_lists_pending(tmp_path: Path) -> None:
     assert "question" in r.stdout
 
 
-@pytest.mark.parametrize("stub", ["daemon", "status", "feedback", "doctor"])
+@pytest.mark.parametrize(
+    "stub",
+    ["status", "audit", "spend", "egress", "introspect", "skill", "doctor"],
+)
 def test_cli_unimplemented_subcommands_still_stub(tmp_path: Path, stub: str) -> None:
-    """Phase 5 left the non-trust subcommands as stubs on purpose."""
+    """Subcommands whose owning phase has not landed remain generic stubs.
+
+    Phase 11 wired real handlers for ``daemon`` (eval harness), ``feedback``
+    (self-correction), ``self-fix``, ``dev-mode``, ``debug``, and ``rag``;
+    this list covers the ones still deliberately deferred.
+    """
     r = _run_cli(stub, home=tmp_path)
     assert r.returncode == 0
     assert "not yet implemented" in r.stdout
