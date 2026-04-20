@@ -516,6 +516,52 @@ class AntipatternChecker:
         pass
 ```
 
+### RequirementsValidator Interface
+
+Detects hallucinated packages in `requirements.txt` — LLMs occasionally emit
+recursive or nonsensical package names (e.g. `-ibm-cloud-ibm-cloud-*` or a
+segment repeated three or more times). `RequirementsValidator` pattern-matches
+for these and optionally rewrites the file.
+
+```python
+from pathlib import Path
+from typing import Any, Dict
+
+class RequirementsValidator:
+    """Validates requirements.txt files for hallucinated packages."""
+
+    # Patterns indicating hallucinated packages
+    HALLUCINATION_PATTERNS = [
+        r".*-ibm-cloud-ibm-cloud.*",
+        r".*-azure-.*-azure.*",
+        r".*-gcp-.*-gcp.*",
+        r".*(\w{4,})-\1-\1.*",
+        r"flask-graphql-.*-.*-.*-.*-.*",
+    ]
+
+    def validate(self, req_file: Path, fix: bool = False) -> Dict[str, Any]:
+        """Validate requirements.txt for hallucinated packages.
+
+        Args:
+            req_file: Path to requirements.txt
+            fix: When True, rewrites the file in place removing offending lines
+
+        Returns:
+            Dict with 'valid', 'errors', 'warnings', 'fixed_content'
+        """
+```
+
+Registered and re-exported from `gaia.agents.code.validators`:
+
+```python
+from gaia.agents.code.validators import (
+    SyntaxValidator,
+    ASTAnalyzer,
+    AntipatternChecker,
+    RequirementsValidator,
+)
+```
+
 ---
 
 ## Implementation Details

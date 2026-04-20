@@ -169,7 +169,7 @@ class TestUploadByPathTOCTOU:
         # Temp file should be cleaned up
         assert not temp_paths[0].exists()
 
-    def test_upload_cleans_up_temp_on_failure(self, home_tmp_dir, app):
+    def test_upload_cleans_up_temp_on_failure(self, home_tmp_dir, client):
         """Temp file must be removed even when indexing fails."""
         doc_file = home_tmp_dir / "test.txt"
         doc_file.write_text("hello world")
@@ -179,17 +179,15 @@ class TestUploadByPathTOCTOU:
             temp_paths.append(Path(str(path)))
             raise RuntimeError("indexing failed")
 
-        # Use raise_server_exceptions=False so we get the 500 response
-        # instead of the TestClient re-raising the RuntimeError.
-        error_client = TestClient(app, raise_server_exceptions=False)
         with patch("gaia.ui.server._index_document", mock_index_fail):
-            resp = error_client.post(
+            resp = client.post(
                 "/api/documents/upload-path",
                 json={"filepath": str(doc_file)},
             )
 
-        # Should get 500 (global exception handler catches it)
-        assert resp.status_code == 500
+        # Indexing failure now returns 200 with status="failed" (not 500)
+        assert resp.status_code == 200
+        assert resp.json()["indexing_status"] == "failed"
         # Temp file should still be cleaned up
         if temp_paths:
             assert not temp_paths[0].exists()

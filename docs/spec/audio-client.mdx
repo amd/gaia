@@ -71,6 +71,7 @@ class AudioClient:
         whisper_model_size="base",
         audio_device_index=None,
         silence_threshold=0.5,
+        mic_threshold=0.003,
         enable_tts=True,
         logging_level="INFO",
         use_claude=False,
@@ -84,6 +85,8 @@ class AudioClient:
             whisper_model_size: Whisper model size (tiny, base, small, medium, large)
             audio_device_index: Audio input device index (None = default)
             silence_threshold: Silence duration before processing (seconds)
+            mic_threshold: Microphone amplitude threshold for voice-activity
+                detection (passed through to WhisperAsr as silence_threshold).
             enable_tts: Enable text-to-speech output
             logging_level: Logging level (DEBUG, INFO, WARNING, ERROR)
             use_claude: Use Claude API for LLM

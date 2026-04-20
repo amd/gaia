@@ -382,13 +382,15 @@ That is the entire API surface. No embeddings endpoint, no streaming (unless `cf
 
 ### Cloud and Remote Providers
 
-You can also point the agent at cloud-hosted LLM services. Build with SSL support first:
+You can also point the agent at cloud-hosted LLM services. GAIA auto-detects
+OpenSSL at configure time (`find_package(OpenSSL QUIET)`); if it is installed,
+HTTPS support is compiled in automatically — no extra flags needed:
 
 ```bash
-cmake -B build -S cpp -DGAIA_ENABLE_SSL=ON
+cmake -B build -S cpp
 ```
 
-This requires OpenSSL to be installed on your system.
+If OpenSSL isn't found, the build still succeeds but falls back to HTTP only.
 
 <Tabs>
   <Tab title="OpenAI">

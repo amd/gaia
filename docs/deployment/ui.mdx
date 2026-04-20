@@ -25,43 +25,48 @@ The GAIA Agent UI is distributed as an [npm package](https://www.npmjs.com/packa
 # Installation
 
 <Warning>
-  Desktop installers (`.exe` / `.deb`) are **not yet available** for download. To use the Agent UI today, install via npm:
+  Prebuilt desktop installers (`.exe` / `.deb`) are being rolled out. To use
+  the Agent UI today, install via npm (launcher binary is `gaia-ui`):
 
   ```bash
   npm install -g @amd-gaia/agent-ui
-  gaia
+  gaia-ui
   ```
 
-  Or launch from the GAIA CLI: `gaia --ui`. See the [Agent UI guide](/guides/agent-ui) for details.
+  Or launch from the GAIA CLI: `gaia --ui`. See the
+  [Agent UI guide](/guides/agent-ui) for details.
 </Warning>
 
-Install GAIA UI on Windows and Ubuntu using the packages from the GitHub [Releases](https://github.com/amd/gaia/releases) page (when available).
+Install GAIA UI on Windows and Ubuntu using the packages from the GitHub
+[Releases](https://github.com/amd/gaia/releases) page (when available).
+Artifact names follow
+`gaia-agent-ui-<version>-<arch>-setup.<ext>` (see `electron-builder.yml`).
 
 ## Supported platforms
 - Windows 11 (64-bit) - Full GUI and CLI support
 - Linux: Ubuntu 22.04 LTS or 24.04 LTS (64-bit) - Full GUI and CLI support
 
 ## Windows (.exe)
-1. Download the latest `gaia-ui-setup.exe` from [Releases](https://github.com/amd/gaia/releases).
-2. Double-click `gaia-ui-setup.exe` and follow the prompts.
-3. Launch GAIA UI from the Start Menu (search for "GAIA UI") or the desktop shortcut.
+1. Download `gaia-agent-ui-<version>-x64-setup.exe` (e.g. `gaia-agent-ui-0.17.2-x64-setup.exe`) from [Releases](https://github.com/amd/gaia/releases).
+2. Double-click the installer and follow the prompts.
+3. Launch GAIA from the Start Menu (search for "GAIA") or the desktop shortcut. The underlying binary is `gaia-desktop`.
 4. On first launch, setup may take a moment. An internet connection is required the first time.
-5. Updating: download the newer `gaia-ui-setup.exe` from [Releases](https://github.com/amd/gaia/releases) and run it.
-6. Uninstalling: Windows Settings → Apps → Installed apps → find "GAIA UI" → Uninstall.
+5. Updating: download the newer `gaia-agent-ui-<version>-x64-setup.exe` from [Releases](https://github.com/amd/gaia/releases) and run it.
+6. Uninstalling: Windows Settings → Apps → Installed apps → find "GAIA" → Uninstall.
 
 ## Ubuntu (.deb)
-1. Download the latest `gaia-ui-setup.deb` (amd64) from [Releases](https://github.com/amd/gaia/releases).
-2. Open a terminal in the folder where you downloaded `gaia-ui-setup.deb`, then install with apt:
+1. Download `gaia-agent-ui-<version>-amd64.deb` (e.g. `gaia-agent-ui-0.17.2-amd64.deb`) from [Releases](https://github.com/amd/gaia/releases).
+2. Open a terminal in the download folder, then install with apt:
 ```bash
 sudo apt update
-sudo apt install ./gaia-ui-setup.deb
+sudo apt install ./gaia-agent-ui-*-amd64.deb
 ```
-3. Launch GAIA UI from your application menu (search for "GAIA UI").
+3. Launch GAIA from your application menu (search for "GAIA") or run `gaia-desktop` from a terminal.
 4. On first launch, setup may take a moment. An internet connection is required the first time.
-5. Updating: download the newer `gaia-ui-setup.deb` from [Releases](https://github.com/amd/gaia/releases) and install it again with apt (same command as above).
-6. Uninstalling:
+5. Updating: download the newer `.deb` from [Releases](https://github.com/amd/gaia/releases) and reinstall with apt (same command as above).
+6. Uninstalling (package name is `gaia-desktop`):
 ```bash
-sudo apt remove gaiaui
+sudo apt remove gaia-desktop
 ```
 
 # GAIA Chat (Lightweight Desktop)

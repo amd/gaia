@@ -249,10 +249,14 @@ All other `AgentConfig` fields are set at construction time. For dynamic configu
 
 ### HTTPS Support
 
-HTTPS is supported via OpenSSL (enabled by default with `GAIA_ENABLE_SSL=ON`). For local-only deployments where the LLM runs on `localhost`, you can disable SSL to remove the OpenSSL dependency:
+HTTPS is enabled automatically when CMake finds OpenSSL on the system
+(`find_package(OpenSSL QUIET)` in `cpp/CMakeLists.txt`). If OpenSSL is not
+present, GAIA builds with HTTP-only transport and skips the SSL-specific code
+paths. There is no `GAIA_ENABLE_SSL` option — to force-disable OpenSSL, pass
+the CMake built-in `-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON`:
 
 ```bash
-cmake -B build -DGAIA_ENABLE_SSL=OFF
+cmake -B build -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON
 ```
 
 ---

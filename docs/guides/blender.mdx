@@ -98,12 +98,12 @@ gaia blender [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | "Qwen3.5-35B-A3B-GGUF" | Language model ID for AI processing (not a Blender 3D model) |
+| `--model` | string | auto-selected by agent | Language model ID for AI processing (not a Blender 3D model). When omitted, the Blender agent picks a model based on your installed profile — typically a Qwen3 variant. Pass e.g. `--model Qwen3.5-35B-A3B-GGUF` to pin the 35B model. |
 | `--example` | int (1-6) | None | Run a specific example, if not specified run interactive mode |
 | `--steps` | int | 5 | Maximum number of steps per query |
 | `--output-dir` | string | "output" | Directory to save output files |
 | `--stream` | flag | False | Enable streaming mode for LLM responses |
-| `--stats` | flag | True | Enable statistics collection (stats saved to output files, not displayed) |
+| `--stats` | flag | False | Enable statistics collection (stats saved to output files, not displayed) |
 | `--query` | string | None | Custom query to run instead of examples |
 | `--interactive` | flag | False | Enable interactive mode for continuous queries |
 | `--debug-prompts` | flag | False | Enable debug prompts for development |
@@ -331,7 +331,7 @@ Exiting Blender interactive mode.
   <Accordion title="Debug Mode">
     Enable debug mode for detailed troubleshooting:
     ```bash
-    gaia blender --debug-prompts --interactive --logging-level DEBUG
+    gaia blender --debug-prompts --interactive
     ```
 
     This provides:

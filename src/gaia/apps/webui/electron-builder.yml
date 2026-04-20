@@ -1,0 +1,204 @@
+# electron-builder configuration for GAIA Agent UI.
+#
+# Replaces forge.config.cjs (Phase C of the desktop-installer plan).
+# Produces four installer artifacts: NSIS .exe (Windows), DMG (macOS),
+# DEB + AppImage (Linux).
+#
+# Paths with `../../../../installer/...` resolve from this file's location
+# (src/gaia/apps/webui/) to the repo root's `installer/` tree populated by
+# Phases B, C (this file), and E.
+#
+# See docs/plans/desktop-installer.mdx §7 Phase C for context.
+
+appId: ai.amd.gaia
+productName: GAIA                   # User-facing display name (Applications folder, Start Menu, dock, title bar)
+executableName: gaia-desktop       # Actual binary name — must NOT collide with the Python
+                                   # CLI `gaia` (console_scripts entry in setup.py). Using
+                                   # `gaia-desktop` avoids a recursive-launch risk on Linux
+                                   # where findGaiaBin()'s commandExists("gaia") fallback
+                                   # could find /usr/bin/gaia-desktop instead of the venv's
+                                   # Python gaia binary.
+                                   # Affects: .app/Contents/MacOS/gaia-desktop, gaia-desktop.exe,
+                                   # /usr/bin/gaia-desktop, deb package name, AppImage binary name
+copyright: Copyright © 2026 Advanced Micro Devices, Inc.
+
+directories:
+  output: dist-app
+  buildResources: ../../../../installer
+
+# Files included in the asar. Mirrors forge.config.cjs packagerConfig.ignore
+# but as an include list (which is what electron-builder expects).
+files:
+  - main.cjs
+  - preload.cjs
+  - bin/**/*
+  - services/**/*
+  - assets/**/*
+  - app.config.json
+  - package.json
+  - "!**/*.{ts,tsx,map}"
+  - "!src/**/*"
+  - "!public/**/*"
+  - "!out/**/*"
+  - "!**/.gaia/**"
+  - "!gaia.log"
+  - "!**/node_modules/.cache/**"
+  - "!forge.config.cjs"
+  - "!vite.config.ts"
+  - "!tsconfig.json"
+  - "!index.html"
+  - "!electron-builder.yml"
+
+# dist/ ships as extraResource (loaded via process.resourcesPath) — matches
+# the old forge.config.cjs.packagerConfig.extraResource behavior.
+extraResources:
+  - from: dist
+    to: dist
+    filter:
+      - "**/*"
+
+asar: true
+# Nothing currently needs to be unpacked from the asar.
+asarUnpack: []
+
+# afterPack hook: prune Chromium locales to en-US only (~45 MB savings).
+# Replaces the postPackage hook from forge.config.cjs.
+afterPack: ../../../../installer/scripts/after-pack.cjs
+
+# Auto-update provider — Phase F wires up the actual electron-updater logic;
+# for now this just declares where electron-updater should look.
+publish:
+  provider: github
+  owner: amd
+  repo: gaia
+  vPrefixedTagName: true
+
+# Code signing — env-driven, off by default for unsigned local builds.
+# Phase H integrates SignPath for Windows and Apple Developer ID for macOS.
+forceCodeSigning: false
+
+# ─── Windows (NSIS) ─────────────────────────────────────────────────────
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: ../../../../installer/nsis/icon.ico
+  # Lowercase, hyphenated, no spaces — avoids shell quoting pain and matches
+  # the gaia-agent-ui binary name. Display name in Add/Remove Programs is
+  # still driven by productName ("GAIA").
+  artifactName: gaia-agent-ui-${version}-${arch}-setup.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: GAIA
+  installerIcon: ../../../../installer/nsis/icon.ico
+  uninstallerIcon: ../../../../installer/nsis/icon.ico
+  installerHeaderIcon: ../../../../installer/nsis/icon.ico
+  installerSidebar: ../../../../installer/nsis/installer-sidebar.bmp
+  uninstallerSidebar: ../../../../installer/nsis/installer-sidebar.bmp
+  uninstallDisplayName: ${productName}
+  license: ../../../../LICENSE.md
+  include: ../../../../installer/nsis/installer.nsh
+  # Respect §5 — keep user data by default. The uninstaller wizard / the
+  # `gaia uninstall --purge` command handle data removal when the user opts in.
+  deleteAppDataOnUninstall: false
+
+# ─── macOS (DMG) ────────────────────────────────────────────────────────
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  icon: ../../../../installer/macos/icon.icns
+  category: public.app-category.developer-tools
+  # Lowercase filename for the .dmg — matches the gaia-agent-ui binary
+  # naming. The .app bundle INSIDE the DMG keeps its display name
+  # "GAIA.app" from productName, so Finder / Applications folder
+  # still show the pretty name.
+  artifactName: gaia-agent-ui-${version}-${arch}.${ext}
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: ../../../../installer/macos/entitlements.mac.plist
+  entitlementsInherit: ../../../../installer/macos/entitlements.mac.plist
+  # Notarization is env-driven (APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD +
+  # APPLE_TEAM_ID). Phase H wires this up; until then unsigned builds are
+  # produced for local dev.
+  notarize: false
+
+dmg:
+  background: ../../../../installer/macos/dmg-background.png
+  iconSize: 80
+  # Coordinates MUST match ICON_APP_CENTER / ICON_APPS_CENTER in
+  # installer/macos/generate-dmg-background.py — the background art
+  # draws drop-target halos at these exact points. If you move one,
+  # move both; otherwise the icons float off-target at install time.
+  contents:
+    - x: 160
+      y: 200
+      type: file
+    - x: 500
+      y: 200
+      type: link
+      path: /Applications
+  window:
+    width: 660
+    height: 400
+
+# ─── Linux (DEB + AppImage) ─────────────────────────────────────────────
+linux:
+  target:
+    - target: deb
+      arch:
+        - x64
+    - target: AppImage
+      arch:
+        - x64
+  icon: ../../../../installer/linux/gaia-agent-ui.png
+  category: Development
+  # Lowercase hyphenated artifact name — matches gaia-agent-ui binary
+  # and the .deb package name Debian will register.
+  artifactName: gaia-agent-ui-${version}-${arch}.${ext}
+  # Maintainer is required by electron-builder for .deb packages (fpm
+  # propagates this into the Debian control file). Falls back to
+  # `author.email` in package.json if not set, which we don't have — so
+  # it must be set explicitly here. Use a project-scoped address rather
+  # than a real inbox so we don't leak individual maintainer emails.
+  maintainer: GAIA maintainers <gaia@amd.com>
+  desktop:
+    entry:
+      Name: GAIA
+      Comment: Privacy-first agentic AI interface for AMD Ryzen AI
+      Categories: Development;Utility;
+      # StartupWMClass must match the X11 WM_CLASS the app reports at
+      # runtime. Electron derives WM_CLASS from the executable basename
+      # by default, so with executableName: gaia-desktop this becomes
+      # "gaia-desktop". Getting this wrong breaks taskbar icon grouping.
+      StartupWMClass: gaia-desktop
+
+deb:
+  depends:
+    - libnotify4
+    - libnss3
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libdrm2
+    - libgbm1
+    - libxcb-dri3-0
+  recommends:
+    - python3
+    - python3-venv
+  priority: optional
+  fpm:
+    - "--after-install=../../../../installer/debian/postinst"
+    - "--before-remove=../../../../installer/debian/prerm"
+    - "--after-remove=../../../../installer/debian/postrm"
+
+appImage:
+  artifactName: gaia-agent-ui-${version}-${arch}.${ext}

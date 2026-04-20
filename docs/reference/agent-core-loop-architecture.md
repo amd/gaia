@@ -10,7 +10,10 @@
 
 ### 1.1 The Agentic Loop
 
-The core loop lives in `Agent.process()` (`base/agent.py:1593`):
+The core loop lives in `Agent.process_query()` (`base/agent.py`; look for
+`def process_query`). The flow below is still accurate, but specific line
+numbers in this historical review drift as the file evolves — treat them as
+starting points rather than anchors:
 
 ```
 while steps_taken < steps_limit and final_answer is None:

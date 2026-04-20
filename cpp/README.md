@@ -3,7 +3,7 @@
 <!-- Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. -->
 <!-- SPDX-License-Identifier: MIT -->
 
-The [GAIA](https://github.com/amd/gaia) C++ agent framework. Implements the core agentic loop — LLM reasoning, tool execution, multi-step planning, and MCP (Model Context Protocol) client integration — as a lightweight, header-friendly C++ library.
+The [GAIA](https://github.com/amd/gaia) C++ agent framework — a native C++17 port of the Python base agent. Part of AMD's open-source AI agent platform for Ryzen AI hardware. See the [Agent UI plan](../docs/plans/agent-ui.mdx) for the consumer desktop experience that this framework supports.
 
 Included demos:
 
@@ -53,7 +53,7 @@ lemonade-server serve
 
 Default model: `Qwen3-4B-GGUF` (configurable via `AgentConfig::modelId`)
 
-> **Any OpenAI-compatible server works.** The agent talks to a standard `/v1/chat/completions` endpoint. You can use [llama.cpp server](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com/), [vLLM](https://github.com/vllm-project/vllm), or any other OpenAI-compatible backend — just set `AgentConfig::baseUrl` and `AgentConfig::modelId` to match your endpoint. See the [Integration Guide](../docs/cpp/integration.mdx) for details.
+> **Any OpenAI-compatible server works.** The agent talks to a standard `/v1/chat/completions` endpoint. You can use [llama.cpp server](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com/), [vLLM](https://github.com/vllm-project/vllm), or any other OpenAI-compatible backend — just set `AgentConfig::baseUrl` and `AgentConfig::modelId` to match your endpoint. Endpoints that already use `/v1` are preserved as-is; Lemonade-style endpoints continue to use `/api/v1`. See the [Integration Guide](../docs/cpp/integration.mdx) for details.
 
 ### 3. Windows MCP Server (for the demo)
 
@@ -192,6 +192,11 @@ GAIA_STREAMING=1 ./build/my_agent
 **Example — point to a remote server:**
 ```bash
 GAIA_CPP_BASE_URL=http://192.168.1.50:8000 ./build/my_agent
+```
+
+**Example — point to Ollama's OpenAI-compatible endpoint:**
+```bash
+GAIA_CPP_BASE_URL=http://localhost:11434/v1 LEMONADE_MODEL=gemma4:e2b ./build/my_agent
 ```
 
 Code-level config always takes precedence over environment variables when explicitly set, but these variables control the *default* value of each field in `AgentConfig`.

@@ -16,16 +16,20 @@
 const { app, BrowserWindow, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const { spawn } = require("child_process");
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
+const backendInstaller = require("./services/backend-installer.cjs");
+const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
+const autoUpdater = require("./services/auto-updater.cjs");
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
-const APP_NAME = "GAIA Agent UI";
+const APP_NAME = "GAIA";
 const BACKEND_PORT = 4200;
 const HEALTH_CHECK_URL = `http://localhost:${BACKEND_PORT}/api/health`;
 const STARTUP_TIMEOUT = 30000;
@@ -73,35 +77,21 @@ let isQuitting = false;
 
 // ── Backend Process ────────────────────────────────────────────────────────
 
-function findGaiaCommand() {
-  const isWindows = process.platform === "win32";
-
-  // Check common locations
-  const candidates = isWindows
-    ? ["gaia.exe", "gaia", "gaia.cmd"]
-    : ["gaia"];
-
-  for (const cmd of candidates) {
-    try {
-      const { execSync } = require("child_process");
-      const check = isWindows ? `where ${cmd}` : `which ${cmd}`;
-      execSync(check, { stdio: "ignore" });
-      return cmd;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
+/**
+ * Start the GAIA Python backend. Expects the backend installer to have
+ * already ensured the venv is populated — callers should await
+ * `bootstrapBackend()` first.
+ *
+ * Returns the ChildProcess, or null if the gaia binary cannot be found
+ * (shouldn't happen post-ensureBackend, but we guard just in case).
+ */
 function startBackend() {
-  const gaiaCmd = findGaiaCommand();
+  const gaiaCmd = backendInstaller.findGaiaBin();
 
   if (!gaiaCmd) {
-    console.warn(
-      "Warning: gaia CLI not found. Backend will not start automatically."
+    console.error(
+      "[main] GAIA backend not found even after install — cannot start backend"
     );
-    console.warn("Install with: pip install amd-gaia");
     return null;
   }
 
@@ -111,6 +101,7 @@ function startBackend() {
     gaiaCmd,
     ["chat", "--ui", "--ui-port", String(BACKEND_PORT)],
     {
+      cwd: os.homedir(),  // Electron's cwd is "/" on macOS when launched from Finder
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env },
       detached: false,
@@ -246,17 +237,9 @@ async function loadApp() {
   const distPath = findDistPath();
 
   if (distPath) {
-    // Load the built frontend directly (for when backend serves it)
-    // First try loading from the backend URL
-    try {
-      await mainWindow.loadURL(`http://localhost:${BACKEND_PORT}`);
-      console.log("Loaded app from backend server");
-      return;
-    } catch {
-      // Fall through to loading from file
-    }
-
-    // Load from built files
+    // Always load the bundled frontend from the asar. The backend only
+    // serves the API (no frontend files in the pip package), so loading
+    // http://localhost:4200/ would show raw JSON instead of the UI.
     const indexPath = path.join(distPath, "index.html");
     console.log("Loading app from:", indexPath);
     await mainWindow.loadFile(indexPath);
@@ -337,18 +320,149 @@ function setupJumpList() {
   }
 }
 
-// ── App Lifecycle ──────────────────────────────────────────────────────────
+// ── Backend Bootstrap (Phase A) ───────────────────────────────────────────
 
-// Handle creating/removing shortcuts on Windows when installing/uninstalling
-try {
-  if (require("electron-squirrel-startup")) {
-    app.quit();
+/**
+ * Ensure the Python backend is installed before the main window loads.
+ *
+ * Shows a borderless progress window while the install runs. On failure,
+ * surfaces a retry / manual / quit dialog. Loops until the user either
+ * succeeds, chooses manual install, or quits.
+ *
+ * Returns true if the backend is ready, false if the user chose to quit.
+ */
+async function bootstrapBackend() {
+  // Fast-path: if an install is obviously not needed (binary present and
+  // version matches), skip the progress window entirely and go straight to
+  // ensureBackend which will confirm readiness.
+  const existingBin = backendInstaller.findGaiaBin();
+  if (existingBin) {
+    const installedVersion = backendInstaller.getInstalledVersion(existingBin);
+    let expectedVersion = null;
+    try {
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(__dirname, "package.json"), "utf8")
+      );
+      expectedVersion = pkg.version;
+    } catch {
+      // ignore
+    }
+    if (installedVersion && installedVersion === expectedVersion) {
+      console.log(
+        `[main] GAIA backend already at ${installedVersion} — skipping bootstrap UI`
+      );
+      // Clean up any stale state file so the state machine reflects reality.
+      backendInstaller.setState(backendInstaller.STATES.READY, {
+        version: expectedVersion,
+        installedVersion,
+      });
+      return true;
+    }
   }
-} catch {
-  // electron-squirrel-startup not available
+
+  // Slow path: need to install or upgrade. Show the progress window.
+  let keepTrying = true;
+  while (keepTrying) {
+    const progress = installerProgressDialog.createProgressWindow();
+
+    try {
+      await backendInstaller.ensureBackend({
+        onProgress: progress.onProgress,
+      });
+      progress.close();
+      console.log("[main] Backend bootstrap complete");
+      return true;
+    } catch (err) {
+      progress.close();
+      console.error(
+        `[main] Backend bootstrap failed: ${err && err.message ? err.message : err}`
+      );
+
+      const errorInfo = {
+        message: (err && err.message) || "GAIA install failed.",
+        stage: (err && err.stage) || null,
+        suggestion: (err && err.suggestion) || null,
+      };
+
+      const choice = await installerProgressDialog.showFailureDialog(
+        null,
+        errorInfo
+      );
+
+      if (choice === "retry") {
+        continue; // loop
+      }
+      if (choice === "manual") {
+        // The user was directed to the docs in an external browser. Quit so
+        // they can complete the manual install and restart.
+        return false;
+      }
+      return false; // quit
+    }
+  }
+  return false;
 }
 
+// ── App Lifecycle ──────────────────────────────────────────────────────────
+
+// Note: electron-squirrel-startup was removed in Phase C of the
+// desktop-installer plan. electron-builder's NSIS target does not need
+// Squirrel's first-run shortcut bookkeeping — NSIS creates the Start Menu
+// and Desktop shortcuts itself at install time.
+
+// ── Single-instance lock ─────────────────────────────────────────────────
+//
+// GAIA Agent UI is a desktop app that the user may inadvertently launch
+// twice (double-click in Finder, second click on the dock icon, second
+// click in the Start Menu, autostart firing while the user already has
+// the app open, etc.). Without a lock, two Electron instances would race:
+//
+//   • Both call backend-installer.cjs concurrently — interleaved log
+//     writes, state file (~/.gaia/electron-install-state.json) flapping
+//     between INSTALLING records, possibly half-installed venvs.
+//   • Both spawn the Python backend on port 4200 — second crashes.
+//   • Both register IPC handlers via ipcMain.handle(...) — Electron
+//     throws "Attempted to register a second handler" and the second
+//     instance dies.
+//   • Two tray icons, two auto-updater singletons.
+//
+// requestSingleInstanceLock() is the standard Electron pattern: the first
+// process to call it gets `true`, every subsequent launch on the same
+// machine gets `false` and should immediately quit. The first instance
+// receives a `second-instance` event and surfaces its window.
+const gotTheSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotTheSingleInstanceLock) {
+  console.log("[main] Another GAIA Agent UI instance is already running — quitting");
+  app.quit();
+  // Use process.exit so we bail BEFORE app.whenReady() fires below.
+  // app.quit() alone is async and the rest of this file would still
+  // execute, racing with the first instance.
+  process.exit(0);
+}
+
+app.on("second-instance", (_event, _argv, _cwd) => {
+  // A second launch happened while we were running. Surface our window
+  // (the user almost certainly wanted to see it). mainWindow may be null
+  // if we're still in the bootstrap phase — in that case the first
+  // instance is already showing the install progress dialog and there's
+  // nothing else to do.
+  if (typeof mainWindow !== "undefined" && mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+  }
+});
+
 app.whenReady().then(async () => {
+  // Phase A: ensure the Python backend is installed BEFORE creating the
+  // main window. The progress dialog owns the UI during this phase.
+  const bootstrapOk = await bootstrapBackend();
+  if (!bootstrapOk) {
+    console.log("[main] Backend bootstrap aborted — quitting");
+    app.quit();
+    return;
+  }
+
   // Start the Python backend
   backendProcess = startBackend();
 
@@ -358,25 +472,36 @@ app.whenReady().then(async () => {
   // Initialize services (tray, agent manager, notifications)
   initializeServices();
 
+  // Phase F: start the auto-updater (non-blocking). First check runs on
+  // a 10s delay inside the module so it never competes with app launch.
+  // Any failure here is logged and swallowed — the app continues to run
+  // even if auto-update is unavailable.
+  try {
+    autoUpdater.init(mainWindow);
+  } catch (err) {
+    console.error(
+      "[main] Failed to init auto-updater:",
+      err && err.message ? err.message : err
+    );
+  }
+
   // Setup Windows Jump List (T11)
   setupJumpList();
 
   // Show loading state
   await loadApp();
 
-  // Wait for backend to be ready, then reload
+  // Wait for backend API to be reachable. The bundled frontend
+  // (loaded from dist/index.html in the asar) auto-detects when the
+  // API becomes available and dismisses its "Cannot connect" banner.
+  // We do NOT reload the window with http://localhost:4200/ because
+  // the pip-installed backend has no frontend files — only the API.
   if (backendProcess) {
     console.log("Waiting for backend to start...");
     const ready = await waitForBackend(STARTUP_TIMEOUT);
-
-    if (ready && mainWindow && !mainWindow.isDestroyed()) {
-      console.log("Backend is ready! Loading app...");
-      try {
-        await mainWindow.loadURL(`http://localhost:${BACKEND_PORT}`);
-      } catch (error) {
-        console.error("Failed to load from backend:", error.message);
-      }
-    } else if (!ready) {
+    if (ready) {
+      console.log("Backend API is ready on port", BACKEND_PORT);
+    } else {
       console.warn("Backend did not respond within timeout.");
     }
   }
@@ -450,6 +575,16 @@ app.on("will-quit", (event) => {
 });
 
 async function cleanup() {
+  // Phase F: tear down auto-updater timers and IPC handlers.
+  try {
+    autoUpdater.destroy();
+  } catch (err) {
+    console.error(
+      "[main] Error tearing down auto-updater:",
+      err && err.message ? err.message : err
+    );
+  }
+
   // Clean up notification timers
   if (notificationService) {
     notificationService.destroy();

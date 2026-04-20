@@ -129,8 +129,11 @@ src/gaia/llm/
 ### Package Exports (`__init__.py`)
 
 ```python
-from gaia.llm import create_client, LLMClient, NotSupportedError
+from gaia.llm import create_client, LLMClient, VLMClient, NotSupportedError
 ```
+
+`VLMClient` is also re-exported from `gaia.llm` — see
+[`vlm-client`](/spec/vlm-client) for its API.
 
 ---
 
@@ -1298,7 +1301,7 @@ result = agent.process_task("Analyze this code...")
 
 ## Documentation Updates Required
 
-### SDK.md
+### docs/sdk/sdks/llm.mdx
 
 Add to LLM Section:
 

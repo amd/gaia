@@ -1,0 +1,721 @@
+---
+title: "Skill Format"
+description: "SKILL.md specification — permission model, security tiers, and OpenClaw compatibility"
+icon: "puzzle-piece"
+---
+
+# SKILL.md Format Specification
+
+**Status:** Draft
+**Version:** 0.1.0
+**Target Release:** v0.24.0
+**Related Issues:** #462, #647, #473, #285
+
+---
+
+## 1. Overview
+
+SKILL.md is the standard format for declaring, distributing, and composing agent
+skills (plugins) in the GAIA ecosystem. A skill is a self-contained unit of
+capability -- one or more `@tool`-decorated functions packaged with metadata that
+describes permissions, model requirements, dependencies, and security posture.
+
+Design goals:
+
+- **Declarative** -- A single file describes everything the runtime needs to
+  load, sandbox, and execute the skill.
+- **Composable** -- Agents compose skills; an agent's manifest (#462) lists the
+  skills it requires.
+- **Auditable** -- Permission grants and security tiers are explicit, enabling
+  automated scanning and human review.
+- **Compatible** -- An OpenClaw compatibility layer allows migration of existing
+  SKILL.md files with minimal modification.
+
+A skill is NOT an agent. An agent orchestrates one or more skills to accomplish
+a goal. See Section 9 for the relationship between skills and agent manifests.
+
+---
+
+## 2. File Format
+
+A SKILL.md file consists of YAML frontmatter delimited by `---` fences,
+followed by a Markdown body.
+
+### 2.1 Full Schema
+
+```yaml
+---
+# === Identity (required) ===
+name: web-search                          # Unique skill identifier (lowercase, hyphens)
+version: 1.0.0                            # SemVer version string
+description: "Search the web using Brave Search API"
+author: AMD                               # Publisher name or GitHub handle
+license: MIT                              # SPDX license identifier
+
+# === Permissions (required) ===
+permissions:
+  - network:read                          # Can make outbound HTTP requests
+  - filesystem:none                       # No file access
+
+# === Requirements (optional) ===
+requirements:
+  model: ">=7B"                           # Minimum model parameter count
+  context: ">=8K"                         # Minimum context window (tokens)
+  python: ">=3.10"                        # Python version constraint
+  dependencies:                           # Python packages (pip format)
+    - requests>=2.31
+  node_dependencies:                      # Node packages (for MCP skills)
+    - "@brave/brave-search-mcp-server"
+  env_vars:                               # Required environment variables
+    - BRAVE_API_KEY
+  hardware:                               # Hardware hints (advisory, not enforced)
+    npu: optional                         # required | optional | none
+    gpu_vram: ">=0GB"                     # Minimum GPU VRAM
+
+# === Tools (required) ===
+tools:
+  - name: search_web
+    description: "Search the web for current information"
+    parameters:
+      query: {type: string, required: true}
+      max_results: {type: integer, required: false, default: 5}
+    returns: {type: object}
+    atomic: false                          # Maps to @tool(atomic=...) flag
+
+# === Security (required) ===
+security_tier: verified                   # verified | community | experimental
+
+# === Marketplace (optional) ===
+registry: https://registry.amd-gaia.ai   # Skill registry URL
+tags:
+  - search
+  - web
+  - brave
+homepage: https://github.com/amd/gaia-skills/tree/main/web-search
+repository: https://github.com/amd/gaia-skills
+---
+
+# Web Search Skill
+
+Search the web for current information using the Brave Search API.
+```
+
+### 2.2 Field Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique skill identifier. Lowercase alphanumeric with hyphens. Max 64 chars. |
+| `version` | string | Yes | SemVer 2.0.0 version string. |
+| `description` | string | Yes | One-line human-readable description. Max 200 chars. |
+| `author` | string | Yes | Publisher name or GitHub handle. |
+| `license` | string | Yes | SPDX license identifier. |
+| `permissions` | list | Yes | Permission grants. See Section 3. |
+| `requirements` | object | No | Runtime requirements. Defaults assume no constraints. |
+| `tools` | list | Yes | Tool declarations. Must have at least one entry. |
+| `security_tier` | string | Yes | One of: `verified`, `community`, `experimental`. |
+| `registry` | string | No | Registry URL. Defaults to AMD official registry. |
+| `tags` | list | No | Searchable tags for marketplace discovery. |
+| `homepage` | string | No | URL to skill documentation or landing page. |
+| `repository` | string | No | URL to source repository. |
+
+### 2.3 Naming Conventions
+
+Skill names must match the regex `^[a-z][a-z0-9-]{0,63}$`. Names are globally
+unique within a registry. The following prefixes are reserved:
+
+| Prefix | Reserved For |
+|--------|-------------|
+| `amd-` | AMD-published official skills |
+| `gaia-` | GAIA core framework skills |
+| `mcp-` | Skills that wrap MCP servers |
+
+---
+
+## 3. Permission Model
+
+Permissions follow the format `<domain>:<level>`. Every skill must declare
+permissions explicitly -- there are no implicit grants.
+
+### 3.1 Permission Domains
+
+| Domain | Levels | Description |
+|--------|--------|-------------|
+| `filesystem` | `read`, `write`, `none` | Local file system access |
+| `network` | `read`, `write`, `none` | Outbound network requests (`read` = GET-like, `write` = POST/PUT/DELETE) |
+| `shell` | `execute`, `none` | Shell command execution |
+| `desktop` | `control`, `none` | Desktop automation (mouse, keyboard, screen capture) |
+| `mcp` | `connect`, `none` | Connect to MCP servers |
+| `env` | `read`, `none` | Read environment variables beyond those in `env_vars` |
+| `database` | `read`, `write`, `none` | Database connections (SQLite, PostgreSQL, etc.) |
+
+### 3.2 Permission Scoping
+
+Permissions can be narrowed with path or pattern qualifiers:
+
+```yaml
+permissions:
+  - filesystem:read:~/.gaia/data/**     # Read only within data directory
+  - filesystem:write:./output/**         # Write only to output directory
+  - network:read:*.brave.com             # HTTP requests only to brave.com
+  - shell:execute:git,npm               # Only execute git and npm commands
+```
+
+Scoped permissions are enforced at runtime by the skill sandbox. Unscoped
+permissions grant access to the full domain.
+
+### 3.3 Permission Escalation Rules
+
+- A skill cannot request permissions beyond its security tier ceiling.
+- `experimental` skills: all permissions allowed, but execution is sandboxed.
+- `community` skills: `shell:execute` and `desktop:control` require explicit
+  user approval at install time.
+- `verified` skills: all declared permissions are pre-approved by AMD audit.
+
+| Permission | Verified | Community | Experimental |
+|-----------|----------|-----------|--------------|
+| `filesystem:read` | Auto | Auto | Sandboxed |
+| `filesystem:write` | Auto | Prompt | Sandboxed |
+| `network:*` | Auto | Auto | Sandboxed |
+| `shell:execute` | Auto | Prompt | Sandboxed |
+| `desktop:control` | Auto | Prompt | Sandboxed |
+| `mcp:connect` | Auto | Auto | Sandboxed |
+| `database:write` | Auto | Prompt | Sandboxed |
+
+---
+
+## 4. Security Tiers
+
+### 4.1 AMD Verified
+
+- Code-signed by AMD with a hardware-backed signing key.
+- Security audit completed (static analysis, dependency audit, manual review).
+- Published to the official AMD skill registry.
+- Automatic permission grants -- no user prompts.
+- Eligible for pre-installation in GAIA distributions.
+- Re-audited on every version bump.
+
+### 4.2 Community Reviewed
+
+- Signed by the publisher (GPG or Sigstore).
+- Automated security scanning: static analysis (Bandit), dependency audit
+  (pip-audit), secret detection (detect-secrets).
+- Community ratings and review system on the marketplace.
+- Dangerous permissions (`shell:execute`, `desktop:control`, `database:write`)
+  require explicit user approval at install time.
+- Publisher reputation score influences visibility in search results.
+
+### 4.3 Experimental
+
+- No signature required.
+- Executed in a sandboxed environment (restricted filesystem, network proxy,
+  no direct shell access).
+- User must explicitly approve installation with `--allow-experimental` flag.
+- Cannot be auto-installed as agent dependencies.
+- Runtime resource limits enforced (CPU time, memory, network bandwidth).
+- Displayed with a warning in the marketplace UI.
+
+### 4.4 Tier Promotion Path
+
+```
+Experimental --> Community Reviewed --> AMD Verified
+                 (publisher signs)      (AMD audits)
+```
+
+A skill author can request tier promotion through the marketplace. Community
+tier requires publisher signing and passing automated scans. AMD Verified
+requires a formal audit request and AMD security team review.
+
+---
+
+## 5. Tool Registration
+
+SKILL.md tool declarations map directly to the existing `@tool` decorator and
+`_TOOL_REGISTRY` in `src/gaia/agents/base/tools.py`.
+
+### 5.1 Loading Process
+
+When an agent calls `self.load_skill("web-search")`, the runtime:
+
+1. Resolves the skill directory: `~/.gaia/skills/web-search/`
+2. Parses `SKILL.md` frontmatter to extract metadata.
+3. Validates permissions against the skill's security tier.
+4. Installs Python dependencies listed in `requirements.dependencies` (if not
+   already satisfied).
+5. Imports `tools.py` from the skill directory.
+6. Verifies that every function listed in the `tools` frontmatter section
+   exists in `tools.py` and is decorated with `@tool`.
+7. Registers tools into `_TOOL_REGISTRY` with a namespaced key:
+   `<skill-name>/<tool-name>` (e.g., `web-search/search_web`).
+
+### 5.2 Tool Namespacing
+
+To prevent collisions when an agent loads multiple skills, tools are registered
+with a namespace prefix. The LLM sees the short name; the registry uses the
+qualified name.
+
+```python
+# In _TOOL_REGISTRY after loading "web-search" skill:
+{
+    "web-search/search_web": {
+        "name": "search_web",               # Short name for LLM
+        "qualified_name": "web-search/search_web",
+        "description": "Search the web for current information",
+        "parameters": {"query": {"type": "string", "required": True}},
+        "function": <function search_web>,
+        "atomic": False,
+        "skill": "web-search",
+        "skill_version": "1.0.0",
+    }
+}
+```
+
+### 5.3 Skill tools.py Convention
+
+Each skill's `tools.py` must use the standard `@tool` decorator:
+
+```python
+# ~/.gaia/skills/web-search/tools.py
+# Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+from gaia.agents.base.tools import tool
+
+@tool
+def search_web(query: str, max_results: int = 5) -> dict:
+    """Search the web for current information using Brave Search API."""
+    import os
+    import requests
+
+    api_key = os.environ["BRAVE_API_KEY"]
+    response = requests.get(
+        "https://api.search.brave.com/res/v1/web/search",
+        headers={"X-Subscription-Token": api_key},
+        params={"q": query, "count": max_results},
+    )
+    return response.json()
+```
+
+### 5.4 Validation Rules
+
+The runtime validates that:
+
+- Every tool declared in SKILL.md frontmatter has a matching `@tool`-decorated
+  function in `tools.py`.
+- Parameter names and types in the frontmatter match the function signature.
+- The function has a docstring (used as tool description fallback).
+- Return type is JSON-serializable.
+
+Validation failures block skill loading with a descriptive error message.
+
+---
+
+## 6. Skill Discovery and Installation
+
+### 6.1 CLI Commands
+
+```bash
+# Search the registry
+gaia skill search "web search"
+
+# Install a skill
+gaia skill install web-search
+
+# Install a specific version
+gaia skill install web-search@1.2.0
+
+# Install an experimental skill (requires explicit flag)
+gaia skill install some-experimental-skill --allow-experimental
+
+# List installed skills
+gaia skill list
+
+# Show skill details
+gaia skill info web-search
+
+# Update a skill
+gaia skill update web-search
+
+# Update all skills
+gaia skill update --all
+
+# Remove a skill
+gaia skill remove web-search
+
+# Verify skill signatures
+gaia skill verify web-search
+
+# Publish a skill to the registry (for skill authors)
+gaia skill publish ./my-skill/
+```
+
+### 6.2 Programmatic API
+
+```python
+from gaia.skills import SkillManager
+
+manager = SkillManager()
+
+# Install
+manager.install("web-search", version=">=1.0.0")
+
+# Load into an agent
+agent.load_skill("web-search")
+
+# List installed
+for skill in manager.list_installed():
+    print(f"{skill.name} {skill.version} [{skill.security_tier}]")
+```
+
+---
+
+## 7. Skill Directory Structure
+
+### 7.1 Installed Skills
+
+```
+~/.gaia/skills/
+├── web-search/
+│   ├── SKILL.md              # Skill manifest (YAML frontmatter + docs)
+│   ├── tools.py              # @tool decorated functions
+│   ├── requirements.txt      # Pinned Python dependencies (generated)
+│   ├── signature.json        # Publisher or AMD signature
+│   └── lib/                  # Optional supporting modules
+│       └── brave_client.py
+├── file-converter/
+│   ├── SKILL.md
+│   ├── tools.py
+│   ├── requirements.txt
+│   └── templates/
+│       └── output.html
+└── .registry-cache.json      # Local cache of registry metadata
+```
+
+### 7.2 Skill Development Layout
+
+For skill authors developing locally:
+
+```
+my-skill/
+├── SKILL.md                  # Skill manifest
+├── tools.py                  # Tool implementations
+├── tests/
+│   ├── test_tools.py         # Unit tests for tools
+│   └── conftest.py
+├── lib/                      # Supporting modules (optional)
+├── .gitignore
+└── LICENSE
+```
+
+### 7.3 Lock File
+
+`~/.gaia/skills/skill-lock.json` records exact installed versions and
+dependency resolutions, analogous to `package-lock.json`:
+
+```json
+{
+  "version": 1,
+  "skills": {
+    "web-search": {
+      "version": "1.2.0",
+      "integrity": "sha256-abc123...",
+      "security_tier": "verified",
+      "installed_at": "2026-03-15T10:30:00Z",
+      "dependencies_hash": "sha256-def456..."
+    }
+  }
+}
+```
+
+---
+
+## 8. OpenClaw Compatibility
+
+OpenClaw's ClawHub hosts thousands of community skills. GAIA's compatibility
+layer must enforce trust boundaries since external skills are untrusted by default.
+
+### 8.1 Format Differences
+
+| Aspect | OpenClaw SKILL.md | GAIA SKILL.md |
+|--------|-------------------|---------------|
+| Frontmatter | YAML with `claw_version` field | YAML with `version` field |
+| Permissions | Coarse (`network: true/false`) | Granular (`network:read`, scoped) |
+| Security | No tier system | Three-tier model |
+| Tools | `actions` list with `handler` paths | `tools` list mapping to `@tool` |
+| Dependencies | `pip_requires` list | `requirements.dependencies` |
+| Signatures | None | Required for community/verified |
+
+### 8.2 Migration Tool
+
+```bash
+# Convert an OpenClaw SKILL.md to GAIA format
+gaia skill migrate ./openclaw-skill/SKILL.md
+
+# Convert and validate
+gaia skill migrate ./openclaw-skill/SKILL.md --validate
+
+# Batch migrate a directory of OpenClaw skills
+gaia skill migrate ./openclaw-skills/ --batch --output ./gaia-skills/
+```
+
+The migration tool:
+
+1. Parses OpenClaw YAML frontmatter.
+2. Maps `actions` entries to GAIA `tools` format.
+3. Expands coarse permissions (`network: true`) to granular equivalents
+   (`network:read`, `network:write`).
+4. Sets `security_tier: experimental` for all migrated skills (trust must be
+   re-established).
+5. Generates a GAIA-compatible `tools.py` wrapper that delegates to the
+   original OpenClaw handler files.
+6. Produces a migration report listing manual review items.
+
+### 8.3 Runtime Adapter
+
+For skills that cannot be cleanly migrated, GAIA provides an OpenClaw runtime
+adapter:
+
+```python
+from gaia.skills.openclaw import OpenClawAdapter
+
+adapter = OpenClawAdapter("./openclaw-skill/")
+agent.load_skill(adapter)  # Loaded as experimental, sandboxed
+```
+
+The adapter wraps OpenClaw handler functions in `@tool` decorators at runtime,
+enforces GAIA's permission model, and runs the skill in the experimental
+sandbox regardless of any tier claims in the original file.
+
+---
+
+## 9. Relationship to Agent Manifest (#462)
+
+Skills are composable units; agents compose skills. The agent manifest system
+(#462) declares which skills an agent requires.
+
+### 9.1 Agent Manifest References Skills
+
+```yaml
+# Example AGENT.yaml for GaiaAgent
+name: gaia-agent
+version: 0.24.0
+description: "Document Q&A with RAG capabilities"
+
+skills:
+  - name: rag-search
+    version: ">=1.0.0"
+    required: true
+  - name: web-search
+    version: ">=1.0.0"
+    required: false       # Optional enhancement
+  - name: file-operations
+    version: ">=1.0.0"
+    required: true
+
+model:
+  default: "Qwen3.5-35B"
+  minimum: ">=7B"
+  context: ">=32K"
+```
+
+### 9.2 Migration from Hardcoded Wiring (#473)
+
+The current agent system uses hardcoded mixin classes for tool registration:
+
+```python
+# Current pattern (to be migrated)
+class GaiaAgent(Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin):
+    def _register_tools(self):
+        self.register_rag_tools()
+        self.register_file_tools()
+        self.register_shell_tools()
+```
+
+After migration to the skill system:
+
+```python
+# Target pattern
+class GaiaAgent(Agent):
+    def _register_tools(self):
+        self.load_skill("rag-search")
+        self.load_skill("file-operations")
+        self.load_skill("shell-commands")
+```
+
+Existing mixin classes in `src/gaia/agents/chat/tools/` and
+`src/gaia/agents/code/tools/` will be refactored into standalone skills
+during the v0.24.0 migration (#473). The mixins remain available as a
+backward-compatible fallback during the deprecation period.
+
+### 9.3 Composition Hierarchy
+
+```
+Agent Manifest (AGENT.yaml)
+  |
+  +-- Skill A (SKILL.md)
+  |     +-- tool_1  (@tool)
+  |     +-- tool_2  (@tool)
+  |
+  +-- Skill B (SKILL.md)
+  |     +-- tool_3  (@tool)
+  |
+  +-- Inline Tools (agent-specific, not shared)
+        +-- tool_4  (@tool)
+```
+
+Agents can combine skills from the registry with agent-specific inline tools
+that are not packaged as skills.
+
+---
+
+## 10. Marketplace Integration
+
+### 10.1 Publishing Workflow
+
+```
+Author develops skill locally
+       |
+       v
+gaia skill validate ./my-skill/     # Local validation
+       |
+       v
+gaia skill publish ./my-skill/      # Uploads to registry
+       |
+       v
+Automated scan pipeline runs        # Bandit, pip-audit, detect-secrets
+       |
+       v
+Skill appears as "experimental"     # Until publisher signs
+       |
+       v
+Publisher signs with GPG/Sigstore   # Promotes to "community"
+       |
+       v
+AMD audit request (optional)        # Promotes to "verified"
+```
+
+### 10.2 Versioning
+
+Skills follow SemVer 2.0.0:
+
+- **Major** -- Breaking changes to tool signatures or permission requirements.
+- **Minor** -- New tools added, backward-compatible feature additions.
+- **Patch** -- Bug fixes, documentation updates.
+
+Version constraints in agent manifests and `gaia skill install` use the
+standard comparators: `>=`, `<=`, `==`, `~=`, `!=`, `^`.
+
+### 10.3 Dependency Resolution
+
+Skills can depend on other skills:
+
+```yaml
+requirements:
+  skills:
+    - name: auth-helpers
+      version: ">=1.0.0"
+```
+
+The resolver uses a topological sort to determine install order and fails
+with a clear error on circular dependencies. Version conflicts are resolved
+by selecting the highest version satisfying all constraints, or reporting
+the conflict if no solution exists.
+
+### 10.4 Registry API
+
+The registry exposes a REST API for programmatic access:
+
+```
+GET  /api/v1/skills                     # List skills (paginated)
+GET  /api/v1/skills/{name}              # Skill metadata
+GET  /api/v1/skills/{name}/{version}    # Specific version
+GET  /api/v1/skills/{name}/download     # Download skill package
+POST /api/v1/skills                     # Publish (authenticated)
+GET  /api/v1/search?q=web+search        # Full-text search
+```
+
+---
+
+## 11. GitHub Issue Cross-References
+
+| Issue | Title | Relationship |
+|-------|-------|-------------|
+| #462 | Agent Manifest: declarative metadata system | Agent manifests reference skills. SKILL.md is the skill-level complement to AGENT.yaml. |
+| #647 | Skill marketplace: format spec, security tiers | This document is the format spec requested in #647. Security tiers defined in Section 4. |
+| #473 | Migrate existing agents to manifest system | Existing tool mixins become skills. Migration path in Section 9.2. |
+| #285 | Scope skills for gaia agents | Original scoping issue. This spec fulfills the format definition requirement. |
+| #691 | SKILL.md format specification | This document fulfills the specification requested in #691. |
+| #692 | OpenClaw skill compatibility | OpenClaw mapping defined in Section 10 (Compatibility Layer). |
+
+---
+
+## Appendix A: Complete Minimal Example
+
+The smallest valid SKILL.md:
+
+```yaml
+---
+name: hello-world
+version: 0.1.0
+description: "A minimal example skill"
+author: developer
+license: MIT
+permissions:
+  - filesystem:none
+  - network:none
+tools:
+  - name: greet
+    description: "Return a greeting"
+    parameters:
+      name: {type: string, required: true}
+security_tier: experimental
+---
+
+# Hello World Skill
+
+A minimal skill that returns a greeting.
+```
+
+Corresponding `tools.py`:
+
+```python
+from gaia.agents.base.tools import tool
+
+@tool
+def greet(name: str) -> dict:
+    """Return a greeting for the given name."""
+    return {"message": f"Hello, {name}!"}
+```
+
+---
+
+## Appendix B: Permission Quick Reference
+
+```
+filesystem:read              Read any file
+filesystem:read:~/data/**    Read files under ~/data/ only
+filesystem:write             Write any file
+filesystem:write:./out/**    Write files under ./out/ only
+filesystem:none              No file access
+
+network:read                 Outbound GET-like requests
+network:read:*.example.com   Requests to example.com only
+network:write                Outbound POST/PUT/DELETE
+network:none                 No network access
+
+shell:execute                Execute any shell command
+shell:execute:git,npm        Execute only git and npm
+shell:none                   No shell access
+
+desktop:control              Mouse, keyboard, screen capture
+desktop:none                 No desktop access
+
+mcp:connect                  Connect to MCP servers
+mcp:none                     No MCP access
+
+env:read                     Read environment variables
+env:none                     No env access (only declared env_vars)
+
+database:read                Read from databases
+database:write               Read and write to databases
+database:none                No database access
+```

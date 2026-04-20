@@ -199,17 +199,18 @@ gaia chat --index document.pdf --debug
 ```
 
 ```python Python Debug
-# Python SDK with debug
-from gaia.agents.chat.agent import ChatAgent
+# Python SDK with debug — ChatAgent takes a single ChatAgentConfig
+from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
-agent = ChatAgent(
+config = ChatAgentConfig(
     rag_documents=['document.pdf'],
     debug=True,
-    silent_mode=False
+    silent_mode=False,
 )
+agent = ChatAgent(config)
 
 result = agent.process_query("What is the vision statement?")
-print(f"Debug trace saved to: {result['output_file']}")
+print(result)
 ```
 </CodeGroup>
 
@@ -228,11 +229,12 @@ print(f"Debug trace saved to: {result['output_file']}")
     **Default - Fast processing**
 
     ```python
-    agent = ChatAgent(
+    config = ChatAgentConfig(
         rag_documents=['document.pdf'],
         chunk_size=500,
-        chunk_overlap=50
+        chunk_overlap=50,
     )
+    agent = ChatAgent(config)
     ```
   </Card>
 
@@ -240,11 +242,12 @@ print(f"Debug trace saved to: {result['output_file']}")
     **More accurate context**
 
     ```python
-    agent = ChatAgent(
+    config = ChatAgentConfig(
         rag_documents=['document.pdf'],
         use_llm_chunking=True,
-        chunk_size=500
+        chunk_size=500,
     )
+    agent = ChatAgent(config)
     ```
   </Card>
 </CardGroup>

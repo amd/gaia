@@ -218,6 +218,47 @@ Replace a specific function in a Python file.
 }
 ```
 
+### 9. write_markdown_file
+
+Write (or overwrite) a Markdown file, optionally creating parent directories.
+Used by the code agent when generating READMEs, spec documents, or reports.
+
+**Parameters:**
+- `file_path` (str, required): Destination path
+- `content` (str, required): Markdown content to write
+- `create_dirs` (bool, optional): Create parent directories if missing (default: True)
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "size_bytes": int,
+}
+```
+
+### 10. update_gaia_md
+
+Refresh the project's `GAIA.md` (or another project-level index file) with
+generated metadata — used by the code agent to keep project docs in sync with
+what it's building.
+
+**Parameters:**
+- `project_root` (str, optional): Project root directory (default: `"."`)
+- `project_name` (str, optional): Display name to write into the file
+- `description` (str, optional): Short project description
+- `structure` (str or dict, optional): Formatted directory structure
+- `instructions` (str, optional): Agent-facing instructions section
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "updated_sections": List[str],
+}
+```
+
 ---
 
 ## Usage Examples

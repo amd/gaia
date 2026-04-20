@@ -144,26 +144,27 @@ icon: "bug"
 
 <AccordionGroup>
   <Accordion title="Connection refused" icon="plug-circle-xmark">
-    **Ensure server is running:**
+    **Ensure server is running** (default port is 8080; also shared by
+    `gaia mcp docker` so check for a collision):
     ```bash
-    gaia api start --port 5000
+    gaia api start --port 8080
     ```
 
     **Check if port is in use:**
     ```powershell
     # Windows
-    netstat -ano | findstr :5000
+    netstat -ano | findstr :8080
     ```
     ```bash
     # Linux
-    lsof -i :5000
+    lsof -i :8080
     ```
   </Accordion>
 
   <Accordion title="Model not found error" icon="circle-question">
     Use the correct model ID:
     ```bash
-    curl http://localhost:5000/v1/models
+    curl http://localhost:8080/v1/models
     ```
     Default model ID is `gaia-code`.
   </Accordion>
@@ -178,7 +179,7 @@ icon: "bug"
   <Accordion title="Port already in use" icon="ban">
     Stop existing server or use a different port:
     ```bash
-    gaia api start --port 5001
+    gaia api start --port 8081
     ```
   </Accordion>
 </AccordionGroup>
@@ -196,7 +197,7 @@ icon: "bug"
 
     Or delete all models and re-download:
     ```bash
-    gaia uninstall --models --yes
+    gaia uninstall --purge --purge-models --yes
     gaia init --profile chat
     ```
   </Accordion>

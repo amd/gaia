@@ -144,14 +144,8 @@ class JiraAgent(Agent):
         if hasattr(self, "_jira_config") and self._jira_config:
             jira_config = self._jira_config
 
-        # Base prompt - strict JSON-only output for better compatibility
-        prompt = """You are a Jira assistant that responds ONLY in JSON format.
-
-**CRITICAL RULES:**
-1. Output ONLY valid JSON - nothing else
-2. Do NOT add any text before the opening {
-3. Do NOT add any text after the closing }
-4. Your ENTIRE response must be parseable JSON
+        # Base prompt
+        prompt = """You are a Jira assistant.
 
 Capabilities:
 - Search issues (JQL queries)
@@ -201,17 +195,6 @@ JQL QUOTING RULES (CRITICAL):
 - NEVER use single quotes ('') in JQL
 - Functions: NO quotes → assignee = currentUser(), sprint in openSprints()
 
-RESPONSE FORMAT - Use EXACTLY this structure:
-
-For SEARCH (most common):
-{"thought": "User wants X, I'll search for Y", "goal": "Search Jira", "plan": [{"tool": "jira_search", "tool_args": {"jql": "YOUR_JQL_HERE"}}]}
-
-For CREATE:
-{"thought": "User wants to create X", "goal": "Create issue", "plan": [{"tool": "jira_create", "tool_args": {"summary": "Title", "description": "Details", "issue_type": "Task"}}]}
-
-For FINAL ANSWER (after tool execution):
-{"thought": "Search completed", "goal": "Report results", "answer": "Found X issues: [specific details]"}
-
 EXAMPLES - Copy these patterns exactly:
 
 User: "show my issues"
@@ -229,12 +212,10 @@ User: "issues created this week"
 User: "current sprint stories"
 {"thought": "User wants stories in current sprint", "goal": "Search Jira", "plan": [{"tool": "jira_search", "tool_args": {"jql": "issuetype = Story AND sprint in openSprints()"}}]}
 
-RULES:
-1. Response MUST be valid JSON only
-2. Use double quotes for ALL JSON strings
-3. In JQL: NO quotes for single words, DOUBLE quotes for phrases
-4. Escape quotes in JQL with backslash: \\"In Progress\\"
-5. Copy the exact format from examples"""
+JQL RULES:
+1. In JQL: NO quotes for single words, DOUBLE quotes for phrases
+2. Escape quotes in JQL with backslash: \\"In Progress\\"
+3. Copy the exact format from examples above"""
 
         return prompt
 

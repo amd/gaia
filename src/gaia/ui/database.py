@@ -175,7 +175,8 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for file_mtime: %s", e)
 
-        # Add private column to sessions for per-session incognito mode
+        # Add private column to sessions for per-session incognito mode,
+        # and agent_type column for per-session agent selection.
         try:
             sess_cols = [
                 row[1]
@@ -187,8 +188,18 @@ class ChatDatabase:
                 )
                 self._conn.commit()
                 logger.info("Migrated sessions table: added private column")
+            if "agent_type" not in sess_cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN agent_type TEXT DEFAULT 'chat'"
+                )
+                # SQLite ALTER TABLE DEFAULT doesn't backfill existing rows
+                self._conn.execute(
+                    "UPDATE sessions SET agent_type = 'chat' WHERE agent_type IS NULL"
+                )
+                self._conn.commit()
+                logger.info("Migrated sessions table: added agent_type column")
         except Exception as e:
-            logger.debug("Migration check for private: %s", e)
+            logger.debug("Migration check for sessions columns: %s", e)
 
     def close(self):
         """Close database connection."""
@@ -222,17 +233,19 @@ class ChatDatabase:
         system_prompt: str = None,
         document_ids: List[str] = None,
         private: bool = False,
+        agent_type: str = None,
     ) -> Dict[str, Any]:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
         model = model or "Qwen3.5-35B-A3B-GGUF"
         title = title or "New Chat"
+        agent_type = agent_type or "chat"
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private, agent_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     title,
@@ -241,6 +254,7 @@ class ChatDatabase:
                     model,
                     system_prompt,
                     1 if private else 0,
+                    agent_type,
                 ),
             )
 
@@ -317,8 +331,9 @@ class ChatDatabase:
         system_prompt: str = None,
         document_ids: list = None,
         private: bool = None,
+        agent_type: str = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title, system prompt, and/or document_ids."""
+        """Update session title, system prompt, agent_type, private flag, and/or document_ids."""
         updates = []
         params = []
 
@@ -331,6 +346,9 @@ class ChatDatabase:
         if private is not None:
             updates.append("private = ?")
             params.append(1 if private else 0)
+        if agent_type is not None:
+            updates.append("agent_type = ?")
+            params.append(agent_type)
 
         updates.append("updated_at = ?")
         params.append(self._now())
@@ -589,6 +607,22 @@ class ChatDatabase:
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM documents WHERE id = ?", (doc_id,)
+            ).fetchone()
+
+            if not row:
+                return None
+
+            return self._enrich_document(dict(row))
+
+    def get_document_by_hash(self, file_hash: str) -> Optional[Dict[str, Any]]:
+        """Get document by its SHA-256 content hash.
+
+        Used by the blob upload endpoint to short-circuit re-indexing when
+        the same file content has already been uploaded.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM documents WHERE file_hash = ?", (file_hash,)
             ).fetchone()
 
             if not row:
