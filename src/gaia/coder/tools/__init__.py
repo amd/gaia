@@ -1,10 +1,7 @@
-# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+"""Tool mixins for gaia-coder (see §15.2 of docs/plans/coder-agent.mdx)."""
 
-"""Tool mixins for gaia-coder.
+from gaia.coder.tools.file import FileToolsMixin
 
-Phase 1 stub. Mixin implementations (``FileToolsMixin``, ``CLIToolsMixin``,
-``SearchToolsMixin``, ``WebToolsMixin``, ``GitHubToolsMixin``, etc. — see
-§5.2) land here in sibling branches. Platform-specific mixins live under
-``platform/`` per §5.8.
-"""
+__all__ = ["FileToolsMixin"]
