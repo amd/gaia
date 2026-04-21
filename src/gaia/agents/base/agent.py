@@ -428,7 +428,9 @@ Do NOT wrap conversational replies in JSON.
         """
         raise NotImplementedError("Subclasses must implement _register_tools")
 
-    def _format_tools_for_prompt(self, registry: Optional[Dict[str, dict]] = None) -> str:
+    def _format_tools_for_prompt(
+        self, registry: Optional[Dict[str, dict]] = None
+    ) -> str:
         """Format the registered tools into a string for the prompt.
 
         Parameters
@@ -493,9 +495,7 @@ Do NOT wrap conversational replies in JSON.
         if self.tool_loader is None:
             return
         filtered = self.tool_loader.resolve(user_message, _TOOL_REGISTRY)
-        self._system_prompt_cache = self._compose_system_prompt(
-            tool_registry=filtered
-        )
+        self._system_prompt_cache = self._compose_system_prompt(tool_registry=filtered)
 
     def list_tools(self, verbose: bool = True) -> None:
         """

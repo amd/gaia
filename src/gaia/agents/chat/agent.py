@@ -1772,7 +1772,11 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
         )
 
         # Pre-activate RAG bundle when documents are already indexed
-        if hasattr(self, "rag") and self.rag and getattr(self.rag, "indexed_files", None):
+        if (
+            hasattr(self, "rag")
+            and self.rag
+            and getattr(self.rag, "indexed_files", None)
+        ):
             self.tool_loader._state["rag"].activated = True
 
         # ── filesystem: file navigation and search ──────────────────────
@@ -1932,9 +1936,7 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
 
         # Log the bundle configuration
         total = len(_TOOL_REGISTRY)
-        bundled = sum(
-            len(b.tools) for b in self.tool_loader._bundles.values()
-        )
+        bundled = sum(len(b.tools) for b in self.tool_loader._bundles.values())
         logger.info(
             "ToolLoader configured: %d bundles, %d/%d tools bundled",
             len(self.tool_loader._bundles),
