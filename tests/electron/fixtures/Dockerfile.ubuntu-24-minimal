@@ -1,0 +1,30 @@
+# Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Container fixture used by the #782 AppImage smoke matrix.
+#
+# Simulates "Ubuntu 24.04 LTS minimal" — the distro the reporter hit:
+#   - libfuse2 IS installed (FUSE v2 needed for AppImage v2)
+#   - curl is purged (to verify T3's bundled-uv eliminates the curl dep)
+#   - xvfb/xauth present so an AppImage renderer can start headless
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Base tools the smoke harness needs:
+#   libfuse2       — AppImage v2 FUSE mount
+#   xvfb, xauth    — headless display for Chromium
+#   ca-certificates— TLS trust for any egress from the app itself
+#   file, procps   — assertion helpers
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends \
+      libfuse2 \
+      xvfb \
+      xauth \
+      ca-certificates \
+      file \
+      procps \
+ && apt-get purge --yes curl wget || true \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work

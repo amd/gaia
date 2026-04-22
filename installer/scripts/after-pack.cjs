@@ -217,4 +217,47 @@ module.exports = async function afterPack(context) {
       totalSaved
     )}`
   );
+
+  // ─── Delete chrome-sandbox for AppImage (issue #782) ─────────────────
+  //
+  // Chromium's SUID sandbox helper (`chrome-sandbox`) requires root-owned
+  // mode 4755. AppImages extract unprivileged to a FUSE mount and cannot
+  // chown, so the helper FATALs Chromium at launch:
+  //
+  //   FATAL:sandbox/linux/suid/client/setuid_sandbox_host.cc:166]
+  //   The SUID sandbox helper binary was found, but is not configured
+  //   correctly. Rather than run without sandboxing I'm aborting now.
+  //
+  // `linux.executableArgs: [--no-sandbox]` in electron-builder.yml covers
+  // the `.desktop`-entry launch path (double-click from file manager),
+  // but users who run `./gaia-agent-ui-*.AppImage` from the shell bypass
+  // the .desktop Exec= line — their invocation of AppRun does not get
+  // --no-sandbox, and the SUID FATAL comes back. Deleting the helper
+  // from the packaged tree forces Chromium onto its unprivileged
+  // user-namespace sandbox on every launch path.
+  //
+  // Combined deb+AppImage builds: electron-builder runs afterPack on the
+  // shared `linux-unpacked` appOutDir, so this delete affects the DEB
+  // staging tree too. That is intentional and coordinated — the DEB
+  // postinst already guards its chmod with `if [ -f chrome-sandbox ]`,
+  // so it skips rather than failing, and the DEB .desktop entry also
+  // gets --no-sandbox from `linux.executableArgs`. DEB CLI launches on
+  // kernels where unprivileged userns is fully disabled (rare on 24.04+)
+  // still need manual --no-sandbox; this is documented.
+  const isLinux = context.electronPlatformName === "linux";
+  if (isLinux) {
+    const sandboxPath = path.join(root, "chrome-sandbox");
+    try {
+      if (fs.existsSync(sandboxPath)) {
+        fs.rmSync(sandboxPath, { force: true });
+        console.log(
+          `[after-pack] deleted chrome-sandbox at ${sandboxPath} (issue #782; Chromium will use userns sandbox)`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[after-pack] failed to delete chrome-sandbox at ${sandboxPath}: ${err.message}`,
+      );
+    }
+  }
 };
