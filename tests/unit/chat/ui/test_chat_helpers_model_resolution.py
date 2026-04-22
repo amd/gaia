@@ -190,6 +190,69 @@ class TestModelKwargSelection:
             "kwargs", {}
         ), "Non-streaming path must not pass streaming=True to create_agent"
 
+    def test_cache_hit_on_second_turn_for_setdefault_agent(self):
+        """Cache regression guard for #842 fix: custom agents must hit the cache
+        on turn 2 even when their setdefault model differs from the session model.
+
+        Pre-fix _store_agent used _effective_model(agent, model_id) (the
+        post-construction value, e.g. "SetdefaultChose-GGUF") as the cache key,
+        while _get_cached_agent looked up using the pre-construction model_id
+        (the DB default). The keys never matched → cache miss every turn.
+
+        After the fix, _store_agent uses model_id (pre-construction intent)
+        and the keys agree regardless of what setdefault chose.
+        """
+        import gaia.ui._chat_helpers as _helpers
+        from gaia.ui._chat_helpers import _get_chat_response
+        from gaia.ui.models import ChatRequest
+
+        sid = "cache-test-session"
+        registry, _ = _make_registry(setdefault_model="SetdefaultChose-GGUF")
+        db = _make_db(custom_model=None)
+        session = dict(_make_session(model=_DB_DEFAULT))
+        session["session_id"] = sid
+
+        # Clear cache once; do NOT clear between turns (that's the whole point).
+        with _helpers._agent_cache_lock:
+            _helpers._agent_cache.clear()
+
+        request = ChatRequest(session_id=sid, message="hi", stream=False)
+
+        with (
+            patch("gaia.ui._chat_helpers._agent_registry", registry),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+        ):
+            # Turn 1 — agent constructed, stored in cache.
+            _run_sync(_get_chat_response(db, session, request))
+            first_agent = _helpers._agent_cache.get(sid, {}).get("agent")
+
+            # Turn 2 — must hit the cache; no second create_agent call.
+            _run_sync(_get_chat_response(db, session, request))
+            second_agent = _helpers._agent_cache.get(sid, {}).get("agent")
+
+        # 1. Only one construction (cache hit on turn 2).
+        assert registry.create_agent.call_count == 1, (
+            f"Cache regression: create_agent called {registry.create_agent.call_count} "
+            "times; expected 1 (turn 2 must be a cache hit, not a rebuild)"
+        )
+        # 2. Object identity proves the cache returned the same agent.
+        assert second_agent is first_agent, (
+            "Cache regression: turn 2 returned a different agent object — "
+            "cache hit must return the SAME instance, not a reconstructed one"
+        )
+        # 3. Stored key is the pre-construction intent (the actual regression pin).
+        stored_model = _helpers._agent_cache.get(sid, {}).get("model_id")
+        assert stored_model == _DB_DEFAULT, (
+            f"Cache regression: stored model_id={stored_model!r} must equal the "
+            f"pre-construction session model {_DB_DEFAULT!r}, not the agent's "
+            "post-setdefault value — otherwise lookup/store keys diverge"
+        )
+        # 4. Agent's own model_id reflects what setdefault chose.
+        assert first_agent.model_id == "SetdefaultChose-GGUF", (
+            f"Agent model_id={first_agent.model_id!r} must reflect kwargs.setdefault "
+            "value 'SetdefaultChose-GGUF'"
+        )
+
 
 class TestStaticRegressionGuard:
     """Source-level pin against reintroduction of the antipattern."""
@@ -218,6 +281,23 @@ class TestStaticRegressionGuard:
             "model_id=model_id as a direct kwarg. Build create_kwargs conditionally "
             "and omit model_id when no explicit user choice exists.\n"
             f"Match found at: {match.group()[:80]!r}"
+        )
+
+    def test_no_effective_model_in_store_agent_calls(self):
+        """Cache-key divergence guard for the #842 fix. _store_agent is the cache
+        STORE; its 2nd arg must be the pre-construction model_id so it matches
+        the lookup key used by _get_cached_agent. Passing _effective_model(...)
+        (post-construction) causes the store/lookup keys to diverge whenever the
+        agent's setdefault differs from the session model — agents rebuild every turn.
+        """
+        import re
+
+        src = (Path(__file__).parents[4] / "src/gaia/ui/_chat_helpers.py").read_text()
+        match = re.search(r"_store_agent\([^()]*_effective_model", src, re.DOTALL)
+        assert not match, (
+            "Cache regression (#842): _store_agent must not receive _effective_model(...) "
+            "as a positional arg — store/lookup keys would diverge for setdefault agents. "
+            f"Match: {match.group()[:80]!r}"
         )
 
 

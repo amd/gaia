@@ -621,7 +621,7 @@ async def _get_chat_response(
                 )
                 _store_agent(
                     session_id,
-                    _effective_model(agent, model_id),
+                    model_id,
                     document_ids,
                     agent,
                     agent_type,
@@ -1001,7 +1001,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
                         _store_agent(
                             session_id,
-                            _effective_model(agent, model_id),
+                            model_id,
                             document_ids,
                             agent,
                             agent_type,
