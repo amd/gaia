@@ -660,8 +660,8 @@ jobs:
                 echo "::error::AppImage exited silently without libfuse2 — bug"
                 exit 1
               fi
-              if ! grep -qiE "fuse|libfuse|appimage|mount" /tmp/out.log; then
-                echo "::error::error output lacks a humane FUSE hint; expected keyword fuse|libfuse|appimage|mount"
+              if ! grep -qiE "fuse|libfuse|AppImage|fusermount" /tmp/out.log; then
+                echo "::error::error output lacks a humane FUSE hint; expected keyword fuse|libfuse|AppImage|fusermount"
                 exit 1
               fi
               echo "Row 2 PASS (humane failure referencing fuse/appimage)"

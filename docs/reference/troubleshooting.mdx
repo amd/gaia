@@ -417,12 +417,15 @@ icon: "bug"
     (`kernel.apparmor_restrict_unprivileged_userns=1`), which otherwise
     aborts Chromium with a FATAL sandbox error on first launch.
 
-    **Security note:** Chromium's user-namespace isolation still applies on
-    most kernels, so renderer processes remain sandboxed there. On kernels
-    where user namespaces are *fully* disabled, renderer sandboxing is
-    reduced. If your threat model requires the full SUID sandbox, run the
-    DEB package (`gaia-agent-ui-*-amd64.deb`) instead — the DEB installs
-    `chrome-sandbox` with root ownership via its postinst hook.
+    **Security note:** `--no-sandbox` disables Chromium's renderer sandbox
+    entirely — it is *not* a partial reduction. A compromised renderer can
+    reach anything the user account can: files in your home directory, the
+    keychain, network access. OS-level isolation (user account, AppArmor
+    profiles if any) is the only layer that remains. If your threat model
+    requires Chromium's process sandbox, install the `.deb` package
+    (`gaia-agent-ui-*-amd64.deb`) instead — its postinst installs
+    `chrome-sandbox` with root ownership so Chromium can use its full
+    SUID sandbox.
 
     Older AppImages (&le; 0.17.3) require the user to pass `--no-sandbox`
     manually:

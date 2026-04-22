@@ -52,9 +52,17 @@ app.commandLine.appendSwitch("ozone-platform-hint", "auto");
         const fd = fs.openSync(logPath, "r");
         const keep = 5 * 1024 * 1024;
         const buf = Buffer.alloc(keep);
-        fs.readSync(fd, buf, 0, keep, Math.max(0, st.size - keep));
+        // readSync can return fewer bytes than requested; only write
+        // what we actually read so we don't append zero-padding.
+        const bytesRead = fs.readSync(
+          fd,
+          buf,
+          0,
+          keep,
+          Math.max(0, st.size - keep),
+        );
         fs.closeSync(fd);
-        fs.writeFileSync(logPath, buf);
+        fs.writeFileSync(logPath, buf.subarray(0, bytesRead));
       }
     } catch {
       // ENOENT or permission — best-effort; just fall through.
@@ -211,7 +219,11 @@ async function startBackend() {
     chunk.split(/\r?\n/).forEach((line) => {
       if (!line) return;
       console.log(`[backend] ${line}`);
-      backendStderrTail.push(line);
+      // Cap per-line length so pathological no-newline backend output
+      // can't balloon the in-memory tail or the crash-dialog body.
+      const capped =
+        line.length > 2048 ? line.slice(0, 2048) + "…[truncated]" : line;
+      backendStderrTail.push(capped);
       if (backendStderrTail.length > 20) backendStderrTail.shift();
     });
   });
@@ -788,12 +800,14 @@ async function cleanup() {
   if (backendProcess) {
     console.log("Stopping backend process...");
     const proc = backendProcess;
-    const pid = proc.pid;
     backendProcess = null;
     isIntentionalKill = true;
 
     try {
-      await portManager.killBackend(pid);
+      // Pass the ChildProcess handle (not a bare pid) so port-manager
+      // can short-circuit via `proc.exitCode` and close the PID-reuse
+      // TOCTOU window.
+      await portManager.killBackend(proc);
     } catch (err) {
       console.error("Error stopping backend:", err.message);
     }

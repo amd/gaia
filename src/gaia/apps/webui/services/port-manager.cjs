@@ -23,7 +23,13 @@ const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 
-const GAIA_HOME = path.join(os.homedir(), ".gaia");
+/**
+ * Resolve the GAIA home directory lazily so tests can point it elsewhere
+ * via the `GAIA_HOME_OVERRIDE` env var without re-requiring the module.
+ */
+function gaiaHome() {
+  return process.env.GAIA_HOME_OVERRIDE || path.join(os.homedir(), ".gaia");
+}
 
 /**
  * Ask the kernel for a free TCP port by binding to port 0, reading the
@@ -49,16 +55,35 @@ function findFreePort() {
 
 /**
  * Terminate a spawned backend: SIGTERM, wait up to 3 s, then SIGKILL.
- * Safe to call with a nullish pid. `logger` is an optional {log, error}
- * shim — defaults to console.
+ * Accepts either a ChildProcess reference (preferred — lets us
+ * short-circuit via `exitCode` so PID reuse can never hit us) or a raw
+ * pid (useful for tests). Safe to call with nullish.
  */
-async function killBackend(pid, logger) {
+async function killBackend(procOrPid, logger) {
   const log = (logger && logger.log) || console.log;
   const logError = (logger && logger.error) || console.error;
 
+  if (!procOrPid) return;
+
+  // Distinguish ChildProcess vs raw pid. A ChildProcess has both .pid
+  // and .exitCode/.signalCode; typeof === "object" is enough.
+  const isChildProcess = typeof procOrPid === "object";
+  const proc = isChildProcess ? procOrPid : null;
+  const pid = isChildProcess ? procOrPid.pid : procOrPid;
+
   if (!pid) return;
 
+  // If we have the ChildProcess handle, trust it — the exitCode is set
+  // synchronously by Node's child_process before any pid reuse could
+  // happen, so this closes the PID-reuse TOCTOU that a pid-only API has.
+  if (proc && (proc.exitCode !== null || proc.signalCode !== null)) {
+    log(`[port-manager] child pid ${pid} already exited (exitCode=${proc.exitCode} signal=${proc.signalCode})`);
+    return;
+  }
+
   // Is the process still alive? kill(pid, 0) throws ESRCH if not.
+  // Only relied on when the caller passed a raw pid (tests); callers
+  // with a ChildProcess were already short-circuited above.
   const alive = (p) => {
     try {
       process.kill(p, 0);
@@ -120,10 +145,11 @@ async function killBackend(pid, logger) {
  *
  * Returns the absolute path of the written bundle.
  */
-async function writeDiagnosticsBundle(destPath) {
+async function writeDiagnosticsBundle(destPath, logger) {
+  const logError = (logger && logger.error) || console.error;
   if (!destPath) {
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    destPath = path.join(GAIA_HOME, `diagnostics-${ts}.tgz`);
+    destPath = path.join(gaiaHome(), `diagnostics-${ts}.tgz`);
   }
 
   try {
@@ -141,7 +167,7 @@ async function writeDiagnosticsBundle(destPath) {
   ];
 
   const present = candidates.filter((rel) =>
-    fs.existsSync(path.join(GAIA_HOME, rel))
+    fs.existsSync(path.join(gaiaHome(), rel))
   );
 
   if (present.length === 0) {
@@ -153,7 +179,7 @@ async function writeDiagnosticsBundle(destPath) {
 
   try {
     // -C so paths inside the archive are relative (no /home/... leakage).
-    execFileSync("tar", ["-czf", destPath, "-C", GAIA_HOME, ...present], {
+    execFileSync("tar", ["-czf", destPath, "-C", gaiaHome(), ...present], {
       stdio: ["ignore", "ignore", "pipe"],
       timeout: 10000,
     });
@@ -164,7 +190,7 @@ async function writeDiagnosticsBundle(destPath) {
     const fallback = destPath.replace(/\.tgz$/, ".txt");
     const chunks = [];
     for (const rel of present) {
-      const abs = path.join(GAIA_HOME, rel);
+      const abs = path.join(gaiaHome(), rel);
       try {
         chunks.push(`==== ${rel} ====\n`);
         chunks.push(fs.readFileSync(abs, "utf8"));
@@ -174,7 +200,7 @@ async function writeDiagnosticsBundle(destPath) {
       }
     }
     fs.writeFileSync(fallback, chunks.join(""));
-    console.error(
+    logError(
       `[port-manager] tar unavailable (${err.message}); wrote plain-text bundle to ${fallback}`
     );
     return fallback;
@@ -192,12 +218,12 @@ class PortManager {
     return findFreePort();
   }
 
-  killBackend(pid) {
-    return killBackend(pid, this.logger);
+  killBackend(procOrPid) {
+    return killBackend(procOrPid, this.logger);
   }
 
   writeDiagnosticsBundle(destPath) {
-    return writeDiagnosticsBundle(destPath);
+    return writeDiagnosticsBundle(destPath, this.logger);
   }
 }
 

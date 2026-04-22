@@ -144,51 +144,26 @@ test("killBackend escalates to SIGKILL when SIGTERM is trapped/ignored", async (
 
 // ─── writeDiagnosticsBundle ──────────────────────────────────────────
 //
-// The real bundler reads from ~/.gaia/. To avoid clobbering a dev user's
-// logs, we redirect HOME for the duration of the test so GAIA_HOME
-// computed by the module points at our tempdir.
-//
-// However the module captured GAIA_HOME at require-time (it's a const at
-// the top of the file). Rather than re-require with a mutated env (which
-// is brittle across node cache modes), we seed files at the real
-// ~/.gaia path and clean up afterwards. The module is tolerant of
-// missing files — if nothing matches, it writes an empty marker.
-//
-// Simpler, safer: copy fixture files into the REAL ~/.gaia with unique
-// names is too invasive. Instead we assert the *return contract*: when
-// GAIA_HOME contains at least one known log name, the tgz is non-empty
-// and readable by tar. If GAIA_HOME has none of them, an empty file
-// is still produced.
+// Redirect GAIA_HOME to a tempdir via `GAIA_HOME_OVERRIDE` so the test
+// never touches a developer's real ~/.gaia. The module reads this env
+// var at call-time (not require-time), so mutating it here works.
 
 test("writeDiagnosticsBundle produces a tar.gz containing seeded log files", async () => {
-  const gaiaHome = path.join(os.homedir(), ".gaia");
-  const markerName = `electron-install.log`;
-  const markerPath = path.join(gaiaHome, markerName);
-
-  // Seed a tiny marker file iff safe. If a real log exists, we leave it
-  // alone and just rely on its presence; our assertion is that the
-  // archive contains *some* known-name entry.
-  let createdMarker = false;
-  try {
-    fs.mkdirSync(gaiaHome, { recursive: true });
-    if (!fs.existsSync(markerPath)) {
-      fs.writeFileSync(markerPath, "test-marker-from-port-manager-test\n");
-      createdMarker = true;
-    }
-  } catch (err) {
-    // If we cannot prepare ~/.gaia (exotic sandbox), skip via early return.
-    console.error(`[skip] could not seed ~/.gaia: ${err.message}`);
-    return;
-  }
+  const fakeGaia = fs.mkdtempSync(path.join(os.tmpdir(), "gaia-home-"));
+  const markerPath = path.join(fakeGaia, "electron-install.log");
+  fs.writeFileSync(markerPath, "test-marker-from-port-manager-test\n");
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gaia-diag-"));
   const dest = path.join(tmpDir, "bundle.tgz");
+
+  const prevOverride = process.env.GAIA_HOME_OVERRIDE;
+  process.env.GAIA_HOME_OVERRIDE = fakeGaia;
 
   try {
     const written = await writeDiagnosticsBundle(dest);
     assert.ok(
       fs.existsSync(written),
-      `bundle should exist at ${written}`
+      `bundle should exist at ${written}`,
     );
     const stat = fs.statSync(written);
     assert.ok(stat.size > 0, "bundle should be non-empty");
@@ -200,22 +175,18 @@ test("writeDiagnosticsBundle produces a tar.gz containing seeded log files", asy
         encoding: "utf8",
       });
       assert.ok(
-        listing.includes("electron-install.log") ||
-          listing.includes("gaia.log") ||
-          listing.includes("electron-main.log") ||
-          listing.includes("electron-install-state.json"),
-        `archive should contain at least one known log; got:\n${listing}`
+        listing.includes("electron-install.log"),
+        `archive should contain the seeded electron-install.log; got:\n${listing}`,
       );
     }
   } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-    if (createdMarker) {
-      try {
-        fs.unlinkSync(markerPath);
-      } catch {
-        /* best effort */
-      }
+    if (prevOverride === undefined) {
+      delete process.env.GAIA_HOME_OVERRIDE;
+    } else {
+      process.env.GAIA_HOME_OVERRIDE = prevOverride;
     }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(fakeGaia, { recursive: true, force: true });
   }
 });
 

@@ -5915,7 +5915,12 @@ def handle_diagnostics_command(args):
             return out
         except FileNotFoundError:
             return f"[command not found: {cmd[0]}]"
-        except Exception as e:  # pylint: disable=broad-except
+        except (subprocess.SubprocessError, OSError) as e:
+            # Narrow to the specific failure modes this function is
+            # expected to tolerate (tool hung, spawn failed, permission
+            # denied). Real logic errors must still propagate so we
+            # don't silently bury them per CLAUDE.md's no-silent-fallback
+            # rule.
             return f"[error running {' '.join(cmd)}: {e}]"
 
     # System info snapshot
@@ -5968,15 +5973,15 @@ def handle_diagnostics_command(args):
             tar.addfile(info, io.BytesIO(sysinfo_blob))
 
             # Always include state files (no chat content)
-            for path in state_files:
-                if path.is_file():
-                    tar.add(str(path), arcname=path.name)
+            for entry in state_files:
+                if entry.is_file():
+                    tar.add(str(entry), arcname=entry.name)
 
             # Log files gated by --no-logs
             if not args.no_logs:
-                for path in log_files:
-                    if path.is_file():
-                        tar.add(str(path), arcname=path.name)
+                for entry in log_files:
+                    if entry.is_file():
+                        tar.add(str(entry), arcname=entry.name)
             else:
                 note = b"Log files omitted (--no-logs was passed).\n"
                 info = tarfile.TarInfo(name="LOGS-OMITTED.txt")
