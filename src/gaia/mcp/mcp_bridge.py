@@ -628,7 +628,10 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 400,
                 {
                     "jsonrpc": "2.0",
-                    "error": {"code": -32600, "message": "Invalid Request: expected JSON object"},
+                    "error": {
+                        "code": -32600,
+                        "message": "Invalid Request: expected JSON object",
+                    },
                     "id": None,
                 },
             )
