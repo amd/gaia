@@ -229,12 +229,11 @@ module.exports = async function afterPack(context) {
   //   correctly. Rather than run without sandboxing I'm aborting now.
   //
   // `linux.executableArgs: [--no-sandbox]` in electron-builder.yml covers
-  // the `.desktop`-entry launch path (double-click from file manager),
-  // but users who run `./gaia-agent-ui-*.AppImage` from the shell bypass
-  // the .desktop Exec= line — their invocation of AppRun does not get
-  // --no-sandbox, and the SUID FATAL comes back. Deleting the helper
-  // from the packaged tree forces Chromium onto its unprivileged
-  // user-namespace sandbox on every launch path.
+  // the `.desktop`-entry launch path, but users who run
+  // `./gaia-agent-ui-*.AppImage` from the shell bypass the .desktop Exec=
+  // line entirely. Deleting chrome-sandbox plus wrapping the binary (see
+  // below) ensures --no-sandbox reaches Electron's native startup checks
+  // on every launch path.
   //
   // Combined deb+AppImage builds: electron-builder runs afterPack on the
   // shared `linux-unpacked` appOutDir, so this delete affects the DEB
@@ -255,6 +254,48 @@ module.exports = async function afterPack(context) {
     } catch (err) {
       console.warn(
         `[after-pack] failed to delete chrome-sandbox at ${sandboxPath}: ${err.message}`,
+      );
+    }
+
+    // ── Wrap binary to inject --no-sandbox into argv (issue #782) ──────────
+    //
+    // app.commandLine.appendSwitch('no-sandbox') in main.js runs after V8
+    // starts, but Electron's sandbox checks (root-without-sandbox in
+    // electron_main_delegate.cc, userns-sandbox in zygote_host_impl_linux.cc)
+    // happen in native code before V8 — too early to be affected by JS.
+    // --no-sandbox must be in the binary's own argv[] at process start.
+    //
+    // Solution: rename gaia-desktop → .gaia-desktop-bin and write a thin
+    // POSIX shell wrapper named gaia-desktop that prepends --no-sandbox.
+    // AppRun (AppImage) and the DEB .desktop Exec= both call gaia-desktop,
+    // so every launch path gets the flag regardless of how the AppImage is
+    // invoked (double-click, shell, .desktop, xdg-open, CI xvfb-run).
+    //
+    // The DEB .desktop already carries --no-sandbox via executableArgs —
+    // passing it twice is harmless (Chromium ignores duplicate switches).
+    const execName = "gaia-desktop";
+    const binaryPath = path.join(root, execName);
+    const realBinaryName = `.${execName}-bin`;
+    const realBinaryPath = path.join(root, realBinaryName);
+    try {
+      if (fs.existsSync(binaryPath)) {
+        fs.renameSync(binaryPath, realBinaryPath);
+        const wrapper =
+          `#!/bin/sh\n` +
+          `exec "$(dirname "$(readlink -f "$0")")/${realBinaryName}" --no-sandbox "$@"\n`;
+        fs.writeFileSync(binaryPath, wrapper);
+        fs.chmodSync(binaryPath, 0o755);
+        console.log(
+          `[after-pack] wrapped ${execName} → ${realBinaryName} with --no-sandbox in argv`,
+        );
+      } else {
+        console.warn(
+          `[after-pack] binary not found at ${binaryPath} — skipping --no-sandbox wrapper`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[after-pack] failed to create --no-sandbox wrapper: ${err.message}`,
       );
     }
   }

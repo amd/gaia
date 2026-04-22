@@ -1428,6 +1428,45 @@ This command will:
 
 ---
 
+### Diagnostics Command
+
+Bundle system info and logs into a tarball for bug reports.
+
+```bash
+gaia diagnostics [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--output` | path | `~/.gaia/diagnostics-<YYYYMMDD-HHMMSS>.tgz` | Destination path for the tarball |
+| `--no-logs` | flag | false | Omit log files (useful for public bug reports) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Full Bundle
+gaia diagnostics
+# → ~/.gaia/diagnostics-20260422-173000.tgz
+```
+
+```bash Without Logs
+gaia diagnostics --no-logs
+```
+
+```bash Custom Output Path
+gaia diagnostics --output /tmp/my-bundle.tgz
+```
+</CodeGroup>
+
+The bundle includes:
+- System info snapshot (`uname -a`, distro, relevant env vars, all TCP listeners via `ss -tlnp`)
+- State files from `~/.gaia/` (config, session data — no chat content)
+- Log files: `~/.gaia/gaia.log` and `~/.gaia/electron-main.log` (omitted with `--no-logs`)
+
+---
+
 ## Global Options
 
 All commands support these global options:

@@ -457,16 +457,16 @@ icon: "bug"
       teed to disk so errors are visible even when the app was not launched
       from a terminal.
 
-    If a process is holding port 4200, you can inspect it with:
+    To inspect all active TCP listeners (the backend uses a dynamic port, not always 4200):
     ```bash
-    lsof -iTCP:4200
+    ss -tlnp
     ```
   </Accordion>
 
   <Accordion title="Collecting a diagnostics bundle for bug reports" icon="box-archive">
     GAIA ships a `gaia diagnostics` command that bundles the logs above
     together with a short system-info snapshot (`uname -a`, distro info,
-    relevant environment variables, `lsof -iTCP:4200`) into a single
+    relevant environment variables, `ss -tlnp (all TCP listeners)`) into a single
     tarball:
 
     ```bash
