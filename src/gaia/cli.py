@@ -5939,7 +5939,9 @@ def handle_diagnostics_command(args):
             lsb = "[lsb_release and /etc/os-release both unavailable]"
     sysinfo_parts.append("=== lsb_release / os-release ===\n" + lsb)
 
-    env_filter = re.compile(r"gaia|lemonade|xdg|wayland|display", re.IGNORECASE)
+    env_filter = re.compile(
+        r"^(GAIA|LEMONADE|XDG|WAYLAND|DISPLAY|X_|QT_|GTK_)", re.IGNORECASE
+    )
     # Redact values for keys that look like they might carry secrets. The
     # filter above already restricts the set of keys, but a user may still
     # have set e.g. GAIA_API_KEY or LEMONADE_TOKEN, and we must not ship
@@ -5954,12 +5956,17 @@ def handle_diagnostics_command(args):
         v_safe = "[redacted]" if secret_filter.search(k) else v
         env_lines.append(f"{k}={v_safe}")
     sysinfo_parts.append(
-        "=== env (filtered: gaia|lemonade|xdg|wayland|display; secrets redacted) ===\n"
+        "=== env (filtered: GAIA|LEMONADE|XDG|WAYLAND|DISPLAY|X_|QT_|GTK_; secrets redacted) ===\n"
         + "\n".join(env_lines)
     )
 
     # lsof on port 4200 — only if lsof is present; capture_output handles absence.
-    sysinfo_parts.append("=== lsof -iTCP:4200 ===\n" + _run(["lsof", "-iTCP:4200"]))
+    sysinfo_parts.append(
+        "=== lsof -iTCP:4200 (legacy default) ===\n" + _run(["lsof", "-iTCP:4200"])
+    )
+    sysinfo_parts.append(
+        "=== ss -tlnp (all TCP listeners) ===\n" + _run(["ss", "-tlnp"])
+    )
 
     sysinfo_blob = "\n\n".join(sysinfo_parts).encode("utf-8")
 
@@ -5975,13 +5982,21 @@ def handle_diagnostics_command(args):
             # Always include state files (no chat content)
             for entry in state_files:
                 if entry.is_file():
-                    tar.add(str(entry), arcname=entry.name)
+                    tar.add(
+                        str(entry),
+                        arcname=entry.name,
+                        filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
+                    )
 
             # Log files gated by --no-logs
             if not args.no_logs:
                 for entry in log_files:
                     if entry.is_file():
-                        tar.add(str(entry), arcname=entry.name)
+                        tar.add(
+                            str(entry),
+                            arcname=entry.name,
+                            filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
+                        )
             else:
                 note = b"Log files omitted (--no-logs was passed).\n"
                 info = tarfile.TarInfo(name="LOGS-OMITTED.txt")

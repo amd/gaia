@@ -74,20 +74,21 @@ sudo apt remove gaia-desktop
 
 ## Ubuntu (.AppImage)
 
-Prefer the `.deb` when possible — it installs `chrome-sandbox` with root
-ownership via its postinst hook so Chromium can use its process sandbox.
-The AppImage ships with `--no-sandbox` (required for AppArmor-restricted
-userns on Ubuntu 24.04.1+), which disables Chromium's renderer sandbox
-entirely — see the security note in
+Both the AppImage and the `.deb` ship with `--no-sandbox` to work
+around Ubuntu 24.04.1+'s AppArmor-restricted unprivileged-userns policy
+(`kernel.apparmor_restrict_unprivileged_userns=1`), which otherwise aborts
+Chromium with a FATAL sandbox error on first launch — see the security
+note in
 [Troubleshooting → AppImage on Linux](/reference/troubleshooting#appimage-on-linux).
 Use the AppImage for portable installs or distros without apt.
 
 <Warning>
-  **Ubuntu 24.04 LTS minimal** does not ship the FUSE 2 runtime that
-  AppImage v2 needs. Install it first, or the AppImage will fail to mount:
+  **Ubuntu 24.04 LTS minimal** does not ship the FUSE 2 runtime or the
+  Chromium system libraries that the AppImage bundles. Install them first:
 
   ```bash
-  sudo apt install libfuse2
+  sudo apt install libfuse2 libglib2.0-0t64 libgtk-3-0t64 libnss3 \
+      libasound2t64 libxss1 libxtst6 libatk-bridge2.0-0t64 libgbm1
   ```
 </Warning>
 

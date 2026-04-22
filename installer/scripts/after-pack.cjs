@@ -248,12 +248,10 @@ module.exports = async function afterPack(context) {
   if (isLinux) {
     const sandboxPath = path.join(root, "chrome-sandbox");
     try {
-      if (fs.existsSync(sandboxPath)) {
-        fs.rmSync(sandboxPath, { force: true });
-        console.log(
-          `[after-pack] deleted chrome-sandbox at ${sandboxPath} (issue #782; Chromium will use userns sandbox)`,
-        );
-      }
+      fs.rmSync(sandboxPath, { force: true });
+      console.log(
+        `[after-pack] deleted chrome-sandbox at ${sandboxPath} (issue #782; Chromium will use userns sandbox)`,
+      );
     } catch (err) {
       console.warn(
         `[after-pack] failed to delete chrome-sandbox at ${sandboxPath}: ${err.message}`,

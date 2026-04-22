@@ -421,11 +421,11 @@ icon: "bug"
     entirely — it is *not* a partial reduction. A compromised renderer can
     reach anything the user account can: files in your home directory, the
     keychain, network access. OS-level isolation (user account, AppArmor
-    profiles if any) is the only layer that remains. If your threat model
-    requires Chromium's process sandbox, install the `.deb` package
-    (`gaia-agent-ui-*-amd64.deb`) instead — its postinst installs
-    `chrome-sandbox` with root ownership so Chromium can use its full
-    SUID sandbox.
+    profiles if any) is the only layer that remains. The `.deb` package
+    (`gaia-agent-ui-*-amd64.deb`) ships with the same `--no-sandbox`
+    posture as the AppImage for the same AppArmor-userns reason, so
+    switching packaging formats does not restore the Chromium sandbox on
+    Ubuntu 24.04.1+.
 
     Older AppImages (&le; 0.17.3) require the user to pass `--no-sandbox`
     manually:

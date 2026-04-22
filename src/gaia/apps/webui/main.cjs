@@ -35,6 +35,17 @@ const agentSeeder = require("./services/agent-seeder.cjs");
 // app.whenReady() fires.
 app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 
+// ── F7: --no-sandbox on Linux (issue #782) ───────────────────────────────────
+// chrome-sandbox is deleted from the packaged tree by after-pack.cjs so
+// Chromium must use its unprivileged user-namespace sandbox on every launch
+// path. The .desktop Exec= line already carries --no-sandbox via
+// electron-builder.yml linux.executableArgs, but direct `./GAIA.AppImage`
+// invocations bypass the .desktop entry. Appending the switch here makes
+// all Linux launch paths behave identically.
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("no-sandbox");
+}
+
 // ── F7: Log tee to ~/.gaia/electron-main.log (issue #782) ───────────────────
 // Users often launch AppImages by double-click, not from a terminal, so
 // console output vanishes. Mirror console.log/error to a file so the
@@ -72,6 +83,11 @@ app.commandLine.appendSwitch("ozone-platform-hint", "auto");
     stream.write(
       `\n──── electron-main opened (${new Date().toISOString()}) pid=${process.pid} ────\n`
     );
+
+    const flushAndEnd = () => {
+      try { stream.end(); } catch { /* ignore */ }
+    };
+    process.on("exit", flushAndEnd);
 
     const wrap = (origFn, level) => (...args) => {
       try {
