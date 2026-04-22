@@ -26,6 +26,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -138,6 +139,49 @@ if (!APPIMAGE) {
         assert.ok(
           (st.mode & 0o111) !== 0,
           `uv binary should be executable; mode=${(st.mode & 0o777).toString(8)}`
+        );
+      });
+
+      // ── AC4 / T3b: bundled uv binary SHA256 matches BUNDLED_UV_SHA256 ──
+      // Runtime ensureUv() hashes the extracted ELF and rejects any mismatch,
+      // so catch packaging/hash drift at smoke time instead of on user launch.
+      test("AC4/T3b: bundled uv SHA256 matches BUNDLED_UV_SHA256[linux-x64]", () => {
+        const uvPath = path.join(
+          squashRoot,
+          "resources",
+          "vendor",
+          "uv",
+          "linux-x64",
+          "uv"
+        );
+        const installerPath = path.resolve(
+          path.dirname(new URL(import.meta.url).pathname),
+          "..",
+          "..",
+          "src",
+          "gaia",
+          "apps",
+          "webui",
+          "services",
+          "backend-installer.cjs"
+        );
+        const installerSrc = fs.readFileSync(installerPath, "utf8");
+        const m = installerSrc.match(
+          /BUNDLED_UV_SHA256\s*=\s*\{[^}]*?"linux-x64"\s*:\s*"([0-9a-f]{64})"/s
+        );
+        assert.ok(
+          m,
+          `could not parse BUNDLED_UV_SHA256["linux-x64"] from ${installerPath}`
+        );
+        const expected = m[1];
+        const actual = crypto
+          .createHash("sha256")
+          .update(fs.readFileSync(uvPath))
+          .digest("hex");
+        assert.equal(
+          actual,
+          expected,
+          `bundled uv binary SHA256 does not match BUNDLED_UV_SHA256["linux-x64"]; ensureUv() will reject this at runtime`
         );
       });
 

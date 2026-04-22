@@ -71,13 +71,16 @@ const NETWORK_CHECK_TIMEOUT_MS = 5000;
 // contributors running from source keep working.
 //
 // When bumping uv, update BOTH:
-//   - .github/workflows/build-installers.yml (download pin + sha256)
-//   - BUNDLED_UV_SHA256 below (matches CI)
+//   - .github/workflows/build-installers.yml (tarball .tar.gz SHA256 — archive)
+//   - BUNDLED_UV_SHA256 below (extracted ELF binary SHA256)
+// These are two different digests: the workflow verifies the downloaded
+// archive against upstream's published .sha256, then extracts the `uv` binary
+// which is what `ensureUv()` hashes at runtime.
 //
 // Currently pinned: uv v0.5.14 linux-x64.
 const BUNDLED_UV_VERSION = "0.5.14";
 const BUNDLED_UV_SHA256 = {
-  "linux-x64": "22034760075b92487b326da5aa1a2a3e1917e2e766c12c0fd466fccda77013c7",
+  "linux-x64": "0e05d828b5708e8a927724124db3746396afddad6273c47283d7c562dc795bd6",
 };
 
 const MANAGED_UV_DIR = path.join(GAIA_HOME, "bin");
