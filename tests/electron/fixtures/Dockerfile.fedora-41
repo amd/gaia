@@ -18,6 +18,17 @@ RUN dnf install --assumeyes \
       file \
       ca-certificates \
       nspr \
+      nss \
+      atk \
+      at-spi2-atk \
+      cups-libs \
+      gtk3 \
+      libXcomposite \
+      libXdamage \
+      libXfixes \
+      libXrandr \
+      pango \
+      alsa-lib \
  && dnf clean all
 
 WORKDIR /work
