@@ -218,8 +218,9 @@ describe('Chat App Integration', () => {
       apiContent = fs.readFileSync(apiPath, 'utf8');
     });
 
-    it('should define API_BASE using relative /api path', () => {
-      expect(apiContent).toContain("'/api'");
+    it('should define API_BASE via getApiBase utility (which returns /api for non-file: origins)', () => {
+      expect(apiContent).toContain('getApiBase');
+      expect(apiContent).toContain("from '../utils/apiBase'");
     });
 
     it('should have system status endpoint function', () => {

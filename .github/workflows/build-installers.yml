@@ -556,6 +556,7 @@ jobs:
             --device /dev/fuse
             --security-opt seccomp=unconfined
             --security-opt apparmor=unconfined
+            --ipc=host
             -v "${APPIMAGE_HOST}:/work/gaia.AppImage:ro"
           )
 
