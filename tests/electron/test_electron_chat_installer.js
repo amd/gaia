@@ -355,8 +355,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       const apiPath = path.join(CHAT_APP_PATH, 'src/services/api.ts');
       const content = fs.readFileSync(apiPath, 'utf8');
 
-      // API_BASE should be relative /api (proxied by Vite/Electron)
-      expect(content).toContain("'/api'");
+      // API_BASE is resolved at runtime via getApiBase() — returns '/api'
+      // for non-file: origins and reads the ?api= query param for Electron.
+      expect(content).toContain('getApiBase');
+      expect(content).toContain("from '../utils/apiBase'");
 
       // Should not hardcode full external URLs
       const urlMatches = content.match(/https?:\/\/(?!localhost)[^\s'"]+/g) || [];
