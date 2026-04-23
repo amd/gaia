@@ -600,7 +600,9 @@ jobs:
                 PORT=${PORT:-4200}
                 # Use bash /dev/tcp instead of curl — curl is purged in this
                 # container to prove the bundled-uv path eliminates that dep.
-                RESPONSE=$(bash -c "exec 3<>/dev/tcp/127.0.0.1/${PORT}; printf 'GET /api/health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n' >&3; cat <&3" 2>/dev/null || true)
+                # Avoid single quotes inside the outer single-quoted bash -c block
+                # by using a subshell ( ) with double-quoted printf instead.
+                RESPONSE=$( (exec 3<>/dev/tcp/127.0.0.1/${PORT} && printf "GET /api/health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" >&3 && timeout 5 cat <&3) 2>/dev/null || true)
                 if echo "$RESPONSE" | grep -q "gaia-agent-ui"; then
                   HEALTH_OK=1
                   break
