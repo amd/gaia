@@ -575,8 +575,9 @@ jobs:
               xvfb-run --auto-servernum /tmp/gaia.AppImage \
                 >/tmp/stdout.log 2>/tmp/stderr.log &
               APP_PID=$!
-              # Poll for readiness up to 90s.
-              for i in $(seq 1 90); do
+              # Poll for readiness up to 300s — fresh install downloads
+              # Lemonade + a model on first run; 90s was too tight.
+              for i in $(seq 1 300); do
                 if grep -q "state: ready" /tmp/stdout.log 2>/dev/null; then
                   break
                 fi
@@ -679,7 +680,7 @@ jobs:
               xvfb-run --auto-servernum /tmp/gaia.AppImage \
                 >/tmp/stdout.log 2>/tmp/stderr.log &
               APP_PID=$!
-              for i in $(seq 1 90); do
+              for i in $(seq 1 300); do
                 if grep -q "state: ready" /tmp/stdout.log 2>/dev/null; then
                   break
                 fi
