@@ -250,7 +250,7 @@ ParsedResponse parseLlmResponse(const std::string& response) {
             if (j.contains("answer")) {
                 parsed.answer = jsonToString(j["answer"]);
             }
-            if (j.contains("tool")) {
+            if (j.contains("tool") && j["tool"].is_string()) {
                 parsed.toolName = j["tool"].get<std::string>();
                 parsed.toolArgs = (j.contains("tool_args") && j["tool_args"].is_object())
                     ? j["tool_args"] : json::object();
@@ -275,10 +275,10 @@ ParsedResponse parseLlmResponse(const std::string& response) {
         parsed.thought = j.value("thought", "");
         parsed.goal = j.value("goal", "");
 
-        if (j.contains("answer")) {
+        if (j.contains("answer") && !j["answer"].is_null()) {
             parsed.answer = jsonToString(j["answer"]);
         }
-        if (j.contains("tool")) {
+        if (j.contains("tool") && j["tool"].is_string()) {
             parsed.toolName = j["tool"].get<std::string>();
             parsed.toolArgs = (j.contains("tool_args") && j["tool_args"].is_object())
                 ? j["tool_args"] : json::object();

@@ -84,7 +84,7 @@ void CleanConsole::printPlan(const json& plan, int /*currentStep*/) {
     std::cout << color::BOLD << color::CYAN << "  Plan: " << color::RESET;
     for (size_t i = 0; i < plan.size(); ++i) {
         if (i > 0) std::cout << color::GRAY << " -> " << color::RESET;
-        if (plan[i].is_object() && plan[i].contains("tool")) {
+        if (plan[i].is_object() && plan[i].contains("tool") && plan[i]["tool"].is_string()) {
             std::cout << color::CYAN
                       << plan[i]["tool"].get<std::string>()
                       << color::RESET;
@@ -127,7 +127,7 @@ void CleanConsole::prettyPrintJson(const json& data,
     if (title != "Tool Result" || !data.is_object()) return;
 
     // Show the command that was executed (registered-tool format)
-    if (data.contains("command")) {
+    if (data.contains("command") && data["command"].is_string()) {
         std::string cmd = data["command"].get<std::string>();
         std::cout << color::CYAN << "      Cmd: " << color::RESET
                   << color::GRAY;
@@ -136,7 +136,7 @@ void CleanConsole::prettyPrintJson(const json& data,
     }
 
     // Show error if present
-    if (data.contains("error")) {
+    if (data.contains("error") && data["error"].is_string()) {
         std::cout << color::RED << color::BOLD << "      Error: "
                   << color::RESET << color::RED
                   << data["error"].get<std::string>()
@@ -145,7 +145,7 @@ void CleanConsole::prettyPrintJson(const json& data,
     }
 
     // Show tool output preview — registered-tool format: {"output": "..."}
-    if (data.contains("output")) {
+    if (data.contains("output") && data["output"].is_string()) {
         std::string output = data["output"].get<std::string>();
         if (output.empty() || output.find("(no output)") != std::string::npos) {
             std::cout << color::GREEN << "      Result: "
@@ -180,7 +180,7 @@ void CleanConsole::prettyPrintJson(const json& data,
     }
 
     // Show status (registered-tool format)
-    if (data.contains("status")) {
+    if (data.contains("status") && data["status"].is_string()) {
         auto status = data["status"].get<std::string>();
         const char* statusColor = (status == "completed")
             ? color::GREEN : color::YELLOW;

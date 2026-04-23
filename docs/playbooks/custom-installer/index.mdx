@@ -1,0 +1,278 @@
+---
+title: "Custom Installer Playbook"
+description: "Ship the Zoo Agent pre-loaded in a branded GAIA installer. Three-OS walkthrough."
+icon: "play"
+---
+
+<Info>
+  **Source code:**
+  [`src/gaia/apps/webui/services/agent-seeder.cjs`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/services/agent-seeder.cjs) ·
+  [`src/gaia/installer/export_import.py`](https://github.com/amd/gaia/blob/main/src/gaia/installer/export_import.py) ·
+  [`src/gaia/apps/webui/electron-builder.yml`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/electron-builder.yml)
+</Info>
+
+**Time to complete:** 45–75 minutes
+**What you'll build:** A branded GAIA installer for Windows, macOS, or Ubuntu with the **Zoo Agent** preloaded
+**What you'll learn:** How bundled agents flow from a staging directory through `electron-builder` into the first-launch seeder, plus how to share agents between existing GAIA installations without rebuilding an installer
+
+---
+
+## What's different about this playbook
+
+This playbook is the end-to-end walkthrough for shipping a branded GAIA installer with your agent preloaded — useful when `pip install amd-gaia` or enterprise silent-install isn't the right fit. Take a working agent, drop it into the staging directory, run one `npm` command per OS, install the binary, and watch the seeder surface your agent in the Agent UI on first launch.
+
+Two paths are covered:
+
+- **Path A — Branded installer.** You build and ship a full GAIA installer with your agent preloaded. This is what OEM partners, enterprise teams, and community builders typically want.
+- **Path B — Share an existing agent.** You already have GAIA installed on both sides and just want to move an agent between machines. No installer build.
+
+---
+
+## Path A — Branded installer
+
+The running example is the **Zoo Agent**. It is a minimal Python agent that plays an enthusiastic zookeeper.
+
+<Steps>
+
+<Step title="Prerequisites">
+
+Who this path is for: **OEM partners** pre-loading GAIA on Ryzen AI hardware, **enterprise teams** distributing an internal-knowledge agent, and **community builders** sharing a branded specialty agent.
+
+What you need installed:
+
+- Git
+- Node.js 18+ and npm
+- Python 3.10+ (for running the agent locally to verify it before packaging)
+
+Clone and install:
+
+```bash
+git clone https://github.com/amd/gaia.git
+cd gaia/src/gaia/apps/webui
+npm install
+```
+
+All subsequent steps assume your working directory is `gaia/src/gaia/apps/webui/`.
+
+</Step>
+
+<Step title="Create the Zoo Agent">
+
+Create the bundled-agent staging directory and drop in a Python `agent.py`:
+
+```bash
+mkdir -p build/bundled-agents/zoo-agent
+```
+
+Create `build/bundled-agents/zoo-agent/agent.py`:
+
+```python title="build/bundled-agents/zoo-agent/agent.py"
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import AgentConsole
+
+
+class ZooAgent(Agent):
+    AGENT_ID = "zoo-agent"
+    AGENT_NAME = "Zoo Agent"
+    AGENT_DESCRIPTION = "A zookeeper who loves animals"
+    CONVERSATION_STARTERS = [
+        "Hello! What's happening at the zoo today?",
+        "Tell me a fun fact about one of your animals.",
+    ]
+
+    def _get_system_prompt(self) -> str:
+        return (
+            "You are a funny and enthusiastic zookeeper! You work at the world's "
+            "best zoo and every response you give includes a fun fact or a playful "
+            "reference to one of your beloved zoo animals."
+        )
+
+    def _create_console(self) -> AgentConsole:
+        return AgentConsole()
+
+    def _register_tools(self) -> None:
+        pass
+```
+
+**Why this location matters.** The `build/bundled-agents/` directory is the build-time staging area picked up by the `extraResources` entry in `electron-builder.yml`:
+
+```yaml
+extraResources:
+  - from: build/bundled-agents
+    to: agents
+    filter: ["**/*"]
+```
+
+At install time the contents end up under `process.resourcesPath/agents/<agent-id>/` inside the installed app. On first launch, `seedBundledAgents()` in [`src/gaia/apps/webui/services/agent-seeder.cjs`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/services/agent-seeder.cjs) copies them into `~/.gaia/agents/<agent-id>/` and writes a `.seeded` sentinel so the copy runs exactly once per agent.
+
+<Warning>
+  **Agent code runs with user privileges.** The `agent.py` file you bundle executes when the user selects your agent. Only bundle code you wrote or have audited.
+</Warning>
+
+</Step>
+
+<Step title="Build the installer">
+
+Pick your target platform. Each command builds the full GAIA Agent UI installer with your Zoo Agent baked in.
+
+<Tabs>
+  <Tab title="Windows">
+    ```bash
+    npm run package:win
+    ```
+
+    Output:
+
+    ```
+    dist-app/gaia-agent-ui-<version>-x64-setup.exe
+    ```
+  </Tab>
+  <Tab title="macOS">
+    ```bash
+    npm run package:mac
+    ```
+
+    Output:
+
+    ```
+    dist-app/gaia-agent-ui-<version>-arm64.dmg
+    ```
+  </Tab>
+  <Tab title="Ubuntu">
+    ```bash
+    npm run package:linux
+    ```
+
+    Output:
+
+    ```
+    dist-app/gaia-agent-ui-<version>-amd64.deb
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Cross-compilation is not supported end-to-end today. Build each target on its native OS (or in a matching VM / CI runner).
+</Note>
+
+</Step>
+
+<Step title="Install and verify">
+
+<Tabs>
+  <Tab title="Windows">
+    1. Double-click the `.exe` in `dist-app/`.
+    2. Accept the NSIS prompts through to completion.
+    3. Launch **GAIA** from the Start Menu.
+  </Tab>
+  <Tab title="macOS">
+    1. Open the `.dmg` in `dist-app/`.
+    2. Drag **GAIA** to `Applications`.
+    3. Launch from Launchpad or `Applications/`.
+  </Tab>
+  <Tab title="Ubuntu">
+    ```bash
+    sudo apt install ./dist-app/gaia-agent-ui-<version>-amd64.deb
+    ```
+
+    Launch from your desktop environment's application menu, or run `gaia-agent-ui` from a terminal.
+  </Tab>
+</Tabs>
+
+**Verify the seeder ran:**
+
+1. Open the Agent UI. On first launch, `seedBundledAgents()` copies every directory under `<resources>/agents/` into `~/.gaia/agents/` and writes a `.seeded` marker so re-launches are no-ops.
+2. Open the agent dropdown in the UI header — **Zoo Agent** should appear alongside the built-in agents.
+3. Select **Zoo Agent** and send "What's happening at the zoo today?". You should get an enthusiastic zookeeper response with a fun animal fact.
+
+If the agent does not appear:
+
+- Confirm `~/.gaia/agents/zoo-agent/agent.py` exists on the target machine.
+- Confirm `~/.gaia/agents/zoo-agent/.seeded` exists — if it's missing, the seeder did not run; check the Electron main-process logs.
+- If `.seeded` exists but the directory is incomplete, delete `~/.gaia/agents/zoo-agent/` and relaunch to trigger a fresh seed.
+
+</Step>
+
+<Step title="(Optional) Branding">
+
+Most users ship with the default GAIA branding and only customize the agent. If you want a branded installer, edit [`src/gaia/apps/webui/electron-builder.yml`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/electron-builder.yml) before re-running the `package:*` command:
+
+- `productName` → user-facing app name (e.g., `Zoo GAIA`)
+- `appId` → your reverse-DNS namespace (e.g., `com.acme.zoo-gaia`)
+
+Icons, sidebar bitmaps, and installer graphics are referenced by path inside the same file — replace the assets in place.
+
+**Signing is out of scope for this playbook.** An unsigned or ad-hoc-signed installer is perfectly usable for internal distribution and testing. For production signing (Windows Authenticode, macOS Developer ID + notarization), see the [Code Signing Reference](/deployment/code-signing).
+
+</Step>
+
+</Steps>
+
+---
+
+## Path B — Share an existing agent
+
+If you already have GAIA installed and want to move an agent to another machine — or share it with a teammate — you don't need to build an installer. Use the agent bundle export/import flow instead.
+
+The bundle is a `.zip` containing your custom agents plus a `bundle.json` table of contents. Export on the source machine, import on the destination.
+
+### Export
+
+<CodeGroup>
+```bash CLI
+gaia agent export
+# → creates ~/.gaia/export.zip containing every agent under ~/.gaia/agents/
+```
+
+```text UI
+Settings → Custom Agents → Export All
+# Saves the bundle via a native file-picker dialog.
+```
+</CodeGroup>
+
+Under the hood both flows call `export_custom_agents()` in [`src/gaia/installer/export_import.py`](https://github.com/amd/gaia/blob/main/src/gaia/installer/export_import.py), which walks `~/.gaia/agents/` and writes a deterministic zip with a `bundle.json` manifest.
+
+### Import
+
+<CodeGroup>
+```bash CLI
+gaia agent import ~/Downloads/gaia-agents-export.zip
+# Prompts for trust confirmation before installing.
+```
+
+```text UI
+Settings → Custom Agents → Import
+# File picker → trust confirmation → done.
+```
+</CodeGroup>
+
+Imports go through `import_agent_bundle()` in [`src/gaia/installer/export_import.py`](https://github.com/amd/gaia/blob/main/src/gaia/installer/export_import.py). Each agent is staged in a temp directory and atomically moved into `~/.gaia/agents/<id>/`, so a partial failure leaves previously-installed agents intact. Zip entries are validated for path traversal, absolute paths, symlinks, size, and entry count before anything touches disk.
+
+<Warning>
+  **Importing a bundle installs third-party Python code that runs on your machine when the agent is selected.** Only import bundles from sources you trust. The UI import flow shows the list of agent IDs in the bundle and requires an explicit confirmation click before extraction.
+</Warning>
+
+### When to use which path
+
+| Scenario | Path |
+|----------|------|
+| Shipping GAIA + your agent to users who don't have GAIA | Path A — Branded installer |
+| Moving an agent between two machines that already run GAIA | Path B — Export/Import |
+| Publishing an agent for the community to drop in | Path B (share the `.zip`) |
+| OEM pre-install on Ryzen AI hardware | Path A |
+
+---
+
+## Next steps
+
+<CardGroup cols={3}>
+  <Card title="Custom Agents" icon="wand-magic-sparkles" href="/guides/custom-agent">
+    Deep reference for agent authoring, manifest schema, tools, and MCP.
+  </Card>
+  <Card title="Code Signing" icon="signature" href="/deployment/code-signing">
+    Per-platform signing secrets, CI integration, troubleshooting.
+  </Card>
+  <Card title="Agent UI" icon="desktop" href="/deployment/ui">
+    Desktop shell architecture, build pipeline, Electron integration.
+  </Card>
+</CardGroup>

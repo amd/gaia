@@ -622,6 +622,20 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
 
     def handle_jsonrpc(self, data):
         """Handle JSON-RPC requests."""
+        # Validate that data is a dict (JSON-RPC requires an object)
+        if not isinstance(data, dict):
+            self.send_json(
+                400,
+                {
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32600,
+                        "message": "Invalid Request: expected JSON object",
+                    },
+                    "id": None,
+                },
+            )
+            return
         # Validate JSON-RPC
         if "jsonrpc" not in data or data["jsonrpc"] != "2.0":
             self.send_json(
