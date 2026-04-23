@@ -419,9 +419,15 @@ async function loadApp() {
     // Always load the bundled frontend from the asar. The backend only
     // serves the API (no frontend files in the pip package), so loading
     // http://localhost:4200/ would show raw JSON instead of the UI.
+    //
+    // Pass the real backend base URL as a query parameter so the renderer
+    // can reach whatever random port port-manager picked (see #851).
+    // Without this, the compiled bundle falls back to its hardcoded
+    // `http://localhost:4200/api` and every API call 404s.
     const indexPath = path.join(distPath, "index.html");
-    console.log("Loading app from:", indexPath);
-    await mainWindow.loadFile(indexPath);
+    const apiBase = `http://127.0.0.1:${backendPort}/api`;
+    console.log("Loading app from:", indexPath, "api:", apiBase);
+    await mainWindow.loadFile(indexPath, { query: { api: apiBase } });
   } else {
     // Show a simple loading/error page
     mainWindow.loadURL(

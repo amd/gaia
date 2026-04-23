@@ -22,15 +22,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Download, Upload, CheckCircle2, AlertCircle } from 'lucide-react';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
+import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 import type { AgentInfo } from '../types';
 
-// Same base-URL logic as services/api.ts — export/import hit the REST
-// backend directly (not the apiFetch wrapper) because they deal with
-// binary zip payloads, not JSON.
-const API_BASE = window.location.protocol === 'file:'
-    ? 'http://localhost:4200/api'
-    : '/api';
+// Export/import hit the REST backend directly (not the apiFetch wrapper)
+// because they deal with binary zip payloads, not JSON.
+const API_BASE = getApiBase();
 
 type Status =
     | { kind: 'idle' }
