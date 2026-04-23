@@ -92,6 +92,7 @@ on:
       - 'src/gaia/apps/webui/main.cjs'
       - 'src/gaia/apps/webui/bin/**'
       - 'src/gaia/apps/webui/services/**'
+      - 'tests/electron/fixtures/**'
       - 'src/gaia/version.py'
 
 # Least-privilege default. Only the release-upload step needs `contents:
