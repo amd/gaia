@@ -17,6 +17,7 @@ RUN dnf install --assumeyes \
       procps-ng \
       file \
       ca-certificates \
+      nspr \
  && dnf clean all
 
 WORKDIR /work
