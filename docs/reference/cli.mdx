@@ -352,6 +352,56 @@ gaia kill --port 8080
 On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tray.exe` processes.
 </Note>
 
+### Agent Command
+
+Manage custom agents installed under `~/.gaia/agents/`. Supports exporting every custom agent into a single `.zip` bundle and importing a bundle produced on another machine.
+
+```bash
+gaia agent export [--output PATH]
+gaia agent import PATH [--yes]
+```
+
+**Export options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--output <path>` | string | Destination `.zip` file (default: `~/.gaia/export.zip`) |
+
+**Import options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `path` | string | Path to the `.zip` bundle to import (positional, required) |
+| `--yes, -y` | flag | Skip the interactive trust prompt (required in non-interactive/CI contexts) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Export all custom agents
+gaia agent export
+```
+
+```bash Export to a custom path
+gaia agent export --output ./my-agents.zip
+```
+
+```bash Import a bundle (interactive)
+gaia agent import ./my-agents.zip
+```
+
+```bash Import non-interactively (CI)
+gaia agent import ./my-agents.zip --yes
+```
+</CodeGroup>
+
+<Warning>
+Exported bundles contain your agent source files as-is. Any API keys or credentials present in `agent.py` will be included. Review bundles before sharing.
+</Warning>
+
+<Note>
+Importing a bundle runs third-party Python code on your machine. `gaia agent import` shows the agent IDs in the bundle and requires explicit `y`/`yes` confirmation (or `--yes`) before proceeding.
+</Note>
+
 ---
 
 ## Core Commands
@@ -1375,6 +1425,45 @@ This command will:
 - Find the process ID (PID) bound to the specified port
 - Forcefully terminate that process
 - Provide feedback about success or failure
+
+---
+
+### Diagnostics Command
+
+Bundle system info and logs into a tarball for bug reports.
+
+```bash
+gaia diagnostics [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--output` | path | `~/.gaia/diagnostics-<YYYYMMDD-HHMMSS>.tgz` | Destination path for the tarball |
+| `--no-logs` | flag | false | Omit log files (useful for public bug reports) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Full Bundle
+gaia diagnostics
+# → ~/.gaia/diagnostics-20260422-173000.tgz
+```
+
+```bash Without Logs
+gaia diagnostics --no-logs
+```
+
+```bash Custom Output Path
+gaia diagnostics --output /tmp/my-bundle.tgz
+```
+</CodeGroup>
+
+The bundle includes:
+- System info snapshot (`uname -a`, distro, relevant env vars, all TCP listeners via `ss -tlnp`)
+- State files from `~/.gaia/` (config, session data — no chat content)
+- Log files: `~/.gaia/gaia.log` and `~/.gaia/electron-main.log` (omitted with `--no-logs`)
 
 ---
 

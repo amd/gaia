@@ -305,7 +305,8 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
                 const json responseJson = json::parse(rawResponse);
                 if (responseJson.contains("choices") && !responseJson["choices"].empty()) {
                     const auto& choice = responseJson["choices"][0];
-                    if (choice.contains("message") && choice["message"].contains("content")) {
+                    if (choice.contains("message") && choice["message"].contains("content")
+                        && choice["message"]["content"].is_string()) {
                         return choice["message"]["content"].get<std::string>();
                     }
                 }
@@ -324,7 +325,8 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
 
         if (responseJson.contains("choices") && !responseJson["choices"].empty()) {
             auto& choice = responseJson["choices"][0];
-            if (choice.contains("message") && choice["message"].contains("content")) {
+            if (choice.contains("message") && choice["message"].contains("content")
+                && choice["message"]["content"].is_string()) {
                 return choice["message"]["content"].get<std::string>();
             }
         }

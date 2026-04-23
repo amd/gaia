@@ -28,7 +28,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -414,13 +414,71 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             _webui_dist,
         )
 
-        @app.get("/")
+        _FALLBACK_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GAIA Agent UI &mdash; Backend API</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 Helvetica, Arial, sans-serif;
+    max-width: 640px;
+    margin: 4rem auto;
+    padding: 0 1.5rem;
+    line-height: 1.55;
+    color: #1f2328;
+    background: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e6edf3; background: #0d1117; }
+    a { color: #58a6ff; }
+    code { background: #161b22; }
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  p  { margin: 0.75rem 0; }
+  ul { padding-left: 1.25rem; }
+  li { margin: 0.25rem 0; }
+  code {
+    background: #f3f4f6;
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-size: 0.95em;
+  }
+  .muted { color: #656d76; font-size: 0.9rem; margin-top: 2rem; }
+</style>
+</head>
+<body>
+  <h1>This is the GAIA backend API</h1>
+  <p>
+    To use the GAIA interface, open the GAIA desktop app
+    (download at
+    <a href="https://github.com/amd/gaia/releases">github.com/amd/gaia/releases</a>).
+    For browser-mode setup and troubleshooting, see
+    <a href="https://amd-gaia.ai/guides/agent-ui">amd-gaia.ai/guides/agent-ui</a>.
+  </p>
+  <ul>
+    <li><a href="/docs">API documentation</a> (<code>/docs</code>)</li>
+    <li><a href="/api/health">Health endpoint</a> (<code>/api/health</code>)</li>
+  </ul>
+  <p class="muted">
+    GAIA Agent UI backend is running, but no frontend build was found.
+  </p>
+</body>
+</html>
+"""
+
+        @app.get("/", response_class=HTMLResponse)
         async def no_frontend():
-            """Inform user that frontend needs to be built."""
-            return {
-                "message": "GAIA Agent UI API is running. Frontend not built yet.",
-                "hint": "Run 'npm run build' in src/gaia/apps/webui/ to build the frontend.",
-            }
+            """Serve a helpful HTML landing page when no frontend build is present.
+
+            The backend API is still fully functional; this page just tells
+            human visitors where to find the desktop app and API docs instead
+            of returning raw JSON.
+            """
+            return HTMLResponse(content=_FALLBACK_HTML, status_code=200)
 
     return app
 
