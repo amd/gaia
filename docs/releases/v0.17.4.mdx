@@ -1,0 +1,61 @@
+---
+title: "v0.17.4"
+description: "Patch release: custom agents now honor their declared model, and the C++ library no longer crashes on null JSON fields from smaller LLMs."
+---
+
+# GAIA v0.17.4 Release Notes
+
+GAIA v0.17.4 is a focused patch release that fixes two correctness bugs users hit in practice: custom Agent UI agents silently ignoring their declared model, and the C++ library crashing on tool-call responses from smaller LLMs. Upgrade if you build custom agents or run GAIA against quantized/smaller models.
+
+```bash
+pip install --upgrade amd-gaia
+```
+
+**Why upgrade:**
+- **Custom agents finally use the model they declare** — If your agent sets a model via `kwargs.setdefault("model_id", ...)`, the Agent UI now actually runs against that model when the user's session is at the DB default, instead of silently falling back to the session model. A follow-up fix also restores agent-cache hits on the second turn so custom-model agents aren't rebuilt every request.
+- **No more crashes on smaller LLMs** — The C++ library previously crashed with `json.exception.type_error.302` when models like `qwen3.5:9b` returned `null` for `"tool"` or `"content"` fields. Those fields are now parsed safely.
+
+---
+
+## What's New
+
+### Custom Agent `model_id` Respected in the Agent UI
+
+Previously, `_chat_helpers.py` always passed `model_id=<session model>` explicitly to `registry.create_agent()`, which defeated `kwargs.setdefault("model_id", ...)` in custom agents — `setdefault` only fires when the key is absent (PR [#841](https://github.com/amd/gaia/pull/841)).
+
+**What you can do:**
+- Ship a custom agent whose template sets `kwargs.setdefault("model_id", "my-model")` and have the Agent UI actually use `my-model` when the session is at the DB default.
+- Three-branch precedence for model selection is now explicit: `custom_model` setting > session-explicit model > agent's own `setdefault`.
+
+**Under the hood:**
+- Extracted `_build_create_kwargs()` and `_effective_model()` helpers in `src/gaia/ui/_chat_helpers.py` to eliminate duplicate three-branch logic across streaming and non-streaming paths.
+- `SESSION_DEFAULT_MODEL` now exported from `database.py` as the single source of truth.
+- `_effective_model()` uses an explicit `None` check rather than `or`, so an empty string is not treated as a missing model.
+- Follow-up PR [#842](https://github.com/amd/gaia/pull/842) restored the pre-construction `model_id` as the agent-cache key so lookups and stores match — custom-model agents now hit the cache on turn two instead of being rebuilt every request. Added a two-turn cache-hit regression test plus a static guard that asserts `_store_agent` never receives `_effective_model(...)` as a positional arg.
+
+---
+
+### C++ Library: Null-Safety in LLM Response Parsing
+
+Added `.is_string()` / `.is_null()` guards before all `.get<std::string>()` calls on LLM response JSON fields in `cpp/src/json_utils.cpp::parseLlmResponse()` (PR [#780](https://github.com/amd/gaia/pull/780)). Fixes a crash (`json.exception.type_error.302: type must be string, but is null`) when smaller models (e.g. `qwen3.5:9b`) return `null` for `"tool"` or `"content"` instead of omitting them. `json.contains()` returns `true` for `null` values, so the existing checks were insufficient.
+
+---
+
+## Full Changelog
+
+- `8fc43f3f` — fix(cpp): add null-safety checks for JSON string fields in LLM response parsing (#780)
+- `62722de2` — fix(ui): honor custom agent model_id when session is at DB default (#841)
+- `4acfd400` — fix(ui): extract _build_create_kwargs/_effective_model, import SESSION_DEFAULT_MODEL
+- `8f5c7621` — fix(ui): restore intent-key for agent cache store to fix miss regression (#842)
+- `a0fdb109` — docs(plans): fix broken CMU link to EMNLP 2004 Email Speech Acts paper (#817)
+
+Full Changelog: [v0.17.3...v0.17.4](https://github.com/amd/gaia/compare/v0.17.3...v0.17.4)
+
+---
+
+## Release checklist
+- [x] `util/validate_release_notes.py docs/releases/v0.17.4.mdx --tag v0.17.4` passes
+- [x] `src/gaia/version.py` → `0.17.4`
+- [x] `src/gaia/apps/webui/package.json` → `0.17.4`
+- [x] Navbar label in `docs/docs.json` → `v0.17.4 · Lemonade 10.0.0`
+- [ ] Review from @kovtcharov-amd addressed
