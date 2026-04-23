@@ -598,8 +598,10 @@ jobs:
               for i in $(seq 1 30); do
                 PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+")
                 PORT=${PORT:-4200}
-                if curl -sSf "http://127.0.0.1:${PORT}/api/health" \
-                    | grep -q "gaia-agent-ui"; then
+                # Use bash /dev/tcp instead of curl — curl is purged in this
+                # container to prove the bundled-uv path eliminates that dep.
+                RESPONSE=$(bash -c "exec 3<>/dev/tcp/127.0.0.1/${PORT}; printf 'GET /api/health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n' >&3; cat <&3" 2>/dev/null || true)
+                if echo "$RESPONSE" | grep -q "gaia-agent-ui"; then
                   HEALTH_OK=1
                   break
                 fi
