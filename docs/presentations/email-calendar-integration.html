@@ -273,7 +273,7 @@
       Email triage is the <span class="highlight">#1 requested use case</span> for local AI agents.
       Always-on workloads with sensitive data &mdash; exactly where on-device processing wins.
     </p>
-    <div class="grid-3">
+    <div class="grid-4">
       <div class="card">
         <div class="card-icon">&#x1F512;</div>
         <h3>Privacy</h3>
@@ -283,6 +283,11 @@
         <div class="card-icon">&#x26A1;</div>
         <h3>Always-On</h3>
         <p>Overnight triage, morning briefs, draft responses &mdash; the agent works while you sleep.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F4B0;</div>
+        <h3>Zero Token Cost</h3>
+        <p>Running locally eliminates per-token API fees. Process thousands of emails daily with no marginal cost.</p>
       </div>
       <div class="card">
         <div class="card-icon">&#x1F3AF;</div>
@@ -326,7 +331,8 @@
   <div class="slide slide-content" data-index="3">
     <h2>Synthetic Inbox Dataset</h2>
     <div class="section-line"></div>
-    <p>A generated email corpus for development, testing, and evaluation &mdash; no real PII needed.</p>
+    <p>A generated email corpus for development, testing, and evaluation &mdash; no real PII needed.
+      <span style="font-size: 14px; color: var(--text-muted);">(<a href="https://github.com/amd/gaia/blob/main/docs/plans/email-triage-agent.mdx" style="color: var(--accent-soft);">Email Triage Agent Plan &sect;28</a>)</span></p>
     <div class="two-col">
       <div>
         <ul class="feature-list">
@@ -719,7 +725,7 @@
         </div>
       </div>
 
-      <div style="display: flex; flex-direction: column; gap: 14px;">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
         <div class="card" style="text-align: center;">
           <p class="metric">&lt; 2 min</p>
           <p>Time to first inbox summary</p>
@@ -727,6 +733,10 @@
         <div class="card" style="text-align: center;">
           <p class="metric">&gt; 80%</p>
           <p>Target triage accuracy (1 week)</p>
+        </div>
+        <div class="card" style="text-align: center;">
+          <p class="metric">&lt; 5 GB</p>
+          <p>Peak memory &mdash; Gemma 4 E4B at Q4 GGUF</p>
         </div>
         <div class="card" style="text-align: center;">
           <p class="metric">100%</p>
