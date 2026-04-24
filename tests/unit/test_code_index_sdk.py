@@ -46,8 +46,6 @@ def make_sdk(tmp_path: Path, **kwargs) -> "CodeIndexSDK":
     config = CodeIndexConfig(
         repo_path=str(tmp_path),
         cache_dir=str(tmp_path / ".cache"),
-        index_git_history=False,
-        index_prs=False,
         **kwargs,
     )
     return CodeIndexSDK(config)

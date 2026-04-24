@@ -168,14 +168,11 @@ setup(
             "llama-index-readers-youtube-transcript",
         ],
         "rag": [
-            "pypdf",
-            "pymupdf>=1.24.0",
-            "sentence-transformers",
-            "faiss-cpu>=1.7.0",
-        ],
-        "code-index": [
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
+            "pymupdf>=1.24.0",
+            "pypdf",
+            "sentence-transformers",
         ],
         "lint": [
             "black",

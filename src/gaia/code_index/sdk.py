@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 """
-CodeIndexSDK — semantic code search over repositories, git history, and PRs.
+CodeIndexSDK — semantic code search over source-code repositories.
 
 Reuses GAIA's Lemonade Server embedding infrastructure (AMD NPU/GPU accelerated)
 and FAISS for vector similarity search.
@@ -15,9 +15,13 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
+
+_MISSING_DEPS_MSG = (
+    "code_index dependencies missing. Install with: pip install -e '.[rag]'"
+)
 
 # ---------------------------------------------------------------------------
 # Configuration and response dataclasses
@@ -61,9 +65,6 @@ class CodeIndexConfig:
     chunk_overlap: int = 50
     embedding_model: str = "nomic-embed-text-v2-moe-GGUF"
     cache_dir: str = "~/.gaia/code_index"
-    index_git_history: bool = True
-    index_prs: bool = False
-    max_commits: int = 1000
     embedding_base_url: Optional[str] = None
 
 
@@ -83,39 +84,12 @@ class CodeChunk:
 
 
 @dataclass
-class CommitChunk:
-    """A git commit, represented as a searchable chunk."""
-
-    content: str
-    commit_hash: str
-    author: str
-    date: str
-    files_changed: List[str]
-    diff_summary: str
-
-
-@dataclass
-class PRChunk:
-    """A GitHub pull request, represented as a searchable chunk."""
-
-    content: str
-    pr_number: int
-    title: str
-    state: str
-    author: str
-    labels: List[str]
-    files_changed: List[str]
-    url: str
-    body: str = ""
-
-
-@dataclass
 class SearchResult:
     """A single search result."""
 
-    chunk: Union[CodeChunk, CommitChunk, PRChunk]
+    chunk: CodeChunk
     score: float
-    result_type: str  # "code" | "commit" | "pr"
+    result_type: str  # "code"
 
 
 @dataclass
@@ -124,8 +98,6 @@ class IndexResult:
 
     files_indexed: int
     chunks_created: int
-    commits_indexed: int
-    prs_indexed: int
     duration_seconds: float
 
 
@@ -143,7 +115,7 @@ _CACHE_VERSION = 1
 
 class CodeIndexSDK:
     """
-    Semantic code search over repositories, git history, and pull requests.
+    Semantic code search over source-code repositories.
 
     Uses Lemonade Server (AMD NPU/GPU) for hardware-accelerated embeddings
     and FAISS IndexFlatL2 for vector similarity search.
@@ -218,8 +190,8 @@ class CodeIndexSDK:
         from gaia.code_index.parsers import chunk_code_file
 
         # Parse files — incremental: skip unchanged
-        reused_chunks: List[Union[CodeChunk, CommitChunk, PRChunk]] = []
-        new_chunks: List[Union[CodeChunk, CommitChunk, PRChunk]] = []
+        reused_chunks: List[CodeChunk] = []
+        new_chunks: List[CodeChunk] = []
         new_file_hashes: Dict[str, str] = {}
         files_indexed = 0
 
@@ -249,43 +221,19 @@ class CodeIndexSDK:
             new_chunks.extend(parsed)
             files_indexed += 1
 
-        # Git history and PR data
-        commits_indexed = 0
-        prs_indexed = 0
-        if self.config.index_git_history or self.config.index_prs:
-            try:
-                from gaia.code_index.git import GitIndexer
-
-                git_indexer = GitIndexer(self.config)
-
-                if self.config.index_git_history:
-                    commits = git_indexer.get_commits()
-                    new_chunks.extend(commits)
-                    commits_indexed = len(commits)
-                    if commits_indexed:
-                        self.log.info(f"Indexed {commits_indexed} commits")
-
-                if self.config.index_prs:
-                    prs = git_indexer.get_pull_requests()
-                    new_chunks.extend(prs)
-                    prs_indexed = len(prs)
-                    if prs_indexed:
-                        self.log.info(f"Indexed {prs_indexed} PRs")
-            except Exception as e:
-                self.log.warning(f"Git indexing failed (skipping): {e}")
-
         all_chunks = reused_chunks + new_chunks
         if not all_chunks:
             self.log.warning("No chunks to index")
             return IndexResult(
                 files_indexed=0,
                 chunks_created=0,
-                commits_indexed=commits_indexed,
-                prs_indexed=prs_indexed,
                 duration_seconds=time.time() - start,
             )
 
-        import numpy as np
+        try:
+            import numpy as np
+        except ImportError as e:
+            raise ImportError(_MISSING_DEPS_MSG) from e
 
         # Reuse existing embeddings for unchanged chunks
         reused_embeddings = None
@@ -361,8 +309,6 @@ class CodeIndexSDK:
             return IndexResult(
                 files_indexed=files_indexed,
                 chunks_created=0,
-                commits_indexed=commits_indexed,
-                prs_indexed=prs_indexed,
                 duration_seconds=time.time() - start,
             )
 
@@ -391,8 +337,6 @@ class CodeIndexSDK:
         return IndexResult(
             files_indexed=files_indexed,
             chunks_created=len(valid_chunks),
-            commits_indexed=commits_indexed,
-            prs_indexed=prs_indexed,
             duration_seconds=duration,
         )
 
@@ -403,11 +347,11 @@ class CodeIndexSDK:
         top_k: int = 10,
     ) -> List[SearchResult]:
         """
-        Semantic search over indexed code, commits, and/or PRs.
+        Semantic search over indexed code.
 
         Args:
             query: Natural language or code query.
-            scope: "all" | "code" | "commit" | "pr"
+            scope: "all" | "code" (retained for forward compatibility).
             top_k: Maximum results to return.
 
         Returns:
@@ -438,25 +382,18 @@ class CodeIndexSDK:
         if query_emb.size == 0:
             return []
 
-        import numpy as np
+        try:
+            import numpy as np
+        except ImportError as e:
+            raise ImportError(_MISSING_DEPS_MSG) from e
 
         query_vec = query_emb[0:1].astype(np.float32)
 
-        # FAISS search — over-fetch when scope filtering is active so we
-        # don't silently return fewer results than top_k.
         ntotal = self._faiss_index.ntotal
         if ntotal == 0:
             return []
 
-        if scope == "all":
-            fetch_k = min(top_k, ntotal)
-        elif scope in ("commit", "pr"):
-            # Commit/PR chunks are typically a tiny fraction of the index,
-            # so we need to fetch aggressively to find enough matches.
-            fetch_k = min(top_k * 50, ntotal)
-        else:
-            fetch_k = min(top_k * 3, ntotal)
-
+        fetch_k = min(top_k, ntotal)
         distances, indices = self._faiss_index.search(query_vec, fetch_k)
 
         chunks = [self._dict_to_chunk(c) for c in meta.get("chunks", [])]
@@ -465,18 +402,11 @@ class CodeIndexSDK:
             if idx < 0 or idx >= len(chunks):
                 continue
             chunk = chunks[idx]
-            result_type = (
-                "code"
-                if isinstance(chunk, CodeChunk)
-                else "commit" if isinstance(chunk, CommitChunk) else "pr"
-            )
-            if scope != "all" and result_type != scope:
+            if scope not in ("all", "code"):
                 continue
             # Convert L2 distance to a similarity score in [0, 1]
             score = float(1.0 / (1.0 + dist))
-            results.append(
-                SearchResult(chunk=chunk, score=score, result_type=result_type)
-            )
+            results.append(SearchResult(chunk=chunk, score=score, result_type="code"))
             if len(results) >= top_k:
                 break
 
@@ -490,8 +420,6 @@ class CodeIndexSDK:
 
         chunks = meta.get("chunks", [])
         code_count = sum(1 for c in chunks if c.get("chunk_type") == "code")
-        commit_count = sum(1 for c in chunks if c.get("chunk_type") == "commit")
-        pr_count = sum(1 for c in chunks if c.get("chunk_type") == "pr")
 
         return {
             "indexed": True,
@@ -499,8 +427,6 @@ class CodeIndexSDK:
             "embedding_model": meta.get("embedding_model"),
             "total_chunks": len(chunks),
             "code_chunks": code_count,
-            "commit_chunks": commit_count,
-            "pr_chunks": pr_count,
             "files_tracked": len(meta.get("file_hashes", {})),
             "created_at": meta.get("created_at"),
             "cache_path": str(self._cache_dir),
@@ -675,25 +601,13 @@ class CodeIndexSDK:
         except OSError:
             return None
 
-    def _chunk_to_embed_text(
-        self, chunk: Union[CodeChunk, CommitChunk, PRChunk]
-    ) -> str:
+    def _chunk_to_embed_text(self, chunk: CodeChunk) -> str:
         """Extract the text to embed (first 1200 chars for search)."""
         MAX_EMBED_CHARS = 1200
-        if isinstance(chunk, CodeChunk):
-            prefix = ""
-            if chunk.symbol_name:
-                prefix = f"{chunk.symbol_type or 'symbol'}: {chunk.symbol_name}\n"
-            return (prefix + chunk.content)[:MAX_EMBED_CHARS]
-        elif isinstance(chunk, CommitChunk):
-            return f"commit {chunk.commit_hash[:8]} by {chunk.author}: {chunk.content}"[
-                :MAX_EMBED_CHARS
-            ]
-        elif isinstance(chunk, PRChunk):
-            return f"PR #{chunk.pr_number} ({chunk.state}): {chunk.title}\n{chunk.content}"[
-                :MAX_EMBED_CHARS
-            ]
-        return str(chunk)[:MAX_EMBED_CHARS]
+        prefix = ""
+        if chunk.symbol_name:
+            prefix = f"{chunk.symbol_type or 'symbol'}: {chunk.symbol_name}\n"
+        return (prefix + chunk.content)[:MAX_EMBED_CHARS]
 
     def _load_embedder(self):
         """Load the Lemonade embedding model if not already loaded.
@@ -865,8 +779,11 @@ class CodeIndexSDK:
 
     def _build_faiss_index(self, embeddings):
         """Build a FAISS IndexFlatL2 from embeddings array."""
-        import faiss
-        import numpy as np
+        try:
+            import faiss
+            import numpy as np
+        except ImportError as e:
+            raise ImportError(_MISSING_DEPS_MSG) from e
 
         dim = embeddings.shape[1]
         index = faiss.IndexFlatL2(dim)
@@ -954,76 +871,34 @@ class CodeIndexSDK:
     # Serialization helpers
     # ------------------------------------------------------------------
 
-    def _chunk_to_dict(self, chunk: Union[CodeChunk, CommitChunk, PRChunk]) -> Dict:
-        if isinstance(chunk, CodeChunk):
-            return {
-                "chunk_type": "code",
-                "content": chunk.content,
-                "file_path": chunk.file_path,
-                "language": chunk.language,
-                "start_line": chunk.start_line,
-                "end_line": chunk.end_line,
-                "symbol_name": chunk.symbol_name,
-                "symbol_type": chunk.symbol_type,
-                "docstring": chunk.docstring,
-                "imports": chunk.imports,
-            }
-        elif isinstance(chunk, CommitChunk):
-            return {
-                "chunk_type": "commit",
-                "content": chunk.content,
-                "commit_hash": chunk.commit_hash,
-                "author": chunk.author,
-                "date": chunk.date,
-                "files_changed": chunk.files_changed,
-                "diff_summary": chunk.diff_summary,
-            }
-        elif isinstance(chunk, PRChunk):
-            return {
-                "chunk_type": "pr",
-                "content": chunk.content,
-                "pr_number": chunk.pr_number,
-                "title": chunk.title,
-                "state": chunk.state,
-                "author": chunk.author,
-                "labels": chunk.labels,
-                "files_changed": chunk.files_changed,
-                "url": chunk.url,
-            }
-        raise ValueError(f"Unknown chunk type: {type(chunk)}")
+    def _chunk_to_dict(self, chunk: CodeChunk) -> Dict:
+        if not isinstance(chunk, CodeChunk):
+            raise ValueError(f"Unknown chunk type: {type(chunk)}")
+        return {
+            "chunk_type": "code",
+            "content": chunk.content,
+            "file_path": chunk.file_path,
+            "language": chunk.language,
+            "start_line": chunk.start_line,
+            "end_line": chunk.end_line,
+            "symbol_name": chunk.symbol_name,
+            "symbol_type": chunk.symbol_type,
+            "docstring": chunk.docstring,
+            "imports": chunk.imports,
+        }
 
-    def _dict_to_chunk(self, d: Dict) -> Union[CodeChunk, CommitChunk, PRChunk]:
+    def _dict_to_chunk(self, d: Dict) -> CodeChunk:
         t = d.get("chunk_type", "code")
-        if t == "code":
-            return CodeChunk(
-                content=d["content"],
-                file_path=d["file_path"],
-                language=d["language"],
-                start_line=d["start_line"],
-                end_line=d["end_line"],
-                symbol_name=d.get("symbol_name"),
-                symbol_type=d.get("symbol_type"),
-                docstring=d.get("docstring"),
-                imports=d.get("imports", []),
-            )
-        elif t == "commit":
-            return CommitChunk(
-                content=d["content"],
-                commit_hash=d["commit_hash"],
-                author=d["author"],
-                date=d["date"],
-                files_changed=d.get("files_changed", []),
-                diff_summary=d.get("diff_summary", ""),
-            )
-        elif t == "pr":
-            return PRChunk(
-                content=d["content"],
-                pr_number=d["pr_number"],
-                title=d["title"],
-                state=d["state"],
-                author=d["author"],
-                labels=d.get("labels", []),
-                files_changed=d.get("files_changed", []),
-                url=d["url"],
-            )
-        raise ValueError(f"Unknown chunk_type: {t}")
+        if t != "code":
+            raise ValueError(f"Unknown chunk_type: {t}")
+        return CodeChunk(
+            content=d["content"],
+            file_path=d["file_path"],
+            language=d["language"],
+            start_line=d["start_line"],
+            end_line=d["end_line"],
+            symbol_name=d.get("symbol_name"),
+            symbol_type=d.get("symbol_type"),
+            docstring=d.get("docstring"),
+            imports=d.get("imports", []),
+        )

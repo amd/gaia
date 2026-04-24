@@ -2,16 +2,14 @@
 # SPDX-License-Identifier: MIT
 
 """
-GAIA Code Index — semantic search over codebases, git history, and PRs.
+GAIA Code Index — semantic search over source-code repositories.
 """
 
 from gaia.code_index.sdk import (
     CodeChunk,
     CodeIndexConfig,
     CodeIndexSDK,
-    CommitChunk,
     IndexResult,
-    PRChunk,
     SearchResult,
 )
 
@@ -19,8 +17,6 @@ __all__ = [
     "CodeIndexSDK",
     "CodeIndexConfig",
     "CodeChunk",
-    "CommitChunk",
-    "PRChunk",
     "SearchResult",
     "IndexResult",
 ]

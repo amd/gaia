@@ -1,19 +1,32 @@
 ---
-title: Code Index SDK
-description: API reference for the CodeIndexSDK — semantic search over repositories, git history, and pull requests.
+title: "Code Index SDK"
+description: "API reference for CodeIndexSDK and the CodeIndexToolsMixin agent integration."
+icon: "magnifying-glass-code"
 ---
+
+<Info>
+  **Source Code:** [`src/gaia/code_index/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/code_index/sdk.py), [`src/gaia/code_index/parsers.py`](https://github.com/amd/gaia/blob/main/src/gaia/code_index/parsers.py), and [`src/gaia/agents/code_index/tools/mixin.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code_index/tools/mixin.py)
+</Info>
+
+<Note>
+  **Looking for usage docs?** See the [Code Index guide](/guides/code-index) for CLI walkthroughs and architecture overview.
+</Note>
+
+`CodeIndexSDK` indexes **repository files** (no git history, no PRs) using Lemonade Server embeddings and FAISS for vector similarity search. The SDK is exposed to agents via `CodeIndexToolsMixin`, which is already composed into the built-in `CodeAgent`.
 
 ## Installation
 
 ```bash
-pip install faiss-cpu   # or faiss-gpu for GPU support
-# Included in:
-pip install "gaia[code-index]"
+uv pip install -e '.[rag]'
+```
+
+FAISS and numpy live under the `[rag]` extras. If they're missing the SDK raises:
+
+```
+code_index dependencies missing. Install with: pip install -e '.[rag]'
 ```
 
 ## CodeIndexConfig
-
-Configuration dataclass for `CodeIndexSDK`.
 
 ```python
 from gaia.code_index.sdk import CodeIndexConfig
@@ -25,9 +38,6 @@ config = CodeIndexConfig(
     chunk_overlap=50,
     embedding_model="nomic-embed-text-v2-moe-GGUF",
     cache_dir="~/.gaia/code_index",
-    index_git_history=True,
-    index_prs=False,
-    max_commits=1000,
     embedding_base_url=None,
 )
 ```
@@ -40,14 +50,9 @@ config = CodeIndexConfig(
 | `chunk_overlap` | `int` | `50` | Token overlap between chunks |
 | `embedding_model` | `str` | `"nomic-embed-text-v2-moe-GGUF"` | Lemonade embedding model |
 | `cache_dir` | `str` | `"~/.gaia/code_index"` | Cache directory |
-| `index_git_history` | `bool` | `True` | Include git commits |
-| `index_prs` | `bool` | `False` | Include GitHub PRs |
-| `max_commits` | `int` | `1000` | Max commits to index |
 | `embedding_base_url` | `Optional[str]` | `None` | Custom Lemonade base URL |
 
 ## CodeIndexSDK
-
-Main SDK class for indexing and searching.
 
 ```python
 from gaia.code_index.sdk import CodeIndexSDK
@@ -55,117 +60,93 @@ from gaia.code_index.sdk import CodeIndexSDK
 sdk = CodeIndexSDK(config)
 ```
 
-### Methods
+### `index_repository() -> IndexResult`
 
-#### `index_repository() -> IndexResult`
-
-Scan the repository, parse source files, generate embeddings, and save a FAISS index.
+Discover source files, parse them, embed via Lemonade, and persist a FAISS index. Re-runs are incremental — unchanged files (matched by SHA-256) reuse their existing embeddings.
 
 ```python
 result = sdk.index_repository()
-print(f"Files: {result.files_indexed}, Chunks: {result.chunks_created}")
-if result.commits_indexed:
-    print(f"Commits: {result.commits_indexed}")
+print(f"Files: {result.files_indexed}, "
+      f"Chunks: {result.chunks_created}, "
+      f"Took: {result.duration_seconds:.1f}s")
 ```
 
-#### `search(query, scope="all", top_k=10) -> List[SearchResult]`
-
-Embed the query and return the most similar chunks.
+### `search(query, scope="all", top_k=10) -> List[SearchResult]`
 
 ```python
 results = sdk.search("error handling in agent tools", top_k=5)
 for r in results:
-    print(f"[{r.score:.3f}] {r.chunk.file_path}:{r.chunk.start_line}")
+    print(f"[{r.score:.3f}] {r.chunk.file_path}:{r.chunk.start_line} "
+          f"— {r.chunk.symbol_name or '?'}")
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `query` | `str` | — | Natural language or code query |
-| `scope` | `str` | `"all"` | Filter: `"all"`, `"code"`, `"commit"`, `"pr"` |
+| `scope` | `str` | `"all"` | `"all"` or `"code"` (reserved for future filters) |
 | `top_k` | `int` | `10` | Number of results |
 
-#### `get_status() -> Dict`
+L2 distance is converted to a similarity score in `[0, 1]` via `1 / (1 + dist)`.
 
-Return index statistics.
+### `get_status() -> Dict`
 
 ```python
 status = sdk.get_status()
-# {"indexed": True, "total_chunks": 1234, "embedding_model": "...", ...}
+# {
+#   "indexed": True,
+#   "repo_path": "/abs/path",
+#   "embedding_model": "nomic-embed-text-v2-moe-GGUF",
+#   "total_chunks": 1234,
+#   "code_chunks": 1234,
+#   "files_tracked": 312,
+#   "created_at": 1714000000.0,
+#   "cache_path": "/Users/me/.gaia/code_index/<hash>"
+# }
 ```
 
-#### `clear_index()`
+### `clear_index()`
 
-Remove the FAISS index and metadata from the cache.
+Removes the FAISS index and metadata for this repo from the cache.
 
 ```python
 sdk.clear_index()
 ```
 
-## Data Types
+## Data types
 
 ### CodeChunk
 
-A semantic chunk of source code.
-
 | Field | Type | Description |
 |-------|------|-------------|
-| `content` | `str` | Source code text |
-| `file_path` | `str` | Relative path to file |
+| `content` | `str` | Source text |
+| `file_path` | `str` | Path relative to repo root |
 | `language` | `str` | Detected language |
 | `start_line` | `int` | First line (1-indexed) |
 | `end_line` | `int` | Last line |
-| `symbol_name` | `Optional[str]` | Function/class name |
-| `symbol_type` | `Optional[str]` | `"function"`, `"class"`, etc. |
+| `symbol_name` | `Optional[str]` | Function / class name |
+| `symbol_type` | `Optional[str]` | `"function"`, `"class"`, … |
 | `docstring` | `Optional[str]` | Extracted docstring |
-
-### CommitChunk
-
-A git commit as a searchable chunk.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `content` | `str` | Formatted commit text |
-| `commit_hash` | `str` | Full SHA |
-| `author` | `str` | Author name |
-| `date` | `str` | ISO 8601 date |
-| `files_changed` | `List[str]` | Files in the commit |
-| `diff_summary` | `str` | Commit message |
-
-### PRChunk
-
-A GitHub pull request as a searchable chunk.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `content` | `str` | Formatted PR text |
-| `pr_number` | `int` | PR number |
-| `title` | `str` | PR title |
-| `state` | `str` | `"open"`, `"closed"`, `"merged"` |
-| `author` | `str` | Author login |
-| `url` | `str` | GitHub URL |
-| `labels` | `List[str]` | Label names |
-| `body` | `str` | PR description |
+| `imports` | `List[str]` | Imports parsed from the file |
 
 ### SearchResult
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `chunk` | `CodeChunk \| CommitChunk \| PRChunk` | The matched chunk |
-| `score` | `float` | Similarity score in [0, 1] |
-| `result_type` | `str` | `"code"`, `"commit"`, or `"pr"` |
+| `chunk` | `CodeChunk` | The matched chunk |
+| `score` | `float` | Similarity score in `[0, 1]` (higher is better) |
+| `result_type` | `str` | Currently always `"code"` |
 
 ### IndexResult
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `files_indexed` | `int` | Files successfully parsed |
-| `chunks_created` | `int` | Total chunks embedded |
-| `commits_indexed` | `int` | Git commits indexed (0 if disabled) |
-| `prs_indexed` | `int` | Pull requests indexed (0 if disabled) |
+| `files_indexed` | `int` | Files newly parsed in this run |
+| `chunks_created` | `int` | Total chunks in the resulting index (reused + new) |
+| `duration_seconds` | `float` | Wall-clock time for the run |
 
 ## Parsers
 
-The `gaia.code_index.parsers` module provides low-level parsing utilities.
+`gaia.code_index.parsers` provides language detection and symbol-aware chunking.
 
 ```python
 from gaia.code_index.parsers import (
@@ -179,52 +160,67 @@ from gaia.code_index.parsers import (
 # Detect language from filename
 lang = detect_language("agent.py")  # "python"
 
-# Check if a file is binary
-is_binary_file("/path/to/file")  # True/False
-
-# Parse a Python file using AST
+# Parse a Python file with the AST
 chunks = parse_python_file("agent.py", source_code)
 
-# Parse other languages using regex
+# Parse JS/TS/Go/Rust/Java/C/C++ via regex
 chunks = parse_generic_file("agent.ts", source_code, "typescript")
 
 # High-level dispatcher
 chunks = chunk_code_file("agent.go", source_code, max_size_mb=1.0)
 ```
 
-## GitIndexer
+## Agent integration: CodeIndexToolsMixin
 
-Extracts commit history and pull requests.
+The mixin lives at `gaia.agents.code_index.tools.mixin.CodeIndexToolsMixin`. It exposes four `@tool`-decorated methods through `register_code_index_tools()`:
 
-```python
-from gaia.code_index.git import GitIndexer
+| Tool | Description |
+|------|-------------|
+| `index_codebase(repo_path="")` | Build / refresh the FAISS index |
+| `search_code_index(query, scope="all", top_k=10)` | Semantic search |
+| `get_index_status()` | Report indexed state, chunk counts, embedding model, cache path |
+| `clear_code_index()` | Remove the cached index |
 
-indexer = GitIndexer(config)
+`CodeAgent` already composes this mixin, so `gaia-code index chat` and any `CodeAgent` instance get the tools for free.
 
-# Get commits (requires git)
-commits = indexer.get_commits()  # List[CommitChunk]
-
-# Get PRs (requires gh CLI)
-prs = indexer.get_pull_requests()  # List[PRChunk]
-```
-
-## CodeIndexAgent
-
-The `CodeIndexAgent` provides semantic code search tools as a dedicated agent.
+### Composing onto a custom Python agent
 
 ```python
-from gaia.agents.code_index.agent import CodeIndexAgent
+from gaia.agents.base.agent import Agent
+from gaia.agents.code_index.tools.mixin import CodeIndexToolsMixin
 
-agent = CodeIndexAgent(repo_path="/path/to/repo")
-agent.process_query("How does authentication work?")
+class MyResearchAgent(CodeIndexToolsMixin, Agent):
+    def __init__(self, repo_path: str = "."):
+        super().__init__()
+        self._init_code_index_state(repo_path=repo_path)
+
+    def _register_tools(self):
+        super()._register_tools()
+        self.register_code_index_tools()
 ```
 
-Available tools (registered via `@tool` decorator):
+State is initialised lazily — calling `_init_code_index_state` is optional but recommended so the agent honours the repo path you intended.
 
-| Tool name | Description |
-|-----------|-------------|
-| `index_codebase` | Index a repository |
-| `search_code_index` | Semantic search |
-| `code_index_status` | Index statistics |
-| `clear_code_index` | Remove cached index |
-| `search_git_history` | Git log text search |
+### Opting in from a YAML-manifest agent
+
+`code_index` is registered in `KNOWN_TOOLS` ([`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)), so a manifest can list it directly:
+
+```yaml
+name: my_research_agent
+class_path: my_pkg.agent:MyResearchAgent
+tools:
+  - code_index   # composes CodeIndexToolsMixin
+  - file_search
+```
+
+## Privacy and safety
+
+- All embeddings are generated locally by Lemonade Server.
+- Sensitive filenames are skipped during discovery: `.env`, `.env.*`, SSH private keys, `*.pem`, `*.key`, `*.pfx`, `*.p12`, `*.jks`, `*.keystore`.
+- The SDK uses `gaia.security.PathValidator` to keep file reads scoped to the configured `repo_path`, and the `index_codebase` tool refuses any `repo_path` that isn't a sub-path of the agent's original root.
+
+## Roadmap
+
+- [#869](https://github.com/amd/gaia/issues/869) — MCP server wrapper exposing the index to external code assistants.
+- [#870](https://github.com/amd/gaia/issues/870) — Multi-repo indexing in a single namespace.
+- [#871](https://github.com/amd/gaia/issues/871) — Verilog / VHDL parsers.
