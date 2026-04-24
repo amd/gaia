@@ -12,17 +12,17 @@ Full gap analysis identified 9 feature groups across 3 tiers.
 
 | # | Feature | Status | Commit | Notes |
 |---|---------|--------|--------|-------|
-| 1 | Supervisor Agent Integration | **complete** | - | New node type, supervisor slots, decision UI, default supervisors between stages |
-| 2 | Loop Block Component | **complete** | - | Loop paths, condition config, iteration counter, progress bar, near-limit warning |
-| 3 | Conditional Gates | **complete** | - | Decision gates, branch paths, quality badges, pass/fail visualization |
+| 1 | Supervisor Agent Integration | **complete** | `ef98904` | New node type, supervisor slots, decision UI, default supervisors between stages |
+| 2 | Loop Block Component | **complete** | `ef98904` | Loop paths, condition config, iteration counter, progress bar, near-limit warning |
+| 3 | Conditional Gates | **complete** | `ef98904` | Decision gates, branch paths, quality badges, pass/fail visualization |
 
 ### Tier 2 - Workspace UX (must-have for usability)
 
 | # | Feature | Status | Commit | Notes |
 |---|---------|--------|--------|-------|
-| 4 | Canvas Navigation | pending | - | Zoom/pan, mini-map, grid/snap |
-| 5 | Canvas Operations | pending | - | Undo/redo, multi-select, resizing, export |
-| 6 | Execution View | pending | - | Split-pane, output panel, timeline |
+| 4 | Canvas Navigation | **complete** | `ef98904` | Zoom/pan, mini-map, grid/snap |
+| 5 | Canvas Operations | **complete** | `ef98904` | Undo/redo, multi-select, resizing, export |
+| 6 | Execution View | **complete** | `ef98904` | Split-pane, output panel, timeline |
 
 ### Tier 3 - Advanced Features (post-v1)
 
@@ -41,7 +41,9 @@ Full gap analysis identified 9 feature groups across 3 tiers.
 - Implementation tasks created: #34-#40
 - Starting Tier 1 implementation: Supervisor Agent Integration
 
-### Tier 1 Completion (2026-04-24)
+### Tier 1 & 2 Completion (2026-04-24)
+
+**Commit:** `ef98904` - feat(ui): add supervisor agents, decision gates, loop blocks, and workspace tools
 
 **Types updated** (`src/gaia/apps/webui/src/types/index.ts`):
 - Added `CanvasNodeType`: 'supervisor' | 'gate' | 'loop'
@@ -57,6 +59,8 @@ Full gap analysis identified 9 feature groups across 3 tiers.
 
 **Store updated** (`pipelineCanvasStore.ts`):
 - Added `addSupervisorBetweenStages()`, `addGateBetweenStages()`, `addLoopBlock()` actions
+- Added Tier 2: `setZoom()`, `setPan()`, `resetView()`, `undo()`, `redo()`, `pushHistory()`
+- Added Tier 2: `toggleNodeSelection()`, `clearSelection()`, `setShowGrid()`, `setSnapToGrid()`
 - Enhanced `resetCanvas()` to include default supervisors and gates between stages
 - Enhanced `applyExecutionState()` to handle quality scores, supervisor decisions, gate pass/fail
 
@@ -71,6 +75,10 @@ Full gap analysis identified 9 feature groups across 3 tiers.
 - ~300+ lines of new styles for supervisor, gate, loop components
 - Pipeline Blocks section styling in palette
 - Pulse animation for near-limit loop blocks
+- Grid background, zoom controls, active button states
 
 **Canvas toolbar updated** (`PipelineCanvas.tsx`):
 - Shows supervisor, gate, loop counts in toolbar stats
+- Added undo/redo, zoom in/out, fit-to-view, grid toggle buttons
+- Added wheel zoom and click-drag pan handlers
+- Added transform wrapper for zoom/pan
