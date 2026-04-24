@@ -28,8 +28,8 @@ Full gap analysis identified 9 feature groups across 3 tiers.
 
 | # | Feature | Status | Commit | Notes |
 |---|---------|--------|--------|-------|
-| 7 | Execution Replay & History | **complete** | `TODO` | Backend API, ExecutionHistory component, History tab |
-| 8 | Template Marketplace | partial | `TODO` | Backend versioning API complete, UI pending |
+| 7 | Execution Replay & History | **complete** | `9a85250` | Backend API, ExecutionHistory component, History tab |
+| 8 | Template Marketplace | partial | `9a85250` | Backend versioning API complete, UI pending |
 | 9 | Performance Dashboard | pending | - | Timing, bottlenecks, resources |
 
 ## Progress Log

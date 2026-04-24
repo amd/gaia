@@ -25,9 +25,10 @@ The Pipeline Canvas is accessible from the Agent UI via the Pipeline Runner comp
 2. Open the Pipeline Runner from the sidebar
 3. Switch to the **Canvas** tab (Layers icon)
 
-The canvas view provides two tabs:
+The canvas view provides three tabs:
 - **Canvas** - Visual drag-and-drop pipeline builder
-- **Log** - Original form-based pipeline configuration and execution log
+- **Log View** - Original form-based pipeline configuration and execution log
+- **History** - Past pipeline executions with replay and delete
 
 ## Pipeline Stages
 
@@ -191,3 +192,13 @@ Controls the maximum number of iterations per stage (1-10). Higher values allow 
 ### Session Selection
 
 The canvas requires an active chat session for pipeline execution. Sessions are managed through the chat interface and appear in the dropdown.
+
+### Execution History
+
+The **History** tab provides a log of all past pipeline runs:
+
+- **Execution list** - Shows status icons, task description, duration, quality scores, and loop count
+- **Expandable details** - Click any execution to see pipeline ID, session, quality scores per iteration, and agents used
+- **Replay** - Re-run a previous execution with the same configuration (pre-fills the task description)
+- **Delete** - Remove an execution from history
+- **Refresh** - Reload the execution list from the server
