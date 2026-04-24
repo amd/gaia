@@ -1,0 +1,544 @@
+{
+  "run_id": "eval-20260424-221542",
+  "timestamp": "2026-04-24T22:34:58.204665+00:00",
+  "config": {
+    "backend_url": "http://localhost:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0
+  },
+  "summary": {
+    "total_scenarios": 4,
+    "passed": 3,
+    "failed": 1,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 0.75,
+    "judged_pass_rate": 0.75,
+    "avg_score": 8.55,
+    "by_category": {
+      "context_retention": {
+        "passed": 3,
+        "failed": 1,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 8.5525
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "conversation_summary",
+      "status": "PASS",
+      "overall_score": 9.8,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey what was Q3 revenue?",
+          "agent_response": "According to `bb4aa775dc9b_acme_q3_report.md`, Q3 2025 revenue was **$14.2 million**, which represents a strong **+23% increase** compared to Q3 2024's $11.5 million.\n\nThe report also notes that Widget Pro X was the top product at $8.1 million, and Jane Smith projects **15–18% growth** for Q4 driven by enterprise segment expansion. What part of this report should we dig into next—the regional breakdown, product performance, or maybe those Q4 projections?",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified Q3 revenue as $14.2 million from the indexed document. Used RAG query_specific_file tool appropriately. Response exceeded expectations by also volunteering YoY growth and CEO outlook. Minor efficiency deduction for two-step tool chain (index then query).",
+          "performance": {
+            "tokens_per_second": 109.9,
+            "time_to_first_token": 0.557,
+            "input_tokens": 1355,
+            "output_tokens": 510,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "how does that compare to last year?",
+          "agent_response": "As noted before, Q3 2025 revenue of **$14.2 million** compares favorably to last year's Q3 2024 revenue of **$11.5 million**, showing a significant **+23% increase**.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly recalled both the 23% YoY growth figure and the $11.5M Q3 2024 baseline from conversation context without needing a RAG lookup. Efficient single-step response with perfect factual accuracy.",
+          "performance": {
+            "tokens_per_second": 112.6,
+            "time_to_first_token": 0.121,
+            "input_tokens": 154,
+            "output_tokens": 291,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "what does the CEO think about Q4?",
+          "agent_response": "According to `bb4aa775dc9b_acme_q3_report.md`, the company projects Q4 growth of **15–18%**, fueled primarily by **enterprise segment expansion**. Three major product launches are scheduled for November 2025: Widget Pro X v2.1, Gadget Plus integration with Salesforce, and a Mobile app for Android in December 2025. Net Promoter Score improved to **62** in Q3, up from 54 in Q2.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly stated the 15-18% Q4 growth projection and enterprise segment expansion driver, matching ground truth. Tool selection score slightly reduced as the information was already in context from Turn 1. Otherwise accurate and complete.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "which document has all this info?",
+          "agent_response": "All of that information—the Q3 revenue figures, the CEO's projected growth rate for Q4, and the details on upcoming products—comes exclusively from the report titled `bb4aa775dc9b_acme_q3_report.md`.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified acme_q3_report.md as the sole source document. Response was concise and precise without requiring a tool lookup.",
+          "performance": {
+            "tokens_per_second": 112.4,
+            "time_to_first_token": 0.224,
+            "input_tokens": 450,
+            "output_tokens": 187,
+            "flags": []
+          }
+        },
+        {
+          "turn": 5,
+          "user_message": "summarize what you have told me so far",
+          "agent_response": "Here's a quick rundown: **Q3 Revenue:** $14.2 million, a **+23% increase** compared to $11.5 million in Q3 2024. **CEO Q4 Outlook:** Projects **15–18% growth** driven by enterprise segment expansion. **Source:** All from `bb4aa775dc9b_acme_q3_report.md`.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly recalled ALL THREE required facts: Q3 revenue $14.2M, YoY growth 23% from $11.5M baseline, and CEO's projected 15-18% Q4 growth. All ground truth facts present and correctly stated. Excellent context retention across the full 5-turn conversation.",
+          "performance": {
+            "tokens_per_second": 111.5,
+            "time_to_first_token": 0.107,
+            "input_tokens": 83,
+            "output_tokens": 702,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 5,
+        "estimated_usd": 0.81
+      },
+      "elapsed_s": 447.56210923194885,
+      "category": "context_retention",
+      "performance_summary": {
+        "avg_tokens_per_second": 111.6,
+        "avg_time_to_first_token": 0.252,
+        "total_input_tokens": 2042,
+        "total_output_tokens": 1690,
+        "flags": [
+          "no_stats"
+        ]
+      }
+    },
+    {
+      "scenario_id": "cross_turn_file_recall",
+      "status": "FAIL",
+      "overall_score": 7.52,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey, what documents do you have loaded?",
+          "agent_response": "Want me to elaborate? That comparison covers **pricing**, **integrations**, and overall **user satisfaction** between StreamLine and ProFlow—which aspect should we dig into next?",
+          "agent_tools": [
+            "index_documents",
+            "list_indexed_documents",
+            "summarize_document"
+          ],
+          "scores": {
+            "correctness": 8,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 7,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 8.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent called list_indexed_documents (correct) and then summarize_document (extra). Response indirectly confirmed the document exists by describing its content (StreamLine vs ProFlow comparison on pricing, integrations, user satisfaction), but never explicitly named the document file. Expected behavior was to list/indicate an indexed document — this is met, albeit indirectly.",
+          "performance": {
+            "tokens_per_second": 110.4,
+            "time_to_first_token": 4.951,
+            "input_tokens": 16858,
+            "output_tokens": 253,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "how much do the two products cost?",
+          "agent_response": "Since you want to dig deeper into the comparison, here are some other key differences between StreamLine and ProFlow pulled directly from the document:\n\n### Integrations & Ecosystem\n*   **ProFlow** has a much larger ecosystem with **25 native integrations**...\n*   **StreamLine** supports **10 native integrations**...\n\n### User Ratings & Mobile Support\n*   **ProFlow** scores higher at **4.7 out of 5 stars**, compared to StreamLine's average rating of **4.2 out of 5 stars**.\n*   **ProFlow** offers both iOS and Android apps, whereas **StreamLine** is currently limited to iOS only.\n\nBoth products offer a **14-day free trial**. Let me know if any specific feature or integration caught your eye!",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 8,
+            "context_retention": 8,
+            "completeness": 0,
+            "efficiency": 8,
+            "personality": 5,
+            "error_recovery": 10
+          },
+          "overall_score": 4.75,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "Agent called query_specific_file on the correct document and retrieved chunks explicitly containing pricing data ($49/month for StreamLine, $30/month price premium implying $79 for ProFlow). However, the generated response entirely ignored the pricing information and re-discussed integrations and ratings instead. The expected answer was 'StreamLine $49/month, ProFlow $79/month' — neither price appears in the response, making correctness=0.",
+          "performance": {
+            "tokens_per_second": 108.8,
+            "time_to_first_token": 0.864,
+            "input_tokens": 2181,
+            "output_tokens": 532,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "which one is better value for money?",
+          "agent_response": "The question of **better value** really depends on what you prioritize—budget or breadth of functionality.\n\n### Budget Focus: StreamLine ($49/month)\nIf your primary concern is keeping costs low, **StreamLine** wins easily at $49 per month. It offers solid core functionality and still maintains a respectable user rating of 4.2 out of 5 stars.\n\n### Feature & UX Focus: ProFlow ($79/month)\nIf you have a more complex workflow and can absorb the extra $30 monthly premium, **ProFlow** provides superior value: 25 native integrations vs 10, 4.7/5 stars vs 4.2/5 stars, and iOS+Android vs iOS-only mobile.\n\n> **The Verdict:** Choose **StreamLine** if budget is paramount; choose **ProFlow** if extensive integration capabilities and top-tier user satisfaction are non-negotiable requirements.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 6,
+            "error_recovery": 10
+          },
+          "overall_score": 9.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly synthesized all three required factors: pricing ($49 vs $79), ratings (4.2 vs 4.7), and integrations (10 vs 25), and grounded them in a reasoned value comparison. No hallucinated facts — all data points come from the document. Minor personality deduction for unsolicited emojis and slight verbosity.",
+          "performance": {
+            "tokens_per_second": 108.3,
+            "time_to_first_token": 0.872,
+            "input_tokens": 2186,
+            "output_tokens": 629,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "In Turn 2, the agent retrieved chunks from the document that explicitly contained pricing data ($49/month for StreamLine, $79 implied from $30 premium), but the response generation ignored these facts and instead recycled integrations/ratings content from the Turn 1 summarize_document call. The agent appears to anchor on its prior summary rather than attending to the specific question asked.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "src/gaia/agents/chat/agent.py",
+        "description": "Add an explicit instruction in the system prompt to always directly answer the user's literal question first, before adding supplementary context. Something like: 'When the user asks a specific question (e.g., about price, a date, a name), answer that question directly and precisely before elaborating. Do not substitute a related topic for the one actually asked about.'"
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 266.29917311668396,
+      "category": "context_retention",
+      "performance_summary": {
+        "avg_tokens_per_second": 109.2,
+        "avg_time_to_first_token": 2.229,
+        "total_input_tokens": 21225,
+        "total_output_tokens": 1414,
+        "flags": [
+          "high_latency",
+          "token_explosion"
+        ]
+      }
+    },
+    {
+      "scenario_id": "multi_doc_context",
+      "status": "PASS",
+      "overall_score": 9.25,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "How many PTO days do first-year employees get?",
+          "agent_response": "First-year employees receive **15 paid time off (PTO) days**. That figure comes from the employee handbook's policy details.",
+          "agent_tools": [
+            "rag_query"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 8,
+            "completeness": 9,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.05,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved and stated 15 PTO days, matching the ground truth from employee_handbook.md. Response was direct and accurate with no sycophancy. Context retention scored 8 as this was the first turn with no prior turns to retain.",
+          "performance": {
+            "tokens_per_second": 108.3,
+            "time_to_first_token": 0.872,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What was the Q3 revenue?",
+          "agent_response": "The Q3 revenue was **$14.2 million**, representing a 23% increase over Q3 2024. The report also details top product performance, future outlook, and regional breakdown. Is there anything specific you want to dive into?",
+          "agent_tools": [
+            "rag_query"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 9,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.35,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved $14.2 million from acme_q3_report.md, matching ground truth exactly. Response was thorough with additional context. Minor personality deduction for closing with an offer-to-help question which is mildly sycophantic.",
+          "performance": {
+            "tokens_per_second": 108.3,
+            "time_to_first_token": 0.872,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Which document did each of those answers come from?",
+          "agent_response": "The facts were pulled from two different documents: the PTO days came from employee_handbook.md, and all Q3 data came from acme_q3_report.md (internally cached as bb4aa775dc9b_acme_q3_report.md).",
+          "agent_tools": [
+            "context_recall"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.35,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly attributed PTO to employee_handbook.md and Q3 revenue to acme_q3_report.md without confusing the documents. Minor correctness deduction for citing the internal cached filename rather than the canonical name. Context retention was excellent — recalled both prior answers and their sources accurately.",
+          "performance": {
+            "tokens_per_second": 108.3,
+            "time_to_first_token": 0.872,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 232.01734685897827,
+      "category": "context_retention",
+      "performance_summary": {
+        "avg_tokens_per_second": 108.3,
+        "avg_time_to_first_token": 0.872,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "flags": []
+      }
+    },
+    {
+      "scenario_id": "pronoun_resolution",
+      "status": "PASS",
+      "overall_score": 9.17,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey, how many PTO days do new employees get in their first year?",
+          "agent_response": "According to employee_handbook.md, based on Section 4: Time Off Policy:\n\nNew employees in their first year are entitled to **15 days** of paid time off (PTO). This accrual begins from their start date at a rate of 1.25 days per month.",
+          "agent_tools": [
+            "rag_search"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 8,
+            "completeness": 9,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 8
+          },
+          "overall_score": 8.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved and stated the exact figure of 15 days from the handbook, including the accrual rate. Answer directly matches ground truth.",
+          "performance": {
+            "tokens_per_second": 112.4,
+            "time_to_first_token": 0.131,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "what about remote work - does it have a policy too?",
+          "agent_response": "According to employee_handbook.md, here is a breakdown of the remote work policy:\n\n### Standard Remote Work Policy\nFor **full-time employees**, you may work remotely up to **3 days per week**, but this arrangement must receive manager approval and remains subject to business needs.\n\n### Fully Remote Arrangements\nIf an employee wishes to work fully remotely (5 days per week), it requires **VP-level approval** and is reviewed on a case-by-case basis.",
+          "agent_tools": [
+            "rag_search"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 9,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 8
+          },
+          "overall_score": 9.2,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resolved the pronoun 'it' as referring to the handbook and accurately stated both the 3-day/week standard limit with manager approval and the VP-level approval requirement for fully remote — matching ground truth exactly.",
+          "performance": {
+            "tokens_per_second": 112.4,
+            "time_to_first_token": 0.131,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Are contractors eligible for those benefits?",
+          "agent_response": "According to **employee_handbook.md**, contractors are explicitly stated as not being eligible for standard company benefits programs because they are engaged through a service agreement rather than direct employment.\n\nSpecifically:\n\n* **General Benefits:** Contractors/Consultants are listed as \"NOT eligible for company benefits programs.\"\n* **EAP Access:** They are also specifically excluded from the Employee Assistance Program (EAP) because they are not classified as direct employees.",
+          "agent_tools": [
+            "rag_search"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 8
+          },
+          "overall_score": 9.35,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resolved 'those benefits' as referring to the handbook's benefits section and unambiguously stated contractors are NOT eligible — matching ground truth and avoiding the critical failure condition.",
+          "performance": {
+            "tokens_per_second": 112.4,
+            "time_to_first_token": 0.131,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 209.3344807624817,
+      "category": "context_retention",
+      "performance_summary": {
+        "avg_tokens_per_second": 112.4,
+        "avg_time_to_first_token": 0.131,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "flags": []
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.81
+  },
+  "performance": {
+    "avg_tokens_per_second": 110.4,
+    "avg_time_to_first_token": 0.871,
+    "total_input_tokens": 23267,
+    "total_output_tokens": 3104,
+    "scenarios_with_data": 4,
+    "flags": [
+      "high_latency",
+      "no_stats",
+      "token_explosion"
+    ]
+  }
+}

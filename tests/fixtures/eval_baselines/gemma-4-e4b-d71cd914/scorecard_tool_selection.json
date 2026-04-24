@@ -1,0 +1,401 @@
+{
+  "run_id": "eval-20260424-213347",
+  "timestamp": "2026-04-24T21:48:33.290101+00:00",
+  "config": {
+    "backend_url": "http://localhost:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0
+  },
+  "summary": {
+    "total_scenarios": 4,
+    "passed": 2,
+    "failed": 1,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 1,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 0.5,
+    "judged_pass_rate": 0.6666666666666666,
+    "avg_score": 7.77,
+    "by_category": {
+      "tool_selection": {
+        "passed": 2,
+        "failed": 1,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 1,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 7.773333333333333
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "known_path_read",
+      "status": "FAIL",
+      "overall_score": 6.67,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Please read eval/corpus/documents/acme_q3_report.md and tell me the Q3 revenue.",
+          "agent_response": "Looks like we hit a brick wall—the system is denying access to `eval/corpus/documents/acme_q3_report.md`. It seems that particular folder isn't within the allowed paths for me to read or query documents right now.\n\nIf you can provide a different path or confirm if there's another way I can get eyes on that report, let me know!",
+          "agent_tools": [
+            "query_specific_file",
+            "read_file"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 8,
+            "context_retention": 7,
+            "completeness": 2,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 5
+          },
+          "overall_score": 4.65,
+          "pass": false,
+          "failure_category": "BLOCKED_BY_ARCHITECTURE",
+          "reasoning": "Agent correctly used direct file access tools (query_specific_file then read_file) without calling search_file first — optimal tool selection. However both returned 'Access denied' because the worktree path is outside allowed paths. Agent could not state $14.2 million; correctness=0 triggers FAIL.",
+          "performance": {
+            "tokens_per_second": 110.2,
+            "time_to_first_token": 0.231,
+            "input_tokens": 500,
+            "output_tokens": 406,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Now what is the CEO's Q4 outlook?",
+          "agent_response": "According to bb4aa775dc9b_acme_q3_report.md, the CEO projects 15-18% growth for Q4 2025, driven by enterprise segment expansion and three new product launches scheduled for November.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 8,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 8.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly stated 15-18% growth driven by enterprise segment expansion, matching ground truth exactly. Used indexed internal copy (query_specific_file on internal filename) after Turn 1 path was blocked. tool_selection=7 not 10 because it re-queried rather than answering from already-indexed context, but acceptable given Turn 1 failure.",
+          "performance": {
+            "tokens_per_second": 109.6,
+            "time_to_first_token": 0.542,
+            "input_tokens": 1359,
+            "output_tokens": 745,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The Agent UI backend restricts file access to allowed paths. The worktree eval corpus path is not in the allowed list, causing both query_specific_file and read_file to return 'Access denied' in Turn 1. The document was accessible via its indexed internal copy (bb4aa775dc9b_acme_q3_report.md), but the agent did not discover this fallback path in Turn 1, resulting in failure to answer the Q3 revenue question.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/ui/routers/files.py",
+        "description": "Add the eval corpus documents path to the Agent UI backend's allowed paths configuration, or configure the evaluation harness to use paths already within the allowed list. Alternatively, when query_specific_file returns access denied, the agent should automatically fall back to querying the indexed internal copy by document ID."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.53
+      },
+      "elapsed_s": 208.49635887145996,
+      "category": "tool_selection",
+      "performance_summary": {
+        "avg_tokens_per_second": 109.9,
+        "avg_time_to_first_token": 0.387,
+        "total_input_tokens": 1859,
+        "total_output_tokens": 1151,
+        "flags": []
+      }
+    },
+    {
+      "scenario_id": "multi_step_plan",
+      "status": "PASS",
+      "overall_score": 7.35,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Can you give me a quick HR briefing -- PTO policy, remote work rules, and whether contractors get benefits?",
+          "agent_response": "### HR Briefing Summary\n\nHere is a quick briefing on your questions, based on the indexed documents:\n\n#### 🌴 Paid Time Off (PTO) Policy\nThe handbook outlines different employee classifications that affect benefit eligibility:\n*   **Full-time employees**: Are eligible for **all benefits** described in the handbook.\n*   **Part-time employees**: Are eligible for **limited benefits** as described in Section 5.\n*   Specific details regarding accrued PTO days are not provided in these retrieved sections of the handbook.\n\n#### 💻 Remote Work Rules\nAcme Corp has clear guidelines for remote work:\n*   Employees must be available during core hours (**9:00 AM – 3:00 PM local time**).\n*   A secure and reliable internet connection is mandatory, along with compliance with all data security requirements when working remotely.\n*   The company is **not responsible** for home office expenses unless they have been specifically approved by HR.\n\n#### 🤝 Contractor Benefits Eligibility\nContractors are explicitly excluded from standard employee programs:\n*   Individuals classified as Contractors or Consultants are **NOT eligible for company benefits programs**.",
+          "agent_tools": [
+            "index_documents",
+            "query_documents"
+          ],
+          "scores": {
+            "correctness": 4,
+            "tool_selection": 7,
+            "context_retention": 7,
+            "completeness": 4,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 7
+          },
+          "overall_score": 5.8,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "Only 1 of 3 required facts was correctly stated. Contractors NOT eligible = correct. PTO: agent said '15-day details not provided' even though the chunk contained the data. Remote work: agent retrieved wrong section (core hours/security), missing the 3 days/week limit and manager/VP approval rules.",
+          "performance": {
+            "tokens_per_second": 108.5,
+            "time_to_first_token": 0.856,
+            "input_tokens": 2119,
+            "output_tokens": 1016,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Now add the Q3 financial highlight to that briefing.",
+          "agent_response": "### 💰 Q3 Financial Highlights\n\nHere is the updated briefing, incorporating Acme Corp's latest quarterly performance data:\n\n*   **Revenue Jump**: Total revenue reached **$14.2 million**, marking a substantial **+23% increase** compared to $11.5 million in Q3 2024.\n*   **Profitability**: Gross margin for Q3 stood at **68%**.\n*   **Customer Acquisition**: **47 new customers** onboarded during Q3.\n\n*(Note: The HR policies regarding PTO, remote work rules, and contractor benefits remain as previously detailed in employee_handbook.md.)*",
+          "agent_tools": [
+            "query_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 8,
+            "completeness": 9,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 7
+          },
+          "overall_score": 8.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly retrieved $14.2M Q3 revenue from acme_q3_report — exact match. Queried the right document. Context retention demonstrated by referencing the prior HR briefing. Minor deduction: did not attempt to fix incomplete Turn 1 facts.",
+          "performance": {
+            "tokens_per_second": 109.1,
+            "time_to_first_token": 0.561,
+            "input_tokens": 1362,
+            "output_tokens": 1127,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "Turn 1 RAG retrieval surfaced a chunk containing the 15-day PTO table but the model failed to extract the specific figure, instead reporting the detail was 'not provided'. The remote work policy chunk retrieved was from the wrong section (core hours/security), missing the 3-days/week limit and manager/VP approval rules from Section 7.",
+      "recommended_fix": {
+        "target": "rag_pipeline",
+        "file": "src/gaia/rag/sdk.py",
+        "description": "Issue separate targeted sub-queries per fact for multi-fact questions (e.g., 'PTO days accrual first year', 'remote work days per week approval', 'contractor benefits eligibility') rather than a single broad query, to ensure all relevant policy sections are retrieved and the model is not asked to synthesize across absent chunks."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.48
+      },
+      "elapsed_s": 239.9138491153717,
+      "category": "tool_selection",
+      "performance_summary": {
+        "avg_tokens_per_second": 108.8,
+        "avg_time_to_first_token": 0.709,
+        "total_input_tokens": 3481,
+        "total_output_tokens": 2143,
+        "flags": []
+      }
+    },
+    {
+      "scenario_id": "no_tools_needed",
+      "status": "PASS",
+      "overall_score": 9.98,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey, what's the capital of France?",
+          "agent_response": "Paris. It’s got that effortless charm—a city built on romance and excellent pastries.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 10.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent answered 'Paris' directly with no tool calls (tools_used=0). Response is accurate, concise, and personality-forward. Perfect tool restraint for a general knowledge question.",
+          "performance": {
+            "tokens_per_second": 115.1,
+            "time_to_first_token": 0.122,
+            "input_tokens": 39,
+            "output_tokens": 72,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "ok quick math - what's 15% of 200?",
+          "agent_response": "30. Simple stuff like that doesn’t need an AI; it just needs basic brain function. But hey, happy to help with the heavy lifting if your calculator gives up!",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent answered '30' directly with no tools (tools_used=0). Arithmetic is correct. Personality docked 1 point for the slightly edge 'basic brain function' quip, though it remains direct and non-sycophantic.",
+          "performance": {
+            "tokens_per_second": 115.1,
+            "time_to_first_token": 0.072,
+            "input_tokens": 51,
+            "output_tokens": 93,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "tell me a fun fact about penguins",
+          "agent_response": "Penguins can actually dive deeper than any other bird species, sometimes reaching depths of over 500 feet while hunting fish! They are basically aquatic torpedoes with feathers.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 10.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent provided a factual penguin fact (Emperor penguins do dive >500 ft) without any tool calls (tools_used=0). Expected behavior fully matched. 'Aquatic torpedoes with feathers' is excellent GAIA voice.",
+          "performance": {
+            "tokens_per_second": 114.9,
+            "time_to_first_token": 0.09,
+            "input_tokens": 54,
+            "output_tokens": 83,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 233.81462287902832,
+      "category": "tool_selection",
+      "performance_summary": {
+        "avg_tokens_per_second": 115.0,
+        "avg_time_to_first_token": 0.095,
+        "total_input_tokens": 144,
+        "total_output_tokens": 248,
+        "flags": []
+      }
+    },
+    {
+      "scenario_id": "smart_discovery",
+      "status": "INFRA_ERROR",
+      "overall_score": 0.0,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What's the PTO policy for first-year employees? I need the exact number of days.",
+          "agent_response": "Sorry, I ran into an unexpected problem. This might be a temporary issue — try again in a moment.\n\n*Technical details: Unexpected response format from Lemonade Server: {'error': {'details': {'response': {'error': {'code': 400, 'message': 'request (16827 tokens) exceeds the available context size (4096 tokens), try increasing it', 'n_ctx': 4096, 'n_prompt_tokens': 16827, 'type': 'exceed_context_size_error'}}, 'status_code': 400}, 'message': 'llama-server request failed', 'type': 'backend_error'}}*",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 0,
+            "context_retention": 0,
+            "completeness": 0,
+            "efficiency": 0,
+            "personality": 0,
+            "error_recovery": 0
+          },
+          "overall_score": 0.0,
+          "pass": false,
+          "failure_category": "INFRA_ERROR",
+          "reasoning": "Lemonade Server is configured with ctx_size=4096 but the GAIA system prompt alone requires ~16827 tokens. Every request fails before the model can invoke any tools or generate an answer.",
+          "performance": {
+            "tokens_per_second": 157.8,
+            "time_to_first_token": 0.047,
+            "input_tokens": 25,
+            "output_tokens": 7,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What about the remote work policy?",
+          "agent_response": null,
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 0,
+            "context_retention": 0,
+            "completeness": 0,
+            "efficiency": 0,
+            "personality": 0,
+            "error_recovery": 0
+          },
+          "overall_score": 0.0,
+          "pass": false,
+          "failure_category": "INFRA_ERROR",
+          "reasoning": "Not executed — blocked by Turn 1 INFRA_ERROR. Same context overflow would have prevented any response.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        }
+      ],
+      "root_cause": "Lemonade Server running Gemma-4-E4B-it-GGUF is configured with ctx_size=4096, but the GAIA ChatAgent system prompt alone requires ~16827 prompt tokens (411% of capacity). Every chat request fails with 'exceed_context_size_error' before the model can invoke any tools or generate a response.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/llm/lemonade_manager.py",
+        "description": "Restart Lemonade Server with a larger context window (e.g., --ctx-size 32768) matching GAIA's DEFAULT_CONTEXT_SIZE. The running instance was started with ctx_size=4096 which is insufficient for the GAIA system prompt."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 203.12126684188843,
+      "category": "tool_selection",
+      "performance_summary": {
+        "avg_tokens_per_second": 157.8,
+        "avg_time_to_first_token": 0.047,
+        "total_input_tokens": 25,
+        "total_output_tokens": 7,
+        "flags": [
+          "no_stats"
+        ]
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 1.01
+  },
+  "performance": {
+    "avg_tokens_per_second": 122.9,
+    "avg_time_to_first_token": 0.309,
+    "total_input_tokens": 5509,
+    "total_output_tokens": 3549,
+    "scenarios_with_data": 4,
+    "flags": [
+      "no_stats"
+    ]
+  }
+}
