@@ -612,9 +612,11 @@ jobs:
           # empty and the app falls back to pulling from PyPI normally.
           WHEEL_MOUNTS=()
           if [ -n "${WHEEL_PATH}" ]; then
+            WHEEL_BASENAME=$(basename "${WHEEL_PATH}")
+            WHEEL_DIR=$(dirname "${WHEEL_PATH}")
             WHEEL_MOUNTS=(
-              -v "${WHEEL_PATH}:/work/gaia.whl:ro"
-              --env GAIA_LOCAL_WHEEL=/work/gaia.whl
+              -v "${WHEEL_DIR}:/work/wheels:ro"
+              --env "GAIA_LOCAL_WHEEL=/work/wheels/${WHEEL_BASENAME}"
             )
           fi
 
