@@ -987,9 +987,14 @@ async function installBackend(opts = {}) {
   const version = resolveBackendVersion(opts);
   // GAIA_LOCAL_WHEEL: CI-only. When set, install from the given wheel path
   // instead of pulling from PyPI. This breaks the circular dependency in
-  // release pipeline smoke tests that run before PyPI publish.
+  // release pipeline smoke tests that run before PyPI publish. The `[ui]`
+  // extras marker is preserved so the local install matches the PyPI path
+  // (fastapi, uvicorn, python-multipart, httpx, psutil) — otherwise the
+  // backend venv comes up missing every UI dep and /api/health never binds.
   const localWheel = process.env.GAIA_LOCAL_WHEEL || null;
-  const pipPackage = localWheel || `amd-gaia[ui]==${version}`;
+  const pipPackage = localWheel
+    ? `${localWheel}[ui]`
+    : `amd-gaia[ui]==${version}`;
 
   log("================================================");
   log("  Installing GAIA backend");

@@ -626,6 +626,7 @@ jobs:
             --security-opt apparmor=unconfined
             --ipc=host
             -v "${APPIMAGE_HOST}:/work/gaia.AppImage:ro"
+            # Expand to nothing if WHEEL_MOUNTS is empty (set -u compat)
             "${WHEEL_MOUNTS[@]+"${WHEEL_MOUNTS[@]}"}"
           )
 
