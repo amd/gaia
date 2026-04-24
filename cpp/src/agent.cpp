@@ -606,7 +606,12 @@ std::string summarizeUserInput(const std::vector<Message>& userMessages) {
             return it->content;
         }
     }
-    return userMessages.back().content;
+    // No USER-role message found — use the first message's content as a
+    // last resort (cosmetic only; validation above ensures input is non-empty).
+    for (const auto& m : userMessages) {
+        if (!m.content.empty()) return m.content;
+    }
+    return "";
 }
 } // namespace
 
@@ -617,8 +622,19 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
     bool anyNonEmpty = false;
     for (const auto& m : userMessages) {
-        if (m.parts.has_value() && !m.parts->empty()) { anyNonEmpty = true; break; }
         if (!m.content.empty()) { anyNonEmpty = true; break; }
+        if (m.parts.has_value()) {
+            // A parts vector counts as non-empty only if it has at least one
+            // IMAGE part or a TEXT part with non-empty text. An empty vector
+            // or a vector containing only empty-text stubs is rejected.
+            for (const auto& part : *m.parts) {
+                if (part.kind == ContentPart::Kind::IMAGE_URL) { anyNonEmpty = true; break; }
+                if (part.kind == ContentPart::Kind::TEXT && !part.text.empty()) {
+                    anyNonEmpty = true; break;
+                }
+            }
+        }
+        if (anyNonEmpty) break;
     }
     if (!anyNonEmpty) {
         throw std::invalid_argument("Agent::processQuery: all user messages are empty");

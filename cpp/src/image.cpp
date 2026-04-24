@@ -86,6 +86,11 @@ Image Image::fromBytes(std::vector<std::uint8_t> bytes, const std::string& mimeT
         mime = mimeType;
     } else {
         mime = detectImageMimeType(bytes.data(), bytes.size());
+        if (mime.empty()) {
+            throw std::invalid_argument(
+                "Image::fromBytes: unrecognized image format — "
+                "pass an explicit mimeType (png/jpeg/gif/webp/bmp)");
+        }
     }
     Image img;
     img.bytes_ = std::move(bytes);
@@ -112,37 +117,40 @@ static std::vector<std::uint8_t> readFileBytesSecure(const std::string& path) {
 #if defined(O_NOFOLLOW) && !defined(_WIN32)
     int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW);
     if (fd < 0) {
+        // ELOOP means the path is (or became) a symlink — surface as security rejection.
         throw std::runtime_error("Image::fromFile: cannot open file");
     }
+    // RAII guard — closes fd on any early-exit (exception or return).
+    struct FdGuard {
+        int fd;
+        ~FdGuard() noexcept { if (fd >= 0) ::close(fd); }
+    } fdGuard{fd};
+
     struct stat sb;
     if (::fstat(fd, &sb) != 0) {
-        ::close(fd);
         throw std::runtime_error("Image::fromFile: fstat failed");
     }
     if (!S_ISREG(sb.st_mode)) {
-        ::close(fd);
         throw std::invalid_argument("Image::fromFile: not a regular file (post-open)");
     }
     auto sz = static_cast<std::uintmax_t>(sb.st_size);
     if (sz == 0) {
-        ::close(fd);
         throw std::invalid_argument("Image::fromFile: empty file");
     }
     if (sz > static_cast<std::uintmax_t>(GAIA_MAX_IMAGE_BYTES)) {
-        ::close(fd);
         throw std::invalid_argument("Image::fromFile: file exceeds GAIA_MAX_IMAGE_BYTES");
     }
+    // Allocation after the cap check (≤ 20 MiB): vector ctor may throw
+    // std::bad_alloc; FdGuard ensures fd is closed even in that case.
     std::vector<std::uint8_t> bytes(static_cast<std::size_t>(sz));
     std::size_t total = 0;
     while (total < bytes.size()) {
         ssize_t n = ::read(fd, bytes.data() + total, bytes.size() - total);
         if (n <= 0) {
-            ::close(fd);
             throw std::runtime_error("Image::fromFile: read failed");
         }
         total += static_cast<std::size_t>(n);
     }
-    ::close(fd);
     return bytes;
 #else
     std::uintmax_t sz = fs::file_size(path, ec);
@@ -165,6 +173,11 @@ static std::vector<std::uint8_t> readFileBytesSecure(const std::string& path) {
 Image Image::fromFile(const std::string& path) {
     auto bytes = readFileBytesSecure(path);
     std::string mime = detectImageMimeType(bytes.data(), bytes.size());
+    if (mime.empty()) {
+        throw std::invalid_argument(
+            "Image::fromFile: unrecognized image format — "
+            "supported: png, jpeg, gif, webp, bmp");
+    }
     Image img;
     img.bytes_ = std::move(bytes);
     img.mimeType_ = std::move(mime);

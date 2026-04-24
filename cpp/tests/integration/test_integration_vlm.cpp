@@ -50,7 +50,13 @@ std::string testVlmModel() {
 int envInt(const char* name, int fallback) {
     const char* v = std::getenv(name);
     if (!v || !*v) return fallback;
-    try { return std::stoi(v); } catch (...) { return fallback; }
+    try {
+        return std::stoi(v);
+    } catch (const std::invalid_argument&) {
+        return fallback;   // non-numeric value — treat as unset
+    } catch (const std::out_of_range&) {
+        return fallback;   // value overflows int — treat as unset
+    }
 }
 
 int testVlmCtxSize()      { return envInt("GAIA_CPP_TEST_VLM_CTX", 32768); }

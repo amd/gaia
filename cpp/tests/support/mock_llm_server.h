@@ -145,11 +145,15 @@ private:
 
         server_->Post("/api/v1/chat/completions",
                       [this](const httplib::Request& req, httplib::Response& res) {
-                          ++requestCount_;
+                          // Store the body BEFORE incrementing requestCount_ so
+                          // that any observer polling requestCount() >= N is
+                          // guaranteed to find the corresponding body already
+                          // present in receivedBodies().
                           {
                               std::lock_guard<std::mutex> lk(mu_);
                               receivedBodies_.push_back(req.body);
                           }
+                          ++requestCount_;
                           QueuedResponse qr;
                           {
                               std::lock_guard<std::mutex> lk(mu_);

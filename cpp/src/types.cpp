@@ -12,8 +12,9 @@ namespace gaia {
 // ---- MIME Detection ----
 
 std::string detectImageMimeType(const std::uint8_t* data, std::size_t size) {
-    // All checks gated on size >= 12 before any offset-8 probe. Smaller
-    // buffers fall through to the default without OOB access.
+    // Buffers < 12 bytes cannot be safely probed for WebP (offset 8–11).
+    // Return "image/png" so callers treating these as padding/header stubs
+    // don't crash (AC-15e short-buffer safety contract).
     if (data == nullptr || size < 12) {
         return "image/png";
     }
@@ -40,7 +41,9 @@ std::string detectImageMimeType(const std::uint8_t* data, std::size_t size) {
     if (data[0] == 'B' && data[1] == 'M') {
         return "image/bmp";
     }
-    return "image/png";
+    // Unrecognized magic bytes on a full-sized buffer — return empty string.
+    // Callers must either supply an explicit mimeType or reject the input.
+    return {};
 }
 
 // ---- ContentPart ----
