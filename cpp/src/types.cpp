@@ -13,8 +13,13 @@ namespace gaia {
 
 std::string detectImageMimeType(const std::uint8_t* data, std::size_t size) {
     // Buffers < 12 bytes cannot be safely probed for WebP (offset 8–11).
-    // Return "image/png" so callers treating these as padding/header stubs
-    // don't crash (AC-15e short-buffer safety contract).
+    // Returning "image/png" for null/short buffers is the AC-15e contract:
+    // test fixtures call this function directly with 1/5/11-byte header stubs
+    // and assert the safe fallback. In practice, Image::fromBytes already rejects
+    // empty byte vectors before calling this, and Image::fromFile reads the full
+    // file first — so neither factory can produce a mislabeled Image via this
+    // path. Full-sized buffers (>= 12 bytes) with unrecognized magic return ""
+    // so callers throw with a clear message.
     if (data == nullptr || size < 12) {
         return "image/png";
     }
@@ -38,6 +43,8 @@ std::string detectImageMimeType(const std::uint8_t* data, std::size_t size) {
         return "image/webp";
     }
     // BMP: "BM"
+    // Note: "BM" is a 2-byte signature with false-positive potential (any data starting "BM...").
+    // Acceptable here because Image::fromBytes enforces an explicit whitelist and callers supply real image files.
     if (data[0] == 'B' && data[1] == 'M') {
         return "image/bmp";
     }

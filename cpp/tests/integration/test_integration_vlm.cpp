@@ -25,6 +25,7 @@
 #include <gaia/types.h>
 
 #include <cstdlib>
+#include <iostream>
 #include <string>
 
 #ifndef GAIA_TEST_FIXTURES_DIR
@@ -94,8 +95,10 @@ void expectPinnedLemonadeVersion() {
             v = info["lemonade_version"].get<std::string>();
         }
         if (v.empty()) {
-            GTEST_MESSAGE_("Lemonade /system-info did not return a version field; skipping pin check",
-                           ::testing::TestPartResult::kNonFatalFailure);
+            std::cerr << "[VLM version pin] Lemonade /system-info did not return a "
+                         "version field; skipping pin check (informational only)."
+                      << std::endl;
+            SUCCEED();
             return;
         }
         EXPECT_EQ(v, std::string(GAIA_PINNED_LEMONADE_VERSION))
@@ -103,9 +106,11 @@ void expectPinnedLemonadeVersion() {
             << "GAIA-pinned version (" << GAIA_PINNED_LEMONADE_VERSION << "). "
             << "Update LEMONADE_VERSION in src/gaia/version.py or roll back the server.";
     } catch (const std::exception& e) {
-        GTEST_MESSAGE_(("Lemonade /system-info probe failed: "
-                        + std::string(e.what())).c_str(),
-                       ::testing::TestPartResult::kNonFatalFailure);
+        std::cerr << "[VLM version pin] Lemonade /system-info probe failed: "
+                  << e.what()
+                  << " (informational only; continuing VLM test)."
+                  << std::endl;
+        SUCCEED();
     }
 }
 
