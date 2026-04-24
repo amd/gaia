@@ -1,0 +1,25 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "GAIA",
+  "description": "AMD's open-source framework for building AI agents in Python and C++ that run entirely on local hardware, with AMD NPU and GPU acceleration on Ryzen AI processors.",
+  "folders": ["docs"],
+  "excludeFolders": ["tests", "scripts", "workshop", "docs/spec"],
+  "excludeFiles": ["CHANGELOG.md"],
+  "rules": [
+    "GAIA has two frameworks: Python (src/gaia/) and C++ (cpp/). Most documentation covers the Python SDK.",
+    "Python agents inherit from the base Agent class in src/gaia/agents/base/agent.py",
+    "Tools are registered using the @tool decorator from gaia.agents.base.tools",
+    "LLM inference runs locally via Lemonade Server on AMD NPU/GPU hardware",
+    "Default models: Qwen3-0.6B-GGUF (general), Qwen3.5-35B-A3B-GGUF (agents/code), Qwen3-VL-4B-Instruct-GGUF (vision)",
+    "Agent UI is the primary user interface — launch with 'gaia --ui' for privacy-first desktop chat with document Q&A",
+    "All new features require tests in tests/ and documentation in docs/ (.mdx format for Mintlify)",
+    "Use 'uv pip install -e .[dev]' for development setup",
+    "The code index (gaia.code_index) provides semantic search over repositories using local FAISS + Lemonade embeddings"
+  ],
+  "previousVersions": [
+    {"tag": "v0.17.1"},
+    {"tag": "v0.17.0"},
+    {"tag": "v0.16.0"},
+    {"tag": "v0.15.0"}
+  ]
+}
