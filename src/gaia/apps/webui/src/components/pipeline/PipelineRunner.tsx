@@ -25,10 +25,13 @@ import {
   Gauge,
   Zap,
   Search,
+  Layers,
+  List,
 } from 'lucide-react';
 import { usePipelineStore } from '../../stores/pipelineStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useTemplateStore } from '../../stores/templateStore';
+import { PipelineCanvas } from './PipelineCanvas';
 import './PipelineRunner.css';
 
 /** Map 5-stage pipeline phases to actual agent categories in config/agents/. */
@@ -118,6 +121,7 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
   const [autoSpawn, setAutoSpawn] = useState(true);
   const [templateName, setTemplateName] = useState('');
   const [sessionId, setSessionId] = useState(currentSessionId || '');
+  const [activeTab, setActiveTab] = useState<'canvas' | 'runner'>('canvas');
   // Use array for collapsed event keys (immutable, React-detectable)
   const [collapsedEvents, setCollapsedEvents] = useState<string[]>([]);
 
@@ -207,12 +211,35 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
 
   return (
     <div className="pipeline-runner">
-      {/* Header */}
+      {/* Header with tabs */}
       <div className="pr-header">
-        <h1>Pipeline Execution</h1>
-        <p>Run the 5-stage autonomous agent spawning pipeline</p>
+        <div className="pr-header-left">
+          <h1>Pipeline Execution</h1>
+          <p>Run the 5-stage autonomous agent spawning pipeline</p>
+        </div>
+        <div className="pr-tabs">
+          <button
+            className={`pr-tab ${activeTab === 'canvas' ? 'active' : ''}`}
+            onClick={() => setActiveTab('canvas')}
+          >
+            <Layers size={14} />
+            Canvas
+          </button>
+          <button
+            className={`pr-tab ${activeTab === 'runner' ? 'active' : ''}`}
+            onClick={() => setActiveTab('runner')}
+          >
+            <List size={14} />
+            Log View
+          </button>
+        </div>
       </div>
 
+      {/* Tab content */}
+      {activeTab === 'canvas' ? (
+        <PipelineCanvas />
+      ) : (
+      <div className="pr-runner-content">
       {/* Configuration Form */}
       <div className="pr-form-card">
         <h2>Configure Pipeline</h2>
@@ -578,6 +605,8 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
           </div>
         );
       })}
+      </div>
+      )}
     </div>
   );
 }

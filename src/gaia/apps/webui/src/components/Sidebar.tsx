@@ -16,8 +16,8 @@ interface SidebarProps {
     tunnelActive?: boolean;
     tunnelLoading?: boolean;
     onMobileToggle?: () => void;
-    currentView?: 'chat' | 'templates' | 'runner' | 'registry';
-    onViewChange?: (view: 'chat' | 'templates' | 'runner' | 'registry') => void;
+    currentView?: 'chat' | 'templates' | 'runner' | 'registry' | 'component-registry';
+    onViewChange?: (view: 'chat' | 'templates' | 'runner' | 'registry' | 'component-registry') => void;
 }
 
 /** Copy a session's hash link to the clipboard. */
@@ -467,6 +467,15 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                     >
                         <span className="sidebar-nav-icon">🤖</span>
                         <span>Agent Registry</span>
+                    </button>
+                    <button
+                        className={`sidebar-nav-item ${currentView === 'component-registry' ? 'active' : ''}`}
+                        onClick={() => onViewChange('component-registry')}
+                        title="Component Framework"
+                        aria-label="Open component framework"
+                    >
+                        <span className="sidebar-nav-icon">🧩</span>
+                        <span>Components</span>
                     </button>
                 </div>
             )}

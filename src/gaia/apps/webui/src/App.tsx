@@ -15,6 +15,7 @@ import { PermissionPrompt } from './components/PermissionPrompt';
 import { PipelineTemplateManager } from './components/templates/PipelineTemplateManager';
 import { PipelineRunner } from './components/pipeline/PipelineRunner';
 import { AgentRegistry } from './components/registry/AgentRegistry';
+import { ComponentRegistry } from './components/registry/ComponentRegistry';
 import { useChatStore } from './stores/chatStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
@@ -434,6 +435,8 @@ function App() {
                     <PipelineRunner onViewChange={setCurrentView} />
                 ) : currentView === 'registry' ? (
                     <AgentRegistry />
+                ) : currentView === 'component-registry' ? (
+                    <ComponentRegistry />
                 ) : (
                     <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
                         {displayedSessionId ? (

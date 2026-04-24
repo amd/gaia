@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateCreateRequest, TemplateUpdateRequest, PipelineMetricsResponse, PipelineMetricsHistory, PipelineAggregateMetrics, PipelineRunRequest, PipelineRunResponse, PipelineEvent, AgentRegistryEntry, AgentFileContent } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateCreateRequest, TemplateUpdateRequest, PipelineMetricsResponse, PipelineMetricsHistory, PipelineAggregateMetrics, PipelineRunRequest, PipelineRunResponse, PipelineEvent, AgentRegistryEntry, AgentFileContent, ComponentListResponse, ComponentRawResponse, ComponentUpdateRequest } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -526,6 +526,23 @@ export async function getAgentRaw(agentId: string): Promise<AgentFileContent> {
 /** Save edited YAML/MD content back to an agent file. */
 export async function saveAgentRaw(agentId: string, content: string): Promise<{ agent_id: string; source: string; updated: boolean }> {
     return apiFetch('PUT', `/v1/pipeline/agents/${agentId}/raw`, { content });
+}
+
+// ── Component Framework ─────────────────────────────────────────────────────
+
+/** List all available component files grouped by category. */
+export async function listComponents(): Promise<ComponentListResponse> {
+    return apiFetch('GET', '/v1/pipeline/components/list');
+}
+
+/** Get raw MD content for a component file. */
+export async function getComponentRaw(category: string, name: string): Promise<ComponentRawResponse> {
+    return apiFetch('GET', `/v1/pipeline/components/${encodeURIComponent(category)}/${encodeURIComponent(name)}/raw`);
+}
+
+/** Save edited MD content back to a component file. */
+export async function saveComponentRaw(category: string, name: string, content: string): Promise<{ success: boolean; path: string }> {
+    return apiFetch('PUT', `/v1/pipeline/components/${encodeURIComponent(category)}/${encodeURIComponent(name)}/raw`, { content });
 }
 
 // ── Pipeline Metrics ─────────────────────────────────────────────────────

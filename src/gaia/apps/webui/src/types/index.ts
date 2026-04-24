@@ -599,3 +599,131 @@ export interface PipelineExecution {
     currentPhase?: string;
     loopCount?: number;
 }
+
+// ── Component Framework Types ─────────────────────────────────────────────
+
+/** A single component file in the Component Framework (memory, knowledge, tasks, etc.). */
+export interface ComponentItem {
+    category: string;
+    name: string;
+    title: string;
+    description: string;
+    path: string;
+    version: string;
+}
+
+/** Response from listing all components. */
+export interface ComponentListResponse {
+    components: ComponentItem[];
+    total: number;
+}
+
+/** Response from getting raw MD content for a component file. */
+export interface ComponentRawResponse {
+    content: string;
+    path: string;
+    frontmatter: Record<string, unknown>;
+}
+
+/** Request body for updating a component file. */
+export interface ComponentUpdateRequest {
+    content: string;
+}
+
+// ── Pipeline Canvas Types ────────────────────────────────────────────────
+
+/** Node status for visual pipeline execution overlay. */
+export type CanvasNodeStatus = 'idle' | 'running' | 'complete' | 'error' | 'waiting';
+
+/** Type of node in the canvas. */
+export type CanvasNodeType = 'agent' | 'stage';
+
+/** A single node in the pipeline canvas (agent card or stage zone). */
+export interface CanvasNode {
+    id: string;
+    type: CanvasNodeType;
+    /** Agent ID from registry (for agent nodes) or stage key (for stage nodes). */
+    agentId?: string;
+    /** Display label. */
+    label: string;
+    /** Agent category (analysis, orchestration, quality, etc.). */
+    category?: string;
+    /** Model assigned to this agent. */
+    modelId?: string;
+    /** Execution status for live overlay. */
+    status: CanvasNodeStatus;
+    /** Quality score from last execution (0-1). */
+    qualityScore?: number;
+    /** Canvas position in pixels (relative to canvas container). */
+    position: { x: number; y: number };
+    /** Stage this agent is assigned to (for agent nodes). */
+    assignedStage?: string;
+    /** Agent registry data snapshot. */
+    agentData?: AgentRegistryEntry;
+}
+
+/** Connection between two nodes in the canvas. */
+export interface CanvasEdge {
+    id: string;
+    /** Source node ID. */
+    source: string;
+    /** Target node ID. */
+    target: string;
+    /** Optional label on the edge (e.g., "loop back"). */
+    label?: string;
+    /** Edge status for live overlay. */
+    status: 'idle' | 'active' | 'complete' | 'error' | 'loop-back';
+    /** Whether the edge should be animated (during execution). */
+    animated?: boolean;
+}
+
+/** The full canvas state. */
+export interface CanvasState {
+    /** All nodes on the canvas. */
+    nodes: CanvasNode[];
+    /** All edges/connections between nodes. */
+    edges: CanvasEdge[];
+    /** Name of the loaded template (if any). */
+    templateName?: string;
+    /** Quality threshold for the pipeline. */
+    qualityThreshold: number;
+    /** Max iterations allowed. */
+    maxIterations: number;
+}
+
+/** Drag payload from the agent palette. */
+export interface PaletteDragData {
+    agentId: string;
+    name: string;
+    category: string;
+    modelId?: string;
+    capabilities?: string[];
+    description?: string;
+    keywords?: string[];
+    phases?: string[];
+}
+
+/** Pipeline stage definition for the canvas. */
+export interface PipelineStageDef {
+    key: string;
+    label: string;
+    description: string;
+    agentCategory: string;
+    order: number;
+}
+
+/** Serialized canvas data for saving as a pipeline template. */
+export interface CanvasTemplateExport {
+    name: string;
+    description: string;
+    quality_threshold: number;
+    max_iterations: number;
+    agent_categories: Record<string, string[]>;
+    routing_rules: Array<{
+        condition: string;
+        route_to: string;
+        priority: number;
+        loop_back: boolean;
+        guidance?: string;
+    }>;
+}

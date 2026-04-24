@@ -1,0 +1,791 @@
+/* Pipeline Canvas - Visual drag-and-drop pipeline builder */
+
+/* ── Layout ─────────────────────────────────────────────────────────── */
+
+.pipeline-canvas {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: #0f1117;
+    color: #e5e7eb;
+}
+
+/* ── Toolbar ────────────────────────────────────────────────────────── */
+
+.pc-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: #161822;
+    border-bottom: 1px solid #2a2d3a;
+    min-height: 52px;
+}
+
+.pc-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.pc-toolbar-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #e5e7eb;
+}
+
+.pc-toolbar-template {
+    font-size: 12px;
+    color: #8b5cf6;
+    background: #8b5cf620;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.pc-toolbar-stats {
+    font-size: 12px;
+    color: #9ca3af;
+}
+
+.pc-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pc-session-select {
+    background: #1e2030;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    color: #e5e7eb;
+    padding: 4px 8px;
+    font-size: 12px;
+    max-width: 160px;
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────── */
+
+.pc-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    background: #1e2030;
+    color: #e5e7eb;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.pc-btn:hover:not(:disabled) {
+    background: #2a2d3a;
+    border-color: #3a3d4a;
+}
+
+.pc-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.pc-btn-primary {
+    background: #8b5cf6;
+    border-color: #8b5cf6;
+    color: #fff;
+}
+
+.pc-btn-primary:hover:not(:disabled) {
+    background: #7c3aed;
+}
+
+.pc-btn-secondary {
+    background: #1e2030;
+    border-color: #3a3d4a;
+}
+
+/* ── Error Bar ──────────────────────────────────────────────────────── */
+
+.pc-error-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #991b1b;
+    font-size: 12px;
+}
+
+.pc-error-bar button {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: #991b1b;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+/* ── Main Layout ────────────────────────────────────────────────────── */
+
+.pc-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* ── Palette Sidebar ────────────────────────────────────────────────── */
+
+.pc-palette-sidebar {
+    width: 260px;
+    min-width: 260px;
+    background: #161822;
+    border-right: 1px solid #2a2d3a;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.pc-palette-sidebar-header {
+    padding: 10px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #9ca3af;
+    border-bottom: 1px solid #2a2d3a;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ── Agent Palette ──────────────────────────────────────────────────── */
+
+.pc-palette {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+}
+
+.pc-palette-loading,
+.pc-palette-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 32px 16px;
+    color: #6b7280;
+    font-size: 13px;
+}
+
+.pc-palette-search {
+    position: relative;
+    margin-bottom: 8px;
+}
+
+.pc-palette-search input {
+    width: 100%;
+    padding: 6px 8px 6px 26px;
+    background: #1e2030;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    color: #e5e7eb;
+    font-size: 12px;
+    outline: none;
+}
+
+.pc-palette-search input:focus {
+    border-color: #8b5cf6;
+}
+
+.pc-palette-search-icon {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #6b7280;
+}
+
+.pc-palette-header {
+    font-size: 11px;
+    color: #6b7280;
+    padding: 4px 0;
+    margin-bottom: 4px;
+}
+
+.pc-palette-category {
+    margin-bottom: 4px;
+}
+
+.pc-palette-category-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.pc-palette-category-header:hover {
+    background: #1e2030;
+}
+
+.pc-palette-cat-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.pc-palette-cat-label {
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: capitalize;
+    flex: 1;
+}
+
+.pc-palette-cat-count {
+    font-size: 11px;
+    color: #6b7280;
+    background: #1e2030;
+    padding: 1px 6px;
+    border-radius: 10px;
+}
+
+.pc-palette-agents {
+    padding-left: 24px;
+}
+
+.pc-palette-agent {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    cursor: grab;
+    transition: background 0.15s;
+    font-size: 12px;
+}
+
+.pc-palette-agent:hover {
+    background: #1e2030;
+}
+
+.pc-palette-agent:active {
+    cursor: grabbing;
+}
+
+.pc-palette-agent-grip {
+    color: #4b5563;
+    flex-shrink: 0;
+}
+
+.pc-palette-agent-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pc-palette-agent-model {
+    font-size: 10px;
+    color: #6b7280;
+    background: #0f1117;
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+/* ── Canvas Area ────────────────────────────────────────────────────── */
+
+.pc-canvas-area {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+    padding: 16px;
+}
+
+.pc-canvas-edges {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.pc-edge {
+    transition: stroke 0.3s, stroke-dasharray 0.3s;
+}
+
+.pc-edge-animated {
+    animation: dash-flow 1s linear infinite;
+}
+
+@keyframes dash-flow {
+    to {
+        stroke-dashoffset: -10;
+    }
+}
+
+.pc-edge-loop {
+    stroke: #ef4444 !important;
+    animation: dash-flow 0.6s linear infinite;
+}
+
+.pc-edge-label {
+    fill: #9ca3af;
+    font-size: 11px;
+}
+
+/* ── Stage Zones ────────────────────────────────────────────────────── */
+
+.pc-stages {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    position: relative;
+    z-index: 2;
+}
+
+.pc-stage-zone {
+    background: #161822;
+    border: 1px solid #2a2d3a;
+    border-radius: 10px;
+    padding: 16px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.pc-stage-zone-drag-over {
+    border-color: #8b5cf6;
+    box-shadow: 0 0 0 2px #8b5cf640;
+    background: #1a1c2e;
+}
+
+.pc-stage-running {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 1px #3b82f640;
+}
+
+.pc-stage-complete {
+    border-color: #10b981;
+}
+
+.pc-stage-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.pc-stage-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.pc-stage-number {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #2a2d3a;
+    color: #9ca3af;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.pc-stage-icon {
+    color: #8b5cf6;
+}
+
+.pc-stage-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #e5e7eb;
+    display: block;
+}
+
+.pc-stage-description {
+    font-size: 11px;
+    color: #6b7280;
+    display: block;
+}
+
+.pc-stage-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pc-stage-agent-count {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.pc-stage-running-badge {
+    font-size: 10px;
+    font-weight: 600;
+    color: #3b82f6;
+    background: #3b82f620;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+
+.pc-stage-complete-badge {
+    font-size: 10px;
+    font-weight: 600;
+    color: #10b981;
+    background: #10b98120;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+
+/* ── Stage Agent Slots ──────────────────────────────────────────────── */
+
+.pc-stage-agents {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    min-height: 48px;
+}
+
+.pc-stage-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 16px;
+    color: #4b5563;
+    font-size: 12px;
+    border: 2px dashed #2a2d3a;
+    border-radius: 8px;
+    width: 100%;
+}
+
+/* ── Agent Node Card ────────────────────────────────────────────────── */
+
+.pc-agent-node {
+    width: 200px;
+    background: #1e2030;
+    border: 1px solid #2a2d3a;
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: grab;
+    position: relative;
+    transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.pc-agent-node:hover {
+    border-color: #3a3d4a;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.pc-agent-node.selected {
+    border-color: #8b5cf6;
+    box-shadow: 0 0 0 2px #8b5cf640;
+}
+
+.pc-agent-node.dragging {
+    opacity: 0.5;
+    cursor: grabbing;
+}
+
+.pc-agent-node.running {
+    border-color: #3b82f6;
+}
+
+.pc-agent-node.complete {
+    border-color: #10b981;
+}
+
+.pc-agent-node.error {
+    border-color: #ef4444;
+}
+
+.pc-agent-status {
+    height: 3px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.pc-agent-status-label {
+    display: none;
+}
+
+.pc-agent-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 10px 6px;
+}
+
+.pc-agent-icon {
+    color: #8b5cf6;
+    flex-shrink: 0;
+}
+
+.pc-agent-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.pc-agent-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #e5e7eb;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pc-agent-id {
+    display: block;
+    font-size: 10px;
+    color: #6b7280;
+    font-family: monospace;
+}
+
+.pc-agent-remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: none;
+    color: #6b7280;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+.pc-agent-node:hover .pc-agent-remove {
+    opacity: 1;
+}
+
+.pc-agent-remove:hover {
+    background: #ef444420;
+    color: #ef4444;
+}
+
+.pc-agent-details {
+    padding: 0 10px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.pc-agent-detail {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+}
+
+.pc-agent-detail-label {
+    color: #6b7280;
+}
+
+.pc-agent-detail-value {
+    color: #9ca3af;
+    font-family: monospace;
+}
+
+.pc-agent-quality {
+    font-weight: 600;
+}
+
+.pc-agent-quality.pass {
+    color: #10b981;
+}
+
+.pc-agent-quality.fail {
+    color: #ef4444;
+}
+
+.pc-agent-capabilities {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 0 10px 8px;
+}
+
+.pc-agent-capability {
+    font-size: 9px;
+    color: #9ca3af;
+    background: #2a2d3a;
+    padding: 1px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.pc-agent-more {
+    color: #6b7280;
+}
+
+/* ── Settings Bar ───────────────────────────────────────────────────── */
+
+.pc-settings-bar {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 8px 16px;
+    background: #161822;
+    border-top: 1px solid #2a2d3a;
+    font-size: 12px;
+}
+
+.pc-setting {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #9ca3af;
+}
+
+.pc-setting label {
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.pc-setting input[type="range"] {
+    width: 100px;
+    accent-color: #8b5cf6;
+}
+
+.pc-setting-value {
+    font-weight: 600;
+    color: #e5e7eb;
+    min-width: 40px;
+}
+
+.pc-setting input[type="number"] {
+    background: #1e2030;
+    border: 1px solid #2a2d3a;
+    border-radius: 4px;
+    color: #e5e7eb;
+    padding: 2px 4px;
+    font-size: 12px;
+    text-align: center;
+}
+
+/* ── Modal ──────────────────────────────────────────────────────────── */
+
+.pc-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.pc-modal {
+    background: #1e2030;
+    border: 1px solid #2a2d3a;
+    border-radius: 10px;
+    padding: 20px;
+    width: 360px;
+    max-width: 90vw;
+}
+
+.pc-modal h3 {
+    margin: 0 0 16px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #e5e7eb;
+}
+
+.pc-modal-field {
+    margin-bottom: 16px;
+}
+
+.pc-modal-field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: #9ca3af;
+    margin-bottom: 4px;
+}
+
+.pc-modal-field input {
+    width: 100%;
+    padding: 8px 10px;
+    background: #0f1117;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    color: #e5e7eb;
+    font-size: 13px;
+    outline: none;
+}
+
+.pc-modal-field input:focus {
+    border-color: #8b5cf6;
+}
+
+.pc-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+/* ── Dropdown ───────────────────────────────────────────────────────── */
+
+.pc-dropdown {
+    position: relative;
+}
+
+.pc-dropdown-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: #1e2030;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    z-index: 50;
+    min-width: 160px;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.pc-dropdown-item {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    background: none;
+    border: none;
+    color: #e5e7eb;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.pc-dropdown-item:hover {
+    background: #2a2d3a;
+}
+
+/* ── Spin Animation ─────────────────────────────────────────────────── */
+
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
