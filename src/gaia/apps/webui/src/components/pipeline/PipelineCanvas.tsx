@@ -34,6 +34,8 @@ function PipelineCanvasInner() {
         saveCanvasAsTemplate,
         applyExecutionState,
         setLastError,
+        setQualityThreshold,
+        setMaxIterations,
         lastError,
         isSaving,
     } = usePipelineCanvasStore((s) => ({
@@ -48,6 +50,8 @@ function PipelineCanvasInner() {
         saveCanvasAsTemplate: s.saveCanvasAsTemplate,
         applyExecutionState: s.applyExecutionState,
         setLastError: s.setLastError,
+        setQualityThreshold: s.setQualityThreshold,
+        setMaxIterations: s.setMaxIterations,
         lastError: s.lastError,
         isSaving: s.isSaving,
     }));
@@ -422,8 +426,7 @@ function PipelineCanvasInner() {
                         step={0.05}
                         value={qualityThreshold}
                         onChange={(e) => {
-                            const { set } = usePipelineCanvasStore.getState();
-                            set({ qualityThreshold: Number(e.target.value) });
+                            setQualityThreshold(Number(e.target.value));
                         }}
                     />
                     <span className="pc-setting-value">{(qualityThreshold * 100).toFixed(0)}%</span>
@@ -436,8 +439,7 @@ function PipelineCanvasInner() {
                         max={10}
                         value={maxIterations}
                         onChange={(e) => {
-                            const { set } = usePipelineCanvasStore.getState();
-                            set({ maxIterations: Number(e.target.value) });
+                            setMaxIterations(Number(e.target.value));
                         }}
                         style={{ width: 60 }}
                     />

@@ -7,7 +7,7 @@
  * Agents are grouped by category. Each agent card is draggable into stage zones.
  */
 
-import { memo, useState } from 'react';
+import { memo, useState, useEffect } from 'react';
 import { GripVertical, Cpu, Loader2, ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { usePipelineCanvasStore } from '../../stores/pipelineCanvasStore';
 
@@ -30,13 +30,11 @@ function AgentPaletteInner() {
 
     const [search, setSearch] = useState('');
     const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
-    const [loaded, setLoaded] = useState(false);
 
-    // Load agents on first render
-    if (!loaded && !paletteLoading && agents.length === 0) {
-        setLoaded(true);
+    // Load agents on mount
+    useEffect(() => {
         fetchAgents();
-    }
+    }, [fetchAgents]);
 
     const toggleCategory = (cat: string) => {
         setExpandedCategories((prev) => ({ ...prev, [cat]: !prev[cat] }));

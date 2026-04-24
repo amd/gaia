@@ -76,6 +76,8 @@ interface CanvasStoreState {
     setSelectedNode: (id: string | null) => void;
     setDragOverStage: (stageKey: string | null) => void;
     setLastError: (error: string | null) => void;
+    setQualityThreshold: (value: number) => void;
+    setMaxIterations: (value: number) => void;
 }
 
 // ── Helper: compute node position from stage ──────────────────────────
@@ -440,4 +442,6 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
     setSelectedNode: (id) => set({ selectedNodeId: id }),
     setDragOverStage: (stageKey) => set({ dragOverStage: stageKey }),
     setLastError: (error) => set({ lastError: error }),
+    setQualityThreshold: (value) => set({ qualityThreshold: value }),
+    setMaxIterations: (value) => set({ maxIterations: value }),
 }));
