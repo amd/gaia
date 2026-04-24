@@ -72,6 +72,8 @@
                   "guides/routing",
                   "guides/explicit-tool-calling",
                   "guides/auto-spawn-pipeline",
+                  "guides/pipeline-canvas",
+                  "guides/component-framework",
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health",

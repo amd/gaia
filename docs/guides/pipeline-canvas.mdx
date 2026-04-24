@@ -1,0 +1,142 @@
+---
+title: "Pipeline Canvas"
+description: "Build visual AI pipelines with drag-and-drop agent orchestration"
+---
+
+# Pipeline Canvas
+
+The Pipeline Canvas provides a visual drag-and-drop interface for building and orchestrating multi-stage AI pipelines. Agents can be dragged like "LEGOs" through pipeline stages, with live execution status feedback and template-based persistence.
+
+## Overview
+
+The Pipeline Canvas transforms the text-based pipeline configuration into a visual builder experience. Users can:
+
+- **Drag agents from the palette** onto any of the 5 pipeline stage zones
+- **See live execution status** during pipeline runs (color-coded status indicators)
+- **Save and load canvas state** as reusable pipeline templates
+- **Configure quality thresholds** and iteration limits visually
+- **Run pipelines directly** from the canvas with session selection
+
+## Accessing the Pipeline Canvas
+
+The Pipeline Canvas is accessible from the Agent UI via the Pipeline Runner component. Navigate to:
+
+1. Start the Agent UI: `gaia chat --ui`
+2. Open the Pipeline Runner from the sidebar
+3. Switch to the **Canvas** tab (Layers icon)
+
+The canvas view provides two tabs:
+- **Canvas** - Visual drag-and-drop pipeline builder
+- **Log** - Original form-based pipeline configuration and execution log
+
+## Pipeline Stages
+
+The canvas is organized into 5 sequential pipeline stages:
+
+| Stage | Description | Agent Category |
+|-------|-------------|----------------|
+| 1. Domain Analysis | Understand the problem domain and requirements | Analysis |
+| 2. Workflow Modeling | Design the workflow and task decomposition | Analysis |
+| 3. Loom Building | Build the orchestration framework | Orchestration |
+| 4. Gap Detection | Identify gaps and areas for improvement | Orchestration |
+| 5. Pipeline Execution | Execute the pipeline with quality gates | Orchestration |
+
+## Using the Canvas
+
+### Dragging Agents
+
+1. **From the palette** - The left sidebar shows all registered agents grouped by category
+2. **To a stage zone** - Drag an agent card and drop it onto the desired stage
+3. **Within the canvas** - Drag existing agent nodes between stages to reassign them
+
+### Agent Palette
+
+The palette sidebar categorizes agents by their capabilities:
+
+- **Analysis** - Domain analysis and workflow modeling agents (blue)
+- **Orchestration** - Pipeline orchestration and execution agents (purple)
+- **Quality** - Quality assurance and evaluation agents (green)
+
+Each agent card displays the agent ID, name, and default model.
+
+### Agent Node Status
+
+Agent nodes on the canvas display real-time status during execution:
+
+- **Idle** - Clock icon, no border highlight
+- **Running** - Blue border with loading spinner
+- **Complete** - Green border with checkmark
+- **Error** - Red border with alert icon
+- **Waiting** - Hourglass icon (awaiting upstream stage)
+
+### Edge Connections
+
+SVG bezier curves connect stages visually:
+- **Gray dashed** - Default connection (no activity)
+- **Blue animated** - Active data flow (stage executing)
+- **Green solid** - Stage completed successfully
+- **Red dashed** - Loop-back triggered (quality gate failed)
+
+### Running a Pipeline
+
+1. Select a session from the dropdown in the toolbar
+2. Optionally adjust the **Quality Threshold** (50-100%) and **Max Iterations** (1-10)
+3. Click **Run Pipeline**
+
+The canvas will display live execution status as the pipeline runs, with SSE events streamed from the backend.
+
+### Saving and Loading Templates
+
+**Save as Template:**
+1. Click the **Save** button
+2. Enter a template name
+3. The canvas state is serialized to the pipeline template YAML format
+
+**Load Template:**
+1. Click the **Load** dropdown
+2. Select an existing template
+3. The canvas loads agents into their respective stages
+
+## Canvas Architecture
+
+### Component Structure
+
+```
+src/gaia/apps/webui/src/components/pipeline/
+├── PipelineCanvas.tsx      # Main canvas orchestrator
+├── PipelineCanvas.css      # Dark theme canvas styling
+├── AgentPalette.tsx        # Draggable agent sidebar
+├── AgentNode.tsx           # Agent card with status indicators
+├── StageZone.tsx           # Stage drop zone with agent slots
+└── PipelineRunner.tsx      # Canvas/Log tab container
+```
+
+### State Management
+
+The canvas uses Zustand stores for state management:
+
+- **pipelineCanvasStore** - Canvas nodes, edges, template state
+- **pipelineStore** - Pipeline execution state (SSE streaming)
+- **templateStore** - Template CRUD operations
+
+### Template Format
+
+Canvas state serializes to the pipeline template YAML format, extracting:
+- `agent_categories` - Agents grouped by stage category
+- `routing_rules` - Decision engine rules for stage transitions
+- `quality_threshold` - Minimum quality score for passing gates
+- `max_iterations` - Maximum loop iterations per stage
+
+## Configuration Options
+
+### Quality Threshold
+
+A slider control (50-100%) that sets the minimum quality score required for a stage to pass. If quality falls below this threshold, the decision engine may trigger a loop-back.
+
+### Max Iterations
+
+Controls the maximum number of iterations per stage (1-10). Higher values allow more refinement cycles but increase execution time.
+
+### Session Selection
+
+The canvas requires an active chat session for pipeline execution. Sessions are managed through the chat interface and appear in the dropdown.

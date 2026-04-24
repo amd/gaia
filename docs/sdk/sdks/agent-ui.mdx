@@ -17,7 +17,7 @@ from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentR
 ```
 </Note>
 
-**See also:** [User Guide](/guides/agent-ui) | [Agent SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server)
+**See also:** [User Guide](/guides/agent-ui) | [Agent SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server) | [Pipeline Canvas](/guides/pipeline-canvas)
 
 <Warning>
   **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Qwen3.5-35B-A3B-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
@@ -777,6 +777,223 @@ class AttachDocumentRequest(BaseModel):
     | `500` | Failed to launch the system file explorer |
   </Accordion>
 </AccordionGroup>
+
+---
+
+### Pipeline Components
+
+Component Framework endpoints for managing reusable pipeline components (memory, knowledge, tasks, commands, documents, checklists, personas, workflows, templates).
+
+<Info>
+  **Source Code:** [`src/gaia/ui/routers/pipeline.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/routers/pipeline.py) (lines 504-706)
+
+  **Schemas:** [`src/gaia/ui/schemas/pipeline_templates.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/schemas/pipeline_templates.py) (lines 139-172)
+</Info>
+
+<AccordionGroup>
+  <Accordion title="GET /api/v1/pipeline/components/list">
+    List all component framework files grouped by category.
+
+    Returns metadata for all component files across 9 categories:
+    - `memory`, `knowledge`, `tasks`, `commands`, `documents`
+    - `checklists`, `personas`, `workflows`, `templates`
+
+    Each component includes title, description, version, and template ID from frontmatter.
+
+    **Response Schema:**
+    ```json
+    {
+      "components": [
+        {
+          "category": "memory",
+          "name": "working-memory",
+          "title": "Working Memory",
+          "description": "Short-term context retention for active tasks",
+          "path": "memory/working-memory.md",
+          "version": "1.0.0",
+          "template_id": "mem-001"
+        }
+      ],
+      "total": 44
+    }
+    ```
+
+    **Example:**
+    ```bash
+    curl http://localhost:4200/api/v1/pipeline/components/list
+    ```
+
+    **Response Fields:**
+
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `components` | array | List of component metadata objects |
+    | `category` | string | Component category (directory name) |
+    | `name` | string | Component name (filename without `.md` extension) |
+    | `title` | string | Component title from frontmatter |
+    | `description` | string | Component description from frontmatter |
+    | `path` | string | Relative path to component file (e.g., `memory/working-memory.md`) |
+    | `version` | string\|null | Version from frontmatter (optional) |
+    | `template_id` | string\|null | Template ID from frontmatter (optional) |
+    | `total` | integer | Total number of components |
+
+    **Error responses:**
+
+    | Status | Condition |
+    |--------|-----------|
+    | `500` | Component framework not available (ComponentLoader import failed) |
+  </Accordion>
+
+  <Accordion title="GET /api/v1/pipeline/components/{category}/{component_name}/raw">
+    Get raw markdown content for a component framework file.
+
+    Returns the component file content as JSON with path, frontmatter, and raw content.
+
+    **Path traversal protection:**
+    - Category must be in whitelist (9 valid categories)
+    - Component name must match alphanumeric characters, underscores, and hyphens only
+
+    **Valid Categories:** `memory`, `knowledge`, `tasks`, `commands`, `documents`, `checklists`, `personas`, `workflows`, `templates`
+
+    **Response Schema:**
+    ```json
+    {
+      "content": "---\ntitle: Working Memory\ndescription: Short-term context retention\nversion: 1.0.0\n---\n\n# Working Memory\n\nComponent content here...",
+      "path": "memory/working-memory.md",
+      "frontmatter": {
+        "title": "Working Memory",
+        "description": "Short-term context retention",
+        "version": "1.0.0"
+      }
+    }
+    ```
+
+    **Example:**
+    ```bash
+    curl http://localhost:4200/api/v1/pipeline/components/memory/working-memory/raw
+    ```
+
+    **Error responses:**
+
+    | Status | Condition |
+    |--------|-----------|
+    | `400` | Invalid category (not in whitelist) |
+    | `400` | Invalid component_name format (contains disallowed characters) |
+    | `404` | Component not found |
+    | `500` | Component framework not available |
+  </Accordion>
+
+  <Accordion title="PUT /api/v1/pipeline/components/{category}/{component_name}/raw">
+    Update raw markdown content for a component framework file.
+
+    Saves the provided content back to the component file. Content should include both frontmatter (YAML between `---` delimiters) and markdown body.
+
+    **Path traversal protection:**
+    - Category must be in whitelist (9 valid categories)
+    - Component name must match alphanumeric characters, underscores, and hyphens only
+    - ComponentLoader.save_component() provides SEC-003 path traversal protection
+
+    **Request Schema:**
+    ```json
+    {
+      "content": "---\ntitle: Working Memory\ndescription: Updated description\nversion: 1.0.1\n---\n\n# Working Memory\n\nUpdated component content..."
+    }
+    ```
+
+    | Field | Type | Required | Description |
+    |-------|------|----------|-------------|
+    | `content` | string | Yes | New markdown content including frontmatter (optional) |
+
+    **Response Schema:**
+    ```json
+    {
+      "success": true,
+      "path": "memory/working-memory.md",
+      "full_path": "/home/user/gaia/src/gaia/pipeline/components/memory/working-memory.md"
+    }
+    ```
+
+    **Example:**
+    ```bash
+    curl -X PUT http://localhost:4200/api/v1/pipeline/components/memory/working-memory/raw \
+      -H "Content-Type: application/json" \
+      -d '{
+        "content": "---\ntitle: Working Memory\nversion: 1.0.1\n---\n\nUpdated content..."
+      }'
+    ```
+
+    **Error responses:**
+
+    | Status | Condition |
+    |--------|-----------|
+    | `400` | Invalid category (not in whitelist) |
+    | `400` | Invalid component_name format |
+    | `400` | Path traversal detected |
+    | `404` | Component not found |
+    | `500` | Component framework not available |
+
+    **Security Notes:**
+
+    - **Category Whitelist:** Only the 9 predefined categories are accepted. Any other value returns `400 Bad Request`.
+    - **Name Validation:** Component names must match the pattern `^[a-zA-Z0-9_-]+$`. This prevents directory traversal attacks using `..` or special characters.
+    - **Path Traversal Protection:** The underlying `ComponentLoader` implements SEC-003 path traversal protection, which provides an additional layer of security beyond the whitelist validation.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+### Pipeline Canvas
+
+The Agent UI includes a visual Pipeline Canvas for building and orchestrating multi-stage AI pipelines through drag-and-drop.
+
+<Info>
+  **Source Code:** [`src/gaia/apps/webui/src/components/pipeline/`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/src/components/pipeline/)
+
+  **State Management:** [`src/gaia/apps/webui/src/stores/pipelineCanvasStore.ts`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/src/stores/pipelineCanvasStore.ts)
+</Info>
+
+The Canvas provides:
+
+- **Agent Palette** -- Draggable sidebar with all registered agents grouped by category
+- **Stage Zones** -- 5 pipeline stages (Domain Analysis through Pipeline Execution) as drop targets
+- **Live Execution** -- Real-time status overlay synced from SSE streaming via `pipelineStore`
+- **Template Persistence** -- Canvas state serializes to/from pipeline template YAML format
+- **Quality Controls** -- Quality threshold slider and max iterations configuration
+
+**Using the Canvas:**
+
+1. Start the Agent UI: `gaia chat --ui`
+2. Open the Pipeline Runner from the sidebar
+3. Switch to the **Canvas** tab (Layers icon)
+4. Drag agents from the palette onto stage zones
+5. Click **Run Pipeline** to execute with SSE streaming
+
+**Key Types:**
+
+```typescript
+interface CanvasNode {
+    id: string;
+    type: CanvasNodeType;        // 'stage' | 'agent'
+    agentId?: string;
+    label: string;
+    category?: string;
+    status: CanvasNodeStatus;    // 'idle' | 'running' | 'complete' | 'error' | 'waiting'
+    position: { x: number; y: number };
+    assignedStage?: string;
+}
+
+interface CanvasEdge {
+    id: string;
+    source: string;
+    target: string;
+    animated?: boolean;
+    status?: 'idle' | 'active' | 'complete' | 'loop-back';
+}
+```
+
+<Note>
+For detailed usage instructions, see the [Pipeline Canvas User Guide](/guides/pipeline-canvas).
+</Note>
 
 ---
 
