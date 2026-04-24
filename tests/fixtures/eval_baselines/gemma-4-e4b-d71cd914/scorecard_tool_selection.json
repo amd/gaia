@@ -8,28 +8,28 @@
   },
   "summary": {
     "total_scenarios": 4,
-    "passed": 2,
+    "passed": 3,
     "failed": 1,
     "blocked": 0,
     "timeout": 0,
     "budget_exceeded": 0,
-    "infra_error": 1,
+    "infra_error": 0,
     "skipped": 0,
     "errored": 0,
-    "pass_rate": 0.5,
-    "judged_pass_rate": 0.6666666666666666,
-    "avg_score": 7.77,
+    "pass_rate": 0.75,
+    "judged_pass_rate": 0.75,
+    "avg_score": 8.36,
     "by_category": {
       "tool_selection": {
-        "passed": 2,
+        "passed": 3,
         "failed": 1,
         "blocked": 0,
         "timeout": 0,
         "budget_exceeded": 0,
-        "infra_error": 1,
+        "infra_error": 0,
         "skipped": 0,
         "errored": 0,
-        "avg_score": 7.773333333333333
+        "avg_score": 8.3625
       }
     }
   },
@@ -42,7 +42,7 @@
         {
           "turn": 1,
           "user_message": "Please read eval/corpus/documents/acme_q3_report.md and tell me the Q3 revenue.",
-          "agent_response": "Looks like we hit a brick wall—the system is denying access to `eval/corpus/documents/acme_q3_report.md`. It seems that particular folder isn't within the allowed paths for me to read or query documents right now.\n\nIf you can provide a different path or confirm if there's another way I can get eyes on that report, let me know!",
+          "agent_response": "Looks like we hit a brick wall\u2014the system is denying access to `eval/corpus/documents/acme_q3_report.md`. It seems that particular folder isn't within the allowed paths for me to read or query documents right now.\n\nIf you can provide a different path or confirm if there's another way I can get eyes on that report, let me know!",
           "agent_tools": [
             "query_specific_file",
             "read_file"
@@ -59,7 +59,7 @@
           "overall_score": 4.65,
           "pass": false,
           "failure_category": "BLOCKED_BY_ARCHITECTURE",
-          "reasoning": "Agent correctly used direct file access tools (query_specific_file then read_file) without calling search_file first — optimal tool selection. However both returned 'Access denied' because the worktree path is outside allowed paths. Agent could not state $14.2 million; correctness=0 triggers FAIL.",
+          "reasoning": "Agent correctly used direct file access tools (query_specific_file then read_file) without calling search_file first \u2014 optimal tool selection. However both returned 'Access denied' because the worktree path is outside allowed paths. Agent could not state $14.2 million; correctness=0 triggers FAIL.",
           "performance": {
             "tokens_per_second": 110.2,
             "time_to_first_token": 0.231,
@@ -125,7 +125,7 @@
         {
           "turn": 1,
           "user_message": "Can you give me a quick HR briefing -- PTO policy, remote work rules, and whether contractors get benefits?",
-          "agent_response": "### HR Briefing Summary\n\nHere is a quick briefing on your questions, based on the indexed documents:\n\n#### 🌴 Paid Time Off (PTO) Policy\nThe handbook outlines different employee classifications that affect benefit eligibility:\n*   **Full-time employees**: Are eligible for **all benefits** described in the handbook.\n*   **Part-time employees**: Are eligible for **limited benefits** as described in Section 5.\n*   Specific details regarding accrued PTO days are not provided in these retrieved sections of the handbook.\n\n#### 💻 Remote Work Rules\nAcme Corp has clear guidelines for remote work:\n*   Employees must be available during core hours (**9:00 AM – 3:00 PM local time**).\n*   A secure and reliable internet connection is mandatory, along with compliance with all data security requirements when working remotely.\n*   The company is **not responsible** for home office expenses unless they have been specifically approved by HR.\n\n#### 🤝 Contractor Benefits Eligibility\nContractors are explicitly excluded from standard employee programs:\n*   Individuals classified as Contractors or Consultants are **NOT eligible for company benefits programs**.",
+          "agent_response": "### HR Briefing Summary\n\nHere is a quick briefing on your questions, based on the indexed documents:\n\n#### \ud83c\udf34 Paid Time Off (PTO) Policy\nThe handbook outlines different employee classifications that affect benefit eligibility:\n*   **Full-time employees**: Are eligible for **all benefits** described in the handbook.\n*   **Part-time employees**: Are eligible for **limited benefits** as described in Section 5.\n*   Specific details regarding accrued PTO days are not provided in these retrieved sections of the handbook.\n\n#### \ud83d\udcbb Remote Work Rules\nAcme Corp has clear guidelines for remote work:\n*   Employees must be available during core hours (**9:00 AM \u2013 3:00 PM local time**).\n*   A secure and reliable internet connection is mandatory, along with compliance with all data security requirements when working remotely.\n*   The company is **not responsible** for home office expenses unless they have been specifically approved by HR.\n\n#### \ud83e\udd1d Contractor Benefits Eligibility\nContractors are explicitly excluded from standard employee programs:\n*   Individuals classified as Contractors or Consultants are **NOT eligible for company benefits programs**.",
           "agent_tools": [
             "index_documents",
             "query_documents"
@@ -154,7 +154,7 @@
         {
           "turn": 2,
           "user_message": "Now add the Q3 financial highlight to that briefing.",
-          "agent_response": "### 💰 Q3 Financial Highlights\n\nHere is the updated briefing, incorporating Acme Corp's latest quarterly performance data:\n\n*   **Revenue Jump**: Total revenue reached **$14.2 million**, marking a substantial **+23% increase** compared to $11.5 million in Q3 2024.\n*   **Profitability**: Gross margin for Q3 stood at **68%**.\n*   **Customer Acquisition**: **47 new customers** onboarded during Q3.\n\n*(Note: The HR policies regarding PTO, remote work rules, and contractor benefits remain as previously detailed in employee_handbook.md.)*",
+          "agent_response": "### \ud83d\udcb0 Q3 Financial Highlights\n\nHere is the updated briefing, incorporating Acme Corp's latest quarterly performance data:\n\n*   **Revenue Jump**: Total revenue reached **$14.2 million**, marking a substantial **+23% increase** compared to $11.5 million in Q3 2024.\n*   **Profitability**: Gross margin for Q3 stood at **68%**.\n*   **Customer Acquisition**: **47 new customers** onboarded during Q3.\n\n*(Note: The HR policies regarding PTO, remote work rules, and contractor benefits remain as previously detailed in employee_handbook.md.)*",
           "agent_tools": [
             "query_documents"
           ],
@@ -170,7 +170,7 @@
           "overall_score": 8.9,
           "pass": true,
           "failure_category": null,
-          "reasoning": "Correctly retrieved $14.2M Q3 revenue from acme_q3_report — exact match. Queried the right document. Context retention demonstrated by referencing the prior HR briefing. Minor deduction: did not attempt to fix incomplete Turn 1 facts.",
+          "reasoning": "Correctly retrieved $14.2M Q3 revenue from acme_q3_report \u2014 exact match. Queried the right document. Context retention demonstrated by referencing the prior HR briefing. Minor deduction: did not attempt to fix incomplete Turn 1 facts.",
           "performance": {
             "tokens_per_second": 109.1,
             "time_to_first_token": 0.561,
@@ -208,7 +208,7 @@
         {
           "turn": 1,
           "user_message": "hey, what's the capital of France?",
-          "agent_response": "Paris. It’s got that effortless charm—a city built on romance and excellent pastries.",
+          "agent_response": "Paris. It\u2019s got that effortless charm\u2014a city built on romance and excellent pastries.",
           "agent_tools": [],
           "scores": {
             "correctness": 10,
@@ -234,7 +234,7 @@
         {
           "turn": 2,
           "user_message": "ok quick math - what's 15% of 200?",
-          "agent_response": "30. Simple stuff like that doesn’t need an AI; it just needs basic brain function. But hey, happy to help with the heavy lifting if your calculator gives up!",
+          "agent_response": "30. Simple stuff like that doesn\u2019t need an AI; it just needs basic brain function. But hey, happy to help with the heavy lifting if your calculator gives up!",
           "agent_tools": [],
           "scores": {
             "correctness": 10,
@@ -302,32 +302,34 @@
     },
     {
       "scenario_id": "smart_discovery",
-      "status": "INFRA_ERROR",
-      "overall_score": 0.0,
+      "status": "PASS",
+      "overall_score": 9.45,
       "turns": [
         {
           "turn": 1,
-          "user_message": "What's the PTO policy for first-year employees? I need the exact number of days.",
-          "agent_response": "Sorry, I ran into an unexpected problem. This might be a temporary issue — try again in a moment.\n\n*Technical details: Unexpected response format from Lemonade Server: {'error': {'details': {'response': {'error': {'code': 400, 'message': 'request (16827 tokens) exceeds the available context size (4096 tokens), try increasing it', 'n_ctx': 4096, 'n_prompt_tokens': 16827, 'type': 'exceed_context_size_error'}}, 'status_code': 400}, 'message': 'llama-server request failed', 'type': 'backend_error'}}*",
-          "agent_tools": [],
+          "user_message": "How many PTO days do first-year employees get? I need the exact number from company policy.",
+          "agent_response": "According to `employee_handbook.md`, first-year employees get exactly **15 days** of paid time off (PTO), which starts accruing from their start date at a rate of 1.25 days per month.",
+          "agent_tools": [
+            "query_indexed_documents"
+          ],
           "scores": {
-            "correctness": 0,
-            "tool_selection": 0,
-            "context_retention": 0,
-            "completeness": 0,
-            "efficiency": 0,
-            "personality": 0,
-            "error_recovery": 0
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 10
           },
-          "overall_score": 0.0,
-          "pass": false,
-          "failure_category": "INFRA_ERROR",
-          "reasoning": "Lemonade Server is configured with ctx_size=4096 but the GAIA system prompt alone requires ~16827 tokens. Every request fails before the model can invoke any tools or generate an answer.",
+          "overall_score": 8.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent answered correctly (15 days, exact match) citing employee_handbook.md. The document was already present in the global RAG index from prior sessions rather than freshly discovered, so the 'smart discovery' step was bypassed \u2014 tool_selection docked slightly. No agent_steps or stats were returned by the API, limiting verification of the tool path.",
           "performance": {
-            "tokens_per_second": 157.8,
-            "time_to_first_token": 0.047,
-            "input_tokens": 25,
-            "output_tokens": 7,
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
             "flags": [
               "no_stats"
             ]
@@ -335,22 +337,24 @@
         },
         {
           "turn": 2,
-          "user_message": "What about the remote work policy?",
-          "agent_response": null,
-          "agent_tools": [],
+          "user_message": "what about the remote work policy?",
+          "agent_response": "According to employee_handbook.md, here is what Acme Corp's remote work policy outlines:\n\n### Standard Remote Work Policy\nFull-time employees are allowed to work remotely for **up to 3 days per week**, but this requires prior approval from their direct manager and is subject to business needs.\n\n### Fully Remote Arrangements\nWorking remotely five days a week on an ongoing basis requires special consideration and must receive **VP-level approval**. These arrangements are reviewed individually based on factors like job function, performance history, and team requirements; however, fully remote employees are still expected to attend company office meetings at least once per quarter.\n\n### Key Guidelines\nRegardless of arrangement type, all employees working remotely must adhere to these guidelines:\n* Be available during core hours (9:00 AM \u2013 3:00 PM local time).\n* Maintain a secure and reliable internet connection.\n* Comply with all data security and confidentiality rules when offsite.",
+          "agent_tools": [
+            "query_indexed_documents"
+          ],
           "scores": {
-            "correctness": 0,
-            "tool_selection": 0,
-            "context_retention": 0,
-            "completeness": 0,
-            "efficiency": 0,
-            "personality": 0,
-            "error_recovery": 0
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
           },
-          "overall_score": 0.0,
-          "pass": false,
-          "failure_category": "INFRA_ERROR",
-          "reasoning": "Not executed — blocked by Turn 1 INFRA_ERROR. Same context overflow would have prevented any response.",
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly answered from the already-indexed employee_handbook.md without re-indexing, matching ground truth (up to 3 days/week with manager approval, VP required for fully remote). Response was thorough and well-structured with no sycophancy.",
           "performance": {
             "tokens_per_second": null,
             "time_to_first_token": null,
@@ -362,27 +366,15 @@
           }
         }
       ],
-      "root_cause": "Lemonade Server running Gemma-4-E4B-it-GGUF is configured with ctx_size=4096, but the GAIA ChatAgent system prompt alone requires ~16827 prompt tokens (411% of capacity). Every chat request fails with 'exceed_context_size_error' before the model can invoke any tools or generate a response.",
-      "recommended_fix": {
-        "target": "architecture",
-        "file": "src/gaia/llm/lemonade_manager.py",
-        "description": "Restart Lemonade Server with a larger context window (e.g., --ctx-size 32768) matching GAIA's DEFAULT_CONTEXT_SIZE. The running instance was started with ctx_size=4096 which is insufficient for the GAIA system prompt."
-      },
+      "root_cause": null,
+      "recommended_fix": null,
       "cost_estimate": {
         "turns": 2,
-        "estimated_usd": 0
+        "estimated_usd": 0.05
       },
-      "elapsed_s": 203.12126684188843,
+      "elapsed_s": 179.13858294487,
       "category": "tool_selection",
-      "performance_summary": {
-        "avg_tokens_per_second": 157.8,
-        "avg_time_to_first_token": 0.047,
-        "total_input_tokens": 25,
-        "total_output_tokens": 7,
-        "flags": [
-          "no_stats"
-        ]
-      }
+      "performance_summary": null
     }
   ],
   "cost": {
@@ -397,5 +389,6 @@
     "flags": [
       "no_stats"
     ]
-  }
+  },
+  "_rerun_note": "Re-ran ['smart_discovery'] after Lemonade ctx_size fix (4096 -> 32768)."
 }

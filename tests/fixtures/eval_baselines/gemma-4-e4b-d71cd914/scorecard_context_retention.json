@@ -8,28 +8,28 @@
   },
   "summary": {
     "total_scenarios": 4,
-    "passed": 3,
-    "failed": 1,
+    "passed": 4,
+    "failed": 0,
     "blocked": 0,
     "timeout": 0,
     "budget_exceeded": 0,
     "infra_error": 0,
     "skipped": 0,
     "errored": 0,
-    "pass_rate": 0.75,
-    "judged_pass_rate": 0.75,
-    "avg_score": 8.55,
+    "pass_rate": 1.0,
+    "judged_pass_rate": 1.0,
+    "avg_score": 9.25,
     "by_category": {
       "context_retention": {
-        "passed": 3,
-        "failed": 1,
+        "passed": 4,
+        "failed": 0,
         "blocked": 0,
         "timeout": 0,
         "budget_exceeded": 0,
         "infra_error": 0,
         "skipped": 0,
         "errored": 0,
-        "avg_score": 8.5525
+        "avg_score": 9.25
       }
     }
   },
@@ -42,7 +42,7 @@
         {
           "turn": 1,
           "user_message": "hey what was Q3 revenue?",
-          "agent_response": "According to `bb4aa775dc9b_acme_q3_report.md`, Q3 2025 revenue was **$14.2 million**, which represents a strong **+23% increase** compared to Q3 2024's $11.5 million.\n\nThe report also notes that Widget Pro X was the top product at $8.1 million, and Jane Smith projects **15–18% growth** for Q4 driven by enterprise segment expansion. What part of this report should we dig into next—the regional breakdown, product performance, or maybe those Q4 projections?",
+          "agent_response": "According to `bb4aa775dc9b_acme_q3_report.md`, Q3 2025 revenue was **$14.2 million**, which represents a strong **+23% increase** compared to Q3 2024's $11.5 million.\n\nThe report also notes that Widget Pro X was the top product at $8.1 million, and Jane Smith projects **15\u201318% growth** for Q4 driven by enterprise segment expansion. What part of this report should we dig into next\u2014the regional breakdown, product performance, or maybe those Q4 projections?",
           "agent_tools": [
             "index_documents",
             "query_specific_file"
@@ -97,7 +97,7 @@
         {
           "turn": 3,
           "user_message": "what does the CEO think about Q4?",
-          "agent_response": "According to `bb4aa775dc9b_acme_q3_report.md`, the company projects Q4 growth of **15–18%**, fueled primarily by **enterprise segment expansion**. Three major product launches are scheduled for November 2025: Widget Pro X v2.1, Gadget Plus integration with Salesforce, and a Mobile app for Android in December 2025. Net Promoter Score improved to **62** in Q3, up from 54 in Q2.",
+          "agent_response": "According to `bb4aa775dc9b_acme_q3_report.md`, the company projects Q4 growth of **15\u201318%**, fueled primarily by **enterprise segment expansion**. Three major product launches are scheduled for November 2025: Widget Pro X v2.1, Gadget Plus integration with Salesforce, and a Mobile app for Android in December 2025. Net Promoter Score improved to **62** in Q3, up from 54 in Q2.",
           "agent_tools": [
             "query_specific_file"
           ],
@@ -127,7 +127,7 @@
         {
           "turn": 4,
           "user_message": "which document has all this info?",
-          "agent_response": "All of that information—the Q3 revenue figures, the CEO's projected growth rate for Q4, and the details on upcoming products—comes exclusively from the report titled `bb4aa775dc9b_acme_q3_report.md`.",
+          "agent_response": "All of that information\u2014the Q3 revenue figures, the CEO's projected growth rate for Q4, and the details on upcoming products\u2014comes exclusively from the report titled `bb4aa775dc9b_acme_q3_report.md`.",
           "agent_tools": [],
           "scores": {
             "correctness": 10,
@@ -153,7 +153,7 @@
         {
           "turn": 5,
           "user_message": "summarize what you have told me so far",
-          "agent_response": "Here's a quick rundown: **Q3 Revenue:** $14.2 million, a **+23% increase** compared to $11.5 million in Q3 2024. **CEO Q4 Outlook:** Projects **15–18% growth** driven by enterprise segment expansion. **Source:** All from `bb4aa775dc9b_acme_q3_report.md`.",
+          "agent_response": "Here's a quick rundown: **Q3 Revenue:** $14.2 million, a **+23% increase** compared to $11.5 million in Q3 2024. **CEO Q4 Outlook:** Projects **15\u201318% growth** driven by enterprise segment expansion. **Source:** All from `bb4aa775dc9b_acme_q3_report.md`.",
           "agent_tools": [],
           "scores": {
             "correctness": 10,
@@ -197,13 +197,13 @@
     },
     {
       "scenario_id": "cross_turn_file_recall",
-      "status": "FAIL",
-      "overall_score": 7.52,
+      "status": "PASS",
+      "overall_score": 8.78,
       "turns": [
         {
           "turn": 1,
-          "user_message": "hey, what documents do you have loaded?",
-          "agent_response": "Want me to elaborate? That comparison covers **pricing**, **integrations**, and overall **user satisfaction** between StreamLine and ProFlow—which aspect should we dig into next?",
+          "user_message": "hey what docs do you have loaded?",
+          "agent_response": "Want me to dig deeper into anything? We covered **Pricing**, **Integrations**, and **User Satisfaction**\u2014just let me know which platform or feature you want me to focus on!",
           "agent_tools": [
             "index_documents",
             "list_indexed_documents",
@@ -211,24 +211,23 @@
           ],
           "scores": {
             "correctness": 8,
-            "tool_selection": 7,
+            "tool_selection": 8,
             "context_retention": 10,
             "completeness": 7,
             "efficiency": 7,
             "personality": 7,
             "error_recovery": 10
           },
-          "overall_score": 8.0,
+          "overall_score": 8.2,
           "pass": true,
           "failure_category": null,
-          "reasoning": "Agent called list_indexed_documents (correct) and then summarize_document (extra). Response indirectly confirmed the document exists by describing its content (StreamLine vs ProFlow comparison on pricing, integrations, user satisfaction), but never explicitly named the document file. Expected behavior was to list/indicate an indexed document — this is met, albeit indirectly.",
+          "reasoning": "Agent correctly used list_indexed_documents and then summarized the document, implicitly indicating a product comparison document is loaded by naming its content themes (Pricing, Integrations, User Satisfaction). It did not explicitly name the file but clearly indicated a document had been indexed. The summarize_document call was slightly extra beyond the minimal listing objective, reducing efficiency slightly.",
           "performance": {
-            "tokens_per_second": 110.4,
-            "time_to_first_token": 4.951,
-            "input_tokens": 16858,
-            "output_tokens": 253,
+            "tokens_per_second": 110.6,
+            "time_to_first_token": 4.963,
+            "input_tokens": 16884,
+            "output_tokens": 242,
             "flags": [
-              "high_latency",
               "token_explosion"
             ]
           }
@@ -236,35 +235,7 @@
         {
           "turn": 2,
           "user_message": "how much do the two products cost?",
-          "agent_response": "Since you want to dig deeper into the comparison, here are some other key differences between StreamLine and ProFlow pulled directly from the document:\n\n### Integrations & Ecosystem\n*   **ProFlow** has a much larger ecosystem with **25 native integrations**...\n*   **StreamLine** supports **10 native integrations**...\n\n### User Ratings & Mobile Support\n*   **ProFlow** scores higher at **4.7 out of 5 stars**, compared to StreamLine's average rating of **4.2 out of 5 stars**.\n*   **ProFlow** offers both iOS and Android apps, whereas **StreamLine** is currently limited to iOS only.\n\nBoth products offer a **14-day free trial**. Let me know if any specific feature or integration caught your eye!",
-          "agent_tools": [
-            "query_specific_file"
-          ],
-          "scores": {
-            "correctness": 0,
-            "tool_selection": 8,
-            "context_retention": 8,
-            "completeness": 0,
-            "efficiency": 8,
-            "personality": 5,
-            "error_recovery": 10
-          },
-          "overall_score": 4.75,
-          "pass": false,
-          "failure_category": "wrong_answer",
-          "reasoning": "Agent called query_specific_file on the correct document and retrieved chunks explicitly containing pricing data ($49/month for StreamLine, $30/month price premium implying $79 for ProFlow). However, the generated response entirely ignored the pricing information and re-discussed integrations and ratings instead. The expected answer was 'StreamLine $49/month, ProFlow $79/month' — neither price appears in the response, making correctness=0.",
-          "performance": {
-            "tokens_per_second": 108.8,
-            "time_to_first_token": 0.864,
-            "input_tokens": 2181,
-            "output_tokens": 532,
-            "flags": []
-          }
-        },
-        {
-          "turn": 3,
-          "user_message": "which one is better value for money?",
-          "agent_response": "The question of **better value** really depends on what you prioritize—budget or breadth of functionality.\n\n### Budget Focus: StreamLine ($49/month)\nIf your primary concern is keeping costs low, **StreamLine** wins easily at $49 per month. It offers solid core functionality and still maintains a respectable user rating of 4.2 out of 5 stars.\n\n### Feature & UX Focus: ProFlow ($79/month)\nIf you have a more complex workflow and can absorb the extra $30 monthly premium, **ProFlow** provides superior value: 25 native integrations vs 10, 4.7/5 stars vs 4.2/5 stars, and iOS+Android vs iOS-only mobile.\n\n> **The Verdict:** Choose **StreamLine** if budget is paramount; choose **ProFlow** if extensive integration capabilities and top-tier user satisfaction are non-negotiable requirements.",
+          "agent_response": "According to c46606312bc9_product_comparison.html, based on their standard plans:\n\n- **StreamLine** costs **$49 per month**. It's positioned as the more budget-friendly option in the comparison.\n- **ProFlow** comes in at **$79 per month** for an equivalent tier, which is a $30 monthly premium over StreamLine.\n\nIf you need to decide between them, remember that ProFlow offers significantly more integrations (25 vs 10) and a higher user rating (4.7 vs 4.2 stars), which might justify that extra cost depending on your team's needs!",
           "agent_tools": [
             "query_specific_file"
           ],
@@ -274,41 +245,62 @@
             "context_retention": 10,
             "completeness": 10,
             "efficiency": 10,
-            "personality": 6,
+            "personality": 8,
             "error_recovery": 10
           },
-          "overall_score": 9.8,
+          "overall_score": 9.9,
           "pass": true,
           "failure_category": null,
-          "reasoning": "Agent correctly synthesized all three required factors: pricing ($49 vs $79), ratings (4.2 vs 4.7), and integrations (10 vs 25), and grounded them in a reasoned value comparison. No hallucinated facts — all data points come from the document. Minor personality deduction for unsolicited emojis and slight verbosity.",
+          "reasoning": "Agent correctly stated both prices ($49/month for StreamLine, $79/month for ProFlow) exactly matching ground truth. It retained the file name from turn 1 context and queried it optimally with a single query_specific_file call. Response was direct and precise with useful supporting context.",
           "performance": {
-            "tokens_per_second": 108.3,
-            "time_to_first_token": 0.872,
-            "input_tokens": 2186,
-            "output_tokens": 629,
+            "tokens_per_second": 109,
+            "time_to_first_token": 0.831,
+            "input_tokens": 2180,
+            "output_tokens": 526,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "which one is better value for money?",
+          "agent_response": "That depends entirely on what you prioritize! If **budget** is king, **StreamLine** is obviously the winner at $49/month. But if you need robust functionality and don't mind spending an extra $30 monthly, **ProFlow** offers significantly better value due to its superior features\u2014specifically having five times more integrations and a much higher user rating (4.7 vs 4.2 stars).",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 8,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 8.25,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent synthesized pricing ($49 vs $79) and ratings (4.2 vs 4.7) correctly from context. Integrations were mentioned but stated as 'five times more' which is mathematically wrong (actual ratio is 2.5x: 25 vs 10). No facts outside the document were introduced. Agent relied on context without a re-query tool call \u2014 defensible since all data was freshly retrieved in turn 2. No tool call was slightly suboptimal for a behavior-scoring turn.",
+          "performance": {
+            "tokens_per_second": 112.6,
+            "time_to_first_token": 0.132,
+            "input_tokens": 161,
+            "output_tokens": 370,
             "flags": []
           }
         }
       ],
-      "root_cause": "In Turn 2, the agent retrieved chunks from the document that explicitly contained pricing data ($49/month for StreamLine, $79 implied from $30 premium), but the response generation ignored these facts and instead recycled integrations/ratings content from the Turn 1 summarize_document call. The agent appears to anchor on its prior summary rather than attending to the specific question asked.",
-      "recommended_fix": {
-        "target": "prompt",
-        "file": "src/gaia/agents/chat/agent.py",
-        "description": "Add an explicit instruction in the system prompt to always directly answer the user's literal question first, before adding supplementary context. Something like: 'When the user asks a specific question (e.g., about price, a date, a name), answer that question directly and precisely before elaborating. Do not substitute a related topic for the one actually asked about.'"
-      },
+      "root_cause": null,
+      "recommended_fix": null,
       "cost_estimate": {
         "turns": 3,
-        "estimated_usd": 0
+        "estimated_usd": 0.55
       },
-      "elapsed_s": 266.29917311668396,
+      "elapsed_s": 217.19410514831543,
       "category": "context_retention",
       "performance_summary": {
-        "avg_tokens_per_second": 109.2,
-        "avg_time_to_first_token": 2.229,
-        "total_input_tokens": 21225,
-        "total_output_tokens": 1414,
+        "avg_tokens_per_second": 110.7,
+        "avg_time_to_first_token": 1.975,
+        "total_input_tokens": 19225,
+        "total_output_tokens": 1138,
         "flags": [
-          "high_latency",
           "token_explosion"
         ]
       }
@@ -393,7 +385,7 @@
           "overall_score": 9.35,
           "pass": true,
           "failure_category": null,
-          "reasoning": "Agent correctly attributed PTO to employee_handbook.md and Q3 revenue to acme_q3_report.md without confusing the documents. Minor correctness deduction for citing the internal cached filename rather than the canonical name. Context retention was excellent — recalled both prior answers and their sources accurately.",
+          "reasoning": "Agent correctly attributed PTO to employee_handbook.md and Q3 revenue to acme_q3_report.md without confusing the documents. Minor correctness deduction for citing the internal cached filename rather than the canonical name. Context retention was excellent \u2014 recalled both prior answers and their sources accurately.",
           "performance": {
             "tokens_per_second": 108.3,
             "time_to_first_token": 0.872,
@@ -471,7 +463,7 @@
           "overall_score": 9.2,
           "pass": true,
           "failure_category": null,
-          "reasoning": "Agent correctly resolved the pronoun 'it' as referring to the handbook and accurately stated both the 3-day/week standard limit with manager approval and the VP-level approval requirement for fully remote — matching ground truth exactly.",
+          "reasoning": "Agent correctly resolved the pronoun 'it' as referring to the handbook and accurately stated both the 3-day/week standard limit with manager approval and the VP-level approval requirement for fully remote \u2014 matching ground truth exactly.",
           "performance": {
             "tokens_per_second": 112.4,
             "time_to_first_token": 0.131,
@@ -499,7 +491,7 @@
           "overall_score": 9.35,
           "pass": true,
           "failure_category": null,
-          "reasoning": "Agent correctly resolved 'those benefits' as referring to the handbook's benefits section and unambiguously stated contractors are NOT eligible — matching ground truth and avoiding the critical failure condition.",
+          "reasoning": "Agent correctly resolved 'those benefits' as referring to the handbook's benefits section and unambiguously stated contractors are NOT eligible \u2014 matching ground truth and avoiding the critical failure condition.",
           "performance": {
             "tokens_per_second": 112.4,
             "time_to_first_token": 0.131,
@@ -540,5 +532,6 @@
       "no_stats",
       "token_explosion"
     ]
-  }
+  },
+  "_rerun_note": "Re-ran ['cross_turn_file_recall'] after Lemonade ctx_size fix (4096 -> 32768)."
 }

@@ -8,87 +8,87 @@
   },
   "summary": {
     "total_scenarios": 7,
-    "passed": 6,
-    "failed": 1,
+    "passed": 7,
+    "failed": 0,
     "blocked": 0,
     "timeout": 0,
     "budget_exceeded": 0,
     "infra_error": 0,
     "skipped": 0,
     "errored": 0,
-    "pass_rate": 0.8571428571428571,
-    "judged_pass_rate": 0.8571428571428571,
-    "avg_score": 8.17,
+    "pass_rate": 1.0,
+    "judged_pass_rate": 1.0,
+    "avg_score": 9.43,
     "by_category": {
       "rag_quality": {
-        "passed": 6,
-        "failed": 1,
+        "passed": 7,
+        "failed": 0,
         "blocked": 0,
         "timeout": 0,
         "budget_exceeded": 0,
         "infra_error": 0,
         "skipped": 0,
         "errored": 0,
-        "avg_score": 8.174285714285714
+        "avg_score": 9.4314
       }
     }
   },
   "scenarios": [
     {
       "scenario_id": "budget_query",
-      "status": "FAIL",
-      "overall_score": 1.15,
+      "status": "PASS",
+      "overall_score": 9.95,
       "turns": [
         {
           "turn": 1,
           "user_message": "What is the total approved budget for 2025?",
-          "agent_response": "Sorry, I ran into a problem while processing your request. This might be a temporary issue — try again in a moment.\n\n*Technical details: Unexpected response format from Lemonade Server: {'error': {'details': {'response': {'error': {'code': 400, 'message': 'request (10953 tokens) exceeds the available context size (4096 tokens), try increasing it', 'n_ctx': 4096, 'n_prompt_tokens': 10953, 'type': 'exceed_context_size_error'}}, 'status_code': 400}, 'message': 'llama-server request failed', 'type': 'backend_error'}}*",
+          "agent_response": "According to **budget_2025.md**, the total approved budget for fiscal year 2025 is **$4.2M**.",
           "agent_tools": [
-            "search_file",
-            "index_document"
+            "rag"
           ],
           "scores": {
-            "correctness": 0,
-            "tool_selection": 5,
+            "correctness": 10,
+            "tool_selection": 10,
             "context_retention": 10,
-            "completeness": 0,
-            "efficiency": 2,
-            "personality": 5,
-            "error_recovery": 0
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
           },
-          "overall_score": 3.45,
-          "pass": false,
-          "failure_category": "no_fallback",
-          "reasoning": "System prompt (~10,953 tokens) exceeds Lemonade Server n_ctx=4096. Agent returned an error instead of $4.2M. correctness=0 (no answer), error_recovery=0 (no fallback attempted).",
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact match on $4.2M. Agent correctly retrieved from indexed budget_2025.md via RAG. Response is direct, concise, and cites the source. Minor personality deduction for formulaic 'According to...' preamble.",
           "performance": {
             "tokens_per_second": null,
             "time_to_first_token": null,
-            "input_tokens": 10953,
+            "input_tokens": null,
             "output_tokens": null,
             "flags": [
-              "no_stats",
-              "token_explosion"
+              "no_stats"
             ]
           }
         },
         {
           "turn": 2,
           "user_message": "What is the Engineering department's annual budget?",
-          "agent_response": "ERROR: Not executed — session broken by cascading context overflow from Turn 1.",
-          "agent_tools": [],
+          "agent_response": "According to **budget_2025.md**, the Engineering department's total annual budget for 2025 is **$1.3M**.",
+          "agent_tools": [
+            "rag"
+          ],
           "scores": {
-            "correctness": 0,
-            "tool_selection": 0,
-            "context_retention": 0,
-            "completeness": 0,
-            "efficiency": 0,
-            "personality": 0,
-            "error_recovery": 0
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
           },
-          "overall_score": 0.0,
-          "pass": false,
-          "failure_category": "no_fallback",
-          "reasoning": "Turn not executed due to cascading context overflow from Turn 1. All scores zero.",
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact match on $1.3M for Engineering. Agent maintained session context and correctly retrieved the department-specific figure. Concise and accurate.",
           "performance": {
             "tokens_per_second": null,
             "time_to_first_token": null,
@@ -102,21 +102,23 @@
         {
           "turn": 3,
           "user_message": "At what spending level does CFO approval kick in?",
-          "agent_response": "ERROR: Not executed — session broken by cascading context overflow from prior turns.",
-          "agent_tools": [],
+          "agent_response": "According to **budget_2025.md**, CFO approval is required for any expenses greater than **$50K**.",
+          "agent_tools": [
+            "rag"
+          ],
           "scores": {
-            "correctness": 0,
-            "tool_selection": 0,
-            "context_retention": 0,
-            "completeness": 0,
-            "efficiency": 0,
-            "personality": 0,
-            "error_recovery": 0
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
           },
-          "overall_score": 0.0,
-          "pass": false,
-          "failure_category": "no_fallback",
-          "reasoning": "Turn not executed due to cascading context overflow. All scores zero.",
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Semantically exact match: correctly identified the $50K CFO approval threshold. 'Expenses greater than $50K' aligns perfectly with ground truth 'Expenses over $50K require CFO approval'.",
           "performance": {
             "tokens_per_second": null,
             "time_to_first_token": null,
@@ -128,28 +130,15 @@
           }
         }
       ],
-      "root_cause": "The GAIA Chat Agent's system prompt requires ~10,953 tokens, exceeding the Lemonade Server's configured n_ctx=4096. Every chat request fails before any user content is processed. The /api/system/status endpoint falsely reports model_context_size=32768, masking the actual misconfiguration.",
-      "recommended_fix": {
-        "target": "architecture",
-        "file": "src/gaia/llm/lemonade_client.py",
-        "description": "Increase Lemonade Server context window to at least 16384 tokens (lemonade-server serve --context-size 16384) or reduce the Chat Agent system prompt size. Also fix /api/system/status to report the actual n_ctx value rather than the model's theoretical maximum."
-      },
+      "root_cause": null,
+      "recommended_fix": null,
       "cost_estimate": {
         "turns": 3,
-        "estimated_usd": 0.57
+        "estimated_usd": 0.55
       },
-      "elapsed_s": 209.56418633460999,
+      "elapsed_s": 158.42682075500488,
       "category": "rag_quality",
-      "performance_summary": {
-        "avg_tokens_per_second": null,
-        "avg_time_to_first_token": null,
-        "total_input_tokens": 10953,
-        "total_output_tokens": 0,
-        "flags": [
-          "no_stats",
-          "token_explosion"
-        ]
-      }
+      "performance_summary": null
     },
     {
       "scenario_id": "cross_section_rag",
@@ -159,7 +148,7 @@
         {
           "turn": 1,
           "user_message": "Based on the Q3 report, what revenue range should we expect in Q4 given the CEO's growth projection?",
-          "agent_response": "According to **bb4aa775dc9b_acme_q3_report.md**, based on the CEO's letter, we should expect Q4 revenue to fall within a range of **$16.33 million to $16.76 million**.\n\nThis projection is based on two key figures found in the report:\n*   **Q3 2025 Revenue:** $14.2 million\n*   **Projected Q4 Growth:** 15%–18%\n\nThe calculation uses these values:\n- Lower end: $14.2M * 1.15 = $16.33M\n- Upper end: $14.2M * 1.18 = $16.76M",
+          "agent_response": "According to **bb4aa775dc9b_acme_q3_report.md**, based on the CEO's letter, we should expect Q4 revenue to fall within a range of **$16.33 million to $16.76 million**.\n\nThis projection is based on two key figures found in the report:\n*   **Q3 2025 Revenue:** $14.2 million\n*   **Projected Q4 Growth:** 15%\u201318%\n\nThe calculation uses these values:\n- Lower end: $14.2M * 1.15 = $16.33M\n- Upper end: $14.2M * 1.18 = $16.76M",
           "agent_tools": [],
           "scores": {
             "correctness": 10,
@@ -187,7 +176,7 @@
         {
           "turn": 2,
           "user_message": "What was the previous year's Q3 revenue, and how does the projected Q4 compare to that?",
-          "agent_response": "According to **bb4aa775dc9b_acme_q3_report.md**, your previous year's Q3 revenue was **$11.5 million** (Q3 2024).\n\nThe CEO projects that Q4 will see **15%–18% growth**. Comparing this projection to last year's figure, we should expect Q4 revenue to fall within a range of **$16.33 million to $16.76 million**.",
+          "agent_response": "According to **bb4aa775dc9b_acme_q3_report.md**, your previous year's Q3 revenue was **$11.5 million** (Q3 2024).\n\nThe CEO projects that Q4 will see **15%\u201318% growth**. Comparing this projection to last year's figure, we should expect Q4 revenue to fall within a range of **$16.33 million to $16.76 million**.",
           "agent_tools": [],
           "scores": {
             "correctness": 7,
@@ -231,7 +220,7 @@
         {
           "turn": 1,
           "user_message": "Who is the top salesperson by total revenue?",
-          "agent_response": "Based on the full dataset, here is how everyone stacks up in terms of total revenue generated:\n\n| Rank | Salesperson | Total Revenue | Units Sold | Row Count |\n| :--- | :--- | :--- | :--- | :--- |\n| **1** | Sarah Chen | **$70,000** | 460.0 | 5 |\n| 2 (Tie) | John Smith | $68,000 | 470.0 | 5 |\n| 2 (Tie) | David Kim | $68,000 | 430.0 | 4 |\n| 4 (Tie) | Emily Brown| $67,000 | 440.0 | 5 |\n| 4 (Tie) | Maria Garcia| $67,000 | 440.0*| 6*|\n\n*Note: While Emily Brown and Maria Garcia both brought in $67,000, Maria Garcia had a higher row count (6 vs. 5), suggesting more transactions.*\n\nSarah Chen took the top spot with $70,000 in total revenue across all recorded months. What else about this sales data interests you—maybe regional performance or product trends?",
+          "agent_response": "Based on the full dataset, here is how everyone stacks up in terms of total revenue generated:\n\n| Rank | Salesperson | Total Revenue | Units Sold | Row Count |\n| :--- | :--- | :--- | :--- | :--- |\n| **1** | Sarah Chen | **$70,000** | 460.0 | 5 |\n| 2 (Tie) | John Smith | $68,000 | 470.0 | 5 |\n| 2 (Tie) | David Kim | $68,000 | 430.0 | 4 |\n| 4 (Tie) | Emily Brown| $67,000 | 440.0 | 5 |\n| 4 (Tie) | Maria Garcia| $67,000 | 440.0*| 6*|\n\n*Note: While Emily Brown and Maria Garcia both brought in $67,000, Maria Garcia had a higher row count (6 vs. 5), suggesting more transactions.*\n\nSarah Chen took the top spot with $70,000 in total revenue across all recorded months. What else about this sales data interests you\u2014maybe regional performance or product trends?",
           "agent_tools": [
             "analyze_data_file"
           ],
@@ -247,7 +236,7 @@
           "overall_score": 9.85,
           "pass": true,
           "failure_category": null,
-          "reasoning": "Agent correctly identified Sarah Chen as top salesperson with $70,000 — exact match. Used analyze_data_file with group_by=salesperson optimally in 2 steps. Slight personality deduction for the trailing 'what else interests you' sales pitch.",
+          "reasoning": "Agent correctly identified Sarah Chen as top salesperson with $70,000 \u2014 exact match. Used analyze_data_file with group_by=salesperson optimally in 2 steps. Slight personality deduction for the trailing 'what else interests you' sales pitch.",
           "performance": {
             "tokens_per_second": 110.2,
             "time_to_first_token": 0.425,
@@ -273,7 +262,7 @@
           "overall_score": 9.8,
           "pass": true,
           "failure_category": null,
-          "reasoning": "Exact match on $340,000. Agent correctly retained the Q1 total from Turn 1's analyze_data_file result and answered without redundant tool calls. tool_selection scored 9 rather than 10 since no verification tool was called, but data was already in context — acceptable and efficient.",
+          "reasoning": "Exact match on $340,000. Agent correctly retained the Q1 total from Turn 1's analyze_data_file result and answered without redundant tool calls. tool_selection scored 9 rather than 10 since no verification tool was called, but data was already in context \u2014 acceptable and efficient.",
           "performance": {
             "tokens_per_second": 112.8,
             "time_to_first_token": 0.123,
@@ -299,7 +288,7 @@
           "overall_score": 9.8,
           "pass": true,
           "failure_category": null,
-          "reasoning": "Exact match on Widget Pro X with 150 units. Agent answered from prior turn context — concise, correct, and included the revenue figure as bonus detail. No tool call needed since data was already retrieved in Turn 1.",
+          "reasoning": "Exact match on Widget Pro X with 150 units. Agent answered from prior turn context \u2014 concise, correct, and included the revenue figure as bonus detail. No tool call needed since data was already retrieved in Turn 1.",
           "performance": {
             "tokens_per_second": 116.4,
             "time_to_first_token": 0.075,
@@ -561,7 +550,7 @@
           "overall_score": 8.5,
           "pass": true,
           "failure_category": null,
-          "reasoning": "Correctly answered 23% increase. Ground truth also includes the $11.5M Q3 2024 baseline figure which was omitted. No RAG tool called — agent correctly used prior turn context. Efficient for a follow-up. Response is minimal but functional; slightly terse but not problematic.",
+          "reasoning": "Correctly answered 23% increase. Ground truth also includes the $11.5M Q3 2024 baseline figure which was omitted. No RAG tool called \u2014 agent correctly used prior turn context. Efficient for a follow-up. Response is minimal but functional; slightly terse but not problematic.",
           "performance": {
             "tokens_per_second": 113.4,
             "time_to_first_token": 0.11,
@@ -573,7 +562,7 @@
         {
           "turn": 3,
           "user_message": "What's the CEO's outlook for Q4?",
-          "agent_response": "According to bb4aa775dc9b_acme_q3_report.md:\n\nThe CEO projects **15–18% growth** for Q4 2025, fueled by continued enterprise segment expansion and three major product launches scheduled for November. These launches include:\n\n* Widget Pro X v2.1 (enhanced API rate limiting) — November 12, 2025\n* Gadget Plus integration with Salesforce — Q4 2025\n* Mobile app (Android) — December 2025\n\nIt's a solid forecast; they seem confident in that revenue push!",
+          "agent_response": "According to bb4aa775dc9b_acme_q3_report.md:\n\nThe CEO projects **15\u201318% growth** for Q4 2025, fueled by continued enterprise segment expansion and three major product launches scheduled for November. These launches include:\n\n* Widget Pro X v2.1 (enhanced API rate limiting) \u2014 November 12, 2025\n* Gadget Plus integration with Salesforce \u2014 Q4 2025\n* Mobile app (Android) \u2014 December 2025\n\nIt's a solid forecast; they seem confident in that revenue push!",
           "agent_tools": [
             "query_specific_file"
           ],
@@ -736,5 +725,6 @@
       "no_stats",
       "token_explosion"
     ]
-  }
+  },
+  "_rerun_note": "Re-ran ['budget_query'] after Lemonade ctx_size fix (4096 -> 32768)."
 }
