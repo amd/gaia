@@ -15,11 +15,5 @@
     "All new features require tests in tests/ and documentation in docs/ (.mdx format for Mintlify)",
     "Use 'uv pip install -e .[dev]' for development setup",
     "The code index (gaia.code_index) provides semantic search over repositories using local FAISS + Lemonade embeddings"
-  ],
-  "previousVersions": [
-    {"tag": "v0.17.1"},
-    {"tag": "v0.17.0"},
-    {"tag": "v0.16.0"},
-    {"tag": "v0.15.0"}
   ]
 }
