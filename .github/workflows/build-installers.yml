@@ -463,6 +463,31 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: src/gaia/apps/webui/dist-app/
 
+      # ─── Build Python wheel (Linux release builds only) ─────────────
+      # The wheel is consumed by the AppImage smoke tests so they can
+      # install the backend from a local file instead of pulling from PyPI.
+      # This breaks the circular dependency where smoke tests run before
+      # PyPI publish in the release pipeline.
+      - name: Build Python wheel
+        if: matrix.platform == 'linux'
+        id: build-wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install build --quiet
+          python -m build --wheel --outdir /tmp/gaia-wheel
+          WHEEL=$(ls /tmp/gaia-wheel/*.whl | head -n1)
+          echo "path=${WHEEL}" >> "$GITHUB_OUTPUT"
+          echo "Built wheel: ${WHEEL}"
+
+      - name: Upload Python wheel artifact
+        if: matrix.platform == 'linux' && steps.build-wheel.outputs.path != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: gaia-wheel
+          path: /tmp/gaia-wheel/*.whl
+          retention-days: 14
+
   # ─── AppImage smoke tests (issue #782) ──────────────────────────────
   # Consume the linux-installer artifact produced by the `build` matrix
   # and run structural + distro-level smoke checks against the AppImage.
@@ -522,6 +547,35 @@ jobs:
           name: linux-installer
           path: ${{ runner.temp }}/linux-installer
 
+      # Download the Python wheel built alongside the installer so the
+      # AppImage smoke test can install from a local file instead of PyPI.
+      # continue-on-error: the wheel is absent on PR builds (fine — PyPI
+      # still has the previous release), but required on release builds.
+      - name: Download Python wheel
+        id: download-wheel
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: gaia-wheel
+          path: ${{ runner.temp }}/gaia-wheel
+
+      - name: Locate Python wheel
+        id: locate-wheel
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          WHEEL=$(ls "${RUNNER_TEMP}/gaia-wheel"/*.whl 2>/dev/null | head -n1 || true)
+          echo "path=${WHEEL}" >> "$GITHUB_OUTPUT"
+          if [ -n "${WHEEL}" ]; then
+            echo "Found wheel: ${WHEEL} — smoke tests will use GAIA_LOCAL_WHEEL"
+          elif [ -n "${RELEASE_TAG}" ]; then
+            echo "::error::No Python wheel artifact found for release build (tag=${RELEASE_TAG}). The wheel is required to avoid the PyPI circular dependency — the Build Python wheel step must have failed."
+            exit 1
+          else
+            echo "No wheel artifact — smoke tests will install from PyPI (non-release build)"
+          fi
+
       - name: Prepare AppImage
         id: prep
         shell: bash
@@ -540,6 +594,7 @@ jobs:
         shell: bash
         env:
           APPIMAGE_HOST: ${{ steps.prep.outputs.appimage }}
+          WHEEL_PATH: ${{ steps.locate-wheel.outputs.path }}
         run: |
           set -euo pipefail
 
@@ -551,6 +606,20 @@ jobs:
             -f tests/electron/fixtures/Dockerfile.fedora-41 \
             tests/electron/fixtures
 
+          # If a local wheel is available, mount it and set GAIA_LOCAL_WHEEL
+          # so the AppImage installs the backend from file instead of PyPI.
+          # This is the release-pipeline path — on PR builds WHEEL_PATH is
+          # empty and the app falls back to pulling from PyPI normally.
+          WHEEL_MOUNTS=()
+          if [ -n "${WHEEL_PATH}" ]; then
+            WHEEL_BASENAME=$(basename "${WHEEL_PATH}")
+            WHEEL_DIR=$(dirname "${WHEEL_PATH}")
+            WHEEL_MOUNTS=(
+              -v "${WHEEL_DIR}:/work/wheels:ro"
+              --env "GAIA_LOCAL_WHEEL=/work/wheels/${WHEEL_BASENAME}"
+            )
+          fi
+
           DOCKER_RUN_COMMON=(
             --rm
             --cap-add SYS_ADMIN
@@ -559,6 +628,8 @@ jobs:
             --security-opt apparmor=unconfined
             --ipc=host
             -v "${APPIMAGE_HOST}:/work/gaia.AppImage:ro"
+            # Expand to nothing if WHEEL_MOUNTS is empty (set -u compat)
+            "${WHEEL_MOUNTS[@]+"${WHEEL_MOUNTS[@]}"}"
           )
 
           # ── Row 1: Ubuntu 24.04 + libfuse2, curl purged ──────────────
@@ -735,6 +806,31 @@ jobs:
           name: linux-installer
           path: ${{ runner.temp }}/linux-installer
 
+      - name: Download Python wheel
+        id: download-wheel
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: gaia-wheel
+          path: ${{ runner.temp }}/gaia-wheel
+
+      - name: Locate Python wheel
+        id: locate-wheel
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          WHEEL=$(ls "${RUNNER_TEMP}/gaia-wheel"/*.whl 2>/dev/null | head -n1 || true)
+          echo "path=${WHEEL}" >> "$GITHUB_OUTPUT"
+          if [ -n "${WHEEL}" ]; then
+            echo "Found wheel: ${WHEEL} — will set GAIA_LOCAL_WHEEL"
+          elif [ -n "${RELEASE_TAG}" ]; then
+            echo "::error::No Python wheel artifact found for release build (tag=${RELEASE_TAG}). The wheel is required to avoid the PyPI circular dependency — the Build Python wheel step must have failed."
+            exit 1
+          else
+            echo "No wheel artifact — will install from PyPI (non-release build)"
+          fi
+
       - name: Enable AppArmor userns restriction on host
         shell: bash
         run: |
@@ -746,12 +842,18 @@ jobs:
 
       - name: Launch AppImage under xvfb with userns restricted
         shell: bash
+        env:
+          WHEEL_PATH: ${{ steps.locate-wheel.outputs.path }}
         run: |
           set -euo pipefail
           APPIMAGE=$(ls "${RUNNER_TEMP}/linux-installer"/*.AppImage | head -n1)
           chmod +x "${APPIMAGE}"
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends libfuse2 xvfb xauth
+          if [ -n "${WHEEL_PATH}" ]; then
+            export GAIA_LOCAL_WHEEL="${WHEEL_PATH}"
+            echo "GAIA_LOCAL_WHEEL=${GAIA_LOCAL_WHEEL}"
+          fi
           xvfb-run --auto-servernum "${APPIMAGE}" \
             >/tmp/stdout.log 2>/tmp/stderr.log &
           APP_PID=$!

@@ -106,6 +106,7 @@ class SSEOutputHandler(OutputHandler):
         self._in_thinking = False  # True while inside a <think>...</think> block
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
         # Tool confirmation state (blocking until frontend responds)
+        self._confirm_lock = threading.Lock()
         self._confirm_event: Optional[threading.Event] = None
         self._confirm_result: bool = False
         self._confirm_id: Optional[str] = None
@@ -691,8 +692,9 @@ class SSEOutputHandler(OutputHandler):
         ``False`` otherwise.
         """
         confirm_id = str(uuid.uuid4())
-        self._confirm_event = threading.Event()
-        self._confirm_result = False
+        with self._confirm_lock:
+            self._confirm_event = threading.Event()
+            self._confirm_result = False
         self._confirm_id = confirm_id
 
         self._emit(
@@ -739,12 +741,13 @@ class SSEOutputHandler(OutputHandler):
         Called by the ``POST /api/chat/confirm-tool`` HTTP endpoint.  Returns
         ``False`` if there is no pending confirmation request.
         """
-        if self._confirm_event is None:
-            # No pending confirmation — initialise state anyway so callers can
-            # inspect _confirm_result and _confirm_event after the call.
-            self._confirm_event = threading.Event()
-        self._confirm_result = approved
-        self._confirm_event.set()
+        with self._confirm_lock:
+            if self._confirm_event is None:
+                # No pending confirmation — initialise state anyway so callers can
+                # inspect _confirm_result and _confirm_event after the call.
+                self._confirm_event = threading.Event()
+            self._confirm_result = approved
+            self._confirm_event.set()
         return True
 
     def signal_done(self):

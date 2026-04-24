@@ -207,6 +207,149 @@ TEST(TypesTest, AgentConfigFromJsonFileValid) {
     std::remove(tmpPath.c_str());
 }
 
+// ---- MIME detection tests (Ttest1) ----
+
+TEST(TypesTest, DetectImageMimeFromPng) {
+    const std::uint8_t png[] = {0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A,0,0,0,13};
+    EXPECT_EQ(detectImageMimeType(png, sizeof(png)), "image/png");
+}
+TEST(TypesTest, DetectImageMimeFromJpeg) {
+    const std::uint8_t jpg[] = {0xFF,0xD8,0xFF,0xE0,0,0x10,'J','F','I','F',0,0};
+    EXPECT_EQ(detectImageMimeType(jpg, sizeof(jpg)), "image/jpeg");
+}
+TEST(TypesTest, DetectImageMimeFromGif87a) {
+    const std::uint8_t gif[] = {'G','I','F','8','7','a',0,0,0,0,0,0};
+    EXPECT_EQ(detectImageMimeType(gif, sizeof(gif)), "image/gif");
+}
+TEST(TypesTest, DetectImageMimeFromGif89a) {
+    const std::uint8_t gif[] = {'G','I','F','8','9','a',0,0,0,0,0,0};
+    EXPECT_EQ(detectImageMimeType(gif, sizeof(gif)), "image/gif");
+}
+TEST(TypesTest, DetectImageMimeFromWebp) {
+    const std::uint8_t webp[] = {'R','I','F','F',0x24,0,0,0,'W','E','B','P'};
+    EXPECT_EQ(detectImageMimeType(webp, sizeof(webp)), "image/webp");
+}
+TEST(TypesTest, DetectImageMimeFromBmp) {
+    const std::uint8_t bmp[] = {'B','M',0,0,0,0,0,0,0,0,0,0};
+    EXPECT_EQ(detectImageMimeType(bmp, sizeof(bmp)), "image/bmp");
+}
+TEST(TypesTest, DetectImageMimeFromShortBufferFallsBackToPng) {
+    // AC-15e: 1, 5, 11-byte buffers must not OOB-read the WebP offset-8 probe.
+    const std::uint8_t one[] = {0xFF};
+    EXPECT_EQ(detectImageMimeType(one, 1), "image/png");
+    const std::uint8_t five[] = {'R','I','F','F',0x24};
+    EXPECT_EQ(detectImageMimeType(five, 5), "image/png");
+    const std::uint8_t eleven[] = {'R','I','F','F',0x24,0,0,0,'W','E','B'};
+    EXPECT_EQ(detectImageMimeType(eleven, 11), "image/png");
+    // Null buffer guard
+    EXPECT_EQ(detectImageMimeType(nullptr, 0), "image/png");
+}
+
+// ---- ContentPart tests ----
+
+TEST(TypesTest, ContentPartTextToJson) {
+    auto p = ContentPart::makeText("hi");
+    json j = p.toJson();
+    EXPECT_EQ(j["type"], "text");
+    EXPECT_EQ(j["text"], "hi");
+}
+TEST(TypesTest, ContentPartImageUrlToJson) {
+    auto p = ContentPart::makeImageUrl("data:image/png;base64,abc");
+    json j = p.toJson();
+    EXPECT_EQ(j["type"], "image_url");
+    EXPECT_EQ(j["image_url"]["url"], "data:image/png;base64,abc");
+}
+
+// ---- Message VLM tests (Ttest3) ----
+
+TEST(TypesTest, MessageBackwardCompatStringContent) {
+    // AC-6: text-only message with no parts → content is a JSON string.
+    Message msg;
+    msg.role = MessageRole::USER;
+    msg.content = "hello";
+    json j = msg.toJson();
+    EXPECT_TRUE(j["content"].is_string());
+    EXPECT_EQ(j["content"], "hello");
+}
+
+TEST(TypesTest, MessageToJsonArrayForm) {
+    // AC-7: with parts set, content is a JSON array of parts.
+    Message msg;
+    msg.role = MessageRole::USER;
+    msg.parts = std::vector<ContentPart>{
+        ContentPart::makeText("look"),
+        ContentPart::makeImageUrl("data:image/png;base64,abc"),
+    };
+    json j = msg.toJson();
+    ASSERT_TRUE(j["content"].is_array());
+    EXPECT_EQ(j["content"].size(), 2u);
+    EXPECT_EQ(j["content"][0]["type"], "text");
+    EXPECT_EQ(j["content"][0]["text"], "look");
+    EXPECT_EQ(j["content"][1]["type"], "image_url");
+    EXPECT_EQ(j["content"][1]["image_url"]["url"], "data:image/png;base64,abc");
+}
+
+TEST(TypesTest, MessageFromUserTextOnly) {
+    Message m = Message::fromUser("plain text", {});
+    json j = m.toJson();
+    EXPECT_TRUE(j["content"].is_string());
+    EXPECT_EQ(j["content"], "plain text");
+}
+
+TEST(TypesTest, MessageFromUserWithOneImage) {
+    std::vector<std::uint8_t> pngBytes = {0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A,0,0,0,13,0,0,0,0};
+    Image img = Image::fromBytes(pngBytes);
+    Message m = Message::fromUser("hello", {img});
+    json j = m.toJson();
+    ASSERT_TRUE(j["content"].is_array());
+    EXPECT_EQ(j["content"].size(), 2u);
+    EXPECT_EQ(j["content"][0]["type"], "text");
+    EXPECT_EQ(j["content"][0]["text"], "hello");
+    EXPECT_EQ(j["content"][1]["type"], "image_url");
+    std::string url = j["content"][1]["image_url"]["url"].get<std::string>();
+    EXPECT_EQ(url.rfind("data:image/png;base64,", 0), 0u);
+}
+
+TEST(TypesTest, MessageFromUserWithMultipleImages) {
+    std::vector<std::uint8_t> pngBytes = {0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A,0,0,0,13,0,0,0,0};
+    std::vector<std::uint8_t> jpgBytes = {0xFF,0xD8,0xFF,0xE0,0,0x10,'J','F','I','F',0,0,0,0,0,0};
+    Image a = Image::fromBytes(pngBytes);
+    Image b = Image::fromBytes(jpgBytes);
+    Message m = Message::fromUser("see these", {a, b});
+    json j = m.toJson();
+    ASSERT_EQ(j["content"].size(), 3u);
+    EXPECT_EQ(j["content"][0]["type"], "text");
+    EXPECT_EQ(j["content"][1]["image_url"]["url"].get<std::string>().substr(0, 22),
+              "data:image/png;base64,");
+    EXPECT_EQ(j["content"][2]["image_url"]["url"].get<std::string>().substr(0, 23),
+              "data:image/jpeg;base64,");
+}
+
+TEST(TypesTest, MessageFromUserEmptyTextImageOnly) {
+    // AC-8b: empty text + images → array with ONLY image parts.
+    std::vector<std::uint8_t> pngBytes = {0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A,0,0,0,13,0,0,0,0};
+    Image img = Image::fromBytes(pngBytes);
+    Message m = Message::fromUser("", {img});
+    json j = m.toJson();
+    ASSERT_TRUE(j["content"].is_array());
+    EXPECT_EQ(j["content"].size(), 1u);
+    EXPECT_EQ(j["content"][0]["type"], "image_url");
+}
+
+TEST(TypesTest, MessageToolMessageUnaffected) {
+    Message msg;
+    msg.role = MessageRole::TOOL;
+    msg.content = "tool output";
+    msg.name = "my_tool";
+    msg.toolCallId = "call_42";
+    json j = msg.toJson();
+    EXPECT_EQ(j["role"], "tool");
+    EXPECT_TRUE(j["content"].is_string());
+    EXPECT_EQ(j["content"], "tool output");
+    EXPECT_EQ(j["name"], "my_tool");
+    EXPECT_EQ(j["tool_call_id"], "call_42");
+}
+
 // ---- ParsedResponse Tests ----
 
 TEST(TypesTest, ParsedResponseDefaults) {

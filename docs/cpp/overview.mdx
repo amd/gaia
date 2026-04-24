@@ -28,6 +28,7 @@ The GAIA C++17 framework is a native implementation of the core agent system. It
 - MCP client with cross-platform stdio transport
 - JSON response parsing with multi-strategy fallback (code-block extraction, bracket matching, syntax fixing)
 - Console output with ANSI colors (`TerminalConsole`, `CleanConsole`) and silent mode (`SilentConsole`)
+- **Vision-language model (VLM) support** — `gaia::Image` + `processQuery(..., images)` overloads send images inline to OpenAI-compatible vision endpoints; see [API Reference](/cpp/api-reference#vision-language-models-vlm)
 
 <Info>
 The C++ framework focuses on the core agent loop and tool execution. Specialized agents (Code, Docker, Jira, Blender), the REST API server, RAG, and audio are available in the [Python SDK](/quickstart).

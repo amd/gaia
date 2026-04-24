@@ -950,9 +950,15 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
 
 /**
  * Read the pinned backend version from package.json (or a caller override).
+ * Returns null when GAIA_LOCAL_WHEEL is set — the caller uses the wheel path
+ * directly and skips the PyPI version pin (CI release-build fast-path).
  */
 function resolveBackendVersion(opts = {}) {
   if (opts.version) return opts.version;
+  // CI override: install from a local wheel instead of a pinned PyPI version.
+  // Breaks the circular dependency in release builds where the AppImage smoke
+  // test runs before PyPI publish.
+  if (process.env.GAIA_LOCAL_WHEEL) return null;
   try {
     // package.json is one directory up from the services/ (or bin/) directory.
     // We look relative to this module's own location.
@@ -979,7 +985,16 @@ function resolveBackendVersion(opts = {}) {
 async function installBackend(opts = {}) {
   const report = makeProgressReporter(opts.onProgress);
   const version = resolveBackendVersion(opts);
-  const pipPackage = `amd-gaia[ui]==${version}`;
+  // GAIA_LOCAL_WHEEL: CI-only. When set, install from the given wheel path
+  // instead of pulling from PyPI. This breaks the circular dependency in
+  // release pipeline smoke tests that run before PyPI publish. The `[ui]`
+  // extras marker is preserved so the local install matches the PyPI path
+  // (fastapi, uvicorn, python-multipart, httpx, psutil) — otherwise the
+  // backend venv comes up missing every UI dep and /api/health never binds.
+  const localWheel = process.env.GAIA_LOCAL_WHEEL || null;
+  const pipPackage = localWheel
+    ? `${localWheel}[ui]`
+    : `amd-gaia[ui]==${version}`;
 
   log("================================================");
   log("  Installing GAIA backend");
@@ -1045,7 +1060,8 @@ async function installBackend(opts = {}) {
     GAIA_PYTHON_BIN,
   ];
   // Linux/macOS: use CPU-only PyTorch to avoid huge CUDA wheels.
-  if (!IS_WINDOWS) {
+  // Skip when installing from a local wheel — PyPI index not needed.
+  if (!IS_WINDOWS && !localWheel) {
     pipArgs.push("--extra-index-url", "https://download.pytorch.org/whl/cpu");
   }
 
@@ -1224,11 +1240,13 @@ async function ensureBackend(opts = {}) {
     }
 
     // Fast-path: already installed at the expected version.
+    // Skip when expectedVersion is null (GAIA_LOCAL_WHEEL is set) — always
+    // reinstall from the local wheel so CI gets a fresh install each run.
     const expectedVersion = resolveBackendVersion(opts);
     const existingBin = findGaiaBin();
     if (existingBin) {
       const installedVersion = getInstalledVersion(existingBin);
-      if (installedVersion === expectedVersion) {
+      if (expectedVersion !== null && installedVersion === expectedVersion) {
         log(
           `GAIA backend already installed at version ${installedVersion} — nothing to do`
         );
