@@ -736,3 +736,8 @@
     padding: 1px 6px;
     border-radius: 3px;
 }
+
+/* History tab content */
+.pr-history-content {
+    max-width: 100%;
+}

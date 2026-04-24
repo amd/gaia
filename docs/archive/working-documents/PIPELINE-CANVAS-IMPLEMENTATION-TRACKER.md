@@ -28,8 +28,8 @@ Full gap analysis identified 9 feature groups across 3 tiers.
 
 | # | Feature | Status | Commit | Notes |
 |---|---------|--------|--------|-------|
-| 7 | Execution Replay | pending | - | History, comparison, replay |
-| 8 | Template Marketplace | pending | - | Sharing, versioning, diff |
+| 7 | Execution Replay & History | **complete** | `TODO` | Backend API, ExecutionHistory component, History tab |
+| 8 | Template Marketplace | partial | `TODO` | Backend versioning API complete, UI pending |
 | 9 | Performance Dashboard | pending | - | Timing, bottlenecks, resources |
 
 ## Progress Log
@@ -82,3 +82,28 @@ Full gap analysis identified 9 feature groups across 3 tiers.
 - Added undo/redo, zoom in/out, fit-to-view, grid toggle buttons
 - Added wheel zoom and click-drag pan handlers
 - Added transform wrapper for zoom/pan
+
+### Tier 3: Execution Replay & History (2026-04-24)
+
+**Backend** (`src/gaia/ui/routers/pipeline.py`):
+- Added `_execution_history` in-memory list (max 100 runs)
+- Added `record_execution()` helper to record pipeline runs with status, duration, quality scores, loop count, decisions, agents used
+- Added `_execute_and_record()` wrapper that wraps both streaming and sync execution paths
+- `GET /api/v1/pipeline/executions` - Paginated list of past executions
+- `GET /api/v1/pipeline/executions/{pipeline_id}` - Execution detail
+- `DELETE /api/v1/pipeline/executions/{pipeline_id}` - Delete execution
+- `POST /api/v1/pipeline/executions/{pipeline_id}/replay` - Get replay config
+- `GET /api/v1/pipeline/templates/{template_name}/versions` - List template versions
+- `POST /api/v1/pipeline/templates/{template_name}/version` - Create template version snapshot
+
+**Frontend** (`src/gaia/apps/webui/src/components/pipeline/ExecutionHistory.tsx`):
+- Lists past executions with status icons, task description, duration, quality scores, loop count
+- Expandable detail rows showing pipeline ID, session, quality scores, agents used
+- Replay button pre-fills task description and switches to runner tab
+- Delete button removes execution from history
+- Refresh button reloads history from API
+
+**Integration** (`PipelineRunner.tsx`):
+- Added "History" tab alongside Canvas and Log View
+- ExecutionHistory component wired with replay callback
+- CSS for history tab content area

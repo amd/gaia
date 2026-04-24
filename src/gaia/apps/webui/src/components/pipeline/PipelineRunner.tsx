@@ -27,11 +27,13 @@ import {
   Search,
   Layers,
   List,
+  History,
 } from 'lucide-react';
 import { usePipelineStore } from '../../stores/pipelineStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useTemplateStore } from '../../stores/templateStore';
 import { PipelineCanvas } from './PipelineCanvas';
+import { ExecutionHistory } from './ExecutionHistory';
 import './PipelineRunner.css';
 
 /** Map 5-stage pipeline phases to actual agent categories in config/agents/. */
@@ -121,7 +123,7 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
   const [autoSpawn, setAutoSpawn] = useState(true);
   const [templateName, setTemplateName] = useState('');
   const [sessionId, setSessionId] = useState(currentSessionId || '');
-  const [activeTab, setActiveTab] = useState<'canvas' | 'runner'>('canvas');
+  const [activeTab, setActiveTab] = useState<'canvas' | 'runner' | 'history'>('canvas');
   // Use array for collapsed event keys (immutable, React-detectable)
   const [collapsedEvents, setCollapsedEvents] = useState<string[]>([]);
 
@@ -232,12 +234,28 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
             <List size={14} />
             Log View
           </button>
+          <button
+            className={`pr-tab ${activeTab === 'history' ? 'active' : ''}`}
+            onClick={() => setActiveTab('history')}
+          >
+            <History size={14} />
+            History
+          </button>
         </div>
       </div>
 
       {/* Tab content */}
       {activeTab === 'canvas' ? (
         <PipelineCanvas />
+      ) : activeTab === 'history' ? (
+        <div className="pr-history-content">
+          <ExecutionHistory
+            onReplay={(taskDescription, agentsUsed) => {
+              setTaskDescription(taskDescription);
+              setActiveTab('runner');
+            }}
+          />
+        </div>
       ) : (
       <div className="pr-runner-content">
       {/* Configuration Form */}

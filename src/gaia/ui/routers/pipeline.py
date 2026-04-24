@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 import re
+import yaml
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -42,6 +43,10 @@ from ..schemas.pipeline_templates import (
     TemplateListResponse,
     TemplateUpdateRequest,
     TemplateValidateResponse,
+    ComponentListResponse,
+    ComponentRawResponse,
+    ComponentUpdateRequest,
+    ComponentInfoSchema,
 )
 from ..services.template_service import TemplateService, TemplateValidationError
 
@@ -496,6 +501,211 @@ async def update_agent_raw(agent_id: str, update: AgentFileUpdate):
     raise HTTPException(status_code=404, detail=f"Agent file not found for: {agent_id}")
 
 
+# =============================================================================
+# Component Framework Endpoints
+# =============================================================================
+
+# Valid component categories (whitelist)
+VALID_COMPONENT_CATEGORIES = [
+    "memory",
+    "knowledge",
+    "tasks",
+    "commands",
+    "documents",
+    "checklists",
+    "personas",
+    "workflows",
+    "templates"
+]
+
+# Regex pattern for component name validation - only allow safe characters
+_COMPONENT_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+
+
+@router.get("/api/v1/pipeline/components/list", response_model=ComponentListResponse)
+async def list_components():
+    """
+    List all component framework files grouped by category.
+
+    Returns metadata for all 44 component files across 9 categories:
+    - memory, knowledge, tasks, commands, documents
+    - checklists, personas, workflows, templates
+
+    Each component includes title, description, version from frontmatter.
+    """
+    try:
+        from gaia.utils.component_loader import ComponentLoader
+
+        loader = ComponentLoader()
+        all_components = loader.list_components()
+
+        components = []
+        for comp_path in all_components:
+            try:
+                # Parse category from path (e.g., "memory/working-memory.md")
+                path_parts = comp_path.split("/")
+                if len(path_parts) < 2:
+                    continue
+
+                category = path_parts[0]
+                name = path_parts[-1].replace(".md", "")
+
+                # Load frontmatter for metadata
+                component = loader.load_component(comp_path)
+                frontmatter = component["frontmatter"]
+
+                components.append(ComponentInfoSchema(
+                    category=category,
+                    name=name,
+                    title=frontmatter.get("title", frontmatter.get("template_id", name)),
+                    description=frontmatter.get("description", ""),
+                    path=comp_path,
+                    version=frontmatter.get("version", None),
+                    template_id=frontmatter.get("template_id", None),
+                ))
+            except Exception as e:
+                logger.warning(f"Failed to load component {comp_path}: {e}")
+                continue
+
+        return ComponentListResponse(components=components, total=len(components))
+
+    except ImportError as e:
+        logger.error("ComponentLoader not available: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Component framework not available. Check server logs for details.",
+        )
+    except Exception as e:
+        logger.error("Failed to list components: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to list components. Check server logs for details.",
+        )
+
+
+@router.get("/api/v1/pipeline/components/{category}/{component_name}/raw")
+async def get_component_raw(category: str, component_name: str):
+    """
+    Get raw markdown content for a component framework file.
+
+    Returns the component file content as JSON with path, frontmatter, and content.
+
+    Path traversal protection:
+    - Category must be in whitelist (9 valid categories)
+    - Component name must match alphanumeric, underscore, hyphen only
+    """
+    # Security: validate category against whitelist
+    if category not in VALID_COMPONENT_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category. Must be one of: {', '.join(VALID_COMPONENT_CATEGORIES)}"
+        )
+
+    # Security: validate component_name to prevent path traversal
+    if not _COMPONENT_NAME_PATTERN.match(component_name):
+        raise HTTPException(status_code=400, detail="Invalid component_name format")
+
+    try:
+        from gaia.utils.component_loader import ComponentLoader
+
+        loader = ComponentLoader()
+        component_path = f"{category}/{component_name}.md"
+
+        # Load component using ComponentLoader (includes SEC-003 path traversal protection)
+        component = loader.load_component(component_path)
+
+        return ComponentRawResponse(
+            content=f"---\n{yaml.dump(component['frontmatter'], default_flow_style=False, allow_unicode=True, sort_keys=False)}---\n{component['content']}",
+            path=component_path,
+            frontmatter=component["frontmatter"],
+        )
+
+    except ImportError as e:
+        logger.error("ComponentLoader not available: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Component framework not available. Check server logs for details.",
+        )
+    except Exception as e:
+        if "Component not found" in str(e) or "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=f"Component not found: {category}/{component_name}.md")
+        logger.error("Failed to get component %s/%s: %s", category, component_name, e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to get component. Check server logs for details.",
+        )
+
+
+@router.put("/api/v1/pipeline/components/{category}/{component_name}/raw")
+async def update_component_raw(category: str, component_name: str, update: ComponentUpdateRequest):
+    """
+    Update raw markdown content for a component framework file.
+
+    Saves the provided content back to the component file.
+    Content should include both frontmatter (---YAML---) and markdown body.
+
+    Path traversal protection:
+    - Category must be in whitelist (9 valid categories)
+    - Component name must match alphanumeric, underscore, hyphen only
+    - ComponentLoader.save_component() provides SEC-003 path traversal protection
+    """
+    # Security: validate category against whitelist
+    if category not in VALID_COMPONENT_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category. Must be one of: {', '.join(VALID_COMPONENT_CATEGORIES)}"
+        )
+
+    # Security: validate component_name to prevent path traversal
+    if not _COMPONENT_NAME_PATTERN.match(component_name):
+        raise HTTPException(status_code=400, detail="Invalid component_name format")
+
+    try:
+        from gaia.utils.component_loader import ComponentLoader
+
+        loader = ComponentLoader()
+        component_path = f"{category}/{component_name}.md"
+
+        # Parse frontmatter from content if present
+        content = update.content
+        frontmatter = None
+
+        if content.startswith("---\n"):
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                frontmatter_text = parts[1].strip()
+                frontmatter = yaml.safe_load(frontmatter_text)
+                content = parts[2].strip()  # Everything after the closing ---
+
+        # Save component using ComponentLoader (includes SEC-003 path traversal protection)
+        saved_path = loader.save_component(component_path, content, frontmatter)
+
+        return {
+            "success": True,
+            "path": component_path,
+            "full_path": saved_path,
+        }
+
+    except ImportError as e:
+        logger.error("ComponentLoader not available: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Component framework not available. Check server logs for details.",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        if "Component not found" in str(e) or "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=f"Component not found: {category}/{component_name}.md")
+        if "Path traversal" in str(e):
+            raise HTTPException(status_code=400, detail="Invalid path: path traversal detected")
+        logger.error("Failed to update component %s/%s: %s", category, component_name, e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update component. Check server logs for details.",
+        )
+
+
 @router.post("/api/v1/pipeline/run")
 async def run_pipeline_endpoint(
     request: PipelineRunRequest,
@@ -589,7 +799,9 @@ async def run_pipeline_endpoint(
                     loop = asyncio.get_event_loop()
                     result = await loop.run_in_executor(
                         None,
-                        _execute_pipeline_sync,
+                        _execute_and_record,
+                        pipeline_id,
+                        request.session_id,
                         request.task_description,
                         request.auto_spawn,
                         request.template_name,
@@ -649,10 +861,13 @@ async def run_pipeline_endpoint(
         else:
             # Non-streaming: execute and return result
             try:
-                result = _execute_pipeline_sync(
-                    request.task_description,
-                    request.auto_spawn,
-                    request.template_name,
+                result = _execute_and_record(
+                    pipeline_id=pipeline_id,
+                    session_id=request.session_id,
+                    task_description=request.task_description,
+                    auto_spawn=request.auto_spawn,
+                    template_name=request.template_name,
+                    recursive=False,
                 )
                 return PipelineRunResponse(
                     pipeline_id=pipeline_id,
@@ -667,6 +882,53 @@ async def run_pipeline_endpoint(
         # For streaming path, locks are released in BackgroundTask after response
         # For non-streaming path, this is a no-op (already released above)
         pass
+
+
+def _execute_and_record(
+    pipeline_id: str,
+    session_id: str,
+    task_description: str,
+    auto_spawn: bool,
+    template_name: str | None = None,
+    recursive: bool = False,
+    sse_handler=None,
+) -> dict:
+    """Execute pipeline and record the result in execution history."""
+    start_time = time.time()
+    try:
+        result = _execute_pipeline_sync(
+            task_description=task_description,
+            auto_spawn=auto_spawn,
+            template_name=template_name,
+            recursive=recursive,
+            sse_handler=sse_handler,
+        )
+        end_time = time.time()
+        record_execution(
+            pipeline_id=pipeline_id,
+            session_id=session_id,
+            task_description=task_description,
+            status=result.get("pipeline_status", "unknown"),
+            start_time=start_time,
+            end_time=end_time,
+            quality_scores=result.get("quality_scores", []),
+            loop_count=result.get("loop_count", 0),
+            decisions=result.get("decisions", []),
+            agents_used=result.get("agents_used", []),
+        )
+        return result
+    except Exception as e:
+        end_time = time.time()
+        record_execution(
+            pipeline_id=pipeline_id,
+            session_id=session_id,
+            task_description=task_description,
+            status="failed",
+            start_time=start_time,
+            end_time=end_time,
+            agents_used=[],
+        )
+        raise
 
 
 def _execute_pipeline_sync(
@@ -731,3 +993,149 @@ class _PipelineSSEHandler:
                 yield f"data: {json.dumps(event)}\n\n"
             except queue.Empty:
                 break
+
+
+# ── Tier 3: Execution History ────────────────────────────────────────────
+
+# In-memory execution history (last 100 runs)
+_execution_history: list[dict] = []
+_MAX_HISTORY = 100
+
+
+def record_execution(pipeline_id: str, session_id: str, task_description: str,
+                     status: str, start_time: float, end_time: float | None = None,
+                     quality_scores: list[float] | None = None,
+                     loop_count: int = 0, decisions: list[dict] | None = None,
+                     agents_used: list[str] | None = None):
+    """Record a pipeline execution in the history log."""
+    entry = {
+        "pipeline_id": pipeline_id,
+        "session_id": session_id,
+        "task_description": task_description,
+        "status": status,
+        "start_time": start_time,
+        "end_time": end_time or time.time(),
+        "duration_seconds": round((end_time or time.time()) - start_time, 2),
+        "quality_scores": quality_scores or [],
+        "loop_count": loop_count,
+        "decisions": decisions or [],
+        "agents_used": agents_used or [],
+        "avg_quality": round(sum(quality_scores) / len(quality_scores), 3) if quality_scores else None,
+    }
+    _execution_history.append(entry)
+    # Trim to max
+    while len(_execution_history) > _MAX_HISTORY:
+        _execution_history.pop(0)
+
+
+@router.get("/api/v1/pipeline/executions")
+async def list_executions(limit: int = 20, offset: int = 0):
+    """
+    List past pipeline executions, most recent first.
+
+    Returns summary info for each execution including status, duration,
+    quality scores, and loop count.
+    """
+    reversed_history = list(reversed(_execution_history))
+    total = len(reversed_history)
+    page = reversed_history[offset:offset + limit]
+    return {
+        "executions": page,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/api/v1/pipeline/executions/{pipeline_id}")
+async def get_execution(pipeline_id: str):
+    """Get detailed info for a specific pipeline execution."""
+    for entry in _execution_history:
+        if entry["pipeline_id"] == pipeline_id:
+            return {"execution": entry}
+    raise HTTPException(status_code=404, detail="Execution not found")
+
+
+@router.delete("/api/v1/pipeline/executions/{pipeline_id}")
+async def delete_execution(pipeline_id: str):
+    """Delete a specific pipeline execution from history."""
+    before = len(_execution_history)
+    _execution_history[:] = [e for e in _execution_history if e["pipeline_id"] != pipeline_id]
+    deleted = before - len(_execution_history)
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    return {"deleted": True, "pipeline_id": pipeline_id}
+
+
+@router.post("/api/v1/pipeline/executions/{pipeline_id}/replay")
+async def replay_execution(pipeline_id: str):
+    """
+    Re-execute a pipeline using the same configuration as a past run.
+
+    Returns the task description and agents used for manual replay.
+    The caller should invoke /api/v1/pipeline/run with this configuration.
+    """
+    for entry in _execution_history:
+        if entry["pipeline_id"] == pipeline_id:
+            return {
+                "pipeline_id": pipeline_id,
+                "task_description": entry["task_description"],
+                "agents_used": entry["agents_used"],
+                "quality_scores": entry["quality_scores"],
+                "loop_count": entry["loop_count"],
+                "replay_suggestion": f"Re-run with {len(entry['agents_used'])} agents from previous execution",
+            }
+    raise HTTPException(status_code=404, detail="Execution not found")
+
+
+# ── Tier 3: Template Versioning ─────────────────────────────────────────
+
+_template_versions: dict[str, list[dict]] = {}
+
+
+@router.get("/api/v1/pipeline/templates/{template_name}/versions")
+async def list_template_versions(template_name: str, service: TemplateService = Depends(get_template_service)):
+    """List version history for a template."""
+    versions = _template_versions.get(template_name, [])
+    # Also check if template exists
+    template = service.get_template(template_name)
+    if not template and not versions:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return {
+        "template_name": template_name,
+        "versions": versions,
+        "current": template.get("version", 1) if template else None,
+    }
+
+
+@router.post("/api/v1/pipeline/templates/{template_name}/version")
+async def version_template(template_name: str,
+                           service: TemplateService = Depends(get_template_service)):
+    """Create a new version snapshot of a template."""
+    template = service.get_template(template_name)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    current_version = template.get("version", 1)
+    new_version = current_version + 1
+
+    version_entry = {
+        "version": current_version,
+        "snapshot": template.copy(),
+        "created_at": time.time(),
+        "description": template.get("description", ""),
+    }
+
+    if template_name not in _template_versions:
+        _template_versions[template_name] = []
+    _template_versions[template_name].append(version_entry)
+
+    # Update template version
+    template["version"] = new_version
+
+    return {
+        "template_name": template_name,
+        "previous_version": current_version,
+        "new_version": new_version,
+        "versioned": True,
+    }
