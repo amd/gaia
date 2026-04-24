@@ -53,10 +53,29 @@ interface CanvasStoreState {
     selectedNodeId: string | null;
     dragOverStage: string | null;
 
+    // Tier 2: Navigation
+    zoom: number;
+    pan: { x: number; y: number };
+
+    // Tier 2: Undo/Redo
+    history: Array<{ nodes: CanvasNode[]; edges: CanvasEdge[] }>;
+    historyIndex: number;
+
+    // Tier 2: Multi-select
+    selectedNodeIds: string[];
+
+    // Tier 2: Grid
+    showGrid: boolean;
+    snapToGrid: boolean;
+    gridSize: number;
+
     // Actions - canvas data
     setNodes: (nodes: CanvasNode[]) => void;
     setEdges: (edges: CanvasEdge[]) => void;
     addAgentToStage: (agent: PaletteDragData, stageKey: string) => void;
+    addSupervisorBetweenStages: (agent: PaletteDragData, afterStageKey: string) => void;
+    addGateBetweenStages: (condition: string, afterStageKey: string) => void;
+    addLoopBlock: (sourceStage: string, targetStage: string, condition: string) => void;
     removeNode: (nodeId: string) => void;
     moveNodeToStage: (nodeId: string, stageKey: string) => void;
     resetCanvas: () => void;
@@ -78,6 +97,27 @@ interface CanvasStoreState {
     setLastError: (error: string | null) => void;
     setQualityThreshold: (value: number) => void;
     setMaxIterations: (value: number) => void;
+
+    // Tier 2: Navigation
+    setZoom: (zoom: number) => void;
+    setPan: (pan: { x: number; y: number }) => void;
+    resetView: () => void;
+
+    // Tier 2: Undo/Redo
+    pushHistory: () => void;
+    undo: () => void;
+    redo: () => void;
+    canUndo: boolean;
+    canRedo: boolean;
+
+    // Tier 2: Multi-select
+    toggleNodeSelection: (id: string) => void;
+    clearSelection: () => void;
+
+    // Tier 2: Grid
+    setShowGrid: (show: boolean) => void;
+    setSnapToGrid: (snap: boolean) => void;
+    setGridSize: (size: number) => void;
 }
 
 // ── Helper: compute node position from stage ──────────────────────────
@@ -122,6 +162,22 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
     lastError: null,
     selectedNodeId: null,
     dragOverStage: null,
+
+    // Tier 2: Navigation
+    zoom: 1,
+    pan: { x: 0, y: 0 },
+
+    // Tier 2: Undo/Redo
+    history: [],
+    historyIndex: -1,
+
+    // Tier 2: Multi-select
+    selectedNodeIds: [],
+
+    // Tier 2: Grid
+    showGrid: true,
+    snapToGrid: true,
+    gridSize: 20,
 
     // ── Canvas data ────────────────────────────────────────────────────
 
@@ -181,6 +237,122 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
         log.ui.info(`[canvas] Added agent ${agent.agentId} to stage ${stageKey}`);
     },
 
+    addSupervisorBetweenStages: (agent, afterStageKey) => {
+        const afterStage = PIPELINE_STAGES.find((s) => s.key === afterStageKey);
+        if (!afterStage) {
+            set({ lastError: `Unknown stage: ${afterStageKey}` });
+            return;
+        }
+
+        const stageIndex = PIPELINE_STAGES.indexOf(afterStage);
+        const position = { x: 280, y: 80 + stageIndex * 160 + 80 };
+
+        const newNode: CanvasNode = {
+            id: `supervisor-${agent.agentId}-${Date.now()}`,
+            type: 'supervisor',
+            agentId: agent.agentId,
+            label: `${agent.name} (Supervisor)`,
+            category: agent.category,
+            modelId: agent.modelId,
+            status: 'idle',
+            position,
+            assignedStage: afterStageKey,
+            decisionType: 'CONTINUE',
+            decisionCondition: 'quality_below_threshold',
+            agentData: {
+                id: agent.agentId,
+                name: agent.name,
+                category: agent.category,
+                description: agent.description || '',
+                model_id: agent.modelId || null,
+                capabilities: agent.capabilities || [],
+                keywords: agent.keywords || [],
+                phases: agent.phases || [],
+                complexity_range: '0-1',
+                tools: [],
+                enabled: true,
+                version: '1.0.0',
+                source: 'yaml',
+                templates_using: [],
+            },
+        };
+
+        const newNodes = [...get().nodes, newNode];
+        const stageNode = newNodes.find((n) => n.type === 'stage' && n.assignedStage === afterStageKey);
+        const newEdges = stageNode ? [...get().edges, buildEdge(stageNode.id, newNode.id)] : get().edges;
+
+        set({ nodes: newNodes, edges: newEdges });
+        log.ui.info(`[canvas] Added supervisor ${agent.agentId} after stage ${afterStageKey}`);
+    },
+
+    addGateBetweenStages: (condition, afterStageKey) => {
+        const afterStage = PIPELINE_STAGES.find((s) => s.key === afterStageKey);
+        if (!afterStage) {
+            set({ lastError: `Unknown stage: ${afterStageKey}` });
+            return;
+        }
+
+        const stageIndex = PIPELINE_STAGES.indexOf(afterStage);
+        const nextStage = PIPELINE_STAGES[stageIndex + 1];
+        const position = { x: 280, y: 80 + stageIndex * 160 + 80 };
+
+        const newNode: CanvasNode = {
+            id: `gate-${Date.now()}`,
+            type: 'gate',
+            label: `Gate: ${condition}`,
+            status: 'idle',
+            position,
+            assignedStage: afterStageKey,
+            gateCondition: condition as any,
+            branchTargets: {
+                pass: nextStage?.key || afterStageKey,
+                fail: 'domain_analysis',
+            },
+        };
+
+        const newNodes = [...get().nodes, newNode];
+        const stageNode = newNodes.find((n) => n.type === 'stage' && n.assignedStage === afterStageKey);
+        const newEdges = stageNode ? [...get().edges, buildEdge(stageNode.id, newNode.id)] : get().edges;
+
+        set({ nodes: newNodes, edges: newEdges });
+        log.ui.info(`[canvas] Added decision gate after stage ${afterStageKey}`);
+    },
+
+    addLoopBlock: (sourceStage, targetStage, condition) => {
+        const source = PIPELINE_STAGES.find((s) => s.key === sourceStage);
+        const target = PIPELINE_STAGES.find((s) => s.key === targetStage);
+        if (!source || !target) {
+            set({ lastError: `Invalid loop: ${sourceStage} -> ${targetStage}` });
+            return;
+        }
+
+        const sourceIndex = PIPELINE_STAGES.indexOf(source);
+        const targetIndex = PIPELINE_STAGES.indexOf(target);
+        const midIndex = Math.max(sourceIndex, targetIndex);
+        const position = { x: 10, y: 80 + midIndex * 160 + 40 };
+
+        const newNode: CanvasNode = {
+            id: `loop-${Date.now()}`,
+            type: 'loop',
+            label: `Loop: ${source.label} → ${target.label}`,
+            status: 'idle',
+            position,
+            assignedStage: sourceStage,
+            decisionCondition: targetStage,
+            gateCondition: condition as any,
+        };
+
+        const newNodes = [...get().nodes, newNode];
+        const sourceStageNode = newNodes.find((n) => n.type === 'stage' && n.assignedStage === sourceStage);
+        const targetStageNode = newNodes.find((n) => n.type === 'stage' && n.assignedStage === targetStage);
+        const newEdges = [...get().edges];
+        if (sourceStageNode) newEdges.push(buildEdge(sourceStageNode.id, newNode.id));
+        if (targetStageNode) newEdges.push({ ...buildEdge(newNode.id, targetStageNode.id), status: 'loop-back', animated: true, label: `loop (${condition})` });
+
+        set({ nodes: newNodes, edges: newEdges });
+        log.ui.info(`[canvas] Added loop block ${sourceStage} -> ${targetStage}`);
+    },
+
     removeNode: (nodeId) => {
         const nodes = get().nodes.filter((n) => n.id !== nodeId);
         const edges = get().edges.filter((e) => e.source !== nodeId && e.target !== nodeId);
@@ -217,12 +389,54 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
     },
 
     resetCanvas: () => {
-        // Build default canvas with stage nodes only
-        const nodes: CanvasNode[] = PIPELINE_STAGES.map((stage) => buildStageNode(stage, PIPELINE_STAGES.indexOf(stage)));
+        // Build default canvas with stage nodes, supervisor slots, and decision gates
+        const nodes: CanvasNode[] = [];
         const edges: CanvasEdge[] = [];
+
+        // Add stage nodes
+        PIPELINE_STAGES.forEach((stage, i) => {
+            nodes.push(buildStageNode(stage, i));
+        });
+
+        // Add edges between stages
         for (let i = 0; i < PIPELINE_STAGES.length - 1; i++) {
             edges.push(buildEdge(`stage-${PIPELINE_STAGES[i].key}`, `stage-${PIPELINE_STAGES[i + 1].key}`));
         }
+
+        // Add default supervisor node after each stage (except last)
+        for (let i = 0; i < PIPELINE_STAGES.length - 1; i++) {
+            const stage = PIPELINE_STAGES[i];
+            const supervisor: CanvasNode = {
+                id: `supervisor-default-${stage.key}`,
+                type: 'supervisor',
+                label: `Quality Supervisor`,
+                status: 'idle',
+                position: { x: 280, y: 80 + i * 160 + 80 },
+                assignedStage: stage.key,
+                decisionType: 'CONTINUE',
+                decisionCondition: 'quality_below_threshold',
+            };
+            nodes.push(supervisor);
+            edges.push(buildEdge(`stage-${stage.key}`, supervisor.id));
+
+            // Add decision gate after supervisor
+            const gate: CanvasNode = {
+                id: `gate-default-${stage.key}`,
+                type: 'gate',
+                label: `Quality Gate`,
+                status: 'idle',
+                position: { x: 500, y: 80 + i * 160 + 80 },
+                assignedStage: stage.key,
+                gateCondition: 'quality_below_threshold',
+                branchTargets: {
+                    pass: PIPELINE_STAGES[i + 1]?.key || stage.key,
+                    fail: 'domain_analysis',
+                },
+            };
+            nodes.push(gate);
+            edges.push(buildEdge(supervisor.id, gate.id));
+        }
+
         set({ nodes, edges, templateName: undefined, selectedNodeId: null });
     },
 
@@ -418,11 +632,48 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
             const eventType = (lastEvent as any).type || '';
 
             let status: CanvasNode['status'] = node.status;
-            if (eventType === 'tool_start' || eventType === 'step') status = 'running';
-            else if (eventType === 'tool_end' || eventType === 'done') status = 'complete';
+            let updates: Partial<CanvasNode> = {};
+
+            if (eventType === 'tool_start' || eventType === 'step' || eventType === 'iteration_start') status = 'running';
+            else if (eventType === 'tool_end' || eventType === 'done' || eventType === 'iteration_end') status = 'complete';
             else if (eventType === 'error') status = 'error';
 
-            return { ...node, status };
+            // Handle quality score events
+            const qualityEvents = events.filter((e) => (e as any).type === 'quality_score' && (e as any).quality_score !== undefined);
+            if (qualityEvents.length > 0) {
+                const latestQuality = qualityEvents[qualityEvents.length - 1];
+                updates.qualityScore = (latestQuality as any).quality_score;
+            }
+
+            // Handle supervisor decision events
+            if (node.type === 'supervisor') {
+                const decisionEvents = events.filter((e) => (e as any).type === 'loop_back' || (e as any).decision);
+                if (decisionEvents.length > 0) {
+                    const lastDecision = decisionEvents[decisionEvents.length - 1];
+                    if ((lastDecision as any).type === 'loop_back') {
+                        updates.decisionType = 'LOOP_BACK';
+                        status = 'complete';
+                    }
+                }
+            }
+
+            // Handle gate pass/fail based on quality vs threshold
+            if (node.type === 'gate') {
+                const threshold = get().qualityThreshold;
+                if (updates.qualityScore !== undefined) {
+                    status = updates.qualityScore >= threshold ? 'complete' : 'error';
+                }
+            }
+
+            // Handle loop iteration counting
+            if (node.type === 'loop') {
+                const iterationEvents = events.filter((e) => (e as any).type === 'iteration_start');
+                if (iterationEvents.length > 0) {
+                    status = 'running';
+                }
+            }
+
+            return { ...node, status, ...updates };
         });
 
         // Update edges for loop-back detection
@@ -444,4 +695,65 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
     setLastError: (error) => set({ lastError: error }),
     setQualityThreshold: (value) => set({ qualityThreshold: value }),
     setMaxIterations: (value) => set({ maxIterations: value }),
+
+    // ── Tier 2: Navigation ─────────────────────────────────────────────
+
+    setZoom: (zoom) => set({ zoom }),
+    setPan: (pan) => set({ pan }),
+    resetView: () => set({ zoom: 1, pan: { x: 0, y: 0 } }),
+
+    // ── Tier 2: Undo/Redo ──────────────────────────────────────────────
+
+    pushHistory: () => {
+        const { nodes, edges, history, historyIndex } = get();
+        // Truncate any future history if we've undone
+        const newHistory = history.slice(0, historyIndex + 1);
+        newHistory.push({ nodes: [...nodes], edges: [...edges] });
+        // Limit history depth
+        if (newHistory.length > 50) newHistory.shift();
+        set({ history: newHistory, historyIndex: newHistory.length - 1 });
+    },
+
+    undo: () => {
+        const { history, historyIndex } = get();
+        if (historyIndex <= 0) return;
+        const previous = history[historyIndex - 1];
+        set({ nodes: previous.nodes, edges: previous.edges, historyIndex: historyIndex - 1 });
+    },
+
+    redo: () => {
+        const { history, historyIndex } = get();
+        if (historyIndex >= history.length - 1) return;
+        const next = history[historyIndex + 1];
+        set({ nodes: next.nodes, edges: next.edges, historyIndex: historyIndex + 1 });
+    },
+
+    get canUndo() {
+        return get().historyIndex > 0;
+    },
+
+    get canRedo() {
+        return get().historyIndex < get().history.length - 1;
+    },
+
+    // ── Tier 2: Multi-select ───────────────────────────────────────────
+
+    toggleNodeSelection: (id) => {
+        const { selectedNodeIds } = get();
+        const isSelected = selectedNodeIds.includes(id);
+        set({
+            selectedNodeIds: isSelected
+                ? selectedNodeIds.filter((nid) => nid !== id)
+                : [...selectedNodeIds, id],
+            selectedNodeId: id,
+        });
+    },
+
+    clearSelection: () => set({ selectedNodeIds: [], selectedNodeId: null }),
+
+    // ── Tier 2: Grid ───────────────────────────────────────────────────
+
+    setShowGrid: (show) => set({ showGrid: show }),
+    setSnapToGrid: (snap) => set({ snapToGrid: snap }),
+    setGridSize: (size) => set({ gridSize: size }),
 }));

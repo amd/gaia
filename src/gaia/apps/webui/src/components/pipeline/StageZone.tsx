@@ -9,9 +9,12 @@
  */
 
 import { memo } from 'react';
-import { FolderPlus, Play } from 'lucide-react';
-import type { CanvasNode } from '../../types';
+import { FolderPlus, Play, Shield, GitBranch, Repeat } from 'lucide-react';
+import type { CanvasNode, GateCondition } from '../../types';
 import { AgentNode } from './AgentNode';
+import { SupervisorNode } from './SupervisorNode';
+import { DecisionGate } from './DecisionGate';
+import { LoopBlock } from './LoopBlock';
 import { PIPELINE_STAGES } from '../../stores/pipelineCanvasStore';
 import { usePipelineCanvasStore } from '../../stores/pipelineCanvasStore';
 
@@ -30,17 +33,25 @@ interface StageZoneProps {
 }
 
 function StageZoneInner({ stage, agentNodes, index }: StageZoneProps) {
-    const { addAgentToStage, dragOverStage, setDragOverStage, nodes, edges } = usePipelineCanvasStore((s) => ({
+    const { addAgentToStage, dragOverStage, setDragOverStage, nodes, edges, addSupervisorBetweenStages, addGateBetweenStages, addLoopBlock } = usePipelineCanvasStore((s) => ({
         addAgentToStage: s.addAgentToStage,
         dragOverStage: s.dragOverStage,
         setDragOverStage: s.setDragOverStage,
         nodes: s.nodes,
         edges: s.edges,
+        addSupervisorBetweenStages: s.addSupervisorBetweenStages,
+        addGateBetweenStages: s.addGateBetweenStages,
+        addLoopBlock: s.addLoopBlock,
     }));
 
     const isDragOver = dragOverStage === stage.key;
     const stageNode = nodes.find((n) => n.type === 'stage' && n.assignedStage === stage.key);
     const stageStatus = stageNode?.status || 'idle';
+
+    // Get non-agent nodes for this stage (supervisors, gates, loops)
+    const supervisorNodes = nodes.filter((n) => n.type === 'supervisor' && n.assignedStage === stage.key);
+    const gateNodes = nodes.filter((n) => n.type === 'gate' && n.assignedStage === stage.key);
+    const loopNodes = nodes.filter((n) => n.type === 'loop' && n.assignedStage === stage.key);
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
@@ -66,7 +77,18 @@ function StageZoneInner({ stage, agentNodes, index }: StageZoneProps) {
         if (agentData) {
             try {
                 const parsed = JSON.parse(agentData);
-                addAgentToStage(parsed, stage.key);
+                // Check if it's a special block type
+                const blockType = parsed.blockType;
+                if (blockType === 'supervisor') {
+                    addSupervisorBetweenStages(parsed, stage.key);
+                } else if (blockType === 'gate') {
+                    addGateBetweenStages(parsed.condition || 'quality_below_threshold', stage.key);
+                } else if (blockType === 'loop') {
+                    const nextStageKey = PIPELINE_STAGES[index + 1]?.key || 'domain_analysis';
+                    addLoopBlock(stage.key, nextStageKey, parsed.condition || 'quality_below_threshold');
+                } else {
+                    addAgentToStage(parsed, stage.key);
+                }
             } catch {
                 // Invalid drag data - ignore
             }
@@ -110,6 +132,33 @@ function StageZoneInner({ stage, agentNodes, index }: StageZoneProps) {
                     )}
                 </div>
             </div>
+
+            {/* Supervisor nodes */}
+            {supervisorNodes.length > 0 && (
+                <div className="pc-stage-supervisors">
+                    {supervisorNodes.map((node) => (
+                        <SupervisorNode key={node.id} node={node} />
+                    ))}
+                </div>
+            )}
+
+            {/* Decision gate nodes */}
+            {gateNodes.length > 0 && (
+                <div className="pc-stage-gates">
+                    {gateNodes.map((node) => (
+                        <DecisionGate key={node.id} node={node} />
+                    ))}
+                </div>
+            )}
+
+            {/* Loop block nodes */}
+            {loopNodes.length > 0 && (
+                <div className="pc-stage-loops">
+                    {loopNodes.map((node) => (
+                        <LoopBlock key={node.id} node={node} />
+                    ))}
+                </div>
+            )}
 
             {/* Agent slots */}
             <div className="pc-stage-agents">

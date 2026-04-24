@@ -8,7 +8,7 @@
  */
 
 import { memo, useState, useEffect } from 'react';
-import { GripVertical, Cpu, Loader2, ChevronDown, ChevronRight, Search } from 'lucide-react';
+import { GripVertical, Cpu, Loader2, ChevronDown, ChevronRight, Search, Shield, GitBranch, Repeat } from 'lucide-react';
 import { usePipelineCanvasStore } from '../../stores/pipelineCanvasStore';
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -50,6 +50,17 @@ function AgentPaletteInner() {
             description: agent.description,
             keywords: agent.keywords,
             phases: agent.phases,
+        };
+        e.dataTransfer.setData('application/x-agent', JSON.stringify(dragData));
+        e.dataTransfer.effectAllowed = 'copy';
+    };
+
+    const handleBlockDragStart = (e: React.DragEvent, blockType: 'supervisor' | 'gate' | 'loop', condition?: string) => {
+        const dragData = {
+            blockType,
+            name: blockType === 'supervisor' ? 'Quality Supervisor' : blockType === 'gate' ? 'Decision Gate' : 'Loop Block',
+            category: 'orchestration',
+            condition: condition || 'quality_below_threshold',
         };
         e.dataTransfer.setData('application/x-agent', JSON.stringify(dragData));
         e.dataTransfer.effectAllowed = 'copy';
@@ -100,6 +111,38 @@ function AgentPaletteInner() {
             {/* Agent count */}
             <div className="pc-palette-header">
                 <span>{filteredAgents.length} agent{filteredAgents.length !== 1 ? 's' : ''}</span>
+            </div>
+
+            {/* Pipeline Blocks - LEGO blocks for orchestration */}
+            <div className="pc-palette-blocks">
+                <div className="pc-palette-blocks-label">Pipeline Blocks</div>
+                <div
+                    className="pc-palette-block pc-palette-block-supervisor"
+                    draggable
+                    onDragStart={(e) => handleBlockDragStart(e, 'supervisor')}
+                    title="Drag to add a supervisor agent between stages"
+                >
+                    <Shield size={14} className="pc-palette-block-icon" />
+                    <span>Supervisor</span>
+                </div>
+                <div
+                    className="pc-palette-block pc-palette-block-gate"
+                    draggable
+                    onDragStart={(e) => handleBlockDragStart(e, 'gate')}
+                    title="Drag to add a decision gate (pass/fail gate)"
+                >
+                    <GitBranch size={14} className="pc-palette-block-icon" />
+                    <span>Decision Gate</span>
+                </div>
+                <div
+                    className="pc-palette-block pc-palette-block-loop"
+                    draggable
+                    onDragStart={(e) => handleBlockDragStart(e, 'loop')}
+                    title="Drag to add a loop block (iteration control)"
+                >
+                    <Repeat size={14} className="pc-palette-block-icon" />
+                    <span>Loop Block</span>
+                </div>
             </div>
 
             {/* Categories */}

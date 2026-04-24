@@ -635,8 +635,14 @@ export interface ComponentUpdateRequest {
 /** Node status for visual pipeline execution overlay. */
 export type CanvasNodeStatus = 'idle' | 'running' | 'complete' | 'error' | 'waiting';
 
+/** Decision type for supervisor agents - maps to backend DecisionEngine. */
+export type DecisionType = 'CONTINUE' | 'LOOP_BACK' | 'PAUSE' | 'COMPLETE' | 'FAIL';
+
+/** Condition type for decision gates. */
+export type GateCondition = 'quality_below_threshold' | 'error_detected' | 'manual_review' | 'iteration_limit';
+
 /** Type of node in the canvas. */
-export type CanvasNodeType = 'agent' | 'stage';
+export type CanvasNodeType = 'agent' | 'stage' | 'supervisor' | 'gate' | 'loop';
 
 /** A single node in the pipeline canvas (agent card or stage zone). */
 export interface CanvasNode {
@@ -660,6 +666,16 @@ export interface CanvasNode {
     assignedStage?: string;
     /** Agent registry data snapshot. */
     agentData?: AgentRegistryEntry;
+    // Supervisor-specific fields
+    /** Decision type this supervisor produces (for supervisor nodes). */
+    decisionType?: DecisionType;
+    /** Condition that triggers the decision (for supervisor nodes). */
+    decisionCondition?: string;
+    // Gate-specific fields
+    /** Condition type for decision gates. */
+    gateCondition?: GateCondition;
+    /** Target stages for branch paths (for gate nodes). */
+    branchTargets?: { pass: string; fail: string };
 }
 
 /** Connection between two nodes in the canvas. */
@@ -726,4 +742,20 @@ export interface CanvasTemplateExport {
         loop_back: boolean;
         guidance?: string;
     }>;
+}
+
+/** Configuration for a loop block on the canvas. */
+export interface LoopConfig {
+    /** Source stage (where the loop originates). */
+    sourceStage: string;
+    /** Target stage (where the loop returns to). */
+    targetStage: string;
+    /** Condition that triggers the loop. */
+    condition: GateCondition | string;
+    /** Maximum iterations for this loop. */
+    maxIterations: number;
+    /** Current iteration count (updated during execution). */
+    currentIteration: number;
+    /** Label displayed on the loop block. */
+    label?: string;
 }

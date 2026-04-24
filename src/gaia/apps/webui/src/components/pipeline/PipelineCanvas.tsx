@@ -12,7 +12,7 @@
  */
 
 import { memo, useEffect, useCallback, useRef, useState } from 'react';
-import { Play, Save, Trash2, Download, Upload, Loader2, AlertTriangle, Layers } from 'lucide-react';
+import { Play, Save, Trash2, Download, Upload, Loader2, AlertTriangle, Layers, ZoomIn, ZoomOut, Grid, Undo, Redo, Minimize2 } from 'lucide-react';
 import { usePipelineCanvasStore, PIPELINE_STAGES } from '../../stores/pipelineCanvasStore';
 import { usePipelineStore } from '../../stores/pipelineStore';
 import { useTemplateStore } from '../../stores/templateStore';
@@ -38,6 +38,19 @@ function PipelineCanvasInner() {
         setMaxIterations,
         lastError,
         isSaving,
+        zoom,
+        pan,
+        showGrid,
+        snapToGrid,
+        setZoom,
+        setPan,
+        resetView,
+        pushHistory,
+        undo,
+        redo,
+        clearSelection,
+        setShowGrid,
+        setSnapToGrid,
     } = usePipelineCanvasStore((s) => ({
         nodes: s.nodes,
         edges: s.edges,
@@ -54,6 +67,19 @@ function PipelineCanvasInner() {
         setMaxIterations: s.setMaxIterations,
         lastError: s.lastError,
         isSaving: s.isSaving,
+        zoom: s.zoom,
+        pan: s.pan,
+        showGrid: s.showGrid,
+        snapToGrid: s.snapToGrid,
+        setZoom: s.setZoom,
+        setPan: s.setPan,
+        resetView: s.resetView,
+        pushHistory: s.pushHistory,
+        undo: s.undo,
+        redo: s.redo,
+        clearSelection: s.clearSelection,
+        setShowGrid: s.setShowGrid,
+        setSnapToGrid: s.setSnapToGrid,
     }));
 
     const { templates, fetchTemplates } = useTemplateStore((s) => ({
@@ -74,6 +100,34 @@ function PipelineCanvasInner() {
     const [showSaveDialog, setShowSaveDialog] = useState(false);
     const svgRef = useRef<SVGSVGElement>(null);
     const canvasRef = useRef<HTMLDivElement>(null);
+    const isPanning = useRef(false);
+    const panStart = useRef({ x: 0, y: 0 });
+
+    // Zoom on wheel
+    const handleWheel = useCallback((e: React.WheelEvent) => {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        const newZoom = Math.max(0.25, Math.min(3, zoom + delta));
+        setZoom(newZoom);
+    }, [zoom, setZoom]);
+
+    // Pan on mouse drag
+    const handleMouseDown = useCallback((e: React.MouseEvent) => {
+        if (e.button === 0 && e.target === canvasRef.current) {
+            isPanning.current = true;
+            panStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+        }
+    }, [pan]);
+
+    const handleMouseMove = useCallback((e: React.MouseEvent) => {
+        if (isPanning.current) {
+            setPan({ x: e.clientX - panStart.current.x, y: e.clientY - panStart.current.y });
+        }
+    }, []);
+
+    const handleMouseUp = useCallback(() => {
+        isPanning.current = false;
+    }, []);
 
     // Sync session ID
     useEffect(() => {
@@ -164,6 +218,10 @@ function PipelineCanvasInner() {
             return acc;
         }, {} as Record<string, number>);
 
+    const supervisorCount = nodes.filter((n) => n.type === 'supervisor').length;
+    const gateCount = nodes.filter((n) => n.type === 'gate').length;
+    const loopCount = nodes.filter((n) => n.type === 'loop').length;
+
     return (
         <div className="pipeline-canvas">
             {/* Toolbar */}
@@ -180,6 +238,9 @@ function PipelineCanvasInner() {
                     )}
                     <span className="pc-toolbar-stats">
                         {nodes.filter((n) => n.type === 'agent').length} agents
+                        {supervisorCount > 0 && ` · ${supervisorCount} supervisor${supervisorCount !== 1 ? 's' : ''}`}
+                        {gateCount > 0 && ` · ${gateCount} gate${gateCount !== 1 ? 's' : ''}`}
+                        {loopCount > 0 && ` · ${loopCount} loop${loopCount !== 1 ? 's' : ''}`}
                         {Object.keys(agentCategoryCounts).length > 0 &&
                             ` in ${Object.keys(agentCategoryCounts).length} categories`}
                     </span>
@@ -252,6 +313,57 @@ function PipelineCanvasInner() {
                         <Trash2 size={14} />
                     </button>
 
+                    {/* Tier 2: Undo/Redo */}
+                    <button
+                        className="pc-btn pc-btn-secondary"
+                        onClick={undo}
+                        title="Undo (Ctrl+Z)"
+                    >
+                        <Undo size={14} />
+                    </button>
+                    <button
+                        className="pc-btn pc-btn-secondary"
+                        onClick={redo}
+                        title="Redo (Ctrl+Y)"
+                    >
+                        <Redo size={14} />
+                    </button>
+
+                    {/* Tier 2: Zoom controls */}
+                    <div className="pc-zoom-controls">
+                        <button
+                            className="pc-btn pc-btn-secondary pc-zoom-btn"
+                            onClick={() => setZoom(Math.max(0.25, zoom - 0.1))}
+                            title="Zoom out"
+                        >
+                            <ZoomOut size={14} />
+                        </button>
+                        <span className="pc-zoom-level">{(zoom * 100).toFixed(0)}%</span>
+                        <button
+                            className="pc-btn pc-btn-secondary pc-zoom-btn"
+                            onClick={() => setZoom(Math.min(3, zoom + 0.1))}
+                            title="Zoom in"
+                        >
+                            <ZoomIn size={14} />
+                        </button>
+                        <button
+                            className="pc-btn pc-btn-secondary pc-zoom-btn"
+                            onClick={resetView}
+                            title="Fit to view"
+                        >
+                            <Minimize2 size={14} />
+                        </button>
+                    </div>
+
+                    {/* Tier 2: Grid toggle */}
+                    <button
+                        className={`pc-btn pc-btn-secondary ${showGrid ? 'pc-btn-active' : ''}`}
+                        onClick={() => setShowGrid(!showGrid)}
+                        title="Toggle grid"
+                    >
+                        <Grid size={14} />
+                    </button>
+
                     {/* Run pipeline */}
                     <button
                         className="pc-btn pc-btn-primary"
@@ -293,7 +405,23 @@ function PipelineCanvasInner() {
                 </div>
 
                 {/* Canvas area */}
-                <div className="pc-canvas-area" ref={canvasRef}>
+                <div
+                    className={`pc-canvas-area${showGrid ? ' pc-canvas-grid' : ''}`}
+                    ref={canvasRef}
+                    onWheel={handleWheel}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                >
+                    {/* Zoom/pan transform wrapper */}
+                    <div
+                        className="pc-canvas-content"
+                        style={{
+                            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                            transformOrigin: 'top left',
+                        }}
+                    >
                     {/* SVG overlay for edges */}
                     <svg ref={svgRef} className="pc-canvas-edges">
                         {edges.map((edge) => {
@@ -373,6 +501,7 @@ function PipelineCanvasInner() {
                             />
                         ))}
                     </div>
+                    </div> {/* end pc-canvas-content */}
                 </div>
             </div>
 

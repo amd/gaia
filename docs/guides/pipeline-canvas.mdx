@@ -43,11 +43,23 @@ The canvas is organized into 5 sequential pipeline stages:
 
 ## Using the Canvas
 
+### Pipeline Blocks (LEGO Blocks)
+
+The palette includes three draggable orchestration blocks in addition to agents:
+
+| Block | Icon | Color | Purpose |
+|-------|------|-------|---------|
+| **Supervisor** | Shield | Purple | Evaluates output quality and makes decisions |
+| **Decision Gate** | GitBranch | Amber | Pass/fail gate with configurable conditions |
+| **Loop Block** | Repeat | Blue | Iteration control with progress tracking |
+
+Drag these blocks onto any stage zone to add orchestration logic between stages.
+
 ### Dragging Agents
 
-1. **From the palette** - The left sidebar shows all registered agents grouped by category
-2. **To a stage zone** - Drag an agent card and drop it onto the desired stage
-3. **Within the canvas** - Drag existing agent nodes between stages to reassign them
+1. **From the palette** - The left sidebar shows Pipeline Blocks and all registered agents grouped by category
+2. **To a stage zone** - Drag an agent card or block and drop it onto the desired stage
+3. **Within the canvas** - Drag existing nodes between stages to reassign them
 
 ### Agent Palette
 
@@ -58,6 +70,30 @@ The palette sidebar categorizes agents by their capabilities:
 - **Quality** - Quality assurance and evaluation agents (green)
 
 Each agent card displays the agent ID, name, and default model.
+
+### Node Types
+
+The canvas supports multiple node types beyond standard agents:
+
+**Agent Nodes** - Worker agents that execute tasks within a stage. Display agent info, model, category, and execution status.
+
+**Supervisor Nodes** - Evaluate output quality between stages. Features:
+- Decision type indicator: CONTINUE, LOOP_BACK, PAUSE, COMPLETE, FAIL
+- Color-coded decision bar at the top of the node
+- Expandable config panel showing available decision types and monitoring targets
+- Default supervisors are placed between each stage on canvas reset
+
+**Decision Gates** - Diamond-shaped nodes that evaluate conditions:
+- Pass path (green) routes to the next stage
+- Fail path (red) routes back to Domain Analysis
+- Configurable conditions: Quality < Threshold, Error Detected, Manual Review, Iteration Limit
+- Shows actual quality score vs required threshold when available
+
+**Loop Blocks** - Visualize loop paths between stages:
+- Iteration counter showing current/max iterations
+- Progress bar with color change when approaching limit
+- Source -> target stage path display
+- Pulsing warning animation when near iteration limit
 
 ### Agent Node Status
 
@@ -83,7 +119,19 @@ SVG bezier curves connect stages visually:
 2. Optionally adjust the **Quality Threshold** (50-100%) and **Max Iterations** (1-10)
 3. Click **Run Pipeline**
 
-The canvas will display live execution status as the pipeline runs, with SSE events streamed from the backend.
+The canvas will display live execution status as the pipeline runs, with SSE events streamed from the backend. Node statuses update in real-time, and loop-back events are visualized with red animated edges.
+
+### Canvas Tools
+
+The toolbar provides additional workspace tools:
+
+**Undo/Redo** - Revert or reapply canvas changes (also Ctrl+Z / Ctrl+Y)
+
+**Zoom Controls** - Zoom in/out (25%-300%), fit to view, or scroll to zoom
+
+**Grid Toggle** - Show/hide the grid background for alignment
+
+**Pan** - Click and drag the canvas background to pan around
 
 ### Saving and Loading Templates
 
@@ -105,8 +153,11 @@ The canvas will display live execution status as the pipeline runs, with SSE eve
 src/gaia/apps/webui/src/components/pipeline/
 ├── PipelineCanvas.tsx      # Main canvas orchestrator
 ├── PipelineCanvas.css      # Dark theme canvas styling
-├── AgentPalette.tsx        # Draggable agent sidebar
+├── AgentPalette.tsx        # Draggable agent + blocks sidebar
 ├── AgentNode.tsx           # Agent card with status indicators
+├── SupervisorNode.tsx      # Supervisor node with decision display
+├── DecisionGate.tsx        # Diamond-shaped pass/fail gate
+├── LoopBlock.tsx           # Loop block with iteration tracking
 ├── StageZone.tsx           # Stage drop zone with agent slots
 └── PipelineRunner.tsx      # Canvas/Log tab container
 ```

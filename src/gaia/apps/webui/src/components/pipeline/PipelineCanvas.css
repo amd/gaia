@@ -109,6 +109,32 @@
     border-color: #3a3d4a;
 }
 
+.pc-btn-active {
+    background: #8b5cf620;
+    border-color: #8b5cf6;
+    color: #8b5cf6;
+}
+
+/* ── Zoom Controls ─────────────────────────────────────────────────── */
+
+.pc-zoom-controls {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.pc-zoom-btn {
+    padding: 4px 6px;
+}
+
+.pc-zoom-level {
+    font-size: 11px;
+    color: #9ca3af;
+    min-width: 40px;
+    text-align: center;
+    font-weight: 500;
+}
+
 /* ── Error Bar ──────────────────────────────────────────────────────── */
 
 .pc-error-bar {
@@ -298,6 +324,81 @@
     border-radius: 3px;
 }
 
+/* ── Pipeline Blocks (LEGO blocks) ─────────────────────────────────── */
+
+.pc-palette-blocks {
+    padding: 8px;
+    margin-bottom: 8px;
+    background: #1a1c2e;
+    border-radius: 8px;
+    border: 1px solid #2a2d3a;
+}
+
+.pc-palette-blocks-label {
+    font-size: 10px;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
+.pc-palette-block {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    cursor: grab;
+    transition: background 0.15s, border-color 0.15s;
+    font-size: 12px;
+    font-weight: 500;
+    margin-bottom: 4px;
+    border: 1px solid transparent;
+}
+
+.pc-palette-block:hover {
+    background: #1e2030;
+}
+
+.pc-palette-block:active {
+    cursor: grabbing;
+}
+
+.pc-palette-block-icon {
+    flex-shrink: 0;
+}
+
+.pc-palette-block-supervisor {
+    color: #8b5cf6;
+    border-color: #8b5cf640;
+}
+
+.pc-palette-block-supervisor:hover {
+    background: #8b5cf615;
+    border-color: #8b5cf680;
+}
+
+.pc-palette-block-gate {
+    color: #f59e0b;
+    border-color: #f59e0b40;
+}
+
+.pc-palette-block-gate:hover {
+    background: #f59e0b15;
+    border-color: #f59e0b80;
+}
+
+.pc-palette-block-loop {
+    color: #3b82f6;
+    border-color: #3b82f640;
+}
+
+.pc-palette-block-loop:hover {
+    background: #3b82f615;
+    border-color: #3b82f680;
+}
+
 /* ── Canvas Area ────────────────────────────────────────────────────── */
 
 .pc-canvas-area {
@@ -305,6 +406,26 @@
     overflow: auto;
     position: relative;
     padding: 16px;
+    cursor: grab;
+}
+
+.pc-canvas-area:active {
+    cursor: grabbing;
+}
+
+/* Grid background */
+.pc-canvas-grid {
+    background-image:
+        linear-gradient(to right, #1a1c2e 1px, transparent 1px),
+        linear-gradient(to bottom, #1a1c2e 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+/* Canvas content transform wrapper */
+.pc-canvas-content {
+    min-width: fit-content;
+    min-height: fit-content;
+    transition: transform 0.1s ease-out;
 }
 
 .pc-canvas-edges {
@@ -788,4 +909,552 @@
     to {
         transform: rotate(360deg);
     }
+}
+
+/* ── Supervisor Node ────────────────────────────────────────────────── */
+
+.pc-supervisor-node {
+    width: 220px;
+    background: #1e2030;
+    border: 1px solid #8b5cf640;
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: grab;
+    position: relative;
+    transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.pc-supervisor-node:hover {
+    border-color: #8b5cf6;
+    box-shadow: 0 4px 16px rgba(139, 92, 246, 0.2);
+}
+
+.pc-supervisor-node.selected {
+    border-color: #8b5cf6;
+    box-shadow: 0 0 0 2px #8b5cf640;
+}
+
+.pc-supervisor-decision-bar {
+    height: 4px;
+    width: 100%;
+}
+
+.pc-supervisor-body {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 10px 6px;
+}
+
+.pc-supervisor-icon {
+    color: #8b5cf6;
+    flex-shrink: 0;
+}
+
+.pc-supervisor-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.pc-supervisor-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #e5e7eb;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pc-supervisor-id {
+    display: block;
+    font-size: 10px;
+    color: #6b7280;
+    font-family: monospace;
+}
+
+.pc-supervisor-remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: none;
+    color: #6b7280;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+.pc-supervisor-node:hover .pc-supervisor-remove {
+    opacity: 1;
+}
+
+.pc-supervisor-remove:hover {
+    background: #ef444420;
+    color: #ef4444;
+}
+
+.pc-supervisor-decision {
+    padding: 0 10px 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+}
+
+.pc-supervisor-decision-label {
+    color: #6b7280;
+}
+
+.pc-supervisor-decision-value {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-weight: 600;
+}
+
+.pc-supervisor-expand {
+    position: absolute;
+    bottom: 4px;
+    right: 4px;
+    background: none;
+    border: none;
+    color: #4b5563;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+}
+
+.pc-supervisor-expand:hover {
+    background: #2a2d3a;
+    color: #9ca3af;
+}
+
+.pc-supervisor-config {
+    padding: 4px 10px 8px;
+    border-top: 1px solid #2a2d3a;
+    margin-top: 4px;
+}
+
+.pc-supervisor-config-section {
+    margin-bottom: 6px;
+}
+
+.pc-supervisor-config-section label {
+    display: block;
+    font-size: 9px;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.pc-supervisor-decisions-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.pc-supervisor-decision-tag {
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid;
+    color: #9ca3af;
+}
+
+.pc-supervisor-decision-tag.active {
+    font-weight: 600;
+}
+
+.pc-supervisor-condition {
+    font-size: 10px;
+    color: #9ca3af;
+    font-family: monospace;
+}
+
+.pc-supervisor-monitoring {
+    font-size: 10px;
+    color: #9ca3af;
+}
+
+/* ── Decision Gate ──────────────────────────────────────────────────── */
+
+.pc-decision-gate {
+    width: 180px;
+    background: #1e2030;
+    border: 1px solid #f59e0b40;
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: grab;
+    position: relative;
+    transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.pc-decision-gate:hover {
+    border-color: #f59e0b;
+    box-shadow: 0 4px 16px rgba(245, 158, 11, 0.2);
+}
+
+.pc-decision-gate.selected {
+    border-color: #f59e0b;
+    box-shadow: 0 0 0 2px #f59e0b40;
+}
+
+.pc-decision-gate.gate-passed {
+    border-color: #10b981;
+    box-shadow: 0 0 0 1px #10b98140;
+}
+
+.pc-decision-gate.gate-failed {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 1px #ef444440;
+}
+
+.pc-gate-diamond {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin: 8px auto 0;
+    background: #f59e0b20;
+    border-radius: 4px;
+    transform: rotate(45deg);
+    color: #f59e0b;
+}
+
+.pc-gate-diamond > * {
+    transform: rotate(-45deg);
+}
+
+.pc-gate-info {
+    padding: 8px 10px 4px;
+    text-align: center;
+}
+
+.pc-gate-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #e5e7eb;
+}
+
+.pc-gate-condition {
+    display: block;
+    font-size: 10px;
+    color: #6b7280;
+}
+
+.pc-gate-remove {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border: none;
+    background: none;
+    color: #6b7280;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+.pc-decision-gate:hover .pc-gate-remove {
+    opacity: 1;
+}
+
+.pc-gate-remove:hover {
+    background: #ef444420;
+    color: #ef4444;
+}
+
+.pc-gate-branches {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 10px;
+    font-size: 9px;
+}
+
+.pc-gate-branch {
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-weight: 500;
+}
+
+.pc-gate-pass {
+    color: #10b981;
+    background: #10b98115;
+}
+
+.pc-gate-fail {
+    color: #ef4444;
+    background: #ef444415;
+}
+
+.pc-gate-expand {
+    position: absolute;
+    bottom: 4px;
+    right: 4px;
+    background: none;
+    border: none;
+    color: #4b5563;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+}
+
+.pc-gate-expand:hover {
+    background: #2a2d3a;
+    color: #9ca3af;
+}
+
+.pc-gate-config {
+    padding: 4px 10px 8px;
+    border-top: 1px solid #2a2d3a;
+    margin-top: 4px;
+}
+
+.pc-gate-config-section {
+    margin-bottom: 6px;
+}
+
+.pc-gate-config-section label {
+    display: block;
+    font-size: 9px;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.pc-gate-select {
+    width: 100%;
+    background: #0f1117;
+    border: 1px solid #2a2d3a;
+    border-radius: 4px;
+    color: #e5e7eb;
+    padding: 4px 6px;
+    font-size: 10px;
+}
+
+.pc-gate-quality {
+    font-weight: 600;
+    font-size: 11px;
+}
+
+.pc-gate-quality.pass {
+    color: #10b981;
+}
+
+.pc-gate-quality.fail {
+    color: #ef4444;
+}
+
+/* ── Loop Block ─────────────────────────────────────────────────────── */
+
+.pc-loop-block {
+    width: 200px;
+    background: #1e2030;
+    border: 1px solid #3b82f640;
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: grab;
+    position: relative;
+    transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.pc-loop-block:hover {
+    border-color: #3b82f6;
+    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.2);
+}
+
+.pc-loop-block.selected {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px #3b82f640;
+}
+
+.pc-loop-block.pc-loop-near-limit {
+    border-color: #f59e0b;
+    animation: pulse-warning 2s ease-in-out infinite;
+}
+
+@keyframes pulse-warning {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.3); }
+    50% { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0); }
+}
+
+.pc-loop-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 10px 6px;
+}
+
+.pc-loop-icon {
+    color: #3b82f6;
+    flex-shrink: 0;
+}
+
+.pc-loop-label {
+    flex: 1;
+    font-size: 12px;
+    font-weight: 600;
+    color: #e5e7eb;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pc-loop-remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border: none;
+    background: none;
+    color: #6b7280;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+.pc-loop-block:hover .pc-loop-remove {
+    opacity: 1;
+}
+
+.pc-loop-remove:hover {
+    background: #ef444420;
+    color: #ef4444;
+}
+
+.pc-loop-iteration {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px 4px;
+    font-size: 10px;
+}
+
+.pc-loop-iter-count {
+    color: #9ca3af;
+    font-family: monospace;
+    font-weight: 600;
+}
+
+.pc-loop-warning {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    color: #f59e0b;
+    font-weight: 500;
+}
+
+.pc-loop-progress {
+    height: 4px;
+    background: #2a2d3a;
+    margin: 0 10px 6px;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.pc-loop-progress-fill {
+    height: 100%;
+    background: #3b82f6;
+    border-radius: 2px;
+    transition: width 0.3s, background 0.3s;
+}
+
+.pc-loop-near-limit .pc-loop-progress-fill {
+    background: #f59e0b;
+}
+
+.pc-loop-path {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 4px 10px 8px;
+    font-size: 9px;
+}
+
+.pc-loop-path-from,
+.pc-loop-path-to {
+    color: #9ca3af;
+    font-family: monospace;
+    text-transform: capitalize;
+}
+
+.pc-loop-path-arrow {
+    color: #3b82f6;
+}
+
+.pc-loop-expand {
+    position: absolute;
+    bottom: 4px;
+    right: 4px;
+    background: none;
+    border: none;
+    color: #4b5563;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+}
+
+.pc-loop-expand:hover {
+    background: #2a2d3a;
+    color: #9ca3af;
+}
+
+.pc-loop-config {
+    padding: 4px 10px 8px;
+    border-top: 1px solid #2a2d3a;
+    margin-top: 4px;
+}
+
+.pc-loop-config-section {
+    margin-bottom: 6px;
+}
+
+.pc-loop-config-section label {
+    display: block;
+    font-size: 9px;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.pc-loop-condition {
+    font-size: 10px;
+    color: #9ca3af;
+    font-family: monospace;
+}
+
+.pc-loop-max-iter {
+    font-size: 10px;
+    color: #9ca3af;
+    font-weight: 600;
+}
+
+/* ── Stage Sections for New Node Types ──────────────────────────────── */
+
+.pc-stage-supervisors,
+.pc-stage-gates,
+.pc-stage-loops {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 8px 0;
+    border-top: 1px solid #2a2d3a;
+    margin-top: 8px;
 }
