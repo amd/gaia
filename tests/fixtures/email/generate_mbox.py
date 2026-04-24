@@ -404,8 +404,7 @@ def _mailbox_from_records(
     with out_mbox.open("ab") as f:
         for raw_msg, meta, message_id in malformed_raw:
             from_line = (
-                "From malformed@example.com "
-                f"{datetime.now(timezone.utc).ctime()}\n"
+                "From malformed@example.com " f"{datetime.now(timezone.utc).ctime()}\n"
             )
             payload = raw_msg.replace("\n", "\n").encode("utf-8", errors="replace")
             if not payload.endswith(b"\n"):
@@ -529,7 +528,7 @@ def _build_dataset(
             cc=cc,
             to=to,
             html_body=(
-                f"<p>{body}</p><p><img src=\"cid:logo-inline-1\" alt=\"logo\"></p>"
+                f'<p>{body}</p><p><img src="cid:logo-inline-1" alt="logo"></p>'
                 if html
                 else None
             ),

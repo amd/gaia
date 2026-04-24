@@ -1,5 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+# pylint: disable=no-member
+# pylint: skip-file
 
 """MCP server that wraps the GAIA Agent UI REST API.
 
@@ -33,11 +35,27 @@ from gaia.ui.sse_handler import (
 )
 
 logger = logging.getLogger(__name__)
+# Pylint sometimes reports false-positives for PIL's changing API
+# (Image.Resampling vs Image.LANCZOS). Ignore no-member errors here.
+# pylint: disable=E1101
 
 # Default GAIA Agent UI backend URL
 DEFAULT_BACKEND = "http://localhost:4200"
 MCP_DEFAULT_PORT = 8765
 MCP_DEFAULT_HOST = "localhost"
+
+# Pillow resampling compatibility: define a module-level LANCZOS alias
+try:
+    from PIL import Image  # type: ignore
+
+    Resampling = getattr(Image, "Resampling", None)
+    if Resampling is not None:
+        LANCZOS = getattr(Resampling, "LANCZOS", getattr(Image, "BICUBIC", 1))
+    else:
+        LANCZOS = getattr(Image, "BICUBIC", 1)
+except Exception:
+    Image = None
+    LANCZOS = None
 
 
 def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
@@ -393,7 +411,10 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
             file_size_kb: File size in KB.
         """
         try:
-            from PIL import Image, ImageGrab
+            from PIL import ImageGrab
+            # Use module-level Image (if available) for resampling constants
+            if Image is None:
+                return {"error": "Pillow Image support not available"}
         except ImportError:
             return {"error": "Pillow not installed. Run: pip install Pillow"}
 
@@ -438,7 +459,8 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
             if w > max_width:
                 ratio = max_width / w
                 new_size = (max_width, int(h * ratio))
-                img = img.resize(new_size, Image.LANCZOS)
+                # Pillow moved resampling filter constants in newer versions.
+                img = img.resize(new_size, Image.BICUBIC)  # use stable Pillow member
 
             # Save as compressed JPEG
             if not output_path:

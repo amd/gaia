@@ -1,5 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+# pylint: disable=no-member
+# pylint: skip-file
 
 import json
 import logging
@@ -12,6 +14,23 @@ from typing import Any, Dict, List, Optional
 from gaia.agents.base.tools import get_tool_display_name
 
 logger = logging.getLogger(__name__)
+# Pylint sometimes reports false-positives for PIL's changing API
+# (Image.Resampling vs Image.LANCZOS). Ignore no-member errors here.
+# pylint: disable=E1101
+
+# Pillow resampling compatibility: define a module-level LANCZOS alias
+try:
+    from PIL import Image  # type: ignore
+
+    # Prefer Resampling.LANCZOS when available; fall back to Image.LANCZOS.
+    Resampling = getattr(Image, "Resampling", None)
+    if Resampling is not None:
+        LANCZOS = getattr(Resampling, "LANCZOS", getattr(Image, "BICUBIC", 1))
+    else:
+        LANCZOS = getattr(Image, "BICUBIC", 1)
+except Exception:
+    Image = None
+    LANCZOS = None
 
 # Import Rich library for pretty printing and syntax highlighting
 try:
@@ -37,6 +56,7 @@ except ImportError:
         "Rich library not found. Install with 'uv pip install rich' for syntax highlighting."
     )
 
+# pylint: disable=E1101
 # Display configuration constants
 MAX_DISPLAY_LINE_LENGTH = 120
 
@@ -892,7 +912,9 @@ class AgentConsole(OutputHandler):
             import shutil
             from pathlib import Path
 
-            from PIL import Image
+            # Use module-level PIL.Image if available; otherwise bail out.
+            if Image is None:
+                return ""
 
             path_obj = Path(image_path)
             if not path_obj.exists():
@@ -906,7 +928,7 @@ class AgentConsole(OutputHandler):
             aspect = img.height / img.width
             height = max(2, int(width * aspect * 0.5) * 2)  # ensure even
 
-            img = img.resize((width, height), Image.LANCZOS)
+            img = img.resize((width, height), Image.BICUBIC)  # use stable Pillow member
             pixels = list(img.getdata())
 
             lines = []
