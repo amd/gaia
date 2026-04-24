@@ -13,21 +13,24 @@ icon: "diagram-project"
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.api_agent import ApiAgent
 from gaia.agents.chat.tools.file_tools import FileToolsMixin
+from gaia.agents.tools.file_tools import FileSearchToolsMixin
 from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
 from gaia.agents.chat.tools.shell_tools import ShellToolsMixin
 
+# ApiAgent already subclasses Agent, so there's no need to list Agent again.
 class MultiToolAgent(
     ApiAgent,
-    Agent,
-    FileToolsMixin,
+    FileToolsMixin,         # add_watch_directory (file watching)
+    FileSearchToolsMixin,   # read_file / write_file / search_*
     RAGToolsMixin,
-    ShellToolsMixin
+    ShellToolsMixin,
 ):
     """Agent combining multiple tool sets."""
 
     def _get_system_prompt(self) -> str:
         return """You are a versatile assistant with access to:
-        - File operations (read, write, list)
+        - File operations (read, write, search) via FileSearchToolsMixin
+        - Directory watching via FileToolsMixin
         - Document search (RAG)
         - Shell commands
 

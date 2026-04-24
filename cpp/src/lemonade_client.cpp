@@ -25,11 +25,18 @@ namespace gaia {
         result.pop_back();
     }
 
-    // Append /api/v1 if not already present
-    const std::string suffix = "/api/v1";
-    if (result.size() < suffix.size() ||
-        result.substr(result.size() - suffix.size()) != suffix) {
-        result += suffix;
+    // Preserve OpenAI-compatible /v1 endpoints and Lemonade /api/v1 endpoints.
+    const std::string lemonadeSuffix = "/api/v1";
+    const std::string openaiSuffix = "/v1";
+    const bool hasLemonadeSuffix =
+        result.size() >= lemonadeSuffix.size() &&
+        result.substr(result.size() - lemonadeSuffix.size()) == lemonadeSuffix;
+    const bool hasOpenAiSuffix =
+        result.size() >= openaiSuffix.size() &&
+        result.substr(result.size() - openaiSuffix.size()) == openaiSuffix;
+
+    if (!hasLemonadeSuffix && !hasOpenAiSuffix) {
+        result += lemonadeSuffix;
     }
 
     return result;
@@ -365,6 +372,16 @@ void LemonadeClient::ensureModelLoaded(const std::string& modelName, int ctxSize
         return;
     }
 
+    // Non-Lemonade OpenAI-compatible servers such as Ollama do not expose
+    // Lemonade's /health and /load endpoints. In that case, skip model
+    // management and let the server handle model selection from the request.
+    if (baseUrl_.size() < 7 || baseUrl_.substr(baseUrl_.size() - 7) != "/api/v1") {
+        if (debug_) {
+            std::cerr << "[Lemonade] ensureModelLoaded: non-Lemonade endpoint detected, skipping" << std::endl;
+        }
+        return;
+    }
+
     LemonadeHealth h = healthCheck();
 
     if (h.running && h.modelId == effectiveModel) {
@@ -424,7 +441,7 @@ std::string LemonadeClient::chatCompletions(const json& requestBody, int timeout
                         "  Restart Lemonade with a larger context:\n" +
                         "    lemonade-server serve --ctx-size 32768\n" +
                         "  or via the helper script:\n" +
-                        "    .\\scripts\\start-lemonade.ps1 -CtxSize 32768";
+                        "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
                 } else if (!msg.empty()) {
                     errMsg = msg;
                 }
@@ -561,7 +578,7 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
                             "  Restart Lemonade with a larger context:\n" +
                             "    lemonade-server serve --ctx-size 32768\n" +
                             "  or via the helper script:\n" +
-                            "    .\\scripts\\start-lemonade.ps1 -CtxSize 32768";
+                            "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
                     } else if (!msg.empty()) {
                         errMsg = msg;
                     }

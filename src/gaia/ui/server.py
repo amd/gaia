@@ -28,7 +28,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -47,6 +47,7 @@ from ._chat_helpers import _stream_chat_response  # noqa: F401
 # pylint: enable=unused-import
 from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
+from .routers import agents as agents_router_mod
 from .routers import chat as chat_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
@@ -148,47 +149,106 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage startup/shutdown lifecycle for background services."""
+        from gaia.ui.dispatch import DispatchQueue
 
-        # Pre-warm LemonadeManager so the first user message skips HTTP calls.
-        # Runs in a thread-pool worker to avoid blocking the event loop.
-        async def _prewarm_lemonade():
-            try:
-                from gaia.llm.lemonade_manager import LemonadeManager
+        # ── Boot-time initialization via DispatchQueue ──────────────────
+        # Replaces the previous fire-and-forget asyncio.create_task() calls
+        # with a tracked dispatch queue so the frontend can report progress.
 
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    None,
-                    lambda: LemonadeManager.ensure_ready(
-                        quiet=True,
-                        min_context_size=0,  # Only check reachability — don't trigger model reloads
-                    ),
+        queue = DispatchQueue(max_workers=4)
+        app.state.dispatch_queue = queue
+
+        # ── Agent Registry ──────────────────────────────────────────────
+        from gaia.agents.registry import AgentRegistry
+        from gaia.ui._chat_helpers import set_agent_registry
+
+        registry = AgentRegistry()
+        registry.discover()
+        app.state.agent_registry = registry
+        set_agent_registry(registry)
+        agent_ids = [r.id for r in registry.list()]
+        logger.info(
+            "server: Agent registry initialized with %d agents: %s",
+            len(agent_ids),
+            agent_ids,
+        )
+
+        def _check_lemonade():
+            """Pre-warm LemonadeManager — check reachability only."""
+            from gaia.llm.lemonade_manager import LemonadeManager
+
+            LemonadeManager.ensure_ready(
+                quiet=True,
+                min_context_size=0,  # Only check reachability — don't trigger model reloads
+            )
+
+        def _import_modules():
+            """Pre-import heavy pure-library modules so first-message imports are cached.
+
+            ChatAgent/RAGSDK/MCPClientManager are intentionally excluded: their
+            import trees pull in gaia.apps.* modules that instantiate AgentSDK
+            at module level, which calls LemonadeManager.ensure_ready() and can
+            trigger a model switch.
+            """
+            # pylint: disable=unused-import
+            import faiss  # noqa: F401
+            import sentence_transformers  # noqa: F401
+
+        def _load_model():
+            """Pre-load the expected LLM model so the first prompt skips model loading.
+
+            Uses the same model_load_lock as _maybe_load_expected_model() to
+            prevent double loads if a chat request arrives during preload.
+            """
+            import httpx
+
+            from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+            from gaia.ui._chat_helpers import model_load_lock
+
+            base_url = LemonadeManager.get_base_url() or "http://localhost:8000/api/v1"
+
+            # Check if a chat model is already loaded.
+            # Let exceptions propagate so the DispatchQueue marks the job as
+            # FAILED (not DONE) — the frontend will show "degraded" state.
+            resp = httpx.get(f"{base_url}/health", timeout=5.0)
+            if resp.status_code == 200:
+                all_models = resp.json().get("all_models_loaded", [])
+                if any(m.get("type") in ("llm", "vlm") for m in all_models):
+                    return  # Already loaded — nothing to do
+
+            from gaia.llm.lemonade_client import LemonadeClient
+
+            with model_load_lock:
+                # Double-check after acquiring the lock: another thread may have
+                # loaded the model while we were waiting.
+                try:
+                    resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
+                    if resp2.status_code == 200:
+                        all_models2 = resp2.json().get("all_models_loaded", [])
+                        if any(m.get("type") in ("llm", "vlm") for m in all_models2):
+                            return
+                except Exception:
+                    pass  # proceed with load attempt
+
+                from gaia.ui.routers.system import _DEFAULT_MODEL_NAME
+
+                model_id = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
+                LemonadeClient(verbose=False).load_model(
+                    model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False
                 )
-                logger.info("LemonadeManager pre-warmed")
-            except Exception as exc:  # server may not be running yet — that's fine
-                logger.debug("LemonadeManager pre-warm skipped: %s", exc)
 
-        asyncio.create_task(_prewarm_lemonade())
-
-        # Pre-import heavy pure-library modules so first-message imports are cached.
-        # Only import libraries with no Lemonade/LLM side-effects at module level.
-        # ChatAgent/RAGSDK/MCPClientManager are intentionally excluded: their import
-        # trees pull in gaia.apps.* modules that instantiate AgentSDK at module level,
-        # which calls LemonadeManager.ensure_ready() and can trigger a model switch.
-        async def _preload_modules():
-            try:
-                loop = asyncio.get_event_loop()
-
-                def _do_imports():
-                    # pylint: disable=unused-import
-                    import faiss  # noqa: F401
-                    import sentence_transformers  # noqa: F401
-
-                await loop.run_in_executor(None, _do_imports)
-                logger.info("Heavy modules pre-loaded")
-            except Exception as exc:
-                logger.debug("Module pre-load skipped: %s", exc)
-
-        asyncio.create_task(_preload_modules())
+        # Dispatch startup tasks.  Jobs A and B run in parallel; Job C
+        # waits for A (needs Lemonade reachable) before loading the model.
+        lemonade_id = queue.dispatch(
+            "Checking LLM server", _check_lemonade, visible=True
+        )
+        queue.dispatch("Loading ML libraries", _import_modules, visible=True)
+        queue.dispatch(
+            "Loading AI model",
+            _load_model,
+            visible=True,
+            depends_on=lemonade_id,
+        )
 
         # Start document file monitor for auto re-indexing
         monitor = DocumentMonitor(
@@ -204,6 +264,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         yield
 
         # Shutdown
+        await queue.shutdown()
         await monitor.stop()
         logger.info("Document file monitor stopped")
         db.close()
@@ -278,6 +339,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # ── Include Routers ──────────────────────────────────────────────────
     app.include_router(system_router_mod.router)
+    app.include_router(agents_router_mod.router)
     app.include_router(sessions_router_mod.router)
     app.include_router(chat_router_mod.router)
     app.include_router(documents_router_mod.router)
@@ -352,13 +414,71 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             _webui_dist,
         )
 
-        @app.get("/")
+        _FALLBACK_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GAIA Agent UI &mdash; Backend API</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 Helvetica, Arial, sans-serif;
+    max-width: 640px;
+    margin: 4rem auto;
+    padding: 0 1.5rem;
+    line-height: 1.55;
+    color: #1f2328;
+    background: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e6edf3; background: #0d1117; }
+    a { color: #58a6ff; }
+    code { background: #161b22; }
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  p  { margin: 0.75rem 0; }
+  ul { padding-left: 1.25rem; }
+  li { margin: 0.25rem 0; }
+  code {
+    background: #f3f4f6;
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-size: 0.95em;
+  }
+  .muted { color: #656d76; font-size: 0.9rem; margin-top: 2rem; }
+</style>
+</head>
+<body>
+  <h1>This is the GAIA backend API</h1>
+  <p>
+    To use the GAIA interface, open the GAIA desktop app
+    (download at
+    <a href="https://github.com/amd/gaia/releases">github.com/amd/gaia/releases</a>).
+    For browser-mode setup and troubleshooting, see
+    <a href="https://amd-gaia.ai/guides/agent-ui">amd-gaia.ai/guides/agent-ui</a>.
+  </p>
+  <ul>
+    <li><a href="/docs">API documentation</a> (<code>/docs</code>)</li>
+    <li><a href="/api/health">Health endpoint</a> (<code>/api/health</code>)</li>
+  </ul>
+  <p class="muted">
+    GAIA Agent UI backend is running, but no frontend build was found.
+  </p>
+</body>
+</html>
+"""
+
+        @app.get("/", response_class=HTMLResponse)
         async def no_frontend():
-            """Inform user that frontend needs to be built."""
-            return {
-                "message": "GAIA Agent UI API is running. Frontend not built yet.",
-                "hint": "Run 'npm run build' in src/gaia/apps/webui/ to build the frontend.",
-            }
+            """Serve a helpful HTML landing page when no frontend build is present.
+
+            The backend API is still fully functional; this page just tells
+            human visitors where to find the desktop app and API docs instead
+            of returning raw JSON.
+            """
+            return HTMLResponse(content=_FALLBACK_HTML, status_code=200)
 
     return app
 

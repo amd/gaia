@@ -63,32 +63,30 @@ def get_weather(city: str, units: str = "fahrenheit") -> dict:
     }
 ```
 
-The LLM sees this contract:
+The decorator registers an entry in the `_TOOL_REGISTRY` dictionary. Today the
+registry entry looks like this (source: `src/gaia/agents/base/tools.py:40-77`):
 
-```json
+```python
 {
-  "name": "get_weather",
-  "description": "Get current weather for a city.\n\nUse this tool when the user asks about weather conditions, temperature, or if they need an umbrella.",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "city": {
-        "type": "string",
-        "description": "Name of the city (e.g., \"Seattle\", \"Tokyo\")"
-      },
-      "units": {
-        "type": "string",
-        "description": "Temperature units - \"fahrenheit\" or \"celsius\"",
-        "default": "fahrenheit"
-      }
+    "name": "get_weather",
+    "description": "Get current weather for a city.\n\nUse this tool when ...",  # whole docstring
+    "parameters": {
+        "city":  {"type": "string", "required": True},
+        "units": {"type": "string", "required": False},
     },
-    "required": ["city"]
-  }
+    "function": <the callable>,
+    "atomic": False,
 }
 ```
 
 <Note>
-**Key Insight:** Everything the LLM knows about your tool comes from the **function name**, **type hints**, and **docstring**. Your implementation is invisible to it.
+**What's actually captured:** The function name, the full docstring (as
+`description`), and a `{type, required}` entry per parameter inferred from type
+hints (only `str`, `int`, `float`, `bool`, `tuple`, `dict` are recognised —
+other annotations fall back to `"unknown"`). Per-argument descriptions from the
+`Args:` docstring block and parameter default values are **not** parsed into the
+registry today, so write concise, self-contained docstrings to give the LLM all
+the context it needs.
 </Note>
 
 ---
@@ -871,76 +869,63 @@ def query_users(
 
 ## Deep Dive: Tool Schema Generation
 
-<Accordion title="How @tool Generates JSON Schema">
+<Accordion title="How @tool Generates the Tool Entry">
 
-When you decorate a function with `@tool`, Python introspection extracts the schema:
+When you decorate a function with `@tool`, Python introspection extracts a
+minimal schema (see `src/gaia/agents/base/tools.py:19-88` for the authoritative
+implementation):
 
 ```python
 import inspect
-from typing import get_type_hints
 
-def tool(func):
-    """Decorator that generates JSON schema from function signature."""
+_TOOL_REGISTRY = {}
 
-    # Get type hints
-    hints = get_type_hints(func)
-    sig = inspect.signature(func)
+def tool(func=None, *, atomic: bool = False, **kwargs):
+    """Decorator that registers a function in the global tool registry."""
 
-    # Build schema
-    schema = {
-        "name": func.__name__,
-        "description": inspect.getdoc(func) or "",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": []
+    def decorator(f):
+        sig = inspect.signature(f)
+        params = {}
+
+        for name, param in sig.parameters.items():
+            info = {
+                "type": "unknown",
+                "required": param.default is inspect.Parameter.empty,
+            }
+            # A small annotation → JSON-type map; unmapped types stay "unknown"
+            ann = param.annotation
+            if ann is str:   info["type"] = "string"
+            elif ann is int: info["type"] = "integer"
+            elif ann is float: info["type"] = "number"
+            elif ann is bool:  info["type"] = "boolean"
+            elif ann is tuple: info["type"] = "array"
+            elif ann is dict:  info["type"] = "object"
+            params[name] = info
+
+        _TOOL_REGISTRY[f.__name__] = {
+            "name": f.__name__,
+            "description": f.__doc__ or "",  # whole docstring, not per-arg
+            "parameters": params,
+            "function": f,
+            "atomic": atomic,
         }
-    }
+        return f
 
-    # Process each parameter
-    for name, param in sig.parameters.items():
-        if name == "self":
-            continue
-
-        # Get type from hints
-        param_type = hints.get(name, str)
-        json_type = python_to_json_type(param_type)
-
-        # Add to schema
-        schema["parameters"]["properties"][name] = {
-            "type": json_type,
-            "description": extract_param_description(func.__doc__, name)
-        }
-
-        # Check if required (no default value)
-        if param.default == inspect.Parameter.empty:
-            schema["parameters"]["required"].append(name)
-        else:
-            schema["parameters"]["properties"][name]["default"] = param.default
-
-    # Register in global tool registry
-    _TOOL_REGISTRY[func.__name__] = {
-        "name": func.__name__,
-        "description": func.__doc__ or "",
-        "parameters": schema["parameters"],
-        "function": func,
-    }
-    return func
-
-def python_to_json_type(python_type):
-    """Convert Python types to JSON Schema types."""
-    mapping = {
-        str: "string",
-        int: "integer",
-        float: "number",
-        bool: "boolean",
-        list: "array",
-        dict: "object",
-    }
-    return mapping.get(python_type, "string")
+    return decorator(func) if func is not None else decorator
 ```
 
-This schema is what gets sent to the LLM when it needs to decide which tools to use!
+Notable implementation details:
+
+- The full docstring is stored once as `description`. There's no per-argument
+  docstring parsing today — the LLM sees the whole docstring together with a
+  `{type, required}` map.
+- Default values are **not** stored on the parameter entries. `required` is a
+  boolean derived from whether the parameter has a default.
+- Generic annotations like `list[str]` or `Optional[int]` are not specialised —
+  only the bare primitives (`str`, `int`, `float`, `bool`, `tuple`, `dict`) map
+  to a known JSON type; anything else is reported as `"unknown"`.
+- `@tool(atomic=True)` marks a tool as non-decomposable so the planner will not
+  try to split it further.
 
 </Accordion>
 

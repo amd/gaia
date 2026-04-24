@@ -141,6 +141,12 @@ yarn-error.log*
 
 # Node.js build outputs
 build/
+# Allow committed demo agents in the installer staging dir
+!src/gaia/apps/webui/build/
+!src/gaia/apps/webui/build/bundled-agents/
+!src/gaia/apps/webui/build/bundled-agents/**
+src/gaia/apps/webui/build/bundled-agents/**/__pycache__/
+src/gaia/apps/webui/build/bundled-agents/**/*.pyc
 dist/
 out/
 .next/
@@ -201,6 +207,9 @@ installer/version.nsh
 # Installer files
 installer/**.exe
 release_info.json
+
+# Lemonade MSI downloaded at build time (issue #774)
+installer/lemonade-server-minimal.msi
 
 # version
 version.txt

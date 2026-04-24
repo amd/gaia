@@ -4,7 +4,6 @@
 import asyncio
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -2611,6 +2610,64 @@ Examples:
         "chat", help="Interactive code Q&A with the CodeIndexAgent"
     )
 
+    # Diagnostics command (bundle logs + system info for bug reports)
+    diagnostics_parser = subparsers.add_parser(
+        "diagnostics",
+        help="Bundle GAIA logs and system info into a tarball for bug reports",
+    )
+    diagnostics_parser.add_argument(
+        "--output",
+        default=None,
+        help=(
+            "Destination path for the diagnostics tarball "
+            "(default: ~/.gaia/diagnostics-<YYYYMMDD-HHMMSS>.tgz)"
+        ),
+    )
+    diagnostics_parser.add_argument(
+        "--no-logs",
+        action="store_true",
+        help=(
+            "Omit log files from the bundle (useful when logs may contain "
+            "sensitive chat content)"
+        ),
+    )
+
+    # Agent command (export/import custom agent bundles)
+    agent_parser = subparsers.add_parser(
+        "agent",
+        help="Manage custom agents (export/import bundles)",
+    )
+    agent_subparsers = agent_parser.add_subparsers(
+        dest="agent_action", help="Agent action to perform"
+    )
+
+    # Agent export command
+    agent_export_parser = agent_subparsers.add_parser(
+        "export",
+        help="Export custom agents from ~/.gaia/agents/ into a .zip bundle",
+    )
+    agent_export_parser.add_argument(
+        "--output",
+        default=None,
+        help="Destination path for the .zip bundle (default: ~/.gaia/export.zip)",
+    )
+
+    # Agent import command
+    agent_import_parser = agent_subparsers.add_parser(
+        "import",
+        help="Import a custom agent .zip bundle into ~/.gaia/agents/",
+    )
+    agent_import_parser.add_argument(
+        "path",
+        help="Path to the .zip bundle produced by 'gaia agent export'",
+    )
+    agent_import_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip interactive confirmation prompt (non-interactive/CI use)",
+    )
+
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
     init_parser = subparsers.add_parser(
@@ -2689,28 +2746,15 @@ Examples:
         help="Silent installation (no UI, no desktop shortcuts)",
     )
 
-    # Uninstall command (uninstall specific components)
-    uninstall_parser = subparsers.add_parser(
-        "uninstall",
-        help="Uninstall GAIA components",
-        parents=[parent_parser],
+    # Uninstall command: tiered cleanup of the Python-side GAIA install.
+    # The actual flag set + handler live in gaia.installer.uninstall_command
+    # so every desktop installer (NSIS, DMG, DEB, AppImage) can delegate to
+    # the same implementation.
+    from gaia.installer.uninstall_command import (
+        register_subparser as _register_uninstall_subparser,
     )
-    uninstall_parser.add_argument(
-        "--lemonade",
-        action="store_true",
-        help="Uninstall Lemonade Server",
-    )
-    uninstall_parser.add_argument(
-        "--models",
-        action="store_true",
-        help="Clear all downloaded models (frees disk space)",
-    )
-    uninstall_parser.add_argument(
-        "--yes",
-        "-y",
-        action="store_true",
-        help="Skip confirmation prompts",
-    )
+
+    _register_uninstall_subparser(subparsers, parent_parser)
 
     args = parser.parse_args()
 
@@ -4779,6 +4823,16 @@ Let me know your answer!
         handle_cache_command(args)
         return
 
+    # Handle Diagnostics command
+    if args.action == "diagnostics":
+        handle_diagnostics_command(args)
+        return
+
+    # Handle Agent (export/import) command
+    if args.action == "agent":
+        handle_agent_command(args)
+        return
+
     # Handle Blender command
     if args.action == "blender":
         handle_blender_command(args)
@@ -4869,7 +4923,7 @@ Let me know your answer!
                     print(f"GAIA expects v{LEMONADE_VERSION}+")
                     print("")
                     print("To update, run:")
-                    print("  gaia uninstall --lemonade")
+                    print("  gaia uninstall --purge --purge-lemonade")
                     print("  gaia install --lemonade")
                     sys.exit(1)
 
@@ -4905,169 +4959,13 @@ Let me know your answer!
             print("Specify what to install: --lemonade")
             sys.exit(1)
 
-    # Handle uninstall command
+    # Handle uninstall command — delegates to the shared implementation in
+    # gaia.installer.uninstall_command so every desktop installer platform
+    # (NSIS / DMG / DEB / AppImage) uses the same tiered-cleanup code path.
     if args.action == "uninstall":
-        from rich.console import Console
+        from gaia.installer.uninstall_command import run as _run_uninstall
 
-        console = Console()
-
-        # Handle model cache clearing
-        if args.models:
-            try:
-                # Find HuggingFace cache directory
-                hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
-                if sys.platform == "win32":
-                    hf_cache = (
-                        Path(os.path.expanduser("~")) / ".cache" / "huggingface" / "hub"
-                    )
-
-                if not hf_cache.exists():
-                    console.print("[yellow]📦 No model cache found[/yellow]")
-                    console.print(f"   [dim]Checked: {hf_cache}[/dim]")
-                    sys.exit(0)
-
-                # Find all model directories
-                model_dirs = list(hf_cache.glob("models--*"))
-                if not model_dirs:
-                    console.print("[green]✅ Model cache is already empty[/green]")
-                    console.print(f"   [dim]Location: {hf_cache}[/dim]")
-                    sys.exit(0)
-
-                # Calculate total size
-                total_size = 0
-                for model_dir in model_dirs:
-                    try:
-                        total_size += sum(
-                            f.stat().st_size
-                            for f in model_dir.rglob("*")
-                            if f.is_file()
-                        )
-                    except Exception:
-                        pass
-
-                size_gb = total_size / (1024**3)
-
-                # Show what will be deleted
-                console.print()
-                console.print(f"[bold]Found {len(model_dirs)} model(s) in cache[/bold]")
-                console.print(f"   [dim]Location: {hf_cache}[/dim]")
-                console.print(f"   [dim]Total size: ~{size_gb:.1f} GB[/dim]")
-                console.print()
-
-                # Confirm deletion
-                if not args.yes:
-                    console.print(
-                        f"[bold]Delete all {len(model_dirs)} model(s)?[/bold] [dim](frees ~{size_gb:.1f} GB)[/dim]"
-                    )
-                    console.print()
-                    console.print("   [y/N]: ", end="")
-                    response = input()
-                    if response.lower() != "y":
-                        console.print("[dim]Model deletion cancelled[/dim]")
-                        sys.exit(0)
-
-                console.print()
-                console.print(
-                    f"[bold blue]Deleting {len(model_dirs)} model(s)...[/bold blue]"
-                )
-                console.print()
-
-                success_count = 0
-                fail_count = 0
-
-                for model_dir in model_dirs:
-                    # Extract model name from directory
-                    model_name = model_dir.name.replace("models--", "").replace(
-                        "--", "/"
-                    )
-                    console.print(f"   [cyan]{model_name}[/cyan]... ", end="")
-                    try:
-                        shutil.rmtree(model_dir)
-                        console.print("[green]✅[/green]")
-                        success_count += 1
-                    except PermissionError:
-                        console.print("[red]❌ (locked)[/red]")
-                        fail_count += 1
-                    except Exception as e:
-                        console.print(f"[red]❌ ({e})[/red]")
-                        fail_count += 1
-
-                # Summary
-                console.print()
-                if success_count > 0:
-                    console.print(f"[green]✅ Deleted {success_count} model(s)[/green]")
-                if fail_count > 0:
-                    console.print(
-                        f"[red]❌ Failed to delete {fail_count} model(s)[/red]"
-                    )
-                    console.print()
-                    console.print("   [bold]If files are locked:[/bold]")
-                    console.print(
-                        "   [dim]1. Close all apps using models (gaia chat, etc.)[/dim]"
-                    )
-                    console.print(
-                        "   [dim]2. Stop Lemonade:[/dim] [cyan]gaia kill --lemonade[/cyan]"
-                    )
-                    console.print(
-                        "   [dim]3. Re-run:[/dim] [cyan]gaia uninstall --models[/cyan]"
-                    )
-
-                sys.exit(0 if fail_count == 0 else 1)
-
-            except Exception as e:
-                console.print(f"[red]❌ Error: {e}[/red]")
-                sys.exit(1)
-
-        # Handle Lemonade Server uninstallation
-        elif args.lemonade:
-            from gaia.installer.lemonade_installer import LemonadeInstaller
-
-            installer = LemonadeInstaller(console=console)
-
-            # Check if installed
-            info = installer.check_installation()
-            if not info.installed:
-                console.print("[green]✅ Lemonade Server is not installed[/green]")
-                sys.exit(0)
-
-            # Show installation details
-            console.print()
-            console.print(f"[bold]Found Lemonade Server v{info.version}[/bold]")
-            if info.path:
-                console.print(f"   [dim]Location: {info.path}[/dim]")
-            console.print()
-
-            # Confirm uninstallation
-            if not args.yes:
-                console.print(
-                    f"[bold]Uninstall Lemonade Server v{info.version}?[/bold] \\[y/N]: ",
-                    end="",
-                )
-                response = input()
-                if response.lower() != "y":
-                    console.print("[dim]Uninstall cancelled[/dim]")
-                    sys.exit(0)
-
-            # Uninstall
-            console.print()
-            console.print("[bold blue]Uninstalling Lemonade Server...[/bold blue]")
-            result = installer.uninstall(silent=True)
-
-            if result.success:
-                console.print()
-                console.print(
-                    "[green]✅ Lemonade Server uninstalled successfully[/green]"
-                )
-                sys.exit(0)
-            else:
-                console.print()
-                console.print(f"[red]❌ Uninstall failed: {result.error}[/red]")
-                sys.exit(1)
-        else:
-            console.print("[yellow]Specify what to uninstall:[/yellow]")
-            console.print("  [cyan]--lemonade[/cyan]  Uninstall Lemonade Server")
-            console.print("  [cyan]--models[/cyan]    Clear all downloaded models")
-            sys.exit(1)
+        sys.exit(_run_uninstall(args))
 
     # Log error for unknown action
     log.error(f"Unknown action specified: {args.action}")
@@ -6155,6 +6053,306 @@ def handle_cache_command(args):
         cache_log = get_logger(__name__)
         cache_log.error(f"Error managing cache: {e}")
         print(f"❌ Error: {e}")
+        sys.exit(1)
+
+
+def handle_diagnostics_command(args):
+    """Handle the 'gaia diagnostics' command.
+
+    Bundles GAIA log files and a short system-info snapshot into a compressed
+    tarball suitable for attaching to bug reports. Captures:
+
+    - ``~/.gaia/electron-install.log``
+    - ``~/.gaia/gaia.log``
+    - ``~/.gaia/electron-main.log`` (if present; emitted by the Electron shell)
+    - ``~/.gaia/electron-install-state.json``
+    - ``uname -a`` output
+    - ``lsb_release -a`` output, falling back to ``/etc/os-release``
+    - ``env`` entries matching ``gaia|lemonade|xdg|wayland|display`` (case-insensitive)
+    - ``lsof -iTCP:4200`` output (when ``lsof`` is available)
+
+    Args:
+        args: Parsed command-line arguments. Supports ``--output`` to override
+            the destination path and ``--no-logs`` to omit log files from the
+            bundle.
+    """
+    import datetime
+    import io
+    import re
+    import tarfile
+
+    diag_log = get_logger(__name__)
+
+    gaia_dir = Path.home() / ".gaia"
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    if args.output:
+        output_path = Path(args.output).expanduser().resolve()
+    else:
+        output_path = gaia_dir / f"diagnostics-{timestamp}.tgz"
+
+    # Ensure the parent directory exists (e.g. first-ever run before ~/.gaia
+    # has been created by any other GAIA command).
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        diag_log.error(f"Unable to create diagnostics output directory: {e}")
+        print(f"❌ Error: unable to create {output_path.parent}: {e}")
+        sys.exit(1)
+
+    # Log files and state file collected from ~/.gaia
+    log_files = [
+        gaia_dir / "electron-install.log",
+        gaia_dir / "gaia.log",
+        gaia_dir / "electron-main.log",
+    ]
+    state_files = [
+        gaia_dir / "electron-install-state.json",
+    ]
+
+    def _run(cmd):
+        """Run a shell command and return its combined stdout/stderr as text.
+
+        Returns a human-readable error string on failure instead of raising,
+        so a single missing tool does not abort the bundle.
+        """
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            out = result.stdout or ""
+            if result.stderr:
+                out += f"\n[stderr]\n{result.stderr}"
+            return out
+        except FileNotFoundError:
+            return f"[command not found: {cmd[0]}]"
+        except (subprocess.SubprocessError, OSError) as e:
+            # Narrow to the specific failure modes this function is
+            # expected to tolerate (tool hung, spawn failed, permission
+            # denied). Real logic errors must still propagate so we
+            # don't silently bury them per CLAUDE.md's no-silent-fallback
+            # rule.
+            return f"[error running {' '.join(cmd)}: {e}]"
+
+    # System info snapshot
+    sysinfo_parts = []
+    sysinfo_parts.append("=== uname -a ===\n" + _run(["uname", "-a"]))
+
+    lsb = _run(["lsb_release", "-a"])
+    if lsb.startswith("[command not found"):
+        os_release = Path("/etc/os-release")
+        if os_release.is_file():
+            try:
+                lsb = os_release.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                lsb = f"[error reading /etc/os-release: {e}]"
+        else:
+            lsb = "[lsb_release and /etc/os-release both unavailable]"
+    sysinfo_parts.append("=== lsb_release / os-release ===\n" + lsb)
+
+    env_filter = re.compile(
+        r"^(GAIA|LEMONADE|XDG|WAYLAND|DISPLAY|X_|QT_|GTK_)", re.IGNORECASE
+    )
+    # Redact values for keys that look like they might carry secrets. The
+    # filter above already restricts the set of keys, but a user may still
+    # have set e.g. GAIA_API_KEY or LEMONADE_TOKEN, and we must not ship
+    # those in a bug-report tarball.
+    secret_filter = re.compile(
+        r"key|token|secret|pass(word|wd)?|auth|credential", re.IGNORECASE
+    )
+    env_lines = []
+    for k, v in sorted(os.environ.items()):
+        if not env_filter.search(k):
+            continue
+        v_safe = "[redacted]" if secret_filter.search(k) else v
+        env_lines.append(f"{k}={v_safe}")
+    sysinfo_parts.append(
+        "=== env (filtered: GAIA|LEMONADE|XDG|WAYLAND|DISPLAY|X_|QT_|GTK_; secrets redacted) ===\n"
+        + "\n".join(env_lines)
+    )
+
+    # lsof on port 4200 — only if lsof is present; capture_output handles absence.
+    sysinfo_parts.append(
+        "=== lsof -iTCP:4200 (legacy default) ===\n" + _run(["lsof", "-iTCP:4200"])
+    )
+    sysinfo_parts.append(
+        "=== ss -tlnp (all TCP listeners) ===\n" + _run(["ss", "-tlnp"])
+    )
+
+    sysinfo_blob = "\n\n".join(sysinfo_parts).encode("utf-8")
+
+    # Build the tarball
+    try:
+        with tarfile.open(output_path, "w:gz") as tar:
+            # Always include the system-info snapshot
+            info = tarfile.TarInfo(name="system-info.txt")
+            info.size = len(sysinfo_blob)
+            info.mtime = int(datetime.datetime.now().timestamp())
+            tar.addfile(info, io.BytesIO(sysinfo_blob))
+
+            # Always include state files (no chat content)
+            for entry in state_files:
+                if entry.is_file():
+                    tar.add(
+                        str(entry),
+                        arcname=entry.name,
+                        filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
+                    )
+
+            # Log files gated by --no-logs
+            if not args.no_logs:
+                for entry in log_files:
+                    if entry.is_file():
+                        tar.add(
+                            str(entry),
+                            arcname=entry.name,
+                            filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
+                        )
+            else:
+                note = b"Log files omitted (--no-logs was passed).\n"
+                info = tarfile.TarInfo(name="LOGS-OMITTED.txt")
+                info.size = len(note)
+                info.mtime = int(datetime.datetime.now().timestamp())
+                tar.addfile(info, io.BytesIO(note))
+    except OSError as e:
+        diag_log.error(f"Error writing diagnostics bundle: {e}")
+        print(f"❌ Error writing {output_path}: {e}")
+        sys.exit(1)
+
+    print(f"✓ Diagnostics bundle written to: {output_path}")
+
+
+def handle_agent_command(args):
+    """Handle the 'gaia agent' command group (export / import).
+
+    Args:
+        args: Parsed command-line arguments
+    """
+    if not hasattr(args, "agent_action") or args.agent_action is None:
+        print("❌ Error: No agent action specified")
+        print("Available actions: export, import")
+        print("Run 'gaia agent --help' for more information")
+        sys.exit(1)
+
+    if args.agent_action == "export":
+        handle_agent_export(args)
+    elif args.agent_action == "import":
+        handle_agent_import(args)
+    else:
+        print(f"❌ Unknown agent action: {args.agent_action}")
+        sys.exit(1)
+
+
+def handle_agent_export(args):
+    """Export custom agents under ~/.gaia/agents/ into a .zip bundle."""
+    # Lazy import to keep CLI startup fast.
+    from gaia.installer.export_import import export_custom_agents
+
+    output = args.output
+    if output is None:
+        output_path = Path.home() / ".gaia" / "export.zip"
+    else:
+        output_path = Path(output).expanduser()
+
+    # Warn about secrets before writing anything.
+    print(
+        "Warning: exported bundle contains your agent source files as-is. "
+        "Any API keys or credentials in agent.py will be included. "
+        "Review before sharing.",
+        file=sys.stderr,
+    )
+
+    try:
+        result = export_custom_agents(output_path)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    ids = ", ".join(result.agent_ids)
+    print(f"Exported {len(result.agent_ids)} agent(s) to {result.output_path}: {ids}")
+
+
+def handle_agent_import(args):
+    """Import a custom agent .zip bundle into ~/.gaia/agents/."""
+    import json
+    import zipfile
+
+    # Lazy import to keep CLI startup fast.
+    from gaia.installer.export_import import import_agent_bundle
+
+    bundle_path = Path(args.path).expanduser()
+
+    if not bundle_path.exists():
+        print(f"Error: bundle not found: {bundle_path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Peek at bundle.json so we can show agent ids in the trust prompt.
+    # Guard against a maliciously oversized bundle.json before reading it.
+    bundle_agent_ids = []
+    try:
+        with zipfile.ZipFile(bundle_path) as zf:
+            info = zf.getinfo("bundle.json")
+            if info.file_size > 1 * 1024 * 1024:  # 1 MB hard cap on manifest
+                raise ValueError("bundle.json exceeds 1 MB — bundle appears malformed")
+            raw = zf.read("bundle.json")
+            manifest = json.loads(raw.decode("utf-8"))
+            bundle_agent_ids = manifest.get("agent_ids", []) or []
+    except (
+        zipfile.BadZipFile,
+        KeyError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ) as exc:
+        print(f"Error: invalid bundle: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # Trust gate.
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print(
+                "Error: refusing to import non-interactively without --yes. "
+                "Re-run with --yes to confirm.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        print(
+            "Importing this bundle will install third-party Python code on your machine."
+        )
+        if bundle_agent_ids:
+            print("Agents in bundle:")
+            for aid in bundle_agent_ids:
+                print(f"  - {aid}")
+        answer = input("[y/N] Continue? ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("Import cancelled.")
+            sys.exit(0)
+
+    try:
+        result = import_agent_bundle(bundle_path)
+    except (ValueError, zipfile.BadZipFile) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if result.imported:
+        print(f"Imported: {', '.join(result.imported)}")
+    if result.overwritten:
+        print(f"Overwritten: {', '.join(result.overwritten)}")
+    if result.errors:
+        print(f"Errors: {', '.join(result.errors)}", file=sys.stderr)
         sys.exit(1)
 
 

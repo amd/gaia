@@ -11,8 +11,6 @@ title: "API Server"
 </Note>
 ---
 
-<Badge text="development" color="orange" />
-
 **Detailed Spec:** [spec/api-server](/spec/api-server)
 
 ## 7.1 OpenAI-Compatible API
@@ -26,7 +24,7 @@ import uvicorn
 # Run server (app is a module-level FastAPI instance)
 uvicorn.run(app, host="0.0.0.0", port=8080)
 
-# Now accessible via OpenAI SDK:
+# Now accessible via the OpenAI SDK:
 # from openai import OpenAI
 # client = OpenAI(base_url="http://localhost:8080/v1", api_key="dummy")
 # response = client.chat.completions.create(
@@ -35,18 +33,26 @@ uvicorn.run(app, host="0.0.0.0", port=8080)
 # )
 ```
 
+<Note>
+**Port 8080 is shared by default with `gaia mcp docker`.** Run one of them on a
+different port (e.g. `gaia api start --port 8081`) if you need both alive at
+the same time.
+</Note>
+
 ---
 
 ## 7.2 Custom API Agent
 
 **Import:** `from gaia.agents.base.api_agent import ApiAgent`
 
+`ApiAgent` is a mixin that already subclasses the core `Agent`; you only need to
+inherit from `ApiAgent`:
+
 ```python
-from gaia.agents.base.agent import Agent
 from gaia.agents.base.api_agent import ApiAgent
 from gaia.agents.base.tools import tool
 
-class MyAPIAgent(ApiAgent, Agent):
+class MyAPIAgent(ApiAgent):
     """Agent exposed via OpenAI-compatible API."""
 
     def get_model_id(self) -> str:
@@ -58,7 +64,7 @@ class MyAPIAgent(ApiAgent, Agent):
             "max_input_tokens": 4096,
             "max_output_tokens": 2048,
             "description": "Custom agent for data analysis",
-            "capabilities": ["data_analysis", "visualization"]
+            "capabilities": ["data_analysis", "visualization"],
         }
 
     def _get_system_prompt(self) -> str:
@@ -69,14 +75,47 @@ class MyAPIAgent(ApiAgent, Agent):
         def analyze(data: str) -> dict:
             """Analyze data."""
             return {"analysis": "Data is valid"}
-
-# Register with API server
-from gaia.api.agent_registry import registry
-registry.register("my-agent", MyAPIAgent)
-
-# Now available via API:
-# POST /v1/chat/completions with model="my-agent"
 ```
+
+### Registering new agents with the server
+
+The API server exposes a **static registry** of agent models at
+`src/gaia/api/agent_registry.py`, not a runtime `register()` API. To add a new
+model, append an entry to `AGENT_MODELS`:
+
+```python
+# src/gaia/api/agent_registry.py
+AGENT_MODELS = {
+    "gaia-code": {
+        "class_name": "gaia.agents.routing.agent.RoutingAgent",
+        "init_params": {
+            "api_mode": True,
+            "silent_mode": True,
+            "streaming": False,
+            "max_steps": 100,
+        },
+        "description": "Intelligent routing agent ...",
+    },
+    # 👇 New entry
+    "my-agent": {
+        "class_name": "my_package.my_agent.MyAPIAgent",
+        "init_params": {"api_mode": True, "silent_mode": True},
+        "description": "Custom agent for data analysis",
+    },
+}
+```
+
+The server imports `class_name` lazily on the first request. `init_params` are
+passed to the agent's constructor; `gaia api start --debug`, `--show-prompts`,
+`--streaming`, and `--step-through` inject `GAIA_API_*` env-vars that the
+registry merges into `init_params` at startup.
+
+<Note>
+Runtime plug-in discovery is on the roadmap (see
+[`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)),
+but the OpenAI-compatible server still requires editing `AGENT_MODELS` and
+restarting the process.
+</Note>
 
 ---
 
@@ -93,13 +132,24 @@ sse = SSEOutputHandler()
 # Use with agent (parameter name is output_handler, not console)
 agent = MyAgent(output_handler=sse)
 
-# Process query
+# Process query — events are pushed as they happen
 result = agent.process_query("Generate code")
+```
 
-# SSE events are emitted during processing:
-# data: {"type": "thought", "content": "I need to..."}
-# data: {"type": "tool_call", "content": {"name": "generate_code", ...}}
-# data: {"type": "result", "content": {"answer": "Here's the code..."}}
+### Events emitted
+
+The API-layer `SSEOutputHandler` emits a strict subset used for OpenAI-style
+chat completions: `chunk` (streamed token deltas) and `answer` (final message).
+The Agent UI uses a richer handler in `src/gaia/ui/sse_handler.py` that emits
+additional events — `tool_start`, `tool_end`, `tool_result`, `thinking`,
+`processing`, `error`. When wiring SSE through the Agent UI routers you will see
+both surfaces.
+
+```json
+// Example payloads emitted by src/gaia/ui/sse_handler.py
+{"event": "tool_start", "data": {"name": "generate_code", "args": {...}}}
+{"event": "tool_result", "data": {"name": "generate_code", "result": {...}}}
+{"event": "answer", "data": {"text": "Here's the code..."}}
 ```
 
 ---

@@ -5,7 +5,14 @@ icon: "box"
 
 # Application Packaging
 
-<Badge text="development" color="orange" />
+<Warning>
+**Roadmap page — not all commands shown are implemented.** The `gaia package
+--agent ... --ui web/electron` CLI sketched below is a planned convenience
+wrapper. Today you can already expose agents as a web API (`gaia api start`) or
+as an Electron app via the existing Agent UI shell (`src/gaia/electron/`). See
+the [Electron Integration spec](/spec/electron-integration) for what's
+currently shipping.
+</Warning>
 
 ![Status](https://img.shields.io/badge/status-in_development-yellow)
 
@@ -102,7 +109,7 @@ my-agent = "my_package.cli:main"
 - [Core Agent System](./core/agent-system) - Learn about the base Agent class
 - [API Server](/reference/api) - Expose agents via API
 - [Best Practices](./best-practices) - Development guidelines
-- [Lightweight Installer Plan](/plans/installer) - Future installation system
+- [Desktop Installer Plan](/plans/desktop-installer) - NSIS-based installer with bundled Lemonade MSI (in progress)
 
 ---
 

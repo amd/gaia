@@ -9,6 +9,7 @@ import { log } from '../utils/logger';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
 import type { SystemStatus, MCPServerStatus } from '../types';
+import { CustomAgentsSection } from './CustomAgentsSection';
 import './SettingsModal.css';
 
 export function SettingsModal() {
@@ -261,11 +262,14 @@ export function SettingsModal() {
                         </section>
                     )}
 
+                    {/* Custom Agents — export/import bundles */}
+                    <CustomAgentsSection />
+
                     {/* About */}
                     <section className="settings-section">
                         <h4>About</h4>
                         <div className="about-info">
-                            <p>GAIA Agent UI v{version} <span className="beta-badge">BETA</span></p>
+                            <p>GAIA v{version} <span className="beta-badge">BETA</span></p>
                             <p className="about-sub">Privacy-first AI chat for AMD Ryzen AI PCs.</p>
                         </div>
                     </section>

@@ -12,14 +12,25 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from ..database import ChatDatabase
-from ..dependencies import get_db
-from ..models import ModelStatus, SettingsResponse, SettingsUpdateRequest, SystemStatus
+from ..dependencies import get_db, get_dispatch_queue
+from ..models import (
+    InitTaskInfo,
+    ModelStatus,
+    SettingsResponse,
+    SettingsUpdateRequest,
+    SystemStatus,
+    TaskListResponse,
+    TaskResponse,
+)
 
 logger = logging.getLogger(__name__)
+
+# Hold references to background tasks to prevent GC
+_background_tasks: set[asyncio.Task] = set()
 
 router = APIRouter(tags=["system"])
 
@@ -63,7 +74,7 @@ async def _lemonade_post(
 
 
 @router.get("/api/system/status", response_model=SystemStatus)
-async def system_status(db: ChatDatabase = Depends(get_db)):
+async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
     status = SystemStatus()
 
@@ -290,7 +301,46 @@ async def system_status(db: ChatDatabase = Depends(get_db)):
     except Exception:
         pass  # Unknown device — don't block the UI
 
+    # Boot-time initialization tracking from the DispatchQueue.
+    queue = getattr(request.app.state, "dispatch_queue", None)
+    if queue:
+        from ..dispatch import JobStatus
+
+        visible = queue.get_visible_jobs()
+        any_pending = any(
+            j.status in (JobStatus.PENDING, JobStatus.RUNNING) for j in visible
+        )
+        any_failed = any(j.status == JobStatus.FAILED for j in visible)
+        if any_pending:
+            status.init_state = "initializing"
+        elif any_failed:
+            status.init_state = "degraded"
+        else:
+            status.init_state = "ready"
+        status.init_tasks = [
+            InitTaskInfo(name=j.name, status=j.status.value) for j in visible
+        ]
+
     return status
+
+
+@router.get("/api/system/tasks", response_model=TaskListResponse)
+async def list_tasks(queue=Depends(get_dispatch_queue)):
+    """Return visible background tasks (startup initialization, etc.)."""
+    if not queue:
+        return TaskListResponse(tasks=[])
+    visible = queue.get_visible_jobs()
+    return TaskListResponse(
+        tasks=[
+            TaskResponse(
+                id=j.id,
+                name=j.name,
+                status=j.status.value,
+                error=None,  # Sanitized: don't expose raw exception strings
+            )
+            for j in visible
+        ]
+    )
 
 
 async def _check_model_status(model_name: str) -> ModelStatus:
@@ -411,9 +461,11 @@ async def load_model_endpoint(body: LoadModelRequest):
 
     ctx_size = body.ctx_size if body.ctx_size is not None else _MIN_CONTEXT_SIZE
     payload = {"model_name": model_name, "ctx_size": ctx_size}
-    asyncio.create_task(
+    task = asyncio.create_task(
         _lemonade_post("load", payload, timeout=300.0, log_context=f"Load {model_name}")
     )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"status": "loading", "model": model_name, "ctx_size": ctx_size}
 
 
@@ -438,9 +490,11 @@ async def download_model_endpoint(body: DownloadModelRequest):
     payload: dict = {"model_name": model_name}
     if body.force:
         payload["force"] = True
-    asyncio.create_task(
+    task = asyncio.create_task(
         _lemonade_post(
             "pull", payload, timeout=7200.0, log_context=f"Download {model_name}"
         )
     )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"status": "downloading", "model": model_name}

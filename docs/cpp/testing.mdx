@@ -19,7 +19,7 @@ Both suites use [Google Test](https://github.com/google/googletest) (fetched aut
 
 ## Unit Tests
 
-Unit tests are built by default and run without an LLM server. They cover all eight core modules:
+Unit tests are built by default and run without an LLM server. They cover all twelve core modules:
 
 | Module | Test file | What it covers |
 |--------|-----------|----------------|
@@ -31,6 +31,10 @@ Unit tests are built by default and run without an LLM server. They cover all ei
 | Console | `test_console.cpp` | TerminalConsole and SilentConsole output |
 | Clean console | `test_clean_console.cpp` | CleanConsole TUI, word-wrap, ANSI colors |
 | Types | `test_types.cpp` | AgentConfig, Message, ToolInfo, ParsedResponse |
+| Decision types | `test_decision.cpp` | `Decision` struct and interactive menu parsing |
+| Security | `test_security.cpp` | `ToolPolicy`, `validatePath`, shell-arg sanitisation, `AllowedToolsStore` |
+| SSE parser | `test_sse_parser.cpp` | OpenAI-style streaming-event parsing and recovery |
+| Lemonade client | `test_lemonade_client.cpp` | Lemonade HTTP surface (health, models, chat completions) |
 
 ### Building Unit Tests
 

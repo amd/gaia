@@ -38,6 +38,7 @@ FileSearchToolsMixin provides agent-agnostic file search and management operatio
 class FileSearchToolsMixin:
     """
     Mixin providing shared file search and read operations.
+    Register with `self.register_file_search_tools()`.
 
     Tools provided:
     - search_file: Multi-phase intelligent file search
@@ -45,6 +46,10 @@ class FileSearchToolsMixin:
     - read_file: Type-aware file reading with analysis
     - search_file_content: Grep-like content search
     - write_file: Generic file writer
+    - browse_directory: List directory contents with metadata
+    - get_file_info: Inspect a single file's metadata
+    - analyze_data_file: Summarise CSV / JSON / XLSX / log files
+    - list_recent_files: Surface recently-modified files by location
     """
 
     @tool
@@ -212,6 +217,57 @@ class FileSearchToolsMixin:
                 "bytes_written": int,
                 "line_count": int
             }
+        """
+        pass
+
+    @tool
+    def browse_directory(
+        directory_path: str = None,
+        show_hidden: bool = False,
+        sort_by: str = "name",
+    ) -> Dict[str, Any]:
+        """
+        List a directory's contents with file metadata.
+
+        Args:
+            directory_path: Directory to list (default: current working dir)
+            show_hidden: Include dotfiles
+            sort_by: "name", "size", or "mtime"
+
+        Returns:
+            {"status": "success",
+             "directory": str,
+             "entries": List[{"name": str, "is_dir": bool,
+                              "size_bytes": int, "mtime": float}]}
+        """
+        pass
+
+    @tool
+    def get_file_info(file_path: str) -> Dict[str, Any]:
+        """
+        Return metadata for a single file (size, mtime, type, permissions).
+        """
+        pass
+
+    @tool
+    def analyze_data_file(file_path: str) -> Dict[str, Any]:
+        """
+        Summarise a data file (CSV, JSON, XLSX, log, …) with row/column counts,
+        column names, sample rows, and inferred dtypes. Used when the agent
+        needs a quick overview of a dataset before reading it in full.
+        """
+        pass
+
+    @tool
+    def list_recent_files(
+        location: str = "all",
+        file_types: str = None,
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        """
+        Return recently-modified files across common user locations
+        (Desktop/Documents/Downloads/CWD). `location` may be a specific folder
+        name or "all".
         """
         pass
 ```

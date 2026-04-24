@@ -80,7 +80,10 @@ cd gaia
 uv venv .venv --python 3.12
 ```
 
-> **Note:** uv will automatically download Python 3.12 if not already installed.
+> **Note:** GAIA supports Python **≥3.10** (classifiers cover 3.10, 3.11, 3.12
+> in `setup.py`), but linting configs (`black`/`mypy` in `pyproject.toml`) are
+> pinned to `py312`, so **3.12 is recommended for contributors.** `uv` will
+> download 3.12 automatically if it's not installed.
 
 ### Step 4: Activate the Environment
 
@@ -118,13 +121,67 @@ uv pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cp
 uv pip install -e ".[dev]"
 ```
 
-**With all extras:**
+**With optional extras:**
 ```bash
-# Linux/WSL
-uv pip install -e ".[dev,talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu
+# Linux/WSL  (uv picks the CPU-PyTorch wheel automatically via
+# tool.uv.sources in pyproject.toml — no --extra-index-url needed)
+uv pip install -e ".[dev,talk,rag,ui]"
 
 # Windows
-uv pip install -e ".[dev,talk,rag]"
+uv pip install -e ".[dev,talk,rag,ui]"
+```
+
+<Note>
+The `--extra-index-url https://download.pytorch.org/whl/cpu` workaround is
+only needed with plain `pip`. `uv` reads `tool.uv.sources.pytorch-cpu` from
+`pyproject.toml` and routes CPU-only torch wheels through the right index
+automatically.
+</Note>
+
+**Available extras** (see `setup.py` for the full list):
+
+| Extra | Use case |
+|-------|----------|
+| `dev` | Test + lint tooling (pytest, black, isort, mypy, pylint, …) |
+| `ui` | Agent UI backend (FastAPI + uvicorn + SSE); **required for `gaia --ui`** |
+| `api` | OpenAI-compatible API server (`gaia api start`) |
+| `rag` | RAG document Q&A (sentence-transformers, FAISS, pdfplumber, …) |
+| `talk` | Voice ASR/TTS (whisper, sounddevice, kokoro-onnx) |
+| `mcp` | MCP client/server bridge (`gaia mcp start`) |
+| `audio` | Lower-level audio tooling shared by talk |
+| `blender` | BlenderAgent 3D automation bindings |
+| `image` | Stable Diffusion image agent |
+| `eval` | Evaluation framework (ground-truth generation, batch experiments) |
+| `youtube` | `gaia youtube --download-transcript` |
+| `lint` | Standalone lint dependency bundle |
+
+### Step 6: Claude Code Plugins (Optional)
+
+GAIA ships a `.claude/settings.json` that declares two recommended Claude Code plugins from the official Anthropic marketplace:
+
+- **`frontend-design`** — higher-quality, less generic UI generation
+- **`superpowers`** — structured dev methodology (brainstorm → plan → TDD → review)
+
+Plugins are **not auto-installed silently**. The first time you open this repo in [Claude Code](https://claude.com/claude-code) (v2.1.0+), you'll see a prompt:
+
+> *"This project declares plugins. Install them?"*
+
+Accept it once and the plugins become available for the repo. You can verify with:
+
+```bash
+claude --version           # must be >= 2.1.0
+claude plugin list         # shell command — lists installed plugins + status
+# or, inside a Claude Code session, type `/plugin` to open the interactive plugin menu
+```
+
+To opt out, copy the entry into your local `.claude/settings.local.json` with `false`:
+
+```json
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": false
+  }
+}
 ```
 
 ### Deactivating
@@ -134,7 +191,7 @@ When done working:
 deactivate
 ```
 
-> **See also:** [Chat SDK Documentation](/guides/chat)
+> **See also:** [Agent SDK Documentation](/guides/chat)
 
 ---
 
@@ -181,16 +238,16 @@ Start the Agent UI (backend + frontend) with the convenience scripts:
 
 **Linux / macOS:**
 ```bash
-./scripts/start-agent-ui.sh                # Start both backend + frontend
-./scripts/start-agent-ui.sh --backend-only # Backend only (port 4200)
-./scripts/start-agent-ui.sh --frontend-only # Frontend dev server only (port 5174)
+./installer/scripts/start-agent-ui.sh                # Start both backend + frontend
+./installer/scripts/start-agent-ui.sh --backend-only # Backend only (port 4200)
+./installer/scripts/start-agent-ui.sh --frontend-only # Frontend dev server only (port 5174)
 ```
 
 **Windows PowerShell:**
 ```powershell
-.\scripts\start-agent-ui.ps1               # Start both backend + frontend
-.\scripts\start-agent-ui.ps1 -BackendOnly  # Backend only (port 4200)
-.\scripts\start-agent-ui.ps1 -FrontendOnly # Frontend dev server only (port 5174)
+.\installer\scripts\start-agent-ui.ps1               # Start both backend + frontend
+.\installer\scripts\start-agent-ui.ps1 -BackendOnly  # Backend only (port 4200)
+.\installer\scripts\start-agent-ui.ps1 -FrontendOnly # Frontend dev server only (port 5174)
 ```
 
 Or start manually:
@@ -201,6 +258,35 @@ uv run python -m gaia.ui.server --debug
 # Terminal 2: Frontend (Vite dev server with hot reload)
 cd src/gaia/apps/webui && npm run dev
 ```
+
+### Linting and Formatting
+
+`util/lint.py` drives all repo lint tooling. Running it with no flags runs
+**every** check in sequence; pass a specific flag to run one:
+
+```bash
+python util/lint.py --all --fix   # Run everything; autoformat with black + isort
+python util/lint.py --black       # Code formatting
+python util/lint.py --isort       # Import sorting
+python util/lint.py --pylint      # pylint
+python util/lint.py --flake8      # flake8
+python util/lint.py --mypy        # type checking
+python util/lint.py --bandit      # security scan
+python util/lint.py --imports     # custom import-cycle check
+python util/lint.py --doc-versions # verify versions in docs match src/gaia/version.py
+```
+
+### Running Tests
+
+```bash
+python -m pytest tests/unit/        # Unit tests only
+python -m pytest tests/ -xvs        # All tests, verbose
+python -m pytest tests/ --hybrid    # Cloud + local testing
+```
+
+Key fixtures live in `tests/conftest.py` (`api_client`, `api_server`,
+`require_lemonade`, `lemonade_available`). The `require_lemonade` fixture
+auto-skips integration tests when no Lemonade server is running.
 
 ---
 

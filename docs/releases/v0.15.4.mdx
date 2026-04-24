@@ -78,7 +78,7 @@ Define which MCP servers to load in a JSON config file. Swap tools per product l
 
 ### `gaia init --profile mcp`
 
-New initialization profile for MCP development. Checks Node.js prerequisites and generates a starter `mcp_servers.json` config file.
+New initialization profile for MCP development. Creates a starter `~/.gaia/mcp_servers.json` config file.
 
 ```bash
 gaia init --profile mcp
@@ -95,7 +95,7 @@ gaia init --profile mcp
 - **MCP Client Guide** — Step-by-step guide for connecting agents to MCP servers
 - **MCP SDK Reference** — Full API documentation for MCPClientMixin
 - **MCP Client Specification** — Technical specification for transport, tool registration, and config format
-- **Examples** — Walkthrough of variuous agentic examples and configuration options
+- **Examples** — Walkthrough of various agentic examples and configuration options
 - **Node.js/NVM Setup** — Prerequisites documentation for Node.js-based MCP servers
 
 ### Developer Experience
@@ -126,7 +126,7 @@ None — This release is 100% backward compatible.
 # Install/upgrade GAIA
 pip install --upgrade amd-gaia
 
-# Setup MCP profile (checks Node.js prerequisites)
+# Setup MCP profile (creates starter mcp_servers.json)
 gaia init --profile mcp
 
 # Try the time server example

@@ -11,39 +11,44 @@ title: "Audio & Voice"
 </Note>
 ---
 
-<Badge text="development" color="orange" />
-
 **Detailed Spec:** [spec/audio-client](/spec/audio-client)
 
 **Purpose:** Voice interaction with ASR (Whisper) and TTS (Kokoro).
 
 ## Audio Client
 
+`AudioClient` glues Whisper ASR and Kokoro TTS together into a full voice-chat
+loop. It is used by the `Talk` SDK and the `gaia talk` CLI. Because the voice
+loop runs microphone I/O alongside LLM calls, `start_voice_chat` is **`async`**:
+
 ```python
+import asyncio
 from gaia.audio.audio_client import AudioClient
 
 # Initialize audio client
 audio = AudioClient(
     whisper_model_size="base",    # ASR model: base, small, medium, large
-    audio_device_index=None,       # Auto-select
+    audio_device_index=None,       # Auto-select default input device
     silence_threshold=0.5,         # Seconds of silence before processing speech
     mic_threshold=0.003,           # Microphone energy threshold for voice detection
-    enable_tts=True                # Enable text-to-speech
+    enable_tts=True,               # Enable text-to-speech
 )
 
-# List audio devices
-devices = audio.get_device_list()
-for idx, device in enumerate(devices):
-    print(f"{idx}: {device}")
-
-# Define message processor
+# Define message processor (sync function — callback invoked per transcription)
 def process_user_message(message: str) -> str:
     # Your agent logic
     return f"You said: {message}"
 
-# Start voice chat
-audio.start_voice_chat(message_processor_callback=process_user_message)
+# Start voice chat (async — must be awaited)
+async def main():
+    await audio.start_voice_chat(message_processor_callback=process_user_message)
+
+asyncio.run(main())
 ```
+
+<Note>
+To list available input devices, use `WhisperAsr.list_audio_devices()` directly (see ASR section below). `AudioClient` itself does not expose a device-enumeration method.
+</Note>
 
 ---
 
@@ -55,30 +60,35 @@ audio.start_voice_chat(message_processor_callback=process_user_message)
 from gaia.audio.whisper_asr import WhisperAsr
 from queue import Queue
 
-# Create transcription queue
+# List available audio input devices (inherited from AudioRecorder)
+tmp = WhisperAsr(model_size="base")
+tmp.list_audio_devices()   # prints available input devices with index + name
+
+# Create a dedicated transcription queue
 transcription_queue = Queue()
 
 # Initialize Whisper
 asr = WhisperAsr(
-    model_size="base",
-    device_index=0,
+    model_size="base",              # base, small, medium, large
+    device_index=0,                 # Input device (None = default)
     transcription_queue=transcription_queue,
-    enable_cuda=False,  # Use CUDA if available
-    silence_threshold=0.003
+    enable_cuda=False,              # Use CUDA if available
+    silence_threshold=0.003,        # Voice-activity energy threshold
+    min_audio_length=16000 * 0.5,   # 0.5s minimum at 16kHz to trigger transcription
 )
 
-# Start recording
-asr.start_recording()
+# Start streaming recording (runs in a worker thread)
+asr.start_recording_streaming()
 
-# Get transcriptions
+# Consume transcriptions
 while True:
     if not transcription_queue.empty():
         text = transcription_queue.get()
         print(f"Transcribed: {text}")
         # Process text...
 
-# Stop recording
-asr.stop_recording()
+# Transcribe a pre-recorded WAV file instead
+# text = asr.transcribe_file("recording.wav")
 ```
 
 ---
@@ -89,36 +99,40 @@ asr.stop_recording()
 
 ```python
 from gaia.audio.kokoro_tts import KokoroTTS
-import wave
 
-# Initialize TTS
+# Initialize TTS (voice defaults to "af_sarah")
 tts = KokoroTTS()
 
 # List available voices
-voices = tts.list_voices()
+voices = tts.list_available_voices()
 for voice_id, voice_data in voices.items():
-    print(f"{voice_id}: {voice_data['description']}")
+    print(f"{voice_id}: {voice_data.get('description', voice_id)}")
 
-# Generate speech
+# Select a voice (must be called before generate_speech)
+tts.set_voice("af_sarah")  # American female voice
+
+# Generate speech (returns: (audio_samples: list[float], phonemes: str, stats: dict))
 text = "Hello! This is a test of the Kokoro text-to-speech system."
-audio_bytes = tts.synthesize(
-    text=text,
-    voice="af_sarah"  # American female voice
-)
+audio_samples, phonemes, stats = tts.generate_speech(text)
 
-# Save to file
+# audio_samples are 24 kHz float32 PCM in the range [-1.0, 1.0].
+# Save to WAV:
+import numpy as np
+import wave
+audio_int16 = (np.array(audio_samples) * 32767).astype(np.int16)
 with wave.open("output.wav", "wb") as wav_file:
     wav_file.setnchannels(1)
     wav_file.setsampwidth(2)
     wav_file.setframerate(24000)
-    wav_file.writeframes(audio_bytes)
+    wav_file.writeframes(audio_int16.tobytes())
 
-# Or play directly
+# Or play directly using sounddevice
 import sounddevice as sd
-import numpy as np
-audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
-sd.play(audio_array, 24000)
+sd.play(np.array(audio_samples), 24000)
 sd.wait()
+
+# Streaming synthesis (plays audio as chunks become available)
+tts.generate_speech_streaming(text)
 ```
 
 ---

@@ -147,10 +147,11 @@ class DocumentQAAgent(Agent):
         @tool
         def list_documents() -> dict:
             """List all indexed documents."""
-            files = self.rag.get_indexed_files()
+            status = self.rag.get_status()
             return {
-                "documents": files,
-                "count": len(files)
+                "documents": list(self.rag.indexed_files.keys()),
+                "count": status.get("indexed_files", 0),
+                "total_chunks": status.get("total_chunks", 0),
             }
 
 # Usage
@@ -219,7 +220,7 @@ class ReceiptProcessor(Agent):
                 "items": [{"name": "", "price": 0.00}]
             }"""
 
-            extracted = self.vlm.extract_from_image(image_bytes, prompt)
+            extracted = self.vlm.extract_from_image(image_bytes, prompt=prompt)
 
             # Parse JSON
             try:

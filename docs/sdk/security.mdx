@@ -38,10 +38,10 @@ from gaia.rag.sdk import RAGSDK, RAGConfig
 # RAG automatically detects and blocks symlinks
 rag = RAGSDK(RAGConfig())
 
-# This is blocked if it's a symlink
+# This is blocked if it's a symlink — PathValidator raises PermissionError
 try:
     rag.index_document("/suspicious/symlink.pdf")
-except SecurityError as e:
+except PermissionError as e:
     print(f"Security error: {e}")
 ```
 

@@ -4,9 +4,15 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { Session, Message, Document, AgentStep, SystemStatus } from '../types';
+import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo } from '../types';
 
 interface ChatState {
+    // Agents
+    agents: AgentInfo[];
+    activeAgentId: string;
+    setAgents: (agents: AgentInfo[]) => void;
+    setActiveAgentId: (id: string) => void;
+
     // Sessions
     sessions: Session[];
     currentSessionId: string | null;
@@ -81,6 +87,18 @@ interface ChatState {
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
+    // Agents
+    agents: [],
+    activeAgentId: (() => {
+        try { return localStorage.getItem('gaia-active-agent-id') || 'chat'; }
+        catch { return 'chat'; }
+    })(),
+    setAgents: (agents) => set({ agents }),
+    setActiveAgentId: (id) => {
+        try { localStorage.setItem('gaia-active-agent-id', id); } catch { /* noop */ }
+        set({ activeAgentId: id });
+    },
+
     // Sessions
     sessions: [],
     currentSessionId: null,
