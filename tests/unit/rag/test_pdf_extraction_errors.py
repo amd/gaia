@@ -48,7 +48,7 @@ def rag(tmp_path: Path) -> RAGSDK:
     branch of `index_document`) does not need sentence-transformers, faiss,
     or a live Lemonade server, so we bypass the import-time dependency
     check and skip chat/LLM initialization. We also stub the VLM client so
-    the blank-PDF test doesn't spend ~4s timing out against localhost:8000.
+    the blank-PDF test doesn't spend ~4s timing out against localhost:13305.
     """
     config = RAGConfig(
         cache_dir=str(tmp_path / ".gaia"),

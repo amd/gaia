@@ -125,7 +125,7 @@ class GAIAMCPBridge:
     ):
         self.host = host
         self.port = port
-        self.base_url = base_url or "http://localhost:8000/api/v1"
+        self.base_url = base_url or "http://localhost:13305/api/v1"
         self.agents = {}
         self.tools = {}
         self.llm_client = None
@@ -814,7 +814,7 @@ def main():
     parser.add_argument("--host", default="localhost", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on")
     parser.add_argument(
-        "--base-url", default="http://localhost:8000/api/v1", help="LLM server URL"
+        "--base-url", default="http://localhost:13305/api/v1", help="LLM server URL"
     )
     parser.add_argument(
         "--verbose", action="store_true", help="Enable verbose logging for all requests"

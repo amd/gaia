@@ -56,7 +56,7 @@ def lemonade_available():
         bool: True if Lemonade server is available and responding to health checks
     """
     try:
-        response = requests.get("http://localhost:8000/api/v1/health", timeout=5)
+        response = requests.get("http://localhost:13305/api/v1/health", timeout=5)
         return response.status_code == 200
     except (requests.RequestException, requests.ConnectionError):
         return False

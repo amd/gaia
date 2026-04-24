@@ -43,7 +43,7 @@ class SystemStatus(BaseModel):
     context_size_sufficient: bool = True  # False if loaded ctx < required minimum
     model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
     default_model_name: str = "Gemma-4-E4B-it-GGUF"  # Required model for GAIA Chat
-    lemonade_url: str = "http://localhost:8000"  # Lemonade web UI base URL
+    lemonade_url: str = "http://localhost:13305"  # Lemonade web UI base URL
     expected_model_loaded: bool = True  # False if a different model is loaded
     # Boot-time initialization tracking (populated from DispatchQueue)
     init_state: str = "ready"  # "initializing" | "ready" | "degraded"

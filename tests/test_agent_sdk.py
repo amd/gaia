@@ -38,7 +38,7 @@ class TestAgentSDKIntegration(unittest.TestCase):
         print("CHAT SDK INTEGRATION TESTS - REAL LLM SERVER")
         print(f"{'='*60}")
 
-        cls.server_url = "http://localhost:8000"
+        cls.server_url = "http://localhost:13305"
         cls.model = DEFAULT_MODEL_NAME
         cls.timeout = 30  # seconds
 

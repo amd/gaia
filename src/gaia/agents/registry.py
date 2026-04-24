@@ -611,7 +611,7 @@ class AgentRegistry:
         try:
             import requests
 
-            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
             resp = requests.get(f"{base_url}/models", timeout=2)
             if resp.ok:
                 data = resp.json()

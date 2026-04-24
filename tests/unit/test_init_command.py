@@ -292,16 +292,18 @@ class TestInitProfiles(unittest.TestCase):
 class TestRemoteAutoDetection(unittest.TestCase):
     """Test auto-detection of remote mode from LEMONADE_BASE_URL."""
 
-    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://192.168.1.100:8000/api/v1"})
+    @patch.dict(
+        "os.environ", {"LEMONADE_BASE_URL": "http://192.168.1.100:13305/api/v1"}
+    )
     def test_remote_url_sets_remote_true(self):
         """Test that a non-localhost LEMONADE_BASE_URL enables remote mode."""
         from gaia.installer.init_command import InitCommand
 
         cmd = InitCommand(profile="minimal", yes=True)
         self.assertTrue(cmd.remote)
-        self.assertEqual(cmd._lemonade_base_url, "http://192.168.1.100:8000/api/v1")
+        self.assertEqual(cmd._lemonade_base_url, "http://192.168.1.100:13305/api/v1")
 
-    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"})
+    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://localhost:13305/api/v1"})
     def test_localhost_url_keeps_remote_false(self):
         """Test that localhost LEMONADE_BASE_URL does not enable remote mode."""
         from gaia.installer.init_command import InitCommand
@@ -309,7 +311,7 @@ class TestRemoteAutoDetection(unittest.TestCase):
         cmd = InitCommand(profile="minimal", yes=True)
         self.assertFalse(cmd.remote)
 
-    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://127.0.0.1:8000/api/v1"})
+    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://127.0.0.1:13305/api/v1"})
     def test_loopback_url_keeps_remote_false(self):
         """Test that 127.0.0.1 LEMONADE_BASE_URL does not enable remote mode."""
         from gaia.installer.init_command import InitCommand
@@ -319,7 +321,7 @@ class TestRemoteAutoDetection(unittest.TestCase):
 
     @patch.dict(
         "os.environ",
-        {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"},
+        {"LEMONADE_BASE_URL": "http://localhost:13305/api/v1"},
     )
     def test_explicit_remote_flag_overrides_localhost(self):
         """Test that --remote flag takes effect even with localhost URL."""
@@ -383,7 +385,7 @@ class TestDownloadModels(unittest.TestCase):
     @patch("gaia.installer.init_command.LemonadeInstaller")
     @patch.dict(
         "os.environ",
-        {"LEMONADE_BASE_URL": "http://192.168.1.100:8000/api/v1"},
+        {"LEMONADE_BASE_URL": "http://192.168.1.100:13305/api/v1"},
     )
     def test_remote_mode_uses_ensure_model_downloaded(self, mock_installer_class):
         """Test that remote mode delegates to ensure_model_downloaded."""
@@ -442,9 +444,9 @@ class TestVersionCompatibility(unittest.TestCase):
         return cmd
 
     def test_newer_version_accepted(self):
-        """v10.1.0 installed, v10.0.0 expected -> accepted without prompt."""
+        """v10.2.0 installed, v10.1.0 expected -> accepted without prompt."""
         cmd = self._make_cmd()
-        info = LemonadeInfo(installed=True, version="10.1.0")
+        info = LemonadeInfo(installed=True, version="10.2.0")
         result = cmd._check_version_compatibility(info)
         self.assertTrue(result)
 
@@ -456,16 +458,16 @@ class TestVersionCompatibility(unittest.TestCase):
         self.assertTrue(result)
 
     def test_newer_major_version_accepted(self):
-        """v10.0.0 installed, v9.3.0 expected -> accepted."""
+        """v11.0.0 installed, v10.1.0 expected -> accepted."""
         cmd = self._make_cmd()
-        info = LemonadeInfo(installed=True, version="10.0.0")
+        info = LemonadeInfo(installed=True, version="11.0.0")
         result = cmd._check_version_compatibility(info)
         self.assertTrue(result)
 
     def test_older_version_meets_minimum_accepted_in_ci(self):
-        """v10.0.1 installed, v10.0.0 expected, min 10.0.0 -> accepted in CI (--yes)."""
+        """v10.1.1 installed, v10.1.0 expected, min 10.1.0 -> accepted in CI (--yes)."""
         cmd = self._make_cmd(profile="minimal")
-        info = LemonadeInfo(installed=True, version="10.0.1")
+        info = LemonadeInfo(installed=True, version="10.1.1")
         result = cmd._check_version_compatibility(info)
         self.assertTrue(result)
 
@@ -583,11 +585,11 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
     ):
         """Case 4 (CRITICAL): installed at NEWER version (e.g. 11.0.0) -> no download.
 
-        Scenario: the bundled NSIS installer dropped Lemonade v10.0.0 but the
+        Scenario: the bundled NSIS installer dropped Lemonade v10.1.0 but the
         user has since upgraded to v11.0.0. ``gaia init`` must treat this as
         compatible (newer is fine), NOT downgrade or re-download.
         """
-        # Pick a version definitively newer than LEMONADE_VERSION (10.0.0)
+        # Pick a version definitively newer than LEMONADE_VERSION (10.1.0)
         newer_version = "11.0.0"
         info = LemonadeInfo(
             installed=True,
@@ -611,10 +613,10 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
 
     def test_older_version_meeting_minimum_does_not_redownload_in_ci(self):
         """Case 3 (above minimum, --yes): accepted, no install."""
-        # 10.0.1 is above both target (10.0.0) and profile minimum (10.0.0) — no install needed
+        # 10.1.1 is above both target (10.1.0) and profile minimum (10.1.0) — no install needed
         info = LemonadeInfo(
             installed=True,
-            version="10.0.1",
+            version="10.1.1",
             path="/usr/bin/lemonade-server",
         )
         cmd, mock_installer = self._make_cmd(info, profile="minimal")

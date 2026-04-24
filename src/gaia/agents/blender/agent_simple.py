@@ -40,7 +40,7 @@ Example: "Make a tall cylinder" → CYLINDER,0,0,0,1,1,3
         self,
         llm: Optional[LLMClient] = None,
         mcp: Optional[MCPClient] = None,
-        base_url: Optional[str] = "http://localhost:8000/api/v1",
+        base_url: Optional[str] = "http://localhost:13305/api/v1",
     ):
         """
         Initialize the BlenderAgentSimple with LLM and MCP clients.

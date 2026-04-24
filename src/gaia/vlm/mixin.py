@@ -53,7 +53,7 @@ class VLMToolsMixin:
     def init_vlm(
         self,
         model: str = "Gemma-4-E4B-it-GGUF",
-        base_url: str = "http://localhost:8000",
+        base_url: str = "http://localhost:13305",
     ) -> None:
         """
         Initialize VLM tools and register them with the agent.

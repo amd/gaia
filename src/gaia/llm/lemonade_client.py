@@ -42,7 +42,12 @@ load_dotenv()
 # =========================================================================
 # Default server host and port (can be overridden via LEMONADE_BASE_URL env var)
 DEFAULT_HOST = "localhost"
-DEFAULT_PORT = 8000
+# Lemonade v10.1.0 changed its default port from 8000 to 13305 as part of the
+# "spring cleaning" release. See:
+#   https://github.com/lemonade-sdk/lemonade/wiki/Migration#v10x---v101
+# Minimum supported Lemonade version is declared in INIT_PROFILES
+# (min_lemonade_version); keep both in lock-step when bumping.
+DEFAULT_PORT = 13305
 # API version supported by this client
 LEMONADE_API_VERSION = "v1"
 # Default URL includes /api/v1 to match documentation and other clients

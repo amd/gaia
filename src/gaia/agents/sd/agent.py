@@ -33,7 +33,7 @@ class SDAgentConfig:
     use_claude: bool = False
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
-    base_url: str = "http://localhost:8000/api/v1"
+    base_url: str = "http://localhost:13305/api/v1"
     model_id: str = "Gemma-4-E4B-it-GGUF"  # Multimodal model for agentic reasoning
 
     # Execution settings

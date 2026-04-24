@@ -138,7 +138,7 @@ class TestSystemStatus:
     def test_system_status_remote_lemonade_url_skips_device_check(self, client):
         """Non-localhost LEMONADE_BASE_URL means device_supported is always true."""
         with patch.dict(
-            os.environ, {"LEMONADE_BASE_URL": "https://remote-server:8000/api/v1"}
+            os.environ, {"LEMONADE_BASE_URL": "https://remote-server:13305/api/v1"}
         ):
             with patch(
                 "gaia.device.check_device_supported",
@@ -152,7 +152,7 @@ class TestSystemStatus:
         """localhost LEMONADE_BASE_URL still runs the device check normally."""
         with patch.dict(
             os.environ,
-            {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"},
+            {"LEMONADE_BASE_URL": "http://localhost:13305/api/v1"},
             clear=False,
         ):
             with patch(
@@ -176,7 +176,7 @@ class TestSystemStatus:
         mock_httpx_cls.return_value = mock_client
 
         # Ensure default localhost URL is used regardless of env
-        env_override = {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"}
+        env_override = {"LEMONADE_BASE_URL": "http://localhost:13305/api/v1"}
         with patch.dict(os.environ, env_override, clear=False):
             resp = client.get("/api/system/status")
         data = resp.json()
@@ -188,8 +188,8 @@ class TestSystemStatus:
         # Safe defaults: don't warn when server is simply unreachable
         assert data["context_size_sufficient"] is True  # Don't block on unknown
         assert data["model_downloaded"] is None  # Unknown when server not running
-        assert data["default_model_name"] == "Qwen3.5-35B-A3B-GGUF"
-        assert data["lemonade_url"] == "http://localhost:8000"
+        assert data["default_model_name"] == "Gemma-4-E4B-it-GGUF"
+        assert data["lemonade_url"] == "http://localhost:13305"
 
     @patch("httpx.AsyncClient")
     def test_system_status_lemonade_url_parsed_from_env(self, mock_httpx_cls, client):

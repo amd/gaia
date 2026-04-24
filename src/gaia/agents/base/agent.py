@@ -156,7 +156,7 @@ Do NOT wrap conversational replies in JSON.
             use_claude: If True, uses Claude API (default: False)
             use_chatgpt: If True, uses ChatGPT/OpenAI API (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-4-20250514")
-            base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:8000/api/v1)
+            base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
             model_id: The ID of the model to use with LLM server (default for local)
             max_steps: Maximum number of steps the agent can take before terminating
             debug_prompts: If True, includes prompts in the conversation history
@@ -196,7 +196,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Read base_url from environment if not provided
         if base_url is None:
-            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
 
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
