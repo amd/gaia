@@ -5,7 +5,7 @@
 
 import textwrap
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -90,6 +90,12 @@ class TestBuiltinRegistration:
         ids = [r.id for r in registry.list()]
         assert "chat" in ids
 
+    def test_agent_ui_builtin_agents_registered(self):
+        registry = AgentRegistry()
+        registry.discover()
+        ids = {r.id for r in registry.list()}
+        assert {"chat", "code", "docker", "jira", "blender", "emr", "sd"} <= ids
+
     def test_unknown_agent_returns_none(self):
         registry = AgentRegistry()
         registry.discover()
@@ -114,6 +120,59 @@ class TestBuiltinRegistration:
         registry.discover()
         visible_ids = [r.id for r in registry.list() if not r.hidden]
         assert "builder" not in visible_ids
+
+    def test_new_agent_ui_builtins_visible(self):
+        registry = AgentRegistry()
+        registry.discover()
+        visible_ids = {r.id for r in registry.list() if not r.hidden}
+        assert {"code", "docker", "jira", "blender", "emr", "sd"} <= visible_ids
+
+    def test_blender_factory_filters_shared_ui_kwargs(self):
+        fake_agent = MagicMock()
+
+        with patch(
+            "gaia.agents.blender.agent.BlenderAgent", return_value=fake_agent
+        ) as blender_cls:
+            registry = AgentRegistry()
+            registry.discover()
+
+            created = registry.create_agent(
+                "blender",
+                model_id="Test-Model",
+                base_url="http://localhost:8000/api/v1",
+                max_steps=7,
+                silent_mode=True,
+                debug=False,
+            )
+
+        blender_cls.assert_called_once_with(
+            model_id="Test-Model",
+            base_url="http://localhost:8000/api/v1",
+            max_steps=7,
+            silent_mode=True,
+            debug=False,
+        )
+        assert created is fake_agent
+        assert created.console is not None
+
+    def test_emr_factory_uses_ui_safe_defaults(self):
+        fake_agent = MagicMock()
+
+        with patch(
+            "gaia.agents.emr.agent.MedicalIntakeAgent", return_value=fake_agent
+        ) as emr_cls, patch("gaia.agents.registry.Path.home", return_value=Path("/tmp/home")):
+            registry = AgentRegistry()
+            registry.discover()
+
+            created = registry.create_agent("emr", model_id="Qwen3-VL-4B-Instruct-GGUF")
+
+        emr_cls.assert_called_once_with(
+            model_id="Qwen3-VL-4B-Instruct-GGUF",
+            watch_dir="/tmp/home/.gaia/emr/intake_forms",
+            db_path="/tmp/home/.gaia/emr/patients.db",
+            auto_start_watching=False,
+        )
+        assert created is fake_agent
 
 
 # ---------------------------------------------------------------------------

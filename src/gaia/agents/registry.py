@@ -133,6 +133,42 @@ class AgentRegistry:
             agent_ids,
         )
 
+    def _filter_factory_kwargs(
+        self,
+        target: Callable[..., Any],
+        kwargs: Dict[str, Any],
+        rename: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Filter UI kwargs down to what *target* actually accepts.
+
+        Agent UI creates agents with a common kwargs shape (``model_id``,
+        ``silent_mode``, ``debug``, etc.). Some built-in agents expose
+        explicit constructor signatures rather than ``**kwargs``, so they need
+        this narrowing step to avoid ``TypeError`` during session creation.
+        """
+        mapped: Dict[str, Any] = {}
+        rename = rename or {}
+        for key, value in kwargs.items():
+            mapped[rename.get(key, key)] = value
+
+        sig = inspect.signature(target)
+        accepts_var_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
+        )
+        if accepts_var_kwargs:
+            return mapped
+
+        return {key: value for key, value in mapped.items() if key in sig.parameters}
+
+    def _apply_ui_console_overrides(self, agent: Any, kwargs: Dict[str, Any]) -> Any:
+        """Apply UI-specific console behavior for agents without silent_mode support."""
+        if kwargs.get("silent_mode"):
+            from gaia.agents.base.console import SilentConsole
+
+            agent.console = SilentConsole(silence_final_answer=True)
+        return agent
+
     # ------------------------------------------------------------------
     # Built-in agents
     # ------------------------------------------------------------------
@@ -199,6 +235,191 @@ class AgentRegistry:
         except ImportError:
             logger.debug(
                 "registry: BuilderAgent not available, skipping built-in registration"
+            )
+
+        # --- CodeAgent ---
+        try:
+            from gaia.agents.code.agent import CodeAgent
+
+            def code_factory(**kwargs):
+                return CodeAgent(**kwargs)
+
+            self._register(
+                AgentRegistration(
+                    id="code",
+                    name="Code Agent",
+                    description="Autonomous coding agent for project generation, editing, testing, and validation",
+                    source="builtin",
+                    conversation_starters=[
+                        "Build a small app from scratch",
+                        "Fix this bug in my project",
+                        "Refactor this module and add tests",
+                    ],
+                    factory=code_factory,
+                    agent_dir=None,
+                    models=["Qwen3.5-35B-A3B-GGUF"],
+                )
+            )
+            logger.info("registry: Registered built-in agent: code (CodeAgent)")
+        except ImportError:
+            logger.debug(
+                "registry: CodeAgent not available, skipping built-in registration"
+            )
+
+        # --- DockerAgent ---
+        try:
+            from gaia.agents.docker.agent import DockerAgent
+
+            def docker_factory(**kwargs):
+                return DockerAgent(**kwargs)
+
+            self._register(
+                AgentRegistration(
+                    id="docker",
+                    name="Docker Agent",
+                    description="Containerization assistant for Dockerfiles, images, and container workflows",
+                    source="builtin",
+                    conversation_starters=[
+                        "Create a Dockerfile for this app",
+                        "Containerize my project",
+                        "Help me debug this Docker build",
+                    ],
+                    factory=docker_factory,
+                    agent_dir=None,
+                    models=["Qwen3.5-35B-A3B-GGUF"],
+                )
+            )
+            logger.info("registry: Registered built-in agent: docker (DockerAgent)")
+        except ImportError:
+            logger.debug(
+                "registry: DockerAgent not available, skipping built-in registration"
+            )
+
+        # --- JiraAgent ---
+        try:
+            from gaia.agents.jira.agent import JiraAgent
+
+            def jira_factory(**kwargs):
+                return JiraAgent(**kwargs)
+
+            self._register(
+                AgentRegistration(
+                    id="jira",
+                    name="Jira Agent",
+                    description="Natural-language Jira assistant for search, triage, creation, and updates",
+                    source="builtin",
+                    conversation_starters=[
+                        "Show me my high-priority Jira issues",
+                        "Create a new Jira ticket",
+                        "Summarize sprint progress from Jira",
+                    ],
+                    factory=jira_factory,
+                    agent_dir=None,
+                    models=["Qwen3.5-35B-A3B-GGUF"],
+                )
+            )
+            logger.info("registry: Registered built-in agent: jira (JiraAgent)")
+        except ImportError:
+            logger.debug(
+                "registry: JiraAgent not available, skipping built-in registration"
+            )
+
+        # --- BlenderAgent ---
+        try:
+            from gaia.agents.blender.agent import BlenderAgent
+
+            def blender_factory(**kwargs):
+                filtered = self._filter_factory_kwargs(BlenderAgent, kwargs)
+                agent = BlenderAgent(**filtered)
+                return self._apply_ui_console_overrides(agent, kwargs)
+
+            self._register(
+                AgentRegistration(
+                    id="blender",
+                    name="Blender Agent",
+                    description="3D scene automation agent for Blender modeling, modification, and inspection",
+                    source="builtin",
+                    conversation_starters=[
+                        "Create a simple Blender scene",
+                        "Modify this 3D object setup",
+                        "Inspect the current Blender scene",
+                    ],
+                    factory=blender_factory,
+                    agent_dir=None,
+                    models=[],
+                )
+            )
+            logger.info(
+                "registry: Registered built-in agent: blender (BlenderAgent)"
+            )
+        except ImportError:
+            logger.debug(
+                "registry: BlenderAgent not available, skipping built-in registration"
+            )
+
+        # --- MedicalIntakeAgent (EMR) ---
+        try:
+            from gaia.agents.emr.agent import MedicalIntakeAgent
+
+            def emr_factory(**kwargs):
+                emr_root = Path.home() / ".gaia" / "emr"
+                kwargs.setdefault("watch_dir", str(emr_root / "intake_forms"))
+                kwargs.setdefault("db_path", str(emr_root / "patients.db"))
+                kwargs.setdefault("auto_start_watching", False)
+                return MedicalIntakeAgent(**kwargs)
+
+            self._register(
+                AgentRegistration(
+                    id="emr",
+                    name="Medical Intake Agent",
+                    description="Medical intake and document extraction agent for forms, records, and patient lookup",
+                    source="builtin",
+                    conversation_starters=[
+                        "Process these intake forms",
+                        "Find a patient record",
+                        "Summarize recent extracted patient data",
+                    ],
+                    factory=emr_factory,
+                    agent_dir=None,
+                    models=["Qwen3-VL-4B-Instruct-GGUF"],
+                )
+            )
+            logger.info(
+                "registry: Registered built-in agent: emr (MedicalIntakeAgent)"
+            )
+        except ImportError:
+            logger.debug(
+                "registry: MedicalIntakeAgent not available, skipping built-in registration"
+            )
+
+        # --- SDAgent ---
+        try:
+            from gaia.agents.sd.agent import SDAgent
+
+            def sd_factory(**kwargs):
+                agent = SDAgent(**kwargs)
+                return self._apply_ui_console_overrides(agent, kwargs)
+
+            self._register(
+                AgentRegistration(
+                    id="sd",
+                    name="Stable Diffusion Agent",
+                    description="Image generation agent for Stable Diffusion prompt enhancement and creation workflows",
+                    source="builtin",
+                    conversation_starters=[
+                        "Generate an image from this prompt",
+                        "Turn this idea into concept art",
+                        "Create an illustration and refine the prompt",
+                    ],
+                    factory=sd_factory,
+                    agent_dir=None,
+                    models=["Qwen3-8B-GGUF"],
+                )
+            )
+            logger.info("registry: Registered built-in agent: sd (SDAgent)")
+        except ImportError:
+            logger.debug(
+                "registry: SDAgent not available, skipping built-in registration"
             )
 
     # ------------------------------------------------------------------

@@ -28,12 +28,14 @@ class BlenderAgent(Agent):
         self,
         mcp: Optional[MCPClient] = None,
         model_id: str = None,
-        base_url: str = "http://localhost:8000/api/v1",
+        base_url: Optional[str] = None, # Base URL for the local LLM server API for the issue https://github.com/amd/gaia/issues/759 (e.g., "http://localhost:8000")
         max_steps: int = 5,
         debug_prompts: bool = False,
         output_dir: str = None,
         streaming: bool = False,
         show_stats: bool = True,
+        silent_mode: bool = False,
+        debug: bool = False,
     ):
         """
         Initialize the BlenderAgent with MCP client and LLM client.
@@ -47,6 +49,8 @@ class BlenderAgent(Agent):
             output_dir: Directory for storing JSON output files (default: current directory)
             streaming: If True, enables real-time streaming of LLM responses (default: False)
             show_stats: If True, displays LLM performance stats after each response (default: True)
+            silent_mode: If True, suppress console output for Agent UI/background usage
+            debug: If True, enables debug logging and prompt diagnostics
         """
         # Initialize the MCP client for Blender communication
         self.mcp = mcp if mcp else MCPClient()
@@ -60,6 +64,8 @@ class BlenderAgent(Agent):
             output_dir=output_dir,
             streaming=streaming,
             show_stats=show_stats,
+            silent_mode=silent_mode,
+            debug=debug,
         )
 
         # Register Blender-specific tools

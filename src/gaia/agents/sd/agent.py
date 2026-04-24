@@ -33,7 +33,7 @@ class SDAgentConfig:
     use_claude: bool = False
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
-    base_url: str = "http://localhost:8000/api/v1"
+    base_url: Optional[str] = None
     model_id: str = "Qwen3-8B-GGUF"  # 8B model for robust agentic reasoning
 
     # Execution settings
@@ -43,6 +43,7 @@ class SDAgentConfig:
 
     # Debug/output settings
     debug: bool = False
+    silent_mode: bool = False
     show_stats: bool = False
 
 
@@ -105,6 +106,7 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
             model_id=config.model_id,
             max_steps=config.max_steps,
             streaming=config.streaming,
+            silent_mode=config.silent_mode,
             show_stats=config.show_stats,
             min_context_size=config.ctx_size,  # 16K for multi-step planning
         )
