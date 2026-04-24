@@ -128,6 +128,16 @@ TEST(ImageTest, ImageFromBytesRejectsUnknownMime) {
                  std::invalid_argument);
 }
 
+TEST(ImageTest, ImageFromBytesAutoDetectUnrecognizedThrows) {
+    // 12 zero bytes: no known magic pattern. detectImageMimeType returns "".
+    // fromBytes (without explicit MIME) must throw std::invalid_argument.
+    std::vector<std::uint8_t> bytes(12, 0x00);
+    EXPECT_THROW(Image::fromBytes(bytes), std::invalid_argument);
+    // 16 bytes of 0xFF: also unrecognized (not a JPEG — FF D8 FF needed)
+    std::vector<std::uint8_t> bytes2(16, 0xFF);
+    EXPECT_THROW(Image::fromBytes(bytes2), std::invalid_argument);
+}
+
 // ---- Image::fromFile (AC-3, AC-4, AC-15g) ----
 
 TEST(ImageTest, ImageFromFileTinyPng) {

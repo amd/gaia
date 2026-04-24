@@ -33,9 +33,13 @@ using json = nlohmann::json;
 #define GAIA_MAX_IMAGE_BYTES (20u * 1024u * 1024u)
 #endif
 
-/// Detect image MIME type from magic bytes. Returns "image/png" for unknown
-/// inputs or buffers shorter than 12 bytes (safe fallback, no OOB access).
-/// Supported: PNG, JPEG, GIF (87a/89a), WebP (RIFF+WEBP at offset 8), BMP.
+/// Detect image MIME type from magic bytes.
+/// Supported formats: PNG, JPEG, GIF (87a/89a), WebP (RIFF+WEBP at offset 8), BMP.
+/// Returns "image/png" for null pointers or buffers shorter than 12 bytes
+/// (safe fallback against OOB access on header stubs — AC-15e).
+/// Returns "" (empty string) for full-sized (>= 12 byte) buffers with
+/// unrecognized magic. Callers must handle empty by throwing or requiring
+/// the caller to supply an explicit mimeType.
 std::string detectImageMimeType(const std::uint8_t* data, std::size_t size);
 
 /// A single piece of message content — either text or a base64 data-URI image.
