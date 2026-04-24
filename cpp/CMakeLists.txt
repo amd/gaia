@@ -93,6 +93,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(gaia_core
     src/types.cpp
+    src/image.cpp
     src/tool_registry.cpp
     src/console.cpp
     src/clean_console.cpp
@@ -191,6 +192,9 @@ endif()
 if(GAIA_BUILD_EXAMPLES)
     add_executable(security_demo examples/security_demo.cpp)
     target_link_libraries(security_demo PRIVATE gaia::gaia_core)
+
+    add_executable(vlm_agent examples/vlm_agent.cpp)
+    target_link_libraries(vlm_agent PRIVATE gaia::gaia_core)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -201,9 +205,11 @@ if(GAIA_BUILD_TESTS)
 
     add_executable(tests_mock
         tests/test_types.cpp
+        tests/test_image.cpp
         tests/test_tool_registry.cpp
         tests/test_json_utils.cpp
         tests/test_agent.cpp
+        tests/test_agent_vlm.cpp
         tests/test_mcp_client.cpp
         tests/test_console.cpp
         tests/test_lemonade_client.cpp
@@ -218,6 +224,23 @@ if(GAIA_BUILD_TESTS)
         gaia::gaia_core
         GTest::gtest_main
     )
+
+    # VLM tests need httplib (mock LLM server) and the fixtures directory.
+    if(httplib_FOUND)
+        target_link_libraries(tests_mock PRIVATE httplib::httplib)
+    else()
+        target_include_directories(tests_mock SYSTEM PRIVATE
+            $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+    if(OpenSSL_FOUND)
+        target_compile_definitions(tests_mock PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(tests_mock PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+
+    target_compile_definitions(tests_mock PRIVATE
+        GAIA_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    )
+    target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
     include(GoogleTest)
     gtest_discover_tests(tests_mock)
@@ -236,11 +259,16 @@ if(GAIA_BUILD_INTEGRATION_TESTS)
         tests/integration/test_integration_mcp.cpp
         tests/integration/test_integration_wifi.cpp
         tests/integration/test_integration_health.cpp
+        tests/integration/test_integration_vlm.cpp
     )
 
     target_link_libraries(tests_integration PRIVATE
         gaia::gaia_core
         GTest::gtest
+    )
+
+    target_compile_definitions(tests_integration PRIVATE
+        GAIA_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
     )
 
     include(GoogleTest)

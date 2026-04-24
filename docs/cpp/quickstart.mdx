@@ -92,6 +92,12 @@ icon: "rocket"
     ```
     Select GPU or NPU backend, then try "Full network diagnostic" or ask a specific question. The agent reasons about each result and adapts its approach in real-time.
 
+    **Vision-Language (VLM) demo** (cross-platform — requires a VLM model such as `Qwen3-VL-4B-Instruct-GGUF` loaded on the server):
+    ```bash
+    ./build/vlm_agent path/to/image.png "Describe this image."
+    ```
+    See [API Reference: Vision Language Models](/cpp/api-reference#vision-language-models-vlm) for the `gaia::Image` and `processQuery(..., images)` APIs.
+
     Type `quit` to exit.
   </Step>
 </Steps>
