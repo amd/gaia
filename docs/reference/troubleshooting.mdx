@@ -391,6 +391,100 @@ icon: "bug"
 
 ---
 
+## AppImage on Linux
+
+<AccordionGroup>
+  <Accordion title="Ubuntu 24.04 LTS minimal: AppImage fails to mount" icon="linux">
+    **Cause:** AppImage v2 requires FUSE 2. Ubuntu 24.04 LTS ships FUSE 3
+    by default, and the minimal installer does not include `libfuse2` at all.
+
+    **Fix:** install the FUSE 2 compatibility package:
+    ```bash
+    sudo apt install libfuse2
+    ```
+
+    After installing `libfuse2`, re-launch the AppImage:
+    ```bash
+    chmod +x gaia-agent-ui-*.AppImage
+    ./gaia-agent-ui-*.AppImage
+    ```
+  </Accordion>
+
+  <Accordion title="Chromium sandbox / --no-sandbox on Ubuntu 24.04.1+" icon="shield-halved">
+    Starting with **GAIA 0.17.5**, the Linux AppImage is packaged with
+    `--no-sandbox` by default. This works around Ubuntu 24.04.1's
+    AppArmor-based unprivileged-userns restriction
+    (`kernel.apparmor_restrict_unprivileged_userns=1`), which otherwise
+    aborts Chromium with a FATAL sandbox error on first launch.
+
+    **Security note:** `--no-sandbox` disables Chromium's renderer sandbox
+    entirely — it is *not* a partial reduction. A compromised renderer can
+    reach anything the user account can: files in your home directory, the
+    keychain, network access. OS-level isolation (user account, AppArmor
+    profiles if any) is the only layer that remains. The `.deb` package
+    (`gaia-agent-ui-*-amd64.deb`) ships with the same `--no-sandbox`
+    posture as the AppImage for the same AppArmor-userns reason, so
+    switching packaging formats does not restore the Chromium sandbox on
+    Ubuntu 24.04.1+.
+
+    Older AppImages (&le; 0.17.3) require the user to pass `--no-sandbox`
+    manually:
+    ```bash
+    ./gaia-agent-ui-0.17.3.AppImage --no-sandbox
+    ```
+  </Accordion>
+
+  <Accordion title="Resetting a broken bootstrap" icon="rotate-left">
+    If the Python backend bootstrap (uv, virtualenv, `amd-gaia[ui]` install)
+    got interrupted or is in a half-installed state, clear the cached state
+    and relaunch:
+
+    ```bash
+    rm -rf ~/.gaia/venv ~/.gaia/electron-install-state.json
+    ./gaia-agent-ui-*.AppImage
+    ```
+
+    The AppImage will re-run its first-launch bootstrap from scratch.
+  </Accordion>
+
+  <Accordion title="Log files" icon="file-lines">
+    The Linux AppImage writes logs under `~/.gaia/`:
+
+    - `~/.gaia/electron-install.log` — Python backend bootstrap (uv, venv,
+      pip install) output.
+    - `~/.gaia/gaia.log` — runtime backend log from `gaia chat --ui`.
+    - `~/.gaia/electron-main.log` — Electron main-process stdout/stderr,
+      teed to disk so errors are visible even when the app was not launched
+      from a terminal.
+
+    To inspect all active TCP listeners (the backend uses a dynamic port, not always 4200):
+    ```bash
+    ss -tlnp
+    ```
+  </Accordion>
+
+  <Accordion title="Collecting a diagnostics bundle for bug reports" icon="box-archive">
+    GAIA ships a `gaia diagnostics` command that bundles the logs above
+    together with a short system-info snapshot (`uname -a`, distro info,
+    relevant environment variables, `ss -tlnp (all TCP listeners)`) into a single
+    tarball:
+
+    ```bash
+    gaia diagnostics
+    # → ~/.gaia/diagnostics-<YYYYMMDD-HHMMSS>.tgz
+    ```
+
+    Options:
+    - `--output <path>` — write the bundle to a custom path.
+    - `--no-logs` — omit log files (useful if logs might contain sensitive
+      chat content). State and system info are still included.
+
+    Attach the resulting `.tgz` to your GitHub issue.
+  </Accordion>
+</AccordionGroup>
+
+---
+
 ## Still Need Help?
 
 <CardGroup cols={3}>

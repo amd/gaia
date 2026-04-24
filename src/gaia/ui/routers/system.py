@@ -29,6 +29,9 @@ from ..models import (
 
 logger = logging.getLogger(__name__)
 
+# Hold references to background tasks to prevent GC
+_background_tasks: set[asyncio.Task] = set()
+
 router = APIRouter(tags=["system"])
 
 # Default model required for GAIA Chat agent
@@ -458,9 +461,11 @@ async def load_model_endpoint(body: LoadModelRequest):
 
     ctx_size = body.ctx_size if body.ctx_size is not None else _MIN_CONTEXT_SIZE
     payload = {"model_name": model_name, "ctx_size": ctx_size}
-    asyncio.create_task(
+    task = asyncio.create_task(
         _lemonade_post("load", payload, timeout=300.0, log_context=f"Load {model_name}")
     )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"status": "loading", "model": model_name, "ctx_size": ctx_size}
 
 
@@ -485,9 +490,11 @@ async def download_model_endpoint(body: DownloadModelRequest):
     payload: dict = {"model_name": model_name}
     if body.force:
         payload["force"] = True
-    asyncio.create_task(
+    task = asyncio.create_task(
         _lemonade_post(
             "pull", payload, timeout=7200.0, log_context=f"Download {model_name}"
         )
     )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"status": "downloading", "model": model_name}

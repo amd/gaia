@@ -1,0 +1,50 @@
+---
+title: "v0.17.4"
+description: "Custom-agent model selection, C++ null-safety, and docs link fix"
+---
+
+# GAIA v0.17.4 Release Notes
+
+GAIA v0.17.4 is a patch release covering two correctness fixes in the Agent UI custom-agent path, a null-safety fix in the C++ library for smaller LLMs, and a broken docs citation.
+
+**Why upgrade:**
+- **Custom agents use their declared model** — If a custom agent sets a model via `kwargs.setdefault("model_id", ...)`, the Agent UI now respects that setting when the session is at the DB default, instead of falling back to the session model.
+- **Compatibility with smaller LLMs in the C++ library** — The C++ JSON parser now tolerates `null` values in `"tool"` and `"content"` fields, which some smaller models emit in place of omitting the field.
+
+---
+
+## What's New
+
+### Custom Agent `model_id` Respected in the Agent UI
+
+`_chat_helpers.py` previously passed `model_id=<session model>` explicitly to `registry.create_agent()`, which defeated `kwargs.setdefault("model_id", ...)` in custom agents — `setdefault` only fires when the key is absent (PR [#841](https://github.com/amd/gaia/pull/841)). The Agent UI now builds `create_kwargs` conditionally, omitting `model_id` when the session is at the DB default so the agent's `__init__` setdefault governs. Three-branch precedence is now explicit: `custom_model` setting > session-explicit model > agent's own `setdefault`.
+
+A follow-up fix (PR [#842](https://github.com/amd/gaia/pull/842)) restored the pre-construction `model_id` as the agent-cache key. The initial PR #841 landing had switched `_store_agent` to use the post-construction `_effective_model(agent, model_id)` while `_get_cached_agent` still looked up with `model_id`, so keys never matched for custom-model agents and the agent was rebuilt on every turn. A two-turn cache-hit regression test and a static guard on `_store_agent` call sites were added alongside the fix.
+
+Supporting refactor: extracted `_build_create_kwargs()` and `_effective_model()` helpers in `src/gaia/ui/_chat_helpers.py` to deduplicate the three-branch logic across streaming and non-streaming paths, and exported `SESSION_DEFAULT_MODEL` from `database.py` as the single source of truth.
+
+---
+
+### C++ Library: Null-Safety in LLM Response Parsing
+
+`parseLlmResponse()` in `cpp/src/json_utils.cpp` now guards `.get<std::string>()` calls on the `"tool"` and `"answer"` JSON fields with `.is_string()` / `.is_null()` checks (PR [#780](https://github.com/amd/gaia/pull/780)). This fixes a crash (`json.exception.type_error.302: type must be string, but is null`) when smaller LLMs (for example `qwen3.5:9b`) return `null` for those fields instead of omitting them. `json.contains()` returns `true` for `null` values, so the existing presence checks were insufficient.
+
+---
+
+## Bug Fixes
+
+- **Email-triage agent plan: broken CMU citation link** (PR [#817](https://github.com/amd/gaia/pull/817)) — Swapped the failing `www.cs.cmu.edu/~tom/EMNLP2004_final.pdf` URL in `docs/plans/email-triage-agent.mdx` for the canonical ACL Anthology record at [W04-3240](https://aclanthology.org/W04-3240/). The CMU URL was failing DNS resolution in CI, breaking the `Verify external URLs` check on every open docs PR. Restored the paper's full title ("Learning to Classify Email into 'Speech Acts'") for consistency with other citations in the same references list.
+
+---
+
+## Full Changelog
+
+**5 commits** since v0.17.3:
+
+- `8fc43f3f` — fix(cpp): add null-safety checks for JSON string fields in LLM response parsing (#780)
+- `62722de2` — fix(ui): honor custom agent model_id when session is at DB default (#841)
+- `4acfd400` — fix(ui): extract _build_create_kwargs/_effective_model, import SESSION_DEFAULT_MODEL
+- `8f5c7621` — fix(ui): restore intent-key for agent cache store to fix miss regression (#842)
+- `a0fdb109` — docs(plans): fix broken CMU link to EMNLP 2004 Email Speech Acts paper (#817)
+
+Full Changelog: [v0.17.3...v0.17.4](https://github.com/amd/gaia/compare/v0.17.3...v0.17.4)

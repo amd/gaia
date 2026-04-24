@@ -13,7 +13,7 @@
 //   services/notification-service.js  — Desktop notifications + permission prompts (T5)
 //   preload.cjs                       — contextBridge for IPC channels (T0/T1)
 
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, dialog, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -23,16 +23,106 @@ const { spawn } = require("child_process");
 const TrayManager = require("./services/tray-manager.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
+const PortManager = require("./services/port-manager.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
 const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
 const autoUpdater = require("./services/auto-updater.cjs");
 const agentSeeder = require("./services/agent-seeder.cjs");
 
+// ── F7: Ozone hint (issue #782) ─────────────────────────────────────────────
+// Electron-recommended switch for distro-agnostic Linux behaviour: picks
+// Wayland on Wayland sessions, X11 elsewhere. Must be set before
+// app.whenReady() fires.
+app.commandLine.appendSwitch("ozone-platform-hint", "auto");
+
+// ── F7: --no-sandbox on Linux (issue #782) ───────────────────────────────────
+// chrome-sandbox is deleted from the packaged tree by after-pack.cjs so
+// Chromium must use its unprivileged user-namespace sandbox on every launch
+// path. The .desktop Exec= line already carries --no-sandbox via
+// electron-builder.yml linux.executableArgs, but direct `./GAIA.AppImage`
+// invocations bypass the .desktop entry. Appending the switch here makes
+// all Linux launch paths behave identically.
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("no-sandbox");
+}
+
+// ── F7: Log tee to ~/.gaia/electron-main.log (issue #782) ───────────────────
+// Users often launch AppImages by double-click, not from a terminal, so
+// console output vanishes. Mirror console.log/error to a file so the
+// diagnostics bundler has something to attach.
+(function installMainLogTee() {
+  try {
+    const gaiaDir = path.join(os.homedir(), ".gaia");
+    try { fs.mkdirSync(gaiaDir, { recursive: true }); } catch { /* ignore */ }
+    const logPath = path.join(gaiaDir, "electron-main.log");
+
+    // Rotate if > 5 MB — truncate to last ~5 MB on startup.
+    try {
+      const st = fs.statSync(logPath);
+      if (st.size > 5 * 1024 * 1024) {
+        const fd = fs.openSync(logPath, "r");
+        const keep = 5 * 1024 * 1024;
+        const buf = Buffer.alloc(keep);
+        // readSync can return fewer bytes than requested; only write
+        // what we actually read so we don't append zero-padding.
+        const bytesRead = fs.readSync(
+          fd,
+          buf,
+          0,
+          keep,
+          Math.max(0, st.size - keep),
+        );
+        fs.closeSync(fd);
+        fs.writeFileSync(logPath, buf.subarray(0, bytesRead));
+      }
+    } catch {
+      // ENOENT or permission — best-effort; just fall through.
+    }
+
+    const stream = fs.createWriteStream(logPath, { flags: "a" });
+    stream.write(
+      `\n──── electron-main opened (${new Date().toISOString()}) pid=${process.pid} ────\n`
+    );
+
+    const flushAndEnd = () => {
+      try { stream.end(); } catch { /* ignore */ }
+    };
+    process.on("exit", flushAndEnd);
+
+    const wrap = (origFn, level) => (...args) => {
+      try {
+        const line = args
+          .map((a) =>
+            typeof a === "string"
+              ? a
+              : a instanceof Error
+                ? (a.stack || a.message || String(a))
+                : JSON.stringify(a)
+          )
+          .join(" ");
+        stream.write(`[${new Date().toISOString()}] ${level} ${line}\n`);
+      } catch {
+        // swallow — we must not recurse into console.error from here
+      }
+      return origFn.apply(console, args);
+    };
+    console.log = wrap(console.log.bind(console), "INFO");
+    console.warn = wrap(console.warn.bind(console), "WARN");
+    console.error = wrap(console.error.bind(console), "ERROR");
+  } catch (err) {
+    // If this fails, we silently keep the original console — the app must
+    // not refuse to launch over a log-tee failure.
+    process.stderr.write(`[main] log tee failed: ${err.message}\n`);
+  }
+})();
+
 // ── Configuration ──────────────────────────────────────────────────────────
 
 const APP_NAME = "GAIA";
-const BACKEND_PORT = 4200;
-const HEALTH_CHECK_URL = `http://localhost:${BACKEND_PORT}/api/health`;
+// Default fallback only — at runtime we always allocate a free random port
+// via PortManager.findFreePort() to avoid EADDRINUSE on zombie backends
+// from prior aborted sessions (issue #782 / T5).
+const DEFAULT_BACKEND_PORT = 4200;
 const STARTUP_TIMEOUT = 30000;
 
 // Parse CLI args (T11: --minimized flag for auto-start)
@@ -59,6 +149,10 @@ const windowConfig = appConfig.window || {
 // ── State ──────────────────────────────────────────────────────────────────
 
 let backendProcess = null;
+let backendPort = DEFAULT_BACKEND_PORT;
+let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
+let backendStderrTail = [];
+let isIntentionalKill = false;
 let mainWindow = null;
 
 /** @type {TrayManager | null} */
@@ -69,6 +163,11 @@ let agentProcessManager = null;
 
 /** @type {NotificationService | null} */
 let notificationService = null;
+
+/** @type {PortManager} */
+const portManager = new PortManager({
+  logger: { log: console.log.bind(console), error: console.error.bind(console) },
+});
 
 /**
  * Set to true when the user explicitly quits (via tray "Quit" or Cmd+Q).
@@ -86,7 +185,7 @@ let isQuitting = false;
  * Returns the ChildProcess, or null if the gaia binary cannot be found
  * (shouldn't happen post-ensureBackend, but we guard just in case).
  */
-function startBackend() {
+async function startBackend() {
   const gaiaCmd = backendInstaller.findGaiaBin();
 
   if (!gaiaCmd) {
@@ -96,11 +195,27 @@ function startBackend() {
     return null;
   }
 
-  console.log(`Starting backend: ${gaiaCmd} chat --ui --ui-port ${BACKEND_PORT}`);
+  // F5: always spawn on a free random port. Never reuse/probe — the
+  // probe-and-reuse path is spoofable and leaves orphans (issue #782).
+  try {
+    backendPort = await portManager.findFreePort();
+  } catch (err) {
+    console.warn(
+      `[main] findFreePort failed (${err.message}); falling back to ${DEFAULT_BACKEND_PORT}`
+    );
+    backendPort = DEFAULT_BACKEND_PORT;
+  }
+  healthCheckUrl = `http://localhost:${backendPort}/api/health`;
+
+  console.log(`Starting backend: ${gaiaCmd} chat --ui --ui-port ${backendPort}`);
+
+  // Reset per-spawn state so a fresh crash dialog doesn't mix tails.
+  backendStderrTail = [];
+  isIntentionalKill = false;
 
   const child = spawn(
     gaiaCmd,
-    ["chat", "--ui", "--ui-port", String(BACKEND_PORT)],
+    ["chat", "--ui", "--ui-port", String(backendPort)],
     {
       cwd: os.homedir(),  // Electron's cwd is "/" on macOS when launched from Finder
       stdio: ["ignore", "pipe", "pipe"],
@@ -116,22 +231,83 @@ function startBackend() {
   });
 
   child.stderr.on("data", (data) => {
-    const line = data.toString().trim();
-    if (line) console.log(`[backend] ${line}`);
+    const chunk = data.toString();
+    chunk.split(/\r?\n/).forEach((line) => {
+      if (!line) return;
+      console.log(`[backend] ${line}`);
+      // Cap per-line length so pathological no-newline backend output
+      // can't balloon the in-memory tail or the crash-dialog body.
+      const capped =
+        line.length > 2048 ? line.slice(0, 2048) + "…[truncated]" : line;
+      backendStderrTail.push(capped);
+      if (backendStderrTail.length > 20) backendStderrTail.shift();
+    });
   });
 
   child.on("error", (err) => {
     console.error("Failed to start backend:", err.message);
   });
 
-  child.on("exit", (code) => {
+  child.on("exit", (code, signal) => {
     if (code !== 0 && code !== null) {
-      console.error(`Backend exited with code ${code}`);
+      console.error(`Backend exited with code ${code} (signal=${signal})`);
     }
+    const crashed = !isIntentionalKill && code !== 0 && code !== null;
     backendProcess = null;
+
+    if (crashed && !isQuitting) {
+      // Fire-and-forget — don't block the event loop.
+      void handleBackendCrash(code, signal);
+    }
   });
 
   return child;
+}
+
+/**
+ * Show a user-facing crash dialog with the last ~20 stderr lines and
+ * offer to write a diagnostics bundle. Invoked from child.on("exit")
+ * when the kill was NOT initiated by us.
+ */
+async function handleBackendCrash(code, signal) {
+  const tail = backendStderrTail.slice(-20).join("\n") || "(no stderr captured)";
+  const detail =
+    `The GAIA backend exited unexpectedly (code=${code}, signal=${signal}).\n\n` +
+    `Recent log output:\n${tail}`;
+
+  try {
+    const choice = await dialog.showMessageBox({
+      type: "error",
+      title: "GAIA backend crashed",
+      message: "GAIA backend crashed",
+      detail,
+      buttons: ["Copy diagnostics", "Quit"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+
+    if (choice.response === 0) {
+      try {
+        const bundlePath = await portManager.writeDiagnosticsBundle();
+        await dialog.showMessageBox({
+          type: "info",
+          title: "Diagnostics saved",
+          message: "Diagnostics bundle written",
+          detail: `Attach this file to your bug report:\n${bundlePath}`,
+          buttons: ["OK"],
+        });
+      } catch (err) {
+        console.error("[main] Could not write diagnostics bundle:", err.message);
+        dialog.showErrorBox(
+          "Could not write diagnostics",
+          `Failed to write diagnostics bundle: ${err.message}`
+        );
+      }
+    }
+  } catch (err) {
+    console.error("[main] handleBackendCrash failed:", err.message);
+  }
 }
 
 async function waitForBackend(timeoutMs) {
@@ -141,7 +317,7 @@ async function waitForBackend(timeoutMs) {
   while (Date.now() - start < timeoutMs) {
     try {
       await new Promise((resolve, reject) => {
-        const req = http.get(HEALTH_CHECK_URL, (res) => {
+        const req = http.get(healthCheckUrl, (res) => {
           if (res.statusCode === 200) {
             resolve();
           } else {
@@ -221,10 +397,12 @@ function createWindow() {
 
   // Show window when ready (unless --minimized or startMinimized config)
   mainWindow.once("ready-to-show", () => {
+    console.log("[main] ready-to-show fired");
     const shouldStartMinimized =
       startMinimized || (trayManager && trayManager.startMinimized);
 
     if (!shouldStartMinimized) {
+      console.log("[main] mainWindow.show() called");
       mainWindow.show();
     } else {
       console.log("[main] Starting minimized to tray");
@@ -241,9 +419,15 @@ async function loadApp() {
     // Always load the bundled frontend from the asar. The backend only
     // serves the API (no frontend files in the pip package), so loading
     // http://localhost:4200/ would show raw JSON instead of the UI.
+    //
+    // Pass the real backend base URL as a query parameter so the renderer
+    // can reach whatever random port port-manager picked (see #851).
+    // Without this, the compiled bundle falls back to its hardcoded
+    // `http://localhost:4200/api` and every API call 404s.
     const indexPath = path.join(distPath, "index.html");
-    console.log("Loading app from:", indexPath);
-    await mainWindow.loadFile(indexPath);
+    const apiBase = `http://127.0.0.1:${backendPort}/api`;
+    console.log("Loading app from:", indexPath, "api:", apiBase);
+    await mainWindow.loadFile(indexPath, { query: { api: apiBase } });
   } else {
     // Show a simple loading/error page
     mainWindow.loadURL(
@@ -254,7 +438,7 @@ async function loadApp() {
           <div style="text-align:center;">
             <h1>${APP_NAME}</h1>
             <p>Waiting for backend to start...</p>
-            <p style="color:#888; font-size:12px;">Backend: http://localhost:${BACKEND_PORT}</p>
+            <p style="color:#888; font-size:12px;">Backend: http://localhost:${backendPort}</p>
           </div>
         </body>
       </html>`
@@ -271,7 +455,7 @@ function initializeServices() {
   agentProcessManager = new AgentProcessManager(mainWindow);
 
   // T1: Tray Manager (system tray icon + context menu)
-  trayManager = new TrayManager(mainWindow, { backendPort: BACKEND_PORT });
+  trayManager = new TrayManager(mainWindow, { backendPort });
   trayManager.create();
 
   // T5: Notification Service (routes agent notifications to OS + renderer)
@@ -369,6 +553,7 @@ async function bootstrapBackend() {
     try {
       await backendInstaller.ensureBackend({
         onProgress: progress.onProgress,
+        isPackaged: app.isPackaged,
       });
       progress.close();
       console.log("[main] Backend bootstrap complete");
@@ -484,7 +669,7 @@ app.whenReady().then(async () => {
   }
 
   // Start the Python backend
-  backendProcess = startBackend();
+  backendProcess = await startBackend();
 
   // Create the window (hidden until ready-to-show)
   createWindow();
@@ -520,7 +705,7 @@ app.whenReady().then(async () => {
     console.log("Waiting for backend to start...");
     const ready = await waitForBackend(STARTUP_TIMEOUT);
     if (ready) {
-      console.log("Backend API is ready on port", BACKEND_PORT);
+      console.log("Backend API is ready on port", backendPort);
     } else {
       console.warn("Backend did not respond within timeout.");
     }
@@ -575,6 +760,9 @@ let cleanupDone = false;
 
 app.on("before-quit", () => {
   isQuitting = true;
+  // Mark any subsequent backend exit as intentional so we don't pop the
+  // crash dialog during normal shutdown.
+  isIntentionalKill = true;
 });
 
 app.on("will-quit", (event) => {
@@ -628,39 +816,34 @@ async function cleanup() {
     trayManager = null;
   }
 
-  // Stop the Python backend
+  // Stop the Python backend via the port-manager (SIGTERM → wait 3 s → SIGKILL).
+  // F5: previously we did this inline; extracted so main.cjs stays lean and
+  // to prevent orphan leaks across runs (issue #782).
   if (backendProcess) {
     console.log("Stopping backend process...");
-    const proc = backendProcess; // Save reference before nulling
+    const proc = backendProcess;
     backendProcess = null;
+    isIntentionalKill = true;
 
     try {
-      proc.kill("SIGTERM");
-    } catch {
-      // Already dead
+      // Pass the ChildProcess handle (not a bare pid) so port-manager
+      // can short-circuit via `proc.exitCode` and close the PID-reuse
+      // TOCTOU window.
+      await portManager.killBackend(proc);
+    } catch (err) {
+      console.error("Error stopping backend:", err.message);
     }
 
-    // Wait for the process to exit, with a force-kill fallback
-    await new Promise((resolve) => {
-      // Check if already exited (exitCode is set once the process exits)
-      if (proc.exitCode !== null) {
-        resolve();
-        return;
-      }
-
-      const forceKillTimer = setTimeout(() => {
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          // Already dead
-        }
-        resolve();
-      }, 3000);
-
-      proc.once("exit", () => {
-        clearTimeout(forceKillTimer);
-        resolve();
+    // If the child object still reports alive (race), give its exit
+    // listener a brief moment to fire before we continue teardown.
+    if (proc.exitCode === null) {
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 500);
+        proc.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
       });
-    });
+    }
   }
 }
