@@ -5516,7 +5516,7 @@ def handle_sd_command(args):
     # Create config - ensure LLM model is set
     llm_model = getattr(args, "model", None)
     if not llm_model:
-        llm_model = "Qwen3-8B-GGUF"  # Default LLM for prompt enhancement
+        llm_model = "Gemma-4-E4B-it-GGUF"  # Default LLM for prompt enhancement
 
     config = SDAgentConfig(
         sd_model=args.sd_model,

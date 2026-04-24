@@ -85,8 +85,7 @@ def _get_lemonade_config() -> tuple:
 # Agents use Qwen3.5-35B-A3B-GGUF via AGENT_PROFILES (see below), NOT this default.
 # Do NOT change this to 35B — it would break CI tests and force large downloads
 # in minimal setups. The UI default lives in ui/routers/system.py.
-DEFAULT_MODEL_NAME = "Qwen3-0.6B-GGUF"
-# DEFAULT_MODEL_NAME = "Llama-3.2-3B-Instruct-Hybrid"
+DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
 # =========================================================================
 # Request Configuration Defaults
@@ -123,6 +122,9 @@ class ModelRequirement:
     display_name: str
     required: bool = True
     min_ctx_size: int = 4096  # Minimum context size needed
+    tool_calling: bool = (
+        True  # True for GGUF models via Lemonade --jinja (Tier 0 empirical)
+    )
 
 
 @dataclass
@@ -153,24 +155,49 @@ class LemonadeStatus:
 
 # Define available models
 MODELS = {
-    # LLM Models
+    # --- Primary model: Gemma 4 E4B (default for all roles) ---
+    "gemma-4-e4b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="Gemma-4-E4B-it-GGUF",
+        display_name="Gemma 4 E4B (Multimodal)",
+        min_ctx_size=32768,
+        tool_calling=True,
+    ),
+    # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
     "qwen3.5-35b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="Qwen3.5-35B-A3B-GGUF",
         display_name="Qwen3.5 35B",
         min_ctx_size=32768,
+        tool_calling=True,
     ),
     "qwen3-coder-30b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="Qwen3.5-35B-A3B-GGUF",
         display_name="Qwen3 Coder 30B",
         min_ctx_size=32768,
+        tool_calling=True,
     ),
     "qwen3-0.6b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="Qwen3-0.6B-GGUF",
         display_name="Qwen3 0.6B (Fast)",
         min_ctx_size=4096,
+        tool_calling=True,
+    ),
+    "qwen3-vl-4b": ModelRequirement(
+        model_type=ModelType.VLM,
+        model_id="Qwen3-VL-4B-Instruct-GGUF",
+        display_name="Qwen3 VL 4B",
+        min_ctx_size=8192,
+        tool_calling=True,
+    ),
+    "qwen3-8b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="Qwen3-8B-GGUF",
+        display_name="Qwen3 8B",
+        min_ctx_size=16384,
+        tool_calling=True,
     ),
     # Embedding Models
     "nomic-embed": ModelRequirement(
@@ -178,13 +205,7 @@ MODELS = {
         model_id="nomic-embed-text-v2-moe-GGUF",
         display_name="Nomic Embed Text v2",
         min_ctx_size=2048,
-    ),
-    # VLM Models
-    "qwen3-vl-4b": ModelRequirement(
-        model_type=ModelType.VLM,
-        model_id="Qwen3-VL-4B-Instruct-GGUF",
-        display_name="Qwen3 VL 4B",
-        min_ctx_size=8192,
+        tool_calling=False,
     ),
 }
 
@@ -193,74 +214,116 @@ AGENT_PROFILES = {
     "chat": AgentProfile(
         name="chat",
         display_name="Chat Agent",
-        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
+        models=["gemma-4-e4b", "nomic-embed"],
         min_ctx_size=32768,
         description="Interactive chat with RAG and vision support",
     ),
     "code": AgentProfile(
         name="code",
         display_name="Code Agent",
-        models=["qwen3.5-35b"],
+        models=["gemma-4-e4b"],
         min_ctx_size=32768,
         description="Autonomous coding assistant",
     ),
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",
-        models=["qwen3.5-35b"],
+        models=["gemma-4-e4b"],
         min_ctx_size=32768,
         description="Voice-enabled chat",
     ),
     "rag": AgentProfile(
         name="rag",
         display_name="RAG System",
-        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
+        models=["gemma-4-e4b", "nomic-embed"],
         min_ctx_size=32768,
         description="Document Q&A with retrieval and vision",
     ),
     "blender": AgentProfile(
         name="blender",
         display_name="Blender Agent",
-        models=["qwen3.5-35b"],
+        models=["gemma-4-e4b"],
         min_ctx_size=32768,
         description="3D content generation in Blender",
     ),
     "jira": AgentProfile(
         name="jira",
         display_name="Jira Agent",
-        models=["qwen3.5-35b"],
+        models=["gemma-4-e4b"],
         min_ctx_size=32768,
         description="Jira issue management",
     ),
     "docker": AgentProfile(
         name="docker",
         display_name="Docker Agent",
-        models=["qwen3.5-35b"],
+        models=["gemma-4-e4b"],
         min_ctx_size=32768,
         description="Docker container management",
     ),
     "vlm": AgentProfile(
         name="vlm",
         display_name="Vision Agent",
-        models=["qwen3-vl-4b"],
-        min_ctx_size=8192,
+        models=["gemma-4-e4b"],
+        min_ctx_size=32768,
         description="Image understanding and analysis",
     ),
     "minimal": AgentProfile(
         name="minimal",
         display_name="Minimal (Fast)",
-        models=["qwen3-0.6b"],
-        min_ctx_size=4096,
-        description="Fast responses with smaller model",
+        models=["gemma-4-e4b"],
+        min_ctx_size=32768,
+        description="Fast responses with Gemma 4 E4B",
     ),
     "mcp": AgentProfile(
         name="mcp",
         display_name="MCP Bridge",
-        models=["qwen3.5-35b", "nomic-embed", "qwen3-vl-4b"],
+        models=["gemma-4-e4b", "nomic-embed"],
         min_ctx_size=32768,
         description="Model Context Protocol bridge server with vision",
     ),
+    "sd": AgentProfile(
+        name="sd",
+        display_name="SD Agent",
+        models=["gemma-4-e4b"],
+        min_ctx_size=32768,
+        description="Stable Diffusion image generation with LLM helper",
+    ),
 }
+
+
+def is_tool_calling_model(model_id: Optional[str]) -> bool:
+    """Return True if model_id supports native OpenAI tool_calls via Lemonade.
+
+    Defaults to True for unknown GGUF models — Tier 0 empirical testing showed
+    every Lemonade GGUF variant returns tool_calls when tools=[] is passed and
+    the embedded-JSON system prompt is NOT present.
+    """
+    if not model_id:
+        return False
+    for mr in MODELS.values():
+        if mr.model_id == model_id:
+            return mr.tool_calling
+    return True  # Unknown GGUF: optimistic default per Tier 0 findings
+
+
+def _validate_profile_model_registry() -> None:
+    """Fail loudly at import time if AGENT_PROFILES references an undeclared model."""
+    for agent_name, profile in AGENT_PROFILES.items():
+        for key in profile.models:
+            if key not in MODELS:
+                raise ValueError(
+                    f"AGENT_PROFILES['{agent_name}'] references model key '{key}' "
+                    f"which is not declared in MODELS. Add it or fix the typo."
+                )
+            mr = MODELS[key]
+            if mr.tool_calling is None:
+                raise ValueError(
+                    f"AGENT_PROFILES['{agent_name}'] -> MODELS['{key}'].tool_calling "
+                    f"is None. Set explicitly to True or False."
+                )
+
+
+_validate_profile_model_registry()
 
 
 class LemonadeClientError(Exception):

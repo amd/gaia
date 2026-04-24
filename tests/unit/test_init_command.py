@@ -272,12 +272,12 @@ class TestInitProfiles(unittest.TestCase):
         for profile in expected:
             self.assertIn(profile, INIT_PROFILES)
 
-    def test_minimal_profile_uses_qwen3_0_6b(self):
-        """Test that minimal profile uses Qwen3-0.6B model."""
+    def test_minimal_profile_uses_gemma_4_e4b(self):
+        """Test that minimal profile uses Gemma-4-E4B model."""
         from gaia.installer.init_command import INIT_PROFILES
 
         minimal = INIT_PROFILES["minimal"]
-        self.assertIn("Qwen3-0.6B-GGUF", minimal["models"])
+        self.assertIn("Gemma-4-E4B-it-GGUF", minimal["models"])
 
     def test_profiles_have_required_keys(self):
         """Test that all profiles have required keys."""
@@ -442,9 +442,9 @@ class TestVersionCompatibility(unittest.TestCase):
         return cmd
 
     def test_newer_version_accepted(self):
-        """v9.3.4 installed, v9.3.0 expected -> accepted without prompt."""
+        """v10.1.0 installed, v10.0.0 expected -> accepted without prompt."""
         cmd = self._make_cmd()
-        info = LemonadeInfo(installed=True, version="9.3.4")
+        info = LemonadeInfo(installed=True, version="10.1.0")
         result = cmd._check_version_compatibility(info)
         self.assertTrue(result)
 
@@ -463,9 +463,9 @@ class TestVersionCompatibility(unittest.TestCase):
         self.assertTrue(result)
 
     def test_older_version_meets_minimum_accepted_in_ci(self):
-        """v9.1.0 installed, v9.3.0 expected, min 9.0.4 -> accepted in CI (--yes)."""
+        """v10.0.1 installed, v10.0.0 expected, min 10.0.0 -> accepted in CI (--yes)."""
         cmd = self._make_cmd(profile="minimal")
-        info = LemonadeInfo(installed=True, version="9.1.0")
+        info = LemonadeInfo(installed=True, version="10.0.1")
         result = cmd._check_version_compatibility(info)
         self.assertTrue(result)
 
@@ -491,7 +491,7 @@ class TestVersionCompatibility(unittest.TestCase):
         """Newer version should never trigger _upgrade_lemonade."""
         cmd = self._make_cmd()
         cmd._upgrade_lemonade = MagicMock(return_value=True)
-        info = LemonadeInfo(installed=True, version="9.3.4")
+        info = LemonadeInfo(installed=True, version="10.1.0")
         cmd._check_version_compatibility(info)
         cmd._upgrade_lemonade.assert_not_called()
 
@@ -610,11 +610,11 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
         mock_urlretrieve.assert_not_called()
 
     def test_older_version_meeting_minimum_does_not_redownload_in_ci(self):
-        """Case 3 (older but >= profile minimum, --yes): accepted, no install."""
-        # 9.1.0 is older than 10.0.0 target but >= profile minimum (9.0.0)
+        """Case 3 (above minimum, --yes): accepted, no install."""
+        # 10.0.1 is above both target (10.0.0) and profile minimum (10.0.0) — no install needed
         info = LemonadeInfo(
             installed=True,
-            version="9.1.0",
+            version="10.0.1",
             path="/usr/bin/lemonade-server",
         )
         cmd, mock_installer = self._make_cmd(info, profile="minimal")

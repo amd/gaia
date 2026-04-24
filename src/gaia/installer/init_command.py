@@ -39,61 +39,60 @@ log = logging.getLogger(__name__)
 # Note: These define which agent profile to use for each init profile
 INIT_PROFILES = {
     "minimal": {
-        "description": "Fast setup with lightweight model",
+        "description": "Fast setup with Gemma 4 E4B multimodal model",
         "agent": "minimal",
-        "models": ["Qwen3-0.6B-GGUF"],
-        "approx_size": "~400 MB",
-        "min_lemonade_version": "9.0.4",
-        "min_context_size": 4096,
+        "models": ["Gemma-4-E4B-it-GGUF"],
+        "approx_size": "~3 GB",
+        "min_lemonade_version": "10.0.0",
+        "min_context_size": 32768,
         "pip_extras": [],
     },
     "sd": {
-        "description": "Image generation with multi-modal AI (LLM + SD + VLM)",
+        "description": "Image generation with multi-modal AI (LLM + SD)",
         "agent": "sd",
         "models": [
             "SDXL-Turbo",  # Image generation (6.5GB)
-            "Qwen3-8B-GGUF",  # Agentic reasoning + prompt enhancement (5.0GB)
-            "Qwen3-VL-4B-Instruct-GGUF",  # Vision analysis + stories (3.2GB)
+            "Gemma-4-E4B-it-GGUF",  # Agentic reasoning + VLM + prompt enhancement (~3GB)
         ],
-        "approx_size": "~15 GB",
-        "min_lemonade_version": "9.2.0",  # SDXL-Turbo requires v9.2.0+
-        "min_context_size": 16384,  # SD agent needs 16K for multi-step planning
+        "approx_size": "~10 GB",
+        "min_lemonade_version": "10.0.0",
+        "min_context_size": 32768,
         "pip_extras": [],
     },
     "chat": {
         "description": "Interactive chat with RAG and vision support",
         "agent": "chat",
-        "models": None,  # Use agent profile defaults
-        "approx_size": "~25 GB",
-        "min_lemonade_version": "9.0.4",
+        "models": ["Gemma-4-E4B-it-GGUF", "nomic-embed-text-v2-moe-GGUF"],
+        "approx_size": "~4 GB",
+        "min_lemonade_version": "10.0.0",
         "min_context_size": 32768,
         "pip_extras": ["rag"],
     },
     "code": {
         "description": "Autonomous coding assistant",
         "agent": "code",
-        "models": None,
-        "approx_size": "~18 GB",
-        "min_lemonade_version": "9.0.4",
+        "models": ["Gemma-4-E4B-it-GGUF"],
+        "approx_size": "~3 GB",
+        "min_lemonade_version": "10.0.0",
         "min_context_size": 32768,
         "pip_extras": [],
     },
     "rag": {
         "description": "Document Q&A with retrieval",
         "agent": "rag",
-        "models": None,
-        "approx_size": "~25 GB",
-        "min_lemonade_version": "9.0.4",
+        "models": ["Gemma-4-E4B-it-GGUF", "nomic-embed-text-v2-moe-GGUF"],
+        "approx_size": "~4 GB",
+        "min_lemonade_version": "10.0.0",
         "min_context_size": 32768,
         "pip_extras": ["rag"],
     },
     "vlm": {
         "description": "Vision pipeline for document and image extraction",
         "agent": "vlm",
-        "models": ["Qwen3-VL-4B-Instruct-GGUF"],
+        "models": ["Gemma-4-E4B-it-GGUF"],
         "approx_size": "~3 GB",
-        "min_lemonade_version": "9.0.4",
-        "min_context_size": 8192,
+        "min_lemonade_version": "10.0.0",
+        "min_context_size": 32768,
         "pip_extras": [],
     },
     "all": {

@@ -344,9 +344,14 @@ Do NOT wrap conversational replies in JSON.
             if tools_description:
                 parts.append(f"==== AVAILABLE TOOLS ====\n{tools_description}")
 
-        # Add response format (if template set)
+        # Add embedded-JSON response format only for models that don't support
+        # native tool_calls. For tool_calling models we pass tools=[] instead,
+        # and the model uses OpenAI function-calling format natively.
         if hasattr(self, "_response_format_template"):
-            parts.append(self._response_format_template)
+            from gaia.llm.lemonade_client import is_tool_calling_model
+
+            if not is_tool_calling_model(getattr(self, "model_id", None)):
+                parts.append(self._response_format_template)
 
         return "\n\n".join(p for p in parts if p)
 
@@ -439,6 +444,15 @@ Do NOT wrap conversational replies in JSON.
             tool_descriptions.append(f"- {name}({params_str}): {description}")
 
         return "\n".join(tool_descriptions)
+
+    @property
+    def _openai_tools(self):
+        """Return OpenAI function-calling schemas when the active model supports native tool_calls."""
+        from gaia.llm.lemonade_client import is_tool_calling_model
+
+        if is_tool_calling_model(getattr(self, "model_id", None)):
+            return self._build_openai_tool_schemas() or None
+        return None
 
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.
@@ -870,20 +884,105 @@ Do NOT wrap conversational replies in JSON.
 
         return json_response
 
+    def _build_openai_tool_schemas(self) -> list:
+        """Build OpenAI-format function-calling schemas from _TOOL_REGISTRY."""
+
+        def _python_to_json_type(py_type: str) -> str:
+            return {
+                "str": "string",
+                "int": "integer",
+                "float": "number",
+                "bool": "boolean",
+                "list": "array",
+                "dict": "object",
+            }.get(py_type.lower().strip(), "string")
+
+        schemas = []
+        for name, tool_info in _TOOL_REGISTRY.items():
+            properties = {}
+            required = []
+            for param_name, param_info in tool_info["parameters"].items():
+                prop: Dict[str, Any] = {
+                    "type": _python_to_json_type(param_info.get("type", "str"))
+                }
+                desc = param_info.get("description", "")
+                if desc:
+                    prop["description"] = desc
+                properties[param_name] = prop
+                if param_info.get("required", True):
+                    required.append(param_name)
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": tool_info.get("description", ""),
+                        "parameters": {
+                            "type": "object",
+                            "properties": properties,
+                            "required": required,
+                        },
+                    },
+                }
+            )
+        return schemas
+
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """
         Parse the LLM response to extract tool calls or conversational answers.
 
-        ARCHITECTURE: Supports two response modes
-        - Plain text for conversation (no JSON required)
-        - JSON for tool invocations
+        ARCHITECTURE: Supports three response paths
+        - Sentinel JSON string `{"__tool_calls__": ...}` — native OpenAI tool_calls
+        - Plain JSON string `{"thought": ..., "tool": ..., "tool_args": ...}` — embedded format
+        - Plain text — conversational answer
 
         Args:
-            response: The raw response from the LLM
+            response: Raw string from LLM (or sentinel-encoded tool_calls)
 
         Returns:
             Parsed response as a dictionary
         """
+        # --- Native tool_calls branch ---
+        # The Lemonade provider encodes native tool_calls as a sentinel JSON string
+        # when the model uses OpenAI function calling. Detect it here so the rest
+        # of the agent loop (tool execution, history, streaming) sees only str.
+        if isinstance(response, str) and response.startswith('{"__tool_calls__":'):
+            try:
+                envelope = json.loads(response)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Malformed native tool_calls envelope: {exc}"
+                ) from exc
+            tool_calls = envelope["__tool_calls__"]
+            finish_reason = envelope.get("finish_reason", "")
+            if finish_reason == "length":
+                raise ValueError(
+                    f"Tool call truncated mid-arguments (finish_reason=length). "
+                    f"Increase --ctx-size for model {self.model_id}."
+                )
+            if len(tool_calls) > 1:
+                raise NotImplementedError(
+                    "Parallel tool calls (multiple tool_calls in one response) are not yet supported. "
+                    f"Received {len(tool_calls)} tool calls."
+                )
+            tc = tool_calls[0]
+            name = tc["function"]["name"]
+            arguments_str = tc["function"].get("arguments") or ""
+            if arguments_str:
+                try:
+                    tool_args = json.loads(arguments_str)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"Malformed tool_call arguments for '{name}': {exc}. "
+                        f"Raw arguments: {arguments_str[:200]}"
+                    ) from exc
+            else:
+                tool_args = {}
+            logger.debug(
+                "[PARSE] tool_call_path=native model_id=%s tool=%s", self.model_id, name
+            )
+            return {"thought": "", "goal": "", "tool": name, "tool_args": tool_args}
+
         # Check for empty responses
         if not response or not response.strip():
             logger.warning("Empty LLM response received")
@@ -1986,7 +2085,9 @@ Do NOT wrap conversational replies in JSON.
                 # Get streaming response from AgentSDK with proper conversation history
                 try:
                     response_stream = self.chat.send_messages_stream(
-                        messages=messages, system_prompt=self.system_prompt
+                        messages=messages,
+                        system_prompt=self.system_prompt,
+                        tools=self._openai_tools,
                     )
 
                     # Process the streaming response chunks as they arrive
@@ -1994,6 +2095,10 @@ Do NOT wrap conversational replies in JSON.
                     for chunk_response in response_stream:
                         if chunk_response.is_complete:
                             response_stats = chunk_response.stats
+                            # Non-empty complete chunk = tool_calls sentinel from
+                            # native tool-calling path (no streaming for tool calls)
+                            if chunk_response.text:
+                                full_response = chunk_response.text
                         else:
                             self.console.print_streaming_text(chunk_response.text)
                             full_response += chunk_response.text
@@ -2071,7 +2176,9 @@ Do NOT wrap conversational replies in JSON.
                 # Get complete response from AgentSDK
                 try:
                     chat_response = self.chat.send_messages(
-                        messages=messages, system_prompt=self.system_prompt
+                        messages=messages,
+                        system_prompt=self.system_prompt,
+                        tools=self._openai_tools,
                     )
                     response = chat_response.text
                     response_stats = chat_response.stats
@@ -2186,11 +2293,16 @@ Do NOT wrap conversational replies in JSON.
 
                     # Use AgentSDK for streaming plan response
                     stream_gen = self.chat.send_messages_stream(
-                        messages=messages, system_prompt=self.system_prompt
+                        messages=messages,
+                        system_prompt=self.system_prompt,
+                        tools=self._openai_tools,
                     )
 
                     for chunk_response in stream_gen:
-                        if not chunk_response.is_complete:
+                        if chunk_response.is_complete:
+                            if chunk_response.text:
+                                full_response = chunk_response.text
+                        else:
                             chunk = chunk_response.text
                             if hasattr(self.console, "print_streaming_text"):
                                 self.console.print_streaming_text(chunk)
@@ -2223,7 +2335,9 @@ Do NOT wrap conversational replies in JSON.
 
                     # Use AgentSDK for non-streaming plan response
                     chat_response = self.chat.send_messages(
-                        messages=messages, system_prompt=self.system_prompt
+                        messages=messages,
+                        system_prompt=self.system_prompt,
+                        tools=self._openai_tools,
                     )
                     plan_response = chat_response.text
                     self.console.stop_progress()

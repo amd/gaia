@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["system"])
 
 # Default model required for GAIA Chat agent
-_DEFAULT_MODEL_NAME = "Qwen3.5-35B-A3B-GGUF"
+_DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 # Minimum context window (tokens) needed for reliable agent operation.
 # Must match DEFAULT_CONTEXT_SIZE in gaia.llm.lemonade_manager.
 _MIN_CONTEXT_SIZE = 32768
