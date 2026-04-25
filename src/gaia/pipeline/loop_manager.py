@@ -573,11 +573,14 @@ class LoopManager:
 
             scorer = QualityScorer()
 
-            # Build artifact from loop state outputs
-            artifact = loop_state.artifacts.get("output", "") or loop_state.artifacts.get("result", "")
-
+            # Build artifact from loop state outputs — agent artifacts are keyed
+            # by agent ID, so grab the last one produced in this iteration
+            artifact = None
+            for key, value in reversed(list(loop_state.artifacts.items())):
+                if value:
+                    artifact = value
+                    break
             if not artifact:
-                # No artifact available, use simulated fallback
                 return self._simulated_quality(loop_state)
 
             # QualityScorer.evaluate() is async — run it in a new event loop
@@ -599,11 +602,12 @@ class LoopManager:
                     # Extract defects from quality report categories and feed back
                     # into loop state for targeted remediation in next iteration
                     for category_score in getattr(report, "category_scores", []):
-                        for defect in getattr(category_score, "defects", []):
+                        for defect in category_score.defects:
+                            # defects are dicts, not objects
                             loop_state.defects.append({
-                                "category": category_score.category,
-                                "severity": getattr(defect, "severity", "medium"),
-                                "description": getattr(defect, "description", str(defect)),
+                                "category": category_score.category_name,
+                                "severity": defect.get("severity", "medium"),
+                                "description": defect.get("description", str(defect)),
                                 "source": "QualityScorer",
                             })
                     # QualityScorer returns 0-100 scale; normalize to 0-1

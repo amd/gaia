@@ -332,12 +332,21 @@ class PipelineEngine:
         CanvasLoopTemplateConfig objects on the template, allowing UI-driven
         pipeline designs to affect actual execution.
 
+        Clones the template instance to avoid mutating shared singletons in
+        RECURSIVE_TEMPLATES registry.
+
         Args:
             config: Pipeline config dict from API request (may contain canvas_loops, canvas_supervisors)
         """
+        import dataclasses
+
         template = self._current_template
         if template is None:
             return
+
+        # Clone template to avoid mutating shared singleton in registry
+        template = dataclasses.replace(template)
+        self._current_template = template
 
         canvas_loops_raw = config.get("canvas_loops", [])
         if canvas_loops_raw:
@@ -382,6 +391,34 @@ class PipelineEngine:
                 f"Applied {len(canvas_supervisors)} canvas supervisor(s) from API config",
                 extra={"supervisor_count": len(canvas_supervisors)},
             )
+
+    def _get_canvas_loops_for_phase(self, phase) -> List[Dict[str, Any]]:
+        """
+        Get canvas loop configs that apply to a given pipeline phase.
+
+        Translates CanvasLoopTemplateConfig objects into LoopConfig-compatible
+        dicts for phases where canvas loops are configured.
+
+        Args:
+            phase: PipelinePhase to filter by
+
+        Returns:
+            List of loop config dicts (empty if no canvas loops configured)
+        """
+        template = self._current_template
+        if not template or not template.canvas_loops:
+            return []
+
+        from gaia.pipeline.recursive_template import translate_canvas_loops_to_loop_configs
+
+        all_configs = translate_canvas_loops_to_loop_configs(template, self._context.pipeline_id)
+
+        # Filter by phase — canvas loop source_stage maps to PipelinePhase name
+        phase_name_upper = phase.name if hasattr(phase, 'name') else str(phase)
+        return [
+            cfg for cfg in all_configs
+            if cfg.get("phase_name", "").upper() == phase_name_upper.upper()
+        ]
 
     def _register_default_hooks(self) -> None:
         """Register default production hooks."""
@@ -643,8 +680,31 @@ class PipelineEngine:
                     )
             agent_sequence = [agent_id] if agent_id else []
 
-        # Create planning loop
-        loop_config = LoopConfig(
+        # Check for canvas-driven loop configs for this phase
+        canvas_loop_configs = self._get_canvas_loops_for_phase(PipelinePhase.PLANNING)
+
+        if canvas_loop_configs:
+            # Execute canvas-configured loops
+            for canvas_cfg in canvas_loop_configs:
+                loop_config = LoopConfig(
+                    loop_id=canvas_cfg.get("loop_id", generate_loop_id(self._context.pipeline_id)),
+                    phase_name=PipelinePhase.PLANNING,
+                    agent_sequence=canvas_cfg.get("agent_sequence", agent_sequence),
+                    exit_criteria={
+                        "quality_threshold": canvas_cfg.get("quality_threshold", self._context.quality_threshold),
+                        "goal": self._context.user_goal,
+                        "condition": canvas_cfg.get("exit_criteria", {}).get("condition", ""),
+                    },
+                    quality_threshold=canvas_cfg.get("quality_threshold", self._context.quality_threshold),
+                    max_iterations=canvas_cfg.get("max_iterations", self._context.max_iterations),
+                )
+                await self._loop_manager.create_loop(loop_config)
+                future = await self._loop_manager.start_loop(loop_config.loop_id)
+                if future is not None:
+                    loop_state = await asyncio.wrap_future(future)
+        else:
+            # Create planning loop (default path)
+            loop_config = LoopConfig(
             loop_id=generate_loop_id(self._context.pipeline_id),
             phase_name=PipelinePhase.PLANNING,
             agent_sequence=agent_sequence,
@@ -733,8 +793,31 @@ class PipelineEngine:
                     )
             agent_sequence = [agent_id] if agent_id else []
 
-        # Create development loop
-        loop_config = LoopConfig(
+        # Check for canvas-driven loop configs for this phase
+        canvas_loop_configs = self._get_canvas_loops_for_phase(PipelinePhase.DEVELOPMENT)
+
+        if canvas_loop_configs:
+            # Execute canvas-configured loops
+            for canvas_cfg in canvas_loop_configs:
+                loop_config = LoopConfig(
+                    loop_id=canvas_cfg.get("loop_id", generate_loop_id(self._context.pipeline_id)),
+                    phase_name=PipelinePhase.DEVELOPMENT,
+                    agent_sequence=canvas_cfg.get("agent_sequence", agent_sequence),
+                    exit_criteria={
+                        "quality_threshold": canvas_cfg.get("quality_threshold", self._context.quality_threshold),
+                        "goal": self._context.user_goal,
+                        "condition": canvas_cfg.get("exit_criteria", {}).get("condition", ""),
+                    },
+                    quality_threshold=canvas_cfg.get("quality_threshold", self._context.quality_threshold),
+                    max_iterations=canvas_cfg.get("max_iterations", self._context.max_iterations),
+                )
+                await self._loop_manager.create_loop(loop_config)
+                future = await self._loop_manager.start_loop(loop_config.loop_id)
+                if future is not None:
+                    loop_state = await asyncio.wrap_future(future)
+        else:
+            # Create development loop (default path)
+            loop_config = LoopConfig(
             loop_id=generate_loop_id(self._context.pipeline_id),
             phase_name=PipelinePhase.DEVELOPMENT,
             agent_sequence=agent_sequence,
@@ -895,7 +978,7 @@ class PipelineEngine:
                         if isinstance(defect, dict)
                         else {"description": str(defect)}
                     )
-                    routing_decision = self._routing_engine.route_defect_resilient(defect_dict, context={"pipeline_id": getattr(self._state_machine, 'execution_id', None)})
+                    routing_decision = self._routing_engine.route_defect_resilient(defect_dict, context={"pipeline_id": self._state_machine._context.pipeline_id})
                     routing_decisions.append(routing_decision.to_dict())
                 self._state_machine.add_artifact("routing_decisions", routing_decisions)
                 logger.info(
