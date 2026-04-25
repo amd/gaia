@@ -640,6 +640,33 @@ gaia-code "Create a REST API" --use-claude
 
 [→ Full Code Agent Documentation](/guides/code)
 
+#### Code Index
+
+`gaia-code index` builds and queries a local FAISS-backed semantic index over a repository. Embeddings run on AMD NPU/GPU through Lemonade Server. Requires the `[rag]` extras.
+
+```bash
+# Build / refresh the index for the current repo
+gaia-code index
+
+# Index a specific repo, capping discovery
+gaia-code index --repo /path/to/repo --max-files 2000
+
+# Semantic search
+gaia-code index search "where do we mint JWT tokens"
+gaia-code index search "auth flow" --scope code --top-k 5
+
+# Inspect / wipe the cache
+gaia-code index status
+gaia-code index clear
+
+# Interactive Q&A (CodeAgent + code_index tools)
+gaia-code index chat
+```
+
+Common flags at the `index` level: `--repo`, `--max-files`, `--model`, `--base-url`, `--no-lemonade-check`, `--use-claude`, `--use-chatgpt`.
+
+[→ Full Code Index Documentation](/guides/code-index)
+
 ---
 
 ### Blender Agent

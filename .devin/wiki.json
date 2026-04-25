@@ -29,12 +29,12 @@
     },
     {
       "title": "Code Index",
-      "purpose": "Semantic code search over repositories using FAISS + Lemonade embeddings (src/gaia/code_index/), CLI via gaia index, dedicated CodeIndexAgent",
+      "purpose": "Semantic code search over repository files using FAISS + Lemonade embeddings. SDK at src/gaia/code_index/, agent integration via CodeIndexToolsMixin at src/gaia/agents/code_index/tools/mixin.py (composed into CodeAgent), CLI via gaia-code index (build/search/status/clear/chat).",
       "parent": "Core Capabilities"
     },
     {
       "title": "CLI and Configuration",
-      "purpose": "CLI entry point (gaia command) with subcommands: chat, talk, llm, api, mcp, index, sd, blender, jira, docker, eval. Also gaia --ui for Agent UI"
+      "purpose": "CLI entry point (gaia command) with subcommands: chat, talk, llm, api, mcp, sd, blender, jira, docker, eval. Code-index is a subcommand of the gaia-code standalone binary (gaia-code index). Also gaia --ui for Agent UI"
     }
   ]
 }

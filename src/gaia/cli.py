@@ -147,6 +147,7 @@ def initialize_lemonade_for_agent(
     agent_context_sizes = {
         "code": 32768,
         "chat": 32768,
+        "code_index": 32768,
         "jira": 32768,
         "blender": 32768,
         "docker": 32768,
