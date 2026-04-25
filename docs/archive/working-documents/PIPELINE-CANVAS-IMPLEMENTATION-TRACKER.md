@@ -28,9 +28,9 @@ Full gap analysis identified 9 feature groups across 3 tiers.
 
 | # | Feature | Status | Commit | Notes |
 |---|---------|--------|--------|-------|
-| 7 | Execution Replay & History | **complete** | `9a85250` | Backend API, ExecutionHistory component, History tab |
-| 8 | Template Marketplace | partial | `9a85250` | Backend versioning API complete, UI pending |
-| 9 | Performance Dashboard | pending | - | Timing, bottlenecks, resources |
+| 7 | Execution Replay & History | **complete** | `856f1b2` | Backend API, ExecutionHistory component, Runs/Performance sub-tabs |
+| 8 | Template Marketplace | **complete** | `856f1b2` | TemplateMarketplace, VersionHistory, VersionDiff components, export/import API |
+| 9 | Performance Dashboard | **complete** | `856f1b2` | 4 metrics endpoints, MetricsDashboard integrated, aggregate stats with percentiles |
 
 ## Progress Log
 
@@ -107,3 +107,45 @@ Full gap analysis identified 9 feature groups across 3 tiers.
 - Added "History" tab alongside Canvas and Log View
 - ExecutionHistory component wired with replay callback
 - CSS for history tab content area
+
+### Tier 3 Completion: Full Feature Set (2026-04-24)
+
+**Commit:** `856f1b2` - feat(ui): complete Tier 3 pipeline canvas - template marketplace, performance dashboard, execution history
+
+**Backend schemas** (`src/gaia/ui/schemas/pipeline_templates.py`):
+- Added `PhaseTimingSchema`, `PipelineMetricsSummarySchema`, `PipelineMetricsResponseSchema`
+- Added `AggregateMetricStatisticsSchema`, `PipelineAggregateMetricsSchema`
+- Added `MetricHistoryPointSchema`, `PipelineMetricsHistorySchema`
+- Added `LoopMetricsSchema`, `StateTransitionSchema`, `AgentSelectionSchema`
+
+**Backend endpoints** (`src/gaia/ui/routers/pipeline.py`):
+- `GET /api/v1/pipeline/metrics/{pipeline_id}` - Detailed metrics for specific execution
+- `GET /api/v1/pipeline/metrics/history/{pipeline_id}` - Historical metric data points for charting
+- `GET /api/v1/pipeline/metrics/aggregate` - Aggregate statistics (mean/median/std_dev/percentiles)
+- `GET /api/v1/pipeline/executions/{pipeline_id}/metrics` - RESTful alias for pipeline metrics
+- Helper functions: `_build_metrics_response()`, `_compute_percentile()`, `_compute_median()`, `_compute_std_dev()` (pure Python, no numpy)
+
+**ExecutionHistory enhanced** (`ExecutionHistory.tsx`):
+- Added Runs/Performance sub-tabs with BarChart3 and List icons
+- Performance sub-tab renders existing MetricsDashboard component
+- Loading state, empty state, execution list with expand/collapse
+
+**Template Marketplace** (new components):
+- `TemplateMarketplace.tsx` - Grid/list view with search, filter, import, export, use actions
+- `TemplateMarketplace.css` - tm- prefixed CSS styles
+- `VersionHistory.tsx` - Timeline of versions with compare/restore/delete
+- `VersionHistory.css` - vh- prefixed CSS styles
+- `VersionDiff.tsx` - Side-by-side diff of template versions with syntax highlighting
+- `VersionDiff.css` - vd- prefixed CSS styles
+
+**Frontend infrastructure**:
+- `metricsStore.ts` - Fixed import paths from `../../services/api` to `../services/api`
+- `templateStore.ts` - Extended with version operations (export, import, restore version)
+- `api.ts` - Added metrics API functions
+- `types/index.ts` - Added metrics types
+
+**CSS updates** (`PipelineCanvas.css`, `PipelineRunner.css`):
+- ~150 lines of execution history styles (list, items, expand, quality dots, spin animation)
+- Marketplace and version panel styles for PipelineRunner
+
+**Browser testing**: All 4 tabs (Canvas, Log View, History, Marketplace) verified working with 0 console errors.
