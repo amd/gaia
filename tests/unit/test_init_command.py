@@ -444,9 +444,9 @@ class TestVersionCompatibility(unittest.TestCase):
         return cmd
 
     def test_newer_version_accepted(self):
-        """v10.2.0 installed, v10.1.0 expected -> accepted without prompt."""
+        """v10.3.0 installed, v10.2.0 expected -> accepted without prompt."""
         cmd = self._make_cmd()
-        info = LemonadeInfo(installed=True, version="10.2.0")
+        info = LemonadeInfo(installed=True, version="10.3.0")
         result = cmd._check_version_compatibility(info)
         self.assertTrue(result)
 
@@ -458,16 +458,16 @@ class TestVersionCompatibility(unittest.TestCase):
         self.assertTrue(result)
 
     def test_newer_major_version_accepted(self):
-        """v11.0.0 installed, v10.1.0 expected -> accepted."""
+        """v11.0.0 installed, v10.2.0 expected -> accepted."""
         cmd = self._make_cmd()
         info = LemonadeInfo(installed=True, version="11.0.0")
         result = cmd._check_version_compatibility(info)
         self.assertTrue(result)
 
     def test_older_version_meets_minimum_accepted_in_ci(self):
-        """v10.1.1 installed, v10.1.0 expected, min 10.1.0 -> accepted in CI (--yes)."""
+        """v10.2.1 installed, v10.2.0 expected, min 10.2.0 -> accepted in CI (--yes)."""
         cmd = self._make_cmd(profile="minimal")
-        info = LemonadeInfo(installed=True, version="10.1.1")
+        info = LemonadeInfo(installed=True, version="10.2.1")
         result = cmd._check_version_compatibility(info)
         self.assertTrue(result)
 
@@ -493,7 +493,7 @@ class TestVersionCompatibility(unittest.TestCase):
         """Newer version should never trigger _upgrade_lemonade."""
         cmd = self._make_cmd()
         cmd._upgrade_lemonade = MagicMock(return_value=True)
-        info = LemonadeInfo(installed=True, version="10.1.0")
+        info = LemonadeInfo(installed=True, version="10.3.0")
         cmd._check_version_compatibility(info)
         cmd._upgrade_lemonade.assert_not_called()
 
@@ -585,11 +585,11 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
     ):
         """Case 4 (CRITICAL): installed at NEWER version (e.g. 11.0.0) -> no download.
 
-        Scenario: the bundled NSIS installer dropped Lemonade v10.1.0 but the
+        Scenario: the bundled NSIS installer dropped Lemonade v10.2.0 but the
         user has since upgraded to v11.0.0. ``gaia init`` must treat this as
         compatible (newer is fine), NOT downgrade or re-download.
         """
-        # Pick a version definitively newer than LEMONADE_VERSION (10.1.0)
+        # Pick a version definitively newer than LEMONADE_VERSION (10.2.0)
         newer_version = "11.0.0"
         info = LemonadeInfo(
             installed=True,
@@ -613,10 +613,10 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
 
     def test_older_version_meeting_minimum_does_not_redownload_in_ci(self):
         """Case 3 (above minimum, --yes): accepted, no install."""
-        # 10.1.1 is above both target (10.1.0) and profile minimum (10.1.0) — no install needed
+        # 10.2.1 is above both target (10.2.0) and profile minimum (10.2.0) — no install needed
         info = LemonadeInfo(
             installed=True,
-            version="10.1.1",
+            version="10.2.1",
             path="/usr/bin/lemonade-server",
         )
         cmd, mock_installer = self._make_cmd(info, profile="minimal")

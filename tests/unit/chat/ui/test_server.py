@@ -374,7 +374,7 @@ class TestSystemStatus:
         catalog_data = {
             "data": [
                 {
-                    "id": "Qwen3.5-35B-A3B-GGUF",
+                    "id": "Gemma-4-E4B-it-GGUF",
                     "downloaded": True,  # Model IS downloaded, just not loaded yet
                 }
             ]
@@ -621,7 +621,7 @@ class TestSystemStatus:
         data = resp.json()
         assert data["model_loaded"] == "SomeOtherModel-7B-GGUF"
         assert data["expected_model_loaded"] is False
-        assert data["default_model_name"] == "Qwen3.5-35B-A3B-GGUF"
+        assert data["default_model_name"] == "Gemma-4-E4B-it-GGUF"
 
     @patch("httpx.AsyncClient")
     def test_system_status_expected_model_loaded(self, mock_httpx_cls, client):
@@ -636,11 +636,11 @@ class TestSystemStatus:
 
         health_data = {
             "status": "ok",
-            "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+            "model_loaded": "Gemma-4-E4B-it-GGUF",
             "version": "9.3.0",
             "all_models_loaded": [
                 {
-                    "model_name": "Qwen3.5-35B-A3B-GGUF",
+                    "model_name": "Gemma-4-E4B-it-GGUF",
                     "type": "llm",
                     "device": "amd_npu",
                     "recipe_options": {"ctx_size": 32768},

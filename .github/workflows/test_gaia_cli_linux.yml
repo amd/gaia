@@ -109,7 +109,7 @@ jobs:
               exit 1
             fi
 
-            if curl -sf -m 5 http://localhost:8000/api/v1/health >/dev/null 2>&1; then
+            if curl -sf -m 5 http://localhost:13305/api/v1/health >/dev/null 2>&1; then
               echo "✅ Lemonade server is responding! (${elapsed}s)"
               break
             fi
@@ -136,7 +136,7 @@ jobs:
 
           # List available models for debugging
           echo "=== Listing Available Models ==="
-          curl -s http://localhost:8000/api/v1/models | jq '.' || echo "Could not list models"
+          curl -s http://localhost:13305/api/v1/models | jq '.' || echo "Could not list models"
 
           echo "=== Testing Core GAIA CLI Commands with Lemonade ==="
 

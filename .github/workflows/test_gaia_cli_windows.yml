@@ -106,7 +106,7 @@ jobs:
               $waitTime += 2
 
               try {
-                  $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
+                  $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 5
                   Write-Host "Server is ready and responding to health checks"
                   $serverReady = $true
               } catch {
