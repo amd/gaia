@@ -50,7 +50,7 @@ def lemonade_available():
     Check if Lemonade server is available and healthy.
 
     This is a session-scoped fixture that checks once at the start of the
-    test session whether Lemonade server is running on localhost:8000.
+    test session whether Lemonade server is running on localhost:13305.
 
     Returns:
         bool: True if Lemonade server is available and responding to health checks

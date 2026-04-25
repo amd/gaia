@@ -26,7 +26,7 @@ from gaia.llm.lemonade_client import (
 TEST_MODEL = os.environ.get("GAIA_TEST_MODEL", "Llama-3.2-3B-Instruct-Hybrid")
 
 HOST = "localhost"
-PORT = 8000
+PORT = 13305  # Matches DEFAULT_PORT in lemonade_client.py (changed from 8000 in v10.1.0)
 API_BASE = f"http://{HOST}:{PORT}/api/v1"
 
 
@@ -56,7 +56,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         # Test default initialization
         client = LemonadeClient()
         self.assertEqual(client.host, "localhost")
-        self.assertEqual(client.port, 8000)
+        self.assertEqual(client.port, 13305)
         # The client doesn't expose verbose as a property, so check log level instead
         self.assertEqual(client.log.level, logging.WARNING)
 
