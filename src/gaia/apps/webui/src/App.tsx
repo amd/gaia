@@ -54,7 +54,7 @@ function AnimatedPresence({ show, children, duration = 250 }: {
     );
 }
 
-type AppView = 'chat' | 'templates' | 'runner' | 'registry';
+type AppView = 'chat' | 'templates' | 'runner' | 'registry' | 'component-registry';
 
 function App() {
     const {

@@ -1,0 +1,429 @@
+---
+title: "Component Framework"
+description: "Reusable templates and patterns for agent collaboration and pipeline execution"
+icon: "components"
+---
+
+The **Component Framework** provides a structured library of reusable templates that agents actively reference, read, write, and update during pipeline execution. Unlike agent definitions (which define WHO an agent is), the Component Framework defines WHAT agents work with — the living documents, checklists, knowledge bases, and task patterns that form the shared workspace for multi-agent collaboration.
+
+<Info>
+  This guide assumes you have completed the [Quickstart](/quickstart) and have GAIA installed with pipeline orchestration enabled.
+</Info>
+
+---
+
+## Overview
+
+The Component Framework organizes reusable patterns into **9 categories**, each serving a specific purpose in agent workflows:
+
+| Category | Purpose | Example Templates |
+|----------|---------|-------------------|
+| **memory** | Agent state management and context tracking | `working-memory.md`, `short-term-memory.md`, `long-term-memory.md`, `episodic-memory.md` |
+| **knowledge** | Knowledge base templates for domain/procedural information | `domain-knowledge.md`, `procedural-knowledge.md`, `knowledge-graph.md` |
+| **tasks** | Task definition and tracking templates | `task-breakdown.md`, `task-dependency.md`, `task-priority.md`, `task-tracking.md` |
+| **commands** | Command pattern templates for common operations | `shell-commands.md`, `git-commands.md`, `build-commands.md`, `test-commands.md` |
+| **documents** | Document structure templates | `design-doc.md`, `api-spec.md`, `meeting-notes.md`, `status-report.md` |
+| **checklists** | Quality validation checklists | `domain-analysis-checklist.md`, `code-review-checklist.md`, `deployment-checklist.md` |
+| **personas** | Agent persona definitions *(reserved)* | - |
+| **workflows** | Workflow pattern definitions *(reserved)* | - |
+| **templates** | Meta-templates for generating new templates *(reserved)* | - |
+
+### Directory Structure
+
+```
+component-framework/
+├── memory/           # Agent state management templates
+├── knowledge/        # Knowledge base templates
+├── tasks/            # Task definition templates
+├── commands/         # Command pattern templates
+├── documents/        # Document templates
+├── checklists/       # Quality validation checklists
+├── personas/         # Agent persona definitions (reserved)
+├── workflows/        # Workflow patterns (reserved)
+└── templates/        # Meta-templates (reserved)
+```
+
+---
+
+## REST API Endpoints
+
+The Component Framework is accessible via REST API endpoints for programmatic management.
+
+### List Components
+
+List all available components across all categories:
+
+```http
+GET /api/v1/pipeline/components/list
+```
+
+**Response:**
+
+```json
+{
+  "components": [
+    {
+      "category": "memory",
+      "name": "working-memory",
+      "title": "working-memory",
+      "description": "Working memory template for active problem-solving",
+      "path": "memory/working-memory.md",
+      "version": "1.0.0",
+      "template_id": "working-memory"
+    },
+    {
+      "category": "memory",
+      "name": "short-term-memory",
+      "title": "short-term-memory",
+      "description": "Short-term memory for current turn context",
+      "path": "memory/short-term-memory.md",
+      "version": "1.0.0",
+      "template_id": "short-term-memory"
+    }
+  ],
+  "total": 45
+}
+```
+
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `category` | string | Component category (memory, knowledge, tasks, commands, documents, checklists, personas, workflows, templates) |
+| `name` | string | Component filename without `.md` extension |
+| `title` | string | Display title from frontmatter |
+| `description` | string | Description from frontmatter |
+| `path` | string | Relative path within component-framework directory |
+| `version` | string | Version from frontmatter |
+| `template_id` | string | Template ID from frontmatter |
+| `total` | integer | Total number of components |
+
+---
+
+### View Component
+
+View the raw markdown content of a specific component:
+
+```http
+GET /api/v1/pipeline/components/{category}/{component_name}/raw
+```
+
+**Example:**
+
+```bash
+curl http://localhost:4200/api/v1/pipeline/components/memory/working-memory/raw
+```
+
+**Response:**
+
+```json
+{
+  "content": "---\ntemplate_id: working-memory\ntemplate_type: memory\nversion: 1.0.0\n...\n---\n# Working Memory\n\n## Purpose\n\nThis template serves as an active problem-solving scratchpad...\n",
+  "path": "memory/working-memory.md",
+  "frontmatter": {
+    "template_id": "working-memory",
+    "template_type": "memory",
+    "version": "1.0.0",
+    "created": "2026-04-07",
+    "updated": "2026-04-07",
+    "maintainer": "pipeline-engine",
+    "description": "Working memory template for active problem-solving scratchpad",
+    "schema_version": "1.0"
+  }
+}
+```
+
+**Path Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `category` | string | Yes | Category name (memory, knowledge, tasks, commands, documents, checklists, personas, workflows, templates) |
+| `component_name` | string | Yes | Component name without `.md` extension, matching `^[a-zA-Z0-9_-]+$` |
+
+**Error Responses:**
+
+| Status | Condition |
+|--------|-----------|
+| 400 | Invalid category (not in whitelist) |
+| 400 | Invalid component_name format |
+| 404 | Component file not found |
+
+---
+
+### Update Component
+
+Update an existing component's content:
+
+```http
+PUT /api/v1/pipeline/components/{category}/{component_name}/raw
+```
+
+**Request Body:**
+
+```json
+{
+  "content": "---\ntemplate_id: working-memory\ntemplate_type: memory\nversion: 1.0.0\ndescription: Working memory template for active problem-solving\n---\n# Working Memory\n\n## Purpose\n\nUpdated template content here...\n"
+}
+```
+
+**Example:**
+
+```bash
+curl -X PUT http://localhost:4200/api/v1/pipeline/components/memory/working-memory/raw \
+  -H "Content-Type: application/json" \
+  -d '{"content": "---\ntemplate_id: working-memory\ntemplate_type: memory\nversion: 1.0.0\ndescription: Updated description\n---\n# Working Memory\n\nUpdated content..."}'
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "path": "memory/working-memory.md",
+  "full_path": "C:\\Users\\antmi\\gaia\\component-framework\\memory\\working-memory.md"
+}
+```
+
+<Warning>
+  **Security:** All component updates are validated for path traversal attacks (SEC-003). The category must be in the whitelist of 9 valid categories, and component names must match `^[a-zA-Z0-9_-]+$` (alphanumeric, underscores, and hyphens only).
+</Warning>
+
+---
+
+## Component Framework in Agent UI
+
+The Agent UI provides a visual interface for browsing and editing Component Framework templates.
+
+### Viewing Components
+
+1. Open the Agent UI at [http://localhost:4200](http://localhost:4200)
+2. Navigate to the **Components** tab in the sidebar
+3. Browse components by category using the left navigation panel
+4. Click on any component to view its full content with syntax-highlighted markdown
+
+### Editing Components
+
+1. Select a component from the list
+2. Click the **Edit** button (pencil icon) in the component header
+3. Modify the content in the markdown editor
+   - YAML frontmatter appears at the top between `---` delimiters
+   - Markdown body follows the frontmatter
+4. Click **Save** to persist changes
+
+<Note>
+  **Path Traversal Protection:** The Component UI enforces strict path validation. You cannot navigate outside the component-framework directory or use invalid category names.
+</Note>
+
+### Component Categories in UI
+
+The component registry displays all 9 categories with component counts:
+
+| Category | Description |
+|----------|-------------|
+| Memory | State management and context templates |
+| Knowledge | Knowledge base and reference templates |
+| Tasks | Task decomposition and tracking |
+| Commands | Shell, git, build, and test command patterns |
+| Documents | Design docs, API specs, meeting notes |
+| Checklists | Quality validation checklists |
+| Personas | Agent persona definitions (reserved) |
+| Workflows | Workflow patterns (reserved) |
+| Templates | Meta-templates (reserved) |
+
+---
+
+## ComponentLoader Class
+
+The `ComponentLoader` class provides programmatic access to Component Framework templates.
+
+### Basic Usage
+
+```python
+from gaia.utils.component_loader import ComponentLoader
+
+# Initialize the loader
+loader = ComponentLoader()
+
+# Load a component
+component = loader.load_component("memory/working-memory.md")
+print(component["frontmatter"]["template_id"])  # "working-memory"
+print(component["content"])  # Markdown body
+```
+
+### Key Methods
+
+#### load_component(path)
+
+Load a component template and return its frontmatter and content:
+
+```python
+component = loader.load_component("memory/working-memory.md")
+# Returns: {"path": str, "frontmatter": dict, "content": str}
+```
+
+#### render_component(path, variables)
+
+Render a component with variable substitution:
+
+```python
+rendered = loader.render_component(
+    "memory/working-memory.md",
+    {"{{AGENT_ID}}": "domain-analyzer", "{{TIMESTAMP}}": "2026-04-07T10:00:00Z"}
+)
+```
+
+#### list_components(category=None)
+
+List available components, optionally filtered by category:
+
+```python
+all_components = loader.list_components()
+memory_components = loader.list_components("memory")
+```
+
+#### save_component(path, content, frontmatter=None)
+
+Save a component with optional frontmatter:
+
+```python
+saved_path = loader.save_component(
+    "memory/custom-memory.md",
+    content="# Custom Memory\n\nContent here...",
+    frontmatter={"template_id": "custom-memory", "version": "1.0.0"}
+)
+```
+
+### SEC-003 Security: Path Traversal Protection
+
+The `ComponentLoader` implements robust path traversal protection (SEC-003):
+
+1. **Framework Directory Validation:** All paths must resolve within the `component-framework/` directory
+2. **Category Whitelist:** Only valid categories are accepted (memory, knowledge, tasks, commands, documents, checklists, personas, workflows, templates)
+3. **Component Name Pattern:** Component names must match `^[a-zA-Z0-9_-]+$`
+4. **Path Resolution:** Uses `resolve()` and `relative_to()` to detect and block traversal attempts
+
+```python
+# This will raise ComponentLoaderError with "Path traversal detected"
+loader.save_component("../../../etc/passwd", "malicious content")
+
+# This will raise ComponentLoaderError with "Invalid category"
+loader.load_component("invalid_category/file.md")
+```
+
+---
+
+## Template Format
+
+All Component Framework templates use **Markdown with YAML frontmatter**:
+
+```markdown
+---
+template_id: working-memory
+template_type: memory
+version: 1.0.0
+created: 2026-04-07
+updated: 2026-04-07
+maintainer: pipeline-engine
+description: Working memory template for active problem-solving scratchpad
+schema_version: "1.0"
+---
+
+# Template Title
+
+## Purpose
+
+[Clear statement of what this template is for]
+
+## Structure
+
+[Template sections with placeholders using {{VARIABLE_NAME}} syntax]
+
+## Usage Protocol
+
+[How agents should read/write/update this template]
+
+## Examples
+
+[Concrete examples of populated templates]
+
+## Related Components
+
+[Links to related templates in the framework]
+```
+
+### Required Frontmatter Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `template_id` | string | Unique identifier for the template |
+| `template_type` | string | Must match the category (memory, knowledge, tasks, etc.) |
+| `version` | string | Semantic version (e.g., "1.0.0") |
+| `description` | string | One-line purpose statement |
+
+### Optional Frontmatter Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `created` | date | ISO-8601 creation date |
+| `updated` | date | ISO-8601 last update date |
+| `maintainer` | string | Agent ID or team responsible |
+| `schema_version` | string | Template schema version |
+
+---
+
+## Agent Reference Patterns
+
+Agents reference Component Framework templates using the following patterns:
+
+### Read Pattern (R)
+
+Agent loads a template to understand structure or retrieve information:
+
+```markdown
+TOOL-CALL:
+  action: read
+  target: component-framework/memory/working-memory.md
+  purpose: Load current task context
+```
+
+### Write Pattern (W)
+
+Agent creates or updates a template instance:
+
+```markdown
+TOOL-CALL:
+  action: write
+  target: component-framework/knowledge/domain-knowledge.md
+  content: |
+    ---
+    template_id: domain-knowledge-instance
+    template_type: knowledge
+    version: 1.0.0
+    ---
+    # Domain Knowledge
+
+    ## Domain: Software Engineering
+    ...
+```
+
+### Render Pattern (R+)
+
+Agent loads and renders a template with runtime variables:
+
+```markdown
+TOOL-CALL:
+  action: render
+  target: component-framework/tasks/task-tracking.md
+  variables:
+    "{{TASK_ID}}": "TASK-001"
+    "{{STATUS}}": "In Progress"
+    "{{ASSIGNEE}}": "workflow-modeler"
+```
+
+---
+
+## Related Documentation
+
+- [→ Pipeline Orchestration Guide](/guides/pipeline) - Full pipeline execution with component integration
+- [→ Agent Ecosystem Design Spec](/spec/agent-ecosystem-design-spec) - Component Framework in agent architecture
+- [→ Component Framework Design Spec](/spec/component-framework-design-spec) - Detailed technical specification
