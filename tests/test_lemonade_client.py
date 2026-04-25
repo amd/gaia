@@ -26,7 +26,9 @@ from gaia.llm.lemonade_client import (
 TEST_MODEL = os.environ.get("GAIA_TEST_MODEL", "Llama-3.2-3B-Instruct-Hybrid")
 
 HOST = "localhost"
-PORT = 13305  # Matches DEFAULT_PORT in lemonade_client.py (changed from 8000 in v10.1.0)
+PORT = (
+    13305  # Matches DEFAULT_PORT in lemonade_client.py (changed from 8000 in v10.1.0)
+)
 API_BASE = f"http://{HOST}:{PORT}/api/v1"
 
 
