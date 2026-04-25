@@ -1076,6 +1076,32 @@
     font-family: monospace;
 }
 
+.pc-supervisor-condition-input {
+    width: 100%;
+    padding: 4px 6px;
+    font-size: 11px;
+    color: #e5e7eb;
+    background: #181825;
+    border: 1px solid #444455;
+    border-radius: 4px;
+    font-family: monospace;
+    outline: none;
+    box-sizing: border-box;
+}
+
+.pc-supervisor-condition-input:focus {
+    border-color: #8b5cf6;
+}
+
+.pc-supervisor-decision-tag {
+    cursor: pointer;
+    transition: background-color 0.15s;
+}
+
+.pc-supervisor-decision-tag:hover {
+    filter: brightness(1.2);
+}
+
 .pc-supervisor-monitoring {
     font-size: 10px;
     color: #9ca3af;
@@ -1699,13 +1725,5 @@
     padding: 8px 0;
 }
 
-/* Spin animation for loading icons */
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-.spin {
-    animation: spin 1s linear infinite;
-}
+/* ── Execution History (end of file) ──────────────────────────────────── */
 

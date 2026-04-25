@@ -282,6 +282,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
             show_stats=True,  # Always collect stats for token tracking
             max_history_length=20,  # Keep more history for agent conversations
             max_tokens=4096,  # Increased for complex code generation
+            timeout=1200,  # 20 min timeout for long-running batch processing
         )
         self.chat = AgentSDK(chat_config)
         self.model_id = model_id
@@ -1703,6 +1704,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
         max_steps: int = None,
         trace: bool = False,
         filename: str = None,
+        timeout: int = None,
     ) -> Dict[str, Any]:
         """
         Process a user query and execute the necessary tools.
@@ -1713,6 +1715,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
             max_steps: Maximum number of steps to take in the conversation (overrides class default if provided)
             trace: If True, write detailed JSON trace to file
             filename: Optional filename for trace output, if None a timestamped name will be generated
+            timeout: Request timeout in seconds (overrides config default if provided)
 
         Returns:
             Dict containing the final result and operation details
@@ -2206,8 +2209,12 @@ You must respond ONLY in valid JSON. No text before { or after }.
 
                 # Get complete response from AgentSDK
                 try:
+                    send_kwargs = {"system_prompt": self.system_prompt}
+                    if timeout is not None:
+                        send_kwargs["timeout"] = timeout
+
                     chat_response = self.chat.send_messages(
-                        messages=messages, system_prompt=self.system_prompt
+                        messages=messages, **send_kwargs
                     )
                     response = chat_response.text
                     response_stats = chat_response.stats
@@ -2358,8 +2365,12 @@ You must respond ONLY in valid JSON. No text before { or after }.
                     messages.append({"role": "user", "content": plan_prompt})
 
                     # Use AgentSDK for non-streaming plan response
+                    send_kwargs = {"system_prompt": self.system_prompt}
+                    if timeout is not None:
+                        send_kwargs["timeout"] = timeout
+
                     chat_response = self.chat.send_messages(
-                        messages=messages, system_prompt=self.system_prompt
+                        messages=messages, **send_kwargs
                     )
                     plan_response = chat_response.text
                     self.console.stop_progress()

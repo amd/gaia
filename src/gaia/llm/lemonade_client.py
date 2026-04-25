@@ -93,7 +93,7 @@ DEFAULT_MODEL_NAME = "Qwen3-0.6B-GGUF"
 # =========================================================================
 # Default timeout in seconds for regular API requests
 # Increased to accommodate long-running coding and evaluation tasks
-DEFAULT_REQUEST_TIMEOUT = 900
+DEFAULT_REQUEST_TIMEOUT = 1200
 # Default timeout in seconds for model loading operations
 # Increased for large model downloads and loading (10x increase for streaming stability)
 DEFAULT_MODEL_LOAD_TIMEOUT = 12000
@@ -1264,6 +1264,7 @@ class LemonadeClient:
         # Helper function for the actual API call
         def _make_request():
             self.log.debug(f"Sending chat completion request to model: {model}")
+            self.log.debug(f"Request timeout: {timeout} seconds")
             response = requests.post(
                 url,
                 json=data,

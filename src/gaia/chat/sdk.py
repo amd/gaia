@@ -39,6 +39,7 @@ class AgentConfig:
         None  # Lemonade server base URL (None = use LEMONADE_BASE_URL env var)
     )
     assistant_name: str = "gaia"  # Name to use for the assistant in conversations
+    timeout: int = 900  # Request timeout in seconds (default: 15 min for long-running tasks)
 
 
 @dataclass
@@ -229,6 +230,8 @@ class AgentSDK:
                 kwargs["temperature"] = self.config.temperature
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
+            if "timeout" not in kwargs:
+                kwargs["timeout"] = self.config.timeout
             response = self.llm_client.chat(
                 messages=structured,
                 model=self.config.model,

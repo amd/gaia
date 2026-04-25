@@ -29,10 +29,14 @@ import {
   List,
   History,
   LayoutGrid,
+  Shield,
+  GitBranch,
+  ListTree,
 } from 'lucide-react';
 import { usePipelineStore } from '../../stores/pipelineStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useTemplateStore } from '../../stores/templateStore';
+import { usePipelineCanvasStore, PIPELINE_STAGES } from '../../stores/pipelineCanvasStore';
 import { PipelineCanvas } from './PipelineCanvas';
 import { ExecutionHistory } from './ExecutionHistory';
 import { TemplateMarketplace } from './TemplateMarketplace';
@@ -123,6 +127,19 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
     templates: s.templates,
     fetchTemplates: s.fetchTemplates,
   }));
+
+  // Canvas workspace state (for workspace visibility panel)
+  const canvasState = usePipelineCanvasStore((s) => ({
+    nodes: s.nodes,
+    qualityThreshold: s.qualityThreshold,
+    maxIterations: s.maxIterations,
+  }));
+
+  const canvasAgentCount = canvasState.nodes.filter((n) => n.type === 'agent').length;
+  const canvasSupervisorCount = canvasState.nodes.filter((n) => n.type === 'supervisor').length;
+  const canvasGateCount = canvasState.nodes.filter((n) => n.type === 'gate').length;
+  const canvasLoopCount = canvasState.nodes.filter((n) => n.type === 'loop').length;
+  const hasCanvasContent = canvasAgentCount > 0 || canvasSupervisorCount > 0 || canvasGateCount > 0;
 
   const [taskDescription, setTaskDescription] = useState('');
   const [autoSpawn, setAutoSpawn] = useState(true);
@@ -494,6 +511,94 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
           </div>
         )}
       </div>
+
+      {/* Workspace Visibility Panel */}
+      {hasCanvasContent && (
+        <div className="pr-workspace">
+          <div className="pr-workspace-header">
+            <ListTree size={16} />
+            <h3>Canvas Workspace</h3>
+            <span className="pr-workspace-count">
+              {canvasAgentCount} agent{canvasAgentCount !== 1 ? 's' : ''}
+              {canvasSupervisorCount > 0 && ` · ${canvasSupervisorCount} supervisor${canvasSupervisorCount !== 1 ? 's' : ''}`}
+              {canvasGateCount > 0 && ` · ${canvasGateCount} gate${canvasGateCount !== 1 ? 's' : ''}`}
+              {canvasLoopCount > 0 && ` · ${canvasLoopCount} loop${canvasLoopCount !== 1 ? 's' : ''}`}
+            </span>
+          </div>
+          {/* Stage-by-stage breakdown */}
+          <div className="pr-workspace-stages">
+            {PIPELINE_STAGES.map((stage) => {
+              const stageAgents = canvasState.nodes.filter(
+                (n) => n.type === 'agent' && n.assignedStage === stage.key
+              );
+              const stageSupervisors = canvasState.nodes.filter(
+                (n) => n.type === 'supervisor' && n.assignedStage === stage.key
+              );
+              const stageGates = canvasState.nodes.filter(
+                (n) => n.type === 'gate' && n.assignedStage === stage.key
+              );
+              const stageLoops = canvasState.nodes.filter(
+                (n) => n.type === 'loop' && n.assignedStage === stage.key
+              );
+              return (
+                <div key={stage.key} className="pr-workspace-stage">
+                  <div className="pr-workspace-stage-header">
+                    <span className="pr-workspace-stage-num">{stage.order}</span>
+                    <span className="pr-workspace-stage-label">{stage.label}</span>
+                  </div>
+                  {stageAgents.length > 0 && (
+                    <div className="pr-workspace-stage-agents">
+                      {stageAgents.map((a: any) => (
+                        <span key={a.id} className="pr-workspace-agent-chip">
+                          {a.label || a.agentId}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {stageSupervisors.length > 0 && (
+                    <div className="pr-workspace-stage-supervisors">
+                      {stageSupervisors.map((s: any) => (
+                        <span key={s.id} className="pr-workspace-supervisor-chip">
+                          <Shield size={10} />
+                          {s.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {stageGates.length > 0 && (
+                    <div className="pr-workspace-stage-gates">
+                      {stageGates.map((g: any) => (
+                        <span key={g.id} className="pr-workspace-gate-chip">
+                          <GitBranch size={10} />
+                          {g.label} → {g.gateCondition}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {stageLoops.length > 0 && (
+                    <div className="pr-workspace-stage-loops">
+                      {stageLoops.map((l: any) => (
+                        <span key={l.id} className="pr-workspace-loop-chip">
+                          <RotateCcw size={10} />
+                          {l.label} → {l.loopConfig?.target_stage || 'unknown'}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {stageAgents.length === 0 && stageSupervisors.length === 0 && stageGates.length === 0 && stageLoops.length === 0 && (
+                    <span className="pr-workspace-stage-empty">Empty stage</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {/* Canvas config summary */}
+          <div className="pr-workspace-config">
+            <span>Quality: {(canvasState.qualityThreshold * 100).toFixed(0)}%</span>
+            <span>Max iterations: {canvasState.maxIterations}</span>
+          </div>
+        </div>
+      )}
 
       {/* Stage Progress Indicator */}
       {activeExecution && (

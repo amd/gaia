@@ -18,6 +18,7 @@ import type {
     PipelineTemplate,
     LoopNodeConfig,
     SupervisorNodeConfig,
+    GateCondition,
 } from '../types';
 import * as canvasApi from '../services/pipelineCanvas';
 import { usePipelineStore } from './pipelineStore';
@@ -94,6 +95,8 @@ interface CanvasStoreState {
     updateLoopConfig: (loopNodeId: string, partial: Partial<LoopNodeConfig>) => void;
     /** Update a supervisor node's configuration */
     updateSupervisorConfig: (supervisorNodeId: string, partial: Partial<SupervisorNodeConfig>) => void;
+    /** Update a decision gate's condition */
+    updateGateCondition: (gateNodeId: string, condition: string) => void;
     /** Move a free-floating node to a new position */
     moveNodeToPosition: (nodeId: string, position: { x: number; y: number }) => void;
     removeNode: (nodeId: string) => void;
@@ -267,8 +270,9 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
         const stageIndex = PIPELINE_STAGES.indexOf(afterStage);
         const position = { x: 280, y: 80 + stageIndex * 160 + 80 };
 
+        const supervisorId = genId(`supervisor-${agent.agentId}`);
         const newNode: CanvasNode = {
-            id: genId(`supervisor-${agent.agentId}`),
+            id: supervisorId,
             type: 'supervisor',
             agentId: agent.agentId,
             label: `${agent.name} (Supervisor)`,
@@ -279,6 +283,14 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
             assignedStage: afterStageKey,
             decisionType: 'CONTINUE',
             decisionCondition: 'quality_below_threshold',
+            supervisorConfig: {
+                supervisor_id: supervisorId,
+                label: `${agent.name} (Supervisor)`,
+                agent_id: agent.agentId,
+                decision_condition: 'quality_below_threshold',
+                decision_type: 'CONTINUE',
+                monitoring_targets: [afterStageKey],
+            },
             agentData: {
                 id: agent.agentId,
                 name: agent.name,
@@ -323,7 +335,7 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
             status: 'idle',
             position,
             assignedStage: afterStageKey,
-            gateCondition: condition as any,
+            gateCondition: condition as GateCondition,
             branchTargets: {
                 pass: nextStage?.key || afterStageKey,
                 fail: 'domain_analysis',
@@ -359,7 +371,7 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
             position,
             assignedStage: sourceStage,
             decisionCondition: targetStage,
-            gateCondition: condition as any,
+            gateCondition: condition as GateCondition,
         };
 
         const newNodes = [...get().nodes, newNode];
@@ -471,12 +483,34 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
     },
 
     updateSupervisorConfig: (supervisorNodeId, partial) => {
-        const nodes = get().nodes.map((n) => {
-            if (n.id !== supervisorNodeId || !n.supervisorConfig) return n;
-            return { ...n, supervisorConfig: { ...n.supervisorConfig, ...partial } };
+        const nodes: CanvasNode[] = get().nodes.map((n) => {
+            if (n.id !== supervisorNodeId || n.type !== 'supervisor') return n;
+            // Handle both supervisorConfig and flat decision fields
+            if (n.supervisorConfig) {
+                return { ...n, supervisorConfig: { ...n.supervisorConfig, ...partial } };
+            }
+            return {
+                ...n,
+                ...(partial.decision_type !== undefined ? { decisionType: partial.decision_type } : {}),
+                ...(partial.decision_condition !== undefined ? { decisionCondition: partial.decision_condition } : {}),
+            } as CanvasNode;
         });
         set({ nodes });
         log.ui.info(`[canvas] Updated supervisor config for ${supervisorNodeId}`);
+    },
+
+    updateGateCondition: (gateNodeId, condition) => {
+        const nodes = get().nodes.map((n) => {
+            if (n.id !== gateNodeId || n.type !== 'gate') return n;
+            const gateCondition = condition as typeof n.gateCondition;
+            return {
+                ...n,
+                gateCondition,
+                label: `Gate: ${condition}`,
+            };
+        });
+        set({ nodes });
+        log.ui.info(`[canvas] Updated gate condition for ${gateNodeId} -> ${condition}`);
     },
 
     moveNodeToPosition: (nodeId, position) => {
@@ -813,6 +847,32 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
                 }
             }
 
+            // Collect free-floating loop configs
+            const loopNodes = get().nodes.filter((n) => n.type === 'loop' && n.loopConfig);
+            const canvasLoops = loopNodes.map((n) => ({
+                loop_id: n.loopConfig!.loop_id,
+                label: n.loopConfig!.label,
+                agent_ids: n.loopConfig!.agent_ids,
+                max_iterations: n.loopConfig!.max_iterations,
+                quality_threshold: n.loopConfig!.quality_threshold,
+                source_stage: n.loopConfig!.source_stage,
+                target_stage: n.loopConfig!.target_stage,
+                condition: n.loopConfig!.condition || 'quality_below_threshold',
+                position: n.position,
+            }));
+
+            // Collect free-floating supervisor configs
+            const supervisorNodes = get().nodes.filter((n) => n.type === 'supervisor' && n.supervisorConfig);
+            const canvasSupervisors = supervisorNodes.map((n) => ({
+                supervisor_id: n.supervisorConfig!.supervisor_id,
+                label: n.supervisorConfig!.label,
+                agent_id: n.supervisorConfig!.agent_id,
+                position: n.position,
+                decision_condition: n.supervisorConfig!.decision_condition,
+                decision_type: n.supervisorConfig!.decision_type,
+                monitoring_targets: n.supervisorConfig!.monitoring_targets || [],
+            }));
+
             const canvasExport = {
                 name,
                 description: `Pipeline canvas: ${agentNodes.length} agents across ${Object.keys(agentCategories).length} categories`,
@@ -820,6 +880,8 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
                 max_iterations: get().maxIterations,
                 agent_categories: agentCategories,
                 routing_rules: [],
+                canvas_loops: canvasLoops,
+                canvas_supervisors: canvasSupervisors,
             };
 
             await canvasApi.updateTemplateFromCanvas(name, canvasExport);

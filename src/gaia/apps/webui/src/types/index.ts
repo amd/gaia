@@ -358,6 +358,28 @@ export interface PipelineTemplate {
     agent_categories: Record<string, string[]>;
     routing_rules: RoutingRule[];
     quality_weights: Record<string, number>;
+    /** Canvas-defined loop configurations. */
+    canvas_loops?: Array<{
+        loop_id: string;
+        label: string;
+        agent_ids: string[];
+        max_iterations: number;
+        quality_threshold?: number;
+        source_stage?: string;
+        target_stage?: string;
+        condition: string;
+        position?: { x: number; y: number };
+    }>;
+    /** Canvas-defined supervisor configurations. */
+    canvas_supervisors?: Array<{
+        supervisor_id: string;
+        label: string;
+        agent_id?: string;
+        position?: { x: number; y: number };
+        decision_condition: string;
+        decision_type: string;
+        monitoring_targets?: string[];
+    }>;
 }
 
 export interface TemplateListResponse {
@@ -379,6 +401,28 @@ export interface TemplateCreateRequest {
     agent_categories?: Record<string, string[]>;
     routing_rules?: RoutingRule[];
     quality_weights?: Record<string, number>;
+    /** Canvas-defined loop configurations (optional, from visual canvas). */
+    canvas_loops?: Array<{
+        loop_id: string;
+        label: string;
+        agent_ids: string[];
+        max_iterations: number;
+        quality_threshold?: number;
+        source_stage?: string;
+        target_stage?: string;
+        condition: string;
+        position?: { x: number; y: number };
+    }>;
+    /** Canvas-defined supervisor configurations (optional, from visual canvas). */
+    canvas_supervisors?: Array<{
+        supervisor_id: string;
+        label: string;
+        agent_id?: string;
+        position?: { x: number; y: number };
+        decision_condition: string;
+        decision_type: string;
+        monitoring_targets?: string[];
+    }>;
 }
 
 export interface TemplateUpdateRequest {
@@ -388,6 +432,28 @@ export interface TemplateUpdateRequest {
     agent_categories?: Record<string, string[]>;
     routing_rules?: RoutingRule[];
     quality_weights?: Record<string, number>;
+    /** Canvas-defined loop configurations (optional, from visual canvas). */
+    canvas_loops?: Array<{
+        loop_id: string;
+        label: string;
+        agent_ids: string[];
+        max_iterations: number;
+        quality_threshold?: number;
+        source_stage?: string;
+        target_stage?: string;
+        condition: string;
+        position?: { x: number; y: number };
+    }>;
+    /** Canvas-defined supervisor configurations (optional, from visual canvas). */
+    canvas_supervisors?: Array<{
+        supervisor_id: string;
+        label: string;
+        agent_id?: string;
+        position?: { x: number; y: number };
+        decision_condition: string;
+        decision_type: string;
+        monitoring_targets?: string[];
+    }>;
 }
 
 // ── Agent Registry Types ───────────────────────────────────────────────

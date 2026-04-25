@@ -754,3 +754,148 @@
     padding-top: 20px;
     border-top: 2px solid var(--border, #e5e7eb);
 }
+
+/* ── Workspace Visibility Panel ─────────────────────────────────────── */
+
+.pr-workspace {
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+}
+
+.pr-workspace-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.pr-workspace-header h3 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary, #111827);
+}
+
+.pr-workspace-count {
+    font-size: 0.75rem;
+    color: var(--text-secondary, #6b7280);
+    margin-left: auto;
+}
+
+.pr-workspace-stages {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.pr-workspace-stage {
+    background: var(--bg-input, #f9fafb);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 6px;
+    padding: 8px 12px;
+}
+
+.pr-workspace-stage-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.pr-workspace-stage-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--accent, #3b82f6);
+    color: #fff;
+    font-size: 0.6875rem;
+    font-weight: 700;
+}
+
+.pr-workspace-stage-label {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-primary, #374151);
+}
+
+.pr-workspace-stage-agents,
+.pr-workspace-stage-supervisors,
+.pr-workspace-stage-gates,
+.pr-workspace-stage-loops {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 4px;
+}
+
+.pr-workspace-agent-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    background: #eef2ff;
+    color: #4f46e5;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    border: 1px solid #c7d2fe;
+}
+
+.pr-workspace-supervisor-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    background: #fef3c7;
+    color: #d97706;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    border: 1px solid #fde68a;
+}
+
+.pr-workspace-gate-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    background: #ecfdf5;
+    color: #059669;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    border: 1px solid #a7f3d0;
+}
+
+.pr-workspace-loop-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    background: #fef2f2;
+    color: #dc2626;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    border: 1px solid #fecaca;
+}
+
+.pr-workspace-stage-empty {
+    font-size: 0.75rem;
+    color: var(--text-secondary, #9ca3af);
+    font-style: italic;
+}
+
+.pr-workspace-config {
+    display: flex;
+    gap: 16px;
+    font-size: 0.75rem;
+    color: var(--text-secondary, #6b7280);
+    padding-top: 8px;
+    border-top: 1px solid var(--border, #e5e7eb);
+}

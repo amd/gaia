@@ -31,10 +31,11 @@ interface DecisionGateProps {
 }
 
 function DecisionGateInner({ node }: DecisionGateProps) {
-    const { removeNode, setSelectedNode, selectedNodeId } = usePipelineCanvasStore((s) => ({
+    const { removeNode, setSelectedNode, selectedNodeId, updateGateCondition } = usePipelineCanvasStore((s) => ({
         removeNode: s.removeNode,
         setSelectedNode: s.setSelectedNode,
         selectedNodeId: s.selectedNodeId,
+        updateGateCondition: s.updateGateCondition,
     }));
 
     const [expanded, setExpanded] = useState(false);
@@ -47,6 +48,10 @@ function DecisionGateInner({ node }: DecisionGateProps) {
         e.dataTransfer.setData('application/x-canvas-node', node.id);
         e.dataTransfer.effectAllowed = 'move';
         e.stopPropagation();
+    };
+
+    const handleConditionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        updateGateCondition(node.id, e.target.value);
     };
 
     return (
@@ -102,10 +107,12 @@ function DecisionGateInner({ node }: DecisionGateProps) {
                         <label>Condition Type</label>
                         <select
                             className="pc-gate-select"
+                            value={condition}
+                            onChange={handleConditionChange}
                             onClick={(e) => e.stopPropagation()}
                         >
                             {(Object.keys(CONDITION_LABELS) as GateCondition[]).map((cond) => (
-                                <option key={cond} value={cond} selected={cond === condition}>
+                                <option key={cond} value={cond}>
                                     {CONDITION_LABELS[cond]}
                                 </option>
                             ))}

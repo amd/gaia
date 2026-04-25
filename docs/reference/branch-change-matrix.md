@@ -23,16 +23,16 @@ The matrix is organized by system category rather than by commit order. Each ent
 
 | Metric | Value |
 |---|---|
-| Files changed | 984 + Session-3 files |
-| Lines inserted | 306,247 + Session-3 |
+| Files changed | 984 + Session-3 + Session-4 files |
+| Lines inserted | 306,247 + Session-3 + Session-4 |
 | Lines deleted | 13,447 |
-| Net lines added | 292,800 + Session-3 |
-| Branch-specific commits | 78 committed + 11 files modified / 1 file added (Session-2) + 2 files modified (Session-3) |
+| Net lines added | 292,800 + Session-3 + Session-4 |
+| Branch-specific commits | 78 committed + 11 files modified / 1 file added (Session-2) + 2 files modified (Session-3) + 2 files modified (Session-4) |
 | Oldest commit date | 2026-03-16 |
-| Most recent commit date | 2026-04-11 (Session-3: resilience wiring + capability migration) |
-| Delivery phases represented | P1, P2, P3-S1, P3-S2, P3-S3, P3-S4, P4-W1, P4-W2, P4-W3, BAIBEL, P5, P6, Session, Session-2, Session-3 |
+| Most recent commit date | 2026-04-12 (Session-4: recursive pipeline capabilities + 49 new tests) |
+| Delivery phases represented | P1, P2, P3-S1, P3-S2, P3-S3, P3-S4, P4-W1, P4-W2, P4-W3, BAIBEL, P5, P6, Session, Session-2, Session-3, Session-4 |
 
-Note: The planning strategist summary cited 30 branch-specific commits. A full `git log main..HEAD --no-merges` enumeration on 2026-04-07 produced 58 commits; updated enumeration on 2026-04-08 after Phase 5 pull produces 72 commits; updated enumeration on 2026-04-08 after Phase 6 pull (commit `41ee396`) produces 73 commits; updated enumeration on 2026-04-09 after Phase 6 docs pull (commit `e28a922`) produces 74 commits; updated enumeration on 2026-04-09 after matrix dedup commit (`52df806`) and B1-A/B1-B dispatch bug fix commit (`242e380`) produces 78 commits. Session-2 (2026-04-10) introduced 11 modified files and 1 new integration test file. Session-3 (2026-04-11) introduced 2 modified files (`src/gaia/pipeline/routing_engine.py`, `util/migrate-capabilities.py`). The 78-commit figure is used throughout this document as the accurate committed-count. The original discrepancy reflected the strategist counting only pipeline-scoped commits and excluding Agent UI, CI/CD, and pre-existing main-branch backports.
+Note: The planning strategist summary cited 30 branch-specific commits. A full `git log main..HEAD --no-merges` enumeration on 2026-04-07 produced 58 commits; updated enumeration on 2026-04-08 after Phase 5 pull produces 72 commits; updated enumeration on 2026-04-08 after Phase 6 pull (commit `41ee396`) produces 73 commits; updated enumeration on 2026-04-09 after Phase 6 docs pull (commit `e28a922`) produces 74 commits; updated enumeration on 2026-04-09 after matrix dedup commit (`52df806`) and B1-A/B1-B dispatch bug fix commit (`242e380`) produces 78 commits. Session-2 (2026-04-10) introduced 11 modified files and 1 new integration test file. Session-3 (2026-04-11) introduced 2 modified files (`src/gaia/pipeline/routing_engine.py`, `util/migrate-capabilities.py`). Session-4 (2026-04-12) introduced documentation updates for recursive pipeline capabilities and 2 new test files (49 tests total). The 78-commit figure is used throughout this document as the accurate committed-count. The original discrepancy reflected the strategist counting only pipeline-scoped commits and excluding Agent UI, CI/CD, and pre-existing main-branch backports.
 
 ---
 
@@ -171,7 +171,15 @@ A seventh concurrent program — Phase 5: Autonomous Agent Ecosystem Creation �
 
 The Pipeline Orchestration Engine (`src/gaia/pipeline/`) is the central deliverable of this branch. It implements a quality-gated recursive iteration pattern as a first-class GAIA subsystem.
 
-A user submits a goal to the engine. The engine decomposes that goal into four ordered phases — PLANNING, EXECUTION, REVIEW, and FINALIZATION — and assigns each phase to a registered agent. After each complete pass, the `DecisionEngine` evaluates the output against a quality score produced by the `QualityScorer`. If the score meets the configured threshold, the pipeline transitions to `COMPLETED`. If the score is below threshold and iterations remain, the pipeline routes defects back to `PLANNING` for another pass. If iterations are exhausted without meeting threshold, the pipeline terminates in `FAILED` state.
+A user submits a goal to the engine. The engine decomposes that goal into four ordered phases — PLANNING, DEVELOPMENT, QUALITY, and DECISION — and assigns each phase to a registered agent. After each complete pass, the `DecisionEngine` evaluates the output against a quality score produced by the `QualityScorer`. If the score meets the configured threshold, the pipeline transitions to `COMPLETED`. If the score is below threshold and iterations remain, the pipeline routes defects back to `PLANNING` for another pass. If iterations are exhausted without meeting threshold, the pipeline terminates in `FAILED` state.
+
+**Session-4 Enhancements (2026-04-12):**
+
+- **Recursive Phase Loop**: `PipelineEngine._execute_pipeline()` at line 394 now supports `LOOP_BACK` decisions. When the `DecisionEngine` returns `DecisionType.LOOP_BACK` (line 417), the pipeline jumps back to a target phase (e.g., `PLANNING`) and re-executes. This creates the "recursive agent pipeline" — phases can re-execute multiple times until quality thresholds are met.
+
+- **PipelineIsolation Wiring (SEC-005 RESOLVED)**: Each pipeline phase now runs within a `PipelineIsolation` context at line 506. This prevents cross-phase state leakage and ensures filesystem isolation boundaries are enforced per phase.
+
+- **ComponentLoader Hook**: Agent-generated artifacts are automatically saved as components via `ComponentLoader.save_component()` during the development phase at line 734. This enables component persistence and reuse across pipeline runs.
 
 Key design properties:
 
@@ -181,7 +189,7 @@ Key design properties:
 - The `DefectRouter` maps specific defect types to remediation agents using a configurable routing table rather than hardcoded logic.
 - All quality scoring, audit logging, defect tracking, and metrics storage run in-process with no external I/O required, preserving GAIA's local-first design principle.
 
-The engine is implemented across 17 files in `src/gaia/pipeline/`. It is exposed via a CLI stub (`gaia pipeline`) and is documented in `docs/spec/pipeline-engine.mdx`. The Phase 5 extension adds a `PipelineOrchestrator` (`src/gaia/pipeline/orchestrator.py`) that wraps the four-stage domain-to-ecosystem pipeline with autonomous gap detection and agent spawning, and integrates the `ComponentLoader` into the `PipelineEngine` initialization path (`src/gaia/pipeline/engine.py`).
+The engine is implemented across 17 files in `src/gaia/pipeline/`. It is exposed via a CLI stub (`gaia pipeline`) and documented in `docs/spec/pipeline-engine.mdx`. The Phase 5 extension adds a `PipelineOrchestrator` (`src/gaia/pipeline/orchestrator.py`) that wraps the four-stage domain-to-ecosystem pipeline with autonomous gap detection and agent spawning, and integrates the `ComponentLoader` into the `PipelineEngine` initialization path (`src/gaia/pipeline/engine.py`).
 
 ---
 
@@ -321,12 +329,14 @@ Abbreviations used in the **Phase** column are defined in Section 7.1. Abbreviat
 | Module / Component | Change Type | Files | Lines Added | Phase | Commit | Depends On | Consumed By | Test Coverage | Docs | Risk |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `pipeline/__init__.py` | NEW | 1 | ~30 | P1 | `efb1ca7` | — | All pipeline consumers | SMOKE | PARTIAL | LOW |
-| `pipeline/engine.py` | NEW | 1 | ~480 | P1 | `efb1ca7` | `state.py`, `loop_manager.py`, `routing_engine.py`, `decision_engine.py`, `phase_contract.py`, `audit_logger.py` | `cli.py`, demo scripts | BOTH | PARTIAL | MEDIUM |
+| `pipeline/engine.py` | NEW + EXTENDED | 1 | ~480 + Session-4 | P1 + Session-4 | `efb1ca7` + Session-4 | `state.py`, `loop_manager.py`, `routing_engine.py`, `decision_engine.py`, `phase_contract.py`, `audit_logger.py`, `isolation.py`, `component_loader.py` | `cli.py`, demo scripts | BOTH | PARTIAL | MEDIUM |
+| **Session-4 (2026-04-12):** Added recursive phase loop: `LOOP_BACK` decisions at line 417 jump to target phase (e.g., PLANNING). `PipelineIsolation` context per phase at line 506 (SEC-005 RESOLVED). `ComponentLoader.save_component()` at line 734 auto-saves artifacts.
 | `pipeline/state.py` | NEW | 1 | ~220 | P1 | `efb1ca7` | `src/gaia/state/nexus.py` | `engine.py`, `loop_manager.py`, `metrics_hooks.py` | UNIT | PARTIAL | MEDIUM |
 | `pipeline/loop_manager.py` | NEW | 1 | ~190 | P1 | `efb1ca7` | `engine.py`, `state.py` | `engine.py` | UNIT | PARTIAL | MEDIUM |
 | `pipeline/routing_engine.py` | NEW | 1 | ~850 | P1 + Session-3 | `efb1ca7` + Session-3 | `src/gaia/agents/registry.py`, `defect_router.py`, `src/gaia/resilience/` | `engine.py` | BOTH | PARTIAL | MEDIUM |
 **Session-3 (2026-04-11):** Added `route_defect_resilient()` with circuit breaker, bulkhead, and retry wiring. Imports from `gaia.resilience` added. Backward compatible: existing `route_defect()` unchanged.
-| `pipeline/decision_engine.py` | NEW | 1 | ~130 | P1 | `efb1ca7` | `src/gaia/quality/scorer.py` | `engine.py` | UNIT | PARTIAL | MEDIUM |
+| `pipeline/decision_engine.py` | NEW + EXTENDED | 1 | ~130 + Session-4 | P1 + Session-4 | `efb1ca7` + Session-4 | `src/gaia/quality/scorer.py`, `src/gaia/quality/supervisor.py` | `engine.py` | BOTH | PARTIAL | MEDIUM |
+| **Session-4 (2026-04-12):** Added `LOOP_BACK` decision type support with target phase routing. Maps supervisor decisions to pipeline decisions at lines 938-963.
 | `pipeline/phase_contract.py` | NEW | 1 | ~180 | P1 | `2630b38` | — | `engine.py`, phase transition code | UNIT | PARTIAL | LOW |
 | `pipeline/audit_logger.py` | NEW | 1 | ~210 | P1 | `2630b38` | — | `engine.py`, `metrics_hooks.py` | UNIT | PARTIAL | LOW |
 | `pipeline/defect_remediation_tracker.py` | NEW | 1 | ~120 | P1 | `2630b38` | `defect_types.py`, `defect_router.py` | `engine.py` | UNIT | PARTIAL | LOW |
@@ -349,7 +359,8 @@ Abbreviations used in the **Phase** column are defined in Section 7.1. Abbreviat
 |---|---|---|---|---|---|---|---|---|---|---|
 | `quality/__init__.py` | NEW | 1 | ~20 | P1 | `efb1ca7` | — | All quality consumers | SMOKE | PARTIAL | LOW |
 | `quality/scorer.py` | NEW | 1 | ~350 | P1 | `efb1ca7` | `quality/validators/`, `quality/weight_config.py`, `quality/models.py` | `pipeline/decision_engine.py`, `quality/supervisor.py` | BOTH | PARTIAL | MEDIUM |
-| `quality/supervisor.py` | NEW | 1 | ~260 | P1 | `efb1ca7` | `quality/scorer.py`, `src/gaia/agents/base/agent.py` | `pipeline/engine.py` (as supervisor agent) | BOTH | PARTIAL | MEDIUM |
+| `quality/supervisor.py` | NEW | 1 | ~260 | P1 | `efb1ca7` | `quality/scorer.py`, `src/gaia/agents/base/agent.py` | `pipeline/engine.py` (as supervisor agent) | BOTH (35 unit tests) | PARTIAL | MEDIUM |
+| **Session-4 (2026-04-12):** 35 unit tests added in `tests/unit/quality/test_supervisor_agent.py` covering LOOP_BACK/LOOP_FORWARD/PAUSE/FAIL decisions, critical defect detection, consensus data, chronicle integration.
 | `quality/models.py` | NEW | 1 | ~120 | P1 | `efb1ca7` | — | `scorer.py`, `supervisor.py`, `validators/` | UNIT | PARTIAL | LOW |
 | `quality/weight_config.py` | NEW | 1 | ~80 | P1 | `efb1ca7` | — | `scorer.py` | UNIT | PARTIAL | LOW |
 | `quality/templates.py` | NEW | 1 | ~90 | P1 | `efb1ca7` | `quality/templates_pkg/` | `supervisor.py`, `scorer.py` | UNIT | PARTIAL | LOW |
@@ -580,6 +591,8 @@ BAIBEL is implemented primarily as extensions to existing state and quality modu
 |---|---|---|---|---|---|---|---|---|---|---|
 | Pipeline engine tests (`tests/unit/test_pipeline_*.py`, ~10 files) | NEW | ~10 | ~3,500 | P1 | `efb1ca7` + `969eefe` | `src/gaia/pipeline/` | CI unit test suite | UNIT | NO | LOW |
 | Quality gate tests (`tests/unit/test_quality_*.py`, ~8 files) | NEW | ~8 | ~2,800 | P1 | `efb1ca7` | `src/gaia/quality/` | CI unit test suite | UNIT | NO | LOW |
+| **SupervisorAgent tests (`tests/unit/quality/test_supervisor_agent.py`)** | **NEW** | **1** | **881** | **Session** | **recursive pipeline** | **`src/gaia/quality/supervisor.py`** | **CI unit test suite** | **UNIT (35 tests)** | **NO** | **LOW** |
+| **Recursive pipeline E2E tests (`tests/integration/test_recursive_pipeline.py`)** | **NEW** | **1** | **577** | **Session** | **recursive pipeline** | **`src/gaia/pipeline/engine.py`, `isolation.py`** | **CI integration test suite** | **INTEGRATION (14 tests)** | **NO** | **LOW** |
 | Phase 3 module tests (`tests/unit/test_core_*`, `test_cache_*`, `test_config_*`, `test_observability_*`, ~28 files) | NEW | ~28 | ~9,000 | P3-S1 through P3-S4 | Multiple | `src/gaia/core/`, `cache/`, `config/`, `observability/` | CI unit test suite | BOTH | NO | LOW |
 | Phase 4 module tests (`tests/unit/test_health_*`, `test_resilience_*`, `test_security_*`, `test_perf_*`, ~18 files) | NEW | ~18 | ~5,500 | P4-W1 through P4-W3 | `8b05805`, `84ed269`, `4c02e45` | `src/gaia/health/`, `resilience/`, `security/`, `perf/` | BOTH | NO | LOW |
 | Metrics and eval tests (`tests/unit/test_metrics_*`, `test_eval_metrics.py`, `test_scorecard.py`, ~8 files) | NEW | ~8 | ~2,400 | P2 | `31de02f`, `c72e6d9` | `src/gaia/metrics/`, `eval/` | CI unit test suite | BOTH | NO | LOW |
@@ -592,7 +605,11 @@ BAIBEL is implemented primarily as extensions to existing state and quality modu
 | State and context tests (`tests/unit/test_state_*.py`, `test_nexus.py`, ~5 files) | NEW | ~5 | ~1,400 | P1/P2 | Multiple | `src/gaia/state/` | CI unit test suite | UNIT | NO | LOW |
 | Remaining test files (fixtures, helpers, conftest updates, Electron tests) | NEW/EXTENDED | ~54 | ~8,000 | Multiple | Multiple | Various | CI test suite | UNIT | NO | LOW |
 
-Total branch test count: 1,245+ tests at a reported 99.9% pass rate (one pre-existing MCP failure unrelated to this branch).
+**New Test Summary (Session):** 49 new tests added covering recursive pipeline capabilities:
+- **35 SupervisorAgent tests**: LOOP_BACK/LOOP_FORWARD/PAUSE/FAIL decisions, critical defect detection, consensus data, chronicle integration, decision history, statistics reporting, edge cases
+- **14 E2E recursive pipeline tests**: LOOP_BACK phase re-execution, pipeline completion on threshold, failure on max iterations, PipelineIsolation per phase, decision history tracking, edge cases
+
+Total branch test count: 1,294+ tests at a reported 99.9% pass rate (one pre-existing MCP failure unrelated to this branch).
 
 ---
 
@@ -1071,6 +1088,15 @@ The Phase column uses the following abbreviations:
 | `MERGE_DECISION_pipeline-orchestration-v1.md` | Documentation: Add Session-3 results to open items and executive summary | Documentation | Session-3 |
 | `quality_review_session3.md` | Documentation: Session-3 quality assessment, bug fixes verified | Documentation | Session-3 |
 
+**Session-4 Completed (2026-04-12) — Recursive Pipeline Capabilities:**
+
+| Files Modified | Description | Category | Phase |
+|---|---|---|---|
+| `src/gaia/pipeline/engine.py` | Recursive loop: `LOOP_BACK` decisions at line 417, `PipelineIsolation` at line 506, `ComponentLoader` at line 734 | Pipeline Orchestration | Session-4 |
+| `src/gaia/pipeline/decision_engine.py` | `LOOP_BACK` decision type support, target phase routing | Pipeline Orchestration | Session-4 |
+| `PIPELINE_STATUS_REPORT.md` | Documentation: Update score to 9.0/10, SEC-005 RESOLVED, 49 new tests, Nexus Integration GO | Documentation | Session-4 |
+| `docs/reference/branch-change-matrix.md` | Documentation: Add Session-4 test files, update testing infrastructure section | Documentation | Session-4 |
+
 **Session-3 Test Files Created (2026-04-11):**
 
 | Files Created | Description | Category | Phase |
@@ -1081,6 +1107,13 @@ The Phase column uses the following abbreviations:
 | `tests/pipeline/test_agent_registry_bridge.py` | INT-2: Two-registry separation validation | Testing Infrastructure | Session-3 |
 | `tests/ui/routers/test_pipeline_sse_lock_release.py` | B3-C Bug #1: Lock release logic validation | Testing Infrastructure | Session-3 |
 | `tests/ui/routers/test_pipeline_json_serialization.py` | B3-C Bug #2: JSON error handling validation | Testing Infrastructure | Session-3 |
+
+**Session-4 Test Files Created (2026-04-12) — Recursive Pipeline Capabilities:**
+
+| Files Created | Description | Category | Phase |
+|---|---|---|---|
+| `tests/unit/quality/test_supervisor_agent.py` | 35 unit tests for SupervisorAgent: LOOP_BACK/LOOP_FORWARD/PAUSE/FAIL decisions, critical defect detection, consensus, chronicle integration | Testing Infrastructure | Session-4 |
+| `tests/integration/test_recursive_pipeline.py` | 14 E2E tests: Recursive loop behavior, PipelineIsolation per phase, decision history tracking, edge cases | Testing Infrastructure | Session-4 |
 
 ---
 

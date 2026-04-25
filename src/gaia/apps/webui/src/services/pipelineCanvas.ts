@@ -38,6 +38,8 @@ export async function saveCanvasAsTemplate(
         max_iterations: canvas.max_iterations,
         agent_categories: canvas.agent_categories,
         routing_rules: canvas.routing_rules,
+        canvas_loops: canvas.canvas_loops,
+        canvas_supervisors: canvas.canvas_supervisors,
     });
 }
 
@@ -68,6 +70,8 @@ export async function updateTemplateFromCanvas(
         max_iterations: canvas.max_iterations,
         agent_categories: canvas.agent_categories,
         routing_rules: canvas.routing_rules,
+        canvas_loops: canvas.canvas_loops,
+        canvas_supervisors: canvas.canvas_supervisors,
     });
 }
 

@@ -36,11 +36,12 @@ interface SupervisorNodeProps {
 }
 
 function SupervisorNodeInner({ node }: SupervisorNodeProps) {
-    const { removeNode, setSelectedNode, selectedNodeId, nodes } = usePipelineCanvasStore((s) => ({
+    const { removeNode, setSelectedNode, selectedNodeId, nodes, updateSupervisorConfig } = usePipelineCanvasStore((s) => ({
         removeNode: s.removeNode,
         setSelectedNode: s.setSelectedNode,
         selectedNodeId: s.selectedNodeId,
         nodes: s.nodes,
+        updateSupervisorConfig: s.updateSupervisorConfig,
     }));
 
     const [expanded, setExpanded] = useState(false);
@@ -56,15 +57,25 @@ function SupervisorNodeInner({ node }: SupervisorNodeProps) {
         // Cleanup if needed
     };
 
+    const supervisorConfig = node.supervisorConfig;
+
     // Determine active decision based on node status during execution
     const activeDecision = node.status === 'complete'
-        ? (node.decisionType || 'CONTINUE')
+        ? (supervisorConfig?.decision_type || node.decisionType || 'CONTINUE')
         : node.status === 'error'
             ? 'FAIL'
-            : node.decisionType || 'CONTINUE';
+            : supervisorConfig?.decision_type || node.decisionType || 'CONTINUE';
 
     // Find connected stages for context
     const connectedEdges = nodes.filter(n => n.type === 'stage' && n.assignedStage === node.assignedStage);
+
+    const handleDecisionClick = (decision: DecisionType) => {
+        updateSupervisorConfig(node.id, { decision_type: decision });
+    };
+
+    const handleConditionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        updateSupervisorConfig(node.id, { decision_condition: e.target.value });
+    };
 
     return (
         <div
@@ -79,7 +90,7 @@ function SupervisorNodeInner({ node }: SupervisorNodeProps) {
             }}
         >
             {/* Decision indicator bar */}
-            <div className="pc-supervisor-decision-bar" style={{ backgroundColor: DECISION_COLORS[activeDecision] }} />
+            <div className="pc-supervisor-decision-bar" style={{ backgroundColor: DECISION_COLORS[activeDecision as DecisionType] }} />
 
             {/* Main body */}
             <div className="pc-supervisor-body">
@@ -109,9 +120,9 @@ function SupervisorNodeInner({ node }: SupervisorNodeProps) {
                 <span className="pc-supervisor-decision-label">Decision:</span>
                 <span
                     className="pc-supervisor-decision-value"
-                    style={{ color: DECISION_COLORS[activeDecision] }}
+                    style={{ color: DECISION_COLORS[activeDecision as DecisionType] }}
                 >
-                    {DECISION_ICONS[activeDecision]}
+                    {DECISION_ICONS[activeDecision as DecisionType]}
                     {activeDecision}
                 </span>
             </div>
@@ -123,25 +134,35 @@ function SupervisorNodeInner({ node }: SupervisorNodeProps) {
                         <label>Decision Types</label>
                         <div className="pc-supervisor-decisions-list">
                             {AVAILABLE_DECISIONS.map((decision) => (
-                                <span
+                                <button
                                     key={decision}
                                     className={`pc-supervisor-decision-tag${decision === activeDecision ? ' active' : ''}`}
                                     style={{
                                         borderColor: DECISION_COLORS[decision],
                                         ...(decision === activeDecision ? { backgroundColor: DECISION_COLORS[decision] + '20' } : {}),
                                     }}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDecisionClick(decision);
+                                    }}
+                                    title={`Set decision to ${decision}`}
                                 >
                                     {decision}
-                                </span>
+                                </button>
                             ))}
                         </div>
                     </div>
-                    {node.decisionCondition && (
-                        <div className="pc-supervisor-config-section">
-                            <label>Condition</label>
-                            <span className="pc-supervisor-condition">{node.decisionCondition}</span>
-                        </div>
-                    )}
+                    <div className="pc-supervisor-config-section">
+                        <label>Condition</label>
+                        <input
+                            className="pc-supervisor-condition-input"
+                            type="text"
+                            value={supervisorConfig?.decision_condition || node.decisionCondition || 'quality_below_threshold'}
+                            onChange={handleConditionChange}
+                            onClick={(e) => e.stopPropagation()}
+                            placeholder="e.g. quality_below_threshold"
+                        />
+                    </div>
                     {connectedEdges.length > 0 && (
                         <div className="pc-supervisor-config-section">
                             <label>Monitoring</label>
