@@ -244,3 +244,19 @@ eval/corpus/real_world/
 component-framework/**/*.lock
 component-framework/**/.lock
 component-framework/memory/working-memory.md.lock
+
+# Chroma vector DB runtime data (empty until collections are created)
+chroma_data/chroma.sqlite3
+chroma_data/**
+
+# Pipeline runtime screenshots and test artifacts
+*.png
+pipeline-canvas-*.png
+gaia-ui-*.png
+test-ui-*.png
+
+# Agent test scripts
+test-gaia.mjs
+
+# Working documents
+docs/working/
