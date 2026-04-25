@@ -43,7 +43,7 @@ export function PhaseTimingChart({ phaseBreakdown }: PhaseTimingChartProps) {
     return value.toString();
   };
 
-  const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: unknown[] }) => {
+  const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { name: string; duration: number; tokens: number; tps: number; ttft?: number } }> }) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
       return (

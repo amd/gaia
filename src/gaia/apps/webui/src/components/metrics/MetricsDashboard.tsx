@@ -150,12 +150,15 @@ export function MetricsDashboard({ pipelineId }: MetricsDashboardProps) {
           <div className="metrics-chart-row">
             <div className="metrics-chart-full">
               <QualityOverTimeChart
-                qualityHistory={(currentMetrics.quality_scores || []).map(([loop_id, phase, score]) => ({
-                  loop_id,
-                  phase,
-                  score,
-                  timestamp: new Date().toISOString(),
-                }))}
+                qualityHistory={Object.entries(currentMetrics.loop_metrics || {}).flatMap(([loop_id, lm]) =>
+                  (lm.quality_scores || []).map((score: number, idx: number) => ({
+                    loop_id,
+                    phase: lm.phase_name,
+                    score,
+                    timestamp: lm.started_at || new Date().toISOString(),
+                    iteration: idx,
+                  }))
+                )}
               />
             </div>
           </div>
@@ -215,7 +218,7 @@ export function MetricsDashboard({ pipelineId }: MetricsDashboardProps) {
                 {Object.entries(currentMetrics.defects_by_type).map(([type, count]) => (
                   <div key={type} className="defect-item">
                     <span className="defect-type">{type}</span>
-                    <span className="defect-count">{count}</span>
+                    <span className="defect-count">{count as number}</span>
                   </div>
                 ))}
               </div>

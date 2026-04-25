@@ -12,7 +12,7 @@ import type {
   PipelineMetricsResponse,
   PipelineMetricsHistory,
   PipelineAggregateMetrics,
-} from '../../types';
+} from '../types';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 
@@ -224,7 +224,7 @@ export const selectDefectsByType = (state: MetricsState) =>
 /** Get total defects count. */
 export const selectTotalDefects = (state: MetricsState): number => {
   const defects = state.currentMetrics?.defects_by_type || {};
-  return Object.values(defects).reduce((sum, count) => sum + count, 0);
+  return Object.values(defects).reduce((sum: number, count: unknown) => sum + (count as number), 0);
 };
 
 /** Get quality score average. */

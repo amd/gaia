@@ -434,7 +434,7 @@ quality_weights:
             <button
               className="template-editor-btn template-editor-btn-save"
               onClick={handleSave}
-              disabled={!isDirty || isSaving || (templateName && isLoading)}
+              disabled={!isDirty || isSaving || !!(templateName && isLoading)}
             >
               <Save size={16} />
               {isSaving ? 'Saving...' : (templateName ? 'Update' : 'Create')}

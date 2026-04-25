@@ -49,7 +49,7 @@ export function QualityOverTimeChart({ qualityHistory }: QualityOverTimeChartPro
 
   const formatYAxis = (value: number): string => `${Math.round(value * 100)}%`;
 
-  const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: unknown[] }) => {
+  const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { phase: string; loop_id: string; score: number; iteration?: number } }> }) => {
     if (active && payload && payload.length) {
       const point = payload[0].payload;
       return (

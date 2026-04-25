@@ -76,7 +76,7 @@ export function MetricSummaryCards({ summary }: MetricSummaryCardsProps) {
 
   const formatQuality = (score: number): string => `${(score * 100).toFixed(0)}%`;
 
-  const qualityColor = (score: number): string => {
+  const qualityColor = (score: number): 'green' | 'yellow' | 'red' => {
     if (score >= 0.9) return 'green';
     if (score >= 0.7) return 'yellow';
     return 'red';
@@ -123,7 +123,7 @@ export function MetricSummaryCards({ summary }: MetricSummaryCardsProps) {
         icon={<AlertTriangle size={18} />}
         label="Total Defects"
         value={`${summary.total_defects || 0}`}
-        color={summary.total_defects === 0 ? 'green' : summary.total_defects < 5 ? 'yellow' : 'red'}
+        color={(summary.total_defects || 0) === 0 ? 'green' : (summary.total_defects || 0) < 5 ? 'yellow' : 'red'}
       />
     </div>
   );
