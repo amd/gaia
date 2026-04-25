@@ -32,7 +32,7 @@ agent:
     - defect-routing
     - pipeline-progression
 
-  system_prompt: prompts/quality-supervisor.md
+  system_prompt: prompts/quality-supervisor.md  # Prompt defined in quality-supervisor.md
 
   tools:
     - review_consensus
