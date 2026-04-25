@@ -509,31 +509,24 @@ class LoopManager:
                 skip_lemonade=self._skip_lemonade,
             )
 
-            # Initialize agent (registers tools, builds prompt)
-            # Note: This is synchronous for now, could be async in future
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(agent.initialize())
-            finally:
-                loop.close()
+            # Execute agent async methods using a single event loop
+            # (ThreadPoolExecutor threads have no running loop)
+            async def _run_agent():
+                await agent.initialize()
+                execution_ctx = {
+                    "goal": loop_state.config.exit_criteria.get(
+                        "goal", "Complete the task"
+                    ),
+                    "phase": loop_state.config.phase_name,
+                    "iteration": loop_state.iteration,
+                    "defects": loop_state.defects,
+                    "artifacts": loop_state.artifacts,
+                }
+                return await agent.execute(execution_ctx)
 
-            # Prepare execution context
-            context = {
-                "goal": loop_state.config.exit_criteria.get(
-                    "goal", "Complete the task"
-                ),
-                "phase": loop_state.config.phase_name,
-                "iteration": loop_state.iteration,
-                "defects": loop_state.defects,
-                "artifacts": loop_state.artifacts,
-            }
-
-            # Execute agent
             loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             try:
-                result = loop.run_until_complete(agent.execute(context))
+                result = loop.run_until_complete(_run_agent())
             finally:
                 loop.close()
 
@@ -584,12 +577,11 @@ class LoopManager:
                 return self._simulated_quality(loop_state)
 
             # QualityScorer.evaluate() is async — run it in a new event loop
-            # (same pattern scorer uses internally in _evaluate_category_sync)
+            # (ThreadPoolExecutor threads have no running loop)
             import asyncio
 
             try:
                 loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
                     context = {
                         "iteration": loop_state.iteration,
