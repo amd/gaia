@@ -683,6 +683,8 @@ class PipelineEngine:
         # Check for canvas-driven loop configs for this phase
         canvas_loop_configs = self._get_canvas_loops_for_phase(PipelinePhase.PLANNING)
 
+        loop_states: list = []  # Collect all loop states for artifact propagation
+
         if canvas_loop_configs:
             # Execute canvas-configured loops
             for canvas_cfg in canvas_loop_configs:
@@ -701,41 +703,37 @@ class PipelineEngine:
                 await self._loop_manager.create_loop(loop_config)
                 future = await self._loop_manager.start_loop(loop_config.loop_id)
                 if future is not None:
-                    loop_state = await asyncio.wrap_future(future)
+                    ls = await asyncio.wrap_future(future)
+                    loop_states.append(ls)
         else:
             # Create planning loop (default path)
             loop_config = LoopConfig(
-            loop_id=generate_loop_id(self._context.pipeline_id),
-            phase_name=PipelinePhase.PLANNING,
-            agent_sequence=agent_sequence,
-            exit_criteria={
-                "quality_threshold": self._context.quality_threshold,
-                "goal": self._context.user_goal,
-            },
-            quality_threshold=self._context.quality_threshold,
-            max_iterations=self._context.max_iterations,
-        )
-        await self._loop_manager.create_loop(loop_config)
-        future = await self._loop_manager.start_loop(loop_config.loop_id)
+                loop_id=generate_loop_id(self._context.pipeline_id),
+                phase_name=PipelinePhase.PLANNING,
+                agent_sequence=agent_sequence,
+                exit_criteria={
+                    "quality_threshold": self._context.quality_threshold,
+                    "goal": self._context.user_goal,
+                },
+                quality_threshold=self._context.quality_threshold,
+                max_iterations=self._context.max_iterations,
+            )
+            await self._loop_manager.create_loop(loop_config)
+            future = await self._loop_manager.start_loop(loop_config.loop_id)
+            if future is not None:
+                ls = await asyncio.wrap_future(future)
+                loop_states.append(ls)
 
-        # Wait for loop completion
-        loop_state = None
-        if future is not None:
-            loop_state = await asyncio.wrap_future(future)
+        # Propagate artifacts from all executed loops
+        for loop_state in loop_states:
             logger.info(
                 f"Planning loop completed: status={loop_state.status.name}",
-                extra={
-                    "loop_id": loop_config.loop_id,
-                    "status": loop_state.status.name,
-                },
+                extra={"loop_id": loop_state.config.loop_id, "status": loop_state.status.name},
             )
-            # Propagate agent LLM outputs to state machine so they appear in
-            # snapshot.artifacts and are available to QualityScorer
             for agent_id, artifact_text in loop_state.artifacts.items():
                 if artifact_text is not None:
                     self._state_machine.add_artifact(f"plan_{agent_id}", artifact_text)
 
-            # NEW: Commit AGENT_EXECUTED event (Phase 1 Sprint 3)
             if self._enable_chronicle and self._nexus:
                 for agent_id in agent_sequence:
                     self._nexus.commit(
@@ -746,7 +744,7 @@ class PipelineEngine:
                             "status": loop_state.status.name,
                         },
                         phase=PipelinePhase.PLANNING,
-                        loop_id=loop_config.loop_id,
+                        loop_id=loop_state.config.loop_id,
                     )
 
             self._state_machine.add_chronicle_entry(
@@ -796,6 +794,8 @@ class PipelineEngine:
         # Check for canvas-driven loop configs for this phase
         canvas_loop_configs = self._get_canvas_loops_for_phase(PipelinePhase.DEVELOPMENT)
 
+        loop_states: list = []  # Collect all loop states for artifact propagation
+
         if canvas_loop_configs:
             # Execute canvas-configured loops
             for canvas_cfg in canvas_loop_configs:
@@ -814,41 +814,37 @@ class PipelineEngine:
                 await self._loop_manager.create_loop(loop_config)
                 future = await self._loop_manager.start_loop(loop_config.loop_id)
                 if future is not None:
-                    loop_state = await asyncio.wrap_future(future)
+                    ls = await asyncio.wrap_future(future)
+                    loop_states.append(ls)
         else:
             # Create development loop (default path)
             loop_config = LoopConfig(
-            loop_id=generate_loop_id(self._context.pipeline_id),
-            phase_name=PipelinePhase.DEVELOPMENT,
-            agent_sequence=agent_sequence,
-            exit_criteria={
-                "quality_threshold": self._context.quality_threshold,
-                "goal": self._context.user_goal,
-            },
-            quality_threshold=self._context.quality_threshold,
-            max_iterations=self._context.max_iterations,
-        )
-        await self._loop_manager.create_loop(loop_config)
-        future = await self._loop_manager.start_loop(loop_config.loop_id)
+                loop_id=generate_loop_id(self._context.pipeline_id),
+                phase_name=PipelinePhase.DEVELOPMENT,
+                agent_sequence=agent_sequence,
+                exit_criteria={
+                    "quality_threshold": self._context.quality_threshold,
+                    "goal": self._context.user_goal,
+                },
+                quality_threshold=self._context.quality_threshold,
+                max_iterations=self._context.max_iterations,
+            )
+            await self._loop_manager.create_loop(loop_config)
+            future = await self._loop_manager.start_loop(loop_config.loop_id)
+            if future is not None:
+                ls = await asyncio.wrap_future(future)
+                loop_states.append(ls)
 
-        # Wait for loop completion
-        loop_state = None
-        if future is not None:
-            loop_state = await asyncio.wrap_future(future)
+        # Propagate artifacts from all executed loops
+        for loop_state in loop_states:
             logger.info(
                 f"Development loop completed: status={loop_state.status.name}",
-                extra={
-                    "loop_id": loop_config.loop_id,
-                    "status": loop_state.status.name,
-                },
+                extra={"loop_id": loop_state.config.loop_id, "status": loop_state.status.name},
             )
-            # Propagate agent LLM outputs to state machine so they appear in
-            # snapshot.artifacts and are available to QualityScorer
             for agent_id, artifact_text in loop_state.artifacts.items():
                 if artifact_text is not None:
                     self._state_machine.add_artifact(f"code_{agent_id}", artifact_text)
 
-            # NEW: Commit AGENT_EXECUTED event (Phase 1 Sprint 3)
             if self._enable_chronicle and self._nexus:
                 for agent_id in agent_sequence:
                     self._nexus.commit(
@@ -859,7 +855,7 @@ class PipelineEngine:
                             "status": loop_state.status.name,
                         },
                         phase=PipelinePhase.DEVELOPMENT,
-                        loop_id=loop_config.loop_id,
+                        loop_id=loop_state.config.loop_id,
                     )
 
             self._state_machine.add_chronicle_entry(
@@ -872,7 +868,7 @@ class PipelineEngine:
             )
 
             # Save generated components via ComponentLoader
-            if self._component_loader and loop_state and loop_state.artifacts:
+            if self._component_loader and loop_state.artifacts:
                 try:
                     for agent_id, artifact_text in loop_state.artifacts.items():
                         if artifact_text:
