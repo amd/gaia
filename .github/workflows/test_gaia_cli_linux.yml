@@ -194,7 +194,8 @@ jobs:
           echo "Testing LemonadeClient API with running server"
 
           # Run the lemonade client integration tests (skip hybrid NPU test - no NPU on Linux)
-          GAIA_TEST_MODEL="Qwen3-0.6B-GGUF" python -m pytest tests/test_lemonade_client.py -vs --tb=short -k "Integration and not hybrid" || LEMONADE_TEST_EXIT=$?
+          # LEMONADE_PORT=8000: lemonade-server-dev always binds to 8000 (no --port flag)
+          LEMONADE_PORT=8000 GAIA_TEST_MODEL="Qwen3-0.6B-GGUF" python -m pytest tests/test_lemonade_client.py -vs --tb=short -k "Integration and not hybrid" || LEMONADE_TEST_EXIT=$?
 
           if [ "${LEMONADE_TEST_EXIT:-0}" -eq 0 ]; then
             echo "✅ Lemonade client integration tests passed successfully!"
