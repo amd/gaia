@@ -133,6 +133,30 @@ class PhaseConfig:
 
 
 @dataclass
+class CanvasLoopTemplateConfig:
+    """Canvas-driven loop configuration (lightweight version of Pydantic schema)."""
+    loop_id: str = ""
+    label: str = ""
+    agent_ids: List[str] = field(default_factory=list)
+    max_iterations: int = 10
+    quality_threshold: Optional[float] = None
+    source_stage: Optional[str] = None
+    target_stage: Optional[str] = None
+    condition: str = "quality_below_threshold"
+
+
+@dataclass
+class CanvasSupervisorTemplateConfig:
+    """Canvas-driven supervisor configuration (lightweight version of Pydantic schema)."""
+    supervisor_id: str = ""
+    label: str = ""
+    agent_id: Optional[str] = None
+    decision_condition: str = "quality_below_threshold"
+    decision_type: str = "CONTINUE"
+    monitoring_targets: List[str] = field(default_factory=list)
+
+
+@dataclass
 class RecursivePipelineTemplate:
     """
     Generic recursive pipeline template.
@@ -164,6 +188,8 @@ class RecursivePipelineTemplate:
     routing_rules: List[RoutingRule] = field(default_factory=list)
     quality_weights: Dict[str, float] = field(default_factory=dict)
     weight_config: Optional[QualityWeightConfig] = None
+    canvas_loops: List[CanvasLoopTemplateConfig] = field(default_factory=list)
+    canvas_supervisors: List[CanvasSupervisorTemplateConfig] = field(default_factory=list)
 
     def __post_init__(self):
         """Validate template configuration."""
@@ -511,6 +537,18 @@ def load_template_from_yaml(
         for rule_data in data["routing_rules"]:
             routing_rules.append(RoutingRule(**rule_data))
 
+    # Convert canvas loops if present
+    canvas_loops = []
+    if "canvas_loops" in data and data["canvas_loops"]:
+        for loop_data in data["canvas_loops"]:
+            canvas_loops.append(CanvasLoopTemplateConfig(**loop_data))
+
+    # Convert canvas supervisors if present
+    canvas_supervisors = []
+    if "canvas_supervisors" in data and data["canvas_supervisors"]:
+        for sup_data in data["canvas_supervisors"]:
+            canvas_supervisors.append(CanvasSupervisorTemplateConfig(**sup_data))
+
     # Create template instance
     template = RecursivePipelineTemplate(
         name=data.get("name", name),
@@ -521,6 +559,8 @@ def load_template_from_yaml(
         agent_categories=data.get("agent_categories", {}),
         routing_rules=routing_rules,
         quality_weights=data.get("quality_weights", {}),
+        canvas_loops=canvas_loops,
+        canvas_supervisors=canvas_supervisors,
     )
 
     return template
@@ -554,3 +594,50 @@ def load_all_templates_from_directory(
             print(f"Warning: Failed to load template {yaml_file}: {e}")
 
     return templates
+
+
+def translate_canvas_loops_to_loop_configs(
+    template: "RecursivePipelineTemplate",
+    pipeline_id: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    Translate canvas loop configurations into LoopConfig-compatible dicts.
+
+    Args:
+        template: Pipeline template with optional canvas_loops
+        pipeline_id: Current pipeline ID for loop_id generation
+
+    Returns:
+        List of dicts compatible with LoopConfig dataclass.
+        Returns empty list if no canvas loops are configured.
+    """
+    if not template.canvas_loops:
+        return []
+
+    loop_configs = []
+    for canvas in template.canvas_loops:
+        # Map canvas fields to LoopConfig fields
+        phase_name = (canvas.source_stage or "PLANNING").upper()
+        agent_sequence = list(canvas.agent_ids) if canvas.agent_ids else [
+            agent for agents in template.agent_categories.values() for agent in agents
+        ]
+
+        # Build exit criteria from condition
+        exit_criteria: Dict[str, Any] = {"condition": canvas.condition}
+        if canvas.quality_threshold is not None:
+            exit_criteria["quality_threshold"] = canvas.quality_threshold
+        else:
+            exit_criteria["quality_threshold"] = template.quality_threshold
+
+        loop_configs.append({
+            "loop_id": canvas.loop_id or f"canvas-loop-{pipeline_id}",
+            "phase_name": phase_name,
+            "agent_sequence": agent_sequence,
+            "exit_criteria": exit_criteria,
+            "quality_threshold": canvas.quality_threshold or template.quality_threshold,
+            "max_iterations": canvas.max_iterations,
+            "label": canvas.label,
+            "target_stage": canvas.target_stage,
+        })
+
+    return loop_configs

@@ -262,6 +262,9 @@ class PipelineEngine:
             )
             self._current_template = get_recursive_template("generic")
 
+        # Wire canvas loop/supervisor config from API request into template
+        self._apply_canvas_config(self._config)
+
         # Initialize loop manager with agent registry and resolved model_id wired in
         concurrent_loops = self._config.get(
             "concurrent_loops", context.concurrent_loops
@@ -272,6 +275,7 @@ class PipelineEngine:
             model_id=self._model_id,
             template_model_id=getattr(self._current_template, "default_model", None),
             skip_lemonade=self._skip_lemonade,
+            canvas_loops=getattr(self._current_template, "canvas_loops", []),
         )
 
         # Initialize routing engine
@@ -319,6 +323,65 @@ class PipelineEngine:
             f"Pipeline {context.pipeline_id} initialized",
             extra={"pipeline_id": context.pipeline_id},
         )
+
+    def _apply_canvas_config(self, config: Dict[str, Any]) -> None:
+        """
+        Apply canvas loop/supervisor config from API request to template.
+
+        Converts CanvasLoopConfigSchema dicts from the API request into
+        CanvasLoopTemplateConfig objects on the template, allowing UI-driven
+        pipeline designs to affect actual execution.
+
+        Args:
+            config: Pipeline config dict from API request (may contain canvas_loops, canvas_supervisors)
+        """
+        template = self._current_template
+        if template is None:
+            return
+
+        canvas_loops_raw = config.get("canvas_loops", [])
+        if canvas_loops_raw:
+            from gaia.pipeline.recursive_template import CanvasLoopTemplateConfig, CanvasSupervisorTemplateConfig
+
+            canvas_loops = []
+            for loop_data in canvas_loops_raw:
+                if isinstance(loop_data, dict):
+                    canvas_loops.append(CanvasLoopTemplateConfig(
+                        loop_id=loop_data.get("loop_id", ""),
+                        label=loop_data.get("label", ""),
+                        agent_ids=loop_data.get("agent_ids", []),
+                        max_iterations=loop_data.get("max_iterations", 10),
+                        quality_threshold=loop_data.get("quality_threshold"),
+                        source_stage=loop_data.get("source_stage"),
+                        target_stage=loop_data.get("target_stage"),
+                        condition=loop_data.get("condition", "quality_below_threshold"),
+                    ))
+            template.canvas_loops = canvas_loops
+            logger.info(
+                f"Applied {len(canvas_loops)} canvas loop(s) from API config",
+                extra={"loop_count": len(canvas_loops)},
+            )
+
+        canvas_supervisors_raw = config.get("canvas_supervisors", [])
+        if canvas_supervisors_raw:
+            from gaia.pipeline.recursive_template import CanvasSupervisorTemplateConfig
+
+            canvas_supervisors = []
+            for sup_data in canvas_supervisors_raw:
+                if isinstance(sup_data, dict):
+                    canvas_supervisors.append(CanvasSupervisorTemplateConfig(
+                        supervisor_id=sup_data.get("supervisor_id", ""),
+                        label=sup_data.get("label", ""),
+                        agent_id=sup_data.get("agent_id"),
+                        decision_condition=sup_data.get("decision_condition", "quality_below_threshold"),
+                        decision_type=sup_data.get("decision_type", "CONTINUE"),
+                        monitoring_targets=sup_data.get("monitoring_targets", []),
+                    ))
+            template.canvas_supervisors = canvas_supervisors
+            logger.info(
+                f"Applied {len(canvas_supervisors)} canvas supervisor(s) from API config",
+                extra={"supervisor_count": len(canvas_supervisors)},
+            )
 
     def _register_default_hooks(self) -> None:
         """Register default production hooks."""
@@ -832,7 +895,7 @@ class PipelineEngine:
                         if isinstance(defect, dict)
                         else {"description": str(defect)}
                     )
-                    routing_decision = self._routing_engine.route_defect(defect_dict)
+                    routing_decision = self._routing_engine.route_defect_resilient(defect_dict, context={"pipeline_id": getattr(self._state_machine, 'execution_id', None)})
                     routing_decisions.append(routing_decision.to_dict())
                 self._state_machine.add_artifact("routing_decisions", routing_decisions)
                 logger.info(

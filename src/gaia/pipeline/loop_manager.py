@@ -198,6 +198,7 @@ class LoopManager:
         model_id: Optional[str] = None,
         template_model_id: Optional[str] = None,
         skip_lemonade: bool = False,
+        canvas_loops: Optional[List[Dict[str, Any]]] = None,
     ):
         """
         Initialize loop manager.
@@ -208,12 +209,14 @@ class LoopManager:
             model_id: Override model ID for all agents
             template_model_id: Default model from template definition
             skip_lemonade: If True, skip Lemonade server initialization in agents (stub/CI mode)
+            canvas_loops: Optional list of canvas-driven loop configurations from UI
         """
         self.MAX_CONCURRENT_LOOPS = max_concurrent
         self._agent_registry = agent_registry
         self._model_id = model_id
         self._template_model_id = template_model_id
         self._skip_lemonade = skip_lemonade
+        self._canvas_loops = canvas_loops or []
 
         # Loop storage
         self._loops: Dict[str, LoopState] = {}
@@ -230,7 +233,10 @@ class LoopManager:
 
         logger.info(
             "LoopManager initialized",
-            extra={"max_concurrent": max_concurrent},
+            extra={
+                "max_concurrent": max_concurrent,
+                "canvas_loops": len(self._canvas_loops),
+            },
         )
 
     async def create_loop(self, config: LoopConfig) -> str:
@@ -551,9 +557,10 @@ class LoopManager:
 
     def _evaluate_quality(self, loop_state: LoopState) -> float:
         """
-        Evaluate quality of loop output.
+        Evaluate quality of loop output using real QualityScorer.
 
-        In production, this would call the QualityScorer.
+        Falls back to simulated scoring if QualityScorer is unavailable
+        or if the artifact format is incompatible.
 
         Args:
             loop_state: Current loop state
@@ -561,16 +568,62 @@ class LoopManager:
         Returns:
             Quality score (0-1)
         """
-        # Simulate quality evaluation
-        # Base score starts at 0.7
+        try:
+            from gaia.quality.scorer import QualityScorer
+
+            scorer = QualityScorer()
+
+            # Build artifact from loop state outputs
+            artifact = loop_state.artifacts.get("output", "") or loop_state.artifacts.get("result", "")
+
+            if not artifact:
+                # No artifact available, use simulated fallback
+                return self._simulated_quality(loop_state)
+
+            # QualityScorer.evaluate() is async — run it in a new event loop
+            # (same pattern scorer uses internally in _evaluate_category_sync)
+            import asyncio
+
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    context = {
+                        "iteration": loop_state.iteration,
+                        "defects": loop_state.defects,
+                        "loop_id": loop_state.config.loop_id,
+                    }
+                    report = loop.run_until_complete(
+                        scorer.evaluate(artifact=artifact, context=context)
+                    )
+                    # Extract defects from quality report categories and feed back
+                    # into loop state for targeted remediation in next iteration
+                    for category_score in getattr(report, "category_scores", []):
+                        for defect in getattr(category_score, "defects", []):
+                            loop_state.defects.append({
+                                "category": category_score.category,
+                                "severity": getattr(defect, "severity", "medium"),
+                                "description": getattr(defect, "description", str(defect)),
+                                "source": "QualityScorer",
+                            })
+                    # QualityScorer returns 0-100 scale; normalize to 0-1
+                    overall = report.overall_score / 100.0 if report.overall_score else 0.0
+                    return max(0.0, min(1.0, overall))
+                finally:
+                    loop.close()
+            except Exception:
+                # Fall back to simulated scoring on any error
+                return self._simulated_quality(loop_state)
+
+        except Exception:
+            return self._simulated_quality(loop_state)
+
+    @staticmethod
+    def _simulated_quality(loop_state: LoopState) -> float:
+        """Fallback simulated quality evaluation."""
         base_score = 0.7
-
-        # Add some variation based on iteration
         iteration_bonus = min(0.03 * loop_state.iteration, 0.25)
-
-        # Reduce for defects
         defect_penalty = 0.05 * len(loop_state.defects)
-
         score = base_score + iteration_bonus - defect_penalty
         return max(0.0, min(1.0, score))
 
