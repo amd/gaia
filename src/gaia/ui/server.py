@@ -73,17 +73,29 @@ _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 # API paths that bypass tunnel authentication (monitoring / preflight)
 _AUTH_EXEMPT_PATHS = {"/api/health"}
 
+# HttpOnly cookie name used to bootstrap tunnel auth from the QR-code URL.
+# When a mobile browser opens ``https://<tunnel>/?token=<uuid>`` the SPA
+# handler (``serve_spa``) sets this cookie on the response, so the React
+# app's subsequent ``fetch('/api/...')`` calls carry it automatically
+# (same-origin fetches include cookies by default).
+_TUNNEL_COOKIE_NAME = "gaia_tunnel_token"
+
 
 # ── Tunnel Auth Middleware ──────────────────────────────────────────────────
 
 
 class TunnelAuthMiddleware(BaseHTTPMiddleware):
-    """Validate Bearer token on API requests arriving through the ngrok tunnel.
+    """Validate tunnel auth token on API requests arriving through the ngrok tunnel.
 
     When the tunnel is active, every ``/api/*`` request whose source is
-    *not* localhost must carry a valid ``Authorization: Bearer <token>``
-    header.  Local requests (from the Electron desktop app) and the
-    ``/api/health`` monitoring endpoint are always allowed through.
+    *not* localhost must carry a valid token, provided via either:
+
+    1. ``Authorization: Bearer <token>`` header (scriptable clients, curl)
+    2. ``gaia_tunnel_token`` cookie (set by ``serve_spa`` when a mobile
+       browser first opens the QR-code URL containing ``?token=<uuid>``)
+
+    Local requests (from the Electron desktop app) and the ``/api/health``
+    monitoring endpoint are always allowed through.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -107,16 +119,34 @@ class TunnelAuthMiddleware(BaseHTTPMiddleware):
         if client_host in _LOCAL_HOSTS:
             return await call_next(request)
 
-        # ── Remote request through tunnel -- require Bearer token ────────
+        # ── Remote request through tunnel -- require valid token ─────────
+        # Extract token from Authorization header OR cookie.
+        token = None
         auth_header = request.headers.get("authorization", "")
-        if not auth_header.lower().startswith("bearer "):
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[len("bearer ") :].strip()  # noqa: E203
+        if not token:
+            token = request.cookies.get(_TUNNEL_COOKIE_NAME)
+
+        if not token:
+            logger.warning(
+                "Tunnel auth: rejecting %s %s from %s (no header/cookie)",
+                request.method,
+                path,
+                client_host,
+            )
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Missing or invalid Authorization header"},
             )
 
-        token = auth_header[len("bearer ") :].strip()  # noqa: E203
         if not tunnel.validate_token(token):
+            logger.warning(
+                "Tunnel auth: rejecting %s %s from %s (invalid token)",
+                request.method,
+                path,
+                client_host,
+            )
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid tunnel authentication token"},
@@ -385,14 +415,61 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             "Expires": "0",
         }
 
+        def _maybe_bootstrap_tunnel_cookie(
+            resp: FileResponse, request: Request
+        ) -> FileResponse:
+            """Attach tunnel-auth cookie if ?token=<valid-uuid> is present.
+
+            When a mobile browser first opens the QR-code URL
+            ``https://<tunnel>/?token=<uuid>``, we validate the token against
+            the active tunnel and set an HttpOnly cookie so that the SPA's
+            subsequent same-origin ``fetch('/api/...')`` calls authenticate
+            automatically -- no frontend token-plumbing required.
+
+            The ``Secure`` attribute is set only when the incoming request
+            used HTTPS (either directly or via ``X-Forwarded-Proto`` from
+            ngrok).  Over plain HTTP (localhost dev / TestClient) we omit
+            it so the cookie is actually delivered -- the middleware still
+            requires localhost bypass there, so there's no leak risk.
+            """
+            tunnel_mgr = getattr(request.app.state, "tunnel", None)
+            qs_token = request.query_params.get("token")
+            if (
+                tunnel_mgr is not None
+                and tunnel_mgr.active
+                and qs_token
+                and tunnel_mgr.validate_token(qs_token)
+            ):
+                # ngrok terminates TLS and forwards plain HTTP, so direct
+                # request.url.scheme is often "http".  Trust
+                # X-Forwarded-Proto when present.
+                fwd_proto = request.headers.get("x-forwarded-proto", "").lower()
+                is_https = request.url.scheme == "https" or fwd_proto == "https"
+                resp.set_cookie(
+                    key=_TUNNEL_COOKIE_NAME,
+                    value=qs_token,
+                    httponly=True,
+                    secure=is_https,
+                    samesite="lax",
+                    path="/",
+                )
+                logger.info(
+                    "Tunnel auth: bootstrapped cookie for client %s (secure=%s)",
+                    request.client.host if request.client else "unknown",
+                    is_https,
+                )
+            return resp
+
         @app.get("/{full_path:path}")
-        async def serve_spa(full_path: str):
+        async def serve_spa(request: Request, full_path: str):
             """Serve the React SPA for all non-API routes."""
             # Inline path sanitization (prevents directory traversal).
             # Checks are explicit so static analysis (CodeQL) can verify
             # the user-controlled ``full_path`` is properly constrained.
             if not full_path or "\x00" in full_path or ".." in full_path:
-                return FileResponse(_index_html, headers=_NO_CACHE)
+                return _maybe_bootstrap_tunnel_cookie(
+                    FileResponse(_index_html, headers=_NO_CACHE), request
+                )
 
             candidate = (_resolved_dist / full_path).resolve()
 
@@ -400,13 +477,19 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             try:
                 candidate.relative_to(_resolved_dist)
             except ValueError:
-                return FileResponse(_index_html, headers=_NO_CACHE)
+                return _maybe_bootstrap_tunnel_cookie(
+                    FileResponse(_index_html, headers=_NO_CACHE), request
+                )
 
             if candidate.is_file():
-                return FileResponse(str(candidate))
+                return _maybe_bootstrap_tunnel_cookie(
+                    FileResponse(str(candidate)), request
+                )
 
             # Default to index.html for SPA routing
-            return FileResponse(_index_html, headers=_NO_CACHE)
+            return _maybe_bootstrap_tunnel_cookie(
+                FileResponse(_index_html, headers=_NO_CACHE), request
+            )
 
     else:
         # Resolve to an absolute path so users can act on the warning. Prefer

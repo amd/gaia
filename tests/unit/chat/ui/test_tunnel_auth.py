@@ -206,3 +206,131 @@ class TestTunnelDeactivated:
         # Now request should pass without auth
         resp = client.get("/api/sessions")
         assert resp.status_code == 200
+
+
+# ── Tests: cookie-based auth (set by serve_spa ?token= bootstrap) ───────
+
+
+class TestCookieAuth:
+    """Remote requests can authenticate via the gaia_tunnel_token cookie."""
+
+    def test_valid_cookie_allows_request(self, app):
+        """A request with the correct cookie is allowed through."""
+        token = _activate_tunnel(app)
+        client = TestClient(app, cookies={"gaia_tunnel_token": token})
+        resp = client.get("/api/sessions")
+        assert resp.status_code == 200
+
+    def test_wrong_cookie_rejected(self, app):
+        """A request with an incorrect cookie value is rejected."""
+        _activate_tunnel(app)
+        client = TestClient(app, cookies={"gaia_tunnel_token": "bogus"})
+        resp = client.get("/api/sessions")
+        assert resp.status_code == 401
+        assert "Invalid tunnel" in resp.json()["detail"]
+
+    def test_cookie_fallback_when_header_missing(self, app):
+        """Cookie is accepted when Authorization header is absent."""
+        token = _activate_tunnel(app)
+        client = TestClient(app, cookies={"gaia_tunnel_token": token})
+        resp = client.get("/api/system/status")
+        assert resp.status_code == 200
+
+    def test_header_and_cookie_both_valid(self, app):
+        """Valid header wins / both-valid also succeeds."""
+        token = _activate_tunnel(app)
+        client = TestClient(app, cookies={"gaia_tunnel_token": token})
+        resp = client.get(
+            "/api/sessions",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+
+    def test_valid_cookie_with_invalid_header(self, app):
+        """Invalid Bearer header with valid cookie: header takes precedence -> 401.
+
+        This is intentional: we read the header first, and an explicitly
+        invalid header should surface a 401 rather than being silently
+        overridden by a cookie from an earlier session.
+        """
+        token = _activate_tunnel(app)
+        client = TestClient(app, cookies={"gaia_tunnel_token": token})
+        resp = client.get(
+            "/api/sessions",
+            headers={"Authorization": "Bearer not-the-right-token"},
+        )
+        assert resp.status_code == 401
+
+
+# ── Tests: serve_spa cookie bootstrap (?token= -> Set-Cookie) ───────────
+
+
+class TestSpaCookieBootstrap:
+    """serve_spa sets gaia_tunnel_token cookie when ?token=<valid> is present."""
+
+    @pytest.fixture
+    def app_with_frontend(self, tmp_path):
+        """App with a minimal webui dist so serve_spa is registered."""
+        dist = tmp_path / "dist"
+        (dist / "assets").mkdir(parents=True)
+        (dist / "index.html").write_text("<html><body>gaia</body></html>")
+        return create_app(db_path=":memory:", webui_dist=str(dist))
+
+    def test_valid_token_query_sets_cookie(self, app_with_frontend):
+        """Opening /?token=<valid> sets the HttpOnly gaia_tunnel_token cookie."""
+        token = _activate_tunnel(app_with_frontend)
+        client = TestClient(app_with_frontend)
+        resp = client.get(f"/?token={token}")
+        assert resp.status_code == 200
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert "gaia_tunnel_token" in set_cookie
+        assert token in set_cookie
+        assert "HttpOnly" in set_cookie
+        # TestClient also parses the cookie into the jar
+        assert client.cookies.get("gaia_tunnel_token") == token
+
+    def test_invalid_token_query_does_not_set_cookie(self, app_with_frontend):
+        """Opening /?token=<wrong> does NOT set the cookie."""
+        _activate_tunnel(app_with_frontend)
+        client = TestClient(app_with_frontend)
+        resp = client.get("/?token=not-the-token")
+        assert resp.status_code == 200
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert "gaia_tunnel_token" not in set_cookie
+
+    def test_no_token_query_does_not_set_cookie(self, app_with_frontend):
+        """Opening / without a token query does NOT set the cookie."""
+        _activate_tunnel(app_with_frontend)
+        client = TestClient(app_with_frontend)
+        resp = client.get("/")
+        assert resp.status_code == 200
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert "gaia_tunnel_token" not in set_cookie
+
+    def test_token_query_when_tunnel_inactive_does_not_set_cookie(
+        self, app_with_frontend
+    ):
+        """Bootstrap only happens when the tunnel is actually active."""
+        # Don't activate -- tunnel is inactive by default.
+        client = TestClient(app_with_frontend)
+        resp = client.get("/?token=anything")
+        assert resp.status_code == 200
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert "gaia_tunnel_token" not in set_cookie
+
+    def test_bootstrap_then_subsequent_api_call_succeeds(self, app_with_frontend):
+        """End-to-end: GET /?token=<x> sets cookie, then /api/sessions works."""
+        token = _activate_tunnel(app_with_frontend)
+        client = TestClient(app_with_frontend)
+
+        # Step 1: visit bootstrap URL -- should set cookie
+        resp = client.get(f"/?token={token}")
+        assert resp.status_code == 200
+        assert client.cookies.get("gaia_tunnel_token") == token
+
+        # Step 2: subsequent API call reuses the cookie -- must succeed
+        resp = client.get("/api/sessions")
+        assert resp.status_code == 200, (
+            f"Expected 200 after cookie bootstrap, got {resp.status_code}: "
+            f"{resp.text}"
+        )
