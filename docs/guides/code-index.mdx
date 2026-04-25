@@ -180,15 +180,16 @@ Indexing the gaia repo itself against Lemonade Server's `nomic-embed-text-v2-moe
 | Metric | Value |
 |--------|-------|
 | Source files discovered | 973 |
-| Semantic chunks extracted | 24,349 |
+| Semantic chunks indexed | 23,974 |
 | Languages parsed | Python, JavaScript, TypeScript, Go, Rust, Java, C/C++ |
 | Embedding model | `nomic-embed-text-v2-moe-GGUF` (via Lemonade Server) |
+| Wall-clock (remote, ngrok) | ~51 min |
 
 ```bash
 gaia-code index --repo . --model nomic-embed-text-v2-moe-GGUF
 ```
 
-Wall-clock time scales with your Lemonade Server throughput. On a local Ryzen AI setup the embedding step runs on the NPU; over a remote server (e.g. ngrok tunnel) it is network-bound. For retrieval-quality metrics see [#868](https://github.com/amd/gaia/issues/868).
+The 51-minute figure is **network-bound** (embeddings sent to a remote Lemonade Server over an ngrok tunnel). On a local Ryzen AI setup the embedding step runs on the NPU and is substantially faster. For retrieval-quality metrics see [#868](https://github.com/amd/gaia/issues/868).
 
 ## Roadmap
 
