@@ -13,8 +13,8 @@ import type {
   PipelineMetricsHistory,
   PipelineAggregateMetrics,
 } from '../../types';
-import * as api from '../../services/api';
-import { log } from '../../utils/logger';
+import * as api from '../services/api';
+import { log } from '../utils/logger';
 
 // ── Constants ────────────────────────────────────────────────────────
 

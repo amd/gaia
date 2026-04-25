@@ -600,6 +600,41 @@ export interface PipelineExecution {
     loopCount?: number;
 }
 
+// ── Pipeline Template Version Types ────────────────────────────────────────
+
+export interface TemplateVersion {
+    version: number;
+    snapshot: PipelineTemplate;
+    created_at: number;
+    description: string;
+}
+
+export interface TemplateVersionListResponse {
+    template_name: string;
+    versions: TemplateVersion[];
+    current: number | null;
+}
+
+export interface TemplateExportResponse {
+    template: PipelineTemplate;
+    versions: TemplateVersion[];
+    exported_at: number;
+    export_format: string;
+}
+
+export interface TemplateImportRequest {
+    template: PipelineTemplate;
+    name_conflict_strategy: 'rename' | 'overwrite' | 'skip';
+    versions?: TemplateVersion[];
+}
+
+export interface TemplateImportResponse {
+    imported: boolean;
+    template_name: string;
+    versions_restored: number;
+    conflict_resolved: string | null;
+}
+
 // ── Component Framework Types ─────────────────────────────────────────────
 
 /** A single component file in the Component Framework (memory, knowledge, tasks, etc.). */

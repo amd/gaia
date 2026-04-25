@@ -9,7 +9,8 @@
  */
 
 import { memo, useState, useEffect, useCallback } from 'react';
-import { History, Play, Trash2, ChevronDown, ChevronRight, RotateCcw, Clock, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { History, Play, Trash2, ChevronDown, ChevronRight, RotateCcw, Clock, CheckCircle, AlertCircle, Loader2, BarChart3, List } from 'lucide-react';
+import { MetricsDashboard } from '../metrics/MetricsDashboard';
 
 interface ExecutionEntry {
     pipeline_id: string;
@@ -48,6 +49,7 @@ function ExecutionHistoryInner({ onReplay }: ExecutionHistoryProps) {
     const [executions, setExecutions] = useState<ExecutionEntry[]>([]);
     const [loading, setLoading] = useState(false);
     const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [subTab, setSubTab] = useState<'runs' | 'performance'>('runs');
 
     const fetchExecutions = useCallback(async () => {
         setLoading(true);
@@ -113,6 +115,22 @@ function ExecutionHistoryInner({ onReplay }: ExecutionHistoryProps) {
                 <History size={16} />
                 <span>Execution History</span>
                 <span className="pc-execution-count">{executions.length} runs</span>
+                <div className="pc-execution-subtabs">
+                    <button
+                        className={`pc-subtab ${subTab === 'runs' ? 'active' : ''}`}
+                        onClick={() => setSubTab('runs')}
+                        title="Execution list"
+                    >
+                        <List size={12} /> Runs
+                    </button>
+                    <button
+                        className={`pc-subtab ${subTab === 'performance' ? 'active' : ''}`}
+                        onClick={() => setSubTab('performance')}
+                        title="Performance metrics"
+                    >
+                        <BarChart3 size={12} /> Performance
+                    </button>
+                </div>
                 <button
                     className="pc-btn pc-btn-secondary pc-refresh-btn"
                     onClick={fetchExecutions}
@@ -122,6 +140,12 @@ function ExecutionHistoryInner({ onReplay }: ExecutionHistoryProps) {
                 </button>
             </div>
 
+            {subTab === 'performance' ? (
+                <div className="pc-execution-performance">
+                    <MetricsDashboard />
+                </div>
+            ) : (
+            <>
             {executions.length === 0 ? (
                 <div className="pc-execution-empty">
                     <History size={24} strokeWidth={1} />
@@ -222,6 +246,8 @@ function ExecutionHistoryInner({ onReplay }: ExecutionHistoryProps) {
                         );
                     })}
                 </div>
+            )}
+            </>
             )}
         </div>
     );

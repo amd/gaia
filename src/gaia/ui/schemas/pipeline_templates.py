@@ -50,6 +50,9 @@ class PipelineTemplateSchema(BaseModel):
     quality_weights: Dict[str, float] = Field(
         default_factory=dict, description="Weights for quality scoring dimensions"
     )
+    version_count: int = Field(
+        default=0, description="Number of version snapshots stored"
+    )
 
     @field_validator("quality_threshold")
     @classmethod
@@ -83,6 +86,10 @@ class TemplateListResponse(BaseModel):
 
     templates: List[PipelineTemplateSchema]
     total: int
+    version_counts: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Map of template name to version snapshot count",
+    )
 
 
 class TemplateValidateResponse(BaseModel):
@@ -134,3 +141,229 @@ class PipelineRunResponse(BaseModel):
     pipeline_id: str = Field(..., description="Unique pipeline execution ID")
     status: str = Field(..., description="running|completed|failed|blocked")
     message: str = Field(default="", description="Status message")
+
+
+# Component Framework schemas
+
+
+class ComponentInfoSchema(BaseModel):
+    """Schema for component metadata in list response."""
+
+    category: str = Field(..., description="Component category (directory)")
+    name: str = Field(..., description="Component name (filename without extension)")
+    title: str = Field(..., description="Component title from frontmatter")
+    description: str = Field(..., description="Component description from frontmatter")
+    path: str = Field(..., description="Relative path to component file")
+    version: Optional[str] = Field(None, description="Version from frontmatter")
+    template_id: Optional[str] = Field(None, description="Template ID from frontmatter")
+
+
+class ComponentListResponse(BaseModel):
+    """Response for listing component framework files."""
+
+    components: List[ComponentInfoSchema]
+    total: int
+
+
+class ComponentRawResponse(BaseModel):
+    """Response for getting raw component content."""
+
+    content: str = Field(..., description="Raw markdown content")
+    path: str = Field(..., description="Relative path to component file")
+    frontmatter: Dict[str, Any] = Field(..., description="Parsed YAML frontmatter")
+
+
+class ComponentUpdateRequest(BaseModel):
+    """Request to update component content."""
+
+    content: str = Field(
+        ..., description="New markdown content (including frontmatter)"
+    )
+
+
+# ── Template Export / Import Schemas ──────────────────────────────────────
+
+
+class TemplateVersionSnapshot(BaseModel):
+    """A single version snapshot of a template."""
+
+    version: int = Field(..., description="Version number")
+    snapshot: PipelineTemplateSchema = Field(
+        ..., description="Template state at this version"
+    )
+    created_at: float = Field(
+        ..., description="Unix timestamp when snapshot was created"
+    )
+    description: str = Field(default="", description="Description of this version")
+
+
+class TemplateExportResponse(BaseModel):
+    """Response for template export endpoint."""
+
+    template: PipelineTemplateSchema = Field(
+        ..., description="Current template configuration"
+    )
+    versions: List[TemplateVersionSnapshot] = Field(
+        default_factory=list, description="Version history snapshots"
+    )
+    exported_at: float = Field(..., description="Unix timestamp of export")
+    export_format: str = Field(
+        default="gaia-pipeline-template/v1",
+        description="Export format identifier",
+    )
+
+
+class TemplateImportRequest(BaseModel):
+    """Request to import a pipeline template."""
+
+    template: PipelineTemplateSchema = Field(..., description="Template to import")
+    name_conflict_strategy: str = Field(
+        default="rename",
+        description="Strategy for handling name conflicts: rename, overwrite, skip",
+    )
+    versions: List[TemplateVersionSnapshot] = Field(
+        default_factory=list, description="Version snapshots to restore"
+    )
+
+
+class TemplateImportResponse(BaseModel):
+    """Response for template import endpoint."""
+
+    imported: bool = Field(..., description="Whether the import succeeded")
+    template_name: str = Field(..., description="Final name of the imported template")
+    versions_restored: int = Field(
+        ..., description="Number of version snapshots restored"
+    )
+    conflict_resolved: Optional[str] = Field(
+        None, description="How the name conflict was resolved (rename|overwrite|skip)"
+    )
+
+
+# ── Tier 3: Performance Metrics Schemas ──────────────────────────────
+
+
+class PhaseTimingSchema(BaseModel):
+    """Timing data for a single pipeline stage."""
+
+    stage_name: str = Field(..., description="Stage identifier")
+    duration_seconds: float = Field(..., description="Stage execution time")
+    agent_count: int = Field(default=0, description="Number of agents in stage")
+    quality_score: Optional[float] = Field(None, description="Quality score if available")
+
+
+class LoopMetricsSchema(BaseModel):
+    """Metrics for a single loop iteration."""
+
+    loop_id: str = Field(..., description="Loop identifier")
+    iteration_count: int = Field(default=0, description="Number of iterations")
+    total_duration_seconds: float = Field(default=0.0)
+
+
+class StateTransitionSchema(BaseModel):
+    """A state transition event in pipeline execution."""
+
+    from_state: str = Field(..., description="Source state")
+    to_state: str = Field(..., description="Target state")
+    timestamp: float = Field(default=0.0)
+
+
+class AgentSelectionSchema(BaseModel):
+    """An agent selection event."""
+
+    phase: str = Field(..., description="Pipeline phase")
+    agent_id: str = Field(..., description="Selected agent ID")
+    timestamp: float = Field(default=0.0)
+
+
+class PipelineMetricsSummarySchema(BaseModel):
+    """Summary metrics for a pipeline execution."""
+
+    pipeline_id: str = Field(..., description="Pipeline execution ID")
+    total_duration_seconds: float = Field(..., description="Total execution time")
+    total_tokens: int = Field(default=0, description="Total tokens processed")
+    avg_tps: float = Field(default=0.0, description="Average tokens per second")
+    avg_ttft: float = Field(default=0.0, description="Average time to first token")
+    total_loops: int = Field(default=0, description="Total loop count")
+    total_iterations: int = Field(default=0, description="Total iteration count")
+    total_defects: int = Field(default=0, description="Total defects found")
+    avg_quality_score: float = Field(default=0.0, description="Average quality score")
+    max_quality_score: float = Field(default=0.0, description="Max quality score")
+    min_quality_score: float = Field(default=0.0, description="Min quality score")
+
+
+class PipelineMetricsResponseSchema(BaseModel):
+    """Full metrics response for a pipeline execution."""
+
+    success: bool = Field(default=True)
+    pipeline_id: str = Field(..., description="Pipeline execution ID")
+    summary: PipelineMetricsSummarySchema = Field(..., description="Summary metrics")
+    phase_breakdown: Dict[str, PhaseTimingSchema] = Field(
+        default_factory=dict, description="Per-stage timing"
+    )
+    loop_metrics: Dict[str, LoopMetricsSchema] = Field(
+        default_factory=dict, description="Loop iteration metrics"
+    )
+    state_transitions: List[StateTransitionSchema] = Field(
+        default_factory=list, description="State transition history"
+    )
+    defects_by_type: Dict[str, int] = Field(
+        default_factory=dict, description="Defects grouped by type"
+    )
+    agent_selections: List[AgentSelectionSchema] = Field(
+        default_factory=list, description="Agent selection history"
+    )
+
+
+class MetricHistoryPointSchema(BaseModel):
+    """Single point in metrics history."""
+
+    timestamp: str = Field(..., description="ISO timestamp")
+    loop_id: str = Field(default="", description="Loop identifier")
+    phase: str = Field(default="", description="Pipeline phase")
+    metric_type: str = Field(..., description="Metric type name")
+    value: float = Field(..., description="Metric value")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PipelineMetricsHistorySchema(BaseModel):
+    """Metrics history for a pipeline."""
+
+    pipeline_id: str = Field(..., description="Pipeline execution ID")
+    metric_type: Optional[str] = Field(None, description="Filter by metric type")
+    start_time: Optional[str] = Field(None, description="Start time filter")
+    end_time: Optional[str] = Field(None, description="End time filter")
+    total_points: int = Field(..., description="Number of history points")
+    history: List[MetricHistoryPointSchema] = Field(default_factory=list)
+
+
+class AggregateMetricStatisticsSchema(BaseModel):
+    """Statistical summary for a single metric type."""
+
+    metric_type: str = Field(..., description="Metric identifier")
+    count: int = Field(..., description="Sample count")
+    mean: float = Field(..., description="Mean value")
+    median: float = Field(default=0.0, description="Median value")
+    std_dev: float = Field(default=0.0, description="Standard deviation")
+    min_value: float = Field(..., description="Minimum observed value")
+    max_value: float = Field(..., description="Maximum observed value")
+    trend: str = Field(default="stable", description="trend: improving|stable|declining")
+    percentiles: Dict[str, float] = Field(
+        default_factory=dict, description="p50, p90, p95 percentiles"
+    )
+
+
+class PipelineAggregateMetricsSchema(BaseModel):
+    """Aggregate metrics across multiple pipeline executions."""
+
+    success: bool = Field(default=True)
+    total_pipelines: int = Field(..., description="Total pipeline count")
+    time_range: Dict[str, str] = Field(
+        default_factory=dict, description="Start and end timestamps"
+    )
+    metric_statistics: Dict[str, AggregateMetricStatisticsSchema] = Field(
+        default_factory=dict, description="Per-metric statistics"
+    )
+    overall_health: float = Field(default=0.0, description="Overall health score 0-1")
+    recommendations: List[str] = Field(
+        default_factory=list, description="Optimization recommendations"
+    )

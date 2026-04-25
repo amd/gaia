@@ -28,12 +28,17 @@ import {
   Layers,
   List,
   History,
+  LayoutGrid,
 } from 'lucide-react';
 import { usePipelineStore } from '../../stores/pipelineStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useTemplateStore } from '../../stores/templateStore';
 import { PipelineCanvas } from './PipelineCanvas';
 import { ExecutionHistory } from './ExecutionHistory';
+import { TemplateMarketplace } from './TemplateMarketplace';
+import { VersionHistory } from './VersionHistory';
+import { VersionDiff } from './VersionDiff';
+import type { TemplateVersion } from '../../types';
 import './PipelineRunner.css';
 
 /** Map 5-stage pipeline phases to actual agent categories in config/agents/. */
@@ -123,7 +128,10 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
   const [autoSpawn, setAutoSpawn] = useState(true);
   const [templateName, setTemplateName] = useState('');
   const [sessionId, setSessionId] = useState(currentSessionId || '');
-  const [activeTab, setActiveTab] = useState<'canvas' | 'runner' | 'history'>('canvas');
+  const [activeTab, setActiveTab] = useState<'canvas' | 'runner' | 'history' | 'marketplace'>('canvas');
+  // Version history state
+  const [versionTemplateName, setVersionTemplateName] = useState<string | null>(null);
+  const [diffVersions, setDiffVersions] = useState<{ a: TemplateVersion; b: TemplateVersion } | null>(null);
   // Use array for collapsed event keys (immutable, React-detectable)
   const [collapsedEvents, setCollapsedEvents] = useState<string[]>([]);
 
@@ -241,11 +249,55 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
             <History size={14} />
             History
           </button>
+          <button
+            className={`pr-tab ${activeTab === 'marketplace' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('marketplace');
+              fetchTemplates();
+            }}
+          >
+            <LayoutGrid size={14} />
+            Marketplace
+          </button>
         </div>
       </div>
 
       {/* Tab content */}
-      {activeTab === 'canvas' ? (
+      {activeTab === 'marketplace' ? (
+        <div className="pr-marketplace-content">
+          <TemplateMarketplace
+            onUseTemplate={(name: string) => {
+              setTemplateName(name);
+              setActiveTab('runner');
+            }}
+            onViewVersions={(name) => {
+              setVersionTemplateName(name);
+              // Auto-switch to runner tab with version history visible
+              setActiveTab('runner');
+            }}
+          />
+          {/* Version history overlay for selected template */}
+          {versionTemplateName && (
+            <div className="pr-version-panel">
+              <VersionHistory
+                templateName={versionTemplateName}
+                onClose={() => setVersionTemplateName(null)}
+                onCompare={(versionA, versionB) => {
+                  setDiffVersions({ a: versionA, b: versionB });
+                }}
+              />
+              {/* Version diff panel */}
+              {diffVersions && (
+                <VersionDiff
+                  versionA={diffVersions.a}
+                  versionB={diffVersions.b}
+                  onClose={() => setDiffVersions(null)}
+                />
+              )}
+            </div>
+          )}
+        </div>
+      ) : activeTab === 'canvas' ? (
         <PipelineCanvas />
       ) : activeTab === 'history' ? (
         <div className="pr-history-content">

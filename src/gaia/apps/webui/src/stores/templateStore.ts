@@ -8,7 +8,7 @@
  */
 
 import { create } from 'zustand';
-import type { PipelineTemplate, TemplateListResponse, TemplateValidateResponse } from '../types';
+import type { PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateVersion, TemplateExportResponse, TemplateImportRequest } from '../types';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 
@@ -31,6 +31,18 @@ interface TemplateState {
   /** Error message from last failed operation */
   lastError: string | null;
 
+  // Version state
+  /** Version history for the selected template */
+  versions: TemplateVersion[];
+  /** Currently selected version for viewing/comparing */
+  selectedVersion: TemplateVersion | null;
+  /** Whether export is in progress */
+  isExporting: boolean;
+  /** Whether import is in progress */
+  isImporting: boolean;
+  /** View mode for the marketplace */
+  viewMode: 'list' | 'grid';
+
   // Actions - State setters
   /** Set the list of templates */
   setTemplates: (templates: PipelineTemplate[]) => void;
@@ -47,6 +59,18 @@ interface TemplateState {
   /** Set last error */
   setLastError: (error: string | null) => void;
 
+  // Version actions - State setters
+  /** Set version history */
+  setVersions: (versions: TemplateVersion[]) => void;
+  /** Set selected version */
+  setSelectedVersion: (version: TemplateVersion | null) => void;
+  /** Set export state */
+  setIsExporting: (exporting: boolean) => void;
+  /** Set import state */
+  setIsImporting: (importing: boolean) => void;
+  /** Set view mode */
+  setViewMode: (mode: 'list' | 'grid') => void;
+
   // Actions - CRUD operations
   /** Fetch all templates from server */
   fetchTemplates: () => Promise<void>;
@@ -62,6 +86,18 @@ interface TemplateState {
   deleteTemplate: (name: string) => Promise<void>;
   /** Validate a template */
   validateTemplate: (name: string) => Promise<TemplateValidateResponse>;
+
+  // Version operations
+  /** Fetch version history for a template */
+  fetchVersions: (name: string) => Promise<void>;
+  /** Create a new version snapshot */
+  createVersion: (name: string) => Promise<void>;
+  /** Restore a template to a previous version */
+  restoreVersion: (name: string, version: TemplateVersion) => Promise<void>;
+  /** Export a template with version history */
+  exportTemplate: (name: string) => Promise<TemplateExportResponse | null>;
+  /** Import a template from export data */
+  importTemplate: (data: TemplateImportRequest) => Promise<boolean>;
 }
 
 // ── Store Implementation ─────────────────────────────────────────────────
@@ -76,6 +112,13 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
   isSaving: false,
   lastError: null,
 
+  // Version initial state
+  versions: [],
+  selectedVersion: null,
+  isExporting: false,
+  isImporting: false,
+  viewMode: 'grid',
+
   // State setters
   setTemplates: (templates) => set({ templates }),
   setSelectedTemplate: (template) => set({ selectedTemplate: template }),
@@ -84,6 +127,13 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
   setIsLoading: (loading) => set({ isLoading: loading }),
   setIsSaving: (saving) => set({ isSaving: saving }),
   setLastError: (error) => set({ lastError: error }),
+
+  // Version state setters
+  setVersions: (versions) => set({ versions }),
+  setSelectedVersion: (version) => set({ selectedVersion: version }),
+  setIsExporting: (exporting) => set({ isExporting: exporting }),
+  setIsImporting: (importing) => set({ isImporting: importing }),
+  setViewMode: (mode) => set({ viewMode: mode }),
 
   // CRUD operations
   fetchTemplates: async () => {
@@ -196,6 +246,92 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
       set({ lastError: `Failed to validate template ${name}: ${message}`, isLoading: false });
       log.ui.error('[templateStore] Failed to validate template:', err);
       throw err;
+    }
+  },
+
+  // ── Version Operations ─────────────────────────────────────────────────
+
+  fetchVersions: async (name) => {
+    set({ isLoading: true, lastError: null });
+    try {
+      const data = await api.getTemplateVersions(name);
+      set({ versions: data.versions, isLoading: false });
+      log.ui.info(`[templateStore] Fetched ${data.versions.length} versions for ${name}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set({ lastError: `Failed to fetch versions for ${name}: ${message}`, isLoading: false });
+      log.ui.error('[templateStore] Failed to fetch versions:', err);
+    }
+  },
+
+  createVersion: async (name) => {
+    set({ isSaving: true, lastError: null });
+    try {
+      const result = await api.createTemplateVersion(name);
+      // Refresh versions after creating new one
+      await get().fetchVersions(name);
+      set({ isSaving: false });
+      log.ui.info(`[templateStore] Created version ${result.new_version} for ${name}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set({ lastError: `Failed to create version for ${name}: ${message}`, isSaving: false });
+      log.ui.error('[templateStore] Failed to create version:', err);
+    }
+  },
+
+  restoreVersion: async (name, version) => {
+    set({ isSaving: true, lastError: null });
+    try {
+      const snapshot = version.snapshot;
+      await api.updateTemplate(name, {
+        description: snapshot.description,
+        quality_threshold: snapshot.quality_threshold,
+        max_iterations: snapshot.max_iterations,
+        agent_categories: snapshot.agent_categories,
+        routing_rules: snapshot.routing_rules,
+        quality_weights: snapshot.quality_weights,
+      });
+      // Refresh templates list and selected template
+      await get().fetchTemplates();
+      await get().fetchTemplate(name);
+      set({ isSaving: false });
+      log.ui.info(`[templateStore] Restored ${name} to version ${version.version}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set({ lastError: `Failed to restore version: ${message}`, isSaving: false });
+      log.ui.error('[templateStore] Failed to restore version:', err);
+    }
+  },
+
+  exportTemplate: async (name): Promise<TemplateExportResponse | null> => {
+    set({ isExporting: true, lastError: null });
+    try {
+      const data = await api.exportTemplate(name);
+      set({ isExporting: false });
+      log.ui.info(`[templateStore] Exported template ${name} with ${data.versions.length} versions`);
+      return data;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set({ lastError: `Failed to export ${name}: ${message}`, isExporting: false });
+      log.ui.error('[templateStore] Failed to export template:', err);
+      return null;
+    }
+  },
+
+  importTemplate: async (data): Promise<boolean> => {
+    set({ isImporting: true, lastError: null });
+    try {
+      const result = await api.importTemplate(data);
+      // Refresh templates list after import
+      await get().fetchTemplates();
+      set({ isImporting: false });
+      log.ui.info(`[templateStore] Imported template: ${result.template_name} (${result.versions_restored} versions)`);
+      return result.imported;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set({ lastError: `Failed to import template: ${message}`, isImporting: false });
+      log.ui.error('[templateStore] Failed to import template:', err);
+      return false;
     }
   },
 }));

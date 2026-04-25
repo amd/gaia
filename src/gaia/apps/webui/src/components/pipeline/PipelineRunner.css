@@ -741,3 +741,16 @@
 .pr-history-content {
     max-width: 100%;
 }
+
+/* Marketplace tab content */
+.pr-marketplace-content {
+    max-width: 100%;
+    position: relative;
+}
+
+/* Version panel overlay */
+.pr-version-panel {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 2px solid var(--border, #e5e7eb);
+}

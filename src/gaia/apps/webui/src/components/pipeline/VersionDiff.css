@@ -1,0 +1,409 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* VersionDiff - Side-by-side version comparison panel */
+
+.vd-diff-panel {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.vd-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    gap: 12px;
+}
+
+.vd-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.vd-header-left h3 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary, #111827);
+}
+
+.vd-header-versions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.vd-version-badge {
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.vd-version-a {
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.vd-version-b {
+    background: #f3e8ff;
+    color: #7c3aed;
+}
+
+.vd-arrow {
+    color: var(--text-secondary, #9ca3af);
+}
+
+.vd-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.vd-no-changes {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+    color: #16a34a;
+}
+
+.vd-btn-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: var(--text-secondary, #6b7280);
+    padding: 4px;
+    border-radius: 4px;
+}
+
+.vd-btn-close:hover {
+    background: var(--bg-input, #f9fafb);
+    color: var(--text-primary, #374151);
+}
+
+/* ── Summary ────────────────────────────────────────────────────────────── */
+
+.vd-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.vd-summary-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: #fef3c7;
+    color: #b45309;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+}
+
+.vd-chip-agents {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.vd-chip-rules {
+    background: #ede9fe;
+    color: #6d28d9;
+}
+
+/* ── Empty State ────────────────────────────────────────────────────────── */
+
+.vd-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+    color: var(--text-secondary, #6b7280);
+    gap: 12px;
+}
+
+.vd-empty svg {
+    opacity: 0.4;
+    color: #16a34a;
+}
+
+.vd-empty h4 {
+    color: var(--text-primary, #374151);
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.vd-empty p {
+    margin: 0;
+    font-size: 0.8125rem;
+}
+
+/* ── Diff Content ───────────────────────────────────────────────────────── */
+
+.vd-diff-content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* ── Section ────────────────────────────────────────────────────────────── */
+
+.vd-section {
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.vd-section-title {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    margin: 0;
+    padding: 12px 16px;
+    background: var(--bg-muted, #f3f4f6);
+    border-bottom: 1px solid var(--border, #e5e7eb);
+    color: var(--text-primary, #111827);
+}
+
+/* ── Field Diffs ────────────────────────────────────────────────────────── */
+
+.vd-fields {
+    padding: 8px 0;
+}
+
+.vd-field-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+}
+
+.vd-field-row:not(:last-child) {
+    border-bottom: 1px solid var(--border-light, #f3f4f6);
+}
+
+.vd-field-label {
+    font-weight: 600;
+    font-size: 0.75rem;
+    color: var(--text-secondary, #6b7280);
+    min-width: 120px;
+}
+
+.vd-field-value {
+    font-size: 0.8125rem;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.vd-field-old {
+    background: #fee2e2;
+    color: #dc2626;
+}
+
+.vd-field-new {
+    background: #dcfce7;
+    color: #16a34a;
+}
+
+.vd-field-arrow {
+    color: var(--text-secondary, #9ca3af);
+    flex-shrink: 0;
+}
+
+/* ── Agent Category Diffs ──────────────────────────────────────────────── */
+
+.vd-agent-category {
+    padding: 12px 16px;
+}
+
+.vd-agent-category:not(:last-child) {
+    border-bottom: 1px solid var(--border-light, #f3f4f6);
+}
+
+.vd-category-name {
+    font-weight: 600;
+    font-size: 0.75rem;
+    color: var(--text-primary, #111827);
+    margin-bottom: 8px;
+    display: block;
+}
+
+.vd-agent-columns {
+    display: flex;
+    gap: 16px;
+}
+
+.vd-agent-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.vd-agent-old {
+    padding-right: 16px;
+    border-right: 1px solid var(--border, #e5e7eb);
+}
+
+.vd-agent-new {
+    padding-left: 16px;
+}
+
+.vd-agent-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.vd-agent-label {
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: var(--text-secondary, #9ca3af);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-right: 4px;
+}
+
+.vd-agent-chip {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.6875rem;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.vd-agent-chip-removed {
+    background: #fee2e2;
+    color: #dc2626;
+    text-decoration: line-through;
+}
+
+.vd-agent-chip-added {
+    background: #dcfce7;
+    color: #16a34a;
+}
+
+.vd-agent-chip-unchanged {
+    background: var(--bg-muted, #f3f4f6);
+    color: var(--text-secondary, #6b7280);
+}
+
+/* ── Routing Rules Diffs ────────────────────────────────────────────────── */
+
+.vd-rules-columns {
+    display: flex;
+}
+
+.vd-rules-column {
+    flex: 1;
+    padding: 12px 16px;
+}
+
+.vd-rules-old {
+    border-right: 1px solid var(--border, #e5e7eb);
+}
+
+.vd-rules-column-title {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: var(--text-secondary, #6b7280);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0 0 8px;
+}
+
+.vd-rule {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--bg-muted, #f3f4f6);
+    border-radius: 4px;
+    font-size: 0.75rem;
+    margin-bottom: 4px;
+}
+
+.vd-rule-condition {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    color: #d97706;
+    background: #fef3c7;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 0.6875rem;
+}
+
+.vd-rule-target {
+    font-weight: 600;
+    color: #059669;
+}
+
+.vd-rule-loop {
+    margin-left: auto;
+    font-size: 0.625rem;
+    color: #7c3aed;
+    background: #ede9fe;
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+.vd-empty-rules {
+    font-size: 0.75rem;
+    color: var(--text-secondary, #9ca3af);
+    font-style: italic;
+}
+
+/* ── Quality Weights Diffs ──────────────────────────────────────────────── */
+
+.vd-weights-columns {
+    display: flex;
+}
+
+.vd-weights-column {
+    flex: 1;
+    padding: 12px 16px;
+}
+
+.vd-weights-old {
+    border-right: 1px solid var(--border, #e5e7eb);
+}
+
+.vd-weight-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 0.8125rem;
+}
+
+.vd-weight-row:not(:last-child) {
+    border-bottom: 1px solid var(--border-light, #f3f4f6);
+}
+
+.vd-weight-dimension {
+    color: var(--text-secondary, #6b7280);
+}
+
+.vd-weight-value {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-weight: 500;
+    color: var(--text-primary, #374151);
+}
+
+.vd-weight-changed {
+    color: #dc2626;
+    font-weight: 600;
+}

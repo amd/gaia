@@ -1,0 +1,419 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* VersionHistory - Template version timeline panel */
+
+.vh-version-history {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.vh-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    gap: 12px;
+}
+
+.vh-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.vh-header-left h3 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary, #111827);
+}
+
+.vh-version-count {
+    font-size: 0.6875rem;
+    color: var(--text-secondary, #6b7280);
+    background: var(--bg-muted, #f3f4f6);
+    padding: 2px 6px;
+    border-radius: 9999px;
+}
+
+.vh-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* ── Compare Controls ───────────────────────────────────────────────────── */
+
+.vh-compare-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 6px;
+}
+
+.vh-compare-label {
+    font-size: 0.75rem;
+    color: #1d4ed8;
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+
+.vh-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-family: inherit;
+    white-space: nowrap;
+}
+
+.vh-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.vh-btn-small {
+    padding: 4px 8px;
+    font-size: 0.6875rem;
+}
+
+.vh-btn-secondary {
+    background: var(--bg-input, #f9fafb);
+    color: var(--text-primary, #374151);
+    border-color: var(--border, #e5e7eb);
+}
+
+.vh-btn-secondary:hover:not(:disabled) {
+    background: var(--border, #e5e7eb);
+}
+
+.vh-btn-primary {
+    background: var(--accent, #3b82f6);
+    color: #fff;
+}
+
+.vh-btn-primary:hover:not(:disabled) {
+    background: var(--accent-hover, #2563eb);
+}
+
+.vh-btn-ghost {
+    background: none;
+    color: var(--text-secondary, #6b7280);
+    border: 1px solid transparent;
+    padding: 4px 6px;
+}
+
+.vh-btn-ghost:hover:not(:disabled) {
+    background: var(--bg-input, #f9fafb);
+    color: var(--text-primary, #374151);
+}
+
+.vh-btn-warning {
+    color: #d97706;
+}
+
+.vh-btn-warning:hover:not(:disabled) {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.vh-btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: var(--text-secondary, #6b7280);
+    border-radius: 4px;
+}
+
+.vh-btn-icon:hover {
+    background: var(--bg-input, #f9fafb);
+    color: var(--text-primary, #374151);
+}
+
+/* ── Error Bar ──────────────────────────────────────────────────────────── */
+
+.vh-error-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 6px;
+    color: #dc2626;
+    font-size: 0.8125rem;
+}
+
+.vh-error-dismiss {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: #dc2626;
+    cursor: pointer;
+    font-size: 0.75rem;
+    text-decoration: underline;
+    font-family: inherit;
+}
+
+/* ── Loading / Empty ────────────────────────────────────────────────────── */
+
+.vh-loading,
+.vh-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 24px;
+    color: var(--text-secondary, #6b7280);
+    gap: 10px;
+}
+
+.vh-loading svg,
+.vh-empty svg {
+    opacity: 0.4;
+}
+
+.vh-loading span {
+    font-size: 0.875rem;
+}
+
+.vh-empty h4 {
+    color: var(--text-primary, #374151);
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.vh-empty p {
+    margin: 0;
+    font-size: 0.8125rem;
+}
+
+/* ── Timeline ───────────────────────────────────────────────────────────── */
+
+.vh-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.vh-timeline-item {
+    display: flex;
+    gap: 12px;
+    padding: 12px 0;
+    position: relative;
+}
+
+.vh-timeline-current {
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+}
+
+.vh-timeline-compare {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    margin: 0 -8px;
+    padding-left: 8px;
+    padding-right: 8px;
+}
+
+/* ── Timeline Marker ────────────────────────────────────────────────────── */
+
+.vh-timeline-marker {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    flex-shrink: 0;
+    padding-top: 2px;
+}
+
+.vh-marker-dot {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.625rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.vh-marker-live {
+    background: #16a34a;
+    color: #fff;
+}
+
+.vh-marker-version {
+    background: var(--bg-muted, #f3f4f6);
+    color: var(--text-secondary, #6b7280);
+    border: 2px solid var(--border, #e5e7eb);
+}
+
+.vh-marker-a {
+    background: #3b82f6;
+    color: #fff;
+    border-color: #3b82f6;
+}
+
+.vh-marker-b {
+    background: #8b5cf6;
+    color: #fff;
+    border-color: #8b5cf6;
+}
+
+.vh-timeline-line {
+    width: 2px;
+    height: 32px;
+    background: var(--border, #e5e7eb);
+    flex-shrink: 0;
+}
+
+.vh-line-live {
+    background: #86efac;
+}
+
+/* ── Timeline Content ───────────────────────────────────────────────────── */
+
+.vh-timeline-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.vh-version-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.vh-version-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 600;
+    font-size: 0.8125rem;
+    color: var(--text-primary, #111827);
+}
+
+.vh-version-desc {
+    font-size: 0.75rem;
+    color: var(--text-secondary, #6b7280);
+}
+
+.vh-version-time {
+    margin-left: auto;
+    font-size: 0.6875rem;
+    color: var(--text-secondary, #9ca3af);
+}
+
+/* ── Version Summary ────────────────────────────────────────────────────── */
+
+.vh-version-summary {
+    display: flex;
+    gap: 16px;
+    margin-top: 6px;
+    font-size: 0.75rem;
+    color: var(--text-secondary, #6b7280);
+}
+
+.vh-summary-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* ── Version Details ────────────────────────────────────────────────────── */
+
+.vh-version-details {
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: var(--bg-input, #f9fafb);
+    border-radius: 6px;
+    font-size: 0.75rem;
+}
+
+.vh-detail-row {
+    display: flex;
+    gap: 8px;
+    padding: 3px 0;
+}
+
+.vh-detail-row:not(:last-child) {
+    border-bottom: 1px solid var(--border-light, #f3f4f6);
+}
+
+.vh-detail-label {
+    font-weight: 600;
+    color: var(--text-secondary, #6b7280);
+    min-width: 80px;
+}
+
+.vh-detail-agents {
+    color: var(--text-primary, #374151);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.6875rem;
+}
+
+.vh-detail-rules {
+    color: var(--text-secondary, #6b7280);
+}
+
+/* ── Version Actions ────────────────────────────────────────────────────── */
+
+.vh-version-actions {
+    display: flex;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+/* ── Checkbox ───────────────────────────────────────────────────────────── */
+
+.vh-checkbox {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: var(--text-secondary, #6b7280);
+    padding: 0;
+}
+
+.vh-checkbox:hover {
+    color: var(--accent, #3b82f6);
+}
+
+/* ── Spin Animation ─────────────────────────────────────────────────────── */
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.spin {
+    animation: spin 1s linear infinite;
+}

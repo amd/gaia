@@ -18,35 +18,44 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import AsyncGenerator
 
-import re
 import yaml
-
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
-
 from ..schemas.pipeline_templates import (
+    ComponentInfoSchema,
+    ComponentListResponse,
+    ComponentRawResponse,
+    ComponentUpdateRequest,
     PipelineRunRequest,
     PipelineRunResponse,
     PipelineTemplateSchema,
     TemplateCreateRequest,
+    TemplateExportResponse,
+    TemplateImportRequest,
+    TemplateImportResponse,
     TemplateListResponse,
     TemplateUpdateRequest,
     TemplateValidateResponse,
-    ComponentListResponse,
-    ComponentRawResponse,
-    ComponentUpdateRequest,
-    ComponentInfoSchema,
+    TemplateVersionSnapshot,
+    # Tier 3: Metrics schemas
+    AggregateMetricStatisticsSchema,
+    PhaseTimingSchema,
+    PipelineAggregateMetricsSchema,
+    PipelineMetricsHistorySchema,
+    PipelineMetricsResponseSchema,
+    PipelineMetricsSummarySchema,
 )
 from ..services.template_service import TemplateService, TemplateValidationError
 
@@ -71,11 +80,24 @@ async def list_templates(service: TemplateService = Depends(get_template_service
     List all available pipeline templates.
 
     Returns a list of all pipeline templates stored in the templates directory.
+    Templates are enriched with version_count from the in-memory version registry.
     Templates that fail to load are skipped with a warning logged.
     """
     try:
         templates = service.list_templates()
-        return TemplateListResponse(templates=templates, total=len(templates))
+        version_counts: dict[str, int] = {}
+
+        enriched = []
+        for t in templates:
+            count = len(_template_versions.get(t.name, []))
+            version_counts[t.name] = count
+            enriched.append(t.model_copy(update={"version_count": count}))
+
+        return TemplateListResponse(
+            templates=enriched,
+            total=len(enriched),
+            version_counts=version_counts,
+        )
     except Exception as e:
         logger.error("Failed to list templates: %s", e, exc_info=True)
         raise HTTPException(
@@ -287,6 +309,258 @@ async def validate_template(
         )
 
 
+# =============================================================================
+# Template Export / Import Endpoints
+# =============================================================================
+
+
+@router.get("/api/v1/pipeline/templates/{template_name}/export")
+async def export_template(
+    template_name: str,
+    service: TemplateService = Depends(get_template_service),
+):
+    """
+    Export a pipeline template with its full version history.
+
+    Returns the current template configuration along with all version snapshots.
+    Sets Content-Disposition header for browser download as JSON.
+    """
+    try:
+        template = service.get_template(template_name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except TemplateValidationError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid template", "errors": e.errors},
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to export template %s: %s", template_name, e, exc_info=True
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to export template. Check server logs for details.",
+        )
+
+    # Determine the latest version number from snapshots
+    versions = _template_versions.get(template_name, [])
+    latest_version = 1
+    if versions:
+        latest_version = max(v["version"] for v in versions) + 1
+
+    # Build export payload
+    export_data = TemplateExportResponse(
+        template=template.model_copy(update={"version_count": len(versions)}),
+        versions=[
+            {
+                "version": v["version"],
+                "snapshot": (
+                    PipelineTemplateSchema(**v["snapshot"])
+                    if isinstance(v["snapshot"], dict)
+                    else v["snapshot"]
+                ),
+                "created_at": v["created_at"],
+                "description": v.get("description", ""),
+            }
+            for v in versions
+        ],
+        exported_at=time.time(),
+        export_format="gaia-pipeline-template/v1",
+    )
+
+    # Serialize to dict for JSONResponse
+    payload = export_data.model_dump()
+
+    # Build filename with version number
+    filename = f"{template_name}_v{latest_version}.json"
+
+    return JSONResponse(
+        content=payload,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
+
+
+@router.post("/api/v1/pipeline/templates/import")
+async def import_template(
+    request: TemplateImportRequest,
+    service: TemplateService = Depends(get_template_service),
+):
+    """
+    Import a pipeline template from an export payload.
+
+    Handles name conflicts using the specified strategy:
+    - rename: append a timestamp suffix to avoid collision
+    - overwrite: replace the existing template
+    - skip: leave the existing template unchanged and return early
+
+    Optionally restores version snapshots from the export.
+    """
+    strategy = request.name_conflict_strategy
+    if strategy not in ("rename", "overwrite", "skip"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid conflict strategy: {strategy}. Must be 'rename', 'overwrite', or 'skip'.",
+        )
+
+    template = request.template
+    incoming_name = template.name
+    final_name = incoming_name
+
+    # Check for name conflict
+    try:
+        existing = service.get_template(incoming_name)
+        conflict = True
+    except FileNotFoundError:
+        conflict = False
+        existing = None
+
+    if conflict:
+        if strategy == "skip":
+            logger.info(
+                "Import skipped: template '%s' already exists (strategy=skip)",
+                incoming_name,
+            )
+            return TemplateImportResponse(
+                imported=False,
+                template_name=incoming_name,
+                versions_restored=0,
+                conflict_resolved="skip",
+            )
+
+        if strategy == "overwrite":
+            final_name = incoming_name
+            logger.info(
+                "Import overwriting template '%s'",
+                incoming_name,
+            )
+        else:
+            # rename: append timestamp
+            suffix = int(time.time())
+            final_name = f"{incoming_name}_{suffix}"
+            logger.info(
+                "Import renaming '%s' -> '%s' (conflict: rename)",
+                incoming_name,
+                final_name,
+            )
+
+    # Write the template file
+    try:
+        template_data = {
+            "name": final_name,
+            "description": template.description,
+            "quality_threshold": template.quality_threshold,
+            "max_iterations": template.max_iterations,
+        }
+        if template.agent_categories:
+            template_data["agent_categories"] = dict(template.agent_categories)
+        if template.routing_rules:
+            template_data["routing_rules"] = [
+                r.model_dump() for r in template.routing_rules
+            ]
+        if template.quality_weights:
+            template_data["quality_weights"] = dict(template.quality_weights)
+
+        if conflict and strategy == "overwrite":
+            # Update existing template
+            service.update_template(
+                name=final_name,
+                description=template.description,
+                quality_threshold=template.quality_threshold,
+                max_iterations=template.max_iterations,
+                agent_categories=(
+                    dict(template.agent_categories)
+                    if template.agent_categories
+                    else None
+                ),
+                routing_rules=(
+                    [r.model_dump() for r in template.routing_rules]
+                    if template.routing_rules
+                    else None
+                ),
+                quality_weights=(
+                    dict(template.quality_weights) if template.quality_weights else None
+                ),
+            )
+        else:
+            # Create new template
+            service.create_template(
+                name=final_name,
+                description=template.description,
+                quality_threshold=template.quality_threshold,
+                max_iterations=template.max_iterations,
+                agent_categories=(
+                    dict(template.agent_categories)
+                    if template.agent_categories
+                    else None
+                ),
+                routing_rules=(
+                    [r.model_dump() for r in template.routing_rules]
+                    if template.routing_rules
+                    else None
+                ),
+                quality_weights=(
+                    dict(template.quality_weights) if template.quality_weights else None
+                ),
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except TemplateValidationError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid template", "errors": e.errors},
+        )
+    except Exception as e:
+        logger.error("Failed to import template: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to import template. Check server logs for details.",
+        )
+
+    # Restore version snapshots
+    versions_restored = 0
+    if request.versions:
+        if final_name not in _template_versions:
+            _template_versions[final_name] = []
+
+        for vs in request.versions:
+            snapshot_dict = vs.snapshot
+            if isinstance(snapshot_dict, PipelineTemplateSchema):
+                snapshot_dict = snapshot_dict.model_dump()
+            elif isinstance(snapshot_dict, dict):
+                # Ensure it matches PipelineTemplateSchema fields
+                snapshot_dict = dict(snapshot_dict)
+
+            _template_versions[final_name].append(
+                {
+                    "version": vs.version,
+                    "snapshot": snapshot_dict,
+                    "created_at": vs.created_at,
+                    "description": vs.description,
+                }
+            )
+            versions_restored += 1
+
+        logger.info(
+            "Restored %d version snapshots for template '%s'",
+            versions_restored,
+            final_name,
+        )
+
+    conflict_resolved = strategy if conflict else None
+    return TemplateImportResponse(
+        imported=True,
+        template_name=final_name,
+        versions_restored=versions_restored,
+        conflict_resolved=conflict_resolved,
+    )
+
+
 @router.get("/api/v1/pipeline/agents")
 async def list_agents():
     """
@@ -324,7 +598,9 @@ async def list_agents():
                     triggers = agent_data.get("triggers", {})
                     complexity = triggers.get("complexity_range", {})
                     if isinstance(complexity, dict):
-                        complexity_range = f"{complexity.get('min', 0)}-{complexity.get('max', 1)}"
+                        complexity_range = (
+                            f"{complexity.get('min', 0)}-{complexity.get('max', 1)}"
+                        )
                     elif isinstance(complexity, list) and len(complexity) == 2:
                         complexity_range = f"{complexity[0]}-{complexity[1]}"
                     else:
@@ -334,7 +610,9 @@ async def list_agents():
                         "id": agent_id,
                         "name": agent_data.get("name", agent_id),
                         "category": agent_data.get("category", "unknown"),
-                        "description": (agent_data.get("description", "") or "").strip(),
+                        "description": (
+                            agent_data.get("description", "") or ""
+                        ).strip(),
                         "model_id": agent_data.get("model_id", None),
                         "capabilities": agent_data.get("capabilities", []),
                         "keywords": triggers.get("keywords", []),
@@ -381,8 +659,16 @@ async def list_agents():
                     "description": (fm_data.get("description", "") or "").strip(),
                     "model_id": fm_data.get("model_id", None),
                     "capabilities": fm_data.get("capabilities", []),
-                    "keywords": fm_data.get("triggers", {}).get("keywords", []) if isinstance(fm_data.get("triggers"), dict) else [],
-                    "phases": fm_data.get("triggers", {}).get("phases", []) if isinstance(fm_data.get("triggers"), dict) else [],
+                    "keywords": (
+                        fm_data.get("triggers", {}).get("keywords", [])
+                        if isinstance(fm_data.get("triggers"), dict)
+                        else []
+                    ),
+                    "phases": (
+                        fm_data.get("triggers", {}).get("phases", [])
+                        if isinstance(fm_data.get("triggers"), dict)
+                        else []
+                    ),
                     "complexity_range": "0-1",
                     "tools": fm_data.get("tools", []),
                     "enabled": fm_data.get("enabled", True),
@@ -441,11 +727,12 @@ async def list_agents():
 
 
 # Regex pattern for path traversal protection - only allow safe characters
-_AGENT_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+_AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 class AgentFileUpdate(BaseModel):
     """Request body for updating an agent file."""
+
     content: str = Field(..., description="Raw YAML/MD content to save")
 
 
@@ -515,11 +802,11 @@ VALID_COMPONENT_CATEGORIES = [
     "checklists",
     "personas",
     "workflows",
-    "templates"
+    "templates",
 ]
 
 # Regex pattern for component name validation - only allow safe characters
-_COMPONENT_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+_COMPONENT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 @router.get("/api/v1/pipeline/components/list", response_model=ComponentListResponse)
@@ -554,15 +841,19 @@ async def list_components():
                 component = loader.load_component(comp_path)
                 frontmatter = component["frontmatter"]
 
-                components.append(ComponentInfoSchema(
-                    category=category,
-                    name=name,
-                    title=frontmatter.get("title", frontmatter.get("template_id", name)),
-                    description=frontmatter.get("description", ""),
-                    path=comp_path,
-                    version=frontmatter.get("version", None),
-                    template_id=frontmatter.get("template_id", None),
-                ))
+                components.append(
+                    ComponentInfoSchema(
+                        category=category,
+                        name=name,
+                        title=frontmatter.get(
+                            "title", frontmatter.get("template_id", name)
+                        ),
+                        description=frontmatter.get("description", ""),
+                        path=comp_path,
+                        version=frontmatter.get("version", None),
+                        template_id=frontmatter.get("template_id", None),
+                    )
+                )
             except Exception as e:
                 logger.warning(f"Failed to load component {comp_path}: {e}")
                 continue
@@ -598,7 +889,7 @@ async def get_component_raw(category: str, component_name: str):
     if category not in VALID_COMPONENT_CATEGORIES:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid category. Must be one of: {', '.join(VALID_COMPONENT_CATEGORIES)}"
+            detail=f"Invalid category. Must be one of: {', '.join(VALID_COMPONENT_CATEGORIES)}",
         )
 
     # Security: validate component_name to prevent path traversal
@@ -628,8 +919,17 @@ async def get_component_raw(category: str, component_name: str):
         )
     except Exception as e:
         if "Component not found" in str(e) or "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=f"Component not found: {category}/{component_name}.md")
-        logger.error("Failed to get component %s/%s: %s", category, component_name, e, exc_info=True)
+            raise HTTPException(
+                status_code=404,
+                detail=f"Component not found: {category}/{component_name}.md",
+            )
+        logger.error(
+            "Failed to get component %s/%s: %s",
+            category,
+            component_name,
+            e,
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=500,
             detail="Failed to get component. Check server logs for details.",
@@ -637,7 +937,9 @@ async def get_component_raw(category: str, component_name: str):
 
 
 @router.put("/api/v1/pipeline/components/{category}/{component_name}/raw")
-async def update_component_raw(category: str, component_name: str, update: ComponentUpdateRequest):
+async def update_component_raw(
+    category: str, component_name: str, update: ComponentUpdateRequest
+):
     """
     Update raw markdown content for a component framework file.
 
@@ -653,7 +955,7 @@ async def update_component_raw(category: str, component_name: str, update: Compo
     if category not in VALID_COMPONENT_CATEGORIES:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid category. Must be one of: {', '.join(VALID_COMPONENT_CATEGORIES)}"
+            detail=f"Invalid category. Must be one of: {', '.join(VALID_COMPONENT_CATEGORIES)}",
         )
 
     # Security: validate component_name to prevent path traversal
@@ -696,10 +998,21 @@ async def update_component_raw(category: str, component_name: str, update: Compo
         raise
     except Exception as e:
         if "Component not found" in str(e) or "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=f"Component not found: {category}/{component_name}.md")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Component not found: {category}/{component_name}.md",
+            )
         if "Path traversal" in str(e):
-            raise HTTPException(status_code=400, detail="Invalid path: path traversal detected")
-        logger.error("Failed to update component %s/%s: %s", category, component_name, e, exc_info=True)
+            raise HTTPException(
+                status_code=400, detail="Invalid path: path traversal detected"
+            )
+        logger.error(
+            "Failed to update component %s/%s: %s",
+            category,
+            component_name,
+            e,
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=500,
             detail="Failed to update component. Check server logs for details.",
@@ -770,6 +1083,7 @@ async def run_pipeline_endpoint(
 
     try:
         if request.stream:
+
             async def _release_locks():
                 try:
                     session_lock.release()
@@ -785,12 +1099,14 @@ async def run_pipeline_endpoint(
                 try:
                     # Emit start event
                     try:
-                        start_event = json.dumps({
-                            'type': 'status',
-                            'status': 'starting',
-                            'message': 'Initializing pipeline...',
-                            'pipeline_id': pipeline_id,
-                        })
+                        start_event = json.dumps(
+                            {
+                                "type": "status",
+                                "status": "starting",
+                                "message": "Initializing pipeline...",
+                                "pipeline_id": pipeline_id,
+                            }
+                        )
                     except (TypeError, ValueError):
                         start_event = '{"type": "status", "status": "starting", "message": "Initializing pipeline..."}'
                     yield f"data: {start_event}\n\n"
@@ -815,35 +1131,42 @@ async def run_pipeline_endpoint(
                     # Emit completion event (include recursive pipeline metadata)
                     try:
                         done_payload = {
-                            'type': 'done',
-                            'pipeline_id': pipeline_id,
-                            'status': result.get('pipeline_status', 'unknown'),
-                            'result': result,
+                            "type": "done",
+                            "pipeline_id": pipeline_id,
+                            "status": result.get("pipeline_status", "unknown"),
+                            "result": result,
                         }
                         # Add recursive pipeline metadata if present
-                        if 'loop_count' in result:
-                            done_payload['loop_count'] = result['loop_count']
-                        if 'quality_scores' in result:
-                            done_payload['quality_scores'] = result['quality_scores']
-                        if 'decisions' in result:
-                            done_payload['decisions'] = result['decisions']
+                        if "loop_count" in result:
+                            done_payload["loop_count"] = result["loop_count"]
+                        if "quality_scores" in result:
+                            done_payload["quality_scores"] = result["quality_scores"]
+                        if "decisions" in result:
+                            done_payload["decisions"] = result["decisions"]
                         done_event = json.dumps(done_payload)
                     except (TypeError, ValueError):
-                        done_event = json.dumps({
-                            'type': 'done',
-                            'pipeline_id': pipeline_id,
-                            'status': 'unknown',
-                            'result': {'pipeline_status': 'unknown', 'error': 'Serialization error'},
-                        })
+                        done_event = json.dumps(
+                            {
+                                "type": "done",
+                                "pipeline_id": pipeline_id,
+                                "status": "unknown",
+                                "result": {
+                                    "pipeline_status": "unknown",
+                                    "error": "Serialization error",
+                                },
+                            }
+                        )
                     yield f"data: {done_event}\n\n"
                 except Exception as e:
                     logger.error(f"Pipeline streaming error: {e}", exc_info=True)
                     try:
-                        error_event = json.dumps({
-                            'type': 'error',
-                            'content': str(e),
-                            'pipeline_id': pipeline_id,
-                        })
+                        error_event = json.dumps(
+                            {
+                                "type": "error",
+                                "content": str(e),
+                                "pipeline_id": pipeline_id,
+                            }
+                        )
                     except (TypeError, ValueError):
                         error_event = '{"type": "error", "content": "Internal error"}'
                     yield f"data: {error_event}\n\n"
@@ -1002,11 +1325,18 @@ _execution_history: list[dict] = []
 _MAX_HISTORY = 100
 
 
-def record_execution(pipeline_id: str, session_id: str, task_description: str,
-                     status: str, start_time: float, end_time: float | None = None,
-                     quality_scores: list[float] | None = None,
-                     loop_count: int = 0, decisions: list[dict] | None = None,
-                     agents_used: list[str] | None = None):
+def record_execution(
+    pipeline_id: str,
+    session_id: str,
+    task_description: str,
+    status: str,
+    start_time: float,
+    end_time: float | None = None,
+    quality_scores: list[float] | None = None,
+    loop_count: int = 0,
+    decisions: list[dict] | None = None,
+    agents_used: list[str] | None = None,
+):
     """Record a pipeline execution in the history log."""
     entry = {
         "pipeline_id": pipeline_id,
@@ -1020,7 +1350,11 @@ def record_execution(pipeline_id: str, session_id: str, task_description: str,
         "loop_count": loop_count,
         "decisions": decisions or [],
         "agents_used": agents_used or [],
-        "avg_quality": round(sum(quality_scores) / len(quality_scores), 3) if quality_scores else None,
+        "avg_quality": (
+            round(sum(quality_scores) / len(quality_scores), 3)
+            if quality_scores
+            else None
+        ),
     }
     _execution_history.append(entry)
     # Trim to max
@@ -1038,7 +1372,7 @@ async def list_executions(limit: int = 20, offset: int = 0):
     """
     reversed_history = list(reversed(_execution_history))
     total = len(reversed_history)
-    page = reversed_history[offset:offset + limit]
+    page = reversed_history[offset : offset + limit]
     return {
         "executions": page,
         "total": total,
@@ -1060,7 +1394,9 @@ async def get_execution(pipeline_id: str):
 async def delete_execution(pipeline_id: str):
     """Delete a specific pipeline execution from history."""
     before = len(_execution_history)
-    _execution_history[:] = [e for e in _execution_history if e["pipeline_id"] != pipeline_id]
+    _execution_history[:] = [
+        e for e in _execution_history if e["pipeline_id"] != pipeline_id
+    ]
     deleted = before - len(_execution_history)
     if deleted == 0:
         raise HTTPException(status_code=404, detail="Execution not found")
@@ -1094,7 +1430,9 @@ _template_versions: dict[str, list[dict]] = {}
 
 
 @router.get("/api/v1/pipeline/templates/{template_name}/versions")
-async def list_template_versions(template_name: str, service: TemplateService = Depends(get_template_service)):
+async def list_template_versions(
+    template_name: str, service: TemplateService = Depends(get_template_service)
+):
     """List version history for a template."""
     versions = _template_versions.get(template_name, [])
     # Also check if template exists
@@ -1109,8 +1447,9 @@ async def list_template_versions(template_name: str, service: TemplateService = 
 
 
 @router.post("/api/v1/pipeline/templates/{template_name}/version")
-async def version_template(template_name: str,
-                           service: TemplateService = Depends(get_template_service)):
+async def version_template(
+    template_name: str, service: TemplateService = Depends(get_template_service)
+):
     """Create a new version snapshot of a template."""
     template = service.get_template(template_name)
     if not template:
@@ -1139,3 +1478,257 @@ async def version_template(template_name: str,
         "new_version": new_version,
         "versioned": True,
     }
+
+
+# ── Tier 3: Performance Metrics Endpoints ────────────────────────────
+
+
+def _build_metrics_response(execution: dict) -> dict:
+    """Build a PipelineMetricsResponse from an execution history entry."""
+    stage_timings = execution.get("stage_timings", [])
+    quality_scores = execution.get("quality_scores", [])
+    avg_quality = execution.get("avg_quality") or 0.0
+
+    # Build phase breakdown from stage timings
+    phase_breakdown = {}
+    for st in stage_timings:
+        phase_breakdown[st.get("stage_name", "unknown")] = {
+            "stage_name": st.get("stage_name", "unknown"),
+            "duration_seconds": st.get("duration_seconds", 0.0),
+            "agent_count": len(st.get("agent_ids", [])),
+            "quality_score": st.get("quality_score"),
+        }
+
+    # If no stage timings, create estimated breakdown from total duration
+    if not phase_breakdown and execution.get("duration_seconds", 0) > 0:
+        stage_order = [
+            "domain_analysis", "workflow_modeling", "loom_building",
+            "gap_detection", "pipeline_execution",
+        ]
+        total = execution["duration_seconds"]
+        # Equal distribution as fallback
+        per_stage = total / len(stage_order)
+        for stage in stage_order:
+            phase_breakdown[stage] = {
+                "stage_name": stage,
+                "duration_seconds": round(per_stage, 2),
+                "agent_count": 0,
+                "quality_score": None,
+            }
+
+    # Build summary
+    qs = [s for s in quality_scores if s is not None]
+    summary = {
+        "pipeline_id": execution["pipeline_id"],
+        "total_duration_seconds": execution.get("duration_seconds", 0.0),
+        "total_tokens": 0,
+        "avg_tps": 0.0,
+        "avg_ttft": 0.0,
+        "total_loops": execution.get("loop_count", 0),
+        "total_iterations": execution.get("loop_count", 0),
+        "total_defects": 0,
+        "avg_quality_score": round(avg_quality, 3),
+        "max_quality_score": round(max(qs), 3) if qs else 0.0,
+        "min_quality_score": round(min(qs), 3) if qs else 0.0,
+    }
+
+    return {
+        "success": True,
+        "pipeline_id": execution["pipeline_id"],
+        "summary": summary,
+        "phase_breakdown": phase_breakdown,
+        "loop_metrics": {},
+        "state_transitions": [],
+        "defects_by_type": {},
+        "agent_selections": [],
+    }
+
+
+def _compute_percentile(sorted_values: list[float], percentile: float) -> float:
+    """Compute percentile from sorted list without numpy."""
+    if not sorted_values:
+        return 0.0
+    n = len(sorted_values)
+    k = (percentile / 100.0) * (n - 1)
+    f = int(k)
+    c = f + 1 if f + 1 < n else f
+    d = k - f
+    return sorted_values[f] + d * (sorted_values[c] - sorted_values[f])
+
+
+def _compute_median(values: list[float]) -> float:
+    """Compute median without numpy."""
+    if not values:
+        return 0.0
+    s = sorted(values)
+    n = len(s)
+    if n % 2 == 1:
+        return s[n // 2]
+    return (s[n // 2 - 1] + s[n // 2]) / 2.0
+
+
+def _compute_std_dev(values: list[float], mean: float) -> float:
+    """Compute standard deviation without numpy."""
+    if len(values) < 2:
+        return 0.0
+    variance = sum((x - mean) ** 2 for x in values) / len(values)
+    return variance ** 0.5
+
+
+@router.get("/api/v1/pipeline/metrics/{pipeline_id}")
+async def get_pipeline_metrics(pipeline_id: str):
+    """
+    Get detailed metrics for a specific pipeline execution.
+
+    Returns per-stage timing, quality scores, loop metrics, and summary statistics.
+    For executions recorded before stage timing instrumentation, phase_breakdown
+    contains estimated values based on equal distribution.
+    """
+    for entry in _execution_history:
+        if entry["pipeline_id"] == pipeline_id:
+            return _build_metrics_response(entry)
+    raise HTTPException(status_code=404, detail="Execution not found")
+
+
+@router.get("/api/v1/pipeline/metrics/history/{pipeline_id}")
+async def get_metrics_history(pipeline_id: str, metric_type: str | None = None):
+    """
+    Get metrics history for a pipeline execution.
+
+    Returns historical metric data points for charting.
+    If metric_type is specified, filters to that type only.
+    """
+    for entry in _execution_history:
+        if entry["pipeline_id"] == pipeline_id:
+            quality_scores = entry.get("quality_scores", [])
+            history_points = []
+            for i, score in enumerate(quality_scores):
+                history_points.append({
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(entry["start_time"] + i * 60)),
+                    "loop_id": f"loop-{i + 1}",
+                    "phase": "",
+                    "metric_type": "QUALITY_VELOCITY",
+                    "value": score,
+                    "metadata": {"iteration": i + 1},
+                })
+            return {
+                "pipeline_id": pipeline_id,
+                "metric_type": metric_type,
+                "total_points": len(history_points),
+                "history": history_points,
+            }
+    raise HTTPException(status_code=404, detail="Execution not found")
+
+
+@router.get("/api/v1/pipeline/metrics/aggregate")
+async def get_aggregate_metrics(days: int = 7):
+    """
+    Get aggregate metrics across recent pipeline executions.
+
+    Computes statistical summaries (mean, median, std_dev, percentiles)
+    for duration and quality across the last N days of executions.
+    Generates optimization recommendations based on heuristic analysis.
+    """
+    cutoff = time.time() - (days * 86400)
+    recent = [e for e in _execution_history if e["start_time"] >= cutoff]
+
+    if not recent:
+        return {
+            "success": True,
+            "total_pipelines": 0,
+            "time_range": {
+                "start": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cutoff)),
+                "end": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            },
+            "metric_statistics": {},
+            "overall_health": 0.0,
+            "recommendations": ["No pipeline executions in the selected time range"],
+        }
+
+    durations = [e["duration_seconds"] for e in recent]
+    qualities = [e["avg_quality"] for e in recent if e.get("avg_quality") is not None]
+    completed = sum(1 for e in recent if e["status"] == "completed")
+    failed = sum(1 for e in recent if e["status"] == "failed")
+
+    # Duration statistics
+    dur_sorted = sorted(durations)
+    dur_mean = sum(durations) / len(durations)
+    dur_stats = {
+        "metric_type": "duration_seconds",
+        "count": len(durations),
+        "mean": round(dur_mean, 2),
+        "median": round(_compute_median(durations), 2),
+        "std_dev": round(_compute_std_dev(durations, dur_mean), 2),
+        "min_value": round(min(durations), 2),
+        "max_value": round(max(durations), 2),
+        "trend": "stable",
+        "percentiles": {
+            "p50": round(_compute_percentile(dur_sorted, 50), 2),
+            "p90": round(_compute_percentile(dur_sorted, 90), 2),
+            "p95": round(_compute_percentile(dur_sorted, 95), 2),
+        },
+    }
+
+    # Quality statistics
+    qual_stats = {}
+    if qualities:
+        qual_sorted = sorted(qualities)
+        qual_mean = sum(qualities) / len(qualities)
+        qual_stats = {
+            "metric_type": "quality_score",
+            "count": len(qualities),
+            "mean": round(qual_mean, 3),
+            "median": round(_compute_median(qualities), 3),
+            "std_dev": round(_compute_std_dev(qualities, qual_mean), 3),
+            "min_value": round(min(qualities), 3),
+            "max_value": round(max(qualities), 3),
+            "trend": "stable",
+            "percentiles": {
+                "p50": round(_compute_percentile(qual_sorted, 50), 3),
+                "p90": round(_compute_percentile(qual_sorted, 90), 3),
+                "p95": round(_compute_percentile(qual_sorted, 95), 3),
+            },
+        }
+
+    # Generate recommendations
+    recommendations = []
+    if dur_mean > 30:
+        recommendations.append(f"Average pipeline duration is {dur_mean:.0f}s -- consider optimizing agent performance")
+    if failed > 0 and len(recent) > 0:
+        fail_rate = failed / len(recent) * 100
+        if fail_rate > 20:
+            recommendations.append(f"High failure rate ({fail_rate:.0f}%) detected -- review quality thresholds")
+    if qualities:
+        avg_qual = sum(qualities) / len(qualities)
+        if avg_qual < 0.8:
+            recommendations.append(f"Average quality score is {avg_qual:.0%} -- consider adjusting agent prompts")
+
+    if not recommendations:
+        recommendations.append("Pipeline performance is within normal parameters")
+
+    overall_health = (completed / len(recent)) if recent else 0.0
+
+    return {
+        "success": True,
+        "total_pipelines": len(recent),
+        "time_range": {
+            "start": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cutoff)),
+            "end": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+        "metric_statistics": {
+            "duration_seconds": dur_stats,
+            "quality_score": qual_stats,
+        },
+        "overall_health": round(overall_health, 3),
+        "recommendations": recommendations,
+    }
+
+
+@router.get("/api/v1/pipeline/executions/{pipeline_id}/metrics")
+async def get_execution_metrics(pipeline_id: str):
+    """
+    RESTful alias for GET /api/v1/pipeline/metrics/{pipeline_id}.
+
+    Get detailed metrics for a specific pipeline execution.
+    """
+    return await get_pipeline_metrics(pipeline_id)

@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateCreateRequest, TemplateUpdateRequest, PipelineMetricsResponse, PipelineMetricsHistory, PipelineAggregateMetrics, PipelineRunRequest, PipelineRunResponse, PipelineEvent, AgentRegistryEntry, AgentFileContent, ComponentListResponse, ComponentRawResponse, ComponentUpdateRequest } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, PipelineTemplate, TemplateListResponse, TemplateValidateResponse, TemplateCreateRequest, TemplateUpdateRequest, PipelineMetricsResponse, PipelineMetricsHistory, PipelineAggregateMetrics, PipelineRunRequest, PipelineRunResponse, PipelineEvent, AgentRegistryEntry, AgentFileContent, ComponentListResponse, ComponentRawResponse, ComponentUpdateRequest, TemplateVersionListResponse, TemplateExportResponse, TemplateImportRequest, TemplateImportResponse } from '../types';
 import { log } from '../utils/logger';
 
 const API_BASE = '/api';
@@ -511,6 +511,37 @@ export async function deleteTemplate(templateName: string): Promise<{ deleted: b
 /** Validate a pipeline template YAML. */
 export async function validateTemplate(templateName: string): Promise<TemplateValidateResponse> {
     return apiFetch('GET', `/v1/pipeline/templates/${templateName}/validate`);
+}
+
+/** Get version history for a template. */
+export async function getTemplateVersions(templateName: string): Promise<TemplateVersionListResponse> {
+    return apiFetch('GET', `/v1/pipeline/templates/${templateName}/versions`);
+}
+
+/** Create a new version snapshot of a template. */
+export async function createTemplateVersion(templateName: string): Promise<{ template_name: string; previous_version: number; new_version: number; versioned: boolean }> {
+    return apiFetch('POST', `/v1/pipeline/templates/${templateName}/version`);
+}
+
+/** Export a template with full version history (returns JSON response). */
+export async function exportTemplate(templateName: string): Promise<TemplateExportResponse> {
+    return apiFetch('GET', `/v1/pipeline/templates/${templateName}/export`);
+}
+
+/** Import a template from an export payload. */
+export async function importTemplate(data: TemplateImportRequest): Promise<TemplateImportResponse> {
+    return apiFetch('POST', '/v1/pipeline/templates/import', data);
+}
+
+/** Download template export as a JSON file (triggers browser download). */
+export function downloadTemplateExport(templateName: string): void {
+    const url = `${API_BASE}/v1/pipeline/templates/${templateName}/export`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${templateName}_export.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
 }
 
 /** List all registered agents with categories, capabilities, and template references. */

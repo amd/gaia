@@ -1458,3 +1458,222 @@
     border-top: 1px solid #2a2d3a;
     margin-top: 8px;
 }
+
+/* ── Execution History ──────────────────────────────────────────────── */
+
+.pc-execution-history {
+    padding: 16px;
+}
+
+.pc-execution-history-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+.pc-execution-count {
+    margin-left: auto;
+    color: #9ca3af;
+    font-weight: 400;
+    font-size: 0.75rem;
+}
+
+.pc-execution-subtabs {
+    display: flex;
+    gap: 4px;
+    margin-left: 8px;
+}
+
+.pc-subtab {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border: 1px solid #374151;
+    border-radius: 4px;
+    background: transparent;
+    color: #9ca3af;
+    font-size: 0.6875rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.pc-subtab:hover {
+    color: #e5e7eb;
+    border-color: #4b5563;
+}
+
+.pc-subtab.active {
+    color: #e5e7eb;
+    background: #374151;
+    border-color: #6366f1;
+}
+
+.pc-execution-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 24px;
+    color: #9ca3af;
+    font-size: 0.875rem;
+}
+
+.pc-execution-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 48px 24px;
+    color: #6b7280;
+}
+
+.pc-execution-empty-hint {
+    font-size: 0.75rem;
+    color: #4b5563;
+}
+
+.pc-execution-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.pc-execution-item {
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.pc-execution-item-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.pc-execution-item-header:hover {
+    background: #1a1d28;
+}
+
+.pc-exec-status {
+    display: flex;
+    align-items: center;
+}
+
+.pc-exec-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.pc-exec-task {
+    display: block;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pc-exec-meta {
+    display: block;
+    font-size: 0.6875rem;
+    color: #6b7280;
+    margin-top: 2px;
+}
+
+.pc-exec-stats {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pc-exec-quality {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #10b981;
+}
+
+.pc-exec-loops {
+    font-size: 0.6875rem;
+    color: #6366f1;
+}
+
+.pc-exec-actions {
+    display: flex;
+    align-items: center;
+    color: #6b7280;
+}
+
+.pc-execution-details {
+    padding: 10px 12px;
+    background: #1a1d28;
+    border-top: 1px solid #2a2d3a;
+}
+
+.pc-exec-detail-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 0.75rem;
+}
+
+.pc-exec-detail-row label {
+    color: #6b7280;
+    min-width: 90px;
+}
+
+.pc-exec-id {
+    font-family: monospace;
+    font-size: 0.6875rem;
+    color: #9ca3af;
+}
+
+.pc-exec-quality-scores {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.pc-quality-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.pc-quality-dot.pass {
+    background: #10b981;
+}
+
+.pc-quality-dot.fail {
+    background: #ef4444;
+}
+
+.pc-exec-detail-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #2a2d3a;
+}
+
+.pc-execution-performance {
+    padding: 8px 0;
+}
+
+/* Spin animation for loading icons */
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.spin {
+    animation: spin 1s linear infinite;
+}
+
