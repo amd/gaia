@@ -69,6 +69,7 @@ setup(
         "gaia.agents.code.tools",
         "gaia.agents.code.validators",
         "gaia.agents.code_index",
+        "gaia.agents.code_index.tools",
         "gaia.agents.routing",
         "gaia.agents.sd",
         "gaia.agents.summarize",
