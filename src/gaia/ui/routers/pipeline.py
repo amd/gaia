@@ -190,6 +190,8 @@ async def create_template(
             agent_categories=request.agent_categories,
             routing_rules=request.routing_rules,
             quality_weights=request.quality_weights,
+            canvas_loops=request.canvas_loops,
+            canvas_supervisors=request.canvas_supervisors,
         )
         return schema.model_dump()
     except ValueError as e:
@@ -228,6 +230,8 @@ async def update_template(
             agent_categories=request.agent_categories,
             routing_rules=request.routing_rules,
             quality_weights=request.quality_weights,
+            canvas_loops=request.canvas_loops,
+            canvas_supervisors=request.canvas_supervisors,
         )
         return schema.model_dump()
     except FileNotFoundError as e:

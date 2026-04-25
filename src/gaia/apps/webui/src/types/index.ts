@@ -711,6 +711,18 @@ export interface CanvasNode {
     gateCondition?: GateCondition;
     /** Target stages for branch paths (for gate nodes). */
     branchTargets?: { pass: string; fail: string };
+    // Loop-specific fields (for type='loop')
+    /** Self-contained loop configuration */
+    loopConfig?: LoopNodeConfig;
+    // Supervisor-specific fields (for type='supervisor')
+    /** Self-contained supervisor configuration */
+    supervisorConfig?: SupervisorNodeConfig;
+    // Agent-to-loop assignment
+    /** Loop this agent belongs to (references loop node ID) */
+    assignedLoop?: string;
+    // Free-floating supervisor
+    /** Node IDs this supervisor monitors (for free supervisors) */
+    monitoringTargets?: string[];
 }
 
 /** Connection between two nodes in the canvas. */
@@ -776,6 +788,30 @@ export interface CanvasTemplateExport {
         priority: number;
         loop_back: boolean;
         guidance?: string;
+        loop_id?: string;
+        agent_sequence?: string[];
+    }>;
+    /** Canvas-defined loop configurations */
+    canvas_loops?: Array<{
+        loop_id: string;
+        label: string;
+        agent_ids: string[];
+        max_iterations: number;
+        quality_threshold?: number;
+        source_stage?: string;
+        target_stage?: string;
+        condition: string;
+        position?: { x: number; y: number };
+    }>;
+    /** Canvas-defined supervisor configurations */
+    canvas_supervisors?: Array<{
+        supervisor_id: string;
+        label: string;
+        agent_id?: string;
+        position?: { x: number; y: number };
+        decision_condition: string;
+        decision_type: string;
+        monitoring_targets?: string[];
     }>;
 }
 
@@ -793,4 +829,40 @@ export interface LoopConfig {
     currentIteration: number;
     /** Label displayed on the loop block. */
     label?: string;
+}
+
+/** Self-contained loop configuration on a loop node (decoupled from stage). */
+export interface LoopNodeConfig {
+    /** Unique loop identifier, maps to backend LoopConfig.loop_id */
+    loop_id: string;
+    /** Display label */
+    label: string;
+    /** Agent IDs that participate in this loop */
+    agent_ids: string[];
+    /** Per-loop max iterations (null = use global default) */
+    max_iterations: number;
+    /** Per-loop quality threshold */
+    quality_threshold?: number;
+    /** Loop trigger condition */
+    condition?: string;
+    /** Source stage key */
+    source_stage?: string;
+    /** Target stage key (loop destination) */
+    target_stage?: string;
+}
+
+/** Self-contained supervisor configuration on a supervisor node. */
+export interface SupervisorNodeConfig {
+    /** Unique supervisor identifier */
+    supervisor_id: string;
+    /** Display label */
+    label: string;
+    /** Agent ID assigned to this supervisor */
+    agent_id?: string;
+    /** Decision condition */
+    decision_condition: string;
+    /** Decision type produced */
+    decision_type: string;
+    /** Node IDs this supervisor monitors */
+    monitoring_targets?: string[];
 }

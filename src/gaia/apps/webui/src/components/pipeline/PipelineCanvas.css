@@ -1446,6 +1446,38 @@
     font-weight: 600;
 }
 
+.pc-loop-max-iter-input {
+    width: 50px;
+    background: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 3px;
+    color: #e5e7eb;
+    font-size: 10px;
+    padding: 2px 4px;
+}
+
+.pc-loop-agents {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+}
+
+.pc-loop-agent-tag {
+    font-size: 9px;
+    background: #312e81;
+    color: #a5b4fc;
+    border: 1px solid #4338ca;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: monospace;
+}
+
+/* ── Free-Floating Nodes ────────────────────────────────────────────── */
+
+.pc-free-node {
+    cursor: move;
+}
+
 /* ── Stage Sections for New Node Types ──────────────────────────────── */
 
 .pc-stage-supervisors,

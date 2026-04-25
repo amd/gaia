@@ -30,6 +30,51 @@ class AgentCategorySchema(BaseModel):
     agents: List[str] = Field(default_factory=list, description="List of agent IDs")
 
 
+# ── Canvas Loop & Supervisor Configuration Schemas ────────────────────
+
+
+class CanvasLoopConfigSchema(BaseModel):
+    """Canvas-driven loop configuration with per-loop agent selection."""
+
+    loop_id: str = Field(..., description="Unique loop identifier")
+    label: str = Field(default="", description="Display label")
+    agent_ids: List[str] = Field(
+        default_factory=list, description="Explicit agent IDs for this loop"
+    )
+    max_iterations: int = Field(default=10, ge=1, description="Per-loop max iterations")
+    quality_threshold: Optional[float] = Field(
+        None, ge=0.0, le=1.0, description="Per-loop quality threshold"
+    )
+    source_stage: Optional[str] = Field(None, description="Source stage key")
+    target_stage: Optional[str] = Field(None, description="Target stage key (loop destination)")
+    condition: str = Field(
+        default="quality_below_threshold", description="Loop trigger condition"
+    )
+    position: Dict[str, float] = Field(
+        default_factory=dict, description="Canvas position {x, y}"
+    )
+
+
+class CanvasSupervisorConfigSchema(BaseModel):
+    """Canvas-driven supervisor agent configuration."""
+
+    supervisor_id: str = Field(..., description="Unique supervisor identifier")
+    label: str = Field(default="", description="Display label")
+    agent_id: Optional[str] = Field(None, description="Agent ID assigned to this supervisor")
+    position: Dict[str, float] = Field(
+        default_factory=dict, description="Canvas position {x, y}"
+    )
+    decision_condition: str = Field(
+        default="quality_below_threshold", description="Condition triggering decision"
+    )
+    decision_type: str = Field(
+        default="CONTINUE", description="Decision type: CONTINUE, LOOP_BACK, PAUSE, COMPLETE, FAIL"
+    )
+    monitoring_targets: List[str] = Field(
+        default_factory=list, description="Node IDs this supervisor monitors"
+    )
+
+
 class PipelineTemplateSchema(BaseModel):
     """Schema for pipeline template."""
 
@@ -49,6 +94,12 @@ class PipelineTemplateSchema(BaseModel):
     )
     quality_weights: Dict[str, float] = Field(
         default_factory=dict, description="Weights for quality scoring dimensions"
+    )
+    canvas_loops: List[CanvasLoopConfigSchema] = Field(
+        default_factory=list, description="Canvas-defined loop configurations"
+    )
+    canvas_supervisors: List[CanvasSupervisorConfigSchema] = Field(
+        default_factory=list, description="Canvas-defined supervisor configurations"
     )
     version_count: int = Field(
         default=0, description="Number of version snapshots stored"
@@ -110,6 +161,8 @@ class TemplateCreateRequest(BaseModel):
     agent_categories: Dict[str, List[str]] = Field(default_factory=dict)
     routing_rules: List[Dict[str, Any]] = Field(default_factory=list)
     quality_weights: Dict[str, float] = Field(default_factory=dict)
+    canvas_loops: List[Dict[str, Any]] = Field(default_factory=list)
+    canvas_supervisors: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -121,6 +174,8 @@ class TemplateUpdateRequest(BaseModel):
     agent_categories: Optional[Dict[str, List[str]]] = None
     routing_rules: Optional[List[Dict[str, Any]]] = None
     quality_weights: Optional[Dict[str, float]] = None
+    canvas_loops: Optional[List[Dict[str, Any]]] = None
+    canvas_supervisors: Optional[List[Dict[str, Any]]] = None
 
 
 class PipelineRunRequest(BaseModel):

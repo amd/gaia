@@ -18,19 +18,21 @@ interface LoopBlockProps {
 }
 
 function LoopBlockInner({ node }: LoopBlockProps) {
-    const { removeNode, setSelectedNode, selectedNodeId, maxIterations } = usePipelineCanvasStore((s) => ({
+    const { removeNode, setSelectedNode, selectedNodeId, maxIterations, updateLoopConfig } = usePipelineCanvasStore((s) => ({
         removeNode: s.removeNode,
         setSelectedNode: s.setSelectedNode,
         selectedNodeId: s.selectedNodeId,
         maxIterations: s.maxIterations,
+        updateLoopConfig: s.updateLoopConfig,
     }));
 
     const [expanded, setExpanded] = useState(false);
     const isSelected = selectedNodeId === node.id;
 
-    // Derive iteration info from execution state
-    const currentIteration = node.status === 'running' ? 1 : node.status === 'complete' ? maxIterations : 0;
-    const iterationLimit = maxIterations;
+    // Read from node.loopConfig (new free-floating) or fall back to legacy fields
+    const loopConfig = node.loopConfig;
+    const iterationLimit = loopConfig?.max_iterations ?? maxIterations;
+    const currentIteration = node.status === 'running' ? 1 : node.status === 'complete' ? iterationLimit : 0;
     const progress = iterationLimit > 0 ? (currentIteration / iterationLimit) * 100 : 0;
     const isNearLimit = currentIteration >= iterationLimit - 1;
 
@@ -40,9 +42,11 @@ function LoopBlockInner({ node }: LoopBlockProps) {
         e.stopPropagation();
     };
 
-    // Decode source/target from node data
-    const sourceStage = node.assignedStage || 'unknown';
-    const targetStage = node.decisionCondition || 'domain_analysis';
+    // Decode source/target from loopConfig (new) or legacy fields
+    const sourceStage = loopConfig?.source_stage || node.assignedStage || 'unknown';
+    const targetStage = loopConfig?.target_stage || node.decisionCondition || 'domain_analysis';
+    const condition = loopConfig?.condition || node.gateCondition || 'quality_below_threshold';
+    const agentIds = loopConfig?.agent_ids || [];
 
     return (
         <div
@@ -106,12 +110,30 @@ function LoopBlockInner({ node }: LoopBlockProps) {
                 <div className="pc-loop-config">
                     <div className="pc-loop-config-section">
                         <label>Loop Condition</label>
-                        <span className="pc-loop-condition">{node.gateCondition || node.decisionCondition || 'quality_below_threshold'}</span>
+                        <span className="pc-loop-condition">{condition}</span>
                     </div>
                     <div className="pc-loop-config-section">
                         <label>Max Iterations</label>
-                        <span className="pc-loop-max-iter">{iterationLimit}</span>
+                        <input
+                            type="number"
+                            min={1}
+                            max={50}
+                            value={iterationLimit}
+                            className="pc-loop-max-iter-input"
+                            onChange={(e) => updateLoopConfig(node.id, { max_iterations: Math.max(1, parseInt(e.target.value) || 1) })}
+                            onClick={(e) => e.stopPropagation()}
+                        />
                     </div>
+                    {agentIds.length > 0 && (
+                        <div className="pc-loop-config-section">
+                            <label>Agents in Loop</label>
+                            <div className="pc-loop-agents">
+                                {agentIds.map((aid, i) => (
+                                    <span key={i} className="pc-loop-agent-tag">{aid}</span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 

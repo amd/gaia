@@ -16,10 +16,20 @@ import type {
     PaletteDragData,
     AgentRegistryEntry,
     PipelineTemplate,
+    LoopNodeConfig,
+    SupervisorNodeConfig,
 } from '../types';
 import * as canvasApi from '../services/pipelineCanvas';
 import { usePipelineStore } from './pipelineStore';
 import { log } from '../utils/logger';
+
+// ── Unique ID Generator ────────────────────────────────────────────────
+
+/** Replace Date.now() to avoid ID collision during batch operations. */
+let _idCounter = 0;
+function genId(prefix: string): string {
+    return `${prefix}-${Date.now().toString(36)}-${(++_idCounter).toString(36)}`;
+}
 
 // ── Pipeline Stage Definitions ─────────────────────────────────────────
 
@@ -76,6 +86,16 @@ interface CanvasStoreState {
     addSupervisorBetweenStages: (agent: PaletteDragData, afterStageKey: string) => void;
     addGateBetweenStages: (condition: string, afterStageKey: string) => void;
     addLoopBlock: (sourceStage: string, targetStage: string, condition: string) => void;
+    /** Add a free-floating supervisor at arbitrary canvas position */
+    addFreeSupervisor: (agent: PaletteDragData, position: { x: number; y: number }) => void;
+    /** Add a free-floating loop block with self-contained config */
+    addFreeLoop: (config: Partial<LoopNodeConfig>, position: { x: number; y: number }) => void;
+    /** Update a loop node's configuration */
+    updateLoopConfig: (loopNodeId: string, partial: Partial<LoopNodeConfig>) => void;
+    /** Update a supervisor node's configuration */
+    updateSupervisorConfig: (supervisorNodeId: string, partial: Partial<SupervisorNodeConfig>) => void;
+    /** Move a free-floating node to a new position */
+    moveNodeToPosition: (nodeId: string, position: { x: number; y: number }) => void;
     removeNode: (nodeId: string) => void;
     moveNodeToStage: (nodeId: string, stageKey: string) => void;
     resetCanvas: () => void;
@@ -199,7 +219,7 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
         const position = computePosition(stageIndex, existingAgents.length);
 
         const newNode: CanvasNode = {
-            id: `agent-${agent.agentId}-${Date.now()}`,
+            id: genId(`agent-${agent.agentId}`),
             type: 'agent',
             agentId: agent.agentId,
             label: agent.name,
@@ -248,7 +268,7 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
         const position = { x: 280, y: 80 + stageIndex * 160 + 80 };
 
         const newNode: CanvasNode = {
-            id: `supervisor-${agent.agentId}-${Date.now()}`,
+            id: genId(`supervisor-${agent.agentId}`),
             type: 'supervisor',
             agentId: agent.agentId,
             label: `${agent.name} (Supervisor)`,
@@ -297,7 +317,7 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
         const position = { x: 280, y: 80 + stageIndex * 160 + 80 };
 
         const newNode: CanvasNode = {
-            id: `gate-${Date.now()}`,
+            id: genId('gate'),
             type: 'gate',
             label: `Gate: ${condition}`,
             status: 'idle',
@@ -332,7 +352,7 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
         const position = { x: 10, y: 80 + midIndex * 160 + 40 };
 
         const newNode: CanvasNode = {
-            id: `loop-${Date.now()}`,
+            id: genId('loop'),
             type: 'loop',
             label: `Loop: ${source.label} → ${target.label}`,
             status: 'idle',
@@ -351,6 +371,119 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
 
         set({ nodes: newNodes, edges: newEdges });
         log.ui.info(`[canvas] Added loop block ${sourceStage} -> ${targetStage}`);
+    },
+
+    addFreeSupervisor: (agent, position) => {
+        const supervisorId = genId(`sup-${agent.agentId}`);
+        const newNode: CanvasNode = {
+            id: supervisorId,
+            type: 'supervisor',
+            agentId: agent.agentId,
+            label: `${agent.name} (Supervisor)`,
+            category: agent.category,
+            modelId: agent.modelId,
+            status: 'idle',
+            position,
+            // No assignedStage - free-floating
+            decisionType: 'CONTINUE',
+            decisionCondition: 'quality_below_threshold',
+            supervisorConfig: {
+                supervisor_id: supervisorId,
+                label: `${agent.name} (Supervisor)`,
+                agent_id: agent.agentId,
+                decision_condition: 'quality_below_threshold',
+                decision_type: 'CONTINUE',
+                monitoring_targets: [],
+            },
+            agentData: {
+                id: agent.agentId,
+                name: agent.name,
+                category: agent.category,
+                description: agent.description || '',
+                model_id: agent.modelId || null,
+                capabilities: agent.capabilities || [],
+                keywords: agent.keywords || [],
+                phases: agent.phases || [],
+                complexity_range: '0-1',
+                tools: [],
+                enabled: true,
+                version: '1.0.0',
+                source: 'yaml',
+                templates_using: [],
+            },
+        };
+
+        set({ nodes: [...get().nodes, newNode] });
+        log.ui.info(`[canvas] Added free supervisor ${agent.agentId} at (${position.x}, ${position.y})`);
+    },
+
+    addFreeLoop: (config, position) => {
+        const loopId = genId('loop');
+        const sourceStage = config.source_stage || '';
+        const targetStage = config.target_stage || '';
+        const source = PIPELINE_STAGES.find((s) => s.key === sourceStage);
+        const target = PIPELINE_STAGES.find((s) => s.key === targetStage);
+        const label = config.label || (source && target ? `Loop: ${source.label} → ${target.label}` : 'Loop');
+
+        const loopNodeId = genId('loop-node');
+        const newNode: CanvasNode = {
+            id: loopNodeId,
+            type: 'loop',
+            label,
+            status: 'idle',
+            position,
+            // No assignedStage - free-floating
+            loopConfig: {
+                loop_id: loopId,
+                label,
+                agent_ids: config.agent_ids || [],
+                max_iterations: config.max_iterations ?? get().maxIterations,
+                quality_threshold: config.quality_threshold,
+                source_stage: sourceStage,
+                target_stage: targetStage,
+                condition: config.condition || 'quality_below_threshold',
+            },
+        };
+
+        const newNodes = [...get().nodes, newNode];
+        const newEdges: CanvasEdge[] = [...get().edges];
+        // Add edges if source/target stages exist
+        if (sourceStage) {
+            const sourceStageNode = newNodes.find((n) => n.type === 'stage' && n.assignedStage === sourceStage);
+            if (sourceStageNode) newEdges.push(buildEdge(sourceStageNode.id, loopNodeId));
+        }
+        if (targetStage) {
+            const targetStageNode = newNodes.find((n) => n.type === 'stage' && n.assignedStage === targetStage);
+            if (targetStageNode) newEdges.push({ ...buildEdge(loopNodeId, targetStageNode.id), status: 'loop-back', animated: true, label: `loop` });
+        }
+
+        set({ nodes: newNodes, edges: newEdges });
+        log.ui.info(`[canvas] Added free loop "${label}" at (${position.x}, ${position.y})`);
+    },
+
+    updateLoopConfig: (loopNodeId, partial) => {
+        const nodes = get().nodes.map((n) => {
+            if (n.id !== loopNodeId || !n.loopConfig) return n;
+            return { ...n, loopConfig: { ...n.loopConfig, ...partial } };
+        });
+        set({ nodes });
+        log.ui.info(`[canvas] Updated loop config for ${loopNodeId}`);
+    },
+
+    updateSupervisorConfig: (supervisorNodeId, partial) => {
+        const nodes = get().nodes.map((n) => {
+            if (n.id !== supervisorNodeId || !n.supervisorConfig) return n;
+            return { ...n, supervisorConfig: { ...n.supervisorConfig, ...partial } };
+        });
+        set({ nodes });
+        log.ui.info(`[canvas] Updated supervisor config for ${supervisorNodeId}`);
+    },
+
+    moveNodeToPosition: (nodeId, position) => {
+        const nodes = get().nodes.map((n) =>
+            n.id === nodeId ? { ...n, position } : n,
+        );
+        set({ nodes });
     },
 
     removeNode: (nodeId) => {
@@ -508,6 +641,68 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
                 });
             }
 
+            // Reconstruct free-floating loop nodes from canvas_loops
+            const canvasLoops = (parsed as any).canvas_loops;
+            if (canvasLoops && Array.isArray(canvasLoops)) {
+                for (const loopData of canvasLoops) {
+                    const loopNodeId = `loop-node-${loopData.loop_id || Date.now()}`;
+                    const pos = loopData.position || { x: 10, y: 200 };
+                    nodes.push({
+                        id: loopNodeId,
+                        type: 'loop',
+                        label: loopData.label || `Loop`,
+                        status: 'idle',
+                        position: pos,
+                        loopConfig: {
+                            loop_id: loopData.loop_id || loopNodeId,
+                            label: loopData.label || '',
+                            agent_ids: loopData.agent_ids || [],
+                            max_iterations: loopData.max_iterations ?? get().maxIterations,
+                            quality_threshold: loopData.quality_threshold,
+                            source_stage: loopData.source_stage,
+                            target_stage: loopData.target_stage,
+                            condition: loopData.condition || 'quality_below_threshold',
+                        },
+                    });
+                    // Add edges to source/target stages if specified
+                    if (loopData.source_stage) {
+                        const srcNode = nodes.find((n) => n.type === 'stage' && n.assignedStage === loopData.source_stage);
+                        if (srcNode) edges.push(buildEdge(srcNode.id, loopNodeId));
+                    }
+                    if (loopData.target_stage) {
+                        const tgtNode = nodes.find((n) => n.type === 'stage' && n.assignedStage === loopData.target_stage);
+                        if (tgtNode) edges.push({ ...buildEdge(loopNodeId, tgtNode.id), status: 'loop-back', animated: true, label: 'loop' });
+                    }
+                }
+            }
+
+            // Reconstruct free-floating supervisor nodes from canvas_supervisors
+            const canvasSupervisors = (parsed as any).canvas_supervisors;
+            if (canvasSupervisors && Array.isArray(canvasSupervisors)) {
+                for (const supData of canvasSupervisors) {
+                    const supNodeId = `sup-node-${supData.supervisor_id || Date.now()}`;
+                    const pos = supData.position || { x: 280, y: 200 };
+                    nodes.push({
+                        id: supNodeId,
+                        type: 'supervisor',
+                        agentId: supData.agent_id,
+                        label: supData.label || 'Supervisor',
+                        status: 'idle',
+                        position: pos,
+                        decisionType: (supData.decision_type as any) || 'CONTINUE',
+                        decisionCondition: supData.decision_condition || 'quality_below_threshold',
+                        supervisorConfig: {
+                            supervisor_id: supData.supervisor_id || supNodeId,
+                            label: supData.label || '',
+                            agent_id: supData.agent_id,
+                            decision_condition: supData.decision_condition || 'quality_below_threshold',
+                            decision_type: supData.decision_type || 'CONTINUE',
+                            monitoring_targets: supData.monitoring_targets || [],
+                        },
+                    });
+                }
+            }
+
             set({
                 nodes,
                 edges,
@@ -548,6 +743,32 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
                 guidance: 'Improve quality score above threshold',
             }));
 
+            // Collect free-floating loop configs
+            const loopNodes = get().nodes.filter((n) => n.type === 'loop' && n.loopConfig);
+            const canvasLoops = loopNodes.map((n) => ({
+                loop_id: n.loopConfig!.loop_id,
+                label: n.loopConfig!.label,
+                agent_ids: n.loopConfig!.agent_ids,
+                max_iterations: n.loopConfig!.max_iterations,
+                quality_threshold: n.loopConfig!.quality_threshold,
+                source_stage: n.loopConfig!.source_stage,
+                target_stage: n.loopConfig!.target_stage,
+                condition: n.loopConfig!.condition || 'quality_below_threshold',
+                position: n.position,
+            }));
+
+            // Collect free-floating supervisor configs
+            const supervisorNodes = get().nodes.filter((n) => n.type === 'supervisor' && n.supervisorConfig);
+            const canvasSupervisors = supervisorNodes.map((n) => ({
+                supervisor_id: n.supervisorConfig!.supervisor_id,
+                label: n.supervisorConfig!.label,
+                agent_id: n.supervisorConfig!.agent_id,
+                position: n.position,
+                decision_condition: n.supervisorConfig!.decision_condition,
+                decision_type: n.supervisorConfig!.decision_type,
+                monitoring_targets: n.supervisorConfig!.monitoring_targets || [],
+            }));
+
             const canvasExport = {
                 name,
                 description,
@@ -555,6 +776,8 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
                 max_iterations: get().maxIterations,
                 agent_categories: agentCategories,
                 routing_rules: routingRules,
+                canvas_loops: canvasLoops,
+                canvas_supervisors: canvasSupervisors,
             };
 
             await canvasApi.saveCanvasAsTemplate(name, canvasExport);
@@ -665,9 +888,19 @@ export const usePipelineCanvasStore = create<CanvasStoreState>((set, get) => ({
                 }
             }
 
-            // Handle loop iteration counting
+            // Handle loop iteration counting - correlate by loop_id when available
             if (node.type === 'loop') {
-                const iterationEvents = events.filter((e) => (e as any).type === 'iteration_start');
+                const loopId = node.loopConfig?.loop_id;
+                let iterationEvents: Array<Record<string, unknown>> = [];
+                if (loopId) {
+                    // Filter by loop_id for multi-loop support
+                    iterationEvents = events.filter(
+                        (e) => (e as any).type === 'iteration_start' && (e as any).loop_id === loopId,
+                    );
+                } else {
+                    // Fallback: all iteration events (legacy single-loop)
+                    iterationEvents = events.filter((e) => (e as any).type === 'iteration_start');
+                }
                 if (iterationEvents.length > 0) {
                     status = 'running';
                 }

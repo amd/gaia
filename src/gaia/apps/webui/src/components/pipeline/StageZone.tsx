@@ -9,12 +9,11 @@
  */
 
 import { memo } from 'react';
-import { FolderPlus, Play, Shield, GitBranch, Repeat } from 'lucide-react';
+import { FolderPlus, Play, Shield, GitBranch } from 'lucide-react';
 import type { CanvasNode, GateCondition } from '../../types';
 import { AgentNode } from './AgentNode';
 import { SupervisorNode } from './SupervisorNode';
 import { DecisionGate } from './DecisionGate';
-import { LoopBlock } from './LoopBlock';
 import { PIPELINE_STAGES } from '../../stores/pipelineCanvasStore';
 import { usePipelineCanvasStore } from '../../stores/pipelineCanvasStore';
 
@@ -48,10 +47,10 @@ function StageZoneInner({ stage, agentNodes, index }: StageZoneProps) {
     const stageNode = nodes.find((n) => n.type === 'stage' && n.assignedStage === stage.key);
     const stageStatus = stageNode?.status || 'idle';
 
-    // Get non-agent nodes for this stage (supervisors, gates, loops)
+    // Get non-agent nodes for this stage (supervisors with assignedStage, gates)
+    // Free-floating supervisors and loops (no assignedStage) render at canvas level
     const supervisorNodes = nodes.filter((n) => n.type === 'supervisor' && n.assignedStage === stage.key);
     const gateNodes = nodes.filter((n) => n.type === 'gate' && n.assignedStage === stage.key);
-    const loopNodes = nodes.filter((n) => n.type === 'loop' && n.assignedStage === stage.key);
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
@@ -147,15 +146,6 @@ function StageZoneInner({ stage, agentNodes, index }: StageZoneProps) {
                 <div className="pc-stage-gates">
                     {gateNodes.map((node) => (
                         <DecisionGate key={node.id} node={node} />
-                    ))}
-                </div>
-            )}
-
-            {/* Loop block nodes */}
-            {loopNodes.length > 0 && (
-                <div className="pc-stage-loops">
-                    {loopNodes.map((node) => (
-                        <LoopBlock key={node.id} node={node} />
                     ))}
                 </div>
             )}

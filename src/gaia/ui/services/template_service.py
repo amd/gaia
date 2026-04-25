@@ -193,6 +193,22 @@ class TemplateService:
                 for rule in data["routing_rules"]:
                     routing_rules.append(RoutingRuleSchema(**rule))
 
+            # Convert canvas loops if present
+            from gaia.ui.schemas.pipeline_templates import (
+                CanvasLoopConfigSchema,
+                CanvasSupervisorConfigSchema,
+            )
+
+            canvas_loops = []
+            if "canvas_loops" in data and data["canvas_loops"]:
+                for loop in data["canvas_loops"]:
+                    canvas_loops.append(CanvasLoopConfigSchema(**loop))
+
+            canvas_supervisors = []
+            if "canvas_supervisors" in data and data["canvas_supervisors"]:
+                for sup in data["canvas_supervisors"]:
+                    canvas_supervisors.append(CanvasSupervisorConfigSchema(**sup))
+
             # Build schema
             schema = PipelineTemplateSchema(
                 name=data.get("name", path.stem),
@@ -202,6 +218,8 @@ class TemplateService:
                 agent_categories=data.get("agent_categories", {}),
                 routing_rules=routing_rules,
                 quality_weights=data.get("quality_weights", {}),
+                canvas_loops=canvas_loops,
+                canvas_supervisors=canvas_supervisors,
             )
 
             return schema
@@ -222,6 +240,8 @@ class TemplateService:
         agent_categories: Optional[Dict[str, List[str]]] = None,
         routing_rules: Optional[List[Dict[str, Any]]] = None,
         quality_weights: Optional[Dict[str, float]] = None,
+        canvas_loops: Optional[List[Dict[str, Any]]] = None,
+        canvas_supervisors: Optional[List[Dict[str, Any]]] = None,
     ) -> PipelineTemplateSchema:
         """
         Create a new template.
@@ -234,6 +254,8 @@ class TemplateService:
             agent_categories: Map of categories to agent lists
             routing_rules: List of routing rules
             quality_weights: Quality dimension weights
+            canvas_loops: Canvas-defined loop configurations
+            canvas_supervisors: Canvas-defined supervisor configurations
 
         Returns:
             Created PipelineTemplateSchema
@@ -247,7 +269,7 @@ class TemplateService:
             raise ValueError(f"Template '{name}' already exists")
 
         # Build data structure
-        data = {
+        data: Dict[str, Any] = {
             "name": name,
             "description": description,
             "quality_threshold": quality_threshold,
@@ -262,6 +284,12 @@ class TemplateService:
 
         if quality_weights:
             data["quality_weights"] = quality_weights
+
+        if canvas_loops:
+            data["canvas_loops"] = canvas_loops
+
+        if canvas_supervisors:
+            data["canvas_supervisors"] = canvas_supervisors
 
         # Validate by creating schema
         schema = self._validate_data(data)
@@ -281,6 +309,8 @@ class TemplateService:
         agent_categories: Optional[Dict[str, List[str]]] = None,
         routing_rules: Optional[List[Dict[str, Any]]] = None,
         quality_weights: Optional[Dict[str, float]] = None,
+        canvas_loops: Optional[List[Dict[str, Any]]] = None,
+        canvas_supervisors: Optional[List[Dict[str, Any]]] = None,
     ) -> PipelineTemplateSchema:
         """
         Update an existing template.
@@ -293,6 +323,8 @@ class TemplateService:
             agent_categories: Map of categories to agent lists
             routing_rules: List of routing rules
             quality_weights: Quality dimension weights
+            canvas_loops: Canvas-defined loop configurations
+            canvas_supervisors: Canvas-defined supervisor configurations
 
         Returns:
             Updated PipelineTemplateSchema
@@ -310,7 +342,7 @@ class TemplateService:
         existing = self._load_yaml_file(template_path)
 
         # Update fields (only update if not None)
-        data = {
+        data: Dict[str, Any] = {
             "name": existing.name,
             "description": (
                 description if description is not None else existing.description
@@ -339,6 +371,16 @@ class TemplateService:
                 quality_weights
                 if quality_weights is not None
                 else existing.quality_weights
+            ),
+            "canvas_loops": (
+                canvas_loops
+                if canvas_loops is not None
+                else [l.model_dump() for l in existing.canvas_loops]
+            ),
+            "canvas_supervisors": (
+                canvas_supervisors
+                if canvas_supervisors is not None
+                else [s.model_dump() for s in existing.canvas_supervisors]
             ),
         }
 
@@ -470,10 +512,25 @@ class TemplateService:
             TemplateValidationError: If validation fails
         """
         try:
+            from gaia.ui.schemas.pipeline_templates import (
+                CanvasLoopConfigSchema,
+                CanvasSupervisorConfigSchema,
+            )
+
             routing_rules = []
             if "routing_rules" in data and data["routing_rules"]:
                 for rule in data["routing_rules"]:
                     routing_rules.append(RoutingRuleSchema(**rule))
+
+            canvas_loops = []
+            if "canvas_loops" in data and data["canvas_loops"]:
+                for loop in data["canvas_loops"]:
+                    canvas_loops.append(CanvasLoopConfigSchema(**loop))
+
+            canvas_supervisors = []
+            if "canvas_supervisors" in data and data["canvas_supervisors"]:
+                for sup in data["canvas_supervisors"]:
+                    canvas_supervisors.append(CanvasSupervisorConfigSchema(**sup))
 
             return PipelineTemplateSchema(
                 name=data.get("name", ""),
@@ -483,6 +540,8 @@ class TemplateService:
                 agent_categories=data.get("agent_categories", {}),
                 routing_rules=routing_rules,
                 quality_weights=data.get("quality_weights", {}),
+                canvas_loops=canvas_loops,
+                canvas_supervisors=canvas_supervisors,
             )
         except Exception as e:
             raise TemplateValidationError([str(e)])

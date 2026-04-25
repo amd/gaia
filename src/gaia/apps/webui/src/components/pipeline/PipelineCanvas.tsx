@@ -19,6 +19,8 @@ import { useTemplateStore } from '../../stores/templateStore';
 import { useChatStore } from '../../stores/chatStore';
 import { AgentPalette } from './AgentPalette';
 import { StageZone } from './StageZone';
+import { LoopBlock } from './LoopBlock';
+import { SupervisorNode } from './SupervisorNode';
 import './PipelineCanvas.css';
 
 function PipelineCanvasInner() {
@@ -51,6 +53,10 @@ function PipelineCanvasInner() {
         clearSelection,
         setShowGrid,
         setSnapToGrid,
+        addFreeSupervisor,
+        addFreeLoop,
+        moveNodeToPosition,
+        gridSize,
     } = usePipelineCanvasStore((s) => ({
         nodes: s.nodes,
         edges: s.edges,
@@ -80,6 +86,10 @@ function PipelineCanvasInner() {
         clearSelection: s.clearSelection,
         setShowGrid: s.setShowGrid,
         setSnapToGrid: s.setSnapToGrid,
+        addFreeSupervisor: s.addFreeSupervisor,
+        addFreeLoop: s.addFreeLoop,
+        moveNodeToPosition: s.moveNodeToPosition,
+        gridSize: s.gridSize,
     }));
 
     const { templates, fetchTemplates } = useTemplateStore((s) => ({
@@ -128,6 +138,42 @@ function PipelineCanvasInner() {
     const handleMouseUp = useCallback(() => {
         isPanning.current = false;
     }, []);
+
+    // Canvas drop handler for free-floating nodes (supervisors, loops)
+    const handleCanvasDrop = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        const agentData = e.dataTransfer.getData('application/x-agent');
+        if (!agentData) return;
+
+        try {
+            const parsed = JSON.parse(agentData);
+            const blockType = parsed.blockType;
+            if (!blockType) return; // Regular agent - ignore canvas drop
+
+            const canvasEl = canvasRef.current;
+            if (!canvasEl) return;
+
+            const rect = canvasEl.getBoundingClientRect();
+            // Convert screen coordinates to canvas-logical coordinates
+            const logicalX = (e.clientX - rect.left - pan.x) / zoom;
+            const logicalY = (e.clientY - rect.top - pan.y) / zoom;
+            const position = {
+                x: snapToGrid ? Math.round(logicalX / gridSize) * gridSize : logicalX,
+                y: snapToGrid ? Math.round(logicalY / gridSize) * gridSize : logicalY,
+            };
+
+            if (blockType === 'supervisor') {
+                addFreeSupervisor(parsed, position);
+            } else if (blockType === 'loop') {
+                addFreeLoop({
+                    condition: parsed.condition || 'quality_below_threshold',
+                    max_iterations: maxIterations,
+                }, position);
+            }
+        } catch {
+            // Invalid drag data - ignore
+        }
+    }, [pan, zoom, snapToGrid, gridSize, addFreeSupervisor, addFreeLoop, maxIterations]);
 
     // Sync session ID
     useEffect(() => {
@@ -413,6 +459,8 @@ function PipelineCanvasInner() {
                     onMouseMove={handleMouseMove}
                     onMouseUp={handleMouseUp}
                     onMouseLeave={handleMouseUp}
+                    onDrop={handleCanvasDrop}
+                    onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
                 >
                     {/* Zoom/pan transform wrapper */}
                     <div
@@ -501,6 +549,34 @@ function PipelineCanvasInner() {
                             />
                         ))}
                     </div>
+
+                    {/* Free-floating nodes (supervisors and loops without assignedStage) */}
+                    {nodes.filter((n) => n.type === 'supervisor' && !n.assignedStage).map((node) => (
+                        <div
+                            key={node.id}
+                            className="pc-free-node"
+                            style={{
+                                position: 'absolute',
+                                left: node.position.x,
+                                top: node.position.y,
+                            }}
+                        >
+                            <SupervisorNode node={node} />
+                        </div>
+                    ))}
+                    {nodes.filter((n) => n.type === 'loop' && !n.assignedStage).map((node) => (
+                        <div
+                            key={node.id}
+                            className="pc-free-node"
+                            style={{
+                                position: 'absolute',
+                                left: node.position.x,
+                                top: node.position.y,
+                            }}
+                        >
+                            <LoopBlock node={node} />
+                        </div>
+                    ))}
                     </div> {/* end pc-canvas-content */}
                 </div>
             </div>
