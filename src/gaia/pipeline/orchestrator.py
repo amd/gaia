@@ -612,10 +612,10 @@ def _execute_recursive_pipeline(
         # Run the recursive pipeline
         result = await engine.start()
 
-        # Extract decision and quality history from state machine
+        # Extract decision and quality history from state machine snapshot
         decisions = []
         quality_scores = []
-        artifacts = getattr(engine._state_machine, "artifacts", {})
+        artifacts = engine._state_machine.snapshot.artifacts if engine._state_machine else {}
 
         # Collect quality scores from artifacts
         for key, value in artifacts.items():
@@ -625,24 +625,23 @@ def _execute_recursive_pipeline(
                 elif isinstance(value, dict) and "score" in value:
                     quality_scores.append(value["score"])
 
-        # Collect decisions
-        if hasattr(engine._state_machine, "decisions"):
-            decisions = [
-                d if isinstance(d, dict) else getattr(d, "to_dict", lambda: d)()
-                for d in engine._state_machine.decisions
-            ]
+        # Collect decisions from artifacts
+        decision_artifact = artifacts.get("decision")
+        if decision_artifact:
+            if isinstance(decision_artifact, dict):
+                decisions.append(decision_artifact)
+            elif hasattr(decision_artifact, "to_dict"):
+                decisions.append(decision_artifact.to_dict())
 
-        loop_count = getattr(
-            getattr(engine._state_machine, "state", None), "iteration", 1
-        )
+        loop_count = engine._state_machine.snapshot.iteration_count if engine._state_machine else 1
 
-        status = "success" if result and getattr(result, "state", None) else "failed"
+        status = "success" if result else "failed"
 
         return {
             "pipeline_status": status,
             "stage_results": {
                 "pipeline_engine": {
-                    "final_state": getattr(result, "state", "unknown") if result else "unknown",
+                    "final_state": status,
                     "artifacts": dict(artifacts),
                 }
             },

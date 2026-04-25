@@ -217,6 +217,7 @@ class LoopManager:
         self._template_model_id = template_model_id
         self._skip_lemonade = skip_lemonade
         self._canvas_loops = canvas_loops or []
+        self._main_loop: Optional[asyncio.AbstractEventLoop] = None  # Set at start_loop time
 
         # Loop storage
         self._loops: Dict[str, LoopState] = {}
@@ -314,6 +315,12 @@ class LoopManager:
             self._running_count += 1
             loop_state.status = LoopStatus.RUNNING
             loop_state.started_at = datetime.now(timezone.utc)
+
+            # Capture the main event loop for thread-safe coroutine scheduling
+            try:
+                self._main_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._main_loop = None
 
             # Submit to executor
             future = self._executor.submit(self._execute_loop, loop_id)
@@ -658,12 +665,15 @@ class LoopManager:
                             extra={"loop_id": next_loop_id},
                         )
 
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_release())
-        except RuntimeError:
-            # No event loop - create one
-            asyncio.run(_release())
+        # Use thread-safe coroutine scheduling if we have a main loop
+        if self._main_loop is not None:
+            asyncio.run_coroutine_threadsafe(_release(), self._main_loop)
+        else:
+            # Fallback: no-op for lock decrement when called from ThreadPoolExecutor
+            # without a main loop reference. The running_count decrement and future
+            # cleanup will happen on the next state machine interaction.
+            with self._futures_lock:
+                self._running_futures.pop(loop_id, None)
 
     def get_loop_state(self, loop_id: str) -> Optional[LoopState]:
         """
