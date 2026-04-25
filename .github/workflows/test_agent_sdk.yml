@@ -83,7 +83,7 @@ jobs:
           # Start the server in the background as a process (not PowerShell job)
           Write-Host "Starting lemonade-server in background..."
           # Start the server as a background process
-          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray" -PassThru -WindowStyle Hidden
+          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray", "--port", "13305" -PassThru -WindowStyle Hidden
           Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
 
           # Wait for server to start up
