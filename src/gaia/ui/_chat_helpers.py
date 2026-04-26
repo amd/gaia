@@ -454,7 +454,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
         from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
 
-        base_url = LemonadeManager.get_base_url() or "http://localhost:8000/api/v1"
+        base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
         resp = httpx.get(f"{base_url}/health", timeout=5.0)
         if resp.status_code != 200:
             return
@@ -1475,7 +1475,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 import httpx
 
                 base_url = os.environ.get(
-                    "LEMONADE_BASE_URL", "http://localhost:8000/api/v1"
+                    "LEMONADE_BASE_URL", "http://localhost:13305/api/v1"
                 )
                 async with httpx.AsyncClient(timeout=3.0) as stats_client:
                     stats_resp = await stats_client.get(f"{base_url}/stats")

@@ -21,7 +21,9 @@ from gaia.logger import get_logger
 # ``DEFAULT_CONTEXT_SIZE`` from this module. Single source of truth lives
 # in ``gaia.llm.lemonade_client``.
 __all__ = ["DEFAULT_CONTEXT_SIZE", "LemonadeManager", "MessageType"]
-DEFAULT_LEMONADE_URL = "http://localhost:8000"
+# Lemonade v10.1.0+ default port (was 8000 in v10.0.x). PR #865 bumped the
+# minimum supported version, so 13305 is the right default everywhere.
+DEFAULT_LEMONADE_URL = "http://localhost:13305"
 
 
 class MessageType(Enum):
@@ -181,10 +183,10 @@ class LemonadeManager:
         Args:
             min_context_size: Minimum context size required (default: 32768).
             quiet: Suppress output (default: True for SDK, set False for CLI)
-            base_url: Full base URL (e.g., "http://localhost:8000/api/v1").
+            base_url: Full base URL (e.g., "http://localhost:13305/api/v1").
                      If provided, host and port are parsed from it.
             host: Override host (default: from LEMONADE_BASE_URL env or localhost)
-            port: Override port (default: from LEMONADE_BASE_URL env or 8000)
+            port: Override port (default: from LEMONADE_BASE_URL env or 13305)
 
         Returns:
             True if Lemonade server is ready, False otherwise.

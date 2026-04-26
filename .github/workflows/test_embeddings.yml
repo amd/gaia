@@ -68,7 +68,7 @@ jobs:
             $serverJob = Start-Job -ScriptBlock {
                 # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
                 $env:GGML_VK_DISABLE_COOPMAT = "1"
-                & lemonade-server serve --host localhost --port 8000 --no-tray 2>&1
+                & lemonade-server serve --host localhost --port 13305 --no-tray 2>&1
             }
             Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
             $env:LEMONADE_JOB_ID = $serverJob.Id
@@ -84,7 +84,7 @@ jobs:
                 $waitTime += 2
 
                 try {
-                    $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
+                    $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 5
                     Write-Host "[OK] Lemonade server is ready"
                     Write-Host "Health response: $($response | ConvertTo-Json -Compress)"
                     $serverReady = $true
@@ -115,7 +115,7 @@ jobs:
             Write-Host "Pulling nomic-embed-text-v2-moe-GGUF..."
             try {
                 $body = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
-                $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/pull" `
+                $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" `
                     -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
                 Write-Host "   [OK] Model pull initiated"
             } catch {
@@ -130,7 +130,7 @@ jobs:
                 } | ConvertTo-Json
 
                 Write-Host "Loading model: nomic-embed-text-v2-moe-GGUF"
-                $loadResponse = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/load" `
+                $loadResponse = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" `
                     -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 60
                 Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
             } catch {
@@ -147,7 +147,7 @@ jobs:
 
             # Verify model is available
             try {
-                $models = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/models" -Method GET
+                $models = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/models" -Method GET
                 Write-Host "`n[OK] Available models:"
                 $models.data | ForEach-Object { Write-Host "   - $($_.id)" }
             } catch {
@@ -157,7 +157,7 @@ jobs:
             # Verify server is still responding before embeddings test
             Write-Host "`n=== Verifying Server Health ==="
             try {
-                $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 10
+                $health = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 10
                 Write-Host "[OK] Server responding: $($health | ConvertTo-Json -Compress)"
             } catch {
                 Write-Host "[ERROR] Server health check failed: $($_.Exception.Message)"
@@ -179,7 +179,7 @@ jobs:
                 try {
                     $testBody = @{ input = @("test embedding"); model = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
                     # Use localhost consistently and increased timeout for first embedding request
-                    $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/embeddings" `
+                    $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/embeddings" `
                         -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 300
                     Write-Host "[OK] Embedding model verified successfully"
                     $modelReady = $true

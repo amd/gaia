@@ -18,7 +18,7 @@ def mock_lemonade_client():
     with patch("gaia.sd.mixin.LemonadeClient") as MockClient:
         mock_client = MagicMock()
         MockClient.return_value = mock_client
-        mock_client.base_url = "http://localhost:8000/api/v1"
+        mock_client.base_url = "http://localhost:13305/api/v1"
 
         # Mock SD_MODEL_DEFAULTS class attribute
         MockClient.SD_MODEL_DEFAULTS = {

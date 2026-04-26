@@ -99,7 +99,7 @@ This is not a toy demo. Points 2–4 are the security properties that justify th
 
 ### Demo Scenario
 
-The demo uses a single GAIA `ChatAgent` session with a tool that makes an outbound HTTP call. The AXIS policy permits only Lemonade (`localhost:8000`). The demo records what happens when the tool attempts to call an external endpoint (e.g., `api.openai.com`).
+The demo uses a single GAIA `ChatAgent` session with a tool that makes an outbound HTTP call. The AXIS policy permits only Lemonade (`localhost:13305`). The demo records what happens when the tool attempts to call an external endpoint (e.g., `api.openai.com`).
 
 **Step 1 — Write the policy file**
 
@@ -144,7 +144,7 @@ network:
 inference:
   routes:
     - name: lemonade
-      endpoint: http://localhost:8000/api/v1
+      endpoint: http://localhost:13305/api/v1
       provider: openai
       model: Qwen3.5-35B-A3B-GGUF
 ```
@@ -161,7 +161,7 @@ axis run --policy ~/.axis/policies/gaia-mvp.yaml -- \
 
 From the GAIA UI, send two chat messages to `ChatAgent`:
 
-1. *"Summarize the README from this directory."* — uses the local RAG/file tool. Expected: works normally. Confirm in the audit log that only `localhost:8000` network activity is recorded.
+1. *"Summarize the README from this directory."* — uses the local RAG/file tool. Expected: works normally. Confirm in the audit log that only `localhost:13305` network activity is recorded.
 
 2. *"Search the web for the latest AMD GPU benchmarks."* — triggers a tool that attempts an outbound HTTP call. Expected: AXIS proxy blocks it with `EPERM`. The agent receives a tool error and reports it. Confirm the block appears as an OCSF `NetworkAccessDenied` event in the audit stream.
 
@@ -253,11 +253,11 @@ This is non-negotiable for adoption. GAIA has existing users and downstream depe
 
 **Work:**
 - Write AXIS policy YAML templates for each GAIA agent type:
-  - `gaia-chat.yaml` — filesystem read-only, Lemonade `localhost:8000` egress, no shell
+  - `gaia-chat.yaml` — filesystem read-only, Lemonade `localhost:13305` egress, no shell
   - `gaia-code.yaml` — workspace read-write, shell with npm/pip/git scoped, GitHub/PyPI HTTPS egress
   - `gaia-mcp.yaml` — base policy + per-MCP-server egress rules derived from `~/.gaia/mcp_servers.json`
   - `gaia-sd.yaml` — GPU enabled, VRAM limit, Hugging Face egress
-- Add a `lemonade` inference route to each policy (`endpoint: http://localhost:8000/api/v1`, `provider: openai` — Lemonade is OpenAI-compatible)
+- Add a `lemonade` inference route to each policy (`endpoint: http://localhost:13305/api/v1`, `provider: openai` — Lemonade is OpenAI-compatible)
 - Document the launch invocation: `axis run --policy ~/.axis/policies/gaia-chat.yaml -- python -m gaia.ui.server`
 
 **Key technical detail:** GAIA's `discover()` at startup calls `importlib.util.spec_from_file_location` on files in `~/.gaia/agents/`. Landlock rules must include `~/.gaia/agents/` as read-only and `~/.gaia/cache/` as read-write (for `PathValidator`'s `allowed_paths.json`).
@@ -434,7 +434,7 @@ Phase 2 is load-bearing. It:
 | Version | 0.17.3 (`amd-gaia` on PyPI) |
 | License | MIT |
 | UI port | 4200 (FastAPI + optional Electron shell) |
-| LLM default | Lemonade Server (OpenAI-compatible, `localhost:8000`) |
+| LLM default | Lemonade Server (OpenAI-compatible, `localhost:13305`) |
 | LLM providers | Lemonade (AMD), OpenAI, Claude (Anthropic) |
 | MCP transport | stdio only (HTTP/SSE stubs raise `ValueError`) |
 | Agent execution | In-process; `Agent.process_query()` runs in FastAPI thread pool |

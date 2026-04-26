@@ -22,7 +22,7 @@ DEFAULT_DB_PATH = Path.home() / ".gaia" / "chat" / "gaia_chat.db"
 
 # Default model for new sessions — kept in sync with the SQL schema DEFAULT and
 # any code that reads session["model"] and falls back when the field is NULL.
-SESSION_DEFAULT_MODEL = "Qwen3.5-35B-A3B-GGUF"
+SESSION_DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
 
 SCHEMA_SQL = """
 -- Global document library
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
-    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-GGUF',
+    model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
     system_prompt TEXT
 );
 

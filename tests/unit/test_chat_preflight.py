@@ -20,7 +20,7 @@ from gaia.ui._chat_helpers import _maybe_load_expected_model
 _HTTPX_GET = "httpx.get"
 _LEMONADE_MANAGER = "gaia.llm.lemonade_manager.LemonadeManager"
 _LEMONADE_CLIENT = "gaia.llm.lemonade_client.LemonadeClient"
-_BASE_URL = "http://localhost:8000/api/v1"
+_BASE_URL = "http://localhost:13305/api/v1"
 
 
 # ---------------------------------------------------------------------------
@@ -36,8 +36,18 @@ def _health_ok(all_models):
     return resp
 
 
-def _model(type_):
-    return {"type": type_, "model_name": f"test-{type_}"}
+def _model(type_, name=None, ctx_size=32768):
+    """Build a /health ``all_models_loaded`` entry.
+
+    ``name`` defaults to ``test-{type_}`` for tests that don't care about
+    model-name matching.  ``ctx_size`` defaults to 32768 (DEFAULT_CONTEXT_SIZE)
+    so the fast-path tests don't trip the ctx-too-small reload branch.
+    """
+    return {
+        "type": type_,
+        "model_name": name or f"test-{type_}",
+        "recipe_options": {"ctx_size": ctx_size},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -93,8 +103,14 @@ def test_embedding_only_triggers_load():
 
 
 def test_llm_active_skips_load():
-    """LLM already loaded → fast path; LemonadeClient must NOT be instantiated."""
-    health = _health_ok([_model("llm")])
+    """Expected LLM already loaded with sufficient ctx → fast path.
+
+    Pre-flight is now strict: it short-circuits only when the EXPECTED
+    model is loaded (not just any LLM) AND its ctx_size is ≥ 32K.  The
+    old "any LLM is fine" behaviour was a silent footgun (gaia-lite
+    expects 4B but 0.6B was loaded, no reload ever fired).
+    """
+    health = _health_ok([_model("llm", name="Qwen3.5-35B-A3B-GGUF")])
 
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
@@ -114,8 +130,12 @@ def test_llm_active_skips_load():
 
 
 def test_vlm_active_skips_load():
-    """VLM is a valid chat model → fast path; LemonadeClient must NOT be instantiated."""
-    health = _health_ok([_model("vlm")])
+    """Expected VLM already loaded with sufficient ctx → fast path.
+
+    VLMs (type='vlm') are treated as valid chat models; the same name +
+    ctx invariants apply.
+    """
+    health = _health_ok([_model("vlm", name="Qwen3.5-35B-A3B-GGUF")])
 
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
@@ -246,8 +266,12 @@ def test_sse_loading_message_emitted():
 
 
 def test_sse_not_called_on_fast_path():
-    """LLM already loaded (fast path) → SSE handler must NOT be called."""
-    health = _health_ok([_model("llm")])
+    """Expected LLM loaded with sufficient ctx (fast path) → no SSE event.
+
+    The SSE handler is only meant to surface "Loading LLM model..." to the
+    user when the pre-flight is actually going to load.  Fast path = silent.
+    """
+    health = _health_ok([_model("llm", name="Qwen3.5-35B-A3B-GGUF")])
     sse = MagicMock()
 
     with (
@@ -267,12 +291,17 @@ def test_sse_not_called_on_fast_path():
 
 
 def test_concurrent_second_thread_skips_load():
-    """Double-check inside the lock: if another thread already loaded the model,
-    the current thread skips load_model entirely."""
+    """Double-check inside the lock: if another thread already loaded the
+    expected model with sufficient ctx, the current thread skips load_model.
+
+    The re-check matches the same name + ctx invariants as the outer check
+    (otherwise a wrong-model load by another thread would still pass the
+    inner gate, defeating the gate's purpose).
+    """
     # First call (before lock): empty → triggers load path
-    # Second call (inside lock re-check): llm present → skip
+    # Second call (inside lock re-check): expected llm present at 32K → skip
     empty_health = _health_ok([])
-    loaded_health = _health_ok([_model("llm")])
+    loaded_health = _health_ok([_model("llm", name="Qwen3.5-35B-A3B-GGUF")])
 
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
@@ -283,7 +312,8 @@ def test_concurrent_second_thread_skips_load():
 
         _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")
 
-        # load_model must NOT be called because re-check found an LLM
+        # load_model must NOT be called because re-check found the
+        # expected model loaded at sufficient ctx.
         mock_cls.assert_not_called()
 
 

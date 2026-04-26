@@ -13,11 +13,18 @@ class TestEnsureModelLoaded:
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     def test_calls_load_when_model_not_loaded(self, mock_load, mock_status):
-        """Verify load_model is called when model not in loaded_models list."""
+        """Verify load_model is called when model not in loaded_models list.
+
+        Unknown models (not in MODELS registry) default to ctx_size=32768
+        so ChatAgent's >7K-token system prompt isn't truncated by Lemonade's
+        default 4096 ctx — the silent-empty-stream regression that blocked
+        gaia-lite. See _chat_helpers._maybe_load_expected_model + the
+        matching log line in lemonade_client._ensure_model_loaded.
+        """
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(
-            url="http://localhost:8000",
+            url="http://localhost:13305",
             running=True,
             loaded_models=[{"id": "model-a"}],
         )
@@ -25,9 +32,9 @@ class TestEnsureModelLoaded:
         # Execute
         client._ensure_model_loaded("model-b", auto_download=True)
 
-        # Verify - should call with prompt=False and ctx_size from MODELS (None for unknown models)
+        # Verify — unknown model gets 32K fallback ctx (DEFAULT_CONTEXT_SIZE).
         mock_load.assert_called_once_with(
-            "model-b", auto_download=True, prompt=False, ctx_size=None
+            "model-b", auto_download=True, prompt=False, ctx_size=32768
         )
 
     @patch.object(LemonadeClient, "get_status")
@@ -35,9 +42,9 @@ class TestEnsureModelLoaded:
     def test_skips_load_when_model_already_loaded(self, mock_load, mock_status):
         """Verify no load_model call when model already in loaded_models list."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(
-            url="http://localhost:8000",
+            url="http://localhost:13305",
             running=True,
             loaded_models=[{"id": "model-a"}],
         )
@@ -53,7 +60,7 @@ class TestEnsureModelLoaded:
     def test_skips_check_when_auto_download_disabled(self, mock_load, mock_status):
         """Verify method returns early when auto_download=False."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
 
         # Execute
         client._ensure_model_loaded("model-a", auto_download=False)
@@ -67,7 +74,7 @@ class TestEnsureModelLoaded:
     def test_handles_status_check_error_gracefully(self, mock_load, mock_status):
         """Verify errors during status check are logged but don't fail."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_status.side_effect = Exception("Connection failed")
 
         # Execute - should not raise
@@ -87,7 +94,7 @@ class TestStreamCompletionsModelLoading:
     ):
         """Verify _ensure_model_loaded is called before making the API request."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_openai_instance = MagicMock()
         mock_openai_class.return_value = mock_openai_instance
 
@@ -129,7 +136,7 @@ class TestStreamChatCompletionsModelLoading:
     ):
         """Verify _ensure_model_loaded is called before making the API request."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_openai_instance = MagicMock()
         mock_openai_class.return_value = mock_openai_instance
 
@@ -175,9 +182,9 @@ class TestNoPromptBehavior:
     def test_ensure_model_loaded_passes_prompt_false(self, mock_load, mock_status):
         """Verify _ensure_model_loaded passes prompt=False to avoid user prompts."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(
-            url="http://localhost:8000",
+            url="http://localhost:13305",
             running=True,
             loaded_models=[],  # No models loaded
         )
@@ -203,11 +210,11 @@ class TestModelLoadingIntegration:
     ):
         """Integration test: model is loaded when not in loaded_models list."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
 
         # Mock status to show model NOT loaded
         mock_status.return_value = LemonadeStatus(
-            url="http://localhost:8000",
+            url="http://localhost:13305",
             running=True,
             loaded_models=[{"id": "different-model"}],
         )
@@ -234,9 +241,11 @@ class TestModelLoadingIntegration:
             )
         )
 
-        # Verify load_model was called to download/load the model WITHOUT prompting
+        # Verify load_model was called WITHOUT prompting and with the 32K
+        # fallback ctx (unknown model → DEFAULT_CONTEXT_SIZE so ChatAgent's
+        # large system prompt isn't truncated; see _ensure_model_loaded).
         mock_load.assert_called_once_with(
-            "new-model", auto_download=True, prompt=False, ctx_size=None
+            "new-model", auto_download=True, prompt=False, ctx_size=32768
         )
 
     @patch.object(LemonadeClient, "get_status")
@@ -247,11 +256,11 @@ class TestModelLoadingIntegration:
     ):
         """Integration test: no load when model already in loaded_models list."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
 
         # Mock status to show model IS loaded
         mock_status.return_value = LemonadeStatus(
-            url="http://localhost:8000",
+            url="http://localhost:13305",
             running=True,
             loaded_models=[{"id": "existing-model"}],
         )

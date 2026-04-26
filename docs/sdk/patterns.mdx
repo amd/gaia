@@ -55,7 +55,7 @@ class HelloAgent(Agent):
         config = config or HelloAgentConfig()
         super().__init__(
             base_url=config.base_url
-            or os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1"),
+            or os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1"),
             model_id=config.model_id or "Qwen3-0.6B-GGUF",
             max_steps=config.max_steps,
             streaming=config.streaming,
@@ -302,7 +302,7 @@ python -m pytest tests/test_hello_agent.py -xvs
 |-------|-----|
 | Skip `_TOOL_REGISTRY.clear()` | Tools from a previous instance leak in silently. |
 | Register `@tool` at module scope | The decorator needs `self`; top-level loses the binding. |
-| Hard-code `http://localhost:8000` | Breaks Docker/CI where Lemonade runs elsewhere. |
+| Hard-code `http://localhost:13305` | Breaks Docker/CI where Lemonade runs elsewhere. |
 | Mix `time.sleep` into the reasoning loop | Blocks SSE streaming in the UI backend. |
 | Add a mixin without a `KNOWN_TOOLS` entry | YAML-manifest agents cannot opt in by name. |
 | Write `.mdx` docs without updating `docs/docs.json` | Mintlify returns 404 for the page. |

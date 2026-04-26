@@ -297,4 +297,4 @@ The directory includes example bug scenarios:
 - Python 3.x
 - `openai` package (for local models)
 - `anthropic` package (for Claude, when using `--use-claude`)
-- Local LLM endpoint running at `http://localhost:8000/api/v1` (or set `ANTHROPIC_API_KEY` for Claude)
+- Local LLM endpoint running at `http://localhost:13305/api/v1` (or set `ANTHROPIC_API_KEY` for Claude)
