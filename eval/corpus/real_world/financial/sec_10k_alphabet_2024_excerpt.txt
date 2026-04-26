@@ -1,0 +1,64 @@
+ALPHABET INC.
+ANNUAL REPORT ON FORM 10-K — EXCERPT
+For the Fiscal Year Ended December 31, 2024
+(Synthetic excerpt for evaluation purposes)
+
+ITEM 1. BUSINESS — OVERVIEW
+
+Alphabet Inc. is a holding company whose consolidated subsidiaries include
+Google LLC and a group of other businesses collectively referred to as
+"Other Bets." This excerpt summarizes selected financial results and
+disclosures from the fiscal year 2024 annual report. It is intended for
+evaluation harness use only and does not reproduce the original filing.
+
+CONSOLIDATED RESULTS — FISCAL YEAR 2024
+
+For the full year ended December 31, 2024, Alphabet reported total revenues
+of $350,018 million ($350.0 billion), an increase of approximately 14% from
+the prior year. Growth was driven by continued strength in Google Search &
+other, YouTube ads, and Google Cloud. Operating income, operating margin,
+net income, and diluted earnings per share each improved year over year, as
+described in Item 7 of this report.
+
+Geographic mix remained broadly consistent with FY2023, with the United
+States accounting for slightly less than half of total revenues and
+international markets contributing the remainder.
+
+SEGMENT RESULTS
+
+Alphabet reports three segments: Google Services, Google Cloud, and Other
+Bets. The discussion below highlights Google Cloud's fourth-quarter
+performance, which the company called out as a key driver of full-year
+growth.
+
+  Google Cloud — Fourth Quarter 2024
+    Revenue:                 $12.0 billion
+    Year-over-year growth:   30%
+
+The Q4 2024 result represented an acceleration from prior quarters and
+reflected continued adoption of Google Cloud Platform infrastructure
+services and AI-related offerings introduced during the year.
+
+Google Services and Other Bets segment results for FY2024 are presented in
+the segment information note within Item 8; per-segment quarterly
+breakdowns for those segments are not reproduced in this excerpt.
+
+HUMAN CAPITAL
+
+As of December 31, 2024, Alphabet had 183,323 full-time employees worldwide.
+The company continues to invest in technical talent across research,
+engineering, and product roles.
+
+ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS
+
+Total revenues of $350,018 million for the year ended December 31, 2024
+grew approximately 14% compared with FY2023, primarily reflecting growth in
+advertising revenues across Google Services and acceleration in Google
+Cloud. Foreign exchange effects were a modest headwind during the year.
+
+Note on scope: this excerpt covers full-year and selected segment results
+only. It does not include market data such as the closing share price on
+any given trading day; share-price history is published separately by
+exchanges and is not part of the 10-K filing.
+
+END OF EXCERPT
