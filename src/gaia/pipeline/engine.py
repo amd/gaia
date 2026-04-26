@@ -51,7 +51,6 @@ from gaia.quality.scorer import QualityScorer
 from gaia.utils.id_generator import generate_loop_id
 from gaia.utils.logging import get_logger, setup_logging
 from gaia.utils.component_loader import ComponentLoader
-from gaia.pipeline.isolation import PipelineIsolation
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -601,23 +600,21 @@ class PipelineEngine:
                     )
                 return (False, None)
 
-        # Wrap phase execution in PipelineIsolation context (SEC-005)
+        # Execute phase based on type
         try:
-            with PipelineIsolation(pipeline_id=f"{self._context.pipeline_id}-{phase_name}"):
-                # Execute phase based on type
-                decision: Optional[Decision] = None
-                success = True
-                if phase_name == PipelinePhase.PLANNING:
-                    success = await self._execute_planning()
-                elif phase_name == PipelinePhase.DEVELOPMENT:
-                    success = await self._execute_development()
-                elif phase_name == PipelinePhase.QUALITY:
-                    success = await self._execute_quality()
-                elif phase_name == PipelinePhase.DECISION:
-                    decision = await self._execute_decision()
-                    success = decision is not None
+            decision: Optional[Decision] = None
+            success = True
+            if phase_name == PipelinePhase.PLANNING:
+                success = await self._execute_planning()
+            elif phase_name == PipelinePhase.DEVELOPMENT:
+                success = await self._execute_development()
+            elif phase_name == PipelinePhase.QUALITY:
+                success = await self._execute_quality()
+            elif phase_name == PipelinePhase.DECISION:
+                decision = await self._execute_decision()
+                success = decision is not None
         except Exception as e:
-            logger.exception(f"Phase execution error in isolation: {e}")
+            logger.exception(f"Phase execution error in {phase_name}: {e}")
             return (False, None)
 
         # Execute phase exit hooks
@@ -732,7 +729,9 @@ class PipelineEngine:
             )
             for agent_id, artifact_text in loop_state.artifacts.items():
                 if artifact_text is not None:
-                    self._state_machine.add_artifact(f"plan_{agent_id}", artifact_text)
+                    self._state_machine.add_artifact(
+                        f"plan_{loop_state.config.loop_id}_{agent_id}", artifact_text
+                    )
 
             if self._enable_chronicle and self._nexus:
                 for agent_id in agent_sequence:
@@ -843,7 +842,9 @@ class PipelineEngine:
             )
             for agent_id, artifact_text in loop_state.artifacts.items():
                 if artifact_text is not None:
-                    self._state_machine.add_artifact(f"code_{agent_id}", artifact_text)
+                    self._state_machine.add_artifact(
+                        f"code_{loop_state.config.loop_id}_{agent_id}", artifact_text
+                    )
 
             if self._enable_chronicle and self._nexus:
                 for agent_id in agent_sequence:
@@ -872,7 +873,7 @@ class PipelineEngine:
                 try:
                     for agent_id, artifact_text in loop_state.artifacts.items():
                         if artifact_text:
-                            component_path = f"development/{agent_id}.md"
+                            component_path = f"development/{loop_state.config.loop_id}_{agent_id}.md"
                             self._component_loader.save_component(
                                 component_path=component_path,
                                 content=artifact_text,
