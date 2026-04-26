@@ -123,6 +123,16 @@
     border-color: rgba(234, 179, 8, 0.25);
 }
 
+/* Context window size suffix on the model badge ("32K", "8K", etc.).
+   Slightly dimmer than the model name so the eye lands on the model
+   first, but still readable — this is the user's only visible signal
+   of how much context window they've actually got. */
+.model-badge .model-ctx-size {
+    color: var(--text-muted);
+    opacity: 0.75;
+    font-weight: 400;
+}
+
 /* ── Indexed documents context bar ───────────────────────────────── */
 
 .doc-context-bar {
