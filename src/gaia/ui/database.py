@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path.home() / ".gaia" / "chat" / "gaia_chat.db"
 
+# Default model for new sessions — kept in sync with the SQL schema DEFAULT and
+# any code that reads session["model"] and falls back when the field is NULL.
+SESSION_DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
+
 SCHEMA_SQL = """
 -- Global document library
 CREATE TABLE IF NOT EXISTS documents (
@@ -39,7 +43,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
-    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-GGUF',
+    model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
     system_prompt TEXT
 );
 
@@ -238,7 +242,7 @@ class ChatDatabase:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
-        model = model or "Qwen3.5-35B-A3B-GGUF"
+        model = model or SESSION_DEFAULT_MODEL
         title = title or "New Chat"
         agent_type = agent_type or "chat"
 

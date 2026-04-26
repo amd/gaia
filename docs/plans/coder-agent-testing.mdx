@@ -314,7 +314,37 @@ gaia-coder ask "enable self-edit until end of week"
 
 ---
 
-## 9. Level 9 — RAG freshness (Phase 10)
+## 9. Level 9 — Semantic search via `code_index`
+
+The `semantic_search` tool on `SearchToolsMixin` delegates to `gaia.code_index.CodeIndexSDK` (FAISS + Lemonade embeddings) so the agent can find code by *intent*, not just regex.
+
+```python
+from gaia.coder.tools.search import _semantic_search_impl
+
+# Without an index built, returns [] and a WARN pointing at index_repository().
+# Does NOT auto-index — that's an EM-driven operation per §6.9.
+hits = _semantic_search_impl(
+    "how do we verify webhook signatures",
+    top_k=5,
+    repo_path="/path/to/repo",
+)
+```
+
+To build an index first (run once, then the cache lives at `~/.gaia/code_index/<repo_hash>/`):
+
+```python
+from gaia.code_index import CodeIndexConfig, CodeIndexSDK
+
+sdk = CodeIndexSDK(CodeIndexConfig(repo_path="/path/to/repo"))
+sdk.index_repository()      # one-shot; needs Lemonade running with the embedding model
+```
+
+✅ **Pass criteria.**
+- Without an index, `semantic_search(...)` returns `[]` and emits a `WARNING` log pointing at `CodeIndexSDK.index_repository()`.
+- With an index, hits round-trip cleanly into `SemanticHit` dicts with `path`, `start_line`, `end_line`, `score`, `symbol_name`, `snippet`.
+- Without `[rag]` extras installed, the call fails loud with `RuntimeError("semantic_search requires the 'rag' extra...")`.
+
+## 10. Level 10 — RAG freshness (Phase 10)
 
 ```bash
 gaia-coder rag status     # corpora + freshness ages

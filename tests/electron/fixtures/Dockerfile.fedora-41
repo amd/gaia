@@ -1,0 +1,34 @@
+# Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Container fixture used by the #782 AppImage smoke matrix.
+#
+# Validates the AppImage on an RPM-family distro with SELinux headers
+# available. We do not set SELinux to enforcing inside the container
+# (docker usually runs with the host policy), but simply launching on
+# Fedora 41 catches the family of failures that only reproduce there.
+FROM fedora:41
+
+RUN dnf install --assumeyes \
+      fuse-libs \
+      fuse \
+      xorg-x11-server-Xvfb \
+      xorg-x11-xauth \
+      procps-ng \
+      file \
+      ca-certificates \
+      nspr \
+      nss \
+      atk \
+      at-spi2-atk \
+      cups-libs \
+      gtk3 \
+      libXcomposite \
+      libXdamage \
+      libXfixes \
+      libXrandr \
+      pango \
+      alsa-lib \
+ && dnf clean all
+
+WORKDIR /work

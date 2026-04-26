@@ -76,7 +76,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
         self,
         watch_dir: str = "./intake_forms",
         db_path: str = "./data/patients.db",
-        vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF",
+        vlm_model: str = "Gemma-4-E4B-it-GGUF",
         auto_start_watching: bool = True,
         **kwargs,
     ):

@@ -9,6 +9,7 @@ import { log } from '../utils/logger';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
 import type { SystemStatus, MCPServerStatus, Settings, AgentMCPServerStatus } from '../types';
+import { CustomAgentsSection } from './CustomAgentsSection';
 import './SettingsModal.css';
 
 // Context-size preset options (tokens).  All must be >= MIN_CONTEXT_SIZE.
@@ -449,6 +450,9 @@ export function SettingsModal() {
                             </div>
                         </section>
                     )}
+
+                    {/* Custom Agents — export/import bundles */}
+                    <CustomAgentsSection />
 
                     {/* About */}
                     <section className="settings-section">
