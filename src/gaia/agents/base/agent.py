@@ -1526,6 +1526,65 @@ Do NOT wrap conversational replies in JSON.
         conversation.append(tool_entry)
         return truncated_result
 
+    def _shrink_messages_for_overflow(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Aggressively shrink the messages array after a context-overflow.
+
+        Strategy: keep the original user query, keep recent assistant tool_calls
+        and the LATEST tool result intact, but replace older tool-result
+        contents with a short stub. This preserves the structural shape of
+        the conversation (so the model can still reason about what tools have
+        been called) while dropping the bulk of the bytes.
+
+        Used by ``process_query``'s LLM-call retry loop when the model
+        reports ``exceed_context_size``. Returns a new list — the caller
+        must rebind ``messages``.
+        """
+        if not messages:
+            return messages
+        first = messages[0]  # user query
+        rest = messages[1:]
+        # Find indices of tool-result entries
+        tool_indices = [i for i, m in enumerate(rest) if m.get("role") == "tool"]
+        keep_intact = set(tool_indices[-1:]) if tool_indices else set()
+        shrunk_rest: List[Dict[str, Any]] = []
+        for i, m in enumerate(rest):
+            if m.get("role") == "tool" and i not in keep_intact:
+                # Replace bulky tool result with a stub — the model only
+                # needs to know SOMETHING was returned at this point.
+                shrunk_rest.append(
+                    {
+                        "role": "tool",
+                        "name": m.get("name", "unknown"),
+                        "tool_call_id": m.get("tool_call_id", "stub"),
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "[tool result omitted — context "
+                                    "overflow recovery; see latest result]"
+                                ),
+                            }
+                        ],
+                    }
+                )
+            elif (
+                m.get("role") == "assistant"
+                and isinstance(m.get("content"), str)
+                and len(m.get("content", "")) > 800
+            ):
+                # Truncate verbose assistant chain-of-thought too.
+                shrunk_rest.append(
+                    {
+                        "role": "assistant",
+                        "content": m["content"][:800] + "... (truncated)",
+                    }
+                )
+            else:
+                shrunk_rest.append(m)
+        return [first] + shrunk_rest
+
     def _create_tool_message(self, tool_name: str, tool_output: Any) -> Dict[str, Any]:
         """
         Build a message structure representing a tool output for downstream LLM calls.
@@ -2153,9 +2212,7 @@ Do NOT wrap conversational replies in JSON.
                             or "got too long" in err_text
                         )
                         if is_ctx_overflow and not _retried_after_trim_stream:
-                            trimmed = messages[:1]
-                            tail = messages[-4:]
-                            messages = trimmed + tail
+                            messages = self._shrink_messages_for_overflow(messages)
                             self.error_history.append(
                                 {
                                     "step": steps_taken,
@@ -2165,7 +2222,7 @@ Do NOT wrap conversational replies in JSON.
                             )
                             logger.warning(
                                 "Context overflow mid-loop (streaming) — "
-                                "trimmed messages to %d entries and retrying",
+                                "shrunk messages to %d entries and retrying",
                                 len(messages),
                             )
                             _retried_after_trim_stream = True
@@ -2271,13 +2328,11 @@ Do NOT wrap conversational replies in JSON.
                             or "got too long" in err_text
                         )
                         if is_ctx_overflow and not _retried_after_trim:
-                            # Trim the OLDEST tool-result entries from messages.
-                            # Keep the user input (first message) and the most
-                            # recent 2 turns so the model still sees current
-                            # context.
-                            trimmed = messages[:1]  # original user query
-                            tail = messages[-4:]  # last 2 turn pairs roughly
-                            messages = trimmed + tail
+                            # Aggressive shrink: keep all message slots so the
+                            # model still sees its tool-call history, but cap
+                            # any single tool-result content to 500 chars and
+                            # drop all-but-last-2 tool results entirely.
+                            messages = self._shrink_messages_for_overflow(messages)
                             self.error_history.append(
                                 {
                                     "step": steps_taken,
@@ -2286,7 +2341,7 @@ Do NOT wrap conversational replies in JSON.
                                 }
                             )
                             logger.warning(
-                                "Context overflow mid-loop — trimmed messages "
+                                "Context overflow mid-loop — shrunk messages "
                                 "to %d entries and retrying once",
                                 len(messages),
                             )
