@@ -285,7 +285,13 @@ The agent follows a 7-step pipeline from file detection to database storage.
                 data
             )
             data["is_new_patient"] = False
-            self.update("patients", existing_id, data)
+            # DatabaseMixin.update takes (table, data, where, params)
+            self.update(
+                "patients",
+                data,
+                "id = :id",
+                {"id": existing_id},
+            )
 
             # Log changes for review
             self.insert("intake_sessions", {
@@ -500,10 +506,11 @@ class CustomIntakeAgent(MedicalIntakeAgent):
     - Custom fields: preferred_language, interpreter_needed, mobility_aids
     Return as JSON..."""
 
-    def _setup_database(self):
-        super()._setup_database()
+    def _init_database(self):
+        # Parent creates the base schema; the real method is _init_database
+        super()._init_database()
 
-        # Add custom columns
+        # Add custom columns (ALTER TABLE is idempotent-safe when wrapped)
         self.execute("""
             ALTER TABLE patients ADD COLUMN preferred_language TEXT;
             ALTER TABLE patients ADD COLUMN interpreter_needed BOOLEAN;

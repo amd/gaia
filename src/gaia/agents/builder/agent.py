@@ -15,7 +15,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
@@ -25,6 +25,14 @@ from gaia.logger import get_logger
 logger = get_logger(__name__)
 
 # Agent ID cannot match any of these — they are reserved for built-in agents.
+#
+# Note: `_normalize_agent_id` strips a trailing "-agent" suffix, so names like
+# "Widget Agent" slug to "widget", not "widget-agent". But the bare input "Agent"
+# collapses to just "agent" (there is no "-agent" suffix to strip), which would
+# shadow the `Agent` base class in imports and logs. Reserving "agent" here is
+# what catches that edge case — it's intentional, not redundant. Same for the
+# namespace: "chat" (ChatAgent), "gaia" (top-level product / CLI entry), and
+# "builder" (BuilderAgent itself).
 _RESERVED_IDS = {"agent", "chat", "gaia", "builder"}
 
 # Allowed characters for a generated agent ID.
@@ -154,7 +162,10 @@ class BuilderAgent(Agent):
 
         @tool
         def create_agent(
-            name: str, description: str = "", enable_mcp: bool = False
+            name: str,
+            description: str = "",
+            enable_mcp: bool = False,
+            tools: Optional[List[str]] = None,
         ) -> str:
             """Create a new custom agent in the user's GAIA agents directory.
 
@@ -162,11 +173,19 @@ class BuilderAgent(Agent):
                 name: Human-readable agent name, e.g. "Widget Agent".
                 description: One-sentence description of what the agent does.
                 enable_mcp: If True, scaffold MCP support with a local mcp_servers.json.
+                tools: Optional list of built-in tool mixin names to include.
+                    Valid options: "rag" (document Q&A), "file_search" (fuzzy file
+                    search), "file_io" (read/write/edit files), "shell" (sandboxed
+                    shell), "screenshot" (screen capture), "sd" (image generation),
+                    "vlm" (vision LLM). Combine freely; they are added to the
+                    class's base list alongside Agent.
 
             Returns:
                 Confirmation message with the path to the created agent.py.
             """
-            result = _create_agent_impl(name, description, enable_mcp=enable_mcp)
+            result = _create_agent_impl(
+                name, description, enable_mcp=enable_mcp, tools=tools
+            )
             if not result.startswith("Error:"):
                 # Notify the UI — triggers an immediate agent-list refresh
                 created_id = _normalize_agent_id(_split_camel_case(name.strip()))
@@ -318,7 +337,10 @@ def _normalize_agent_id(name: str) -> str:
 
 
 def _create_agent_impl(
-    name: str, description: str = "", enable_mcp: bool = False
+    name: str,
+    description: str = "",
+    enable_mcp: bool = False,
+    tools: Optional[List[str]] = None,
 ) -> str:
     """Core implementation of the create_agent tool, separated for testability."""
     from gaia.agents.builder.template import (
@@ -370,15 +392,19 @@ def _create_agent_impl(
     desc = (
         description.strip() if description.strip() else f"Custom agent: {display_name}"
     )
-    source = generate_agent_source(
-        agent_id=agent_id,
-        agent_name=display_name,
-        description=desc,
-        class_name=class_name,
-        starters=TEMPLATE_STARTERS,
-        system_prompt=TEMPLATE_INSTRUCTIONS,
-        enable_mcp=enable_mcp,
-    )
+    try:
+        source = generate_agent_source(
+            agent_id=agent_id,
+            agent_name=display_name,
+            description=desc,
+            class_name=class_name,
+            starters=TEMPLATE_STARTERS,
+            system_prompt=TEMPLATE_INSTRUCTIONS,
+            enable_mcp=enable_mcp,
+            tools=tools,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
 
     # ── 5. Validate syntax before writing ────────────────────────────────────
     try:

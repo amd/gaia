@@ -19,9 +19,17 @@ def test_agent_creation():
     assert agent is not None
 
 def test_tool_execution():
-    """Test specific tool."""
+    """Test a tool's implementation directly.
+
+    The base Agent does not expose a public `execute_tool()` — tools are
+    invoked by the planner after parsing LLM output. For unit tests, either
+    call the tool function directly (it's just a decorated Python function)
+    or look it up in the global registry.
+    """
+    from gaia.agents.base.tools import _TOOL_REGISTRY
     agent = MyAgent()
-    result = agent.execute_tool("my_tool", {"param": "value"})
+    entry = _TOOL_REGISTRY["my_tool"]
+    result = entry["function"](param="value")
     assert result["status"] == "success"
 
 def test_query_processing():
@@ -51,24 +59,33 @@ def test_silent_mode():
 ## 17.3 Mocking LLM Responses
 
 ```python
-from unittest.mock import Mock, patch
+from unittest.mock import patch
+from gaia.chat.sdk import AgentResponse
 
 def test_with_mocked_llm():
-    """Test agent with mocked LLM."""
-    with patch('gaia.chat.sdk.AgentSDK') as mock_chat:
-        # Configure mock
-        mock_chat.return_value.complete.return_value = {
-            "tool": "my_tool",
-            "args": {"param": "value"}
-        }
+    """Test agent with a mocked AgentSDK.
 
-        # Test agent
+    The AgentSDK exposes `send()` (and `send_stream()`), not `.complete()`.
+    Return an AgentResponse whose `text` contains the JSON the planner
+    expects — the agent will parse it and invoke the referenced tool.
+    """
+    with patch("gaia.chat.sdk.AgentSDK") as mock_chat:
+        mock_chat.return_value.send.return_value = AgentResponse(
+            text='{"tool": "my_tool", "tool_args": {"param": "value"}}',
+        )
+
         agent = MyAgent()
-        result = agent.process_query("Test")
+        agent.process_query("Test")
 
-        # Verify LLM was called
-        assert mock_chat.return_value.complete.called
+        assert mock_chat.return_value.send.called
 ```
+
+<Tip>
+Consider using the built-in `MockLLMProvider` / `MockVLMClient` helpers in
+`gaia.testing` (`src/gaia/testing/mocks.py`) for richer fixtures. The
+`require_lemonade` pytest fixture in `tests/conftest.py` skips integration
+tests automatically if no Lemonade server is running.
+</Tip>
 
 ---
 

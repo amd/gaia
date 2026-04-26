@@ -73,7 +73,7 @@ On any `gaia` CLI command OR Electron app launch:
     "node_version": "20.11.0",
     "python_version": "3.11.8",
     "lemonade_installed": true,
-    "lemonade_version": "9.2.0",
+    "lemonade_version": "10.0.0",
     "lemonade_running": false
   },
   "selected_profile": "chat",
@@ -153,7 +153,7 @@ Free disk:     120 GB                          [OK]
 AMD GPU:       Radeon 780M (integrated)        [OK]
 AMD NPU:       Ryzen AI                        [OK]
 Node.js:       v20.11.0                        [OK]
-Lemonade:      v9.2.0 (installed, not running) [WARN]
+Lemonade:      v10.0.0 (installed, not running) [WARN]
 Models:        None downloaded yet             [--]
 
 Hardware tier: Tier 1 (Full)
@@ -214,7 +214,7 @@ Purpose: Show what was detected, flag any problems, build user confidence.
 |  [OK]   AMD Ryzen 9 7945HX with Ryzen AI NPU                     |
 |  [OK]   32 GB RAM (recommended: 16+ GB)                           |
 |  [OK]   120 GB free disk (need: 25 GB for chat profile)           |
-|  [OK]   Lemonade Server v9.2.0 installed                          |
+|  [OK]   Lemonade Server v10.0.0 installed                          |
 |  [WARN] Lemonade Server is not running (will start automatically) |
 |                                                                    |
 |  Hardware Tier: Full                                               |
@@ -587,7 +587,7 @@ Default is opt-out. Stored in `~/.gaia/preferences.json`.
 - `gaia init` handles MSI download and silent install.
 - PATH refresh uses Windows registry read (see `init_command.py` line 289-337).
 - NPU detection via AMD driver device enumeration.
-- Desktop installer via NSIS (`docs/plans/installer.mdx`). Related: #530.
+- Desktop installer via NSIS (`docs/plans/desktop-installer.mdx`). Related: #530.
 
 ### Linux
 

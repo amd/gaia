@@ -11,7 +11,6 @@ title: "Specialized"
 </Note>
 ---
 
-<Badge text="development" color="orange" />
 
 ## 12.1 ChatAgent (Conversational AI with RAG)
 
@@ -20,13 +19,15 @@ title: "Specialized"
 **Purpose:** General-purpose conversational agent with file operations, RAG, and shell command capabilities.
 
 ```python
-from gaia.agents.chat.agent import ChatAgent
+from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
-# Create chat agent with RAG enabled
-agent = ChatAgent(
-    documents_path="./docs",  # Auto-index PDFs in this directory
-    silent_mode=False
+# Configure the chat agent (use ChatAgentConfig; ChatAgent takes a single
+# `config` argument rather than loose kwargs)
+config = ChatAgentConfig(
+    rag_documents=["./docs/user_manual.pdf"],  # Auto-index these paths
+    silent_mode=False,
 )
+agent = ChatAgent(config)
 
 # Agent has built-in tools:
 # - File operations (read/write/list)

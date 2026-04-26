@@ -4,14 +4,10 @@
 /** API client for GAIA Agent UI backend. */
 
 import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, AgentInfo } from '../types';
+import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
-// When loaded from file:// (Electron with bundled frontend), API calls
-// must use an absolute URL to the backend. When loaded from http://
-// (dev server or backend-served frontend), relative paths work.
-const API_BASE = window.location.protocol === 'file:'
-    ? 'http://localhost:4200/api'
-    : '/api';
+const API_BASE = getApiBase();
 
 // -- Helpers -------------------------------------------------------------------
 

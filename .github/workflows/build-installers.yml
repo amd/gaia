@@ -92,6 +92,7 @@ on:
       - 'src/gaia/apps/webui/main.cjs'
       - 'src/gaia/apps/webui/bin/**'
       - 'src/gaia/apps/webui/services/**'
+      - 'tests/electron/fixtures/**'
       - 'src/gaia/version.py'
 
 # Least-privilege default. Only the release-upload step needs `contents:
@@ -204,6 +205,29 @@ jobs:
         working-directory: src/gaia/apps/webui
         shell: bash
         run: npm ci
+
+      # ─── Fetch uv binary for Linux AppImage (issue #782) ────────────
+      # The AppImage bundles a pinned uv binary under build/vendor/uv so the
+      # after-pack hook and runtime can provision the Python env without
+      # requiring uv on the host. Pin + sha256 verify for supply-chain safety.
+      - name: Fetch uv binary (Linux)
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          UV_VERSION="0.5.14"
+          UV_TARBALL="uv-x86_64-unknown-linux-gnu.tar.gz"
+          UV_SHA256="22034760075b92487b326da5aa1a2a3e1917e2e766c12c0fd466fccda77013c7"
+          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
+          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/linux-x64"
+          mkdir -p "${DEST_DIR}"
+          tmpdir="$(mktemp -d)"
+          curl -fsSL -o "${tmpdir}/${UV_TARBALL}" "${UV_URL}"
+          echo "${UV_SHA256}  ${tmpdir}/${UV_TARBALL}" | sha256sum -c -
+          tar -xzf "${tmpdir}/${UV_TARBALL}" -C "${tmpdir}"
+          cp "${tmpdir}/uv-x86_64-unknown-linux-gnu/uv" "${DEST_DIR}/uv"
+          chmod 0755 "${DEST_DIR}/uv"
+          "${DEST_DIR}/uv" --version
 
       - name: Build frontend (Vite)
         working-directory: src/gaia/apps/webui
@@ -439,6 +463,454 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: src/gaia/apps/webui/dist-app/
 
+      # ─── Build Python wheel (Linux release builds only) ─────────────
+      # The wheel is consumed by the AppImage smoke tests so they can
+      # install the backend from a local file instead of pulling from PyPI.
+      # This breaks the circular dependency where smoke tests run before
+      # PyPI publish in the release pipeline.
+      - name: Build Python wheel
+        if: matrix.platform == 'linux'
+        id: build-wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install build --quiet
+          python -m build --wheel --outdir /tmp/gaia-wheel
+          WHEEL=$(ls /tmp/gaia-wheel/*.whl | head -n1)
+          echo "path=${WHEEL}" >> "$GITHUB_OUTPUT"
+          echo "Built wheel: ${WHEEL}"
+
+      - name: Upload Python wheel artifact
+        if: matrix.platform == 'linux' && steps.build-wheel.outputs.path != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: gaia-wheel
+          path: /tmp/gaia-wheel/*.whl
+          retention-days: 14
+
+  # ─── AppImage smoke tests (issue #782) ──────────────────────────────
+  # Consume the linux-installer artifact produced by the `build` matrix
+  # and run structural + distro-level smoke checks against the AppImage.
+  # These jobs MUST NOT modify the artifact — they are read-only consumers.
+  #
+  # AC mapping (see plan for issue #782):
+  #   AC1 — Ubuntu 24.04 minimal launches without curl / with libfuse2
+  #   AC2 — Arch-equivalent launch (fedora row covers RPM-family SELinux)
+  #   AC3 — pre-built dist/ ships (structural check)
+  #   AC4 — bundled uv present (structural check)
+  #   AC5 — HTML fallback at / (tested separately by unit tests)
+  #   AC6 — port-manager unit tests (tested separately)
+  #   AC8 — Wayland visibility (DEFERRED — see wayland-visibility stub below)
+  #   AC9 — structural guarantees on every release build
+  appimage-structural-smoke:
+    name: AppImage structural smoke
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux installer artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-installer
+          path: ${{ runner.temp }}/linux-installer
+
+      - name: Locate AppImage
+        id: locate
+        shell: bash
+        run: |
+          set -euo pipefail
+          APPIMAGE=$(ls "${RUNNER_TEMP}/linux-installer"/*.AppImage | head -n1)
+          echo "Found AppImage: ${APPIMAGE}"
+          chmod +x "${APPIMAGE}"
+          echo "appimage=${APPIMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Structural smoke (chrome-sandbox, uv, dist, app.asar)
+        env:
+          GAIA_APPIMAGE: ${{ steps.locate.outputs.appimage }}
+        run: node --test tests/electron/appimage-smoke.test.mjs
+
+  appimage-distro-matrix:
+    name: AppImage distro matrix
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux installer artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-installer
+          path: ${{ runner.temp }}/linux-installer
+
+      # Download the Python wheel built alongside the installer so the
+      # AppImage smoke test can install from a local file instead of PyPI.
+      # continue-on-error: the wheel is absent on PR builds (fine — PyPI
+      # still has the previous release), but required on release builds.
+      - name: Download Python wheel
+        id: download-wheel
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: gaia-wheel
+          path: ${{ runner.temp }}/gaia-wheel
+
+      - name: Locate Python wheel
+        id: locate-wheel
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          WHEEL=$(ls "${RUNNER_TEMP}/gaia-wheel"/*.whl 2>/dev/null | head -n1 || true)
+          echo "path=${WHEEL}" >> "$GITHUB_OUTPUT"
+          if [ -n "${WHEEL}" ]; then
+            echo "Found wheel: ${WHEEL} — smoke tests will use GAIA_LOCAL_WHEEL"
+          elif [ -n "${RELEASE_TAG}" ]; then
+            echo "::error::No Python wheel artifact found for release build (tag=${RELEASE_TAG}). The wheel is required to avoid the PyPI circular dependency — the Build Python wheel step must have failed."
+            exit 1
+          else
+            echo "No wheel artifact — smoke tests will install from PyPI (non-release build)"
+          fi
+
+      - name: Prepare AppImage
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          APPIMAGE=$(ls "${RUNNER_TEMP}/linux-installer"/*.AppImage | head -n1)
+          chmod +x "${APPIMAGE}"
+          # Share a stable path into the container workdir mount.
+          cp "${APPIMAGE}" "${RUNNER_TEMP}/linux-installer/gaia-agent-ui.AppImage"
+          echo "appimage=${RUNNER_TEMP}/linux-installer/gaia-agent-ui.AppImage" >> "$GITHUB_OUTPUT"
+
+      # All three rows share one runner. Containers are launched in a
+      # loop so we pay one VM boot for N distro checks (cost discipline
+      # per the amended T7 in the plan).
+      - name: Run distro rows (ubuntu24-libfuse, ubuntu24-nofuse, fedora41)
+        shell: bash
+        env:
+          APPIMAGE_HOST: ${{ steps.prep.outputs.appimage }}
+          WHEEL_PATH: ${{ steps.locate-wheel.outputs.path }}
+        run: |
+          set -euo pipefail
+
+          # Build the two Ubuntu/Fedora fixtures locally.
+          docker build -t gaia-test-u24-min \
+            -f tests/electron/fixtures/Dockerfile.ubuntu-24-minimal \
+            tests/electron/fixtures
+          docker build -t gaia-test-fedora41 \
+            -f tests/electron/fixtures/Dockerfile.fedora-41 \
+            tests/electron/fixtures
+
+          # If a local wheel is available, mount it and set GAIA_LOCAL_WHEEL
+          # so the AppImage installs the backend from file instead of PyPI.
+          # This is the release-pipeline path — on PR builds WHEEL_PATH is
+          # empty and the app falls back to pulling from PyPI normally.
+          WHEEL_MOUNTS=()
+          if [ -n "${WHEEL_PATH}" ]; then
+            WHEEL_BASENAME=$(basename "${WHEEL_PATH}")
+            WHEEL_DIR=$(dirname "${WHEEL_PATH}")
+            WHEEL_MOUNTS=(
+              -v "${WHEEL_DIR}:/work/wheels:ro"
+              --env "GAIA_LOCAL_WHEEL=/work/wheels/${WHEEL_BASENAME}"
+            )
+          fi
+
+          DOCKER_RUN_COMMON=(
+            --rm
+            --cap-add SYS_ADMIN
+            --device /dev/fuse
+            --security-opt seccomp=unconfined
+            --security-opt apparmor=unconfined
+            --ipc=host
+            -v "${APPIMAGE_HOST}:/work/gaia.AppImage:ro"
+            # Expand to nothing if WHEEL_MOUNTS is empty (set -u compat)
+            "${WHEEL_MOUNTS[@]+"${WHEEL_MOUNTS[@]}"}"
+          )
+
+          # ── Row 1: Ubuntu 24.04 + libfuse2, curl purged ──────────────
+          # Must reach "state: ready" AND /api/health must return service
+          # string "gaia-agent-ui" (proves the app actually served
+          # requests, not just logged and died). No FATAL on stderr.
+          echo "::group::Row 1 — ubuntu:24.04 minimal with libfuse2 (no curl)"
+          docker run "${DOCKER_RUN_COMMON[@]}" gaia-test-u24-min \
+            bash -c '
+              set -eo pipefail
+              cp /work/gaia.AppImage /tmp/gaia.AppImage
+              chmod +x /tmp/gaia.AppImage
+              # Launch under xvfb, background. Capture PID correctly so we
+              # can health-check and kill cleanly at end.
+              xvfb-run --auto-servernum /tmp/gaia.AppImage \
+                >/tmp/stdout.log 2>/tmp/stderr.log &
+              APP_PID=$!
+              # Poll for readiness up to 300s — fresh install downloads
+              # Lemonade + a model on first run; 90s was too tight.
+              for i in $(seq 1 300); do
+                if grep -q "state: ready" /tmp/stdout.log 2>/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
+              grep -q "state: ready" /tmp/stdout.log || {
+                echo "::error::did not reach state: ready"
+                tail -n 200 /tmp/stdout.log /tmp/stderr.log || true
+                kill -9 "$APP_PID" 2>/dev/null || true
+                exit 1
+              }
+              # Prove the API actually serves: /api/health must echo the
+              # service string. Re-read the port on every attempt because
+              # main.cjs logs "Starting backend: ... --ui-port <n>" shortly
+              # AFTER state: ready — the log line may not exist yet on the
+              # first iteration. Fall back to 4200 for older builds.
+              HEALTH_OK=0
+              for i in $(seq 1 30); do
+                PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+")
+                PORT=${PORT:-4200}
+                # Use bash /dev/tcp instead of curl — curl is purged in this
+                # container to prove the bundled-uv path eliminates that dep.
+                # Avoid single quotes inside the outer single-quoted bash -c block
+                # by using a subshell ( ) with double-quoted printf instead.
+                RESPONSE=$( (exec 3<>/dev/tcp/127.0.0.1/${PORT} && printf "GET /api/health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" >&3 && timeout 5 cat <&3) 2>/dev/null || true)
+                if echo "$RESPONSE" | grep -q "gaia-agent-ui"; then
+                  HEALTH_OK=1
+                  break
+                fi
+                sleep 1
+              done
+              if [ "$HEALTH_OK" -ne 1 ]; then
+                echo "::error::/api/health did not report service=gaia-agent-ui on port ${PORT}"
+                tail -n 200 /tmp/stdout.log /tmp/stderr.log || true
+                kill -9 "$APP_PID" 2>/dev/null || true
+                exit 1
+              fi
+              # Process must still be alive (did not silently crash).
+              if ! kill -0 "$APP_PID" 2>/dev/null; then
+                echo "::error::main process exited after logging state: ready"
+                exit 1
+              fi
+              # Sanity: no FATAL sandbox in stderr.
+              if grep -qE "FATAL:sandbox|\[Errno 98\]|GLIBC_2\.(3[89]|4[0-9])" /tmp/stderr.log; then
+                echo "::error::forbidden error pattern in stderr"
+                cat /tmp/stderr.log
+                kill -9 "$APP_PID" 2>/dev/null || true
+                exit 1
+              fi
+              # Clean teardown.
+              kill "$APP_PID" 2>/dev/null || true
+              wait "$APP_PID" 2>/dev/null || true
+              echo "Row 1 PASS (state: ready + /api/health 200)"
+            '
+          echo "::endgroup::"
+
+          # ── Row 2: Ubuntu 24.04 WITHOUT libfuse2 ─────────────────────
+          # Launching the AppImage directly MUST emit a human-readable
+          # error message pointing to the missing FUSE dependency, not
+          # a raw fusermount tracepoint or a silent segfault.
+          echo "::group::Row 2 — ubuntu:24.04 minimal WITHOUT libfuse2"
+          docker run "${DOCKER_RUN_COMMON[@]}" ubuntu:24.04 \
+            bash -c '
+              set -o pipefail
+              apt-get update >/dev/null
+              apt-get install --yes --no-install-recommends file ca-certificates >/dev/null
+              # Intentionally do NOT install libfuse2.
+              cp /work/gaia.AppImage /tmp/gaia.AppImage
+              chmod +x /tmp/gaia.AppImage
+              set +e
+              /tmp/gaia.AppImage >/tmp/out.log 2>&1
+              rc=$?
+              set -e
+              cat /tmp/out.log
+              if [ "$rc" -eq 0 ]; then
+                echo "::error::AppImage somehow succeeded without libfuse2 — unexpected"
+                exit 1
+              fi
+              # Require diagnostic text. A silent exit (empty output) or a
+              # bare segfault is the bug we are guarding against. AppImage
+              # runtime emits a recognizable message when libfuse2 is
+              # missing — grep for known keywords (fuse/libfuse/FUSE or
+              # the AppImage runtime hint) as a humane-error contract.
+              if [ ! -s /tmp/out.log ]; then
+                echo "::error::AppImage exited silently without libfuse2 — bug"
+                exit 1
+              fi
+              if ! grep -qiE "fuse|libfuse|AppImage|fusermount" /tmp/out.log; then
+                echo "::error::error output lacks a humane FUSE hint; expected keyword fuse|libfuse|AppImage|fusermount"
+                exit 1
+              fi
+              echo "Row 2 PASS (humane failure referencing fuse/appimage)"
+            '
+          echo "::endgroup::"
+
+          # ── Row 3: Fedora 41 (RPM family, SELinux headers present) ───
+          echo "::group::Row 3 — fedora:41"
+          docker run "${DOCKER_RUN_COMMON[@]}" gaia-test-fedora41 \
+            bash -c '
+              set -eo pipefail
+              cp /work/gaia.AppImage /tmp/gaia.AppImage
+              chmod +x /tmp/gaia.AppImage
+              xvfb-run --auto-servernum /tmp/gaia.AppImage \
+                >/tmp/stdout.log 2>/tmp/stderr.log &
+              APP_PID=$!
+              for i in $(seq 1 300); do
+                if grep -q "state: ready" /tmp/stdout.log 2>/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
+              grep -q "state: ready" /tmp/stdout.log || {
+                echo "::error::fedora did not reach state: ready"
+                tail -n 200 /tmp/stdout.log /tmp/stderr.log || true
+                kill -9 "$APP_PID" 2>/dev/null || true
+                exit 1
+              }
+              HEALTH_OK=0
+              for i in $(seq 1 30); do
+                PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+")
+                PORT=${PORT:-4200}
+                if curl -sSf "http://127.0.0.1:${PORT}/api/health" \
+                    | grep -q "gaia-agent-ui"; then
+                  HEALTH_OK=1
+                  break
+                fi
+                sleep 1
+              done
+              if [ "$HEALTH_OK" -ne 1 ]; then
+                echo "::error::fedora: /api/health did not report service=gaia-agent-ui"
+                kill -9 "$APP_PID" 2>/dev/null || true
+                exit 1
+              fi
+              kill "$APP_PID" 2>/dev/null || true
+              wait "$APP_PID" 2>/dev/null || true
+              echo "Row 3 PASS (state: ready + /api/health 200)"
+            '
+          echo "::endgroup::"
+
+  appimage-userns-restricted:
+    # Ubuntu 24.04.1+ defaults: kernel.apparmor_restrict_unprivileged_userns=1
+    # Validates the appImage.executableArgs: [--no-sandbox] fallback lands.
+    name: AppImage userns-restricted
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux installer artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-installer
+          path: ${{ runner.temp }}/linux-installer
+
+      - name: Download Python wheel
+        id: download-wheel
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: gaia-wheel
+          path: ${{ runner.temp }}/gaia-wheel
+
+      - name: Locate Python wheel
+        id: locate-wheel
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          WHEEL=$(ls "${RUNNER_TEMP}/gaia-wheel"/*.whl 2>/dev/null | head -n1 || true)
+          echo "path=${WHEEL}" >> "$GITHUB_OUTPUT"
+          if [ -n "${WHEEL}" ]; then
+            echo "Found wheel: ${WHEEL} — will set GAIA_LOCAL_WHEEL"
+          elif [ -n "${RELEASE_TAG}" ]; then
+            echo "::error::No Python wheel artifact found for release build (tag=${RELEASE_TAG}). The wheel is required to avoid the PyPI circular dependency — the Build Python wheel step must have failed."
+            exit 1
+          else
+            echo "No wheel artifact — will install from PyPI (non-release build)"
+          fi
+
+      - name: Enable AppArmor userns restriction on host
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The sysctl may not exist on older kernels — tolerate that.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1 || {
+            echo "::warning::kernel.apparmor_restrict_unprivileged_userns not supported on this runner; test degenerates to a plain launch"
+          }
+
+      - name: Launch AppImage under xvfb with userns restricted
+        shell: bash
+        env:
+          WHEEL_PATH: ${{ steps.locate-wheel.outputs.path }}
+        run: |
+          set -euo pipefail
+          APPIMAGE=$(ls "${RUNNER_TEMP}/linux-installer"/*.AppImage | head -n1)
+          chmod +x "${APPIMAGE}"
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libfuse2 xvfb xauth
+          if [ -n "${WHEEL_PATH}" ]; then
+            export GAIA_LOCAL_WHEEL="${WHEEL_PATH}"
+            echo "GAIA_LOCAL_WHEEL=${GAIA_LOCAL_WHEEL}"
+          fi
+          xvfb-run --auto-servernum "${APPIMAGE}" \
+            >/tmp/stdout.log 2>/tmp/stderr.log &
+          APP_PID=$!
+          for i in $(seq 1 90); do
+            if grep -q "state: ready" /tmp/stdout.log 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          if ! grep -q "state: ready" /tmp/stdout.log; then
+            echo "::error::userns-restricted launch did not reach state: ready — --no-sandbox fallback failed"
+            tail -n 200 /tmp/stdout.log /tmp/stderr.log || true
+            kill -9 "$APP_PID" 2>/dev/null || true
+            exit 1
+          fi
+          HEALTH_OK=0
+          for i in $(seq 1 30); do
+            PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+")
+            PORT=${PORT:-4200}
+            if curl -sSf "http://127.0.0.1:${PORT}/api/health" \
+                | grep -q "gaia-agent-ui"; then
+              HEALTH_OK=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$HEALTH_OK" -ne 1 ]; then
+            echo "::error::userns-restricted: /api/health did not report service=gaia-agent-ui"
+            kill -9 "$APP_PID" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$APP_PID" 2>/dev/null || true
+          wait "$APP_PID" 2>/dev/null || true
+          echo "userns-restricted PASS (--no-sandbox fallback + /api/health 200)"
+
+  # ─── Wayland visibility (DEFERRED — issue #782 follow-up) ───────────
+  # The plan calls for a headless Wayland compositor (cage -s or weston
+  # --backend=headless-backend.so) plus pixel-diff via grim, to verify
+  # BrowserWindow actually paints on Wayland (AC8). Implementing this
+  # needs a runner image or container with cage/weston pre-installed, a
+  # stable all-black baseline PNG, and tolerant diff thresholds. Holding
+  # 0.17.5 on this is not worth it — T2/T3/T6 fixes are what users hit.
+  #
+  # When picked up, the job skeleton would be:
+  #
+  #   appimage-wayland-visibility:
+  #     needs: build
+  #     runs-on: ubuntu-24.04
+  #     steps:
+  #       - uses: actions/checkout@v4
+  #       - run: sudo apt-get install --yes cage grim imagemagick libfuse2
+  #       - run: cage -s -- xvfb-run "${APPIMAGE}" &
+  #       - run: sleep 20 && grim -t png /tmp/shot.png
+  #       - run: compare -metric AE /tmp/shot.png baseline.png /tmp/diff.png
+  #
+  # Tracking: re-evaluate after T7 lands, if user reports persist.
+
   # ─── Publish job (opt-in, non-PR only) ──────────────────────────────
   # Split out from the build job so `contents: write` can be granted at
   # the job level to ONLY this job. Fork PRs never reach this job:
@@ -480,21 +952,47 @@ jobs:
           prerelease: ${{ contains(inputs.tag, '-rc.') || contains(inputs.tag, '-beta.') }}
 
   # ─── Gate job ───────────────────────────────────────────────────────
-  # Final job that confirms all platform builds succeeded. This is the
-  # single dependency that publish.yml (or any caller) should wait on.
+  # Final job that confirms all platform builds succeeded AND the Linux
+  # AppImage smoke suite passed. This is the single dependency that
+  # publish.yml (or any caller) should wait on.
+  #
+  # The smoke jobs (appimage-structural-smoke, appimage-distro-matrix,
+  # appimage-userns-restricted) are issue #782 regression guards — a
+  # broken AppImage that still builds but does not launch would slip past
+  # if we gated only on `build`.
   build-complete:
     name: Build complete
     runs-on: ubuntu-latest
-    needs: build
+    needs:
+      - build
+      - appimage-structural-smoke
+      - appimage-distro-matrix
+      - appimage-userns-restricted
     if: always()
     steps:
-      - name: Verify all platform builds succeeded
+      - name: Verify all platform builds and smoke tests succeeded
         shell: bash
         run: |
-          result="${{ needs.build.result }}"
-          echo "Matrix build result: $result"
-          if [ "$result" != "success" ]; then
+          build_result="${{ needs.build.result }}"
+          structural_result="${{ needs.appimage-structural-smoke.result }}"
+          distro_result="${{ needs.appimage-distro-matrix.result }}"
+          userns_result="${{ needs.appimage-userns-restricted.result }}"
+          echo "build:                       $build_result"
+          echo "appimage-structural-smoke:   $structural_result"
+          echo "appimage-distro-matrix:      $distro_result"
+          echo "appimage-userns-restricted:  $userns_result"
+          fail=0
+          if [ "$build_result" != "success" ]; then
             echo "::error::One or more platform installer builds failed"
+            fail=1
+          fi
+          for r in "$structural_result" "$distro_result" "$userns_result"; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "::error::AppImage smoke job failed (status: $r)"
+              fail=1
+            fi
+          done
+          if [ "$fail" -eq 1 ]; then
             exit 1
           fi
-          echo "All platform installers built successfully."
+          echo "All platform installers built and AppImage smoke suite passed."

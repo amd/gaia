@@ -57,6 +57,20 @@ public:
     /// @return JSON result with "result" key containing the final answer
     json processQuery(const std::string& userInput, int maxSteps = 0);
 
+    /// VLM convenience overload: text + images in a single user turn.
+    /// Images are sent as base64 data-URIs inside an OpenAI-compatible
+    /// image_url content part. Stateful and symmetric with the string
+    /// overload: history is appended with text-only stripped messages.
+    json processQuery(const std::string& userInput,
+                      const std::vector<Image>& images,
+                      int maxSteps = 0);
+
+    /// Low-level overload: caller composes the turn as a vector of
+    /// Messages (which may include pre-set `parts` for mixed content).
+    /// The messages are appended to conversationHistory_ (stripped of
+    /// image parts on store). Throws std::invalid_argument on empty input.
+    json processQuery(const std::vector<Message>& messages, int maxSteps = 0);
+
     /// Connect to an MCP server and register its tools.
     /// Mirrors Python MCPClientMixin.connect_mcp_server().
     ///
@@ -140,6 +154,12 @@ protected:
     virtual std::string getSystemPrompt() const { return ""; }
 
 private:
+    /// Unified entry point for all processQuery overloads. Owns the full
+    /// conversation turn: concurrency guard, empty-input validation,
+    /// ensureModelLoaded, history prepend, LLM loop, and end-of-turn
+    /// history write (text-only; image parts stripped).
+    json processQueryInternal(const std::vector<Message>& userMessages, int maxSteps);
+
     // ---- LLM Communication ----
 
     /// Send messages to the LLM and get a response.
@@ -171,6 +191,10 @@ private:
     std::unique_ptr<OutputHandler> console_;
     LemonadeClient lemonade_;
     std::atomic<bool> modelEnsured_{false};
+
+    // Concurrency guard — Agent is NOT re-entrant. A second processQuery
+    // call on the same Agent (from any thread) throws std::runtime_error.
+    std::atomic<bool> inFlight_{false};
 
     AgentState executionState_ = AgentState::PLANNING;
     json currentPlan_;

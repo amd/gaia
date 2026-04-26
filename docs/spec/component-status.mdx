@@ -133,9 +133,9 @@ description: "Implementation status and readiness tracking for all GAIA SDK comp
   </Card>
 
   <Card title="DatabaseMixin" icon="database" href="./database-mixin">
-    <Badge variant="info">Planned</Badge>
+    <Badge variant="success">Available</Badge>
 
-    Database operations for agents - **Issue #1**
+    Stdlib-sqlite3 mixin for agent-owned persistent state (`src/gaia/database/`).
 
     [View Specification →](./database-mixin)
   </Card>
@@ -298,20 +298,22 @@ description: "Implementation status and readiness tracking for all GAIA SDK comp
 ## Plugin System
 
 <Note>
-Plugin system is designed and specified, implementation planned
+Agent discovery is live: the Agent UI server uses `AgentRegistry` with YAML
+manifests under `~/.gaia/agents/`. The OpenAI-style API server uses a separate
+hardcoded `AGENT_MODELS` dict.
 </Note>
 
 <CardGroup cols={2}>
-  <Card title="AgentRegistry" icon="list" href="./plugin-registry">
-    <Badge variant="info">Planned</Badge>
+  <Card title="AgentRegistry (Agent UI)" icon="list" href="./plugin-registry">
+    <Badge variant="success">Available</Badge>
 
-    Dynamic agent discovery - **Issue #4**
+    `src/gaia/agents/registry.py` — scans built-ins + `~/.gaia/agents/`.
   </Card>
 
-  <Card title="get_registry" icon="magnifying-glass" href="./plugin-registry">
-    <Badge variant="info">Planned</Badge>
+  <Card title="AGENT_MODELS (API server)" icon="magnifying-glass" href="/sdk/infrastructure/api-server">
+    <Badge variant="success">Available</Badge>
 
-    Registry accessor function - **Issue #4**
+    Static model registry in `src/gaia/api/agent_registry.py`.
   </Card>
 </CardGroup>
 

@@ -106,6 +106,7 @@ class SSEOutputHandler(OutputHandler):
         self._in_thinking = False  # True while inside a <think>...</think> block
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
         # Tool confirmation state (blocking until frontend responds)
+        self._confirm_lock = threading.Lock()
         self._confirm_event: Optional[threading.Event] = None
         self._confirm_result: bool = False
         self._confirm_id: Optional[str] = None
@@ -279,10 +280,13 @@ class SSEOutputHandler(OutputHandler):
         if isinstance(data, dict) and ("files" in data or "file_list" in data):
             files = data.get("file_list", data.get("files", []))
             if isinstance(files, list):
+                # Keep the UI contract honest: "total" should never claim more accessible
+                # files than we actually include in the event payload.
+                limited_files = files[:20]
                 event["result_data"] = {
                     "type": "file_list",
-                    "files": files[:20],  # Limit to 20 files
-                    "total": data.get("count", len(files)),
+                    "files": limited_files,  # Limit to 20 files
+                    "total": len(limited_files),
                 }
 
         # For search results with chunks, include structured chunk data
@@ -688,8 +692,9 @@ class SSEOutputHandler(OutputHandler):
         ``False`` otherwise.
         """
         confirm_id = str(uuid.uuid4())
-        self._confirm_event = threading.Event()
-        self._confirm_result = False
+        with self._confirm_lock:
+            self._confirm_event = threading.Event()
+            self._confirm_result = False
         self._confirm_id = confirm_id
 
         self._emit(
@@ -736,12 +741,13 @@ class SSEOutputHandler(OutputHandler):
         Called by the ``POST /api/chat/confirm-tool`` HTTP endpoint.  Returns
         ``False`` if there is no pending confirmation request.
         """
-        if self._confirm_event is None:
-            # No pending confirmation — initialise state anyway so callers can
-            # inspect _confirm_result and _confirm_event after the call.
-            self._confirm_event = threading.Event()
-        self._confirm_result = approved
-        self._confirm_event.set()
+        with self._confirm_lock:
+            if self._confirm_event is None:
+                # No pending confirmation — initialise state anyway so callers can
+                # inspect _confirm_result and _confirm_event after the call.
+                self._confirm_event = threading.Event()
+            self._confirm_result = approved
+            self._confirm_event.set()
         return True
 
     def signal_done(self):

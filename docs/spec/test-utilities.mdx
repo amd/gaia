@@ -8,12 +8,10 @@ title: "Test Utilities"
 
 <Note>
 **Component:** Test Utilities (MockLLMProvider, MockVLMClient, fixtures)
-**Module:** `gaia.testing` (planned location)
+**Module:** `gaia.testing`
 **Import:** `from gaia.testing import MockLLMProvider, MockVLMClient, create_test_agent, temp_database`
 </Note>
 ---
-
-<Badge text="development" color="orange" />
 
 ## Overview
 
@@ -377,7 +375,10 @@ def assert_tool_result(result: Dict, expected_keys: List[str]) -> None:
         AssertionError: If keys missing or result invalid
 
     Usage:
-        result = agent.execute_tool("search", {"query": "test"})
+        # Call the registered tool function directly — Agent has no public
+        # `execute_tool()`; see gaia.agents.base.tools._TOOL_REGISTRY
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+        result = _TOOL_REGISTRY["search"]["function"](query="test")
         assert_tool_result(result, ["results", "count"])
     """
     assert isinstance(result, dict), f"Result must be dict, got {type(result)}"
@@ -584,10 +585,11 @@ def test_customer_agent_creates_record(tmp_path):
     with temp_database(schema_file=str(schema)) as db_url:
         agent = CustomerAgent(db_url=db_url)
 
-        # Create customer
-        result = agent.execute_tool("create_customer", {
-            "name": "Test Customer"
-        })
+        # Tools are regular Python functions — call them directly
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+        result = _TOOL_REGISTRY["create_customer"]["function"](
+            name="Test Customer"
+        )
 
         assert result["status"] == "created"
 
@@ -615,8 +617,11 @@ def test_form_extraction():
         extracted_text='{"first_name": "John", "last_name": "Doe"}'
     )
 
-    # Test extraction
-    result = agent.execute_tool("extract_form", {"image_path": "fake.png"})
+    # Test extraction — invoke the registered tool function directly
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    result = _TOOL_REGISTRY["extract_form"]["function"](
+        image_path="fake.png"
+    )
 
     # Verify VLM was called
     assert agent.vlm.was_called

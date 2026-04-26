@@ -413,12 +413,14 @@ class TestStreamingRegisteredAgentDoesNotDoubleIndex:
             _Path(__file__).parents[4] / "src" / "gaia" / "ui" / "_chat_helpers.py"
         ).read_text()
 
-        # Locate the streaming registered-agent factory call. It's the only
-        # ``registry.create_agent(`` invocation in ``_stream_chat_response``
-        # (non-streaming ``_get_chat_response`` uses a separate branch).
+        # Locate the streaming registered-agent factory call. Signature:
+        # ``registry.create_agent(agent_type, **_build_create_kwargs(...,
+        # streaming=True), **_session_agent_kwargs(rag_file_paths=[], ...))``.
+        # We anchor on ``streaming=True`` (only the streaming branch sets it)
+        # followed by ``_session_agent_kwargs(`` to find the right call-site.
         m = re.search(
-            r"registry\.create_agent\(\s*agent_type,\s*model_id=model_id,\s*"
-            r"streaming=True,[^)]*?\*\*_session_agent_kwargs\(([^)]+)\)",
+            r"registry\.create_agent\(\s*agent_type,[^)]*?streaming=True"
+            r"[^)]*?\)\s*,\s*\*\*_session_agent_kwargs\(([^)]+)\)",
             src,
             re.DOTALL,
         )

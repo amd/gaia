@@ -46,15 +46,20 @@ The Hub launches with existing GAIA agents as initial content:
 
 | Agent | Category | Use Case | Source |
 |-------|----------|----------|--------|
-| **GaiaAgent** | Documents | Document Q&A with RAG | [`agents/chat/`](/guides/chat) |
+| **GaiaAgent** (née `ChatAgent`, renamed in v0.20.0) | Documents | Document Q&A with RAG | [`agents/chat/`](/guides/chat) |
 | **CodeAgent** | Code | Code generation and editing | [`agents/code/`](/guides/code) |
-| **ComputerUseAgent** | Desktop | Desktop automation via MCP | [`agents/cua/`](/plans/cua) |
 | **BlenderAgent** | Creative | 3D scene automation | [`agents/blender/`](/guides/blender) |
 | **JiraAgent** | Productivity | Issue management with NLP | [`agents/jira/`](/guides/jira) |
 | **DockerAgent** | DevOps | Container management | [`agents/docker/`](/guides/docker) |
 | **MedicalIntakeAgent** | Healthcare | Form processing with VLM | [`agents/emr/`](/guides/emr) |
 | **RoutingAgent** | Infrastructure | Intelligent agent selection | [`agents/routing/`](/guides/routing) |
-| **TalkAgent** | Voice | Speech-to-speech interaction | [`agents/talk/`](/guides/talk) |
+| **SDAgent** | Creative | Image generation with SD + VLM | [`agents/sd/`](/guides/sd) |
+| **Talk SDK** (voice I/O for agents) | Voice | Speech-to-speech wrapper around any agent | [`gaia/talk/`](/guides/talk) |
+
+Additional seeds expected when the underlying work lands:
+
+- **ComputerUseAgent (CUA)** — planned for v0.21.0; see the
+  [CUA plan](/plans/cua).
 
 These agents serve as reference implementations and starter templates for community submissions.
 

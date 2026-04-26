@@ -173,6 +173,7 @@ class DocumentMonitor:
                         filepath,
                         doc_id,
                     )
+                    self._db.update_document_status(doc_id, "missing")
                 continue
 
             current_mtime, current_size = file_info
