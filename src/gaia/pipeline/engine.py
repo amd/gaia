@@ -661,7 +661,7 @@ class PipelineEngine:
             )
             if agent_id:
                 logger.info(f"Selected planning agent: {agent_id}")
-                self._state_machine.add_artifact("planning_agent", agent_id)
+                self._state_machine.add_artifact("planning_agent", agent_id, source="agent_registry")
 
                 # NEW: Commit AGENT_SELECTED event (Phase 1 Sprint 3)
                 if self._enable_chronicle and self._nexus:
@@ -730,7 +730,10 @@ class PipelineEngine:
             for agent_id, artifact_text in loop_state.artifacts.items():
                 if artifact_text is not None:
                     self._state_machine.add_artifact(
-                        f"plan_{loop_state.config.loop_id}_{agent_id}", artifact_text
+                        f"plan_{loop_state.config.loop_id}_{agent_id}",
+                        artifact_text,
+                        source=agent_id,
+                        source_metadata={"loop_id": loop_state.config.loop_id, "phase": "PLANNING"},
                     )
 
             if self._enable_chronicle and self._nexus:
@@ -843,7 +846,10 @@ class PipelineEngine:
             for agent_id, artifact_text in loop_state.artifacts.items():
                 if artifact_text is not None:
                     self._state_machine.add_artifact(
-                        f"code_{loop_state.config.loop_id}_{agent_id}", artifact_text
+                        f"code_{loop_state.config.loop_id}_{agent_id}",
+                        artifact_text,
+                        source=agent_id,
+                        source_metadata={"loop_id": loop_state.config.loop_id, "phase": "DEVELOPMENT"},
                     )
 
             if self._enable_chronicle and self._nexus:
@@ -910,7 +916,7 @@ class PipelineEngine:
         # Store quality score
         quality_score = quality_report.overall_score / 100
         self._state_machine.set_quality_score(quality_score)
-        self._state_machine.add_artifact("quality_report", quality_report.to_dict())
+        self._state_machine.add_artifact("quality_report", quality_report.to_dict(), source="quality_scorer")
 
         # NEW: Commit QUALITY_EVALUATED event (Phase 1 Sprint 3)
         if self._enable_chronicle and self._nexus:
@@ -977,7 +983,7 @@ class PipelineEngine:
                     )
                     routing_decision = self._routing_engine.route_defect_resilient(defect_dict, context={"pipeline_id": self._state_machine._context.pipeline_id})
                     routing_decisions.append(routing_decision.to_dict())
-                self._state_machine.add_artifact("routing_decisions", routing_decisions)
+                self._state_machine.add_artifact("routing_decisions", routing_decisions, source="routing_engine")
                 logger.info(
                     f"Routed {len(routing_decisions)} defects via RoutingEngine",
                     extra={"defect_count": len(routing_decisions)},
@@ -1005,7 +1011,10 @@ class PipelineEngine:
                 is_final_phase=True,
             )
 
-        self._state_machine.add_artifact("decision", decision.to_dict())
+        self._state_machine.add_artifact(
+            "decision", decision.to_dict(),
+            source="supervisor_agent" if use_supervisor else "decision_engine",
+        )
 
         # NEW: Commit DECISION_MADE event (Phase 1 Sprint 3)
         if self._enable_chronicle and self._nexus:

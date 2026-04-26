@@ -156,6 +156,7 @@ class PipelineSnapshot:
     completed_at: Optional[datetime] = None
     defects: List[Dict[str, Any]] = field(default_factory=list)
     context_injected: Dict[str, Any] = field(default_factory=dict)
+    provenance: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -179,6 +180,7 @@ class PipelineSnapshot:
             ),
             "defects": self.defects,
             "context_injected": self.context_injected,
+            "provenance": self.provenance,
         }
 
     @classmethod
@@ -213,6 +215,7 @@ class PipelineSnapshot:
             ),
             defects=data.get("defects", []),
             context_injected=data.get("context_injected", {}),
+            provenance=data.get("provenance", {}),
         )
 
     def elapsed_time(self) -> Optional[float]:
@@ -501,16 +504,32 @@ class PipelineStateMachine:
         with self._lock:
             self._snapshot.error_message = error_message
 
-    def add_artifact(self, name: str, artifact: Any) -> None:
+    def add_artifact(
+        self,
+        name: str,
+        artifact: Any,
+        source: Optional[str] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         Add an artifact to the snapshot.
 
         Args:
             name: Artifact name/key
             artifact: Artifact data
+            source: Optional origin of the artifact (e.g. agent_id, phase name)
+            source_metadata: Optional metadata dict (timestamp, loop_id, etc.)
         """
         with self._lock:
             self._snapshot.artifacts[name] = artifact
+            if source:
+                meta = {
+                    "source": source,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                if source_metadata:
+                    meta.update(source_metadata)
+                self._snapshot.provenance[name] = meta
 
     def add_defect(self, defect: Dict[str, Any]) -> None:
         """
