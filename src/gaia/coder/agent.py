@@ -62,6 +62,7 @@ from gaia.coder.base import (
 from gaia.coder.llm import AssistantTurn, CoderLLM, Usage
 from gaia.coder.tool_schema import ToolDispatcher, ToolResult, build_anthropic_tools
 from gaia.coder.tools import CLIToolsMixin, SearchToolsMixin
+from gaia.coder.tools.web import WebToolsMixin
 
 # NOTE: ``SearchToolsMixin`` already inherits from ``FileToolsMixin`` (see
 # src/gaia/coder/tools/search.py:49) so we don't list FileToolsMixin in
@@ -118,6 +119,7 @@ READ_TOOLS: frozenset[str] = frozenset(
         "list_processes",
         "get_process_logs",
         "semantic_search",
+        "fetch_url",
         "gh_pr_view",
         "gh_pr_list",
         "gh_pr_files",
@@ -226,7 +228,7 @@ class SendResult:
 # ---------------------------------------------------------------------------
 
 
-class Agent(SearchToolsMixin, CLIToolsMixin):
+class Agent(SearchToolsMixin, CLIToolsMixin, WebToolsMixin):
     """The conversational, tool-using gaia-coder agent.
 
     ``Agent`` composes :class:`SearchToolsMixin` (which itself inherits
@@ -296,6 +298,7 @@ class Agent(SearchToolsMixin, CLIToolsMixin):
         self.register_file_tools()
         self.register_cli_tools()
         self.register_search_tools()
+        self.register_web_tools()
         if include_github:
             try:
                 # Imported lazily so a coder without ``gh`` installed
