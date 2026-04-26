@@ -42,18 +42,27 @@
     background: transparent;
 }
 
-/* Assistant messages -- AMD red left accent, refined lift */
+/* Assistant messages — clean separation via background, no red border.
+ * Previously this shared the AMD-red left border with .msg-error so every
+ * single assistant message read as an "error" at a glance. The red is now
+ * reserved for actual errors (.msg-error) and the small brand accents
+ * (avatar + GAIA name). Assistant messages distinguish themselves from
+ * user messages purely via:
+ *   - their slightly-elevated panel background (--bg-assistant-msg)
+ *   - the GAIA avatar + name in the header
+ *   - left-aligned text (vs. user's right-aligned)
+ * Subtle is the point: a long thread should read as a calm conversation,
+ * not a stack of warnings. */
 .msg-assistant {
     background: var(--bg-assistant-msg);
     border-bottom: 1px solid var(--border-light);
-    border-left: 2px solid var(--amd-red);
     animation: msgSlideIn 250ms var(--ease);
 }
 
-[data-theme="dark"] .msg-assistant {
-    border-left-color: var(--amd-red);
-    background: rgba(237, 28, 36, 0.02);
-}
+/* Dark theme override removed: the base --bg-assistant-msg already
+   resolves to a neutral white-tinted rgba in dark mode (see
+   styles/index.css), so the previous red-haze override here was
+   actively wrong. Now both themes inherit the variable directly. */
 
 .msg-inner { max-width: 100%; }
 
@@ -95,8 +104,12 @@
     overflow: hidden;
 }
 [data-theme="dark"] .msg-avatar-assistant {
-    border-color: rgba(237, 28, 36, 0.25);
-    box-shadow: 0 0 8px rgba(237, 28, 36, 0.12);
+    /* Soft neutral border + subtle lift instead of the previous red glow.
+       The red glow contributed to the "error vibe" the user complained
+       about. Brand red is reserved for the small "GAIA" name text; the
+       avatar itself reads as a calm UI element. */
+    border-color: var(--border);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02);
 }
 .msg-avatar-assistant img {
     width: 100%;
