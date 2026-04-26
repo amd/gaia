@@ -246,8 +246,13 @@ def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
     return scenarios
 
 
-def build_scenario_prompt(scenario_data, manifest_data, backend_url):
-    """Build the prompt passed to `claude -p` for one scenario."""
+def build_scenario_prompt(scenario_data, manifest_data, backend_url, agent_type=None):
+    """Build the prompt passed to `claude -p` for one scenario.
+
+    When *agent_type* is set, the simulator is instructed to create sessions
+    bound to that agent registration ID (e.g. "gaia-lite"). Without it, the
+    backend uses its default agent.
+    """
     scenario_yaml = yaml.dump(scenario_data, default_flow_style=False)
     manifest_json = json.dumps(manifest_data, indent=2)
 
@@ -261,6 +266,27 @@ def build_scenario_prompt(scenario_data, manifest_data, backend_url):
     simulator_content = _load_simulator_content()
     judge_turn_content = _load_judge_turn_content()
     judge_scenario_content = _load_judge_scenario_content()
+
+    # When the runner targets a specific agent (e.g. gaia-lite), inject an
+    # explicit instruction so the eval simulator creates sessions bound to
+    # that agent_type. The MCP create_session tool accepts an optional
+    # agent_type kwarg that maps to the REST POST /api/sessions body.
+    if agent_type:
+        agent_type_instructions = (
+            f"\n## TARGET AGENT\n"
+            f'This eval run targets agent_type="{agent_type}". '
+            f"When creating sessions in Phase 1, you MUST pass "
+            f'agent_type="{agent_type}" to create_session so each scenario '
+            f"runs against the intended agent. Example call: "
+            f'create_session(title="Eval: <scenario_id>", agent_type="{agent_type}").\n'
+        )
+        create_session_call = (
+            f'create_session(title="Eval: {{scenario_id}}", '
+            f'agent_type="{agent_type}")'
+        )
+    else:
+        agent_type_instructions = ""
+        create_session_call = 'create_session("Eval: {{scenario_id}}")'
 
     return f"""You are the GAIA Eval Agent. Test the GAIA Agent UI by simulating a realistic user and judging responses.
 
@@ -292,12 +318,12 @@ def build_scenario_prompt(scenario_data, manifest_data, backend_url):
 
 ## AGENT UI
 Backend: {backend_url}
-
+{agent_type_instructions}
 ## YOUR TASK
 
 ### Phase 1: Setup
 1. Call system_status() — if error, return status="INFRA_ERROR"
-2. Call create_session("Eval: {{scenario_id}}")
+2. Call {create_session_call}
 3. For each document in scenario setup.index_documents:
    Call index_document(filepath=<absolute path>, session_id=<session_id from step 2>)
    CRITICAL: Always pass the session_id so documents are linked to the session and visible to the agent.
@@ -613,12 +639,15 @@ def run_scenario_subprocess(
     budget,
     timeout,
     extra_corpus_dirs=None,
+    agent_type=None,
 ):
     """Invoke claude -p for one scenario. Returns parsed result dict."""
     scenario_id = scenario_data["id"]
     manifest_data = _load_merged_manifest(extra_corpus_dirs=extra_corpus_dirs)
 
-    prompt = build_scenario_prompt(scenario_data, manifest_data, backend_url)
+    prompt = build_scenario_prompt(
+        scenario_data, manifest_data, backend_url, agent_type=agent_type
+    )
 
     result_schema = json.dumps(
         {
@@ -1316,6 +1345,7 @@ class AgentEvalRunner:
         extra_corpus_dirs=None,
         tags=None,
         output_format=None,
+        agent_type=None,
     ):
         self.backend_url = backend_url
         self.model = model
@@ -1326,6 +1356,7 @@ class AgentEvalRunner:
         self.extra_corpus_dirs = extra_corpus_dirs or []
         self.tags = tags or []
         self.output_format = output_format
+        self.agent_type = agent_type
 
     def _print_summary(self, scorecard, run_id, run_dir):
         """Print a one-block eval summary to stdout."""
@@ -1385,6 +1416,8 @@ class AgentEvalRunner:
             sys.exit(1)
 
         print(f"[INFO] Found {len(scenarios)} scenario(s)")
+        if self.agent_type:
+            print(f"[INFO] Targeting agent_type='{self.agent_type}'")
 
         # Pre-flight
         errors = preflight_check(self.backend_url)
@@ -1471,6 +1504,7 @@ class AgentEvalRunner:
                 extra_corpus_dirs=(
                     self.extra_corpus_dirs if self.extra_corpus_dirs else None
                 ),
+                agent_type=self.agent_type,
             )
             results.append(result)
 
@@ -1486,6 +1520,7 @@ class AgentEvalRunner:
             "backend_url": self.backend_url,
             "model": self.model,
             "budget_per_scenario_usd": float(self.budget),
+            "agent_type": self.agent_type,
         }
         scorecard = aggregate_scorecard(results, run_id, run_dir, config)
 
@@ -1563,6 +1598,7 @@ class AgentEvalRunner:
                     extra_corpus_dirs=(
                         self.extra_corpus_dirs if self.extra_corpus_dirs else None
                     ),
+                    agent_type=self.agent_type,
                 )
                 rerun_results.append(result)
 
