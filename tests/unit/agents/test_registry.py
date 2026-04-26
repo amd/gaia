@@ -3,6 +3,7 @@
 
 """Unit tests for AgentRegistry discovery, manifest validation, and model resolution."""
 
+import platform
 import textwrap
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,13 @@ from gaia.agents.registry import (
     AgentManifest,
     AgentRegistration,
     AgentRegistry,
+)
+
+# gaia-lite's primary model is platform-conditional: macOS hits a Lemonade
+# llama.cpp pin (lemonade-sdk/lemonade#1741) that lacks gemma4 arch support,
+# so it falls back to Gemma 3 4B; Linux/Windows can use Gemma 4 E4B directly.
+_EXPECTED_PRIMARY = (
+    "Gemma-3-4b-it-GGUF" if platform.system() == "Darwin" else "Gemma-4-E4B-it-GGUF"
 )
 
 # ---------------------------------------------------------------------------
@@ -142,7 +150,7 @@ class TestBuiltinRegistration:
         # whole reason this agent exists alongside ChatAgent. We currently
         # ship Gemma 4 E4B as primary, with Gemma 3 4B as the fallback for
         # catalogs that haven't picked up the Gemma 4 drop yet.
-        assert reg.models[0] == "Gemma-4-E4B-it-GGUF"
+        assert reg.models[0] == _EXPECTED_PRIMARY
         # Case-insensitive "4B" check — Gemma 3 uses lowercase "4b" in its
         # checkpoint name, Gemma 4 E4B uses uppercase. Both are ~4B models.
         assert all("4b" in m.lower() for m in reg.models), reg.models
@@ -159,7 +167,7 @@ class TestBuiltinRegistration:
             reg.factory()  # no kwargs — factory must still set model_id
         mock_agent.assert_called_once()
         config = mock_agent.call_args.kwargs["config"]
-        assert config.model_id == "Gemma-4-E4B-it-GGUF"
+        assert config.model_id == _EXPECTED_PRIMARY
 
     def test_gaia_lite_factory_respects_caller_override(self):
         """Explicit ``model_id`` from the caller wins over the preset default."""
@@ -217,7 +225,7 @@ class TestBuiltinRegistration:
         mock_agent.assert_called_once()
         config = mock_agent.call_args.kwargs["config"]
         # Same ~4B preset as gaia-lite — confirming the alias hit.
-        assert config.model_id == "Gemma-4-E4B-it-GGUF"
+        assert config.model_id == _EXPECTED_PRIMARY
 
     def test_legacy_chat_lite_resolve_model_returns_4b(self):
         """``resolve_model('chat-lite')`` must honour the alias.
@@ -234,9 +242,9 @@ class TestBuiltinRegistration:
         # Lemonade HTTP call).
         resolved = registry.resolve_model(
             "chat-lite",
-            available_models=["Gemma-4-E4B-it-GGUF", "Something-Else"],
+            available_models=[_EXPECTED_PRIMARY, "Something-Else"],
         )
-        assert resolved == "Gemma-4-E4B-it-GGUF"
+        assert resolved == _EXPECTED_PRIMARY
 
     def test_canonical_id_maps_aliases_and_passes_through_known_ids(self):
         """``canonical_id`` is the single source of alias truth."""

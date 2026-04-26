@@ -8,6 +8,7 @@ import importlib.util
 import inspect
 import json
 import os
+import platform
 import re
 import threading
 import time
@@ -211,15 +212,28 @@ class AgentRegistry:
         # applied via setdefault so callers can still override (e.g. for
         # tests or explicit user selection).
         #
-        # Primary: Gemma-4-E4B-it-GGUF — current-gen Google Gemma at ~4B
-        # effective params, strong instruction-following at low footprint,
-        # natively multimodal, 128K context, Apache 2.0.
-        # Fallback: Gemma-3-4b-it-GGUF — prior-gen, widely available in
-        # Lemonade catalogs that haven't picked up the Gemma 4 drop yet.
-        # Single source of truth — the factory's setdefault below MUST agree
-        # with this list's first entry, or the runtime preset and the UI's
-        # advertised primary will diverge.
-        _GAIA_LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Gemma-3-4b-it-GGUF"]
+        # Preferred-model list is platform-conditional because Gemma 4
+        # support is currently broken on macOS — Lemonade v10.2.0's
+        # bundled llama.cpp (b8460) predates the gemma4 architecture
+        # handler (added in llama.cpp b8637 / ggml-org/llama.cpp#21309)
+        # AND Lemonade actively reverts any local binary swap on
+        # restart. Tracked upstream at lemonade-sdk/lemonade#1741.
+        #
+        # On Linux/Windows the AMD GPU/NPU paths use a different
+        # llama.cpp bundle that does ship gemma4 support, so Gemma 4
+        # is the better default there.
+        #
+        # Both lists keep the other model as a fallback so once the
+        # macOS Lemonade pin gets bumped (or the Linux build regresses),
+        # ``resolve_model`` can fall through without code changes.
+        #
+        # Single source of truth — the factory's setdefault below MUST
+        # agree with this list's first entry, or the runtime preset and
+        # the UI's advertised primary will diverge.
+        if platform.system() == "Darwin":
+            _GAIA_LITE_MODELS = ["Gemma-3-4b-it-GGUF", "Gemma-4-E4B-it-GGUF"]
+        else:
+            _GAIA_LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Gemma-3-4b-it-GGUF"]
 
         def gaia_lite_factory(**kwargs):
             from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
