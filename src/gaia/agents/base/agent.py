@@ -2246,8 +2246,60 @@ Do NOT wrap conversational replies in JSON.
             if self.show_prompts:
                 self.console.print_response(response, "LLM Response")
 
-            # Parse the response
-            parsed = self._parse_llm_response(response)
+            # Parse the response. Small models (e.g. 4B) sometimes emit malformed
+            # tool_calls JSON — concatenated enum values, unterminated strings,
+            # 1000+ char arguments. Don't fail the whole turn: log the error,
+            # nudge the model to retry with simpler args, and continue the loop.
+            try:
+                parsed = self._parse_llm_response(response)
+            except (ValueError, NotImplementedError) as parse_exc:
+                logger.warning(
+                    "Tool-call parse failed (step %d): %s — recovering with retry prompt",
+                    steps_taken,
+                    parse_exc,
+                )
+                self.error_history.append(
+                    {
+                        "step": steps_taken,
+                        "error": str(parse_exc),
+                        "type": "tool_call_parse_error",
+                    }
+                )
+                error_count += 1
+                # If we've already retried several times, give up gracefully and
+                # answer in plain text rather than spamming the user.
+                if error_count >= 3:
+                    final_answer = (
+                        "I had trouble formatting my tool call. Could you "
+                        "rephrase or break the request into smaller pieces?"
+                    )
+                    break
+                # Push a synthetic assistant turn + recovery user message so the
+                # next LLM call has context. Don't include the raw envelope to
+                # keep noise out of the conversation history.
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "[I tried to call a tool but my arguments were "
+                            "malformed.]"
+                        ),
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Your last tool call had malformed arguments. "
+                            "Please try again. Use ONLY the documented enum "
+                            "values for each argument (e.g. 'brief', "
+                            "'detailed', 'bullets' — never a long sentence). "
+                            "If you don't need a tool, answer in plain text."
+                        ),
+                    }
+                )
+                steps_taken += 1
+                continue
             logger.debug(f"Parsed response: {parsed}")
             conversation.append({"role": "assistant", "content": parsed})
 
