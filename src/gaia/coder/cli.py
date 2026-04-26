@@ -1120,15 +1120,81 @@ def _build_parser(
         prog="gaia-coder",
         description=(
             "gaia-coder: engineering-facing coding agent for amd/gaia. "
+            "Run with no subcommand for an interactive REPL "
+            "(Claude-Code-style). "
             "See docs/plans/coder-agent.mdx for the full spec."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    # Top-level logging flags. Mutate the root logger before any handler
+    # runs so per-handler logs are emitted at the requested level.
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable DEBUG-level logging on the root logger.",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Suppress all logging below WARNING.",
+    )
+    parser.add_argument(
+        "--log-file",
+        dest="log_file",
+        default=None,
+        help="Append a copy of every log record to this file.",
     )
     subparsers = parser.add_subparsers(
         dest="subcommand",
         metavar="<subcommand>",
         help="Run `gaia-coder <subcommand> -h` for subcommand help.",
     )
+
+    # --- repl (default; also explicit for flag control) --------------
+    repl_parser = subparsers.add_parser(
+        "repl",
+        help="Launch the interactive coding REPL (default if no subcommand).",
+        description=(
+            "Drop into a Claude-Code-style interactive session. The agent "
+            "is bound to the current repo (use --repo-root to override), "
+            "auto-loads CLAUDE.md / AGENTS.md / GAIA.md as system context, "
+            "and exposes the file / shell / search / GitHub tool registry "
+            "to the LLM. Slash commands inside the REPL: /help, /tools, "
+            "/cost, /save, /load, /trust, /feedback, /quit."
+        ),
+    )
+    repl_parser.add_argument(
+        "--yes",
+        "-y",
+        dest="auto_yes",
+        action="store_true",
+        help="Auto-approve every tool call (use only in trusted environments).",
+    )
+    repl_parser.add_argument(
+        "--model",
+        default=None,
+        help="Override the LLM model (defaults to gaia.eval.config.DEFAULT_CLAUDE_MODEL).",
+    )
+    repl_parser.add_argument(
+        "--repo-root",
+        dest="repo_root",
+        default=None,
+        help="Bind the agent to this repo root (defaults to $PWD).",
+    )
+    repl_parser.add_argument(
+        "--no-github",
+        dest="no_github",
+        action="store_true",
+        help="Skip registering the gh CLI tool family.",
+    )
+    repl_parser.add_argument(
+        "--resume",
+        default=None,
+        help="Resume a saved session by id (see /sessions inside the REPL).",
+    )
+    repl_parser.set_defaults(handler=_handle_repl)
 
     # --- trust ---------------------------------------------------------
     trust = subparsers.add_parser(
@@ -1419,14 +1485,83 @@ def _build_parser(
     return parser
 
 
+def _handle_repl(args: argparse.Namespace) -> int:
+    """Launch the interactive REPL.
+
+    Imported lazily so a user running ``gaia-coder trust`` or another
+    one-shot command does not pay the ``rich`` / ``prompt_toolkit`` /
+    ``anthropic`` import cost just to print a tier summary.
+    """
+    from gaia.coder.repl import run_repl
+
+    repo_root = Path(args.repo_root).resolve() if args.repo_root else None
+    return run_repl(
+        auto_yes=getattr(args, "auto_yes", False),
+        model=args.model,
+        repo_root=repo_root,
+        include_github=not getattr(args, "no_github", False),
+        resume=getattr(args, "resume", None),
+    )
+
+
+def _configure_logging(args: argparse.Namespace) -> None:
+    """Apply ``-v`` / ``-q`` / ``--log-file`` to the root logger.
+
+    Default level is ``INFO`` so the REPL surfaces tool calls and the
+    occasional warning. ``--verbose`` flips to ``DEBUG``; ``--quiet``
+    flips to ``WARNING``. ``--log-file`` adds a :class:`logging.FileHandler`
+    in addition to the default stderr handler.
+    """
+    import logging
+
+    if getattr(args, "quiet", False):
+        level = logging.WARNING
+    elif getattr(args, "verbose", False):
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    # Replace any pre-existing root handler so repeated invocations
+    # (tests, embedded use) don't accumulate stderr handlers.
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    fmt = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter(fmt))
+    root.addHandler(console_handler)
+    log_file = getattr(args, "log_file", None)
+    if log_file:
+        try:
+            file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+            file_handler.setFormatter(logging.Formatter(fmt))
+            root.addHandler(file_handler)
+        except OSError as e:
+            print(f"warning: --log-file {log_file!r} failed: {e}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
-    """``gaia-coder`` entry point."""
+    """``gaia-coder`` entry point.
+
+    With no subcommand: launches the interactive REPL. With a subcommand:
+    dispatches to the matching handler (trust / feedback / self-fix / ...).
+    """
     parser = _build_parser()
     args = parser.parse_args(argv)
+    _configure_logging(args)
 
     if not getattr(args, "subcommand", None):
-        parser.print_help()
-        return 0
+        # No subcommand → REPL is the default surface (daily-driver mode).
+        return _handle_repl(
+            argparse.Namespace(
+                auto_yes=False,
+                model=None,
+                repo_root=None,
+                no_github=False,
+                resume=None,
+            )
+        )
 
     handler: Callable[[argparse.Namespace], int] = args.handler
     return handler(args)
