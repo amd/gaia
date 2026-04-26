@@ -120,3 +120,66 @@ class TestProcessQueryRecoversOnParseError:
         if text:
             assert "Malformed" not in text
             assert "Agent error" not in text
+
+
+class TestProcessQueryRecoversOnContextOverflow:
+    """When the multi-step loop accumulates tool messages past the context
+    window, the agent should trim and retry once before giving up."""
+
+    def _stub_chat_with_exception_then_answer(self, agent, exc, answer):
+        """First call raises *exc*, second returns plain-text *answer*."""
+        responses = [exc, answer]
+        chat = MagicMock()
+
+        def _send(*_, **__):
+            r = responses.pop(0)
+            if isinstance(r, BaseException):
+                raise r
+            resp = MagicMock()
+            resp.text = r
+            resp.stats = {}
+            return resp
+
+        chat.send_messages = MagicMock(side_effect=_send)
+        agent.chat = chat
+        return chat
+
+    def test_context_overflow_triggers_trim_and_retry(self, agent):
+        """First call raises overflow, second succeeds → final_answer set."""
+        agent.streaming = False
+        good = json.dumps({"thought": "ok", "answer": "Here you go."})
+        chat = self._stub_chat_with_exception_then_answer(
+            agent,
+            RuntimeError("exceed_context_size: prompt + history exceeds 32768 tokens"),
+            good,
+        )
+        result = agent.process_query("anything", max_steps=5)
+        assert chat.send_messages.call_count == 2
+        assert any(
+            e.get("type") == "llm_context_overflow_trimmed" for e in agent.error_history
+        )
+        text = result.get("response") if isinstance(result, dict) else str(result)
+        if text:
+            assert "exceed_context_size" not in text
+            assert "Sorry, I ran into" not in text
+
+    def test_context_overflow_after_retry_gives_friendly_fallback(self, agent):
+        """When trim+retry STILL fails, final message is friendly."""
+        agent.streaming = False
+        responses = [
+            RuntimeError("exceeds the available context size"),
+            RuntimeError("exceeds the available context size"),
+        ]
+        chat = MagicMock()
+
+        def _send(*_, **__):
+            raise responses.pop(0)
+
+        chat.send_messages = MagicMock(side_effect=_send)
+        agent.chat = chat
+        result = agent.process_query("x", max_steps=5)
+        text = result.get("response") if isinstance(result, dict) else str(result)
+        if text:
+            # No raw exception leaked
+            assert "exceeds the available context size" not in text
+            assert "Traceback" not in text
