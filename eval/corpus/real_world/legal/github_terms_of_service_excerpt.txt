@@ -1,0 +1,51 @@
+GITHUB TERMS OF SERVICE — SYNTHETIC EXCERPT
+(Paraphrased policy summary for evaluation purposes only)
+
+This excerpt paraphrases representative provisions of the GitHub Terms of
+Service for evaluation harness use. It is not the binding agreement and
+does not reflect the precise wording of any specific version.
+
+A. ACCOUNT REQUIREMENTS
+
+To create a personal account on GitHub, you must be at least 13 years of
+age. The minimum age to create a GitHub account is 13 years old. If you
+reside in a jurisdiction that requires a higher age of digital consent,
+you must meet that higher local minimum to use the service.
+
+Account creation is reserved for human individuals. Accounts must be
+created and used by a human; "machine accounts" or accounts created by
+automated methods are not permitted under these terms. Bots cannot create
+accounts: a human must register and remain accountable for any account
+used to operate automated software, bots, or scripts on the service.
+
+You are responsible for keeping your account credentials secure and for
+all activity that occurs under your account.
+
+B. ACCEPTABLE USE
+
+You may use GitHub only in compliance with these terms and all applicable
+laws. You agree not to engage in activity that violates the Acceptable Use
+Policies, including unlawful, abusive, or disruptive behavior on the
+platform.
+
+C. CONTENT AND INTELLECTUAL PROPERTY
+
+You retain ownership of content you create and upload. By uploading
+content to GitHub, you grant the company a license sufficient to host,
+display, and process that content for the purpose of operating the
+service.
+
+D. TERMINATION
+
+GitHub may suspend or terminate accounts that violate these terms,
+including accounts created by automated methods or that misrepresent the
+identity of their human owner.
+
+E. SCOPE OF THIS DOCUMENT
+
+This terms-of-service text covers user obligations and permitted use
+only. Pricing for paid plans (including GitHub Enterprise) is published
+separately on the GitHub pricing page and is not part of the Terms of
+Service document.
+
+END OF EXCERPT

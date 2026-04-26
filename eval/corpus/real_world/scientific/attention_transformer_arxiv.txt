@@ -1,0 +1,53 @@
+ATTENTION IS ALL YOU NEED — PAPER SUMMARY
+(Synthetic paraphrase for evaluation purposes)
+
+This document summarizes the research paper commonly referred to as
+"Attention Is All You Need." It is paraphrased for evaluation harness use
+and is not a reproduction of the published article.
+
+AUTHORS
+
+The paper was written by Ashish Vaswani, Noam Shazeer, Niki Parmar,
+Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, and Illia
+Polosukhin. The first two authors are Ashish Vaswani and Noam Shazeer.
+
+ARCHITECTURE
+
+The paper proposes a sequence-transduction model called the Transformer.
+The Transformer is based solely on attention mechanisms; it dispenses
+entirely with recurrence and convolutions. The architecture stacks
+self-attention and position-wise feed-forward layers in an encoder-decoder
+configuration, with multi-head attention used both within the encoder and
+decoder and as the cross-attention bridge between them. Because the model
+contains no recurrent or convolutional units, sinusoidal positional
+encodings are added to the input embeddings to inject sequence-order
+information.
+
+KEY RESULTS — WMT 2014 TRANSLATION BENCHMARKS
+
+The Transformer was evaluated on the WMT 2014 English-to-German and
+English-to-French machine-translation tasks. The reported results are:
+
+  WMT 2014 English-to-German: 28.4 BLEU
+  WMT 2014 English-to-French: 41.8 BLEU
+
+The 41.8 BLEU score on English-to-French was the new single-model
+state-of-the-art at publication, surpassing previous best results from
+recurrent and convolutional sequence-to-sequence systems while requiring
+substantially less training time.
+
+TRAINING DETAILS
+
+The Transformer was trained on standard WMT 2014 datasets using the Adam
+optimizer with a custom learning-rate schedule (warmup followed by
+inverse-square-root decay). Training was performed on 8 GPUs over the
+course of several days. Regularization included residual dropout, label
+smoothing, and attention dropout.
+
+NOTE ON SCOPE
+
+The benchmark results in this paper cover English-to-German and
+English-to-French only. Results for other language pairs (for example,
+English-to-Czech translation on WMT 2014) are not reported in this paper.
+
+END OF SUMMARY

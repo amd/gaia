@@ -1,0 +1,53 @@
+UNIVERSAL SERIAL BUS REVISION 2.0 — SPECIFICATION OVERVIEW
+(Synthetic excerpt for evaluation purposes)
+
+This overview paraphrases selected sections of the USB 2.0 specification.
+It is intended for evaluation harness use and is not the binding
+specification document.
+
+DATA TRANSFER MODES
+
+USB 2.0 defines three data transfer modes, distinguished by their maximum
+signaling rates:
+
+  Low Speed:    1.5 Mbit/s
+  Full Speed:   12 Mbit/s
+  High Speed:   480 Mbit/s
+
+The High Speed mode at 480 Mbit/s was the headline addition introduced
+by USB 2.0 over USB 1.1.
+
+BUS TOPOLOGY
+
+USB uses a tiered-star topology rooted at a single host controller. A
+USB 2.0 host controller can address up to 127 devices simultaneously
+(devices are assigned 7-bit addresses; one address is reserved). Hubs are
+permitted to provide additional downstream ports, up to a maximum of five
+non-root tiers between the host and any device.
+
+CABLES — HIGH SPEED
+
+The maximum cable length for a USB 2.0 High Speed segment between a hub
+and a device, or between two hubs, is 5 meters. This 5-meter limit is
+the only cable-length value explicitly stated in this overview.
+
+POWER
+
+USB 2.0 specifies a bus voltage of 5 V (+/- 5%). A standard downstream
+port supplies up to 100 mA at enumeration and up to 500 mA after
+configuration. Self-powered hubs may supply 500 mA per downstream port.
+
+CONNECTORS
+
+USB 2.0 defines Standard-A and Standard-B receptacles and plugs, along
+with the Mini-B variant for compact devices. The Micro-B and Type-C
+connectors common on later devices are defined in subsequent USB
+specifications.
+
+NOTE ON SCOPE
+
+This overview lists the 5-meter maximum cable length for High Speed mode
+only. Maximum cable lengths for the Low Speed and Full Speed modes are
+not separately stated in this overview.
+
+END OF OVERVIEW
