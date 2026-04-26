@@ -109,8 +109,11 @@ def _default_triage_client(**_kwargs: Any) -> str:  # pragma: no cover
     package (e.g. CI for store-only tests). Fail-loudly per ``CLAUDE.md``.
     """
     raise RuntimeError(
-        "No TriageClient configured. Inject one via classify_fix_class(client=...) "
-        "or wire the default Anthropic client in Phase 7."
+        "No TriageClient configured. The self-fix loop needs an LLM "
+        "(default-client wiring lands in Phase 7). For now, either "
+        "inject one via classify_fix_class(client=...) — see "
+        "tests/coder/test_self_fix/conftest.py — or set ANTHROPIC_API_KEY "
+        "and instantiate an anthropic.Anthropic() client by hand."
     )
 
 

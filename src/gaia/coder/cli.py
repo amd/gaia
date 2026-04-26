@@ -1203,7 +1203,7 @@ def _build_parser(
     # --- inbox ---------------------------------------------------------
     inbox_parser = subparsers.add_parser(
         "inbox",
-        help="Read or drain the EM inbox.",
+        help="List pending and recently-answered EM inbox rows.",
         description="List pending and recently-answered inbox rows.",
     )
     inbox_parser.add_argument("--limit", type=int, default=20)

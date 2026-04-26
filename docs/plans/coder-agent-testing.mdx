@@ -1,0 +1,384 @@
+---
+title: gaia-coder Testing Guide
+description: How to test the gaia-coder CLI agent end-to-end, from a single help command up to the eval harness.
+---
+
+# gaia-coder Testing Guide
+
+This guide walks the EM through testing `gaia-coder` from the simplest smoke test to a full eval-harness round-trip. It is grounded in what is **actually wired up on the `coder` branch today** — every command below has been executed against a clean checkout. Stubs (Phase 11+ work) are flagged so you can skip them.
+
+The companion specification is [`docs/plans/coder-agent.mdx`](./coder-agent.mdx). This guide tracks the same section numbering when relevant.
+
+---
+
+## 0. Prerequisites
+
+```bash
+# From the repo root
+uv venv && uv pip install -e ".[dev]"
+source .venv/bin/activate
+
+# Confirm the binary is on PATH
+which gaia-coder
+gaia-coder --help
+```
+
+If `gaia-coder` isn't found, your editable install didn't run. Re-run `uv pip install -e ".[dev]"`.
+
+**Use a scratch home for testing.** Almost every command writes to SQLite stores; default location is the repo root, which pollutes git. Always set:
+
+```bash
+export GAIA_CODER_HOME=/tmp/gaia-coder-test
+mkdir -p $GAIA_CODER_HOME
+```
+
+---
+
+## 1. Level 1 — Smoke (30 seconds)
+
+Confirm the package imports, the entry point binds, and basic state machinery works.
+
+```bash
+gaia-coder --help            # 22 subcommands listed
+gaia-coder trust             # bootstrap prompt (expected on first run)
+```
+
+**Expected on first `trust`:**
+
+```
+gaia-coder has no Engineering Manager bound yet.
+
+Who is my engineering manager? (GitHub handle and preferred contact channel.)
+```
+
+**Bootstrap your EM identity** (the tier ladder is locked until this happens):
+
+```bash
+gaia-coder trust --bootstrap \
+    --em-handle <your-github-handle> \
+    --em-channel github-issue-comment
+```
+
+Re-running `gaia-coder trust` now prints the **Tier 0 (Read-only observer)** snapshot.
+
+✅ **Pass criteria.** `trust` prints "Tier: 0 (Read-only observer)" and lists the five locked higher tiers.
+
+---
+
+## 2. Level 2 — Inbox round-trip (1 minute)
+
+Exercises the EM input queue (§15.4): `note`, `critical`, `inbox`, `ask`.
+
+```bash
+gaia-coder note "hello from the EM"
+gaia-coder critical "fake critical for testing"
+gaia-coder ask "what is your current tier?"
+gaia-coder inbox
+```
+
+**Expected.** Three queued rows in `Pending`, ordered by timestamp, each with a UUID. The agent responds *"I see your message; will respond at next breakpoint"* — that's the correct answer when no daemon is consuming the queue.
+
+```
+Pending (3):
+  [info]     2026-04-26T...  hello from the EM            (id=...)
+  [critical] 2026-04-26T...  fake critical for testing    (id=...)
+  [free_form]2026-04-26T...  what is your current tier?   (id=...)
+```
+
+✅ **Pass criteria.** Queue persists across CLI invocations (state lives in `$GAIA_CODER_HOME/em_inbox.db`).
+
+---
+
+## 3. Level 3 — Tier promotion (1 minute)
+
+Validates the trust contract (§4.2). Tier 0 → 1 → 0 round-trip.
+
+```bash
+# Promote — the --em-signature MUST equal the bound em-handle
+gaia-coder promote --to-tier 1 --reason "smoke test" \
+    --em-signature <your-github-handle>
+
+# Demote back to read-only
+gaia-coder demote --to-tier 0 --reason "rollback after smoke"
+
+# Audit trail
+gaia-coder trust --history
+```
+
+**Negative test (signature mismatch is rejected):**
+
+```bash
+gaia-coder promote --to-tier 1 --reason "x" --em-signature wrong-handle
+# → "Promotion rejected: signature does not match bound EM."
+```
+
+✅ **Pass criteria.** Both promote and demote succeed when the signature matches; mismatched signatures are rejected with a fail-loud error pointing to `gaia-coder em-handoff`.
+
+---
+
+## 4. Level 4 — Daemon round-trip (2 minutes)
+
+The single most important integration test. Spawns the long-lived daemon, posts a task via stdin, waits for completion, asserts the six artifact files land.
+
+```bash
+SANDBOX=/tmp/coder-sandbox
+
+mkdir -p $SANDBOX
+cat > $SANDBOX/task.md <<'EOF'
+---
+id: hello-task
+title: Manual smoke task
+expected_fix_class: tool
+max_diff_loc: 5
+max_wall_clock_min: 1
+scoring:
+  - name: trivial
+    check: "true"
+    weight: 1.0
+---
+
+# Body
+
+Just a daemon round-trip test.
+EOF
+
+# 1. Start daemon (background)
+gaia-coder daemon --sandbox $SANDBOX --capability-tier 0 --no-network-writes &
+DAEMON_PID=$!
+sleep 1
+
+# 2. Send the task via stdin
+gaia-coder ask --sandbox $SANDBOX - < $SANDBOX/task.md
+# → prints "hello-task" (the front-matter id)
+
+# 3. Block until completion (or 1-minute timeout)
+gaia-coder wait --sandbox $SANDBOX --task-id hello-task --timeout-min 1
+
+# 4. Inspect artifacts
+ls $SANDBOX/.eval-artifacts/hello-task/
+# → confidence.txt, diff.patch, pass_results.json, regression_test.py,
+#   standup.md, trace.jsonl
+
+# 5. Clean shutdown
+gaia-coder stop --sandbox $SANDBOX --wait-s 5
+wait $DAEMON_PID
+```
+
+**Expected daemon log lines** (in stderr):
+
+```
+gaia-coder daemon: started (pid=…, tier=0, no-net, sandbox=…) — stub mode
+gaia-coder daemon: completed task hello-task (stub)
+gaia-coder daemon: exiting
+```
+
+**The daemon is currently a Phase 2 stub** that emits canned artifacts so the eval harness can be exercised end-to-end before the real Opus 4.7 client lands. The artifacts are deterministic placeholders — `pass_results.json` carries `"stub": true`.
+
+✅ **Pass criteria.**
+- All six artifact filenames exist after `wait` returns.
+- `wait` exits **0** on success, **124** on timeout.
+- `stop` is idempotent (running it again is a no-op, not an error).
+
+---
+
+## 5. Level 5 — Unit + eval test suite (30 seconds)
+
+```bash
+python -m pytest tests/coder/ tests/eval/ -x --tb=short -q
+```
+
+**Current baseline.** `395 passed in ~28 s`. Suites:
+
+| Path | Coverage |
+|------|----------|
+| `tests/coder/test_skeleton.py` | base agent, default loop, persona |
+| `tests/coder/test_stores.py` | seven SQLite stores + SQL identifier hardening |
+| `tests/coder/test_cli_trust.py`, `test_trust.py` | tier ladder, em.toml round-trip |
+| `tests/coder/test_inbox.py` | inbox queue semantics |
+| `tests/coder/test_intent.py` | intent grammar from §15.4 |
+| `tests/coder/test_self_fix/` | triage → plan → fix → publish → verify |
+| `tests/coder/test_review.py` | seven self-review passes |
+| `tests/coder/test_debug_loop.py`, `test_debug_tools.py` | seven-state debug sub-loop |
+| `tests/coder/test_dev_mode.py`, `test_self_heal.py` | conversational dev-mode + restart primitives |
+| `tests/coder/test_oss_reuse.py` | license-aware imports + path-traversal guard |
+| `tests/coder/test_repo_binding.py` | GitHub App identity + webhook verifier |
+| `tests/coder/test_rag_freshness.py` | freshness contract (§6.8.7) |
+| `tests/coder/test_codebase_research.py` | `CodebaseResearchSubagent` dispatch |
+| `tests/coder/test_integration_e2e.py` | end-to-end CLI flows (no LLM) |
+| `tests/eval/test_coder_cli_runner.py` | the `CoderCLIRunner` hook |
+| `tests/eval/test_gaia_internal_20_suite.py` | the 20-task internal benchmark scaffolding |
+
+✅ **Pass criteria.** Whole suite green (`395 passed`), wall-clock under 60 s on a laptop.
+
+---
+
+## 6. Level 6 — Programmatic CLI runner (`CoderCLIRunner`)
+
+For automated tests, scripts, or CI gates that need to drive the CLI from Python, use the in-tree runner from [`src/gaia/eval/runners/coder_cli.py`](../../src/gaia/eval/runners/coder_cli.py).
+
+```python
+from pathlib import Path
+from gaia.eval.runners.coder_cli import in_tree_runner
+
+runner = in_tree_runner()  # spawns `python -m gaia.coder.cli daemon …`
+sandbox = Path("/tmp/eval-sandbox")
+sandbox.mkdir(exist_ok=True)
+task_md = sandbox / "task.md"
+task_md.write_text("""---
+id: lib-fix
+title: Tighten error message
+expected_fix_class: tool
+max_diff_loc: 5
+max_wall_clock_min: 2
+scoring:
+  - name: pytest
+    check: "pytest -q"
+    weight: 1.0
+---
+# Body
+Make `_validate_license_filter` raise a clearer error.
+""")
+
+result, artifacts = runner.run_one(
+    sandbox=sandbox,
+    task_md_path=task_md,
+    tier=0,
+    no_network_writes=True,   # MUST stay True during eval
+    timeout_min=2,
+)
+print(result.completed, result.elapsed_s)
+print(artifacts["pass_results.json"].read_text())
+```
+
+The runner spawns/teardown is reaped cleanly; the pid file at `<sandbox>/.eval-artifacts/.daemon.pid` disappears after `stop_agent`. See `tests/eval/test_coder_cli_runner.py` for the seven canonical assertions (artifacts present, `--no-network-writes` propagates, `stop_agent` is idempotent, etc.).
+
+✅ **Pass criteria.** `result.completed is True`, `result.elapsed_s < 60`, `set(artifacts) == set(ARTIFACT_FILENAMES)`.
+
+---
+
+## 7. Level 7 — Self-correction loop (Phase 6, requires LLM)
+
+The self-fix loop (§7.4) drives one pending feedback row through triage → plan → fix → publisher → verifier. **This is the first command that requires the Anthropic API.**
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # required
+
+# Submit feedback that the loop will pick up
+gaia-coder feedback \
+    "the persona is too quirky, tone it down" \
+    --severity med \
+    --on https://github.com/amd/gaia/pull/100
+
+# Drive the loop
+gaia-coder self-fix process \
+    --repo-root $(pwd) \
+    --feedback-db $GAIA_CODER_HOME/feedback.db \
+    --memory-db $GAIA_CODER_HOME/memory.db
+```
+
+Without `ANTHROPIC_API_KEY` set, you'll see a fail-loud error:
+
+```
+RuntimeError: No TriageClient configured. Inject one via
+classify_fix_class(client=…) or wire the default Anthropic
+client in Phase 7.
+```
+
+This is correct fail-loudly behavior per [`CLAUDE.md`](../../CLAUDE.md) — the loop refuses to silently downgrade to a heuristic. The **default-client wiring** that picks `ANTHROPIC_API_KEY` up is Phase 7 work; until it lands you must inject a client manually for unit tests (see `tests/coder/test_self_fix/conftest.py` for the pattern).
+
+✅ **Pass criteria** (post-Phase 7). `self-fix process` advances the row from `pending` → `triaged` → `fix-pr-open` and writes a draft PR URL into the audit log.
+
+---
+
+## 8. Level 8 — Dev-mode (self-edit) gate
+
+Conversational opt-in for self-editing the agent's own source (§7.1). The hard precondition is `repo_binding.toml` existing — that's a Phase 10 deliverable, so this gate currently **rejects on a fresh checkout**:
+
+```bash
+gaia-coder dev-mode status
+# → reason: repo_binding.toml not usable: …
+```
+
+To exercise the conversational opt-in path against a fixture binding, see `tests/coder/test_dev_mode.py`. The shape of an enable-from-EM-message looks like:
+
+```bash
+gaia-coder ask "enable self-edit until end of week"
+# → routes via the intent classifier (§15.4)
+# → if dev_mode.precondition is met, sets em.toml allow_state_machine_edit=false
+#   and writes a PAUSE-able session flag.
+```
+
+✅ **Pass criteria.**
+- On a fresh checkout, `dev-mode enable` is rejected with `hard precondition failed`.
+- After binding to a fixture repo, `dev-mode enable --reason "..."` flips the flag, and `dev-mode disable` flips it back.
+
+---
+
+## 9. Level 9 — RAG freshness (Phase 10)
+
+```bash
+gaia-coder rag status     # corpora + freshness ages
+gaia-coder rag refresh    # incremental reindex (no LLM)
+gaia-coder rag rebuild --corpus source_tree   # full rebuild
+```
+
+The freshness contract (§6.8.7) is enforced by `tests/coder/test_rag_freshness.py`. On a fresh checkout each corpus reports `document_count: 0`, `pending_reindex: false`, `last_indexed_at: null` — the indexer doesn't run automatically until Phase 10 binds it to the file watcher.
+
+---
+
+## 10. Subcommands marked "not yet implemented"
+
+These are wired in the parser but the handler prints `not yet implemented`. Tracked for Phase 11+:
+
+| Subcommand | Status | Section |
+|------------|--------|---------|
+| `doctor` | stub | §15.6 bot-provisioning checklist |
+| `status` | stub | dashboard one-liner |
+| `audit` | stub | tail of audit log |
+| `spend` | stub | budget ceiling report |
+| `egress` | stub | egress policy + recent denials |
+| `introspect` | stub | state machine / tool surface |
+| `skill` | stub | skills catalog management |
+
+If you want any of these promoted out of stub state, file a feedback record:
+
+```bash
+gaia-coder feedback "promote 'gaia-coder doctor' out of stub" --severity high
+```
+
+---
+
+## 11. Cleaning up
+
+```bash
+unset GAIA_CODER_HOME
+rm -rf /tmp/gaia-coder-test /tmp/coder-sandbox
+```
+
+The agent never writes outside `$GAIA_CODER_HOME` and the explicit `--sandbox` directory.
+
+---
+
+## 12. Common failures + fixes
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `gaia-coder: command not found` | venv not active | `source .venv/bin/activate` |
+| `EM not bound` on every command | `$GAIA_CODER_HOME` not set, or `trust --bootstrap` never run | Set the env var, then `trust --bootstrap …` |
+| `Promotion rejected: signature does not match bound EM` | `--em-signature` ≠ bound `em-handle` | Pass the exact handle from `gaia-coder trust` |
+| `dev-mode enable rejected: hard precondition failed` | no `repo_binding.toml` | Expected on a fresh checkout — Phase 10 work |
+| `RuntimeError: No TriageClient configured` | self-fix loop has no LLM client | Phase 7 will wire a default; for now inject in unit tests |
+| `wait` returns rc=124 | task body never produced; daemon may have died | Check daemon stderr; the pid file at `<sandbox>/.eval-artifacts/.daemon.pid` should match a live process |
+
+---
+
+## 13. Reporting test results
+
+When you find a regression, post via the audit channel so the agent learns from it:
+
+```bash
+gaia-coder feedback "test X regressed: <one-paragraph reproduction>" \
+    --severity med --on <pr-url-or-commit-sha>
+```
+
+The feedback row lands in `$GAIA_CODER_HOME/feedback.db` and (post-Phase 7) the self-fix loop will pick it up at the next heartbeat.
