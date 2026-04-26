@@ -53,7 +53,17 @@ class LemonadeModelNotLoadedError(LemonadeError):
 
 
 class LemonadeContextOverflowError(LemonadeError):
-    retryable = False
+    """Raised when the prompt + history exceeds the loaded model's ctx.
+
+    ``retryable`` is dynamic — set in ``_classify_lemonade_response`` based
+    on the reported ``n_ctx``. When n_ctx is smaller than GAIA's expected
+    32K, the model was loaded with the wrong ctx_size; reloading via the
+    pre-flight helper will fix it, so we mark retryable so the chat layer
+    auto-recovers. When n_ctx is already at full size, this is a genuine
+    "conversation too big" situation and retry won't help.
+    """
+
+    retryable = False  # default; set True dynamically when n_ctx < 32K
     user_message = (
         "This conversation got too long for the model's context window. "
         "Start a fresh task to keep going."
@@ -105,7 +115,20 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         "exceed_context_size" in type_blob
         or "exceeds the available context size" in msg_blob
     ):
-        return LemonadeContextOverflowError(payload=response), True
+        # Mark retryable when the model was loaded with an unexpectedly
+        # small ctx (almost always 4096 from a pre-restart leftover).
+        # The chat layer's auto-reload at 32K will fix it, so let it try.
+        # GAIA expects 32K everywhere; threshold is a deliberate constant
+        # rather than imported to avoid a circular dep with lemonade_client.
+        n_ctx_reported = 0
+        if isinstance(nested, dict):
+            n_ctx_reported = nested.get("n_ctx") or 0
+        if not n_ctx_reported and isinstance(err, dict):
+            n_ctx_reported = err.get("n_ctx") or 0
+        err_instance = LemonadeContextOverflowError(payload=response)
+        if 0 < n_ctx_reported < 32768:
+            err_instance.retryable = True
+        return err_instance, True
     if (
         "network_error" in type_blob
         or "curl error" in msg_blob

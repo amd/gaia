@@ -127,7 +127,23 @@ def _classify_chat_exception(exc: BaseException):
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
     if "exceed_context_size" in text or "exceeds the available context size" in text:
-        return LemonadeContextOverflowError()
+        err = LemonadeContextOverflowError()
+        # If the textual error mentions a small n_ctx, the model was
+        # loaded with the wrong context size — reload via pre-flight
+        # will fix it, so make the error retryable.
+        import re
+
+        m = re.search(r"context size \((\d+) tokens?\)", text)
+        if not m:
+            m = re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", text)
+        if m:
+            try:
+                n_ctx = int(m.group(1))
+                if 0 < n_ctx < 32768:
+                    err.retryable = True
+            except ValueError:
+                pass
+        return err
     if "network_error" in text or "curl error" in text or "timeout was reached" in text:
         return LemonadeNetworkError()
     return None
