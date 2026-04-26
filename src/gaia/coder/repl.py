@@ -795,7 +795,7 @@ def run_repl(
         boot_ui.info(
             "Quick fixes:\n"
             "  • Set ANTHROPIC_API_KEY in the shell or in a .env file.\n"
-            "  • Install the eval extras: `uv pip install -e \".[eval]\"`.\n"
+            '  • Install the eval extras: `uv pip install -e ".[eval]"`.\n'
             "  • See docs/guides/coder.mdx for the full setup."
         )
         return 1
