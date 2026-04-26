@@ -29,7 +29,7 @@ def _get_context_size_from_health(health_data: dict) -> int:
 
 def test_health_endpoint_returns_context_size():
     """Verify that the health endpoint returns context_size field."""
-    port = os.environ.get("LEMONADE_PORT", "8000")
+    port = os.environ.get("LEMONADE_PORT", "13305")
     url = f"http://localhost:{port}/api/v1/health"
 
     try:

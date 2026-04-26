@@ -141,6 +141,12 @@ yarn-error.log*
 
 # Node.js build outputs
 build/
+# Allow committed demo agents in the installer staging dir
+!src/gaia/apps/webui/build/
+!src/gaia/apps/webui/build/bundled-agents/
+!src/gaia/apps/webui/build/bundled-agents/**
+src/gaia/apps/webui/build/bundled-agents/**/__pycache__/
+src/gaia/apps/webui/build/bundled-agents/**/*.pyc
 dist/
 out/
 .next/

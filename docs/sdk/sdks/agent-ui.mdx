@@ -37,6 +37,16 @@ The Agent UI SDK is the Python backend that powers the GAIA Agent UI. It provide
 
 The backend runs on port `4200` by default and serves both the Electron desktop app and browser-based clients.
 
+<Tip>
+End users don't need to interact with this SDK directly — prebuilt `.exe` /
+`.deb` desktop installers are on the
+[GitHub Releases page](https://github.com/amd/gaia/releases), and
+`npm install -g @amd-gaia/agent-ui` gives the same app on any Node-capable
+platform. This page is for developers embedding or extending the backend.
+See the [Agent UI guide](/guides/agent-ui#install-and-launch) for install
+options.
+</Tip>
+
 ---
 
 ## Quick Start
@@ -242,24 +252,31 @@ Factory function that creates and configures the FastAPI application with all en
 ```python
 from gaia.ui.server import create_app
 
-def create_app(db_path: str = None) -> FastAPI:
+def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         db_path: Path to SQLite database.
                  None for default (~/.gaia/chat/gaia_chat.db).
                  ":memory:" for testing.
+        webui_dist: Path to a prebuilt Agent UI bundle to serve as static
+                 files. None falls back to the bundle that ships with the
+                 installed package (used by `gaia --ui-dist`).
 
     Returns:
-        Configured FastAPI application with all endpoints registered.
+        Configured FastAPI application with all routers (agents, chat,
+        documents, files, mcp, sessions, system, tunnel) registered.
     """
 ```
 
-The database instance is stored on `app.state.db` and is accessible in tests:
+Shared state is stored on `app.state` and is accessible in tests:
 
 ```python
 app = create_app(db_path=":memory:")
-db = app.state.db
+db        = app.state.db               # ChatDatabase
+registry  = app.state.agent_registry   # AgentRegistry (see /spec/plugin-registry)
+dispatch  = app.state.dispatch_queue   # background job queue
+monitor   = app.state.document_monitor # watches the library for new files
 ```
 
 ---
@@ -776,6 +793,161 @@ class AttachDocumentRequest(BaseModel):
     | `404` | Path does not exist |
     | `500` | Failed to launch the system file explorer |
   </Accordion>
+
+  <Accordion title="POST /api/files/upload">
+    Upload an arbitrary file for use as a chat attachment (not added to the
+    RAG library). Use `POST /api/documents/upload` instead if you want the
+    file indexed for Q&A.
+  </Accordion>
+
+  <Accordion title="GET /api/files/browse">
+    Browse filesystem contents. Returns entries under a directory with size,
+    mtime, and type metadata.
+  </Accordion>
+
+  <Accordion title="GET /api/files/search">
+    Search files by name/pattern across watched or allowed locations.
+  </Accordion>
+
+  <Accordion title="GET /api/files/preview">
+    Return a preview (first N bytes / first N lines) of a text file.
+  </Accordion>
+
+  <Accordion title="GET /api/files/image">
+    Stream an image file from the filesystem for display in the UI.
+  </Accordion>
+</AccordionGroup>
+
+### Agents
+
+<AccordionGroup>
+  <Accordion title="GET /api/agents">
+    List all agents registered via `AgentRegistry` — built-in agents plus any
+    custom agents discovered under `~/.gaia/agents/`. See
+    [`plugin-registry`](/spec/plugin-registry) for the manifest format.
+  </Accordion>
+
+  <Accordion title="GET /api/agents/{agent_id}">
+    Return details for a single registered agent (description, models,
+    conversation starters, source = `builtin` / `custom_python` /
+    `custom_manifest`).
+  </Accordion>
+</AccordionGroup>
+
+### MCP
+
+The MCP router manages external Model Context Protocol servers the agent can
+connect to.
+
+<AccordionGroup>
+  <Accordion title="GET /api/mcp/servers">
+    List configured MCP servers and their enabled state.
+  </Accordion>
+
+  <Accordion title="POST /api/mcp/servers">
+    Register a new MCP server configuration.
+  </Accordion>
+
+  <Accordion title="DELETE /api/mcp/servers/{name}">
+    Remove a registered MCP server configuration.
+  </Accordion>
+
+  <Accordion title="POST /api/mcp/servers/{name}/enable">
+    Enable a previously-registered MCP server.
+  </Accordion>
+
+  <Accordion title="POST /api/mcp/servers/{name}/disable">
+    Disable a server without removing its configuration.
+  </Accordion>
+
+  <Accordion title="GET /api/mcp/servers/{name}/tools">
+    List tools exposed by a specific MCP server.
+  </Accordion>
+
+  <Accordion title="GET /api/mcp/catalog">
+    Return the curated catalog of known-good MCP servers (Context7, etc.).
+  </Accordion>
+
+  <Accordion title="GET /api/mcp/status">
+    Overall MCP client status — number of connected servers, aggregate tool
+    count, last-error details.
+  </Accordion>
+</AccordionGroup>
+
+### Tunnel
+
+Expose the local Agent UI over the internet via an ngrok/Cloudflare tunnel.
+Used to reach the UI from a phone.
+
+<AccordionGroup>
+  <Accordion title="POST /api/tunnel/start">
+    Start a tunnel. Returns the public URL.
+  </Accordion>
+
+  <Accordion title="POST /api/tunnel/stop">
+    Stop the active tunnel.
+  </Accordion>
+
+  <Accordion title="GET /api/tunnel/status">
+    Current tunnel status — active/inactive, public URL, provider, uptime.
+  </Accordion>
+</AccordionGroup>
+
+### Chat (advanced)
+
+<AccordionGroup>
+  <Accordion title="POST /api/chat/confirm-tool">
+    Tool-confirmation handshake. When `TOOLS_REQUIRING_CONFIRMATION`
+    triggers the agent to pause, the UI prompts the user and posts the
+    outcome (`approve` / `deny`) back on this endpoint.
+  </Accordion>
+</AccordionGroup>
+
+### Documents (advanced)
+
+<AccordionGroup>
+  <Accordion title="POST /api/documents/upload">
+    Multipart drag-and-drop upload. Stores the file in the library and
+    enqueues it for indexing.
+  </Accordion>
+
+  <Accordion title="GET /api/documents/monitor/status">
+    Status of the background `document_monitor.py` file-watcher.
+  </Accordion>
+
+  <Accordion title="GET /api/documents/{doc_id}/status">
+    Indexing progress for a single document.
+  </Accordion>
+
+  <Accordion title="POST /api/documents/{doc_id}/cancel">
+    Cancel an in-flight indexing job.
+  </Accordion>
+
+  <Accordion title="POST /api/documents/index-folder">
+    Recursively index all supported files under a folder.
+  </Accordion>
+</AccordionGroup>
+
+### Sessions (advanced)
+
+<AccordionGroup>
+  <Accordion title="DELETE /api/sessions/{session_id}/messages/{message_id}">
+    Delete a single message from a session.
+  </Accordion>
+
+  <Accordion title="DELETE /api/sessions/{session_id}/messages/{message_id}/and-below">
+    Delete a message and every message after it (the "resend from here"
+    pattern).
+  </Accordion>
+</AccordionGroup>
+
+### System (advanced)
+
+<AccordionGroup>
+  <Accordion title="GET /api/system/tasks">
+    Inspect the background dispatch queue (model downloads, indexing jobs,
+    etc.) used by `src/gaia/ui/dispatch.py`.
+  </Accordion>
 </AccordionGroup>
 
 ---
@@ -826,15 +998,24 @@ CREATE TABLE messages (
     created_at TEXT,
     rag_sources TEXT,          -- JSON array of source citations
     agent_steps TEXT,          -- JSON array of agent execution steps
+    inference_stats TEXT,      -- JSON blob with timing/token stats
     tokens_prompt INTEGER,
     tokens_completion INTEGER
+);
+
+-- Key/value user settings (e.g. custom_model override)
+CREATE TABLE settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
 );
 ```
 
 **SQLite settings:** Foreign keys enabled, WAL journal mode for concurrent reads.
 
 <Note>
-The `indexing_status`, `file_mtime`, and `agent_steps` columns are added via migrations for databases created before these columns existed. New databases include them in the initial schema.
+The `indexing_status`, `file_mtime`, `agent_steps`, and `inference_stats`
+columns (plus the `settings` table) are added via migrations for databases
+created before these existed. New databases include them in the initial schema.
 </Note>
 
 ---

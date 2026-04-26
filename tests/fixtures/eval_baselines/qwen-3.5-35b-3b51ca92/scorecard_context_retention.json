@@ -1,0 +1,541 @@
+{
+  "run_id": "eval-20260424-180034",
+  "timestamp": "2026-04-24T18:17:16.318437+00:00",
+  "config": {
+    "backend_url": "http://localhost:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0
+  },
+  "summary": {
+    "total_scenarios": 4,
+    "passed": 4,
+    "failed": 0,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 1.0,
+    "judged_pass_rate": 1.0,
+    "avg_score": 9.2,
+    "by_category": {
+      "context_retention": {
+        "passed": 4,
+        "failed": 0,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 9.195
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "conversation_summary",
+      "status": "PASS",
+      "overall_score": 9.51,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey what was the q3 revenue?",
+          "agent_response": "According to bb4aa775dc9b_acme_q3_report.md, page null: Acme Corp's Q3 2025 revenue was **$14.2 million**, representing a 23% increase from Q3 2024's $11.5 million.",
+          "agent_tools": [
+            "rag"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.55,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly retrieved $14.2M Q3 revenue from RAG. Minor cosmetic artifact: 'page null' in citation. No prior context needed for turn 1. Answer is factually accurate and complete.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "and how does that compare to last year? like the growth rate?",
+          "agent_response": "Q3 2025 revenue of $14.2M represents a **23% increase** compared to last year's Q3 of $11.5M — exactly as I mentioned earlier! 📈",
+          "agent_tools": [
+            "context"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 6,
+            "error_recovery": 10
+          },
+          "overall_score": 9.4,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct 23% YoY growth figure with correct base ($11.5M Q3 2024). Strong context retention by referencing prior turn. Slight personality penalty for self-referential 'exactly as I mentioned earlier' and emoji.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "what does the ceo say about q4? any projections?",
+          "agent_response": "According to bb4aa775dc9b_acme_q3_report.md, page null: CEO Jane Smith projects **15–18% growth** for Q4 2025, driven by enterprise segment expansion and three new product launches scheduled for November.",
+          "agent_tools": [
+            "rag"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 8,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.4,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct 15-18% Q4 growth projection with enterprise expansion driver. Re-queried RAG appropriately. Bonus detail on product launches exceeds expected completeness. 'page null' artifact persists in citation.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "wait which document has all this info anyway?",
+          "agent_response": "All that info came from `bb4aa775dc9b_acme_q3_report.md` — Acme's Q3 financial report indexed at the start of our chat! 📄",
+          "agent_tools": [
+            "context"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.4,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly identified acme_q3_report.md as the source. Hash prefix (bb4aa775dc9b_) is a storage artifact — canonical filename is identifiable. One point deducted from correctness since the hash prefix obscures the clean filename the user would recognize.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 5,
+          "user_message": "ok cool, can you summarize what you've told me so far?",
+          "agent_response": "Here's a quick recap of everything we covered:\n\n**Q3 Revenue:** Acme Corp brought in **$14.2 million**, which is a **23% increase** compared to last year's Q3 of $11.5 million.\n\n**CEO Outlook:** Jane Smith is projecting **15–18% growth** for Q4 2025, driven by enterprise expansion and three new product launches.",
+          "agent_tools": [
+            "context"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "All three required facts present: $14.2M revenue, 23% YoY growth from $11.5M baseline, 15-18% Q4 outlook. Well-organized summary synthesizing all prior turns without unnecessary RAG re-query.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        }
+      ],
+      "performance_summary": null,
+      "root_cause": null,
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "src/gaia/ui/routers/chat.py",
+        "description": "Document filenames are stored and surfaced to users with hash prefixes (e.g. bb4aa775dc9b_acme_q3_report.md) in RAG citations, and citations include 'page null' artifacts. Strip hash prefixes and suppress null page references when rendering source citations to the user. Additionally, per-message token stats (tokens_per_second, input_tokens, output_tokens) are null in send responses despite the system reporting active inference throughput — wire stats through to individual message responses."
+      },
+      "cost_estimate": {
+        "turns": 5,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 253.91920399665833,
+      "category": "context_retention"
+    },
+    {
+      "scenario_id": "cross_turn_file_recall",
+      "status": "PASS",
+      "overall_score": 9.22,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey what docs do you have loaded up?",
+          "agent_response": "I've got one document loaded: **product_comparison.html** (just a quick HTML page with 3 chunks). Want me to dig into what it says?",
+          "agent_tools": [
+            "list_indexed_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly used list_indexed_documents and reported product_comparison.html as the indexed document — exact match to expected behavior. Response is direct, brief, and offers to explore further without sycophancy.",
+          "performance": {
+            "tokens_per_second": 90.2,
+            "time_to_first_token": 0.342,
+            "input_tokens": 505,
+            "output_tokens": 71,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "how much do the two products cost?",
+          "agent_response": "**StreamLine**: **$49/month** (standard plan)\n**ProFlow**: **$79/month** (equivalent tier)\n\nThat's a **$30/month premium** for ProFlow — or **$360/year**. The document notes that over a full year, that difference can be meaningful for small businesses.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly recalled the indexed document from Turn 1 and queried it with query_specific_file, returning exact prices: StreamLine $49/month and ProFlow $79/month — both match ground truth. No file name was provided by the user; context retention is perfect. $360/year calculation is mathematically correct and derived from document data.",
+          "performance": {
+            "tokens_per_second": 87.8,
+            "time_to_first_token": 1.482,
+            "input_tokens": 2460,
+            "output_tokens": 155,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "which one is better value for money?",
+          "agent_response": "**StreamLine** wins on pure cost efficiency at **$49/month**, but whether it's \"better value\" depends on your needs:\n\n| Factor | StreamLine | ProFlow |\n|--------|------------|---------|\n| Price | $49/mo | $79/mo (+$30) |\n| Integrations | 10 native | 25 native |\n| User Rating | 4.2/5 stars | 4.7/5 stars |\n| Mobile App | iOS only | iOS + Android |\n\nThe verdict in `/Users/tomasz/.gaia/documents/c46606312bc9_product_comparison.html` is straightforward: choose **StreamLine if budget is primary**. Choose **ProFlow if you need extensive integrations (25 vs 10)** and want that polished UX, and can absorb the **$360/year premium**.\n\nSo there's no single winner — it's about what features justify that extra $30 for your team.",
+          "agent_tools": [
+            "query_specific_file",
+            "query_documents",
+            "answer_question_about_image"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 5,
+            "context_retention": 9,
+            "completeness": 10,
+            "efficiency": 5,
+            "personality": 7,
+            "error_recovery": 7
+          },
+          "overall_score": 7.75,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent covered all three required metrics (pricing $49 vs $79, ratings 4.2 vs 4.7, integrations 10 vs 25) and gave a reasoned comparison using only document facts. However, query_specific_file failed with missing args and answer_question_about_image failed unnecessarily (5 steps vs optimal 2). Minor issue: agent leaked an internal file path in the response. All facts are from the document with no hallucinations.",
+          "performance": {
+            "tokens_per_second": 87.3,
+            "time_to_first_token": 1.903,
+            "input_tokens": 3122,
+            "output_tokens": 430,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "Turn 3 had two tool failures: query_specific_file was invoked without required arguments (file_path, query), and answer_question_about_image was called with empty args as part of an unnecessary plan step. The agent recovered via query_documents but required extra steps. The query_specific_file failure suggests the agent did not reliably pass the file path from prior turn context when constructing the tool call.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "src/gaia/agents/chat/agent.py",
+        "description": "Reinforce in the system prompt that when query_specific_file is selected, the agent must always supply both file_path (retaining the exact filename from prior list_indexed_documents results) and query arguments. Also discourage calling answer_question_about_image unless an actual image path and question are available."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.05
+      },
+      "elapsed_s": 295.5125708580017,
+      "category": "context_retention",
+      "performance_summary": {
+        "avg_tokens_per_second": 88.4,
+        "avg_time_to_first_token": 1.242,
+        "total_input_tokens": 6087,
+        "total_output_tokens": 656,
+        "flags": []
+      }
+    },
+    {
+      "scenario_id": "multi_doc_context",
+      "status": "PASS",
+      "overall_score": 9.2,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "According to the employee_handbook, what is the PTO (paid time off) policy for new employees — specifically how many days do they receive?",
+          "agent_response": "According to **employee_handbook.md**, first-year employees receive **15 days** of paid time off (PTO), which begins accruing from their start date at a rate of **1.25 days per month**.\n\nThis falls under Section 4 (Time Off Policy) and applies specifically to full-time employees. Part-time employees have limited benefits eligibility, while contractors/consultants are not eligible for company benefits programs including PTO.",
+          "agent_tools": [
+            "rag_query"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 8,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.05,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact ground truth match (15 days), correctly cited employee_handbook.md Section 4. Added accrual rate (1.25 days/month) and eligibility details without being asked — high completeness. Tool selection score slightly reduced because agent_steps were empty in the response so RAG tool invocation was implicit; the answer quality confirms RAG was used. No sycophancy, direct data-analyst-appropriate response.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Now looking at the acme_q3_report, what was the total revenue for Q3? Please give the exact figure.",
+          "agent_response": "**$14.2 million** — that's the total revenue for Acme Corp in Q3 2025 according to **bb4aa775dc9b_acme_q3_report.md**.\n\nThis represents a **23% increase** from Q3 2024 ($11.5 million) and exceeded internal forecasts by approximately $600,000 due to a large enterprise deal closing in early September.",
+          "agent_tools": [
+            "rag_query"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 9,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.25,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact ground truth match ($14.2 million). Successfully switched context to the Q3 report document while maintaining the session. Provided year-over-year comparison and forecast delta as valuable supporting context. The document was cited as 'bb4aa775dc9b_acme_q3_report.md' (the stored filename) rather than 'acme_q3_report.md' — cosmetically different but factually correct. Agent_steps empty but response quality confirms RAG retrieval was performed.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Can you confirm which specific document each of those two answers came from? I want to verify the source file for the PTO policy (15 days) and the Q3 revenue figure ($14.2 million).",
+          "agent_response": "Here's the breakdown:\n\n| Fact | Source Document |\n|------|------------------|\n| **PTO Policy (15 days)** | `employee_handbook.md` — Section 4 (Time Off Policy) |\n| **Q3 Revenue ($14.2M)** | `bb4aa775dc9b_acme_q3_report.md` — Financial Performance section |\n\nBoth figures were retrieved directly from those indexed documents during our earlier queries.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.3,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly attributed PTO policy to employee_handbook.md with section reference. Q3 revenue correctly attributed to the Q3 report — named as 'bb4aa775dc9b_acme_q3_report.md' (internal stored path) rather than the canonical 'acme_q3_report.md', a minor cosmetic deviation not a factual error; correctness docked 1 point. Perfect context retention across 3 turns. Efficient table format suited to data analyst persona. No re-querying needed — used memory of prior turn results appropriately.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 192.29555583000183,
+      "category": "context_retention",
+      "performance_summary": null
+    },
+    {
+      "scenario_id": "pronoun_resolution",
+      "status": "PASS",
+      "overall_score": 8.85,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey, quick question - how many PTO days do new employees get in their first year?",
+          "agent_response": "First-year employees get **15 days** of paid time off, which begins accruing at 1.25 days per month from your start date.\n\nAccording to `/Users/tomasz/src/amd/gaia/01/eval/corpus/documents/employee_handbook.md`: \"First-year employees receive 15 days of paid time off, which begins accruing from the employee's start date at a rate of 1.25 days per month.\"",
+          "agent_tools": [
+            "query_indexed_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved and cited 15 PTO days from the handbook using RAG (2362 input tokens confirm tool call). Direct confident tone with source citation. Minor personality deduction for the slightly verbose quote block.",
+          "performance": {
+            "tokens_per_second": 88.4,
+            "time_to_first_token": 1.431,
+            "input_tokens": 2362,
+            "output_tokens": 145,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "what about remote work - does it have a policy too?",
+          "agent_response": "Yes — full-time employees can work remotely up to **3 days per week**, subject to manager approval and team needs.\n\nFrom the same handbook: \"Employees may request to work remotely up to three (3) days per week with prior written approval from their direct supervisor.\" The request must be submitted at least one week in advance, and managers consider factors like role requirements, team collaboration needs, and performance history when approving requests. Remote work arrangements are reviewed quarterly and can be modified based on business needs.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 5,
+            "context_retention": 10,
+            "completeness": 6,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 7.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resolved 'it' to the handbook (context_retention=10) and correctly stated 3 days/week with manager approval. However it missed the critical VP approval requirement for fully remote arrangements. Low input_tokens (632 vs 2362 in turn 1) indicates the agent answered from conversation context without re-querying RAG, causing the omission of the VP approval clause.",
+          "performance": {
+            "tokens_per_second": 89.9,
+            "time_to_first_token": 2.26,
+            "input_tokens": 632,
+            "output_tokens": 175,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Are contractors eligible for those benefits?",
+          "agent_response": "Nope — contractors aren't eligible for any company benefits including PTO or remote work policies.\n\nAccording to `/Users/tomasz/src/amd/gaia/01/eval/corpus/documents/employee_handbook.md`: \"Contractors are NOT eligible for health insurance, paid time off, retirement plans, or other standard employee benefits.\" They're engaged under separate service agreements rather than as employees of the company.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 9.3,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resolved 'those benefits' to employee benefits and correctly stated contractors are NOT eligible. Excellent direct tone ('Nope'). Answered from context (630 input_tokens) but the key fact was established earlier in the session. Source quote accurately reflects handbook content.",
+          "performance": {
+            "tokens_per_second": 89.8,
+            "time_to_first_token": 2.258,
+            "input_tokens": 630,
+            "output_tokens": 128,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "Turn 2 missed the VP approval requirement for fully remote work because the agent answered from conversation context (630 input tokens) rather than re-querying RAG for the remote work policy section. The key detail about fully remote requiring VP-level approval was in the document but not surfaced in the previous turn's context.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "src/gaia/agents/chat/agent.py",
+        "description": "Strengthen the system prompt to instruct the agent to always query the RAG tool when a follow-up question introduces a new topic or policy area, even if the same document was previously retrieved. Currently the agent conflates 'document in context' with 'no need to re-query', causing partial answers when the new question targets a different section."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 259.75301003456116,
+      "category": "context_retention",
+      "performance_summary": {
+        "avg_tokens_per_second": 89.4,
+        "avg_time_to_first_token": 1.983,
+        "total_input_tokens": 3624,
+        "total_output_tokens": 448,
+        "flags": []
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.05
+  },
+  "performance": {
+    "avg_tokens_per_second": 88.9,
+    "avg_time_to_first_token": 1.613,
+    "total_input_tokens": 9711,
+    "total_output_tokens": 1104,
+    "scenarios_with_data": 2,
+    "flags": []
+  }
+}

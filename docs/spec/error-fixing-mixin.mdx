@@ -226,6 +226,27 @@ Initialize GAIA.md from codebase analysis.
 }
 ```
 
+### 9. create_workflow_plan
+
+Plan a complex multi-step workflow. The code agent uses this when a user
+request can't be satisfied by a single tool call — it decomposes the request
+into an ordered plan of tool invocations the agent then executes.
+
+**Parameters:**
+- `query` (str, required): Natural-language description of the workflow to plan
+
+**Returns:**
+```python
+{
+    "status": "success",
+    "plan": [
+        {"step": int, "tool": str, "tool_args": dict, "description": str},
+        ...
+    ],
+    "rationale": str,
+}
+```
+
 ---
 
 ## Usage Examples

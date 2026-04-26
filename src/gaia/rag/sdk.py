@@ -8,9 +8,11 @@ GAIA RAG SDK - Simple PDF document retrieval and Q&A
 
 import errno
 import hashlib
+import hmac
+import json
 import os
-import pickle
 import re
+import secrets
 import threading
 import time
 from dataclasses import dataclass
@@ -41,9 +43,40 @@ from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
 from gaia.security import PathValidator
 
-# Cache integrity verification
-CACHE_HEADER = b"GAIA_CACHE_V1\n"
-MAX_CACHE_SIZE = 500 * 1024 * 1024  # 500 MB
+# --- PDF extraction errors ---------------------------------------------------
+# These inherit from ValueError so existing `except ValueError` blocks in
+# callers (and the index_document error path) keep working, while allowing
+# callers that care to distinguish the specific failure mode.
+
+
+class PDFExtractionError(ValueError):
+    """Base class for PDF extraction failures with actionable messages."""
+
+    #: Short stable status code (e.g. "encrypted", "corrupted", "empty")
+    #: suitable for surfacing in document metadata / telemetry.
+    status: str = "unreadable"
+
+
+class EncryptedPDFError(PDFExtractionError):
+    """Raised when a PDF is password-protected and cannot be decrypted."""
+
+    status = "encrypted"
+
+
+class CorruptedPDFError(PDFExtractionError):
+    """Raised when a PDF is malformed, truncated, or otherwise unreadable."""
+
+    status = "corrupted"
+
+
+class EmptyPDFError(PDFExtractionError):
+    """Raised when a PDF parses successfully but contains no extractable text.
+
+    Typical causes: scanned image-only PDFs (no OCR layer), or documents
+    where all pages are blank / contain only non-text glyphs.
+    """
+
+    status = "empty"
 
 
 @dataclass
@@ -61,7 +94,7 @@ class RAGConfig:
     cache_dir: str = ".gaia"
     show_stats: bool = False
     use_local_llm: bool = True
-    base_url: str = "http://localhost:8000/api/v1"  # Lemonade server API URL
+    base_url: str = "http://localhost:13305/api/v1"  # Lemonade server API URL
     # Memory management settings
     max_indexed_files: int = 100  # Maximum number of files to keep indexed
     max_total_chunks: int = 10000  # Maximum total chunks across all files
@@ -97,7 +130,8 @@ class RAGResponse:
 
 class RAGSDK:
     """
-    Simple RAG SDK for PDF document Q&A following GAIA patterns.
+    Simple RAG SDK for document Q&A (PDF, TXT, MD, RST, LOG, CSV, JSON, XLSX,
+    HTML, and more) following GAIA patterns.
 
     Example usage:
         ```python
@@ -125,6 +159,7 @@ class RAGSDK:
         self._check_dependencies()
 
         # Initialize components
+        self._hmac_key: Optional[bytes] = None  # Lazy-loaded, cached for session
         self.embedder = None
         self.llm_client = None
         self.use_lemonade_embeddings = False
@@ -257,6 +292,99 @@ class RAGSDK:
             os.close(fd)
             raise
 
+    def _get_hmac_key(self) -> bytes:
+        """
+        Get or create HMAC key for cache integrity verification.
+
+        The key is stored per-installation in ~/.gaia/cache/hmac.key
+        and is used to sign cache files to prevent tampering. Cached in
+        memory after first load to avoid repeated disk reads.
+
+        Returns:
+            32-byte HMAC key
+        """
+        if self._hmac_key is not None:
+            return self._hmac_key
+
+        key_dir = Path.home() / ".gaia" / "cache"
+        key_path = key_dir / "hmac.key"
+
+        if key_path.exists():
+            self._hmac_key = key_path.read_bytes()
+            return self._hmac_key
+
+        key_dir.mkdir(parents=True, exist_ok=True)
+        key = secrets.token_bytes(32)
+        key_path.write_bytes(key)
+        try:
+            key_path.chmod(0o600)
+        except (OSError, AttributeError):
+            pass
+        self.log.info("Generated new HMAC key for cache integrity verification")
+        self._hmac_key = key
+        return self._hmac_key
+
+    def _save_cache(self, cache_path: str, cache_data: dict):
+        """
+        Save cache data as JSON with HMAC-SHA256 integrity signature.
+
+        Creates two files:
+        - {cache_path} — JSON-serialized cache data
+        - {cache_path}.sig — HMAC-SHA256 signature (hex-encoded)
+
+        Args:
+            cache_path: Path to the cache file (should end in .json)
+            cache_data: Dictionary with 'chunks', 'full_text', and 'metadata' keys
+        """
+        json_bytes = json.dumps(cache_data, ensure_ascii=False).encode("utf-8")
+        key = self._get_hmac_key()
+        signature = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
+
+        with open(cache_path, "wb") as f:
+            f.write(json_bytes)
+        with open(cache_path + ".sig", "w", encoding="utf-8") as f:
+            f.write(signature)
+
+        self.log.debug(f"Saved signed cache: {cache_path}")
+
+    def _verify_and_load_cache(self, cache_path: str) -> dict:
+        """
+        Load cache data with HMAC-SHA256 integrity verification.
+
+        Verifies the signature before deserializing to prevent
+        loading tampered cache files.
+
+        Args:
+            cache_path: Path to the cache file
+
+        Returns:
+            Deserialized cache data dictionary
+
+        Raises:
+            ValueError: If signature is missing, invalid, or verification fails
+            json.JSONDecodeError: If cache file contains invalid JSON
+        """
+        sig_path = cache_path + ".sig"
+
+        if not os.path.exists(sig_path):
+            raise ValueError("Cache signature file missing — cannot verify integrity")
+
+        with open(cache_path, "rb") as f:
+            json_bytes = f.read()
+
+        with open(sig_path, "r", encoding="utf-8") as f:
+            stored_sig = f.read().strip()
+
+        key = self._get_hmac_key()
+        expected_sig = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
+
+        if not hmac.compare_digest(stored_sig, expected_sig):
+            raise ValueError(
+                "Cache integrity check failed — file may have been tampered with"
+            )
+
+        return json.loads(json_bytes)
+
     def _get_cache_path(self, file_path: str) -> str:
         """
         Get cache file path for a document using content-based hashing.
@@ -292,14 +420,14 @@ class RAGSDK:
             path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
             cache_key = f"{path_hash}_{content_hash[:32]}"
 
-            return os.path.join(self.config.cache_dir, f"{cache_key}.pkl")
+            return os.path.join(self.config.cache_dir, f"{cache_key}.json")
 
         except (OSError, IOError) as e:
             # If file doesn't exist or can't be read, use path-based key
             # This will fail later during indexing anyway
             self.log.warning(f"Cannot read file for cache key: {e}")
             file_hash = hashlib.sha256(str(path).encode()).hexdigest()
-            return os.path.join(self.config.cache_dir, f"{file_hash}_notfound.pkl")
+            return os.path.join(self.config.cache_dir, f"{file_hash}_notfound.json")
 
     def _load_embedder(self):
         """Load embedding model via Lemonade server for hardware acceleration.
@@ -475,12 +603,62 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
+            - pdf_status: str ("readable", "encrypted", "corrupted", "empty")
+
+        Raises:
+            EncryptedPDFError: PDF is password-protected.
+            CorruptedPDFError: PDF is malformed / unreadable.
+            EmptyPDFError: PDF parsed OK but contained no extractable text.
         """
         import time as time_module  # pylint: disable=reimported
 
+        file_name = Path(pdf_path).name
+
+        # Step 0: Open the PDF. pypdf raises EmptyFileError / PdfStreamError
+        # (both subclasses of PdfReadError) for empty/corrupted files. We map
+        # those to our own exceptions so callers can react and users get
+        # actionable guidance instead of a generic stack trace.
+        try:
+            from pypdf.errors import (  # pylint: disable=import-outside-toplevel
+                PdfReadError,
+            )
+        except ImportError:  # pragma: no cover - pypdf is required for PDFs
+            PdfReadError = Exception  # type: ignore[assignment,misc]
+
+        try:
+            reader = PdfReader(pdf_path)
+        except PdfReadError as e:
+            msg = (
+                f"Could not read PDF: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted, truncated, or not a valid PDF.\n"
+                "Suggestions:\n"
+                "  1. Re-download or re-export the PDF from the original source\n"
+                "  2. Try opening the file in a PDF viewer to confirm it is readable\n"
+                "  3. If the source is a scan, re-run OCR and export a fresh PDF"
+            )
+            self.log.error(f"Corrupted PDF {pdf_path}: {e}")
+            raise CorruptedPDFError(msg) from e
+
+        # Step 1: Refuse password-protected PDFs up-front. Without this check
+        # pypdf silently returns empty text for every page and the document
+        # gets "indexed" with zero chunks (see issue #451).
+        if getattr(reader, "is_encrypted", False):
+            msg = (
+                f"PDF is password-protected: {file_name}\n"
+                "GAIA cannot index encrypted PDFs.\n"
+                "Suggestions:\n"
+                "  1. Remove the password with qpdf:\n"
+                "     qpdf --decrypt --password=YOUR_PASSWORD input.pdf output.pdf\n"
+                "  2. Or with pdftk:\n"
+                "     pdftk input.pdf input_pw YOUR_PASSWORD output output.pdf\n"
+                "  3. Then re-index the decrypted file"
+            )
+            self.log.error(f"Encrypted PDF rejected: {pdf_path}")
+            raise EncryptedPDFError(msg)
+
         try:
             extract_start = time_module.time()
-            reader = PdfReader(pdf_path)
             total_pages = len(reader.pages)
             self.log.info(f"📄 Extracting text from {total_pages} pages...")
 
@@ -504,7 +682,9 @@ class RAGSDK:
                 elif not vlm_available and self.config.show_stats:
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
-                    print("     1. Open Lemonade Model Manager (http://localhost:8000)")
+                    print(
+                        "     1. Open Lemonade Model Manager (http://localhost:13305)"
+                    )
                     print(f"     2. Download model: {self.config.vlm_model}")
 
             except Exception as vlm_error:
@@ -627,6 +807,30 @@ class RAGSDK:
                 f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages)"
             )
 
+            # If pypdf parsed the file but every page came back blank, surface
+            # this as EmptyPDFError rather than pretending it succeeded. The
+            # common cause is a scanned image-only PDF without an OCR layer.
+            #
+            # NOTE: `full_text` always carries `[Page N]` prefix lines even for
+            # blank pages (see the join above), so we can't just check
+            # full_text.strip(). Inspect the per-page content instead.
+            has_any_content = any((p["text"] or "").strip() for p in pages_data)
+            if not has_any_content:
+                msg = (
+                    f"No extractable text in PDF: {file_name}\n"
+                    f"The file has {total_pages} page(s) but none contained "
+                    "machine-readable text.\n"
+                    "Common causes:\n"
+                    "  1. The PDF is a scan with no OCR layer\n"
+                    "  2. All content is rendered as images or vector glyphs\n"
+                    "Suggestions:\n"
+                    "  1. Run OCR on the PDF (e.g. `ocrmypdf input.pdf output.pdf`)\n"
+                    "  2. Or enable VLM image extraction by downloading "
+                    f"{self.config.vlm_model} in Lemonade"
+                )
+                self.log.error(f"Empty PDF (no text): {pdf_path}")
+                raise EmptyPDFError(msg)
+
             # Build metadata
             metadata = {
                 "num_pages": total_pages,
@@ -634,9 +838,14 @@ class RAGSDK:
                 "total_images": total_images_processed,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
+                "pdf_status": "readable",
             }
 
             return full_text, total_pages, metadata
+        except PDFExtractionError:
+            # Already a well-formed extraction error with actionable guidance —
+            # re-raise without wrapping or re-logging (callers will log).
+            raise
         except Exception as e:
             self.log.error(f"Error reading PDF {pdf_path}: {e}")
             raise
@@ -754,8 +963,6 @@ These positions indicate where to split the text."""
                 response = response_data["choices"][0]["text"]
 
                 # Parse the split positions
-                import json
-
                 split_positions = json.loads(response)
 
                 # Create chunks based on LLM-suggested positions
@@ -904,8 +1111,6 @@ These positions indicate where to split the text."""
     def _extract_text_from_json(self, json_path: str) -> str:
         """Extract text from JSON file."""
         try:
-            import json
-
             # Use _safe_open to prevent symlink attacks
             with self._safe_open(json_path, "rb") as f:
                 data = json.load(f)
@@ -1838,8 +2043,8 @@ These positions indicate where to split the text."""
         cache_path = self._get_cache_path(file_path)
 
         # Also check for cached Markdown file with hash-based name
-        # Extract the cache key from the pickle cache path to find matching MD file
-        cache_filename = Path(cache_path).stem  # Remove .pkl extension
+        # Extract the cache key from the cache path to find matching MD file
+        cache_filename = Path(cache_path).stem  # Remove .json extension
         md_cache_path = os.path.join(
             self.config.cache_dir, f"{cache_filename}_extracted.md"
         )
@@ -1849,24 +2054,7 @@ These positions indicate where to split the text."""
                 print(f"💾 Loading from cache: {Path(file_path).name}")
             self.log.info(f"📦 Loading cached index for: {file_path}")
             try:
-                file_size = os.path.getsize(cache_path)
-                if file_size > MAX_CACHE_SIZE:
-                    raise ValueError(f"Cache file too large: {file_size} bytes")
-
-                with open(cache_path, "rb") as f:
-                    header = f.readline(128)
-                    if header != CACHE_HEADER:
-                        raise ValueError("Invalid cache format header")
-                    stored_checksum = f.readline(128).decode().strip()
-                    pickled_data = f.read()
-
-                actual_checksum = hashlib.sha256(pickled_data).hexdigest()
-                if actual_checksum != stored_checksum:
-                    raise ValueError("Cache checksum mismatch")
-
-                # Checksum verification above ensures the pickled data has not
-                # been corrupted or naively tampered with before deserializing.
-                cached_data = pickle.loads(pickled_data)  # nosec B301
+                cached_data = self._verify_and_load_cache(cache_path)
                 cached_chunks = cached_data["chunks"]
                 cached_full_text = cached_data.get("full_text", "")
                 cached_metadata = cached_data.get("metadata", {})
@@ -1880,7 +2068,7 @@ These positions indicate where to split the text."""
                             "     💡 Use /clear-cache to force re-extraction with VLM"
                         )
 
-                # Verify Markdown cache exists alongside pickle cache
+                # Verify Markdown cache exists alongside JSON cache
                 if os.path.exists(md_cache_path):
                     self.log.info(
                         f"  ✅ Markdown cache also available: {md_cache_path}"
@@ -2127,12 +2315,7 @@ These positions indicate where to split the text."""
                 "full_text": text,  # Cache full extracted text (for /dump)
                 "metadata": file_metadata,  # Cache metadata (num_pages, vlm_pages, etc.)
             }
-            pickled = pickle.dumps(cache_data)
-            checksum = hashlib.sha256(pickled).hexdigest()
-            with open(cache_path, "wb") as f:
-                f.write(CACHE_HEADER)
-                f.write(f"{checksum}\n".encode())
-                f.write(pickled)
+            self._save_cache(cache_path, cache_data)
 
             # Auto-save markdown version to cache directory for easy access
             self._save_extracted_markdown(file_path, text, file_metadata)
@@ -2179,8 +2362,20 @@ These positions indicate where to split the text."""
             stats["num_chunks"] = len(new_chunks)
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)
+            if file_type == ".pdf":
+                stats["pdf_status"] = "readable"
             return stats
 
+        except PDFExtractionError as e:
+            # Specific, user-actionable PDF failure. Surface the short status
+            # code separately so UIs can badge the document (e.g. "encrypted")
+            # rather than showing the full multi-line remediation blob.
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"PDF extraction failed for {file_path}: {e.status}")
+            stats["error"] = str(e)
+            stats["pdf_status"] = e.status
+            return stats
         except Exception as e:
             if self.config.show_stats:
                 print(f"❌ Failed to index {Path(file_path).name}: {e}")
@@ -2444,7 +2639,7 @@ Answer:"""
 
         This creates a human-readable markdown version of the extracted text
         that can be used for /dump commands and debugging without re-extraction.
-        Uses hash-based naming to match the pickle cache for consistency.
+        Uses hash-based naming to match the JSON cache for consistency.
 
         Args:
             file_path: Path to original document
@@ -2454,7 +2649,7 @@ Answer:"""
         try:
             from datetime import datetime
 
-            # Calculate file hash for consistency with pickle cache
+            # Calculate file hash for consistency with JSON cache
             path = Path(file_path).absolute()
             hasher = hashlib.sha256()
             with self._safe_open(path, "rb") as f:
@@ -2462,7 +2657,7 @@ Answer:"""
                     hasher.update(chunk)
             content_hash = hasher.hexdigest()
 
-            # Use hash-based filename similar to pickle cache
+            # Use hash-based filename similar to JSON cache
             path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
             cache_key = f"{path_hash}_{content_hash[:32]}"
             md_filename = f"{cache_key}_extracted.md"

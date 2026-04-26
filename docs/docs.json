@@ -65,6 +65,7 @@
                   "guides/chat",
                   "guides/talk",
                   "guides/code",
+                  "guides/code-index",
                   "guides/sd",
                   "guides/emr",
                   "guides/blender",
@@ -116,6 +117,12 @@
                       "playbooks/emr-agent/part-2-dashboard",
                       "playbooks/emr-agent/part-3-architecture"
                     ]
+                  },
+                  {
+                    "group": "Custom Installer",
+                    "pages": [
+                      "playbooks/custom-installer/index"
+                    ]
                   }
                 ]
               },
@@ -128,7 +135,8 @@
                     "pages": [
                       "sdk/core/agent-system",
                       "sdk/core/tools",
-                      "sdk/core/console"
+                      "sdk/core/console",
+                      "sdk/patterns"
                     ]
                   },
                   {
@@ -137,6 +145,7 @@
                       "sdk/sdks/chat",
                       "sdk/sdks/agent-ui",
                       "sdk/sdks/rag",
+                      "sdk/sdks/code-index",
                       "sdk/sdks/mcp",
                       "sdk/sdks/llm",
                       "sdk/sdks/vlm",
@@ -336,7 +345,8 @@
             "group": "Packaging & Distribution",
             "pages": [
               "deployment/ui",
-              "deployment/testing-electron"
+              "deployment/testing-electron",
+              "deployment/code-signing"
             ]
           }
         ]
@@ -357,6 +367,7 @@
               "plans/setup-wizard",
               "plans/security-model",
               "plans/email-calendar-integration",
+              "plans/email-triage-agent",
               "plans/messaging-integrations-plan",
               "plans/autonomy-engine"
             ]
@@ -372,10 +383,10 @@
           {
             "group": "Infrastructure",
             "pages": [
-              "plans/mcp-client",
               "plans/cua",
               "plans/docker-containers",
-              "plans/mcp-docs"
+              "plans/mcp-docs",
+              "plans/desktop-installer"
             ]
           },
           {
@@ -394,6 +405,8 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.17.4",
+              "releases/v0.17.3",
               "releases/v0.17.2",
               "releases/v0.17.1",
               "releases/v0.17.0",
@@ -440,7 +453,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.17.2 \u00b7 Lemonade 10.0.0",
+        "label": "v0.17.4 \u00b7 Lemonade 10.0.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

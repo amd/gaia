@@ -129,8 +129,11 @@ src/gaia/llm/
 ### Package Exports (`__init__.py`)
 
 ```python
-from gaia.llm import create_client, LLMClient, NotSupportedError
+from gaia.llm import create_client, LLMClient, VLMClient, NotSupportedError
 ```
+
+`VLMClient` is also re-exported from `gaia.llm` — see
+[`vlm-client`](/spec/vlm-client) for its API.
 
 ---
 
@@ -387,7 +390,7 @@ class LemonadeProvider(LLMClient):
             **kwargs: Additional arguments passed to LemonadeClient
 
         Environment:
-            LEMONADE_BASE_URL: Default base URL (http://localhost:8000/api/v1)
+            LEMONADE_BASE_URL: Default base URL (http://localhost:13305/api/v1)
             LEMONADE_MODEL: Default model name if not specified
 
         Note:
@@ -972,7 +975,7 @@ client.unload_model()
 from gaia.llm import create_client
 
 # Connect to remote server
-client = create_client(base_url="http://192.168.1.100:8000")
+client = create_client(base_url="http://192.168.1.100:13305")
 
 response = client.generate("Hello from remote server")
 print(response)

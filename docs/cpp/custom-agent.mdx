@@ -322,7 +322,7 @@ static gaia::AgentConfig makeConfig() {
     gaia::AgentConfig cfg;
 
     // LLM backend
-    cfg.baseUrl = "http://localhost:8000/api/v1";   // default; override for remote server
+    cfg.baseUrl = "http://localhost:13305/api/v1";   // default; override for remote server
     cfg.modelId = "Qwen3-4B-GGUF";
 
     // Loop limits
@@ -701,7 +701,7 @@ private:
     // Step 5: tune AgentConfig
     static gaia::AgentConfig makeConfig() {
         gaia::AgentConfig cfg;
-        cfg.baseUrl              = "http://localhost:8000/api/v1";
+        cfg.baseUrl              = "http://localhost:13305/api/v1";
         cfg.modelId              = "Qwen3.5-35B-A3B-GGUF";
         cfg.maxSteps             = 15;
         cfg.maxPlanIterations    = 3;

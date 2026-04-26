@@ -109,7 +109,7 @@ def lemonade_server():
     Follows the pattern from test_chat_sdk.py - waits for server
     with timeout, then skips if not available.
     """
-    server_url = "http://localhost:8000"
+    server_url = "http://localhost:13305"
     timeout = 30  # seconds
 
     print(f"\n⏳ Waiting for Lemonade server at {server_url}...")

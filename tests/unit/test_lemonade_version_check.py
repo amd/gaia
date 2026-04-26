@@ -11,7 +11,7 @@ class TestCheckVersionCompatibility:
     """Test _check_version_compatibility version warning behaviour."""
 
     def _make_client(self):
-        return LemonadeClient(host="localhost", port=8000)
+        return LemonadeClient(host="localhost", port=13305)
 
     # -- major mismatch (incompatible) --------------------------------
 

@@ -1,0 +1,51 @@
+# Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Container fixture used by the #782 AppImage smoke matrix.
+#
+# Simulates "Ubuntu 24.04 LTS minimal" — the distro the reporter hit:
+#   - libfuse2 IS installed (FUSE v2 needed for AppImage v2)
+#   - curl is purged (to verify T3's bundled-uv eliminates the curl dep)
+#   - xvfb/xauth present so an AppImage renderer can start headless
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Base tools the smoke harness needs:
+#   libfuse2       — AppImage v2 FUSE mount
+#   xvfb, xauth    — headless display for Chromium
+#   ca-certificates— TLS trust for any egress from the app itself
+#   file, procps   — assertion helpers
+# Chromium runtime deps (Electron bundles Chromium but dynamically links
+# against these system libs; Ubuntu 24.04 ships the `t64` time_t=64-bit
+# variants of several of them):
+#   libglib2.0-0t64, libgtk-3-0t64, libnss3, libasound2t64, libxss1,
+#   libxtst6, libnotify4, xdg-utils, libatk-bridge2.0-0t64, libxcomposite1,
+#   libxdamage1, libxfixes3, libxrandr2, libgbm1, libcups2t64
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends \
+      libfuse2 \
+      xvfb \
+      xauth \
+      ca-certificates \
+      file \
+      procps \
+      libglib2.0-0t64 \
+      libgtk-3-0t64 \
+      libnss3 \
+      libasound2t64 \
+      libxss1 \
+      libxtst6 \
+      libnotify4 \
+      xdg-utils \
+      libatk-bridge2.0-0t64 \
+      libxcomposite1 \
+      libxdamage1 \
+      libxfixes3 \
+      libxrandr2 \
+      libgbm1 \
+      libcups2t64 \
+ && apt-get purge --yes curl wget || true \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work

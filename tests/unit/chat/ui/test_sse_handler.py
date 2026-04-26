@@ -502,7 +502,8 @@ class TestPrettyPrintJsonToolResults:
         events = _drain(handler)
         rd = events[0]["result_data"]
         assert len(rd["files"]) == 20
-        assert rd["total"] == 30
+        # total is the number of files actually included in the event payload
+        assert rd["total"] == 20
 
     def test_file_list_via_file_list_key(self, handler):
         files = ["a.txt", "b.txt"]

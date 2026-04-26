@@ -29,10 +29,13 @@ from ..models import (
 
 logger = logging.getLogger(__name__)
 
+# Hold references to background tasks to prevent GC
+_background_tasks: set[asyncio.Task] = set()
+
 router = APIRouter(tags=["system"])
 
 # Default model required for GAIA Chat agent
-_DEFAULT_MODEL_NAME = "Qwen3.5-35B-A3B-GGUF"
+_DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 # Minimum context window (tokens) needed for reliable agent operation.
 # Must match DEFAULT_CONTEXT_SIZE in gaia.llm.lemonade_manager.
 _MIN_CONTEXT_SIZE = 32768
@@ -40,7 +43,7 @@ _MIN_CONTEXT_SIZE = 32768
 
 def _get_lemonade_base_url() -> str:
     """Return the Lemonade Server API base URL from environment or default."""
-    return os.environ.get("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+    return os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
 
 
 async def _lemonade_post(
@@ -89,7 +92,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 _parsed = urlparse(base_url)
                 status.lemonade_url = f"{_parsed.scheme}://{_parsed.netloc}"
             except Exception:
-                pass  # Keep the default "http://localhost:8000"
+                pass  # Keep the default "http://localhost:13305"
 
             # Use /health endpoint to get the actually loaded model
             # (not /models which returns the full catalog of available models)
@@ -458,9 +461,11 @@ async def load_model_endpoint(body: LoadModelRequest):
 
     ctx_size = body.ctx_size if body.ctx_size is not None else _MIN_CONTEXT_SIZE
     payload = {"model_name": model_name, "ctx_size": ctx_size}
-    asyncio.create_task(
+    task = asyncio.create_task(
         _lemonade_post("load", payload, timeout=300.0, log_context=f"Load {model_name}")
     )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"status": "loading", "model": model_name, "ctx_size": ctx_size}
 
 
@@ -485,9 +490,11 @@ async def download_model_endpoint(body: DownloadModelRequest):
     payload: dict = {"model_name": model_name}
     if body.force:
         payload["force"] = True
-    asyncio.create_task(
+    task = asyncio.create_task(
         _lemonade_post(
             "pull", payload, timeout=7200.0, log_context=f"Download {model_name}"
         )
     )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"status": "downloading", "model": model_name}

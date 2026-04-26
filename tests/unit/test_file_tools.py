@@ -746,6 +746,33 @@ class TestFormatFileListIntegration:
         assert result[9]["number"] == 10
 
 
+# ---------------------------------------------------------------------------
+# search_file: result-contract guard (count must not exceed returned files)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def search_file_fn():
+    """Return the search_file tool function registered by FileSearchToolsMixin."""
+    _StubMixin().register_file_search_tools()
+    return _TOOL_REGISTRY["search_file"]["function"]
+
+
+def test_search_file_count_matches_returned_files(
+    search_file_fn, tmp_path, monkeypatch
+):
+    # Ensure the quick CWD search finds >10 matches deterministically.
+    for i in range(25):
+        (tmp_path / f"file_{i}.txt").write_text("x", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    result = search_file_fn("file_*.txt", deep_search=False)
+
+    assert result["status"] == "success"
+    assert len(result["files"]) == 10
+    assert result["count"] == 10
+
+
 # ===========================================================================
 # 9. read_file: binary document guard
 # ===========================================================================

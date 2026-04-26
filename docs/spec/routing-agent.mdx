@@ -15,10 +15,23 @@ title: "RoutingAgent"
 
 ## Overview
 
-RoutingAgent intelligently routes user requests to appropriate specialized agents (Code, Jira, Docker) with automatic parameter disambiguation. Uses LLM-based analysis for language/framework detection and interactive clarification when needed.
+RoutingAgent intelligently routes user requests for code generation to
+`CodeAgent` with automatic parameter disambiguation. It uses LLM-based
+analysis for language/framework detection and falls back to interactive
+clarification when the request is ambiguous.
+
+<Warning>
+**Today RoutingAgent only routes to `CodeAgent`** — other agent types raise
+`ValueError("Unknown agent type")`. Additionally, the Code Agent path
+currently **only supports TypeScript (Next.js)**: non-TypeScript requests
+are coerced to TypeScript when the language can't be inferred, and requests
+that explicitly pick an unsupported language raise `SystemExit(1)` with a
+clear message. Jira/Docker/etc. routing is on the roadmap but not wired up.
+</Warning>
 
 **Key Features:**
-- LLM-powered request analysis
+- LLM-powered request analysis (`CodeAgent`-only today)
+- TypeScript/Next.js enforcement with automatic fallback
 - Interactive parameter disambiguation
 - Recursive clarification with conversation history
 - API and CLI mode support

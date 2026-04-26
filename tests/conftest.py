@@ -50,13 +50,13 @@ def lemonade_available():
     Check if Lemonade server is available and healthy.
 
     This is a session-scoped fixture that checks once at the start of the
-    test session whether Lemonade server is running on localhost:8000.
+    test session whether Lemonade server is running on localhost:13305.
 
     Returns:
         bool: True if Lemonade server is available and responding to health checks
     """
     try:
-        response = requests.get("http://localhost:8000/api/v1/health", timeout=5)
+        response = requests.get("http://localhost:13305/api/v1/health", timeout=5)
         return response.status_code == 200
     except (requests.RequestException, requests.ConnectionError):
         return False

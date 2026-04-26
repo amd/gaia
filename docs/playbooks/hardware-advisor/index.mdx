@@ -205,15 +205,15 @@ Before we build step-by-step, let's understand what each piece does **under the 
     ```python
     info = client.get_system_info()
 
-    # Returns:
+    # Returns (Lemonade uses AMD-specific device keys):
     {
         "OS Version": "Windows 11 Pro",
         "Processor": "AMD Ryzen 9 7950X",
         "Physical Memory": "32.0 GB",
         "devices": {
-            "cpu": {"name": "...", "available": True},
-            "gpu": {"name": "...", "memory": 8192, "available": True},
-            "npu": {"name": "Ryzen AI NPU", "available": True}
+            "cpu":      {"name": "...", "available": True},
+            "amd_igpu": {"name": "...", "memory_mb": 8192, "available": True},
+            "amd_npu":  {"name": "Ryzen AI NPU", "available": True}
         }
     }
     ```
@@ -497,7 +497,7 @@ def _register_tools(self):
     client = self.client
     agent = self
 
-    @tool
+    @tool(atomic=True)
     def get_hardware_info() -> Dict[str, Any]:
         """Get detailed system hardware information including RAM, GPU, and NPU."""
         try:
@@ -517,9 +517,9 @@ def _register_tools(self):
                 round(gpu_memory_mb / 1024, 2) if gpu_memory_mb > 0 else 0
             )
 
-            # Get NPU information from Lemonade
+            # Get NPU information from Lemonade (AMD-specific device keys)
             devices = info.get("devices", {})
-            npu_info = devices.get("npu", {})
+            npu_info = devices.get("amd_npu", {})
             npu_available = npu_info.get("available", False)
             npu_name = (
                 npu_info.get("name", "Not detected")
@@ -532,13 +532,13 @@ def _register_tools(self):
                 "os": info.get("OS Version", "Unknown"),
                 "processor": info.get("Processor", "Unknown"),
                 "ram_gb": ram_gb,
-                "gpu": {
+                "amd_igpu": {
                     "name": gpu_name,
                     "memory_mb": gpu_memory_mb,
                     "memory_gb": gpu_memory_gb,
                     "available": gpu_available,
                 },
-                "npu": {"name": npu_name, "available": npu_available},
+                "amd_npu": {"name": npu_name, "available": npu_available},
             }
         except Exception as e:
             return {
@@ -592,13 +592,13 @@ You: Show me my system specs
   "os": "Windows 11 Pro",
   "processor": "AMD Ryzen 9 7950X",
   "ram_gb": 32.0,
-  "gpu": {
+  "amd_igpu": {
     "name": "AMD Radeon RX 7900 XTX",
     "memory_mb": 24576,
     "memory_gb": 24.0,
     "available": true
   },
-  "npu": {
+  "amd_npu": {
     "name": "Ryzen AI NPU",
     "available": true
   }
@@ -635,7 +635,7 @@ Add the `list_available_models()` tool with `labels` field and `message` in the 
 **Add this tool** inside the `_register_tools()` method (after the `get_hardware_info` function):
 
 ```python
-@tool
+@tool(atomic=True)
 def list_available_models() -> Dict[str, Any]:
     """List all models available in the catalog with their sizes and download status."""
     try:
@@ -742,7 +742,7 @@ Add the complete `recommend_models()` tool with `estimated_runtime_gb`, `fits_in
 **Add this tool** inside the `_register_tools()` method (after the `list_available_models` function):
 
 ```python
-@tool
+@tool(atomic=True)
 def recommend_models(ram_gb: float, gpu_memory_mb: int = 0) -> Dict[str, Any]:
     """Recommend models based on available system memory.
 
@@ -827,7 +827,7 @@ Try: 'Show me my system specs'
 You: What size LLM can I run?
 
 [Tool: get_hardware_info]
-{"ram_gb": 32.0, "gpu": {"memory_mb": 24576, "available": true}}
+{"ram_gb": 32.0, "amd_igpu": {"memory_mb": 24576, "available": true}}
 
 [Tool: recommend_models]
 {

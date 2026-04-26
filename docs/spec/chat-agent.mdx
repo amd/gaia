@@ -94,7 +94,8 @@ class ChatAgentConfig:
     use_claude: bool = False
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
-    base_url: str = "http://localhost:8000/api/v1"
+    # None = fall back to LEMONADE_BASE_URL env var, then the default
+    base_url: Optional[str] = None
     model_id: Optional[str] = None  # Default: Qwen3.5-35B
 
     # Execution
@@ -103,6 +104,7 @@ class ChatAgentConfig:
 
     # Debug/output
     debug: bool = False
+    debug_prompts: bool = False     # Backward-compatible alias for show_prompts
     show_prompts: bool = False
     show_stats: bool = False
     silent_mode: bool = False
@@ -110,6 +112,7 @@ class ChatAgentConfig:
 
     # RAG settings
     rag_documents: List[str] = field(default_factory=list)
+    library_documents: List[str] = field(default_factory=list)  # UI-attached docs
     watch_directories: List[str] = field(default_factory=list)
     chunk_size: int = 500
     chunk_overlap: int = 100
@@ -118,6 +121,10 @@ class ChatAgentConfig:
 
     # Security
     allowed_paths: Optional[List[str]] = None
+
+    # Agent UI integration
+    ui_session_id: Optional[str] = None      # resume an Agent-UI session
+    enable_sd_tools: bool = False            # Stable Diffusion image generation
 ```
 
 ### Public API

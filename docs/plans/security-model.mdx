@@ -40,7 +40,7 @@ browser and desktop controls in v0.21.0, and autonomous execution safety in v0.2
 | Network ports | Remote exploitation | MCP bridge on `:8765`, API on `:8080` (localhost only) | Remain localhost-only; firewall rules enforced |
 | MCP tool execution | Malicious or unverified tools | No classification; all tools execute freely | Tiered classification: auto-approve, confirm, deny |
 | Shell commands | Arbitrary code execution | Whitelist in ShellToolsMixin (`ALLOWED_COMMANDS`) | Retain whitelist; extend to all agent types |
-| RAG cache | Pickle deserialization (RCE) | `pickle.load()` on cached data (`src/gaia/rag/sdk.py`) | Migrate to safe serialization (#447) |
+| RAG cache | Pickle deserialization (RCE) | `pickle.load()` on cached data guarded by a `GAIA_CACHE_V1` magic header and 500 MB size cap (`src/gaia/rag/sdk.py`) — shipped in v0.17.2 | Migrate to fully safe serialization / HMAC (#447 follow-up) |
 | Credentials | Secret leakage via logs/env | Env vars (`ATLASSIAN_SITE_URL`, `GITHUB_TOKEN`, etc.) | Encrypted credential vault |
 | Browser automation | Navigation to malicious URLs | No URL restrictions on Playwright MCP | URL allowlist + domain restrictions (#459) |
 | Desktop control | Unauthorized system modification | Not yet implemented | Opt-in model with screenshot permissions (#461) |
@@ -648,11 +648,11 @@ Each messaging platform user maps to an isolated GAIA session:
 
 ---
 
-## 13. Pickle Deserialization Vulnerability
+## 13. Pickle Deserialization Vulnerability — *Mitigated in v0.17.2*
 
-**GitHub issue:** #447 (v0.17.2)
+**GitHub issue:** #447 — shipped in v0.17.2 via PR #722.
 
-### 13.1 Current Vulnerability
+### 13.1 Historical Vulnerability
 
 The RAG SDK (`src/gaia/rag/sdk.py`) uses `pickle.load()` to deserialize cached
 document indexes. Pickle deserialization of untrusted data can lead to
@@ -662,7 +662,15 @@ Attack vector: A malicious PDF is indexed, the resulting cache file is tampered 
 (or a crafted `.pkl` file is placed in `~/.gaia/cache/`), and the next time the RAG
 SDK loads the cache, arbitrary code executes.
 
-### 13.2 Remediation
+### 13.2 What v0.17.2 shipped
+
+The RAG cache now prepends a fixed magic header (`GAIA_CACHE_V1\n`) and enforces
+a `MAX_CACHE_SIZE` (500 MB) before any deserialization attempt. See
+`src/gaia/rag/sdk.py:44`. This closes the drive-by-write attack on
+`~/.gaia/cache/` without forcing a JSON migration. Future hardening — full
+JSON serialization or HMAC-authenticated pickle — remains tracked on #447.
+
+### 13.3 Future hardening (tracked as follow-up)
 
 1. **Immediate (v0.17.2):** Replace `pickle.dump`/`pickle.load` with `json` for
    the cache data structure. The cached data (`chunks`, `full_text`, `metadata`)

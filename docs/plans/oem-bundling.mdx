@@ -21,7 +21,7 @@ icon: "box"
 > - [#615](https://github.com/amd/gaia/issues/615) -- App Store and Distribution Channel Packaging
 >
 > **Related Plans:**
-> - [installer.mdx](installer.mdx) -- Install scripts, `gaia init`, model download tiers
+> - [desktop-installer.mdx](desktop-installer.mdx) -- NSIS desktop installer + bundled Lemonade MSI
 > - [agent-hub.mdx](agent-hub.mdx) -- Agent registry and marketplace
 > - [Agent UI](agent-ui.mdx) -- Phases A-D overview
 
@@ -91,7 +91,7 @@ The framework maps hardware SKUs to model recommendations. OEMs select from pred
 | **Halo Max+** | Ryzen AI MAX+ 395 (Agent Computer) | 50 | 40 | 128 GB | ~200B (FP4) | Qwen3.5-35B |
 | **Halo** | Ryzen AI MAX 390 | 50 | 32 | 64 GB | ~70B (FP4) | Qwen3.5-35B |
 | **High** | Ryzen AI 9 HX 370 | 50 | 12 | 32 GB | ~30B (Q4) | Qwen3.5-35B |
-| **Mid** | Ryzen AI 7 340 | 39 | 8 | 16 GB | ~7B (Q4) | Qwen3-8B-Instruct-GGUF |
+| **Mid** | Ryzen AI 7 340 | 39 | 8 | 16 GB | ~7B (Q4) | Qwen3-8B-GGUF |
 | **Entry** | Ryzen AI 5 320 | 16 | 4 | 16 GB | ~4B (Q4) | Qwen3-4B-Instruct-GGUF |
 
 GAIA validates that a model fits the hardware at boot time. If the default model exceeds available memory (RAM minus ~4 GB OS overhead, with 15% model overhead for KV cache), GAIA falls back to the next smaller preinstalled model.

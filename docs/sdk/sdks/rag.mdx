@@ -6,7 +6,6 @@ title: "RAG: Teaching Your Agent About Documents"
   **Source Code:** [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
 
-<Badge text="development" color="orange" />
 
 **Detailed Spec:** [spec/rag-sdk](/spec/rag-sdk)
 
@@ -21,9 +20,9 @@ LLMs have a knowledge cutoff—they don't know about your company's documents, y
 <Tabs>
 <Tab title="Without RAG">
 ```python
-from gaia.llm import LLMClient
+from gaia.llm import create_client
 
-llm = LLMClient()
+llm = create_client()  # LLMClient is abstract; use the factory
 response = llm.generate("What's our company's refund policy?")
 # "I don't have access to your company's specific policies..."
 ```
@@ -150,8 +149,9 @@ rag = RAGSDK()
 rag.index_document("docs/manual.pdf")
 rag.index_document("docs/faq.pdf")
 
-# Or index multiple at once
-rag.index_documents(["guide1.pdf", "guide2.pdf", "guide3.pdf"])
+# Or index multiple by looping
+for path in ["guide1.pdf", "guide2.pdf", "guide3.pdf"]:
+    rag.index_document(path)
 
 # Now you can ask unlimited questions
 response = rag.query("How do I install the software?")
@@ -521,7 +521,12 @@ class ResearchAgent(Agent):
 
     def __init__(self, documents_path: str, **kwargs):
         self.rag = RAGSDK()
-        self.rag.index_documents(documents_path)
+        # index_document takes one path; call in a loop for multiple files
+        if isinstance(documents_path, (list, tuple)):
+            for path in documents_path:
+                self.rag.index_document(path)
+        else:
+            self.rag.index_document(documents_path)
         super().__init__(**kwargs)
 
     def _register_tools(self):
@@ -859,7 +864,8 @@ config = RAGConfig(
 )
 
 rag = RAGSDK(config)
-rag.index_documents(["faq.pdf", "troubleshooting.pdf", "quick_start.pdf"])
+for path in ["faq.pdf", "troubleshooting.pdf", "quick_start.pdf"]:
+    rag.index_document(path)
 
 response = rag.query("How do I reset my password?")
 ```
@@ -883,7 +889,8 @@ config = RAGConfig(
 )
 
 rag = RAGSDK(config)
-rag.index_documents(["paper1.pdf", "paper2.pdf", "literature_review.pdf"])
+for path in ["paper1.pdf", "paper2.pdf", "literature_review.pdf"]:
+    rag.index_document(path)
 
 response = rag.query("What methodology was used in the study?")
 ```
@@ -906,7 +913,8 @@ config = RAGConfig(
 )
 
 rag = RAGSDK(config)
-rag.index_documents(["api_reference.pdf", "tutorial.pdf", "examples.pdf"])
+for path in ["api_reference.pdf", "tutorial.pdf", "examples.pdf"]:
+    rag.index_document(path)
 
 response = rag.query("How do I authenticate API requests?")
 ```
@@ -966,8 +974,8 @@ rag.index_document("/home/user/documents/report.pdf")
 
 # This is BLOCKED - outside allowed paths
 try:
-    rag.index_document("/etc/passwd")  # Raises SecurityError
-except SecurityError as e:
+    rag.index_document("/etc/passwd")  # Raises PermissionError
+except PermissionError as e:
     print(f"Blocked: {e}")
 ```
 
@@ -1048,17 +1056,14 @@ config = RAGConfig(
 # 1. Use AMD NPU acceleration (if available)
 # Lemonade Server (https://lemonade-server.ai) automatically uses NPU for embeddings
 
-# 2. Index documents in batch
-# ✅ Efficient - one batch operation
-rag.index_documents(["doc1.pdf", "doc2.pdf", "doc3.pdf", ...])
-
-# ❌ Slow - separate operations
-for doc in documents:
+# 2. Index documents in a loop (each call processes one file)
+for doc in ["doc1.pdf", "doc2.pdf", "doc3.pdf"]:
     rag.index_document(doc)
 
-# 3. Use smaller embedding model
+# 3. Tune chunk sizes and LLM-based chunking
 config = RAGConfig(
-    embedding_model="all-MiniLM-L6-v2"  # Smaller, faster
+    chunk_size=1024,          # Larger chunks = fewer embeddings = faster indexing
+    use_llm_chunking=False,   # Disable semantic chunking for raw speed
 )
 
 # 4. Persist index to avoid re-indexing
@@ -1089,8 +1094,8 @@ config = RAGConfig(
     chunk_size=1024,          # Fewer chunks per document
 )
 
-# 3. Clear index when switching projects
-rag.clear_index()
+# 3. Clear cached embeddings when switching projects
+rag.clear_cache()
 
 # 4. Remove documents you no longer need
 rag.remove_document("old_document.pdf")
@@ -1130,7 +1135,8 @@ class DocumentQA:
 
         # Index all provided documents
         print(f"Indexing {len(documents)} documents...")
-        self.rag.index_documents(documents)
+        for doc in documents:
+            self.rag.index_document(doc)
         print("Indexing complete!")
 
     def ask(self, question: str) -> str:
@@ -1168,7 +1174,7 @@ class DocumentQA:
 
     def get_stats(self) -> dict:
         """Get index statistics."""
-        return self.rag.get_stats()
+        return self.rag.get_status()
 
 # Usage
 qa = DocumentQA([
@@ -1185,7 +1191,7 @@ print(qa.ask("What's the weather like today?"))
 
 # Check stats
 stats = qa.get_stats()
-print(f"Indexed {stats['num_files']} files with {stats['total_chunks']} chunks")
+print(f"Indexed {stats['indexed_files']} files with {stats['total_chunks']} chunks")
 ```
 
 **Why this solution works:**

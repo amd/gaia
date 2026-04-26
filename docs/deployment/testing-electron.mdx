@@ -43,20 +43,26 @@ npm run test:coverage
 
 ## Test Structure
 
-### Framework Tests (`tests/electron/`)
+All Electron-related tests live under `tests/electron/`. Unit tests for framework
+services sit alongside integration tests for individual apps:
 
-Unit tests for core Electron framework modules:
+### Framework & service tests
 
-- `test_app_controller.js` - AppController lifecycle and initialization
-- `test_window_manager.js` - Window creation and management
-- `test_mcp_client.js` - WebSocket communication and MCP protocol
+- `test_agent_process_manager.js` - Backend Python process lifecycle
+- `test_notification_service.js` - Auto-update and notification plumbing
+- `test_electron_framework_integration.js` - Cross-module framework wiring
+- `test_electron_functional.js` - End-to-end Electron smoke tests
 
-### App Tests (`tests/apps/`)
+### App integration tests
 
-Integration tests for Electron apps:
+- `test_electron_chat_app.js` - Chat/Agent UI app
+- `test_electron_chat_installer.js` - First-run installer flow
+- `test_electron_emr_dashboard.js` - EMR dashboard
+- `test_electron_example_app.js` - Example app template verification
+- `test_electron_jira_app.js` - Jira app configuration and structure
 
-- `test_jira_app.js` - Jira app configuration and structure
-- `test_example_app.js` - Example app template verification
+Shared setup lives in `tests/electron/setup.js`; mocks live under
+`tests/electron/mocks/`.
 
 ## What Gets Tested
 

@@ -8,6 +8,11 @@ import time
 
 def kill_process_on_port(port):
     """Kill any process running on the specified port."""
+    # Validate port is an integer to prevent shell injection
+    try:
+        port = int(port)
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid port number: {port!r}")
     try:
         if sys.platform.startswith("win"):
             # Windows: use netstat + taskkill

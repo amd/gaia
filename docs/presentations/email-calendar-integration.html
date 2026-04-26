@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GAIA Email & Calendar Integration</title>
+<style>
+  :root {
+    --amd-red: #ED1C24;
+    --amd-dark: #1a1a2e;
+    --amd-darker: #0f0f1a;
+    --accent: #ff4757;
+    --accent-soft: #ff6b81;
+    --text: #e8e8f0;
+    --text-muted: #8888a0;
+    --surface: #22223a;
+    --surface-light: #2a2a4a;
+    --green: #2ed573;
+    --yellow: #ffa502;
+    --blue: #3742fa;
+    --code-bg: #16162a;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--amd-darker);
+    color: var(--text);
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  .deck { width: 100vw; height: 100vh; position: relative; }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    padding: 60px 100px;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
+
+  .slide.active { display: flex; opacity: 1; }
+
+  /* Title Slide */
+  .slide-title {
+    align-items: center;
+    text-align: center;
+    background: linear-gradient(135deg, var(--amd-darker) 0%, #1a1a3e 50%, var(--amd-dark) 100%);
+  }
+
+  .slide-title .logo-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+
+  .slide-title .logo-bar .amd-badge {
+    background: var(--amd-red);
+    color: #fff;
+    font-weight: 800;
+    font-size: 18px;
+    padding: 6px 16px;
+    border-radius: 4px;
+    letter-spacing: 2px;
+  }
+
+  .slide-title .logo-bar .product {
+    font-size: 20px;
+    color: var(--text-muted);
+    font-weight: 300;
+    letter-spacing: 1px;
+  }
+
+  .slide-title h1 {
+    font-size: 64px;
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 20px;
+    background: linear-gradient(135deg, #fff 0%, var(--accent-soft) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .slide-title .subtitle {
+    font-size: 24px;
+    color: var(--text-muted);
+    font-weight: 300;
+    max-width: 700px;
+    line-height: 1.5;
+  }
+
+  .slide-title .version-badge {
+    margin-top: 40px;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    color: var(--accent-soft);
+    padding: 8px 24px;
+    border-radius: 100px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 1px;
+  }
+
+  /* Content Slides */
+  .slide-content { background: var(--amd-darker); }
+
+  .slide-content h2 {
+    font-size: 44px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: #fff;
+  }
+
+  .slide-content .section-line {
+    width: 80px;
+    height: 4px;
+    background: var(--amd-red);
+    border-radius: 2px;
+    margin-bottom: 40px;
+  }
+
+  .slide-content p {
+    font-size: 20px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    max-width: 900px;
+    margin-bottom: 20px;
+  }
+
+  /* Grids */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 20px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin-top: 20px; }
+  .grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 20px; margin-top: 20px; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    padding: 28px;
+    transition: border-color 0.2s;
+  }
+
+  .card:hover { border-color: var(--accent); }
+  .card .card-icon { font-size: 32px; margin-bottom: 12px; }
+  .card h3 { font-size: 20px; font-weight: 600; margin-bottom: 8px; color: #fff; }
+  .card p { font-size: 15px; color: var(--text-muted); line-height: 1.5; margin-bottom: 0; }
+  .card .metric { font-size: 36px; font-weight: 800; color: var(--accent-soft); margin-bottom: 4px; }
+
+  /* Code block */
+  pre {
+    background: var(--code-bg);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 24px 28px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 15px;
+    line-height: 1.7;
+    overflow-x: auto;
+    color: var(--text);
+    margin-top: 16px;
+  }
+
+  pre .comment { color: #5c6370; }
+  pre .keyword { color: #c678dd; }
+  pre .string { color: #98c379; }
+  pre .flag { color: #61afef; }
+  pre .dim { color: #5c6370; }
+  pre .number { color: #d19a66; }
+  pre .status-pass { color: #2ed573; font-weight: 700; }
+  pre .status-fail { color: #ff4757; font-weight: 700; }
+
+  /* Flow diagram */
+  .flow { display: flex; align-items: center; gap: 0; margin-top: 24px; flex-wrap: wrap; justify-content: center; }
+
+  .flow-step {
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 20px 24px;
+    text-align: center;
+    min-width: 160px;
+  }
+
+  .flow-step .step-num { font-size: 12px; color: var(--accent); font-weight: 700; letter-spacing: 2px; margin-bottom: 6px; }
+  .flow-step h4 { font-size: 16px; color: #fff; margin-bottom: 4px; }
+  .flow-step p { font-size: 13px; color: var(--text-muted); margin-bottom: 0; }
+  .flow-arrow { font-size: 24px; color: var(--text-muted); padding: 0 8px; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+  th { text-align: left; font-size: 13px; color: var(--text-muted); font-weight: 600; letter-spacing: 1px; text-transform: uppercase; padding: 12px 16px; border-bottom: 2px solid rgba(255,255,255,0.08); }
+  td { padding: 14px 16px; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* Tags */
+  .tag { display: inline-block; padding: 4px 12px; border-radius: 100px; font-size: 13px; font-weight: 600; margin: 2px 4px; }
+  .tag-green { background: rgba(46,213,115,0.15); color: var(--green); }
+  .tag-red { background: rgba(255,71,87,0.15); color: var(--accent); }
+  .tag-yellow { background: rgba(255,165,2,0.15); color: var(--yellow); }
+  .tag-blue { background: rgba(55,66,250,0.15); color: #5e6fff; }
+
+  /* Lists */
+  ul.feature-list { list-style: none; padding: 0; }
+  ul.feature-list li {
+    padding: 10px 0;
+    font-size: 18px;
+    color: var(--text);
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  ul.feature-list li::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-top: 8px;
+    flex-shrink: 0;
+  }
+
+  .highlight { color: var(--accent-soft); font-weight: 600; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
+
+  /* Navigation */
+  .nav { position: fixed; bottom: 24px; right: 32px; display: flex; gap: 8px; z-index: 100; }
+  .nav button {
+    width: 44px; height: 44px; border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: var(--surface); color: var(--text);
+    font-size: 18px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s;
+  }
+  .nav button:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .progress-bar { position: fixed; top: 0; left: 0; height: 3px; background: var(--amd-red); transition: width 0.4s ease; z-index: 100; }
+  .slide-counter { position: fixed; bottom: 30px; left: 32px; font-size: 14px; color: var(--text-muted); font-weight: 500; z-index: 100; }
+
+  .weight-bar { display: inline-block; height: 8px; border-radius: 4px; background: var(--accent); vertical-align: middle; margin-left: 8px; }
+</style>
+</head>
+<body>
+
+<div class="deck" id="deck">
+
+  <!-- SLIDE 1: Title -->
+  <div class="slide slide-title active" data-index="0">
+    <div class="logo-bar">
+      <span class="amd-badge">AMD</span>
+      <span class="product">GAIA Framework</span>
+    </div>
+    <h1>Email & Calendar<br>Integration</h1>
+    <p class="subtitle">
+      Local-first email triage, calendar management, and daily briefs &mdash;
+      powered by on-device AI
+    </p>
+    <div class="version-badge">P0 &mdash; v0.20.0 &rarr; v0.23.0</div>
+  </div>
+
+  <!-- SLIDE 2: Why -->
+  <div class="slide slide-content" data-index="1">
+    <h2>The Opportunity</h2>
+    <div class="section-line"></div>
+    <p>
+      Email triage is the <span class="highlight">#1 requested use case</span> for local AI agents.
+      Always-on workloads with sensitive data &mdash; exactly where on-device processing wins.
+    </p>
+    <div class="grid-4">
+      <div class="card">
+        <div class="card-icon">&#x1F512;</div>
+        <h3>Privacy</h3>
+        <p>All inference runs locally via Lemonade (Ryzen AI NPU). Email content never leaves the device.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x26A1;</div>
+        <h3>Always-On</h3>
+        <p>Overnight triage, morning briefs, draft responses &mdash; the agent works while you sleep.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F4B0;</div>
+        <h3>Zero Token Cost</h3>
+        <p>Running locally eliminates per-token API fees. Process thousands of emails daily with no marginal cost.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F3AF;</div>
+        <h3>Personalized</h3>
+        <p>AI-learned categories adapt to your behavior. The agent gets smarter with every interaction.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 3: Email Triage Agent -->
+  <div class="slide slide-content" data-index="2">
+    <h2>Email Triage Agent</h2>
+    <div class="section-line"></div>
+    <p>A new agent in <code style="color: var(--accent-soft);">src/gaia/agents/email/</code> &mdash; extends Agent + MCPClientMixin + DatabaseMixin.
+      <span style="font-size: 14px; color: var(--text-muted);">(Issues: <a href="https://github.com/amd/gaia/issues/645" style="color: var(--accent-soft);">#645</a>, <a href="https://github.com/amd/gaia/issues/662" style="color: var(--accent-soft);">#662</a>, <a href="https://github.com/amd/gaia/issues/663" style="color: var(--accent-soft);">#663</a>)</span></p>
+    <div class="grid-4">
+      <div class="card">
+        <div class="card-icon">&#x1F3F7;</div>
+        <h3>Categorize</h3>
+        <p>AI-learned priority triage: urgent, actionable, informational, low priority. Categories adapt from user behavior.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F4DD;</div>
+        <h3>Summarize</h3>
+        <p>Per-email and inbox-wide summaries. Thread-level context. Highlights what matters in a morning brief.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x2709;</div>
+        <h3>Draft Replies</h3>
+        <p>Drafts responses matched to contact style. User always approves before send &mdash; never auto-sends.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F4C5;</div>
+        <h3>Calendar Updates</h3>
+        <p>Detects meeting requests &rarr; creates events. Conflict detection. Daily agenda briefs.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 4: Synthetic Inbox Dataset -->
+  <div class="slide slide-content" data-index="3">
+    <h2>Synthetic Inbox Dataset</h2>
+    <div class="section-line"></div>
+    <p>A generated email corpus for development, testing, and evaluation &mdash; no real PII needed.
+      <span style="font-size: 14px; color: var(--text-muted);">(<a href="https://github.com/amd/gaia/blob/main/docs/plans/email-triage-agent.mdx" style="color: var(--accent-soft);">Email Triage Agent Plan &sect;28</a>)</span></p>
+    <div class="two-col">
+      <div>
+        <ul class="feature-list">
+          <li>Realistic email threads: urgent requests, newsletters, receipts, meeting invites, reply chains</li>
+          <li>Varied senders, subjects, tones &mdash; mirrors a real inbox</li>
+          <li><span class="highlight">Ground-truth labels</span> for triage category, priority, and expected actions</li>
+          <li>Calendar events linked to meeting-request emails</li>
+        </ul>
+      </div>
+      <div>
+        <pre><span class="comment"># Example synthetic email entry</span>
+<span class="keyword">id:</span> <span class="string">email_042</span>
+<span class="keyword">from:</span> <span class="string">"Sarah Chen &lt;sarah@acme.com&gt;"</span>
+<span class="keyword">subject:</span> <span class="string">"Q2 budget review - today"</span>
+<span class="keyword">thread_depth:</span> <span class="number">3</span>
+
+<span class="keyword">ground_truth:</span>
+  <span class="keyword">category:</span> <span class="string">urgent</span>
+  <span class="keyword">priority:</span> <span class="number">1</span>
+  <span class="keyword">expected_actions:</span>
+    - <span class="string">notify_immediately</span>
+    - <span class="string">draft_reply</span>
+    - <span class="string">create_calendar_event</span>
+  <span class="keyword">calendar:</span>
+    <span class="keyword">title:</span> <span class="string">"Q2 Budget Review"</span>
+    <span class="keyword">time:</span> <span class="string">"2026-04-23T11:00"</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 5: Agent Eval Integration -->
+  <div class="slide slide-content" data-index="4">
+    <h2>Agent Eval Integration</h2>
+    <div class="section-line"></div>
+    <p>Leverage the existing <code style="color: var(--accent-soft);">gaia eval agent</code> harness to measure triage quality against the synthetic inbox.</p>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="step-num">INPUT</div>
+        <h4>Synthetic Inbox</h4>
+        <p>Ground-truth labeled emails</p>
+      </div>
+      <span class="flow-arrow">&#x2192;</span>
+      <div class="flow-step">
+        <div class="step-num">AGENT</div>
+        <h4>Email Triage</h4>
+        <p>Categorize, summarize, act</p>
+      </div>
+      <span class="flow-arrow">&#x2192;</span>
+      <div class="flow-step">
+        <div class="step-num">JUDGE</div>
+        <h4>Score vs. Truth</h4>
+        <p>Category, priority, actions</p>
+      </div>
+      <span class="flow-arrow">&#x2192;</span>
+      <div class="flow-step">
+        <div class="step-num">OUTPUT</div>
+        <h4>Scorecard</h4>
+        <p>Pass/fail, regressions</p>
+      </div>
+    </div>
+    <pre style="margin-top: 32px"><span class="comment"># Evaluate email triage accuracy</span>
+<span class="keyword">$</span> gaia eval agent <span class="flag">--category</span> <span class="string">email_triage</span>
+
+<span class="dim">Running 24 email triage scenarios...</span>
+<span class="dim">  Categorization accuracy:       </span><span class="status-pass">92%</span> <span class="dim">(22/24 correct)</span>
+<span class="dim">  Summarization quality:         </span><span class="status-pass">8.4/10</span>
+<span class="dim">  Action correctness:            </span><span class="status-pass">87%</span> <span class="dim">(correct reply/event/archive)</span>
+
+<span class="status-pass">PASS</span>  email_triage  <span class="number">8.6/10</span>  <span class="dim">(regressions: 0)</span></pre>
+  </div>
+
+  <!-- SLIDE 6: Delivery Roadmap -->
+  <div class="slide slide-content" data-index="5">
+    <h2>Delivery Roadmap</h2>
+    <div class="section-line"></div>
+    <p>Three milestones, each independently useful. Each delivers measurable user value.</p>
+    <div class="grid-3" style="margin-top: 8px;">
+      <div class="card" style="border-top: 4px solid var(--green);">
+        <h3 style="margin-bottom: 12px;">v0.20.0 &mdash; Inbox Companion</h3>
+        <ul class="feature-list" style="font-size: 15px;">
+          <li>Inbox summary &amp; email search via Gmail MCP</li>
+          <li>Draft replies matched to your writing style</li>
+          <li>On-demand daily brief (email + calendar)</li>
+          <li>Auto-discovered email provider setup</li>
+          <li>Slack webhook alerts for urgent emails</li>
+        </ul>
+        <p style="font-size: 14px; color: var(--green); font-weight: 600; margin-top: 12px;">&ldquo;Summarize my inbox&rdquo; works end-to-end</p>
+      </div>
+      <div class="card" style="border-top: 4px solid var(--yellow);">
+        <h3 style="margin-bottom: 12px;">v0.23.0 &mdash; Full Triage Agent</h3>
+        <ul class="feature-list" style="font-size: 15px;">
+          <li>Dedicated EmailTriageAgent in agent registry</li>
+          <li>Autonomous overnight triage via heartbeat</li>
+          <li>Per-cohort autonomy policies (L0&ndash;L6)</li>
+          <li>Inbox-Zero guided mode</li>
+          <li>Slack interactive approve/reject buttons</li>
+        </ul>
+        <p style="font-size: 14px; color: var(--yellow); font-weight: 600; margin-top: 12px;">Wake up to a triaged inbox every morning</p>
+      </div>
+      <div class="card" style="border-top: 4px solid var(--accent-soft);">
+        <h3 style="margin-bottom: 12px;">v0.23.0+ &mdash; Personalization</h3>
+        <ul class="feature-list" style="font-size: 15px;">
+          <li>Sender importance learned from behavior</li>
+          <li>Writing-voice adaptation per relationship</li>
+          <li>Meeting prep context (email + docs + calendar)</li>
+          <li>Custom AI labels + Split Inbox</li>
+          <li>Cross-agent daily brief (email + tasks + news)</li>
+        </ul>
+        <p style="font-size: 14px; color: var(--accent-soft); font-weight: 600; margin-top: 12px;">Agent gets smarter with every interaction</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 7: Why Local Wins -->
+  <div class="slide slide-content" data-index="6">
+    <h2>Why Local Beats Cloud</h2>
+    <div class="section-line"></div>
+    <p>Four differentiators vs. Superhuman, Shortwave, Fyxer, and Microsoft Copilot.</p>
+    <div class="grid-2" style="margin-top: 8px;">
+      <div class="card">
+        <div class="card-icon">&#x1F512;</div>
+        <h3>Local Inference</h3>
+        <p>Email content <strong>never leaves the device</strong>. Cloud triage services process your inbox on their servers &mdash; every message, every attachment, every thread. GAIA runs Gemma 4 on the Ryzen AI NPU. Zero outbound network calls with email content, verified by audit log.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F3AF;</div>
+        <h3>Per-Cohort Autonomy</h3>
+        <p>Not one global dial. Users set autonomy per sender cohort: <strong>L5 for newsletters</strong> (auto-archive), <strong>L2 for colleagues</strong> (suggest, don&rsquo;t act). 8 cohorts &times; 6 autonomy levels = fine-grained control no cloud product offers.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F50D;</div>
+        <h3>Auto-Discovered Integration</h3>
+        <p>Agent detects installed email clients via OS signals (Win registry, macOS defaults, Linux xdg), infers provider from domain + MX records, and walks through OAuth. <strong>User enters email address &mdash; everything else is automatic.</strong></p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F4D6;</div>
+        <h3>Auditable by Construction</h3>
+        <p>Every action is logged, reversible at L4+, and the agent code is <strong>open-source</strong>. Users can inspect exactly what the agent remembers, what it categorized, and why. No black-box cloud decisions.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 8: C2 Full Agent Capabilities -->
+  <div class="slide slide-content" data-index="7">
+    <h2>C2 Full Agent &mdash; v0.23.0</h2>
+    <div class="section-line"></div>
+    <p>Dedicated <code style="color: var(--accent-soft);">EmailTriageAgent</code> in the agent registry. Autonomous, scheduled, and deeply personalized.</p>
+    <div class="grid-3" style="font-size: 15px;">
+      <div class="card">
+        <h3>Core Agent</h3>
+        <p>In-tree Gmail MCP server &bull; Full EmailTriageAgent class &bull; Write-side ledger with undo &bull; IMAP support for any provider</p>
+      </div>
+      <div class="card">
+        <h3>Autonomy</h3>
+        <p>Per-cohort autonomy policies (L0&ndash;L6) &bull; Scheduled triage via heartbeat &bull; Morning/evening briefs with voice readout via TalkSDK</p>
+      </div>
+      <div class="card">
+        <h3>Intelligence</h3>
+        <p>Custom AI labels + Split Inbox &bull; Priority scoring with NL "why this?" explanations &bull; Writing-voice learning per relationship</p>
+      </div>
+      <div class="card">
+        <h3>UI / UX</h3>
+        <p>Agent Inbox HITL panel &bull; Inbox-Zero guided mode &bull; Drag-to-train classifier &bull; Extraction: receipts, meeting requests, tasks, OTPs</p>
+      </div>
+      <div class="card">
+        <h3>Infrastructure</h3>
+        <p>Credential vault with token rotation &bull; Prompt-injection detection &bull; 13 OpenAI-compatible API endpoints &bull; Slack interactive buttons</p>
+      </div>
+      <div class="card">
+        <h3>Quality</h3>
+        <p>200+ labeled eval fixtures &bull; Injection red-team tests &bull; Accessibility audit &bull; Full SDK + guide documentation</p>
+      </div>
+    </div>
+    <p style="margin-top: 12px; font-size: 14px;">
+      <span class="tag tag-yellow">Research bets requiring prototyping</span> Custom AI labels on local 4B &bull; per-relationship voice learning &bull; auto-follow-up quality
+    </p>
+  </div>
+
+  <!-- SLIDE 9: Prerequisites & Dependencies -->
+  <div class="slide slide-content" data-index="8">
+    <h2>Prerequisites &amp; Dependencies</h2>
+    <div class="section-line"></div>
+    <div class="two-col">
+      <div>
+        <h3 style="font-size: 22px; margin-bottom: 16px; color: #fff;">Land Before Starting</h3>
+        <table style="font-size: 14px;">
+          <thead><tr><th>PR / Issue</th><th>What It Unblocks</th></tr></thead>
+          <tbody>
+            <tr><td><a href="https://github.com/amd/gaia/pull/495" style="color: var(--accent-soft); font-weight: 600;">PR #495</a> security.py</td><td>Write guardrails, <code style="color: var(--accent-soft);">risk_tier</code></td></tr>
+            <tr><td><a href="https://github.com/amd/gaia/issues/741" style="color: var(--accent-soft); font-weight: 600;">#741</a> Credential vault</td><td>OAuth token storage</td></tr>
+            <tr><td><a href="https://github.com/amd/gaia/pull/606" style="color: var(--accent-soft); font-weight: 600;">PR #606</a> / <a href="https://github.com/amd/gaia/pull/517" style="color: var(--accent-soft); font-weight: 600;">#517</a></td><td>Memory system (sender learning)</td></tr>
+            <tr><td><a href="https://github.com/amd/gaia/pull/622" style="color: var(--accent-soft); font-weight: 600;">PR #622</a> AgentOrchestrator</td><td>Routing for email agent</td></tr>
+            <tr><td><a href="https://github.com/amd/gaia/pull/779" style="color: var(--accent-soft); font-weight: 600;">PR #779</a> Agent Eval</td><td>Eval harness for triage quality</td></tr>
+            <tr><td><a href="https://github.com/amd/gaia/issues/737" style="color: var(--accent-soft); font-weight: 600;">#737</a> Slack connector</td><td>Slack auth story for C1</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size: 13px; color: var(--text-muted); margin-top: 8px;">
+          <strong>Minimum to start MVT:</strong> <a href="https://github.com/amd/gaia/pull/495" style="color: var(--accent-soft);">PR #495</a> + <a href="https://github.com/amd/gaia/issues/741" style="color: var(--accent-soft);">#741</a> + one of <a href="https://github.com/amd/gaia/pull/606" style="color: var(--accent-soft);">#606</a>/<a href="https://github.com/amd/gaia/pull/517" style="color: var(--accent-soft);">#517</a>
+        </p>
+      </div>
+      <div>
+        <h3 style="font-size: 22px; margin-bottom: 16px; color: #fff;">Privacy &amp; Security</h3>
+        <div class="card" style="border-left: 4px solid var(--accent); margin-bottom: 16px;">
+          <h3>Critical Policy</h3>
+          <p style="font-size: 16px; line-height: 2.0;">
+            <span class="tag tag-green">READ</span> Autonomous &mdash; agent reads freely<br>
+            <span class="tag tag-red">SEND</span> Always requires user confirmation<br>
+            <span class="tag tag-yellow">ARCHIVE</span> Opt-in only<br>
+            <span class="tag tag-red">DELETE</span> Always confirms first
+          </p>
+        </div>
+        <p style="font-size: 14px; color: var(--text-muted);">
+          All email processed on-device. Credentials in encrypted vault.
+          Only summaries stored &mdash; never full email bodies.
+          Every action logged, reversible at L4+, code is open-source.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 10: Architecture Diagram -->
+  <div class="slide slide-content" data-index="9">
+    <h2>System Architecture</h2>
+    <div class="section-line"></div>
+    <div style="display: flex; gap: 16px; align-items: stretch; margin-top: 8px;">
+
+      <!-- Left column: Data Sources -->
+      <div style="display: flex; flex-direction: column; gap: 12px; min-width: 160px;">
+        <div style="font-size: 11px; color: var(--text-muted); letter-spacing: 2px; font-weight: 600; text-transform: uppercase; margin-bottom: 4px;">Data Sources</div>
+        <div class="card" style="padding: 14px; text-align: center; border-color: var(--green); flex: 1;">
+          <div style="font-size: 24px;">&#x1F4E7;</div>
+          <h3 style="font-size: 14px; margin-bottom: 4px;">Gmail</h3>
+          <p style="font-size: 11px;">MCP Server<br>(OAuth2)</p>
+        </div>
+        <div class="card" style="padding: 14px; text-align: center; border-color: #5e6fff; flex: 1;">
+          <div style="font-size: 24px;">&#x1F4E8;</div>
+          <h3 style="font-size: 14px; margin-bottom: 4px;">Outlook</h3>
+          <p style="font-size: 11px;">MS Graph API<br>(OAuth2)</p>
+        </div>
+        <div class="card" style="padding: 14px; text-align: center; border-color: var(--yellow); flex: 1;">
+          <div style="font-size: 24px;">&#x1F4C5;</div>
+          <h3 style="font-size: 14px; margin-bottom: 4px;">Calendar</h3>
+          <p style="font-size: 11px;">Google / Outlook<br>MCP Server</p>
+        </div>
+      </div>
+
+      <!-- Arrow -->
+      <div style="display: flex; align-items: center; font-size: 28px; color: var(--text-muted);">&#x2192;</div>
+
+      <!-- Center: GAIA Agent Stack -->
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 10px;">
+        <div style="font-size: 11px; color: var(--text-muted); letter-spacing: 2px; font-weight: 600; text-transform: uppercase; margin-bottom: 4px;">GAIA Agent Stack</div>
+
+        <!-- Email Triage Agent -->
+        <div class="card" style="padding: 16px; border-color: var(--accent); border-width: 2px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-size: 16px; margin: 0;">Email Triage Agent</h3>
+            <span class="tag tag-red" style="font-size: 11px;">EmailTriageAgent</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px;">
+            <div style="background: var(--code-bg); border-radius: 6px; padding: 8px; text-align: center; font-size: 12px;">
+              <div style="color: var(--accent-soft); font-weight: 600;">T0</div>
+              <div style="color: var(--text-muted); font-size: 10px;">Rule engine</div>
+            </div>
+            <div style="background: var(--code-bg); border-radius: 6px; padding: 8px; text-align: center; font-size: 12px;">
+              <div style="color: var(--accent-soft); font-weight: 600;">T1</div>
+              <div style="color: var(--text-muted); font-size: 10px;">Classifier</div>
+            </div>
+            <div style="background: var(--code-bg); border-radius: 6px; padding: 8px; text-align: center; font-size: 12px;">
+              <div style="color: var(--accent-soft); font-weight: 600;">T2</div>
+              <div style="color: var(--text-muted); font-size: 10px;">Summarizer</div>
+            </div>
+            <div style="background: var(--code-bg); border-radius: 6px; padding: 8px; text-align: center; font-size: 12px;">
+              <div style="color: var(--accent-soft); font-weight: 600;">T3</div>
+              <div style="color: var(--text-muted); font-size: 10px;">Draft gen</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Middleware row -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
+          <div class="card" style="padding: 10px; text-align: center;">
+            <h3 style="font-size: 13px; margin-bottom: 2px;">Memory</h3>
+            <p style="font-size: 11px;">Sender prefs<br>VIP cache</p>
+          </div>
+          <div class="card" style="padding: 10px; text-align: center;">
+            <h3 style="font-size: 13px; margin-bottom: 2px;">RAG SDK</h3>
+            <p style="font-size: 11px;">Meeting notes<br>Doc search</p>
+          </div>
+          <div class="card" style="padding: 10px; text-align: center;">
+            <h3 style="font-size: 13px; margin-bottom: 2px;">Agent UI</h3>
+            <p style="font-size: 11px;">Brief panel<br>Inbox view</p>
+          </div>
+        </div>
+
+        <!-- LLM Backend -->
+        <div class="card" style="padding: 14px; background: linear-gradient(135deg, #1a1a3e, var(--surface)); border-color: var(--green);">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <h3 style="font-size: 15px; margin-bottom: 2px;">Lemonade Server</h3>
+              <p style="font-size: 12px; margin: 0;">Local LLM inference backend</p>
+            </div>
+            <div style="text-align: right;">
+              <span class="tag tag-green" style="font-size: 10px;">ON-DEVICE</span>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;">
+            <div style="background: var(--code-bg); border-radius: 6px; padding: 8px; text-align: center;">
+              <div style="font-size: 13px; color: #fff; font-weight: 600;">Gemma 4</div>
+              <div style="font-size: 10px; color: var(--text-muted);">Triage &bull; Summarize &bull; Draft</div>
+            </div>
+            <div style="background: var(--code-bg); border-radius: 6px; padding: 8px; text-align: center;">
+              <div style="font-size: 13px; color: #fff; font-weight: 600;">AMD Ryzen AI NPU</div>
+              <div style="font-size: 10px; color: var(--text-muted);">FLM backend &bull; Hardware accel</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Arrow -->
+      <div style="display: flex; align-items: center; font-size: 28px; color: var(--text-muted);">&#x2192;</div>
+
+      <!-- Right column: Outputs -->
+      <div style="display: flex; flex-direction: column; gap: 10px; min-width: 160px;">
+        <div style="font-size: 11px; color: var(--text-muted); letter-spacing: 2px; font-weight: 600; text-transform: uppercase; margin-bottom: 4px;">Outputs &amp; Actions</div>
+        <div class="card" style="padding: 12px; text-align: center; flex: 1;">
+          <div style="font-size: 20px;">&#x1F4CB;</div>
+          <h3 style="font-size: 13px; margin-bottom: 2px;">Daily Brief</h3>
+          <p style="font-size: 10px;">Morning digest<br>Email + Calendar</p>
+        </div>
+        <div class="card" style="padding: 12px; text-align: center; flex: 1;">
+          <div style="font-size: 20px;">&#x2709;</div>
+          <h3 style="font-size: 13px; margin-bottom: 2px;">Draft Replies</h3>
+          <p style="font-size: 10px;">User-approved<br>before send</p>
+        </div>
+        <div class="card" style="padding: 12px; text-align: center; flex: 1;">
+          <div style="font-size: 20px;">&#x1F3F7;</div>
+          <h3 style="font-size: 13px; margin-bottom: 2px;">Auto-Triage</h3>
+          <p style="font-size: 10px;">Categorize<br>Archive &bull; Label</p>
+        </div>
+        <div class="card" style="padding: 12px; text-align: center; flex: 1;">
+          <div style="font-size: 20px;">&#x1F4AC;</div>
+          <h3 style="font-size: 13px; margin-bottom: 2px;">Slack Alerts</h3>
+          <p style="font-size: 10px;">Urgent notifs<br>Brief delivery</p>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Eval flow at bottom -->
+    <div style="margin-top: 14px; display: flex; align-items: center; gap: 12px;">
+      <div style="font-size: 11px; color: var(--text-muted); letter-spacing: 2px; font-weight: 600; text-transform: uppercase; white-space: nowrap;">Eval Loop</div>
+      <div style="flex: 1; display: flex; align-items: center; gap: 0; background: var(--surface); border-radius: 8px; padding: 8px 16px;">
+        <span style="font-size: 12px; color: var(--yellow); font-weight: 600; white-space: nowrap;">Synthetic Inbox</span>
+        <span style="color: var(--text-muted); padding: 0 8px; font-size: 14px;">&#x2192;</span>
+        <span style="font-size: 12px; color: #fff; white-space: nowrap;">Agent Triage</span>
+        <span style="color: var(--text-muted); padding: 0 8px; font-size: 14px;">&#x2192;</span>
+        <span style="font-size: 12px; color: var(--green); font-weight: 600; white-space: nowrap;">Judge vs. Ground Truth</span>
+        <span style="color: var(--text-muted); padding: 0 8px; font-size: 14px;">&#x2192;</span>
+        <span style="font-size: 12px; color: var(--accent-soft); font-weight: 600; white-space: nowrap;">Scorecard</span>
+        <span style="color: var(--text-muted); padding: 0 8px; font-size: 14px;">&#x2192;</span>
+        <span style="font-size: 12px; color: #fff; white-space: nowrap;">Fix &amp; Re-eval</span>
+        <span style="color: var(--text-muted); padding: 0 12px; font-size: 16px;">&#x21BA;</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 11: Key Takeaways -->
+  <div class="slide slide-content" data-index="10">
+    <h2>Key Takeaways</h2>
+    <div class="section-line"></div>
+    <div style="display: grid; grid-template-columns: 3fr 2fr; gap: 48px; align-items: start;">
+      <div>
+        <ul class="feature-list">
+          <li><span class="highlight">Email Triage Agent</span> &mdash; categorize, summarize, draft replies, update calendar</li>
+          <li><span class="highlight">Synthetic Inbox Dataset</span> &mdash; privacy-safe ground-truth test data for eval</li>
+          <li><span class="highlight">Agent Eval Integration</span> &mdash; automated quality scoring, regression detection in CI</li>
+          <li><span class="highlight">On-device AI</span> &mdash; Gemma 4 on Ryzen AI NPU via Lemonade, zero cloud leakage</li>
+          <li><span class="highlight">Auditable &amp; open-source</span> &mdash; every action logged, reversible, inspectable</li>
+        </ul>
+
+        <div style="margin-top: 20px;">
+          <h3 style="font-size: 18px; margin-bottom: 12px; color: #fff;">Detailed Plans</h3>
+          <p style="font-size: 15px; line-height: 1.8;">
+            <a href="https://github.com/amd/gaia/blob/main/docs/plans/email-calendar-integration.mdx" style="color: var(--accent-soft);">Email &amp; Calendar Integration Plan</a><br>
+            <a href="https://github.com/amd/gaia/blob/main/docs/plans/email-triage-agent.mdx" style="color: var(--accent-soft);">Email Triage Agent Spec</a><br>
+            <a href="https://github.com/amd/gaia/blob/main/docs/plans/autonomy-engine.mdx" style="color: var(--accent-soft);">Autonomy Engine Plan</a><br>
+            <a href="https://github.com/amd/gaia/blob/main/docs/plans/security-model.mdx" style="color: var(--accent-soft);">Security Model Plan</a>
+          </p>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+        <div class="card" style="text-align: center;">
+          <p class="metric">&lt; 2 min</p>
+          <p>Time to first inbox summary</p>
+        </div>
+        <div class="card" style="text-align: center;">
+          <p class="metric">&gt; 80%</p>
+          <p>Target triage accuracy (1 week)</p>
+        </div>
+        <div class="card" style="text-align: center;">
+          <p class="metric">&lt; 5 GB</p>
+          <p>Peak memory &mdash; Gemma 4 E4B at Q4 GGUF</p>
+        </div>
+        <div class="card" style="text-align: center;">
+          <p class="metric">100%</p>
+          <p>Local processing &mdash; zero cloud leakage</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Navigation -->
+<div class="progress-bar" id="progress"></div>
+<div class="slide-counter" id="counter">1 / 11</div>
+<div class="nav">
+  <button onclick="navigate(-1)" title="Previous (Left Arrow)">&#x2190;</button>
+  <button onclick="navigate(1)" title="Next (Right Arrow)">&#x2192;</button>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let current = 0;
+
+  function showSlide(index) {
+    slides.forEach(s => s.classList.remove('active'));
+    slides[index].classList.add('active');
+    current = index;
+    const pct = ((index + 1) / slides.length) * 100;
+    document.getElementById('progress').style.width = pct + '%';
+    document.getElementById('counter').textContent = (index + 1) + ' / ' + slides.length;
+  }
+
+  function navigate(dir) {
+    const next = current + dir;
+    if (next >= 0 && next < slides.length) showSlide(next);
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); navigate(1); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); navigate(-1); }
+    if (e.key === 'Home') { e.preventDefault(); showSlide(0); }
+    if (e.key === 'End') { e.preventDefault(); showSlide(slides.length - 1); }
+  });
+
+  showSlide(0);
+</script>
+
+</body>
+</html>

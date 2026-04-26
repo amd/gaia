@@ -22,8 +22,8 @@ from typing import Optional
 
 from openai import OpenAI
 
-DEFAULT_ENDPOINT = "http://localhost:8000/api/v1"
-DEFAULT_LOCAL_MODEL = "Qwen3.5-35B-A3B-GGUF"
+DEFAULT_ENDPOINT = "http://localhost:13305/api/v1"
+DEFAULT_LOCAL_MODEL = "Gemma-4-E4B-it-GGUF"
 CLAUDE_MODEL_NAME = "claude-sonnet-4-5-20250929"
 
 PROMPT_ENGINEERING_GUIDANCE = """
