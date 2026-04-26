@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Callable, Optional, TypeVar, Union
 
+from gaia.resilience.errors import ResilienceError
+
 T = TypeVar("T")
 
 
@@ -31,10 +33,6 @@ class CircuitBreakerState(Enum):
     OPEN = auto()  # Failing fast
     HALF_OPEN = auto()  # Testing recovery
 
-
-class ResilienceError(Exception):
-    """Base exception for resilience pattern failures."""
-    pass
 
 
 class CircuitOpenError(ResilienceError):
@@ -186,10 +184,6 @@ class CircuitBreaker:
             elif self._state == CircuitBreakerState.CLOSED:
                 # Reset failure count on success in closed state
                 self._failure_count = 0
-
-    def record_failure(self) -> None:
-        """Public method to record a failed operation."""
-        self._record_failure()
 
     def _record_failure(self) -> None:
         """Record a failed operation."""

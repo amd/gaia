@@ -18,12 +18,9 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, TypeVar
 
+from gaia.resilience.errors import ResilienceError
+
 T = TypeVar("T")
-
-
-class ResilienceError(Exception):
-    """Base exception for resilience pattern failures."""
-    pass
 
 
 class BulkheadFullError(ResilienceError):

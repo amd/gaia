@@ -26,12 +26,12 @@ Example usage:
     ...     ...
 """
 
+from gaia.resilience.errors import ResilienceError
 from gaia.resilience.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerState,
     CircuitBreakerConfig,
     CircuitOpenError,
-    ResilienceError,
 )
 from gaia.resilience.bulkhead import (
     Bulkhead,

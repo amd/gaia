@@ -260,3 +260,6 @@ test-gaia.mjs
 
 # Working documents
 docs/working/
+
+# Runtime component artifacts
+component-framework/development/

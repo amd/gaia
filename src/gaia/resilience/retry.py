@@ -18,6 +18,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Tuple, TypeVar, Union
 
+from gaia.resilience.errors import ResilienceError
+
 T = TypeVar("T")
 
 
@@ -33,11 +35,6 @@ class RetryError(Exception):
         super().__init__(message)
         self.last_exception = last_exception
         self.attempts = attempts
-
-
-class ResilienceError(Exception):
-    """Base exception for resilience pattern failures."""
-    pass
 
 
 @dataclass(frozen=True)
