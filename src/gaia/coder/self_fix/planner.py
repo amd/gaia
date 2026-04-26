@@ -22,7 +22,6 @@ emit a WARN.
 from __future__ import annotations
 
 import importlib
-import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -30,8 +29,9 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from gaia.coder.self_fix.triage import FixClassResult, LocalisationHit
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 #: Default large-job threshold (§5.1 Stage 3). EM can override via ``em.toml``
 #: (not wired in Phase 6 — the caller supplies a threshold explicitly).

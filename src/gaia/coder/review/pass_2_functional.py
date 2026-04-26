@@ -68,32 +68,53 @@ def _extract_coverage_pct(pytest_output: str) -> Optional[int]:
     return int(match.group(1))
 
 
-def _infer_test_paths(py_files: List[str]) -> List[str]:
-    """Given changed ``.py`` paths, guess the corresponding test paths.
+def _infer_test_paths(
+    py_files: List[str], *, repo_root: Optional[Path] = None
+) -> List[str]:
+    """Given changed ``.py`` paths, return *existing* test paths to feed pytest.
 
     Heuristic (good-enough for v1):
 
     1. Anything already under ``tests/`` is itself a test path.
-    2. ``src/gaia/foo/bar.py`` → look for ``tests/**/test_bar.py`` or
-       ``tests/**/test_foo.py``.
+    2. ``src/gaia/foo/bar.py`` → look for ``tests/**/test_bar.py`` and
+       ``tests/**/test_foo.py``, expanded via :meth:`pathlib.Path.rglob`.
 
-    We never *exclude* tests; unknown candidates fall through to a
-    whole-tests run. The runner then fails loudly if no tests are
-    collected, which is the actionable message we want.
+    pytest does **not** glob ``**`` itself — it treats unmatched paths as
+    literals and exits with collection errors. We must therefore expand the
+    glob ourselves and only hand pytest concrete files that exist on disk.
+    When no candidate test file is found, return an empty list and let
+    :func:`_run_pytest` fall through to its whole-suite fallback.
     """
+    root = Path(repo_root) if repo_root is not None else Path(".")
     paths: List[str] = []
     for fn in py_files:
         if fn.startswith("tests/"):
-            paths.append(fn)
+            # Already a test path; keep as-is so pytest sees it literally.
+            # Only emit it if it exists — a deleted-and-renamed test would
+            # otherwise cause a collection error and short-circuit Pass 2.
+            if (root / fn).exists():
+                paths.append(fn)
             continue
         stem = Path(fn).stem
         parent = Path(fn).parent.name
-        candidate = f"tests/**/test_{stem}.py"
-        paths.append(candidate)
+        candidates = [f"test_{stem}.py"]
         if parent:
-            paths.append(f"tests/**/test_{parent}.py")
+            candidates.append(f"test_{parent}.py")
+        for pattern in candidates:
+            for hit in (root / "tests").rglob(pattern):
+                if not hit.is_file():
+                    continue
+                rel = hit.relative_to(root).as_posix()
+                paths.append(rel)
     # De-dup preserving order
-    return list(dict.fromkeys(paths))
+    deduped = list(dict.fromkeys(paths))
+    if not deduped:
+        logger.info(
+            "pass 2: no per-file tests matched %d changed .py file(s); "
+            "falling back to whole-suite pytest run.",
+            len(py_files),
+        )
+    return deduped
 
 
 def _run_pytest(
@@ -191,7 +212,7 @@ def run_pass(
     tooling_used: List[str] = []
 
     # --- pytest ---
-    test_paths = _infer_test_paths(py_files)
+    test_paths = _infer_test_paths(py_files, repo_root=repo_root)
     if py_files:
         tooling_used.append("pytest")
     pytest_ok, pytest_tail, coverage = _run_pytest(test_paths, cwd=repo_root)

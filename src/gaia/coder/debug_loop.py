@@ -34,7 +34,6 @@ The actual tool implementations live in :mod:`gaia.coder.tools.debug`
 from __future__ import annotations
 
 import json
-import logging
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
@@ -45,8 +44,9 @@ from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple
 
 from gaia.coder.stores import feedback as feedback_store
 from gaia.coder.stores import memory as memory_store
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 #: Confidence threshold below which ``propose_fix`` refuses. §5.9 "Discipline

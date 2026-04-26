@@ -25,15 +25,15 @@ failures at publish time (§6.9).
 from __future__ import annotations
 
 import json
-import logging
 import os
 import shutil
 import subprocess
 from typing import Any, List, Literal, Optional, TypedDict
 
 from gaia.agents.base.tools import tool
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

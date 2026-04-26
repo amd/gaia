@@ -20,7 +20,6 @@ feedback writer uses ``gaia.coder.stores.feedback``.
 from __future__ import annotations
 
 import json
-import logging
 import subprocess
 import sys
 import uuid
@@ -31,8 +30,9 @@ from typing import Any, Mapping, Optional, Sequence
 
 from gaia.coder.stores import feedback as feedback_store
 from gaia.coder.stores import memory as memory_store
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

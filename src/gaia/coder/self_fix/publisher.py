@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List, Mapping, Optional, Sequence
 
+from gaia.coder.safety import ActionContext, enforce_action
 from gaia.coder.self_fix.fixer import Diff
 from gaia.coder.self_fix.planner import Plan
 
@@ -262,6 +263,10 @@ def open_self_fix_pr(
             "§7.4 step 5 forbids opening a self-fix PR without a "
             "regression test."
         )
+    # Safety seam: opening a PR is a tier-2+ mutation. The branch is also
+    # validated against repo_binding.allowed_branches inside enforce_action
+    # so a self-fix branch the EM hasn't authorised cannot be published.
+    enforce_action(ActionContext(action="open_pr", branch=fix_branch))
     if plan.feedback_id != feedback_id:
         raise ValueError(
             f"plan.feedback_id {plan.feedback_id!r} does not match "

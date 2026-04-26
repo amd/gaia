@@ -30,13 +30,14 @@ Four responsibilities:
 from __future__ import annotations
 
 import datetime as dt
-import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

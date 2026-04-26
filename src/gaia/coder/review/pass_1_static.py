@@ -20,7 +20,6 @@ module implements all four.
 
 from __future__ import annotations
 
-import logging
 import re
 import subprocess
 from pathlib import Path
@@ -32,8 +31,9 @@ from gaia.coder.review._diff import (
     resolve_diff,
 )
 from gaia.coder.review.pass_result import PassResult, make_pass_result
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Regex guards

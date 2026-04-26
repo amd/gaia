@@ -26,7 +26,6 @@ into downstream tool calls without custom serialisation.
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Optional
 
@@ -42,8 +41,9 @@ import gaia.coder.review.pass_7_feedback_binding as pass_7_feedback_binding
 from gaia.agents.base.tools import tool
 from gaia.coder.review.gate import GateResultDict, run_all_passes
 from gaia.coder.review.pass_result import PassResult
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ReviewToolsMixin:

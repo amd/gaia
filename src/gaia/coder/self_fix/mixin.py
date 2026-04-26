@@ -20,7 +20,6 @@ when it lands).
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Mapping, Optional
@@ -52,8 +51,9 @@ from gaia.coder.self_fix.triage import (
     localise,
 )
 from gaia.coder.stores import feedback as feedback_store
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _now_iso() -> str:

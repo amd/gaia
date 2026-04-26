@@ -16,7 +16,6 @@ The single entry point :func:`run_all_passes` is exposed via
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, TypedDict
@@ -32,8 +31,9 @@ import gaia.coder.review.pass_6_adversarial as pass_6_adversarial
 import gaia.coder.review.pass_7_feedback_binding as pass_7_feedback_binding
 from gaia.coder.review._diff import resolve_diff
 from gaia.coder.review.pass_result import PassResult, make_pass_result
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 #: Passes that short-circuit the gate on hard-fail — the deterministic,
