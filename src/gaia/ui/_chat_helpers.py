@@ -652,22 +652,46 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+# Tight timeout for pre-flight load_model. The default Lemonade
+# DEFAULT_MODEL_LOAD_TIMEOUT is 12000 s (200 min) — a hung Lemonade
+# would block the chat thread that long. Cold-load of a 4B GGUF on
+# consumer hardware fits comfortably in 120 s; if it hasn't completed
+# in that window something is genuinely wrong and we'd rather surface
+# the failure than hang.
+_PREFLIGHT_LOAD_TIMEOUT_S = 120
+
+
 def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
-    """Ensure a text-generation LLM is active before issuing a chat completion.
+    """Ensure a text-generation LLM is active *with the expected model
+    name and a 32K+ context window* before issuing a chat completion.
 
-    Handles two cases that cause a silent 100-900 second hang:
-    - No model loaded (fresh Lemonade start): Lemonade keeps the HTTP connection
-      open producing zero tokens. No exception is raised so _execute_with_auto_download
-      never fires.
-    - Embedding model active (after document indexing): same silent hang.
+    Handles four failure modes that the chat path would otherwise
+    surface as cryptic errors or hangs:
 
-    In both cases Lemonade returns no error — it just hangs. This pre-flight
-    check detects the problem and does a blocking model swap before process_query
-    is called. VLMs (type='vlm') are treated as valid chat models.
+      1. **No model loaded** (fresh Lemonade start, or post-eviction).
+         Lemonade keeps the connection open producing zero tokens.
+      2. **Embedding model active** (after document indexing).
+         Chat completions silently hang.
+      3. **Wrong chat model active** (e.g. an eval reloaded a
+         different LLM into the slot mid-session).
+      4. **Right model, wrong ctx_size**.  The ChatAgent system
+         prompt is >7K tokens; loading at the legacy 4096 default
+         truncates it and yields empty / context-overflow errors.
+         Cases (3) and (4) used to slip through — the prior guard
+         was ``active_ctx and active_ctx < N`` which short-circuited
+         when ``active_ctx`` was 0 / missing, leaving a 0-ctx model
+         in place.  The new guard treats missing ctx as "needs reload".
 
-    Note: There is a small TOCTOU window between this check and the actual
-    chat request. A model eviction between the two is unlikely but possible;
-    _execute_with_auto_download handles that residual case.
+    On reload we use a tight ``_PREFLIGHT_LOAD_TIMEOUT_S`` (120 s)
+    so a hung Lemonade fails fast instead of blocking the chat thread
+    for the default 200-minute timeout.
+
+    VLMs (``type="vlm"``) count as valid chat models for the model-name
+    check, since the multimodal backbone serves text completions.
+
+    Note: there is a small TOCTOU window between this check and the
+    actual chat request.  An eviction in that window is handled by
+    the one-shot retry in the streaming worker (see ``_run_agent``).
     """
     if not model_id:
         return
@@ -683,13 +707,6 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         data = resp.json()
         all_models = data.get("all_models_loaded", [])
 
-        # Determine whether we need to (re)load. We need to load if:
-        #   1. No chat-capable model is active, OR
-        #   2. The active chat model is NOT the one we expect (e.g. user
-        #      switched agents — gaia-lite wants 4B but 0.6B is loaded), OR
-        #   3. The active model is the right one but its context is smaller
-        #      than what agents need (ChatAgent system prompt is >7k tokens
-        #      so 4096 ctx truncates and yields empty responses).
         expected_lower = model_id.lower()
         chat_models = [m for m in all_models if m.get("type") in ("llm", "vlm")]
         active_is_expected = any(
@@ -700,11 +717,17 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
             if (m.get("model_name") or "").lower() == expected_lower:
                 active_ctx = m.get("recipe_options", {}).get("ctx_size") or 0
                 break
-        needs_load = (
-            not chat_models
-            or not active_is_expected
-            or (active_ctx and active_ctx < DEFAULT_CONTEXT_SIZE)
+        # Reload conditions:
+        #   - no chat model active
+        #   - active chat model isn't the one we want
+        #   - active ctx is missing (== 0 from .get() fallback) OR < required
+        # The previous guard ``active_ctx and active_ctx < DEFAULT_CONTEXT_SIZE``
+        # let a 0-ctx state pass through, which is exactly the broken-model
+        # state where reload is most needed.
+        ctx_too_small = active_is_expected and (
+            active_ctx == 0 or active_ctx < DEFAULT_CONTEXT_SIZE
         )
+        needs_load = not chat_models or not active_is_expected or ctx_too_small
         if not needs_load:
             return
 
@@ -748,7 +771,10 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                     )
                     return
             LemonadeClient(verbose=False).load_model(
-                model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False
+                model_id,
+                ctx_size=DEFAULT_CONTEXT_SIZE,
+                prompt=False,
+                timeout=_PREFLIGHT_LOAD_TIMEOUT_S,
             )
     except Exception as exc:
         logger.warning("Pre-flight model check failed: %s", exc)
@@ -988,9 +1014,40 @@ async def _get_chat_response(
         # omitted, the agent's __init__ set model_id via kwargs.setdefault —
         # a value invisible pre-construction. Using _effective_model preserves
         # the existing 100-900s silent-hang protection for all code paths.
-        _maybe_load_expected_model(_effective_model(agent, model_id))
+        effective = _effective_model(agent, model_id)
+        _maybe_load_expected_model(effective)
 
-        result = agent.process_query(request.message)
+        # One automatic retry on transient Lemonade failures (model
+        # evicted between turns, network blip).  Mirror of the streaming
+        # path's retry logic so non-streaming clients get the same
+        # recovery behaviour. See _classify_chat_exception for the
+        # detection rules.
+        try:
+            result = agent.process_query(request.message)
+        except Exception as first_exc:  # pylint: disable=broad-except
+            classified = _classify_chat_exception(first_exc)
+            if classified is None or not classified.retryable:
+                raise
+            logger.warning(
+                "Non-streaming chat hit retryable Lemonade error (%s) — "
+                "reloading model and retrying once. Original: %s",
+                type(classified).__name__,
+                first_exc,
+            )
+            try:
+                _maybe_load_expected_model(effective)
+            except Exception:  # pylint: disable=broad-except
+                pass
+            try:
+                result = agent.process_query(request.message)
+            except Exception as second_exc:  # pylint: disable=broad-except
+                second_classified = _classify_chat_exception(second_exc)
+                if second_classified is not None:
+                    raise type(second_exc)(
+                        second_classified.user_message
+                    ) from second_exc
+                raise
+
         if isinstance(result, dict):
             # process_query returns {"result": "...", "status": "...", ...}
             # Use explicit None check so an intentional empty string isn't
@@ -1015,6 +1072,13 @@ async def _get_chat_response(
         return "I took too long thinking about that one. Try breaking your question into simpler parts and I'll do my best."
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
+        # Surface the typed Lemonade error's friendly user_message
+        # when we have one, instead of a stock "trouble connecting"
+        # blob.  Falls back to the generic copy when we can't
+        # classify the exception.
+        classified = _classify_chat_exception(e)
+        if classified is not None:
+            return classified.user_message
         return (
             "I'm having trouble connecting to the language model right now. "
             "Please make sure Lemonade Server is running and try again."
