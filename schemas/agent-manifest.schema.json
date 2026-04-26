@@ -32,6 +32,7 @@
       "items": {
         "type": "string",
         "enum": [
+          "code_index",
           "file_io",
           "file_search",
           "rag",

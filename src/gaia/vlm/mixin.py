@@ -52,8 +52,8 @@ class VLMToolsMixin:
 
     def init_vlm(
         self,
-        model: str = "Qwen3-VL-4B-Instruct-GGUF",
-        base_url: str = "http://localhost:8000",
+        model: str = "Gemma-4-E4B-it-GGUF",
+        base_url: str = "http://localhost:13305",
     ) -> None:
         """
         Initialize VLM tools and register them with the agent.
@@ -66,7 +66,7 @@ class VLMToolsMixin:
             base_url: Lemonade Server base URL
 
         Example:
-            self.init_vlm()  # Use default Qwen3-VL-4B
+            self.init_vlm()  # Use default Gemma-4-E4B
         """
         from gaia.llm.vlm_client import VLMClient
 

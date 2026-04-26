@@ -94,7 +94,7 @@ class RAGConfig:
     cache_dir: str = ".gaia"
     show_stats: bool = False
     use_local_llm: bool = True
-    base_url: str = "http://localhost:8000/api/v1"  # Lemonade server API URL
+    base_url: str = "http://localhost:13305/api/v1"  # Lemonade server API URL
     # Memory management settings
     max_indexed_files: int = 100  # Maximum number of files to keep indexed
     max_total_chunks: int = 10000  # Maximum total chunks across all files
@@ -682,7 +682,9 @@ class RAGSDK:
                 elif not vlm_available and self.config.show_stats:
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
-                    print("     1. Open Lemonade Model Manager (http://localhost:8000)")
+                    print(
+                        "     1. Open Lemonade Model Manager (http://localhost:13305)"
+                    )
                     print(f"     2. Download model: {self.config.vlm_model}")
 
             except Exception as vlm_error:
@@ -960,7 +962,7 @@ These positions indicate where to split the text."""
                 )
                 response = response_data["choices"][0]["text"]
 
-                # Parse the split positions (json imported at module top)
+                # Parse the split positions
                 split_positions = json.loads(response)
 
                 # Create chunks based on LLM-suggested positions
@@ -1109,7 +1111,7 @@ These positions indicate where to split the text."""
     def _extract_text_from_json(self, json_path: str) -> str:
         """Extract text from JSON file."""
         try:
-            # Use _safe_open to prevent symlink attacks (json imported at module top)
+            # Use _safe_open to prevent symlink attacks
             with self._safe_open(json_path, "rb") as f:
                 data = json.load(f)
 

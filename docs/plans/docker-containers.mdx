@@ -64,14 +64,14 @@ All images expose the same ports for consistency:
 |------|---------|---------|
 | 3000 | Next.js dev server | Frontend development |
 | 5174 | Vite dev server | Frontend development |
-| 8000 | Lemonade Server (LLM backend) | `lemonade-server serve` |
+| 13305 | Lemonade Server (LLM backend) | `lemonade` (v10.1.0+) |
 | 8080 | GAIA API server | `gaia api start` |
 | 9229 | Node.js debugging | Frontend debugging |
 | 9222 | Chrome DevTools (Electron) | Desktop app debugging |
 
 Map ports when creating container:
 ```bash
-docker run -dit -p 8080:8080 -p 8000:8000 -p 3000:3000 ...
+docker run -dit -p 8080:8080 -p 13305:13305 -p 3000:3000 ...
 ```
 
 ## Image Specifications
@@ -95,7 +95,7 @@ docker run -dit -p 8080:8080 -p 8000:8000 -p 3000:3000 ...
 # Create container
 docker run -dit \
   --name gaia \
-  -p 8000:8000 \
+  -p 13305:13305 \
   -e LEMONADE_BASE_URL=<lemonade-url> \
   amd/gaia:linux
 
@@ -151,7 +151,7 @@ CMD ["tail", "-f", "/dev/null"]
 # Create container
 docker run -dit `
   --name gaia `
-  -p 8000:8000 `
+  -p 13305:13305 `
   -e LEMONADE_BASE_URL=<lemonade-url> `
   amd/gaia:windows
 
@@ -212,7 +212,7 @@ CMD ["powershell", "-NoExit", "-Command", "while ($true) { Start-Sleep -Seconds 
 # Create container (repo clones on startup)
 docker run -dit \
   --name gaia-dev \
-  -p 8000:8000 \
+  -p 13305:13305 \
   -p 3000:3000 \
   -e LEMONADE_BASE_URL=<lemonade-url> \
   -e GITHUB_TOKEN=<github-token> \

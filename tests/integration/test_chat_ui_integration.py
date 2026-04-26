@@ -1591,3 +1591,94 @@ class TestMessageDeletion:
         """DELETE .../and-below returns 404 for non-existent session."""
         resp = client.delete("/api/sessions/nonexistent/messages/1/and-below")
         assert resp.status_code == 404
+
+
+# ── Issue #841 regression: custom agent model_id honored through API ──────────
+
+
+class TestCustomAgentModelChoice:
+    """Verify that a custom Python agent's kwargs.setdefault model_id reaches the
+    registry.create_agent call without model_id being passed as an explicit kwarg.
+
+    This is the integration-layer pin for issue #841. It exercises the full
+    path: HTTP POST → session → _get_chat_response → registry.create_agent.
+    """
+
+    def test_custom_agent_model_id_honored_through_api(self, tmp_path):
+        import textwrap
+
+        agents_dir = tmp_path / ".gaia" / "agents" / "smallbot"
+        agents_dir.mkdir(parents=True)
+        (agents_dir / "agent.py").write_text(textwrap.dedent("""
+            from gaia.agents.base.agent import Agent
+
+            class SmallBot(Agent):
+                AGENT_ID = "smallbot"
+                AGENT_NAME = "SmallBot"
+
+                def __init__(self, **kwargs):
+                    kwargs.setdefault("model_id", "Qwen3.5-4B-GGUF")
+                    super().__init__(skip_lemonade=True, **kwargs)
+
+                def _get_system_prompt(self):
+                    return "x"
+
+                def _register_tools(self):
+                    pass
+        """))
+
+        # HOME patch must wrap the full lifespan: discover() fires on __enter__.
+        with patch("gaia.agents.registry.Path.home", return_value=tmp_path):
+            app = create_app(db_path=":memory:")
+
+            with TestClient(app) as client:
+                # Spy on create_agent AFTER lifespan fires (registry exists now).
+                captured = {}
+                original_create = app.state.agent_registry.create_agent
+
+                def _spy(agent_id, **kwargs):
+                    if agent_id == "smallbot":
+                        captured["model_id_kwarg"] = kwargs.get("model_id", "<omitted>")
+                    agent = original_create(agent_id, **kwargs)
+                    if agent_id == "smallbot":
+                        captured["agent_model_id"] = getattr(agent, "model_id", None)
+                    return agent
+
+                app.state.agent_registry.create_agent = _spy
+
+                # Create a session typed to our custom agent.
+                sess_resp = client.post(
+                    "/api/sessions",
+                    json={"title": "841-test", "agent_type": "smallbot"},
+                )
+                assert sess_resp.status_code == 200, sess_resp.text
+                sid = sess_resp.json()["id"]
+
+                # Send a chat message, bypassing Lemonade and LLM.
+                with (
+                    patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+                    patch(
+                        "gaia.ui._chat_helpers._agent_registry",
+                        app.state.agent_registry,
+                    ),
+                ):
+                    chat_resp = client.post(
+                        "/api/chat/send",
+                        json={
+                            "session_id": sid,
+                            "message": "hi",
+                            "stream": False,
+                        },
+                    )
+
+                assert chat_resp.status_code == 200, chat_resp.text
+
+        assert captured, "create_agent spy was never called for smallbot"
+        assert captured["model_id_kwarg"] == "<omitted>", (
+            f"Issue #841: model_id kwarg must be omitted when session is at DB default; "
+            f"got model_id_kwarg={captured['model_id_kwarg']!r}"
+        )
+        assert captured["agent_model_id"] == "Qwen3.5-4B-GGUF", (
+            f"Issue #841: agent.model_id must reflect kwargs.setdefault value; "
+            f"got {captured['agent_model_id']!r}"
+        )

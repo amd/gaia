@@ -155,7 +155,7 @@ class ChatAgent(
         effective_base_url = (
             config.base_url
             if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
         )
 
         # Initialize RAG SDK (optional - will be None if dependencies not installed)
@@ -1249,7 +1249,7 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
         # Registers via init_vlm(); gracefully skipped if VLM model not loaded.
         try:
             self.init_vlm(
-                base_url=getattr(self, "_base_url", "http://localhost:8000/api/v1")
+                base_url=getattr(self, "_base_url", "http://localhost:13305/api/v1")
             )
             logger.debug(
                 "VLM tools registered (analyze_image, answer_question_about_image)"
