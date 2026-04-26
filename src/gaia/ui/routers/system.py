@@ -35,7 +35,7 @@ _background_tasks: set[asyncio.Task] = set()
 router = APIRouter(tags=["system"])
 
 # Default model required for GAIA Chat agent
-_DEFAULT_MODEL_NAME = "Qwen3.5-35B-A3B-GGUF"
+_DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 # Minimum context window (tokens) needed for reliable agent operation.
 # Must match DEFAULT_CONTEXT_SIZE in gaia.llm.lemonade_manager.
 _MIN_CONTEXT_SIZE = 32768
@@ -43,7 +43,7 @@ _MIN_CONTEXT_SIZE = 32768
 
 def _get_lemonade_base_url() -> str:
     """Return the Lemonade Server API base URL from environment or default."""
-    return os.environ.get("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+    return os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
 
 
 async def _lemonade_post(
@@ -92,7 +92,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 _parsed = urlparse(base_url)
                 status.lemonade_url = f"{_parsed.scheme}://{_parsed.netloc}"
             except Exception:
-                pass  # Keep the default "http://localhost:8000"
+                pass  # Keep the default "http://localhost:13305"
 
             # Use /health endpoint to get the actually loaded model
             # (not /models which returns the full catalog of available models)

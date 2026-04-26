@@ -11,7 +11,7 @@ icon: "gear"
 
 ```bash
 # LLM Configuration
-export LEMONADE_BASE_URL="http://localhost:8000/api/v1"
+export LEMONADE_BASE_URL="http://localhost:13305/api/v1"
 export GAIA_API_DEBUG="true"
 export GAIA_API_STREAMING="true"
 
@@ -31,7 +31,7 @@ export GAIA_LOG_LEVEL="INFO"
 import os
 
 # Read configuration
-base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
 debug = os.getenv("GAIA_API_DEBUG", "false").lower() == "true"
 
 # Use in agent

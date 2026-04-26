@@ -107,7 +107,7 @@ def cmd_run(args):
     # Get base_url from args or environment
     base_url = args.base_url
     if base_url is None:
-        base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+        base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
 
     # Initialize Lemonade with code agent profile (32768 context)
     # Skip for remote servers (e.g., devtunnel URLs), external APIs, or --no-lemonade-check
@@ -556,7 +556,7 @@ Examples:
     parser.add_argument(
         "--base-url",
         default=None,
-        help="Lemonade server URL (default: http://localhost:8000/api/v1)",
+        help="Lemonade server URL (default: http://localhost:13305/api/v1)",
     )
     parser.add_argument(
         "--no-lemonade-check",
