@@ -136,6 +136,55 @@ class TestSearch:
         assert isinstance(results, list)
         assert results == []
 
+    def test_search_raises_on_model_mismatch(self, tmp_path):
+        """Index built with model A + querying with model B must fail loudly.
+
+        Previously returned [] silently, hiding the misconfiguration.
+        """
+        skip_if_unavailable()
+        try:
+            import faiss  # noqa: F401
+        except ImportError:
+            pytest.skip("faiss not installed")
+
+        sdk = make_sdk(tmp_path, embedding_model="model-B")
+        # Plant an in-memory index built with a different model.
+        sdk._faiss_index = MagicMock()
+        sdk._faiss_index.ntotal = 1
+        sdk._metadata = {
+            "embedding_model": "model-A",
+            "chunks": [],
+        }
+
+        with pytest.raises(ValueError, match="Embedding-model mismatch"):
+            sdk.search("anything")
+
+    def test_search_raises_when_query_encoding_fails(self, tmp_path):
+        """Lemonade outage during search must surface as RuntimeError, not [].
+
+        Previously a bare `except Exception: return []` swallowed transport
+        errors, making "Lemonade down" indistinguishable from "no matches".
+        """
+        skip_if_unavailable()
+        try:
+            import faiss  # noqa: F401
+        except ImportError:
+            pytest.skip("faiss not installed")
+
+        sdk = make_sdk(tmp_path)
+        sdk._faiss_index = MagicMock()
+        sdk._faiss_index.ntotal = 1
+        sdk._metadata = {
+            "embedding_model": sdk.config.embedding_model,
+            "chunks": [],
+        }
+
+        with patch.object(sdk, "_load_embedder"), patch.object(
+            sdk, "_encode_texts", side_effect=ConnectionError("backend dead")
+        ):
+            with pytest.raises(RuntimeError, match="Query encoding failed"):
+                sdk.search("anything")
+
     def test_search_with_mocked_index(self, tmp_path):
         skip_if_unavailable()
         sdk = make_sdk(tmp_path)
@@ -329,3 +378,50 @@ class TestEmbeddingModelVersion:
 
         sdk.clear_index()
         assert not sdk._meta_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Test: fail-loudly contract on infrastructure failures
+# ---------------------------------------------------------------------------
+
+
+class TestFailLoudly:
+    def test_load_embedder_raises_with_actionable_message(self, tmp_path):
+        """_load_embedder must surface Lemonade-down with a hint, not swallow."""
+        skip_if_unavailable()
+        sdk = make_sdk(tmp_path)
+
+        fake_client = MagicMock()
+        fake_client.health_check.side_effect = ConnectionError("connection refused")
+        sdk._llm_client = fake_client
+
+        with pytest.raises(RuntimeError, match=r"Lemonade Server"):
+            sdk._load_embedder()
+
+    def test_ensure_index_loaded_raises_on_corrupt_faiss(self, tmp_path):
+        """A corrupt FAISS file must raise — silent False would mask cache rot."""
+        skip_if_unavailable()
+        try:
+            import faiss  # noqa: F401
+        except ImportError:
+            pytest.skip("faiss not installed")
+
+        sdk = make_sdk(tmp_path)
+        # Plant valid metadata + a deliberately-corrupt index file.
+        sdk._cache_dir.mkdir(parents=True, exist_ok=True)
+        from gaia.code_index.sdk import _CACHE_VERSION
+
+        sdk._meta_path.write_text(
+            json.dumps(
+                {
+                    "version": _CACHE_VERSION,
+                    "embedding_model": sdk.config.embedding_model,
+                    "chunks": [{"chunk_type": "code"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        sdk._index_path.write_bytes(b"not a real faiss index")
+
+        with pytest.raises(RuntimeError, match=r"FAISS index"):
+            sdk._ensure_index_loaded()
