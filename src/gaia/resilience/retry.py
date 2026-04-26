@@ -35,6 +35,11 @@ class RetryError(Exception):
         self.attempts = attempts
 
 
+class ResilienceError(Exception):
+    """Base exception for resilience pattern failures."""
+    pass
+
+
 @dataclass(frozen=True)
 class RetryConfig:
     """
@@ -365,3 +370,67 @@ class RetryExecutor:
             RetryError: When all retries exhausted.
         """
         return await _retry_async(func, self._config, *args, **kwargs)
+
+
+class Retry:
+    """
+    Class-based retry wrapper with decorator factory support.
+
+    Provides a @Retry.with_backoff(config) decorator for functions.
+
+    Example usage:
+        >>> @Retry.with_backoff(RetryConfig(max_retries=3))
+        >>> def flaky_operation():
+        ...     ...
+        >>>
+        >>> # Instance usage for statistics
+        >>> retry = Retry(RetryConfig(max_retries=3))
+        >>> stats = retry.get_statistics()
+    """
+
+    def __init__(self, config: Optional[RetryConfig] = None):
+        """
+        Initialize Retry.
+
+        Args:
+            config: Retry configuration. Uses defaults if None.
+        """
+        self._config = config or RetryConfig()
+        self._total_retries = 0
+        self._exhausted_count = 0
+
+    @staticmethod
+    def with_backoff(config: RetryConfig) -> Callable[[Callable[..., T]], Callable[..., T]]:
+        """
+        Static decorator factory for retry with exponential backoff.
+
+        Args:
+            config: Retry configuration.
+
+        Returns:
+            Decorator that wraps functions with retry logic.
+
+        Example:
+            >>> @Retry.with_backoff(RetryConfig(max_retries=3, base_delay=0.1))
+            >>> def flaky_func():
+            ...     ...
+        """
+        def decorator(func: Callable[..., T]) -> Callable[..., T]:
+            return retry(config)(func)
+        return decorator
+
+    def get_statistics(self) -> dict:
+        """
+        Get retry statistics.
+
+        Returns:
+            Dictionary with total retries, max retries config,
+            and exhausted count.
+        """
+        return {
+            "total_retries": self._total_retries,
+            "max_retries": self._config.max_retries,
+            "exhausted_count": self._exhausted_count,
+            "base_delay": self._config.base_delay,
+            "max_delay": self._config.max_delay,
+        }

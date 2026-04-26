@@ -256,114 +256,8 @@ class PipelineOrchestrator(Agent):
                 }
 
         @tool
-        def _trigger_agent_spawn(task_objective: str) -> Dict[str, Any]:
-            """
-            Trigger Master Ecosystem Creator to generate missing agents.
-
-            This tool uses Clear Thought MCP sequential thinking for strategic
-            agent generation planning, then invokes Master Ecosystem Creator
-            via explicit MCP tool call following the explicit tool-calling pattern.
-
-            Args:
-                task_objective: The task requiring the missing agents
-
-            Returns:
-                Dictionary with:
-                - generation_status: str (success/failed)
-                - agents_spawned: List[str] - agents that were generated
-                - mcp_tool_call: str - the MCP tool call format
-                - clear_thought_analysis: Dict - sequential thinking output
-            """
-            missing_agents = self._gap_analysis.get("missing_agents", [])
-
-            if not missing_agents:
-                return {
-                    "generation_status": "skipped",
-                    "agents_spawned": [],
-                    "reason": "no_missing_agents",
-                }
-
-            # Step 1: Clear Thought MCP Sequential Thinking for strategic planning
-            logger.info("Invoking Clear Thought MCP for agent generation planning...")
-
-            clear_thought_prompt = f"""Analyze the agent generation requirements:
-
-TASK_OBJECTIVE: {task_objective}
-MISSING_AGENTS: {missing_agents}
-
-Step 1: What capabilities does each missing agent need?
-Step 2: What tools must each agent have?
-Step 3: What are the dependencies between agents?
-Step 4: What is the optimal generation order?
-Step 5: Are there any shared components or knowledge required?
-
-Provide a structured generation plan."""
-
-            clear_thought_result = self._analyze_with_llm(
-                clear_thought_prompt,
-                system_prompt="You are a strategic planner. Analyze agent generation requirements and provide a detailed plan.",
-            )
-
-            logger.info(
-                f"Clear Thought analysis complete: {str(clear_thought_result)[:200]}..."
-            )
-
-            # Step 2: Format MCP tool call for Master Ecosystem Creator
-            # This follows the explicit tool-calling pattern from docs/guides/explicit-tool-calling.mdx
-            mcp_tool_call = f"""```tool-call
-CALL: mcp__clear-thought__sequentialthinking -> generation_plan
-purpose: Strategic planning for agent generation
-prompt: |
-  TARGET_DOMAIN: {task_objective}
-  AGENTS_TO_GENERATE: {missing_agents}
-  Step 1: Analyze required capabilities per agent
-  Step 2: Identify tool requirements
-  Step 3: Determine agent dependencies
-  Step 4: Plan generation order
-  Step 5: Identify shared components
-
-CALL: mcp__master-ecosystem-creator__spawn_agents
-purpose: Generate missing agents for pipeline execution
-depends_on: generation_plan
-prompt: |
-  TARGET_DOMAIN: {task_objective}
-  AGENTS_TO_GENERATE: {missing_agents}
-  PRIORITY: high
-  BLOCK_UNTIL_COMPLETE: true
-```"""
-
-            logger.info(f"MCP tool call for agent generation:\n{mcp_tool_call}")
-
-            # Step 3: Invoke Master Ecosystem Creator
-            # In a real implementation, this would invoke via MCP protocol
-            logger.info(
-                f"Triggering Master Ecosystem Creator for {len(missing_agents)} agents..."
-            )
-
-            return {
-                "generation_status": "success",
-                "agents_spawned": missing_agents,
-                "mcp_tool_call": mcp_tool_call,
-                "clear_thought_analysis": clear_thought_result,
-                "target_domain": task_objective,
-            }
-
-        @tool
         def get_pipeline_status() -> Dict[str, Any]:
-            """
-            Get current pipeline state and stage results.
-
-            Returns:
-                Dictionary with current pipeline state
-            """
-            return {
-                "domain_blueprint": self._domain_blueprint,
-                "workflow_model": self._workflow_model,
-                "loom_topology": self._loom_topology,
-                "gap_analysis": self._gap_analysis,
-                "execution_result": self._execution_result,
-                "pipeline_status": self._get_pipeline_status(),
-            }
+            return self.get_pipeline_status()
 
     def _clear_thought_domain_analysis(self, task_description: str) -> Dict[str, Any]:
         """
@@ -477,6 +371,115 @@ Provide a structured topology design."""
         else:
             return "complete"
 
+    @tool
+    def _trigger_agent_spawn(self, task_objective: str) -> Dict[str, Any]:
+        """
+        Trigger Master Ecosystem Creator to generate missing agents.
+
+        This tool uses Clear Thought MCP sequential thinking for strategic
+        agent generation planning, then invokes Master Ecosystem Creator
+        via explicit MCP tool call following the explicit tool-calling pattern.
+
+        Args:
+            task_objective: The task requiring the missing agents
+
+        Returns:
+            Dictionary with:
+            - generation_status: str (success/failed)
+            - agents_spawned: List[str] - agents that were generated
+            - mcp_tool_call: str - the MCP tool call format
+            - clear_thought_analysis: Dict - sequential thinking output
+        """
+        missing_agents = self._gap_analysis.get("missing_agents", [])
+
+        if not missing_agents:
+            return {
+                "generation_status": "skipped",
+                "agents_spawned": [],
+                "reason": "no_missing_agents",
+            }
+
+        # Step 1: Clear Thought MCP Sequential Thinking for strategic planning
+        logger.info("Invoking Clear Thought MCP for agent generation planning...")
+
+        clear_thought_prompt = f"""Analyze the agent generation requirements:
+
+TASK_OBJECTIVE: {task_objective}
+MISSING_AGENTS: {missing_agents}
+
+Step 1: What capabilities does each missing agent need?
+Step 2: What tools must each agent have?
+Step 3: What are the dependencies between agents?
+Step 4: What is the optimal generation order?
+Step 5: Are there any shared components or knowledge required?
+
+Provide a structured generation plan."""
+
+        clear_thought_result = self._analyze_with_llm(
+            clear_thought_prompt,
+            system_prompt="You are a strategic planner. Analyze agent generation requirements and provide a detailed plan.",
+        )
+
+        logger.info(
+            f"Clear Thought analysis complete: {str(clear_thought_result)[:200]}..."
+        )
+
+        # Step 2: Format MCP tool call for Master Ecosystem Creator
+        # This follows the explicit tool-calling pattern from docs/guides/explicit-tool-calling.mdx
+        mcp_tool_call = f"""```tool-call
+CALL: mcp__clear-thought__sequentialthinking -> generation_plan
+purpose: Strategic planning for agent generation
+prompt: |
+  TARGET_DOMAIN: {task_objective}
+  AGENTS_TO_GENERATE: {missing_agents}
+  Step 1: Analyze required capabilities per agent
+  Step 2: Identify tool requirements
+  Step 3: Determine agent dependencies
+  Step 4: Plan generation order
+  Step 5: Identify shared components
+
+CALL: mcp__master-ecosystem-creator__spawn_agents
+purpose: Generate missing agents for pipeline execution
+depends_on: generation_plan
+prompt: |
+  TARGET_DOMAIN: {task_objective}
+  AGENTS_TO_GENERATE: {missing_agents}
+  PRIORITY: high
+  BLOCK_UNTIL_COMPLETE: true
+```"""
+
+        logger.info(f"MCP tool call for agent generation:\n{mcp_tool_call}")
+
+        # Step 3: Invoke Master Ecosystem Creator
+        # In a real implementation, this would invoke via MCP protocol
+        logger.info(
+            f"Triggering Master Ecosystem Creator for {len(missing_agents)} agents..."
+        )
+
+        return {
+            "generation_status": "success",
+            "agents_spawned": missing_agents,
+            "mcp_tool_call": mcp_tool_call,
+            "clear_thought_analysis": clear_thought_result,
+            "target_domain": task_objective,
+        }
+
+    def get_pipeline_status(self) -> Dict[str, Any]:
+        """
+        Get current pipeline state and stage results.
+
+        Returns:
+            Dictionary with current pipeline state
+        """
+        return {
+            "domain_blueprint": self._domain_blueprint,
+            "workflow_model": self._workflow_model,
+            "loom_topology": self._loom_topology,
+            "gap_analysis": self._gap_analysis,
+            "execution_result": self._execution_result,
+            "pipeline_status": self._get_pipeline_status(),
+        }
+
     def _analyze_with_llm(self, query: str, system_prompt: str = "") -> Dict[str, Any]:
         """Helper method to analyze with LLM and parse JSON response."""
         import re
@@ -484,6 +487,11 @@ Provide a structured topology design."""
         try:
             messages = [{"role": "user", "content": query}]
             response = self.chat.send_messages(messages, system_prompt=system_prompt)
+
+            # Check for dict response BEFORE stringifying
+            if isinstance(response, dict):
+                return response
+
             response_text = (
                 response.text if hasattr(response, "text") else str(response)
             )
@@ -498,8 +506,6 @@ Provide a structured topology design."""
                         f"degrade. First 200 chars: {response_text[:200]!r}"
                     )
                     return {"raw_response": response_text}
-            elif isinstance(response, dict):
-                return response
             else:
                 return {"raw_response": response_text}
 

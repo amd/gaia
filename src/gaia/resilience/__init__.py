@@ -31,6 +31,7 @@ from gaia.resilience.circuit_breaker import (
     CircuitBreakerState,
     CircuitBreakerConfig,
     CircuitOpenError,
+    ResilienceError,
 )
 from gaia.resilience.bulkhead import (
     Bulkhead,
@@ -41,6 +42,7 @@ from gaia.resilience.retry import (
     retry,
     RetryConfig,
     RetryError,
+    Retry,
 )
 
 __all__ = [
@@ -57,6 +59,9 @@ __all__ = [
     "retry",
     "RetryConfig",
     "RetryError",
+    "Retry",
+    # Common
+    "ResilienceError",
 ]
 
 __version__ = "1.0.0"

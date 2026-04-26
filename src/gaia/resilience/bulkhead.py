@@ -21,7 +21,12 @@ from typing import Any, Callable, Optional, TypeVar
 T = TypeVar("T")
 
 
-class BulkheadFullError(Exception):
+class ResilienceError(Exception):
+    """Base exception for resilience pattern failures."""
+    pass
+
+
+class BulkheadFullError(ResilienceError):
     """Raised when bulkhead is at capacity and rejects new requests."""
 
     def __init__(self, message: str = "Bulkhead is at maximum capacity", max_concurrency: int = 0):
@@ -77,6 +82,37 @@ class Bulkhead:
         >>> # With timeout
         >>> bulkhead_timeout = Bulkhead(max_concurrency=5, acquire_timeout=5.0)
     """
+
+    @staticmethod
+    def isolate(config: Optional[BulkheadConfig] = None) -> Callable[[Callable[..., T]], Callable[..., T]]:
+        """
+        Static decorator factory for bulkhead protection.
+
+        Args:
+            config: Bulkhead configuration. Uses defaults if None.
+
+        Returns:
+            Decorator that wraps functions with bulkhead protection.
+
+        Example:
+            >>> @Bulkhead.isolate(BulkheadConfig(max_concurrency=5))
+            >>> def my_function():
+            ...     ...
+        """
+        cfg = config or BulkheadConfig()
+        bulkhead = Bulkhead(cfg)  # Shared instance for all calls
+        def decorator(func: Callable[..., T]) -> Callable[..., T]:
+            if asyncio.iscoroutinefunction(func):
+                @functools.wraps(func)
+                async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    return await bulkhead.aexecute(func, *args, **kwargs)
+                return async_wrapper
+            else:
+                @functools.wraps(func)
+                def sync_wrapper(*args: Any, **kwargs: Any) -> T:
+                    return bulkhead.execute(func, *args, **kwargs)
+                return sync_wrapper
+        return decorator
 
     def __init__(self, config: Optional[BulkheadConfig] = None):
         """
@@ -272,6 +308,23 @@ class Bulkhead:
         with self._lock:
             self._active_count -= 1
         self._semaphore.release()
+
+    def get_statistics(self) -> dict:
+        """
+        Get bulkhead statistics.
+
+        Returns:
+            Dictionary with current concurrency, max concurrency,
+            rejected count, and total acquired.
+        """
+        with self._lock:
+            return {
+                "current_concurrency": self._active_count,
+                "max_concurrency": self._config.max_concurrency,
+                "rejected_count": self._total_rejected,
+                "total_acquired": self._total_acquired,
+                "utilization": self.utilization,
+            }
 
     def __repr__(self) -> str:
         """Get string representation of bulkhead."""

@@ -32,7 +32,12 @@ class CircuitBreakerState(Enum):
     HALF_OPEN = auto()  # Testing recovery
 
 
-class CircuitOpenError(Exception):
+class ResilienceError(Exception):
+    """Base exception for resilience pattern failures."""
+    pass
+
+
+class CircuitOpenError(ResilienceError):
     """Raised when circuit breaker is open and requests are rejected."""
 
     def __init__(self, message: str = "Circuit breaker is open", time_until_retry: Optional[float] = None):
@@ -103,6 +108,8 @@ class CircuitBreaker:
         self._state = CircuitBreakerState.CLOSED
         self._failure_count = 0
         self._success_count = 0
+        self._total_failures = 0
+        self._total_successes = 0
         self._last_failure_time: Optional[float] = None
         self._lock = threading.RLock()
         self._async_lock = asyncio.Lock()
@@ -113,10 +120,10 @@ class CircuitBreaker:
         return self._config
 
     @property
-    def state(self) -> CircuitBreakerState:
-        """Get current circuit state."""
+    def state(self) -> str:
+        """Get current circuit state as lowercase string."""
         with self._lock:
-            return self._get_state()
+            return self._get_state().name.lower().replace("_", "-")
 
     @property
     def failure_count(self) -> int:
@@ -127,17 +134,17 @@ class CircuitBreaker:
     @property
     def is_closed(self) -> bool:
         """Check if circuit is closed (normal operation)."""
-        return self.state == CircuitBreakerState.CLOSED
+        return self._get_state() == CircuitBreakerState.CLOSED
 
     @property
     def is_open(self) -> bool:
         """Check if circuit is open (failing fast)."""
-        return self.state == CircuitBreakerState.OPEN
+        return self._get_state() == CircuitBreakerState.OPEN
 
     @property
     def is_half_open(self) -> bool:
         """Check if circuit is half-open (testing recovery)."""
-        return self.state == CircuitBreakerState.HALF_OPEN
+        return self._get_state() == CircuitBreakerState.HALF_OPEN
 
     def _get_state(self) -> CircuitBreakerState:
         """
@@ -157,9 +164,18 @@ class CircuitBreaker:
 
         return self._state
 
+    def record_success(self) -> None:
+        """Public method to record a successful operation."""
+        self._record_success()
+
+    def record_failure(self) -> None:
+        """Public method to record a failed operation."""
+        self._record_failure()
+
     def _record_success(self) -> None:
         """Record a successful operation."""
         with self._lock:
+            self._total_successes += 1
             if self._state == CircuitBreakerState.HALF_OPEN:
                 self._success_count += 1
                 if self._success_count >= self._config.success_threshold:
@@ -171,9 +187,14 @@ class CircuitBreaker:
                 # Reset failure count on success in closed state
                 self._failure_count = 0
 
+    def record_failure(self) -> None:
+        """Public method to record a failed operation."""
+        self._record_failure()
+
     def _record_failure(self) -> None:
         """Record a failed operation."""
         with self._lock:
+            self._total_failures += 1
             self._failure_count += 1
             self._last_failure_time = time.time()
 
@@ -208,23 +229,36 @@ class CircuitBreaker:
         else:  # HALF_OPEN
             return True, None
 
-    def call(self, func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    def call(self, func_or_config: Union[Callable[..., T], CircuitBreakerConfig, None] = None, *args: Any, **kwargs: Any) -> Any:
         """
-        Execute function through circuit breaker (synchronous).
+        Execute function through circuit breaker, or create decorator from config.
+
+        Dual-purpose: works as instance method for execution and as classmethod
+        for decorator creation.
+
+        Instance usage: breaker.call(func, arg1, arg2)
+        Class usage:    @CircuitBreaker.call(CircuitBreakerConfig(...))
 
         Args:
-            func: Function to execute.
+            func_or_config: Function to execute, or CircuitBreakerConfig for decorator mode.
             *args: Positional arguments for function.
             **kwargs: Keyword arguments for function.
 
         Returns:
-            Result of function execution.
+            Result of function execution, or a decorator function.
 
         Raises:
             CircuitOpenError: If circuit is open and request is rejected.
-            Exception: Any exception from the wrapped function that is not
-                      in expected_exceptions will be re-raised immediately.
         """
+        # Decorator factory mode: CircuitBreaker.call(config) returns decorator
+        if isinstance(self, CircuitBreakerConfig):
+            config = self
+            def decorator(func: Callable[..., T]) -> Callable[..., T]:
+                breaker = CircuitBreaker(config)
+                return breaker(func)  # Uses __call__
+            return decorator
+
+        # Instance method mode: breaker.call(func, *args) executes through breaker
         with self._lock:
             can_execute, time_until_retry = self._can_execute()
 
@@ -235,7 +269,7 @@ class CircuitBreaker:
                 )
 
         try:
-            result = func(*args, **kwargs)
+            result = func_or_config(*args, **kwargs)
             self._record_success()
             return result
         except self._config.expected_exceptions as e:
@@ -297,6 +331,25 @@ class CircuitBreaker:
             def sync_wrapper(*args: Any, **kwargs: Any) -> T:
                 return self.call(func, *args, **kwargs)
             return sync_wrapper
+
+    def get_statistics(self) -> dict:
+        """
+        Get circuit breaker statistics.
+
+        Returns:
+            Dictionary with current state, failure count, success count,
+            and last failure time.
+        """
+        with self._lock:
+            current_state = self._get_state()
+            return {
+                "state": current_state.name.lower().replace("_", "-"),
+                "failure_count": self._total_failures,
+                "success_count": self._total_successes,
+                "last_failure_time": self._last_failure_time,
+                "recovery_timeout": self._config.recovery_timeout,
+                "failure_threshold": self._config.failure_threshold,
+            }
 
     def reset(self) -> None:
         """

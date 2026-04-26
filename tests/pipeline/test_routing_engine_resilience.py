@@ -39,7 +39,7 @@ class TestCircuitBreakerConfig:
 
         assert config.failure_threshold == 5
         assert config.recovery_timeout == 30.0
-        assert config.success_threshold == 1
+        assert config.success_threshold == 2
 
     def test_config_custom_values(self):
         """Verify custom configuration is applied."""
@@ -232,27 +232,29 @@ class TestBulkhead:
         """Verify bulkhead rejects calls exceeding concurrency limit."""
         call_count = 0
         max_concurrent = 0
-        semaphore = asyncio.Semaphore(3)
+        active = 0
 
         @Bulkhead.isolate(BulkheadConfig(max_concurrency=3, acquire_timeout=0.1))
         async def concurrent_task():
-            nonlocal call_count, max_concurrent
+            nonlocal call_count, max_concurrent, active
             call_count += 1
-            max_concurrent = max(max_concurrent, call_count)
+            active += 1
+            max_concurrent = max(max_concurrent, active)
             await asyncio.sleep(0.2)
-            call_count -= 1
+            active -= 1
             return "done"
 
-        # Start 10 tasks
-        tasks = [concurrent_task() for _ in range(10)]
+        # Start 10 tasks concurrently
+        tasks = [asyncio.create_task(concurrent_task()) for _ in range(10)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Some should fail due to bulkhead
+        # Some should fail due to bulkhead timeout
         exceptions = [r for r in results if isinstance(r, Exception)]
         successes = [r for r in results if not isinstance(r, Exception)]
 
-        # Verify limit was enforced
-        assert len(successes) <= 3 or len(exceptions) > 0
+        # Verify limit was enforced: at most 3 should succeed at a time
+        # With 0.1s acquire timeout and 0.2s work duration, most will be rejected
+        assert len(exceptions) > 0, f"Expected some rejections, got {len(successes)} successes, {len(exceptions)} rejections"
 
     def test_get_statistics(self, bulkhead):
         """Verify bulkhead statistics."""
@@ -274,7 +276,6 @@ class TestRetry:
             max_retries=3,
             base_delay=0.01,
             max_delay=0.1,
-            exponential_base=2
         )
 
     def test_retry_succeeds_on_first_attempt(self, retry_config):
@@ -378,12 +379,12 @@ class TestRoutingEngineResilienceIntegration:
         assert hasattr(engine_with_resilience, '_routing_circuit_breaker')
         assert engine_with_resilience._routing_circuit_breaker is not None
 
-        # Route a normal defect
+        # Route a normal defect through resilient path
         defect = {
             "id": "test-001",
             "description": "SQL injection vulnerability in login form"
         }
-        decision = engine_with_resilience.route_defect(defect)
+        decision = engine_with_resilience.route_defect_resilient(defect)
 
         assert isinstance(decision, RoutingDecision)
         assert decision.target_agent == "security-auditor"
@@ -393,20 +394,17 @@ class TestRoutingEngineResilienceIntegration:
         self, engine_with_resilience, mocker
     ):
         """Verify circuit breaker trips when route_defect fails repeatedly."""
-        # Mock select_specialist to fail
-        engine_with_resilience._agent_registry = None
-        original_select = engine_with_resilience.select_specialist
-
-        def failing_select(*args, **kwargs):
+        # Mock route_defect to always fail
+        def failing_route(*args, **kwargs):
             raise Exception("Registry unavailable")
 
-        engine_with_resilience.select_specialist = failing_select
+        engine_with_resilience.route_defect = failing_route
 
-        # Force failures to trip circuit
+        # Force failures to trip circuit through resilient path
         for i in range(5):
             defect = {"id": f"fail-{i}", "description": "Failure test"}
             try:
-                engine_with_resilience.route_defect(defect)
+                engine_with_resilience.route_defect_resilient(defect)
             except:
                 pass
 
@@ -442,7 +440,7 @@ class TestRoutingEngineResilienceIntegration:
         engine_with_resilience.detect_defect_type = flaky_detect
 
         defect = {"id": "test-001", "description": "Security issue"}
-        decision = engine_with_resilience.route_defect(defect)
+        decision = engine_with_resilience.route_defect_resilient(defect)
 
         assert call_count == 2  # Failed once, succeeded on retry
         assert decision.defect_type == DefectType.SECURITY
