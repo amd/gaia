@@ -37,15 +37,15 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, TypedDict
 
 from gaia.agents.base.tools import tool
 from gaia.coder.tools.github import _run_gh
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

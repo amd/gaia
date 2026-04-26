@@ -21,15 +21,15 @@ from __future__ import annotations
 
 import difflib
 import fnmatch
-import logging
 import os
 import re
 from pathlib import Path
 from typing import List, Optional, TypedDict
 
 from gaia.agents.base.tools import tool
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

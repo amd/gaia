@@ -26,7 +26,6 @@ to tell the author it's broken.
 
 from __future__ import annotations
 
-import logging
 import re
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -40,8 +39,9 @@ from gaia.coder.review._llm import (
     render_prompt,
 )
 from gaia.coder.review.pass_result import PassResult, make_pass_result
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 PROMPT_NAME: str = "persona_linter.md"
 

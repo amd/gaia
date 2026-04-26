@@ -31,7 +31,6 @@ it.
 from __future__ import annotations
 
 import json
-import logging
 import sqlite3
 import subprocess
 from dataclasses import dataclass
@@ -41,8 +40,9 @@ from typing import Optional
 
 from gaia.coder import trust as trust_mod
 from gaia.coder.stores import audit as audit_store
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 #: Default location of the per-daemon session flag. Kept next to ``em.toml``
 #: so the EM (and the agent) can always find it.

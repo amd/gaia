@@ -24,7 +24,6 @@ plus the mixin-registration smoke test.
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 import shlex
@@ -37,8 +36,9 @@ from typing import Callable, List, Mapping, Optional, Sequence, TypedDict
 
 from gaia.agents.base.tools import tool
 from gaia.coder.stores import memory as memory_store
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 #: Default timeout for subprocess commands driven by the debug tools
 #: (``repro_attempt``, ``run_with_tracing``, etc.). 5 minutes — long enough

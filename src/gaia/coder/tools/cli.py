@@ -10,7 +10,6 @@ it with argv-aware matching and a richer exception taxonomy.
 
 from __future__ import annotations
 
-import logging
 import os
 import shlex
 import signal
@@ -20,8 +19,9 @@ import time
 from typing import Dict, List, Optional, TypedDict
 
 from gaia.agents.base.tools import tool
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Return types

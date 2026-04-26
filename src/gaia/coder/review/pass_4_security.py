@@ -23,7 +23,6 @@ Per §15.8 deterministic checks: ``gitleaks detect``, AST scanner for
 from __future__ import annotations
 
 import ast
-import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -35,8 +34,9 @@ from gaia.coder.review._diff import (
     resolve_diff,
 )
 from gaia.coder.review.pass_result import PassResult, make_pass_result
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,6 @@ required only for self-fix PRs per §8 row 7.
 
 from __future__ import annotations
 
-import logging
 import re
 import shutil
 import subprocess
@@ -32,8 +31,9 @@ from gaia.coder.review._llm import (
     render_prompt,
 )
 from gaia.coder.review.pass_result import PassResult, make_pass_result
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 PROMPT_NAME: str = "feedback_binding.md"
 

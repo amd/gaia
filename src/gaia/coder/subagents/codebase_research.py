@@ -31,7 +31,6 @@ the other phases use.
 
 from __future__ import annotations
 
-import logging
 import shutil
 import subprocess
 import time
@@ -42,7 +41,9 @@ from typing import Callable, List, Optional, Protocol, Tuple
 
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

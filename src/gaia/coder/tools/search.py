@@ -12,15 +12,15 @@ callers can then fall back to ``grep`` without surprise.
 from __future__ import annotations
 
 import ast
-import logging
 import os
 from pathlib import Path
 from typing import List, Literal, Optional, TypedDict
 
 from gaia.agents.base.tools import tool
 from gaia.coder.tools.file import FileToolsMixin, SearchHit
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 SymbolKind = Literal["function", "class", "import"]

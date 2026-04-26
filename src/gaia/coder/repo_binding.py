@@ -27,7 +27,6 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import hmac
-import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +34,9 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-logger = logging.getLogger(__name__)
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +356,9 @@ def _check_webhook_signature_round_trip(
             detail="verifier accepted a known-wrong signature — discrimination broken",
         )
     # Discrimination on payload: same secret, different payload must not verify.
-    other_sig = "sha256=" + hmac.new(secret_bytes, payload + b"x", hashlib.sha256).hexdigest()
+    other_sig = (
+        "sha256=" + hmac.new(secret_bytes, payload + b"x", hashlib.sha256).hexdigest()
+    )
     if verify_webhook_signature(secret_bytes, payload, other_sig):
         return DoctorCheck(
             name="webhook_signature_round_trip",
