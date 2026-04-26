@@ -123,16 +123,29 @@ class ClassifyClient(Protocol):
 ClassifyClientFn = Callable[..., str]
 
 
-def _default_classify_client(**_kwargs: Any) -> str:  # pragma: no cover
-    """Default client refuses to run — forces callers to inject a real one.
+#: Token cap for the P8 classify_failure prompt. The classifier returns a
+#: small JSON envelope (kind / evidence / confidence / action); 2k is plenty.
+_CLASSIFY_MAX_TOKENS: int = 2048
 
-    Keeps this module import-clean on systems without the ``anthropic``
-    package (e.g. CI runs that only exercise stores / audit). Fail-loudly.
+
+def _default_classify_client(*, prompt: str, **_kwargs: Any) -> str:
+    """Run the classify_failure prompt through :class:`gaia.coder.llm.CoderLLM`.
+
+    The :class:`ClassifyClient` protocol passes structured kwargs
+    (``error``, ``recent_tool_calls``, ``dev_mode_on``) that the rendered
+    ``prompt`` already includes — this default forwards only the prompt.
+
+    Raises:
+        RuntimeError: when the ``anthropic`` SDK is not installed in the
+            runtime. The module stays importable on stores-only CI lines
+            because :class:`CoderLLM` is constructed lazily inside the
+            helper. Missing ``ANTHROPIC_API_KEY`` or transport failures
+            propagate unchanged per the fail-loudly rule in ``CLAUDE.md``.
     """
-    raise RuntimeError(
-        "No ClassifyClient configured. Inject one via classify_failure(client=...) "
-        "or wire the default Anthropic client at production swap (Phase 11)."
-    )
+    # Lazy import — keeps the module importable on stores-only CI lines.
+    from gaia.coder.llm import default_completion_client
+
+    return default_completion_client(prompt=prompt, max_tokens=_CLASSIFY_MAX_TOKENS)
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"

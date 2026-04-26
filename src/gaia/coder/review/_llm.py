@@ -127,34 +127,31 @@ def call_opus(
     max_tokens = max_tokens or DEFAULT_MAX_TOKENS
     temperature = DEFAULT_TEMPERATURE if temperature is None else temperature
 
+    # Route through :class:`gaia.coder.llm.CoderLLM` so the coder has a
+    # single Anthropic seam — see ``src/gaia/coder/llm.py`` module docstring.
+    # Imported lazily so this module stays importable on hosts without the
+    # anthropic SDK (CI lines that exercise only the static review passes
+    # 1, 2, 4 — those don't need an LLM).
+    from gaia.coder.llm import CoderLLM
+
     try:
-        import anthropic  # type: ignore
-    except ImportError as exc:  # noqa: PERF203 — single exception is fine
+        llm = CoderLLM(model=model, max_tokens=max_tokens)
+    except ImportError as exc:
+        # ``CoderLLM`` raises ``ImportError`` from the underlying
+        # ``ClaudeClient`` when the anthropic package is not installed.
         raise LLMClientUnavailable(
             "anthropic SDK not installed in this environment. Install with "
-            "`pip install anthropic>=0.35` or patch "
-            "`gaia.coder.review._llm.call_opus` in tests."
+            "`uv pip install anthropic>=0.35` (or `uv pip install -e .[eval]`) "
+            "or patch `gaia.coder.review._llm.call_opus` in tests."
         ) from exc
 
-    client = anthropic.Anthropic()
-    kwargs: Dict[str, Any] = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    if system:
-        kwargs["system"] = system
-    response = client.messages.create(**kwargs)
-
-    # Anthropic v1 SDK returns a list of content blocks. For our flat JSON
-    # prompts the first text block is the whole response.
-    parts = []
-    for block in getattr(response, "content", []):
-        text = getattr(block, "text", None)
-        if text:
-            parts.append(text)
-    return "\n".join(parts)
+    return llm.complete(
+        prompt,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        system=system,
+    )
 
 
 def parse_json_response(raw: str) -> Dict[str, Any]:

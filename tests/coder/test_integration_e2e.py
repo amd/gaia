@@ -41,6 +41,7 @@ from gaia.coder.self_fix import (
     LoopDriverConfig,
     self_heal,
 )
+from gaia.coder.self_fix.fixer import EditHunk
 from gaia.coder.self_fix.publisher import ReviewGateResult
 from gaia.coder.self_fix.verifier import verify_on_merge
 from gaia.coder.stores import audit as audit_store
@@ -163,6 +164,31 @@ def _canned_gh_runner(
         )
 
     return runner
+
+
+def _canned_edit_hunk_planner() -> Callable[..., list[EditHunk]]:
+    """Stub planner — appends a marker line to the first localised hit.
+
+    The end-to-end test asserts the state-machine transitions, not the
+    creativity of the LLM-driven default planner. Injecting this stub keeps
+    the integration test offline (no Anthropic call) while still exercising
+    the fixer's apply / branch / PR pipeline.
+    """
+
+    def planner(*, plan, fix_class, hits):  # noqa: ARG001
+        if not hits:
+            return []
+        first = hits[0]
+        return [
+            EditHunk(
+                path=first.path,
+                old_string=first.snippet,
+                new_string=first.snippet + "\n# canned e2e edit\n",
+                replace_all=False,
+            )
+        ]
+
+    return planner
 
 
 def _seven_pass_review_gate(
@@ -294,6 +320,7 @@ def test_full_flow_feedback_to_fix(
                 base_ref="coder",
             ),
             triage_client=_canned_triage_client(fix_class="tool", confidence=92),
+            edit_hunk_planner=_canned_edit_hunk_planner(),
             gh_runner=_canned_gh_runner(pr_number=777),
             review_gate_runner=_seven_pass_review_gate(success_confidence=88),
             # The tmp repo has no collectable tests — differential verify

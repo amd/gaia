@@ -101,3 +101,44 @@ def test_continuous_critique_threshold_constants() -> None:
     """Contract: 60 / 80 thresholds are the public numbers (§7.2)."""
     assert MIN_CRITIQUE_CONFIDENCE == 60
     assert HIGH_CONFIDENCE_THRESHOLD == 80
+
+
+def test_default_critique_client_routes_through_coder_llm(mocker) -> None:
+    """The default critique client MUST forward the prompt to
+    :func:`gaia.coder.llm.default_completion_client` — verifying the §7.2
+    critique path is wired to the coder's single LLM seam.
+    """
+    # The default critique client lazy-imports ``default_completion_client``
+    # from :mod:`gaia.coder.llm` so the patch target is the source module —
+    # the import happens at call time, picking up whatever this patch binds.
+    fake = mocker.patch(
+        "gaia.coder.llm.default_completion_client",
+        return_value=json.dumps(
+            {
+                "findings": [
+                    {
+                        "severity": "high",
+                        "citation": "GAIA.md:rule-1",
+                        "fix_direction": "do the thing",
+                        "confidence": 88,
+                    }
+                ],
+                "most_impactful": {
+                    "severity": "high",
+                    "citation": "GAIA.md:rule-1",
+                    "fix_direction": "do the thing",
+                    "confidence": 88,
+                },
+            }
+        ),
+    )
+    # No client= override → default path runs.
+    result = critique_recent_output(
+        success_criterion="ship the fix",
+        recent_output="some edit diff containing classify_failure",
+    )
+    assert result.findings and result.findings[0].confidence == 88
+    fake.assert_called_once()
+    kwargs = fake.call_args.kwargs
+    assert "ship the fix" in kwargs["prompt"]
+    assert kwargs["max_tokens"] == 2048
