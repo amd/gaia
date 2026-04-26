@@ -1152,6 +1152,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 model_id,
             )
             model_id = custom_model
+        # ``session_model`` is the model_id we expect to drive the
+        # session with, captured here in the outer scope so the
+        # auto-title background task at the bottom of this generator
+        # can read it without needing access to the inner producer
+        # thread's ``agent`` variable.
+        session_model = model_id
 
         stored_agent_type = session.get("agent_type") or "chat"
         agent_type = request.agent_type or stored_agent_type
@@ -1846,13 +1852,19 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             # once the response is complete. Skips Eval: titles, throttled
             # to 30 s/session, runs on the same Lemonade slot the chat
             # just used. Never blocks the user's response.
+            #
+            # NB: ``agent`` lives inside the producer thread's scope and
+            # isn't accessible here. We pass ``session_model`` (set
+            # before the producer started) instead — it's the same
+            # value ``_effective_model`` would have returned for the
+            # default agent factories that honour ``model_id`` kwarg.
             _bg = asyncio.create_task(
                 _maybe_update_session_title(
                     db=db,
                     session_id=request.session_id,
                     user_msg=request.message,
                     assistant_msg=full_response,
-                    model_id=_effective_model(agent, model_id),
+                    model_id=session_model,
                 )
             )
             # Hold a reference so the GC doesn't kill the task before
