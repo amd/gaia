@@ -777,12 +777,28 @@ def run_repl(
     Returns:
         The exit code the user-facing CLI should return.
     """
-    llm = CoderLLM(model=model) if model else None
-    agent = Agent(
-        llm=llm,
-        repo_root=repo_root,
-        include_github=include_github,
-    )
+    # Boot-time errors (missing ANTHROPIC_API_KEY, missing anthropic SDK,
+    # missing bs4) reach the user as a friendly message + actionable next
+    # step rather than a Python traceback. The underlying ClaudeClient
+    # already raises ValueError / ImportError with good messages — we
+    # render them via UI.error and exit 1.
+    boot_ui = UI()
+    try:
+        llm = CoderLLM(model=model) if model else None
+        agent = Agent(
+            llm=llm,
+            repo_root=repo_root,
+            include_github=include_github,
+        )
+    except (ValueError, ImportError) as e:
+        boot_ui.error(f"gaia-coder cannot start:\n{e}")
+        boot_ui.info(
+            "Quick fixes:\n"
+            "  • Set ANTHROPIC_API_KEY in the shell or in a .env file.\n"
+            "  • Install the eval extras: `uv pip install -e \".[eval]\"`.\n"
+            "  • See docs/guides/coder.mdx for the full setup."
+        )
+        return 1
     repl = Repl(agent=agent, auto_yes=auto_yes)
     if resume:
         try:
