@@ -36,20 +36,50 @@ class TestLlmCli(unittest.TestCase):
         return True
 
     def _check_lemonade_server_health(self):
-        """Check if lemonade server is running and accessible."""
+        """Check Lemonade is up AND return the name of a loaded chat model.
+
+        Two failure modes the bare /health status code doesn't catch:
+
+        1. Lemonade up with no model loaded → ``status: ok`` but
+           ``all_models_loaded == []`` and ``/v1/chat/completions`` 500s.
+        2. Lemonade up with a model loaded but ``gaia llm`` defaults to a
+           DIFFERENT model (post-PR-#865 the default flipped to
+           Gemma 4 E4B) — Lemonade then 500s on the unloaded one and the
+           OpenAI client retries until our 60 s test timeout. CI runners
+           rarely preload Gemma; locally most devs preload Qwen.
+
+        Returns the first chat-capable ``model_name`` (so the test can
+        pass it via ``--model`` and avoid case 2), or ``None`` to skip.
+        """
         try:
             response = requests.get("http://localhost:13305/api/v1/health", timeout=5)
-            if response.status_code == 200:
-                print("OK: Lemonade server health check passed")
-                return True
-            else:
+            if response.status_code != 200:
                 print(
                     f"ERROR: Lemonade server health check failed with status: {response.status_code}"
                 )
-                return False
+                return None
+            data = response.json()
+            chat_models = [
+                m
+                for m in data.get("all_models_loaded", [])
+                if m.get("type") in ("llm", "vlm")
+            ]
+            if not chat_models:
+                print(
+                    "ERROR: Lemonade is up but no chat-capable model is loaded "
+                    f"(all_models_loaded={data.get('all_models_loaded')}). "
+                    "Cannot exercise the LLM CLI without a model — skipping."
+                )
+                return None
+            chosen = chat_models[0].get("model_name")
+            print(
+                "OK: Lemonade server health check passed; chat models loaded: "
+                f"{[m.get('model_name') for m in chat_models]}; using {chosen}"
+            )
+            return chosen
         except requests.exceptions.RequestException as e:
             print(f"ERROR: Lemonade server health check failed with exception: {e}")
-            return False
+            return None
 
     def test_llm_command_with_server(self):
         """Test LLM command with running server."""
@@ -58,28 +88,33 @@ class TestLlmCli(unittest.TestCase):
         if not self._check_command_availability():
             self.skipTest("gaia command is not available")
 
-        # Check if server is accessible
-        if not self._check_lemonade_server_health():
-            self.skipTest("Lemonade server is not running")
+        # Check if server is accessible AND has a chat model loaded.
+        # Returns the loaded model name so we can pass it via --model and
+        # avoid the "default model not loaded" 500-retry hang.
+        loaded_model = self._check_lemonade_server_health()
+        if loaded_model is None:
+            self.skipTest("Lemonade server is not running or no chat model is loaded")
 
         try:
-            # Test with explicit --base-url (without /api/v1 to test normalization)
-            print(
-                "Executing command: gaia llm 'What is 1+1?' --max-tokens 20 --base-url http://localhost:13305"
-            )
+            # Test with explicit --base-url (without /api/v1 to test
+            # normalization) and --model targeting the actually-loaded
+            # checkpoint (so we don't trip Lemonade's auto-load on a
+            # different default which otherwise 500-retries to timeout).
+            cmd = [
+                "gaia",
+                "llm",
+                "What is 1+1?",
+                "--max-tokens",
+                "20",
+                "--base-url",
+                "http://localhost:13305",
+                "--model",
+                loaded_model,
+            ]
+            print(f"Executing command: {' '.join(cmd)}")
 
-            # Test the LLM command with explicit --base-url
-            # This validates both the CLI arg and the base_url normalization
             result = subprocess.run(
-                [
-                    "gaia",
-                    "llm",
-                    "What is 1+1?",
-                    "--max-tokens",
-                    "20",
-                    "--base-url",
-                    "http://localhost:13305",
-                ],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=60,
