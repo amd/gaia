@@ -97,33 +97,49 @@ class TestGlobalSemaphore429:
     """Tests for global concurrency semaphore returning 429 Too Many Requests."""
 
     def test_semaphore_exhausted_returns_429(self):
-        """When the global semaphore is exhausted, a request gets 429."""
-        # Create app with semaphore of size 1
+        """When the global semaphore is exhausted, a request gets 429.
+
+        Implementation notes:
+
+        - We use ``Semaphore(0)`` rather than a Semaphore(1) we manually
+          exhaust on a side event loop. The old approach tied the
+          semaphore's internal waiter list to a loop different from the
+          one TestClient uses, producing flaky cross-loop behaviour
+          (sometimes 429 in 60 s, sometimes hung). A semaphore with
+          starting value 0 is exhausted from birth and works on any loop.
+
+        - The endpoint waits up to ``timeout=60.0`` for the semaphore
+          (see chat.py — long enough to cushion sequential workloads
+          like the eval runner). We patch ``asyncio.wait_for`` to a
+          tiny timeout so the test runs in <1 s instead of >60 s.
+        """
+        from unittest.mock import patch as _patch
+
         app = create_app(db_path=":memory:")
         db = app.state.db
         sid = db.create_session(title="Test")["id"]
 
-        # Replace semaphore with one that's already exhausted
-        sem = asyncio.Semaphore(1)
+        # Permanently-exhausted semaphore — no waiters needed.
+        app.state.chat_semaphore = asyncio.Semaphore(0)
 
-        async def _exhaust():
-            await sem.acquire()
+        # Patch the in-endpoint wait_for so the test isn't dominated by
+        # the production 60 s gate. We wrap the real wait_for and force
+        # a short timeout; everything else (acquire, TimeoutError raise)
+        # runs unchanged.
+        real_wait_for = asyncio.wait_for
 
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(_exhaust())
+        async def _fast_wait_for(awaitable, timeout):  # noqa: ARG001
+            return await real_wait_for(awaitable, timeout=0.2)
 
-        app.state.chat_semaphore = sem
+        with _patch("gaia.ui.routers.chat.asyncio.wait_for", _fast_wait_for):
+            client = TestClient(app)
+            resp = client.post(
+                "/api/chat/send",
+                json={"session_id": sid, "message": "blocked", "stream": False},
+            )
 
-        client = TestClient(app)
-        resp = client.post(
-            "/api/chat/send",
-            json={"session_id": sid, "message": "blocked", "stream": False},
-        )
         assert resp.status_code == 429
         assert "busy" in resp.json()["detail"]
-
-        sem.release()
-        loop.close()
 
     def test_semaphore_released_after_non_streaming_request(self, client, session_id):
         """After a non-streaming request completes, the semaphore is released."""

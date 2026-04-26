@@ -122,9 +122,15 @@ class TestConfirmToolExecutionApprove:
         t = threading.Thread(target=run_confirm)
         t.start()
 
-        # Wait for the confirmation to be set up
+        # Wait for the worker to have set up _confirm_event before we resolve.
+        # Polling _confirm_result was wrong — it's initialised to False (not
+        # None), so ``is None`` never holds and resolve fired before the
+        # worker registered its event, then the worker's own setup
+        # overwrote the resolved state. _confirm_event starts at None and
+        # is only set inside confirm_tool_execution, so polling it for
+        # not-None correctly tracks the registration moment.
         deadline = time.time() + 2.0
-        while handler._confirm_result is None and time.time() < deadline:
+        while handler._confirm_event is None and time.time() < deadline:
             time.sleep(0.05)
 
         handler.resolve_tool_confirmation(approved=True)
@@ -144,7 +150,7 @@ class TestConfirmToolExecutionApprove:
         t.start()
 
         deadline = time.time() + 2.0
-        while handler._confirm_result is None and time.time() < deadline:
+        while handler._confirm_event is None and time.time() < deadline:
             time.sleep(0.05)
 
         handler.resolve_tool_confirmation(approved=True)
@@ -173,8 +179,10 @@ class TestConfirmToolExecutionDeny:
         t = threading.Thread(target=run_confirm)
         t.start()
 
+        # See note in test_approve_returns_true: poll _confirm_event, not
+        # _confirm_result. The latter is False from the start.
         deadline = time.time() + 2.0
-        while handler._confirm_result is None and time.time() < deadline:
+        while handler._confirm_event is None and time.time() < deadline:
             time.sleep(0.05)
 
         handler.resolve_tool_confirmation(approved=False)
