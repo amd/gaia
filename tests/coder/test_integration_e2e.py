@@ -69,6 +69,26 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+@pytest.fixture(autouse=True)
+def _bypass_safety_seam(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable :func:`gaia.coder.safety.enforce_action` for the e2e tests.
+
+    The safety seam (added with :mod:`gaia.coder.safety`) gates ``edit_file``
+    behind tier-1+ AND requires dev-mode for ``src/gaia/coder/`` paths. The
+    e2e fixtures bootstrap a tier-0 install in a hermetic tmp dir where the
+    editable-install precondition can't be met — so the production safety
+    contract would block the test before it could exercise the loop driver.
+    The contract itself is covered by :mod:`tests.coder.test_safety`; here we
+    no-op the seam so the loop logic can be observed end-to-end.
+    """
+    monkeypatch.setattr(
+        "gaia.coder.self_fix.fixer.enforce_action", lambda ctx, **kw: None
+    )
+    monkeypatch.setattr(
+        "gaia.coder.self_fix.publisher.enforce_action", lambda ctx, **kw: None
+    )
+
+
 @pytest.fixture
 def e2e_repo(tmp_path: Path) -> Path:
     """Fresh git repo with ``main`` + ``coder`` branches.

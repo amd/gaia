@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
+from gaia.coder.safety import ActionContext, enforce_action
 from gaia.coder.self_fix.planner import Plan
 from gaia.coder.self_fix.triage import FixClassResult
 
@@ -147,13 +148,47 @@ def _edit_file_impl(
     old_string: str,
     new_string: str,
     replace_all: bool = False,
+    *,
+    repo_root: Optional[Path] = None,
+    enforce: bool = True,
 ) -> int:
     """Apply an edit matching :class:`gaia.coder.tools.file.FileToolsMixin`.
 
     Mirrors the exact semantics of PR #818's ``edit_file`` tool (unique-match
     unless ``replace_all``, fail-loudly on missing) without instantiating the
     mixin. Returns the number of replacements made.
+
+    Safety seam (added with :mod:`gaia.coder.safety`): every call goes through
+    :func:`gaia.coder.safety.enforce_action` first. The relative path passed
+    to the safety check is computed from ``repo_root`` when supplied — this
+    is what the dev-mode gate uses to detect self-edits under
+    ``src/gaia/coder/``. When ``repo_root`` is None we fall back to
+    ``path.as_posix()`` and the dev-mode gate sees the absolute path (which
+    will never start with ``src/gaia/coder/``, i.e. no self-edit detection
+    happens — that's a deliberate trade-off: tests / scripts that don't pass
+    a ``repo_root`` get the cheaper guard, but production callers in
+    :func:`generate_fix` always pass it).
+
+    Set ``enforce=False`` to bypass the seam (only used by tests that have
+    already authorised the edit themselves).
     """
+    if enforce:
+        if repo_root is not None:
+            try:
+                rel = path.resolve().relative_to(Path(repo_root).resolve()).as_posix()
+            except ValueError:
+                # ``path`` is not inside ``repo_root`` — refuse on principle
+                # rather than fall through with a misleading "absolute"
+                # forbidden-paths comparison.
+                from gaia.coder.safety import ActionDenied
+
+                raise ActionDenied(
+                    f"safety: edit target {path!s} is outside repo_root "
+                    f"{repo_root!s}; refusing to edit."
+                )
+        else:
+            rel = path.as_posix()
+        enforce_action(ActionContext(action="edit_file", paths=(rel,)))
     if not path.exists():
         raise FileNotFoundError(f"edit_file: {path!r} does not exist")
     text = path.read_text(encoding="utf-8")
@@ -220,6 +255,7 @@ def generate_fix(
             old_string=hunk.old_string,
             new_string=hunk.new_string,
             replace_all=hunk.replace_all,
+            repo_root=repo_root,
         )
         rel = hunk.path
         if rel not in touched:

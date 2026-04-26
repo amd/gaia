@@ -20,6 +20,26 @@ import pytest
 from gaia.coder.stores import feedback as feedback_store
 
 
+@pytest.fixture(autouse=True)
+def _bypass_safety_seam(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Allow the self-fix tests to run without an ``em.toml`` / dev-mode setup.
+
+    :func:`gaia.coder.safety.enforce_action` is wired into
+    :func:`_edit_file_impl` and :func:`open_self_fix_pr` and would otherwise
+    fail-closed in this test environment (no em.toml ⇒ tier 0 ⇒ ``edit_file``
+    denied; ``src/gaia/coder/`` paths require dev-mode which is OFF). The
+    *real* safety contract is exercised by :mod:`tests.coder.test_safety`;
+    here we want to keep the focus on the self-fix workflow itself, so we
+    monkeypatch the seam to a no-op for the duration of each test.
+    """
+    monkeypatch.setattr(
+        "gaia.coder.self_fix.fixer.enforce_action", lambda ctx, **kw: None
+    )
+    monkeypatch.setattr(
+        "gaia.coder.self_fix.publisher.enforce_action", lambda ctx, **kw: None
+    )
+
+
 @pytest.fixture()
 def tmp_git_repo(tmp_path: Path) -> Path:
     """Return a path to a freshly-initialised git repo.
