@@ -15,10 +15,15 @@ Usage:
   runner.run()
 """
 
+import contextlib
+import errno
+import fcntl
 import functools
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +38,148 @@ RESULTS_DIR = EVAL_DIR / "results"
 MCP_CONFIG = EVAL_DIR / "mcp-config.json"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
+
+# ── Single-runner lock ────────────────────────────────────────────────────
+#
+# Why this exists: ``gaia eval agent`` drives Lemonade Server, which has a
+# **single-tenant LLM slot** (one model loaded at a time, one ``ctx_size``
+# in effect). When two eval runs fire concurrently against the same
+# Lemonade — e.g. an agent in ``--fix`` mode shelling out parallel
+# category invocations, or a user kicking off a manual run on top of a
+# script — they race-evict each other's models out of that slot, and
+# the user sees nondeterministic ``n_ctx=4096`` overflow errors,
+# ``model_load_error: llama-server failed to start`` failures, and
+# spurious ``BLOCKED_BY_ARCHITECTURE`` results that have nothing to do
+# with the agent under test.
+#
+# We enforce one-at-a-time execution by holding an advisory lock on
+# ``/tmp/gaia-eval-agent.lock`` for the lifetime of ``AgentEvalRunner.run()``.
+# fcntl.flock + LOCK_EX | LOCK_NB gives us "fail fast if held by another
+# process" semantics. We write our PID into the lock file so the error
+# message is actionable, and we tolerate stale locks by checking whether
+# the holder PID is alive.
+#
+# Escape hatch: ``GAIA_EVAL_NO_LOCK=1`` skips the lock — useful for the
+# unit-test suite or for callers that genuinely manage Lemonade out of
+# band.
+_LOCK_FILE = Path(tempfile.gettempdir()) / "gaia-eval-agent.lock"
+_LOCK_ENV_BYPASS = "GAIA_EVAL_NO_LOCK"
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Return True iff *pid* corresponds to a running process."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # We don't own the process, but it exists.
+        return True
+
+
+@contextlib.contextmanager
+def _acquire_eval_lock():
+    """Hold a process-wide advisory lock for the duration of an eval run.
+
+    Raises ``SystemExit(2)`` with an actionable error message when the
+    lock is already held by another live process.  Stale locks (holder
+    PID has exited) are reclaimed automatically.
+    """
+    if os.environ.get(_LOCK_ENV_BYPASS) == "1":
+        yield
+        return
+
+    # Open / create the lock file. Mode 0o644 so it survives across users
+    # without weird permission games.
+    try:
+        fd = os.open(str(_LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as exc:
+        # If we can't even create the lockfile (read-only /tmp etc.),
+        # skip locking and let the run proceed — better degraded than dead.
+        print(
+            f"[WARN] Could not create eval lock at {_LOCK_FILE}: {exc}. "
+            "Skipping concurrency guard.",
+            file=sys.stderr,
+        )
+        yield
+        return
+
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
+                raise
+            # Lock is held — read holder PID + age and decide.
+            try:
+                with open(_LOCK_FILE, "r", encoding="utf-8") as fh:
+                    holder_pid_str = fh.read().strip()
+                holder_pid = int(holder_pid_str) if holder_pid_str else -1
+            except (ValueError, OSError):
+                holder_pid = -1
+
+            held_age_s = (
+                time.time() - _LOCK_FILE.stat().st_mtime if _LOCK_FILE.exists() else 0
+            )
+
+            if holder_pid > 0 and not _is_pid_alive(holder_pid):
+                # Stale lock — holder is dead. Try once more to grab it.
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    print(
+                        "[ERROR] Eval lock is held but holder PID "
+                        f"{holder_pid} is gone, and re-acquire still failed. "
+                        f"Manually delete {_LOCK_FILE} and retry.",
+                        file=sys.stderr,
+                    )
+                    os.close(fd)
+                    sys.exit(2)
+            else:
+                # A live eval run is in progress somewhere — refuse loudly.
+                print(
+                    "[ERROR] Another `gaia eval agent` run is already in "
+                    f"progress (PID {holder_pid}, started ~{int(held_age_s)}s ago).\n"
+                    "        Lemonade Server's single LLM slot can't safely "
+                    "host two evals at once — they race-evict each other's "
+                    "models and you'll see bogus n_ctx=4096 errors.\n"
+                    f"        Wait for PID {holder_pid} to finish, or "
+                    f"`kill {holder_pid}` if it's stuck.\n"
+                    "        Override (NOT recommended): "
+                    f"set {_LOCK_ENV_BYPASS}=1 in the environment.",
+                    file=sys.stderr,
+                )
+                os.close(fd)
+                sys.exit(2)
+
+        # We hold the lock — record our PID so future failers can see it.
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
+            os.fsync(fd)
+        except OSError:
+            # PID-write failure is non-fatal; the lock itself is already held.
+            pass
+
+        try:
+            yield
+        finally:
+            # Best-effort cleanup. Releasing the flock happens implicitly
+            # when fd is closed; we also wipe our PID so a reader doesn't
+            # blame our (dead) process for a future stale-lock encounter.
+            try:
+                os.ftruncate(fd, 0)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 REAL_WORLD_MANIFEST = REAL_WORLD_CORPUS_DIR / "manifest.json"
 
 # Personas defined in eval/prompts/simulator.md.  validate_scenario enforces this list.
@@ -1255,6 +1402,10 @@ class AgentEvalRunner:
           C) re-run only previously-failed scenarios
           D) compare before/after and report improvements/regressions
         repeating B-D up to max_fix_iterations or until target_pass_rate is met.
+
+        Holds a process-wide advisory lock for the lifetime of the run
+        (audit-only mode skips this — no Lemonade contention there).
+        See ``_acquire_eval_lock`` for the rationale.
         """
 
         if audit_only:
@@ -1263,6 +1414,25 @@ class AgentEvalRunner:
             result = run_audit()
             print(json.dumps(result, indent=2))
             return result
+
+        with _acquire_eval_lock():
+            return self._run_locked(
+                scenario_id=scenario_id,
+                category=category,
+                fix_mode=fix_mode,
+                max_fix_iterations=max_fix_iterations,
+                target_pass_rate=target_pass_rate,
+            )
+
+    def _run_locked(
+        self,
+        scenario_id=None,
+        category=None,
+        fix_mode=False,
+        max_fix_iterations=3,
+        target_pass_rate=0.90,
+    ):
+        """Internal entry — holds the eval lock; only called by ``run()``."""
 
         # Find scenarios
         scenarios = find_scenarios(scenario_id=scenario_id, category=category)
