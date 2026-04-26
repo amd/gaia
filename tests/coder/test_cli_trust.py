@@ -247,16 +247,19 @@ def test_cli_inbox_lists_pending(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "stub",
-    ["status", "audit", "spend", "egress", "introspect", "skill", "doctor"],
+    "verb",
+    ["status", "audit", "spend", "egress", "doctor"],
 )
-def test_cli_unimplemented_subcommands_still_stub(tmp_path: Path, stub: str) -> None:
-    """Subcommands whose owning phase has not landed remain generic stubs.
+def test_cli_previously_stubbed_verbs_now_run_real_handlers(
+    tmp_path: Path, verb: str
+) -> None:
+    """The seven previously-stubbed commands now run real handlers.
 
-    Phase 11 wired real handlers for ``daemon`` (eval harness), ``feedback``
-    (self-correction), ``self-fix``, ``dev-mode``, ``debug``, and ``rag``;
-    this list covers the ones still deliberately deferred.
+    Smoke-checks the no-args path of each verb on a clean
+    ``GAIA_CODER_HOME`` so a regression that re-stubs one of them
+    surfaces immediately. The full happy/failure-path coverage lives in
+    ``test_cli_real_commands.py``; this test guards the wiring only.
     """
-    r = _run_cli(stub, home=tmp_path)
-    assert r.returncode == 0
-    assert "not yet implemented" in r.stdout
+    r = _run_cli(verb, home=tmp_path)
+    assert "not yet implemented" not in r.stdout
+    assert "not yet implemented" not in r.stderr

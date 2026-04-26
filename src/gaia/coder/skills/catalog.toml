@@ -20,4 +20,4 @@
 # See docs/plans/coder-agent.mdx §4.7 for the full schema and loading
 # algorithm.
 
-skills = []
+skill = []
