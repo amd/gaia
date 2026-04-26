@@ -107,7 +107,7 @@ def cmd_run(args):
     # Get base_url from args or environment
     base_url = args.base_url
     if base_url is None:
-        base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+        base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
 
     # Initialize Lemonade with code agent profile (32768 context)
     # Skip for remote servers (e.g., devtunnel URLs), external APIs, or --no-lemonade-check
@@ -224,8 +224,234 @@ def cmd_run(args):
         return 1
 
 
+def _build_index_parser():
+    """Build the argparse parser for ``gaia-code index``."""
+    parser = argparse.ArgumentParser(
+        prog="gaia-code index",
+        description="Index a code repository for semantic search",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Index current directory
+  gaia-code index
+
+  # Index a specific repository
+  gaia-code index --repo /path/to/repo
+
+  # Search the index
+  gaia-code index search "how does the agent handle errors"
+
+  # Restrict search to source code chunks
+  gaia-code index search "auth flow" --scope code --top-k 5
+
+  # Show index status
+  gaia-code index status
+
+  # Clear the index
+  gaia-code index clear
+
+  # Interactive code Q&A (CodeAgent + code_index tools)
+  gaia-code index chat
+        """,
+    )
+    parser.add_argument(
+        "--repo",
+        default=".",
+        help="Path to repository root (default: current directory)",
+    )
+    parser.add_argument(
+        "--max-files",
+        type=int,
+        default=5000,
+        help="Maximum number of files to index (default: 5000)",
+    )
+    parser.add_argument(
+        "--model",
+        default="nomic-embed-text-v2-moe-GGUF",
+        help="Embedding model to use (default: nomic-embed-text-v2-moe-GGUF)",
+    )
+    # Shared LLM / Lemonade flags (used by `chat`)
+    parser.add_argument(
+        "--use-claude",
+        action="store_true",
+        help="Use Claude API instead of local Lemonade server (for `chat`)",
+    )
+    parser.add_argument(
+        "--use-chatgpt",
+        action="store_true",
+        help="Use ChatGPT/OpenAI API instead of local Lemonade server (for `chat`)",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Lemonade server URL (default: http://localhost:8000/api/v1)",
+    )
+    parser.add_argument(
+        "--no-lemonade-check",
+        action="store_true",
+        help="Skip Lemonade server initialization check",
+    )
+
+    sub = parser.add_subparsers(dest="index_action", help="Index action")
+
+    search_p = sub.add_parser("search", help="Search the index")
+    search_p.add_argument("query", help="Search query")
+    search_p.add_argument(
+        "--scope",
+        choices=["all", "code"],
+        default="all",
+        help="Scope of search (default: all)",
+    )
+    search_p.add_argument(
+        "--top-k",
+        type=int,
+        default=10,
+        help="Number of results to return (default: 10)",
+    )
+
+    sub.add_parser("status", help="Show index status")
+    sub.add_parser("clear", help="Clear the index")
+    sub.add_parser("chat", help="Interactive code Q&A (CodeAgent + code_index tools)")
+
+    return parser
+
+
+def cmd_index(argv):
+    """Handle ``gaia-code index [...]`` (semantic code search).
+
+    Args:
+        argv: Remaining CLI args after the leading ``index`` token
+              (e.g. ``sys.argv[2:]``).
+
+    Returns:
+        Process exit code (0 = success, non-zero = failure).
+    """
+    try:
+        from gaia.code_index.sdk import CodeIndexConfig, CodeIndexSDK
+    except ImportError:
+        print("code_index dependencies missing. Install with: pip install -e '.[rag]'")
+        return 1
+
+    parser = _build_index_parser()
+    args = parser.parse_args(argv)
+
+    repo_path = os.path.abspath(args.repo)
+    config = CodeIndexConfig(
+        repo_path=repo_path,
+        max_files=args.max_files,
+        embedding_model=args.model,
+    )
+    sdk = CodeIndexSDK(config)
+
+    action = args.index_action
+
+    if action == "chat":
+        try:
+            from gaia.agents.code.agent import CodeAgent
+        except ImportError:
+            print(
+                "code_index dependencies missing. "
+                "Install with: pip install -e '.[rag]'"
+            )
+            return 1
+
+        if not args.no_lemonade_check:
+            from gaia.cli import initialize_lemonade_for_agent
+
+            success, _ = initialize_lemonade_for_agent(
+                agent="code",
+                skip_if_external=True,
+                use_claude=args.use_claude,
+                use_chatgpt=args.use_chatgpt,
+                base_url=args.base_url,
+            )
+            if not success:
+                return 1
+
+        agent = CodeAgent(
+            repo_path=repo_path,
+            code_index_config=config,
+            use_claude=args.use_claude,
+            use_chatgpt=args.use_chatgpt,
+            base_url=args.base_url,
+            skip_lemonade=args.no_lemonade_check,
+        )
+        print("=== Code Index Chat ===")
+        print(f"Repository: {repo_path}")
+        print("Ask questions about the codebase. Type 'exit' or 'quit' to stop.\n")
+        while True:
+            try:
+                query = input("You: ")
+                if query.lower() in ["exit", "quit", "q"]:
+                    break
+                if query.strip():
+                    agent.process_query(query)
+            except KeyboardInterrupt:
+                print("\nExiting.")
+                break
+            except Exception as e:
+                print(f"Error: {e}")
+        return 0
+
+    if action == "status":
+        status = sdk.get_status()
+        if not status.get("indexed"):
+            print(f"No index found for {repo_path}")
+            print("Run 'gaia-code index' to build the index.")
+        else:
+            print(f"Repository: {status['repo_path']}")
+            print(f"Embedding model: {status.get('embedding_model', 'unknown')}")
+            print(f"Total chunks: {status.get('total_chunks', 0)}")
+            print(f"  Code chunks: {status.get('code_chunks', 0)}")
+            print(f"Files tracked: {status.get('files_tracked', 0)}")
+        return 0
+
+    if action == "clear":
+        sdk.clear_index()
+        print(f"Index cleared for {repo_path}")
+        return 0
+
+    if action == "search":
+        results = sdk.search(args.query, scope=args.scope, top_k=args.top_k)
+        if not results:
+            print("No results found. Run 'gaia-code index' first.")
+            return 0
+        for i, r in enumerate(results, 1):
+            chunk = r.chunk
+            print(f"\n{'=' * 60}")
+            print(f"Result {i} (score: {r.score:.4f}, type: {r.result_type})")
+            if hasattr(chunk, "file_path"):
+                line = f":{chunk.start_line}" if hasattr(chunk, "start_line") else ""
+                print(f"File: {chunk.file_path}{line}")
+            if hasattr(chunk, "symbol_name") and chunk.symbol_name:
+                print(
+                    f"Symbol: {chunk.symbol_name} "
+                    f"({getattr(chunk, 'symbol_type', '')})"
+                )
+            print(f"\n{chunk.content[:400]}")
+        return 0
+
+    # Default action: build the index
+    print(f"Indexing repository: {repo_path}")
+    try:
+        result = sdk.index_repository()
+        print("\nIndexing complete:")
+        print(f"  Files indexed: {result.files_indexed}")
+        print(f"  Chunks created: {result.chunks_created}")
+        return 0
+    except Exception as e:
+        print(f"Indexing failed: {e}")
+        return 1
+
+
 def main():
     """Main CLI entry point."""
+    # Dispatch `gaia-code index ...` before the main argparse runs, since the
+    # main parser has a positional `query` that would otherwise swallow
+    # "index" as a free-form query string.
+    if len(sys.argv) > 1 and sys.argv[1] == "index":
+        return cmd_index(sys.argv[2:])
+
     parser = argparse.ArgumentParser(
         description="GAIA Code Agent - AI-powered code generation and analysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -250,6 +476,12 @@ Examples:
 
   # Debug mode
   gaia-code "Build an app" --debug
+
+  # Semantic code search (see `gaia-code index --help`)
+  gaia-code index --repo .
+  gaia-code index search "how does auth work" --scope code
+  gaia-code index status
+  gaia-code index chat
         """,
     )
 
@@ -324,7 +556,7 @@ Examples:
     parser.add_argument(
         "--base-url",
         default=None,
-        help="Lemonade server URL (default: http://localhost:8000/api/v1)",
+        help="Lemonade server URL (default: http://localhost:13305/api/v1)",
     )
     parser.add_argument(
         "--no-lemonade-check",

@@ -1,0 +1,131 @@
+---
+title: "v0.17.3"
+description: "Custom installers with agent portability, broader backend compatibility, reference agents with Strix CI, safer RAG cache, and encrypted-PDF handling."
+---
+
+# GAIA v0.17.3 Release Notes
+
+GAIA v0.17.3 is an extensibility and resilience release. You can now package your own agents into a custom GAIA installer and seed them on first launch, point GAIA at alternative OpenAI-compatible inference servers from the C++ library (Ollama, for example), and start from three new reference agents (weather, RAG Q&A, HTML mockup) that execute against real Lemonade hardware in CI. It also hardens the RAG cache against an insecure-deserialization class of bug (CWE-502) — all users should upgrade.
+
+**Why upgrade:**
+- **Ship your own GAIA** — Export and import agents between machines, follow a new guide to produce a custom installer that seeds your agents on first launch, and on Windows install everything in one step because the installer now includes the Lemonade Server MSI.
+- **Work with alternative inference backends** — The C++ library now preserves OpenAI-compatible `/v1` base URLs instead of rewriting them to `/api/v1`, so servers that expose the standard `/v1` path (Ollama, for example) work out of the box.
+- **Start from a working example** — Three new reference agents (weather via MCP, RAG document Q&A, HTML landing-page generator) with integration tests that actually execute against Lemonade on a Strix CI runner.
+- **Safer RAG cache** — Replaces `pickle` deserialization with JSON + HMAC-SHA256 (CWE-502). Unsigned or tampered caches are rejected and transparently rebuilt on the next query.
+- **Better document handling** — Encrypted or corrupted PDFs now produce distinct, actionable errors (`EncryptedPDFError`, `CorruptedPDFError`) instead of generic failures, and the RAG index is hardened for concurrent queries.
+
+---
+
+## What's New
+
+### Custom Installers and Agent Portability
+
+You can now package a custom GAIA installer that ships with your own agents pre-loaded, and move agents between machines with export/import (PR #795). On Windows, the official installer now includes the Lemonade Server MSI and runs it during install, so a fresh machine has the complete local-LLM stack after a single download (PR #781).
+
+**What you can do:**
+- Export an agent from `~/.gaia/agents/` to a portable bundle with `gaia agents export` and import it on another machine with `gaia agents import`
+- Follow the new custom-installer playbook at [`docs/playbooks/custom-installer/index.mdx`](/playbooks/custom-installer) to distribute GAIA with your agents pre-loaded — useful for workshops, team deployments, and internal tooling
+- On Windows, the installer now includes Lemonade Server — no separate download for a complete first-run experience
+
+**Under the hood:**
+- `gaia agents export` / `gaia agents import` CLI commands round-trip agents between machines as portable bundles
+- First-launch agent seeder (`src/gaia/apps/webui/services/agent-seeder.cjs`) copies `<resourcesPath>/agents/<id>/` into `~/.gaia/agents/<id>/` the first time the app starts
+- Windows NSIS installer embeds `lemonade-server-minimal.msi` into `$PLUGINSDIR` and runs it via `msiexec /i ... /qn /norestart` during install (auto-cleaned on exit)
+
+---
+
+### Broader Backend Compatibility in the C++ Library
+
+The C++ library now preserves OpenAI-compatible `/v1` base URLs (PR #773) instead of rewriting them to `/api/v1`. That means inference servers that expose the standard OpenAI `/v1` path — for example, Ollama at `http://localhost:11434/v1` — work out of the box without needing a special adapter.
+
+---
+
+### Reference Agents and Real-Hardware Integration Tests
+
+Three new example agents and a Strix-runner CI workflow land together (PR #340).
+
+**What you can do:**
+- Copy `examples/weather_agent.py`, `examples/rag_doc_agent.py`, or `examples/product_mockup_agent.py` as a starting point for your own agents
+- Run the new integration tests locally against Lemonade to validate agents end-to-end, not just structurally
+
+**Under the hood:**
+- `tests/integration/test_example_agents.py` executes agents and validates responses with a 5-minute-per-test timeout
+- `.github/workflows/test_examples.yml` runs on the self-hosted Strix runner (`stx` label) with Lemonade serving `Qwen3-4B-Instruct-2507-GGUF`
+- Docs homepage refreshed with a technical value prop ("Agent SDK for AMD Ryzen AI") and MCP / CUA added to the capabilities list
+
+---
+
+### Smarter PDF Handling in RAG
+
+Encrypted and corrupted PDFs now surface as distinct, actionable errors (`EncryptedPDFError`, `CorruptedPDFError`, `EmptyPDFError`) instead of generic failures or silent 0-chunk indexes (PR #784, closes #451). Encrypted PDFs are detected before extraction; corrupted PDFs are caught during extraction with a clear message. Combined with the indexing-failure surfacing in PR #723, you get a visible indexing-failed status the moment a document fails — and the RAG index itself is now thread-safe under concurrent queries (PR #746).
+
+---
+
+## Security
+
+### RAG Cache Deserialization Replaced with JSON + HMAC
+
+Fixes an insecure-deserialization issue in the RAG cache (CWE-502, PR #768). Previously, cached document indexes were serialized with Python `pickle`; if an attacker could write to `~/.gaia/` — via a shared drive, a sync conflict, or a malicious extension — loading that cache could execute arbitrary code.
+
+v0.17.3 replaces `pickle` with signed JSON: caches are now serialized as JSON and authenticated with HMAC-SHA256 using a per-install key stored at `~/.gaia/cache/hmac.key`. Unsigned or tampered caches are rejected and transparently rebuilt on the next query. Old `.pkl` caches from previous GAIA versions are ignored and re-indexed the next time you query a document.
+
+**You should upgrade if you** share `~/.gaia/` across machines (Dropbox, iCloud, network home directories), run GAIA in a multi-user environment, or have ever imported RAG caches from another source.
+
+---
+
+## Bug Fixes
+
+- **Ask Agent attaches files before sending to chat** (PR #725) — Dropped files are indexed into RAG and attached to the active session before the prompt is consumed, so the model sees the document on the first turn instead of the second.
+- **Document indexing failures are surfaced** (PR #723) — A document that produces 0 chunks now raises `RuntimeError` in the SDK and surfaces as `indexing_status: failed` in the UI, instead of looking like a silent success. Covers RAG SDK, background indexing, and re-index paths.
+- **Encrypted or corrupted PDFs produce actionable errors** (PR #784, closes #451) — RAG now raises distinct `EncryptedPDFError` and `CorruptedPDFError` exceptions instead of generic failures, so you see exactly what went wrong.
+- **RAG index thread safety hardened** (PR #746) — Adds `RLock` protection around index mutation paths and rebuilds chunk/index state atomically before publishing it, so concurrent queries read consistent snapshots and failed rebuilds no longer leak partial state.
+- **MCP JSON-RPC handler guards against non-dict bodies** (PR #803) — A malformed JSON-RPC payload (array, string, null) now returns HTTP 400 `Invalid Request: expected JSON object` instead of an HTTP 500 from a `TypeError`.
+- **File-search count aligned with accessible results** (PR #754) — The returned count now matches the number of files the tool actually surfaces, instead of a pre-filter total that over-reported results the caller could not access.
+- **Tracked block cursor replaces misplaced decorative cursor** (PR #727) — Fixes the mis-positioned blinking cursor in the chat input box, which now tracks the actual caret position via a mirror-div technique.
+- **Ad-hoc sign the macOS app bundle instead of skipping code signing** (PR #765) — The `.app` bundle inside the DMG now carries an ad-hoc signature, so Gatekeeper presents a single "Open Anyway" bypass in System Settings instead of the unrecoverable "is damaged" error. Full Apple Developer ID signing is still being finalized.
+
+---
+
+## Release & CI
+
+- **Publish workflow: single approval gate, no legacy Electron apps** (PR #758) — Removed the legacy jira and example standalone Electron apps from the publish pipeline; a single `publish` environment gate governs PyPI, npm, and installer publishing.
+- **Claude CI modernization** (PR #797, PR #799, PR #783) — Migrated all four `claude-code-action` call sites to `v1.0.99` (pinned by SHA, fixes an issue-handler hang), bumped `--max-turns` from 20 to 50 on both `pr-review` and `pr-comment` for deeper analysis, upgraded to Opus 4.7, standardized 23 subagent definitions with explicit when-to-use sections and tool allowlists, and added agent-builder tooling (manifest schema, `lint.py --agents`, BuilderAgent mixins).
+
+---
+
+## Docs
+
+- **Roadmap overhaul** (PR #710) — Milestone-aligned plans with voice-first as P0 and 9 new plan documents for upcoming initiatives.
+- **Plan: email triage agent** (PR #796) — Specification for an upcoming email triage agent.
+- **Docs/source drift resolved** (PR #794) — Fixed broken SDK examples across 15 docs, rewrote 5 spec files against the current source (including two that documented entire APIs that don't exist in code), added 20+ missing CLI flags to the CLI reference, and removed 2 already-shipped plan documents (installer, mcp-client).
+- **FAQ: data-privacy answer clarified for external LLM providers** (PR #798) — Sharper guidance on what leaves your machine when you point GAIA at Claude or OpenAI.
+
+---
+
+## Full Changelog
+
+**21 commits** since v0.17.2:
+
+- `6d3f3f71` — fix: replace misplaced decorative cursor with tracked terminal block cursor (#727)
+- `874cf2a3` — fix: Ask Agent indexes and attaches files before sending to chat (#725)
+- `4fa121e2` — fix: surface document indexing failures instead of silent 0-chunk success (#723)
+- `34b1d06e` — fix(ci): ad-hoc sign macOS DMG instead of skipping code signing (#765)
+- `7188b83c` — Roadmap overhaul: milestone-aligned plans with voice-first P0 and 9 new plan documents (#710)
+- `1beddac5` — cpp: support Ollama-compatible /v1 endpoints (#773)
+- `cf9ac995` — fix: harden rag index thread safety (#746)
+- `1c55c31b` — fix(ci): remove legacy electron apps from publish, single approval gate (#758)
+- `52946a7a` — feat(installer): bundle Lemonade Server MSI into Windows installer (#774) (#781)
+- `e96b3686` — ci(claude): review infra + conventions + subagent overhaul + agent-builder tooling (#783)
+- `058674b5` — fix(rag): detect encrypted and corrupted PDFs with actionable errors (#451) (#784)
+- `7bcb5d51` — fix: replace insecure pickle deserialization with JSON + HMAC in RAG cache (CWE-502) (#768)
+- `a5167e5f` — fix: keep file-search count aligned with accessible results (#754)
+- `da5ba458` — ci(claude): migrate to claude-code-action v1.0.99 + fix issue-handler hang (#797)
+- `03f546b9` — ci(claude): bump pr-review and pr-comment --max-turns 20 -> 50 (#799)
+- `4119d564` — docs(faq): clarify data-privacy answer re: external LLM providers (#798)
+- `0cfbcf41` — Add example agents and integration test workflow (#340)
+- `c4bd15fb` — docs: fix drift between docs and source (docs review pass 1 + 2) (#794)
+- `407ed5b8` — docs(plans): add email triage agent spec (#796)
+- `06fb04a4` — fix(mcp): guard JSON-RPC handler against non-dict body (#803)
+- `880ad603` — feat(installer): custom installer guide, agent export/import, first-launch seeder (#795)
+
+Full Changelog: [v0.17.2...v0.17.3](https://github.com/amd/gaia/compare/v0.17.2...v0.17.3)

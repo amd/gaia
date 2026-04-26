@@ -56,6 +56,21 @@ extraResources:
     to: dist
     filter:
       - "**/*"
+  - from: build/bundled-agents
+    to: agents
+    filter:
+      - "**/*"
+  # Bundled `uv` binary (issue #782 T3). The CI job `fetch-uv-binary` in
+  # .github/workflows/build-electron-apps.yml downloads a pinned astral-sh/uv
+  # release, SHA256-verifies it, and extracts the single `uv` binary to
+  # build/vendor/uv/linux-x64/uv (mode 0755). Shipping this inside the
+  # AppImage removes the runtime `curl | sh` bootstrap that breaks on
+  # Ubuntu 24.04 minimal (curl not installed by default). Runtime path
+  # inside the mounted AppImage is <resources>/vendor/uv/linux-x64/uv.
+  - from: build/vendor/uv
+    to: vendor/uv
+    filter:
+      - "**/*"
 
 asar: true
 # Nothing currently needs to be unpacked from the asar.
@@ -164,6 +179,22 @@ linux:
   # Lowercase hyphenated artifact name — matches gaia-agent-ui binary
   # and the .deb package name Debian will register.
   artifactName: gaia-agent-ui-${version}-${arch}.${ext}
+  # Pass --no-sandbox to both .desktop Exec= lines (deb AND AppImage).
+  #
+  # Issue #782 co-fix with after-pack.cjs chrome-sandbox delete. Ubuntu
+  # 24.04.1 LTS and later ship `kernel.apparmor_restrict_unprivileged_userns=1`
+  # by default — even with chrome-sandbox absent, Chromium's userns fallback
+  # is AppArmor-restricted and aborts FATAL. `--no-sandbox` is the supported
+  # escape hatch; Chromium's own userns isolation still applies where the
+  # kernel allows it, so this is benign on unrestricted kernels and
+  # load-bearing on Ubuntu 24.04.1+.
+  #
+  # This is scoped at the `linux:` level (not `appImage:`) so the DEB's
+  # .desktop entry also gets --no-sandbox. DEB CLI launches of the bare
+  # /opt/GAIA/gaia-desktop binary on hardened kernels still need explicit
+  # --no-sandbox; see docs/reference/troubleshooting.mdx.
+  executableArgs:
+    - --no-sandbox
   # Maintainer is required by electron-builder for .deb packages (fpm
   # propagates this into the Debian control file). Falls back to
   # `author.email` in package.json if not set, which we don't have — so
@@ -202,3 +233,4 @@ deb:
 
 appImage:
   artifactName: gaia-agent-ui-${version}-${arch}.${ext}
+  # --no-sandbox is inherited from linux.executableArgs above.

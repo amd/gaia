@@ -68,6 +68,8 @@ setup(
         "gaia.agents.code.prompts",
         "gaia.agents.code.tools",
         "gaia.agents.code.validators",
+        "gaia.agents.code_index",
+        "gaia.agents.code_index.tools",
         "gaia.agents.routing",
         "gaia.agents.sd",
         "gaia.agents.summarize",
@@ -83,6 +85,7 @@ setup(
         "gaia.coder.self_fix",
         "gaia.coder.tests",
         "gaia.coder.skills",
+        "gaia.code_index",
     ],
     package_data={
         "gaia.eval": [
@@ -183,10 +186,11 @@ setup(
             "llama-index-readers-youtube-transcript",
         ],
         "rag": [
-            "pypdf",
-            "pymupdf>=1.24.0",
-            "sentence-transformers",
             "faiss-cpu>=1.7.0",
+            "numpy>=1.24.0",
+            "pymupdf>=1.24.0",
+            "pypdf",
+            "sentence-transformers",
         ],
         "lint": [
             "black",

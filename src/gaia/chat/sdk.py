@@ -163,6 +163,7 @@ class AgentSDK:
         self,
         messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
         **kwargs,
     ) -> AgentResponse:
         """
@@ -233,6 +234,7 @@ class AgentSDK:
                 messages=structured,
                 model=self.config.model,
                 stream=False,
+                tools=tools,
                 **kwargs,
             )
 
@@ -255,6 +257,7 @@ class AgentSDK:
         self,
         messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
         **kwargs,
     ):
         """
@@ -318,6 +321,21 @@ class AgentSDK:
                 kwargs["temperature"] = self.config.temperature
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
+
+            if tools:
+                # Tool-calling path: provider forces non-streaming and returns
+                # a sentinel JSON string. Yield as a single complete response.
+                response = self.llm_client.chat(
+                    messages=structured,
+                    model=self.config.model,
+                    stream=True,
+                    tools=tools,
+                    **kwargs,
+                )
+                stats = self.get_stats()
+                yield AgentResponse(text=response, stats=stats, is_complete=True)
+                return
+
             full_response = ""
             for chunk in self.llm_client.chat(
                 messages=structured, model=self.config.model, stream=True, **kwargs

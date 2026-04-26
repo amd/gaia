@@ -9,6 +9,7 @@ Integration tests for the Agent SDK functionality with real LLM server.
 These tests require a running Lemonade server and test actual LLM interactions.
 """
 
+import os
 import sys
 import time
 import unittest
@@ -38,8 +39,8 @@ class TestAgentSDKIntegration(unittest.TestCase):
         print("CHAT SDK INTEGRATION TESTS - REAL LLM SERVER")
         print(f"{'='*60}")
 
-        cls.server_url = "http://localhost:8000"
-        cls.model = DEFAULT_MODEL_NAME
+        cls.server_url = "http://localhost:13305"
+        cls.model = os.environ.get("GAIA_TEST_MODEL", DEFAULT_MODEL_NAME)
         cls.timeout = 30  # seconds
 
         # Verify server is running

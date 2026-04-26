@@ -232,7 +232,13 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
             return "warning", f"HTTP {e.code} (server error)"
         return "broken", f"HTTP {e.code}"
     except urllib.error.URLError as e:
-        return "broken", f"URL error: {e.reason}"
+        # Connection reset / refused is often CDN/anti-bot blocking, not a dead link
+        reason = e.reason
+        if isinstance(reason, (ConnectionResetError, ConnectionRefusedError)):
+            return "warning", f"URL error: {reason} (may block automated requests)"
+        if hasattr(reason, "errno") and reason.errno in (104, 111):
+            return "warning", f"URL error: {reason} (may block automated requests)"
+        return "broken", f"URL error: {reason}"
     except TimeoutError:
         return "warning", "timeout"
     except Exception as e:

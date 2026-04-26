@@ -244,7 +244,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         systemStatus.context_size_sufficient === false
     ) {
         const current = systemStatus.model_context_size ?? 0;
-        const lemonadeUI = systemStatus.lemonade_url ?? 'http://localhost:8000';
+        const lemonadeUI = systemStatus.lemonade_url ?? 'http://localhost:13305';
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">

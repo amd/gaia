@@ -1,0 +1,398 @@
+{
+  "run_id": "eval-20260424-170558",
+  "timestamp": "2026-04-24T17:31:48.482519+00:00",
+  "config": {
+    "backend_url": "http://localhost:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0
+  },
+  "summary": {
+    "total_scenarios": 4,
+    "passed": 2,
+    "failed": 2,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 0.5,
+    "judged_pass_rate": 0.5,
+    "avg_score": 7.64,
+    "by_category": {
+      "tool_selection": {
+        "passed": 2,
+        "failed": 2,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 7.6425
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "known_path_read",
+      "status": "PASS",
+      "overall_score": 9.28,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Please read eval/corpus/documents/acme_q3_report.md and tell me the Q3 revenue.",
+          "agent_response": "Q3 2025 revenue was **$14.2 million**, representing a 23% increase from Q3 2024's $11.5 million, per `/Users/tomasz/.gaia/documents/bb4aa775dc9b_acme_q3_report.md`. Results exceeded internal forecast by approximately $600,000 due to a large enterprise deal closing in early September.",
+          "agent_tools": [
+            "rag_query"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 7,
+            "personality": 9,
+            "error_recovery": 8
+          },
+          "overall_score": 8.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved $14.2M Q3 revenue from the indexed document. Tool selection scored 7 rather than 10 because direct file read was not confirmed; the document appears to have been accessed via RAG query on indexed content rather than explicit read_file. The success criteria is PASS if agent retrieves the correct answer — it did.",
+          "performance": {
+            "tokens_per_second": 88.1,
+            "time_to_first_token": 0.834,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Now what is the CEO's Q4 outlook?",
+          "agent_response": "According to `bb4aa775dc9b_acme_q3_report.md`, Jane Smith projects **15–18% revenue growth** for Q4, driven by enterprise segment expansion and three new product launches planned for November.",
+          "agent_tools": [
+            "rag_query"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.75,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified 15-18% projected growth driven by enterprise segment expansion, matching the ground truth exactly. Referenced the same document from Turn 1, demonstrating strong context retention. Direct and confident response with no sycophancy.",
+          "performance": {
+            "tokens_per_second": 88.3,
+            "time_to_first_token": 0.765,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 381.35178875923157,
+      "category": "tool_selection",
+      "performance_summary": {
+        "avg_tokens_per_second": 88.2,
+        "avg_time_to_first_token": 0.799,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "flags": []
+      }
+    },
+    {
+      "scenario_id": "multi_step_plan",
+      "status": "FAIL",
+      "overall_score": 6.33,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Can you give me a quick HR briefing -- PTO policy, remote work rules, and whether contractors get benefits?",
+          "agent_response": "Based on the indexed **employee_handbook.md**, here's your HR briefing:\n\n**PTO Policy:** The document confirms employees accrue paid time off but doesn't specify exact day counts per year tier (first-year vs senior) in the retrieved sections. You'd need to check Section 5 Benefits for full accrual schedules.\n\n**Remote Work Rules:** Not detailed in the currently indexed portions of the handbook — only general guidelines mention core hours (9 AM – 3 PM local time) and security requirements when working remotely. Full policy likely elsewhere in the document.\n\n**Contractor Benefits:** ✅ Clear answer — Contractors/Consultants are **NOT eligible for company benefits programs**. They're engaged through service agreements, not direct employment, and fall outside benefit coverage entirely (Section 3).\n\nFor complete PTO days breakdown and remote work specifics, you may want me to search for additional sections or a more comprehensive version of the handbook if available.",
+          "agent_tools": [
+            "query_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 3,
+            "tool_selection": 6,
+            "context_retention": 5,
+            "completeness": 2,
+            "efficiency": 4,
+            "personality": 7,
+            "error_recovery": 2
+          },
+          "overall_score": 4.1,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "Agent retrieved chunks containing all three required facts but failed to synthesize facts 1 and 2 into its answer — claimed PTO day count and remote work rules were not in indexed portions despite being present in retrieved chunks. Only fact 3 (contractors ineligible) was correctly stated. query_specific_file called 3 times with missing args, no recovery.",
+          "performance": {
+            "tokens_per_second": 19.8,
+            "time_to_first_token": 4.519,
+            "input_tokens": 974,
+            "output_tokens": 383,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Now add the Q3 financial highlight to that briefing.",
+          "agent_response": "Here's your complete **HR + Finance Briefing**:\n\n## **HR Policies** *(from employee_handbook.md)*\n\n| Topic | Policy Summary |\n|-------|----------------|\n| **PTO Accrual** | First-year employees receive **15 days/year**, accruing at 1.25 days/month. |\n| **Remote Work** | Full-time employees may work remotely **up to 3 days/week with manager approval**. |\n| **Contractor Benefits** | Contractors are **NOT eligible for any company benefits programs**. |\n\n## **Q3 Financial Highlights** *(from acme_q3_report.md)*\n\n- **Q3 2025 Revenue:** $14.2 million (**+23% YoY**) from $11.5M in Q3 2024 — exceeded forecast by ~$600K\n- **Gross Margin:** 68%, up from 65% in Q2 2025\n- **NPS Score:** Improved to **62**, up from 54 in Q2",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 8,
+            "context_retention": 9,
+            "completeness": 9,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 7
+          },
+          "overall_score": 8.55,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly queried acme_q3_report and retrieved $14.2M Q3 revenue (exact match). Self-corrected Turn 1 gaps by including all three HR facts in the consolidated briefing. Strong context retention. Minor deduction on tool_selection for initial bad path in query_specific_file, but recovered successfully.",
+          "performance": {
+            "tokens_per_second": 19.8,
+            "time_to_first_token": 8.15,
+            "input_tokens": 1825,
+            "output_tokens": 843,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "Turn 1 failure: the agent retrieved chunks containing all required facts (15 days PTO, 3 days/week remote) but failed to synthesize the specific numeric values into its response, instead claiming the data was absent from indexed portions. This is a RAG-to-synthesis gap — the model saw the answer in tool results but did not surface it. Additionally, query_specific_file was called 3 times with missing arguments and no error recovery.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "src/gaia/agents/chat/agent.py",
+        "description": "Strengthen the system prompt to instruct the agent to extract and quote specific facts (numbers, dates, names) verbatim from retrieved chunks rather than summarizing vaguely. Also update the query_specific_file tool docstring to clearly mark file_path and query as separate required parameters, and add a one-retry-only guard to prevent repeated malformed calls."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 657.139673948288,
+      "category": "tool_selection",
+      "performance_summary": {
+        "avg_tokens_per_second": 19.8,
+        "avg_time_to_first_token": 6.335,
+        "total_input_tokens": 2799,
+        "total_output_tokens": 1226,
+        "flags": []
+      }
+    },
+    {
+      "scenario_id": "no_tools_needed",
+      "status": "PASS",
+      "overall_score": 9.95,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "what's the capital of France?",
+          "agent_response": "Paris. Though honestly, if you're going there just for the capital status, you might want to reconsider — but if you're actually visiting, that's where all the good croissants are anyway.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent answered 'Paris' correctly and immediately with no tool calls. Response was direct and factually correct. Personality score slightly reduced for added editorial commentary that, while charming, borders on unnecessary padding.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "what's 15% of 200?",
+          "agent_response": "30. Easy math: 10% is 20, so double that for 20%. Or just multiply 200 × 0.15 either way works out to **30**.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 10.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent answered '30' correctly with no tool calls. Response led with the answer and provided helpful working to show the calculation. Direct, confident, and complete.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "tell me a fun fact about penguins",
+          "agent_response": "Penguins have knees — they're just tucked inside those fluffy feather suits you see on TV. You'd never guess from watching them waddle around in tuxedos!",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent provided a genuine, factually accurate fun fact about penguins (hidden knees is a well-known biological fact) with no tool calls. Response was engaging and direct.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 150.13064408302307,
+      "category": "tool_selection",
+      "performance_summary": null
+    },
+    {
+      "scenario_id": "smart_discovery",
+      "status": "FAIL",
+      "overall_score": 5.35,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "How many PTO days do first-year employees get? Check the employee handbook.",
+          "agent_response": "{\n  \"thought\": \"User wants PTO info from employee handbook.",
+          "agent_tools": [
+            "index_document"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 0,
+            "context_retention": 10,
+            "completeness": 0,
+            "efficiency": 4,
+            "personality": 0,
+            "error_recovery": 0
+          },
+          "overall_score": 2.4,
+          "pass": false,
+          "failure_category": "garbled_output",
+          "reasoning": "Agent correctly planned to index employee_handbook.md then query it, but the stored response is a truncated JSON fragment ({\"thought\": \"User wants PTO info from employee handbook.\") — not prose. Pre-check Raw JSON leak / Non-answer fails: the LLM generated a structured JSON output that was never extracted into a user-facing answer, so correctness, completeness, and tool_selection are all 0. Efficiency=4 because the plan was correct but execution was incomplete (index_document called, query_specific_file never reached).",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "what about the remote work policy?",
+          "agent_response": "**Remote Work Policy:** According to employee_handbook.md, full-time employees may work remotely **up to 3 days per week** with manager approval. Fully remote arrangements (5 days/week) require VP-level approval.\n\n**PTO Days:** The document does not specify how many PTO days first-year employees receive — only that contractors are NOT eligible for company benefits.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 8,
+            "context_retention": 6,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 8.3,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly answered the remote work policy ('up to 3 days per week with manager approval; fully remote requires VP approval') matching ground truth exactly. Used query_specific_file without re-indexing, satisfying the success criterion. Minor deductions: tool path was wrong (/Users/tomasz/employee_handbook.md vs actual corpus path) though query still succeeded; extra incorrect statement that 'the document does not specify PTO days' when the retrieved chunks clearly show 15 days for first year — suggests poor context retention from Turn 1's garbled output.",
+          "performance": {
+            "tokens_per_second": 88.1,
+            "time_to_first_token": 1.35,
+            "input_tokens": 2133,
+            "output_tokens": 650,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "Turn 1 produced a garbled/truncated JSON fragment as the assistant response ({\"thought\": \"User wants PTO info from employee handbook.\"). The LLM generated a structured JSON response but the formatting layer in _chat_helpers.py or sse_handler.py failed to extract the prose answer before storing it, resulting in a non-answer that never delivered the PTO fact (15 days) to the user.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/ui/_chat_helpers.py",
+        "description": "Add response format validation: detect when the LLM returns an incomplete or raw JSON object (starts with '{' and lacks a prose answer) and either extract the intended answer field or surface an actionable error. Also investigate why structured agent outputs are being persisted as truncated JSON fragments instead of formatted prose — the SSE 'done' event already carries the truncated content, suggesting the issue is upstream in the model response parsing loop."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 361.7822790145874,
+      "category": "tool_selection",
+      "performance_summary": {
+        "avg_tokens_per_second": 88.1,
+        "avg_time_to_first_token": 1.35,
+        "total_input_tokens": 2133,
+        "total_output_tokens": 650,
+        "flags": [
+          "no_stats"
+        ]
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0
+  },
+  "performance": {
+    "avg_tokens_per_second": 65.4,
+    "avg_time_to_first_token": 2.828,
+    "total_input_tokens": 4932,
+    "total_output_tokens": 1876,
+    "scenarios_with_data": 3,
+    "flags": [
+      "no_stats"
+    ]
+  }
+}

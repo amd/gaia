@@ -25,6 +25,7 @@ logger = get_logger(__name__)
 # KNOWN_TOOLS maps tool name -> (module_path, class_name) for lazy import
 KNOWN_TOOLS: Dict[str, tuple] = {
     "rag": ("gaia.agents.chat.tools.rag_tools", "RAGToolsMixin"),
+    "code_index": ("gaia.agents.code_index.tools.mixin", "CodeIndexToolsMixin"),
     "file_search": ("gaia.agents.tools.file_tools", "FileSearchToolsMixin"),
     "file_io": ("gaia.agents.code.tools.file_io", "FileIOToolsMixin"),
     "shell": ("gaia.agents.chat.tools.shell_tools", "ShellToolsMixin"),
@@ -614,7 +615,7 @@ class AgentRegistry:
         try:
             import requests
 
-            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
             resp = requests.get(f"{base_url}/models", timeout=2)
             if resp.ok:
                 data = resp.json()
