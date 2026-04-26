@@ -1,0 +1,66 @@
+id: memory_schedule_preferences
+name: "Memory Schedule Preference Learning"
+category: memory
+severity: medium
+description: |
+  Tests whether the agent learns the user's calendar / scheduling rules and
+  applies them when proposing meeting times. This covers the "schedule preference
+  learning" consumer use case from the v0.20.0 milestone — agent knows you prefer
+  morning meetings, blocks afternoons for focus, batches 1:1s on certain days.
+
+  The agent must retain multiple scheduling rules (preferred windows, no-go
+  windows, day-of-week patterns) and recommend a slot that respects all of them.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Establish a no-meeting window"
+    user_message: "Schedule rule: I never take meetings before 10am — I do deep work then. Please remember this as a hard rule."
+    ground_truth:
+      expected_answer: "Hard rule stored: no meetings before 10am"
+    success_criteria: "Agent stores the rule. Should use remember tool with category=preference. Confirms the no-meeting-before-10am rule explicitly."
+
+  - turn: 2
+    objective: "Establish a focus block"
+    user_message: "Also: Tuesdays and Thursdays from 1pm to 3pm are blocked for focus work. No meetings, no calls. Hard rule."
+    ground_truth:
+      expected_answer: "Focus block stored: Tue/Thu 1-3pm, no meetings"
+    success_criteria: "Agent stores the focus block with all three components: days (Tue + Thu), time window (1-3pm), and the no-meeting rule. Must keep both days, not just one."
+
+  - turn: 3
+    objective: "Establish a positive preference (where to bias scheduling)"
+    user_message: "I prefer to batch 1:1s on Tuesdays — late mornings ideally. And I like Friday afternoons for unstructured catch-ups."
+    ground_truth:
+      expected_answer: "Soft preferences: 1:1s Tue late morning; Fri afternoon for catch-ups"
+    success_criteria: "Agent stores both soft preferences (Tue late morning for 1:1s, Fri PM for catch-ups). These should not contradict the earlier hard rules."
+
+  - turn: 4
+    objective: "Recommend a meeting slot — agent must apply all rules"
+    user_message: "Need to schedule a 30-min 1:1 with Pat next week. When should I propose?"
+    ground_truth:
+      expected_answer: "Tuesday late morning (e.g., 10:30-11:00 or 11-11:30) — respects no-before-10am AND batch-1:1s-on-Tuesday"
+    success_criteria: "Agent proposes a Tuesday late-morning slot (somewhere between 10am and 12pm). MUST NOT propose: any time before 10am, Tue/Thu 1-3pm, or non-Tuesday for a 1:1 (since the user batched 1:1s on Tuesday). Should reference the stored rules in its reasoning. FAIL if proposed slot violates any hard rule."
+
+  - turn: 5
+    objective: "Detect a conflict in a proposed external meeting"
+    user_message: "A colleague suggested a 90-min architecture review for Thursday 2pm. Does that work for me?"
+    ground_truth:
+      expected_answer: "No — Thursday 2pm overlaps the Tue/Thu 1-3pm focus block"
+    success_criteria: "Agent flags the conflict with the stored Thursday 1-3pm focus block. Should propose an alternative slot that respects all rules. FAIL if agent says yes / doesn't recognize the focus-block conflict."
+
+  - turn: 6
+    objective: "Apply rule-aware reasoning to a vaguer ask"
+    user_message: "What's a good time for an unstructured chat with my mentor sometime this/next week?"
+    ground_truth:
+      expected_answer: "Friday afternoon (matches stored preference for Friday PM catch-ups)"
+    success_criteria: "Agent suggests a Friday afternoon slot, citing the stored preference for unstructured catch-ups on Friday afternoons. FAIL if agent suggests a non-Friday slot or an early-morning Friday slot (before 10am)."
+
+expected_outcome: |
+  Agent retains a layered set of scheduling rules — hard no-go windows, focus
+  blocks, and soft preferences — and applies them faithfully when recommending
+  or evaluating meeting times, demonstrating practical scheduling intelligence
+  driven by stored preferences.
