@@ -7,7 +7,7 @@ import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 ---
 
-<Layout title="GAIA - Stop Renting AI. Start Owning It.">
+<Layout title="GAIA — Private AI on your Ryzen AI PC">
   <!-- Neural Network / Circuit Background -->
   <div class="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
     <div class="circuit-bg"></div>
@@ -21,125 +21,309 @@ import Footer from '../components/Footer.astro';
 
   <Header />
   <main id="main-content">
-    <!-- Hero Section - Bun-style layout -->
+
+    <!-- ============================================================== -->
+    <!-- 1. HERO — Agent UI focus                                        -->
+    <!-- ============================================================== -->
     <section class="min-h-[80vh] flex items-center px-4 sm:px-6 lg:px-8 pt-24 pb-16">
       <div class="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
 
-        <!-- Left Column: Hero Content -->
+        <!-- Left: pitch + download CTAs -->
         <div class="overflow-visible">
           <h1 class="text-5xl lg:text-6xl font-bold text-white mb-8">
-            GAIA is your <span class="text-gaia-accent" id="dynamic-text-wrapper">free<span class="cursor">|</span></span><br />
-            Agent SDK for Ryzen AI
+            Your AI agent.<br />
+            <span class="text-gaia-accent">100% on your PC.</span>
           </h1>
 
           <p class="text-xl text-gaia-muted mb-10 max-w-lg leading-relaxed">
-            Build AI agents that run <strong class="text-white">100% locally</strong> on AMD Ryzen AI PCs. Pythonic toolkit includes Chat, RAG, Voice, Vision, Image Gen, MCP, Docker, and Database—built for local agents.
+            GAIA is the open-source desktop app and SDK for running AI agents locally on AMD Ryzen AI hardware. Chat with your documents, talk to your computer, generate images — without sending a single token to the cloud.
           </p>
 
-          <!-- Install Command with Folder Tabs -->
-          <div class="mb-6">
-            <!-- OS Folder Tabs -->
-            <div class="flex gap-1">
-              <button class="os-tab active" data-os="windows">
+          <!-- Download CTAs -->
+          <div class="mb-6 space-y-3">
+            <p class="text-xs text-gaia-muted uppercase tracking-wider">Download the Agent UI</p>
+
+            <!-- Primary OS-detected button -->
+            <a
+              id="download-primary"
+              href="https://github.com/amd/gaia/releases/latest"
+              class="download-primary flex items-center justify-between gap-4 px-5 py-4 bg-gaia-accent hover:bg-gaia-accent/90 text-white font-semibold rounded-lg transition-all shadow-lg shadow-gaia-accent/20 hover:shadow-gaia-accent/40"
+            >
+              <span class="flex items-center gap-3">
+                <svg id="download-os-icon" class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <!-- Default: download icon, replaced by OS icon via JS -->
+                  <path d="M12 16l-5-5h3V4h4v7h3l-5 5zm-7 4v-2h14v2H5z"/>
+                </svg>
+                <span id="download-label">Download for your platform</span>
+              </span>
+              <span id="download-version" class="text-xs font-mono opacity-80">latest</span>
+            </a>
+
+            <!-- Secondary OS buttons -->
+            <div class="flex flex-wrap gap-2 text-sm">
+              <a id="dl-windows" href="https://github.com/amd/gaia/releases/latest" class="os-pill" data-os="windows">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5.479L10.5 4.5v7.5H3V5.479zm0 13.042V12h7.5v7.5L3 18.521zM11.5 12H21v7.5l-9.5-1V12zm0-7.5L21 3.5V11h-9.5V4.5z"/></svg>
                 Windows
-              </button>
-              <button class="os-tab" data-os="linux">
-                Linux
-              </button>
+              </a>
+              <a id="dl-macos" href="https://github.com/amd/gaia/releases/latest" class="os-pill" data-os="macos">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+                macOS
+              </a>
+              <a id="dl-linux-deb" href="https://github.com/amd/gaia/releases/latest" class="os-pill" data-os="linux-deb">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.504 0c-.155 0-.315.008-.48.021-4.226.333-3.105 4.807-3.17 6.298-.076 1.092-.3 1.953-1.05 3.02-.885 1.051-2.127 2.75-2.716 4.521-.278.832-.41 1.684-.287 2.489a.99.99 0 00-.111.165c-.265.39-.482.602-.738.804-.262.198-.51.273-.804.341-.293.08-.617.16-.946.426l-.018.014a1.51 1.51 0 00-.503 1.213c.013.255.092.482.234.65.142.169.347.305.585.357.165.04.336.04.485 0 .07-.018.143-.045.226-.082.098-.041.225-.09.382-.143.317-.105.748-.214 1.21-.207.215.004.435.024.661.07.09.018.18.041.27.069.058.018.116.038.173.06.121.046.243.097.367.155.066.029.131.06.197.094.094.046.187.094.281.146a.86.86 0 00.119.057.825.825 0 00.243.052c.087.005.176-.007.262-.04.085-.034.165-.084.236-.146.142-.122.259-.279.366-.444.214-.331.392-.687.535-1.058.292-.72.519-1.502.668-2.318.077-.405.13-.812.18-1.219.05-.408.087-.819.115-1.231.013-.205.024-.412.034-.618.005-.103.01-.206.014-.309.005-.103.009-.205.013-.308.008-.205.013-.41.013-.616 0-.412-.014-.823-.04-1.232-.027-.41-.066-.819-.114-1.224-.097-.81-.245-1.611-.439-2.39-.388-1.555-1-3.026-1.838-4.302-.42-.638-.875-1.243-1.398-1.766-.522-.523-1.103-.962-1.74-1.27-.318-.155-.65-.272-.99-.341-.34-.07-.69-.082-1.038-.054z"/></svg>
+                Linux .deb
+              </a>
+              <a id="dl-linux-appimage" href="https://github.com/amd/gaia/releases/latest" class="os-pill" data-os="linux-appimage">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                Linux AppImage
+              </a>
+            </div>
+
+            <p class="text-xs text-gaia-muted">
+              Or browse all builds and checksums on
+              <a href="https://github.com/amd/gaia/releases/latest" class="text-gaia-accent hover:underline">GitHub Releases →</a>
+            </p>
+          </div>
+
+          <!-- What you get -->
+          <div class="mt-10">
+            <p class="text-xs text-gaia-muted uppercase tracking-wider mb-4">Built-in agents</p>
+            <div class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+              <a href="https://amd-gaia.ai/guides/chat" class="text-gaia-muted hover:text-white transition-colors">Document Q&amp;A</a>
+              <a href="https://amd-gaia.ai/guides/talk" class="text-gaia-muted hover:text-white transition-colors">Voice</a>
+              <a href="https://amd-gaia.ai/guides/code" class="text-gaia-muted hover:text-white transition-colors">Code generation</a>
+              <a href="https://amd-gaia.ai/guides/sd" class="text-gaia-muted hover:text-white transition-colors">Image generation</a>
+              <a href="https://amd-gaia.ai/guides/blender" class="text-gaia-muted hover:text-white transition-colors">3D / Blender</a>
+              <a href="https://amd-gaia.ai/integrations/mcp" class="text-gaia-muted hover:text-white transition-colors">MCP integrations</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Agent UI demo zone (drop your screenshot/video here) -->
+        <div>
+          <div class="demo-zone bg-gaia-card rounded-xl border border-gaia-border overflow-hidden relative aspect-[16/10]">
+            <!-- ============================================================ -->
+            <!-- DEMO ASSET DROP ZONE                                          -->
+            <!--                                                                -->
+            <!-- Replace this <div class="demo-placeholder"> with one of:       -->
+            <!--                                                                -->
+            <!-- 1. Screenshot:                                                 -->
+            <!--    <img src="/agent-ui.png" alt="GAIA Agent UI"                -->
+            <!--         class="w-full h-full object-cover" />                  -->
+            <!--                                                                -->
+            <!-- 2. Looping video (autoplay muted):                             -->
+            <!--    <video autoplay muted loop playsinline                      -->
+            <!--           poster="/agent-ui-poster.png"                        -->
+            <!--           class="w-full h-full object-cover">                  -->
+            <!--      <source src="/agent-ui-demo.mp4" type="video/mp4" />      -->
+            <!--    </video>                                                    -->
+            <!--                                                                -->
+            <!-- 3. Animated GIF:                                               -->
+            <!--    <img src="/agent-ui-demo.gif" alt="GAIA Agent UI"           -->
+            <!--         class="w-full h-full object-cover" />                  -->
+            <!--                                                                -->
+            <!-- Drop the asset into website/public/ — Astro serves /public/    -->
+            <!-- at the root, so /agent-ui.png maps to public/agent-ui.png.     -->
+            <!-- ============================================================ -->
+            <div class="demo-placeholder absolute inset-0 flex flex-col">
+              <!-- Mock window chrome -->
+              <div class="flex items-center gap-2 px-4 py-3 bg-gaia-bg/60 border-b border-gaia-border">
+                <span class="w-3 h-3 rounded-full bg-red-500/80"></span>
+                <span class="w-3 h-3 rounded-full bg-yellow-500/80"></span>
+                <span class="w-3 h-3 rounded-full bg-green-500/80"></span>
+                <span class="ml-3 text-xs text-gaia-muted font-mono">GAIA Agent UI</span>
+              </div>
+              <!-- Mock chat surface -->
+              <div class="flex-1 flex flex-col gap-3 p-6 overflow-hidden">
+                <div class="self-start max-w-[75%] px-4 py-2 rounded-2xl rounded-tl-sm bg-gaia-bg/80 text-sm text-gaia-text border border-gaia-border">
+                  Summarise my Q4 sales report from <span class="text-gaia-accent">~/Reports</span>.
+                </div>
+                <div class="self-end max-w-[80%] px-4 py-2 rounded-2xl rounded-tr-sm bg-gaia-accent/15 text-sm text-gaia-text border border-gaia-accent/30">
+                  <span class="block mb-1">Found <strong>q4-sales.pdf</strong> · 47 pages · indexed locally</span>
+                  Q4 revenue rose <strong>18% YoY</strong> to $4.2M, led by enterprise renewals (+34%). Net new logos slowed (-9%). Margin compressed 2pts on cloud spend.
+                </div>
+                <div class="self-start text-xs text-gaia-muted font-mono pl-2">
+                  <span class="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                  Running locally on Ryzen AI NPU
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="text-xs text-gaia-muted text-center mt-3 font-mono opacity-60">
+            (placeholder — drop screenshot/video into website/public/)
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- 2. Capability strip                                              -->
+    <!-- ============================================================== -->
+    <section class="px-4 sm:px-6 lg:px-8 py-20 border-t border-gaia-border/50">
+      <div class="max-w-7xl mx-auto">
+        <div class="text-center mb-14">
+          <h2 class="text-3xl lg:text-4xl font-bold text-white mb-3">Everything an AI assistant can do —<br /><span class="text-gaia-accent">without the cloud bill.</span></h2>
+          <p class="text-gaia-muted max-w-2xl mx-auto">Eight built-in agents. Hundreds of MCP integrations. All running on your Ryzen AI hardware.</p>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div class="capability-card">
+            <h3 class="font-semibold text-white mb-1">Chat with your documents</h3>
+            <p class="text-sm text-gaia-muted">Drop a PDF in, ask questions. RAG runs locally — your files never leave the machine.</p>
+          </div>
+          <div class="capability-card">
+            <h3 class="font-semibold text-white mb-1">Talk to it out loud</h3>
+            <p class="text-sm text-gaia-muted">Whisper ASR + Kokoro TTS for voice in, voice out. No round-trip to OpenAI.</p>
+          </div>
+          <div class="capability-card">
+            <h3 class="font-semibold text-white mb-1">Generate code</h3>
+            <p class="text-sm text-gaia-muted">A code agent that orchestrates tools, validates output, and writes files for you.</p>
+          </div>
+          <div class="capability-card">
+            <h3 class="font-semibold text-white mb-1">Generate images</h3>
+            <p class="text-sm text-gaia-muted">Stable Diffusion XL Turbo on the iGPU. Prompt → PNG in seconds, fully offline.</p>
+          </div>
+          <div class="capability-card">
+            <h3 class="font-semibold text-white mb-1">Automate Blender</h3>
+            <p class="text-sm text-gaia-muted">Drive 3D scene creation by chat — the agent talks to Blender over MCP.</p>
+          </div>
+          <div class="capability-card">
+            <h3 class="font-semibold text-white mb-1">Connect your stack</h3>
+            <p class="text-sm text-gaia-muted">MCP client + bridge means Jira, Docker, GitHub, Slack — anything with an MCP server.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- 3. Why local                                                     -->
+    <!-- ============================================================== -->
+    <section class="px-4 sm:px-6 lg:px-8 py-20">
+      <div class="max-w-5xl mx-auto">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
+          <div>
+            <p class="text-xs text-gaia-accent uppercase tracking-wider mb-3 font-semibold">Why local</p>
+            <h2 class="text-3xl lg:text-4xl font-bold text-white mb-5">Stop renting AI.<br />Start owning it.</h2>
+            <ul class="space-y-3 text-gaia-muted">
+              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">No API keys.</strong> No spend. No rate limits.</span></li>
+              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">No data leaves your PC.</strong> HIPAA-friendly by construction — there is nowhere for it to go.</span></li>
+              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">NPU + iGPU acceleration.</strong> Optimised for AMD Ryzen AI via Lemonade Server.</span></li>
+              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">Open source, MIT licensed.</strong> Fork it, ship it inside your product, run it on a plane.</span></li>
+            </ul>
+          </div>
+
+          <div class="bg-gaia-card border border-gaia-border rounded-xl p-6">
+            <p class="text-xs text-gaia-muted uppercase tracking-wider mb-3">Architecture</p>
+            <div class="font-mono text-xs text-gaia-text space-y-2">
+              <div class="flex justify-between border-b border-gaia-border/50 pb-2"><span>You</span><span class="text-gaia-accent">→ Agent UI</span></div>
+              <div class="flex justify-between border-b border-gaia-border/50 pb-2 pl-4"><span>Agent UI</span><span class="text-gaia-accent">→ GAIA SDK</span></div>
+              <div class="flex justify-between border-b border-gaia-border/50 pb-2 pl-8"><span>GAIA SDK</span><span class="text-gaia-accent">→ Lemonade Server</span></div>
+              <div class="flex justify-between pb-2 pl-12"><span>Lemonade</span><span class="text-gaia-accent">→ Ryzen AI NPU/iGPU</span></div>
+              <div class="text-gaia-muted text-center pt-3 border-t border-gaia-border/50">Network calls in this stack: <strong class="text-white">zero</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- 4. For developers — SDK install + code typewriter                -->
+    <!-- ============================================================== -->
+    <section class="px-4 sm:px-6 lg:px-8 py-20 border-t border-gaia-border/50">
+      <div class="max-w-7xl mx-auto">
+        <div class="text-center mb-14">
+          <p class="text-xs text-gaia-accent uppercase tracking-wider mb-3 font-semibold">For developers</p>
+          <h2 class="text-3xl lg:text-4xl font-bold text-white mb-3">Build your own agent in 10 lines.</h2>
+          <p class="text-gaia-muted max-w-2xl mx-auto">The same SDK that powers the Agent UI. Chat, RAG, voice, vision, MCP — Pythonic and composable.</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
+          <!-- SDK install -->
+          <div>
+            <p class="text-xs text-gaia-muted uppercase tracking-wider mb-3">Install the SDK</p>
+
+            <!-- Install method tabs -->
+            <div class="flex gap-1 flex-wrap">
+              <button class="os-tab active" data-os="uv">uv (fastest)</button>
+              <button class="os-tab" data-os="pip">pip</button>
+              <button class="os-tab" data-os="windows">Windows script</button>
+              <button class="os-tab" data-os="linux">Linux script</button>
             </div>
 
             <div class="bg-gaia-card rounded-xl rounded-tl-none border border-gaia-border overflow-hidden">
-
-            <!-- Install Commands -->
-            <div class="p-4">
-              <!-- Windows Command -->
-              <div id="install-windows" class="install-cmd flex items-center justify-between gap-4">
-                <code class="font-mono text-sm text-gaia-text flex-1">
-                  irm https://amd-gaia.ai/install.ps1 | iex
-                </code>
-                <button
-                  class="copy-install-btn flex-shrink-0 p-2 bg-transparent hover:bg-gaia-muted/10 rounded text-gaia-muted hover:text-white transition-all"
-                  data-copy="irm https://amd-gaia.ai/install.ps1 | iex"
-                  title="Copy to clipboard"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                  </svg>
-                </button>
-              </div>
-
-              <!-- Linux Command -->
-              <div id="install-linux" class="install-cmd hidden flex items-center justify-between gap-4">
-                <code class="font-mono text-sm text-gaia-text flex-1">
-                  curl -fsSL https://amd-gaia.ai/install.sh | sh
-                </code>
-                <button
-                  class="copy-install-btn flex-shrink-0 p-2 bg-transparent hover:bg-gaia-muted/10 rounded text-gaia-muted hover:text-white transition-all"
-                  data-copy="curl -fsSL https://amd-gaia.ai/install.sh | sh"
-                  title="Copy to clipboard"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                  </svg>
-                </button>
+              <div class="p-4">
+                <div id="install-uv" class="install-cmd flex items-center justify-between gap-4">
+                  <code class="font-mono text-sm text-gaia-text flex-1">uv pip install amd-gaia</code>
+                  <button class="copy-install-btn flex-shrink-0 p-2 bg-transparent hover:bg-gaia-muted/10 rounded text-gaia-muted hover:text-white transition-all" data-copy="uv pip install amd-gaia" title="Copy">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>
+                </div>
+                <div id="install-pip" class="install-cmd hidden flex items-center justify-between gap-4">
+                  <code class="font-mono text-sm text-gaia-text flex-1">pip install amd-gaia</code>
+                  <button class="copy-install-btn flex-shrink-0 p-2 bg-transparent hover:bg-gaia-muted/10 rounded text-gaia-muted hover:text-white transition-all" data-copy="pip install amd-gaia" title="Copy">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>
+                </div>
+                <div id="install-windows" class="install-cmd hidden flex items-center justify-between gap-4">
+                  <code class="font-mono text-sm text-gaia-text flex-1">irm https://amd-gaia.ai/install.ps1 | iex</code>
+                  <button class="copy-install-btn flex-shrink-0 p-2 bg-transparent hover:bg-gaia-muted/10 rounded text-gaia-muted hover:text-white transition-all" data-copy="irm https://amd-gaia.ai/install.ps1 | iex" title="Copy">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>
+                </div>
+                <div id="install-linux" class="install-cmd hidden flex items-center justify-between gap-4">
+                  <code class="font-mono text-sm text-gaia-text flex-1">curl -fsSL https://amd-gaia.ai/install.sh | sh</code>
+                  <button class="copy-install-btn flex-shrink-0 p-2 bg-transparent hover:bg-gaia-muted/10 rounded text-gaia-muted hover:text-white transition-all" data-copy="curl -fsSL https://amd-gaia.ai/install.sh | sh" title="Copy">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>
+                </div>
               </div>
             </div>
+
+            <p class="text-xs text-gaia-muted mt-4">
+              <strong class="text-gaia-text">uv / pip</strong> install the Python package only.
+              The <strong class="text-gaia-text">Windows / Linux</strong> scripts also set up Lemonade Server and download default models.
+              C++ developers — see the <a href="https://amd-gaia.ai/cpp/setup" class="text-gaia-accent hover:underline">C++ setup guide</a>.
+            </p>
+
+            <div class="mt-6 flex flex-wrap gap-3 text-sm">
+              <a href="https://amd-gaia.ai/quickstart" class="px-4 py-2 bg-gaia-card border border-gaia-border rounded-lg text-gaia-text hover:border-gaia-accent transition-colors">Quickstart</a>
+              <a href="https://amd-gaia.ai/sdk" class="px-4 py-2 bg-gaia-card border border-gaia-border rounded-lg text-gaia-text hover:border-gaia-accent transition-colors">SDK reference</a>
+              <a href="https://github.com/amd/gaia" class="px-4 py-2 bg-gaia-card border border-gaia-border rounded-lg text-gaia-text hover:border-gaia-accent transition-colors">GitHub</a>
             </div>
           </div>
 
-          <!-- Used For -->
-          <div class="mt-10">
-            <p class="text-xs text-gaia-muted uppercase tracking-wider mb-4">Built for</p>
-            <div class="flex flex-nowrap gap-x-6 text-sm whitespace-nowrap">
-              <a href="https://amd-gaia.ai/guides/chat" class="text-gaia-muted hover:text-white transition-colors">Document Q&A</a>
-              <a href="https://amd-gaia.ai/guides/talk" class="text-gaia-muted hover:text-white transition-colors">Voice Assistants</a>
-              <a href="https://amd-gaia.ai/guides/code" class="text-gaia-muted hover:text-white transition-colors">Code Generation</a>
-              <a href="https://amd-gaia.ai/guides/jira" class="text-gaia-muted hover:text-white transition-colors">Workflow Automation</a>
-              <a href="https://amd-gaia.ai/integrations/mcp" class="text-gaia-muted hover:text-white transition-colors">MCP Integration</a>
+          <!-- Code typewriter -->
+          <div>
+            <div class="flex gap-1 px-4 pt-4 flex-wrap">
+              <button class="folder-tab active" data-tab="docs" data-file="rag_doc_agent.py">Document Q&amp;A</button>
+              <button class="folder-tab" data-tab="voice" data-file="voice_agent.py">Voice</button>
+              <button class="folder-tab" data-tab="code" data-file="code_agent.py">Code Gen</button>
+              <button class="folder-tab" data-tab="workflow" data-file="file_watcher_agent.py">Automation</button>
+              <button class="folder-tab" data-tab="mcp" data-file="weather_agent.py">MCP</button>
+            </div>
+
+            <div class="bg-gaia-card rounded-xl rounded-tl-none border border-gaia-border overflow-hidden relative">
+              <pre class="p-8 overflow-x-auto h-[420px] flex items-start"><code id="code-display" class="font-mono text-sm text-gaia-text leading-relaxed"><span class="cursor-code">|</span></code></pre>
+              <button id="copy-code-btn" class="absolute bottom-4 right-4 p-2 bg-transparent hover:bg-gaia-muted/10 rounded text-gaia-muted hover:text-white transition-all" title="Copy code">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              </button>
             </div>
           </div>
         </div>
+      </div>
+    </section>
 
-        <!-- Right Column: Code Demo with Tabs -->
-        <div>
-          <!-- Folder Tabs - Match "Built For" section -->
-          <div class="flex gap-1 px-4 pt-4 flex-wrap">
-            <button class="folder-tab active" data-tab="docs" data-file="rag_doc_agent.py">
-              Document Q&A
-            </button>
-            <button class="folder-tab" data-tab="voice" data-file="voice_agent.py">
-              Voice
-            </button>
-            <button class="folder-tab" data-tab="code" data-file="code_agent.py">
-              Code Gen
-            </button>
-            <button class="folder-tab" data-tab="workflow" data-file="file_watcher_agent.py">
-              Automation
-            </button>
-            <button class="folder-tab" data-tab="mcp" data-file="weather_agent.py">
-              MCP
-            </button>
-          </div>
-
-          <div class="bg-gaia-card rounded-xl rounded-tl-none border border-gaia-border overflow-hidden relative">
-            <!-- Code Display with Cursor -->
-            <pre class="p-8 overflow-x-auto h-[420px] flex items-start"><code id="code-display" class="font-mono text-sm text-gaia-text leading-relaxed"><span class="cursor-code">|</span></code></pre>
-
-            <!-- Copy Button for Code Examples -->
-            <button
-              id="copy-code-btn"
-              class="absolute bottom-4 right-4 p-2 bg-transparent hover:bg-gaia-muted/10 rounded text-gaia-muted hover:text-white transition-all"
-              title="Copy code"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-            </button>
-          </div>
-        </div>
+    <!-- ============================================================== -->
+    <!-- 5. Final CTA                                                     -->
+    <!-- ============================================================== -->
+    <section class="px-4 sm:px-6 lg:px-8 py-20 border-t border-gaia-border/50">
+      <div class="max-w-3xl mx-auto text-center">
+        <h2 class="text-3xl lg:text-4xl font-bold text-white mb-4">Ready to own your AI?</h2>
+        <p class="text-gaia-muted mb-8">Free, open source, and shipped today.</p>
+        <a href="https://github.com/amd/gaia/releases/latest" class="inline-flex items-center gap-3 px-8 py-4 bg-gaia-accent hover:bg-gaia-accent/90 text-white font-semibold rounded-lg transition-all shadow-lg shadow-gaia-accent/20 hover:shadow-gaia-accent/40">
+          Download GAIA
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+        </a>
       </div>
     </section>
 
@@ -148,13 +332,7 @@ import Footer from '../components/Footer.astro';
 </Layout>
 
 <style>
-  #dynamic-text-wrapper {
-    display: inline-block;
-    min-width: 3.2em;
-    text-align: left;
-  }
-
-  .cursor, .cursor-code {
+  .cursor-code {
     animation: blink 1s step-end infinite;
   }
 
@@ -181,7 +359,6 @@ import Footer from '../components/Footer.astro';
     50% { opacity: 0.5; }
   }
 
-  /* Neural Network Connections */
   .neural-network {
     position: absolute;
     inset: 0;
@@ -201,7 +378,6 @@ import Footer from '../components/Footer.astro';
     50% { opacity: 1; transform: scale(1.05); }
   }
 
-  /* Data Streams */
   .data-stream {
     position: absolute;
     width: 100%;
@@ -211,20 +387,9 @@ import Footer from '../components/Footer.astro';
     box-shadow: 0 0 10px rgba(237, 28, 36, 0.4);
   }
 
-  .stream-1 {
-    top: 25%;
-    animation: streamFlow1 6s linear infinite;
-  }
-
-  .stream-2 {
-    top: 50%;
-    animation: streamFlow2 8s linear infinite 2s;
-  }
-
-  .stream-3 {
-    top: 75%;
-    animation: streamFlow3 7s linear infinite 4s;
-  }
+  .stream-1 { top: 25%; animation: streamFlow1 6s linear infinite; }
+  .stream-2 { top: 50%; animation: streamFlow2 8s linear infinite 2s; }
+  .stream-3 { top: 75%; animation: streamFlow3 7s linear infinite 4s; }
 
   @keyframes streamFlow1 {
     0% { transform: translateX(-100%); opacity: 0; }
@@ -247,7 +412,6 @@ import Footer from '../components/Footer.astro';
     100% { transform: translateX(100%); opacity: 0; }
   }
 
-  /* Processor Glow (AMD NPU/iGPU activity) */
   .processor-glow {
     position: absolute;
     width: 600px;
@@ -271,28 +435,16 @@ import Footer from '../components/Footer.astro';
   }
 
   @keyframes processorPulse1 {
-    0%, 100% {
-      transform: scale(1);
-      opacity: 0.08;
-    }
-    50% {
-      transform: scale(1.3);
-      opacity: 0.12;
-    }
+    0%, 100% { transform: scale(1); opacity: 0.08; }
+    50% { transform: scale(1.3); opacity: 0.12; }
   }
 
   @keyframes processorPulse2 {
-    0%, 100% {
-      transform: scale(1);
-      opacity: 0.08;
-    }
-    50% {
-      transform: scale(1.2);
-      opacity: 0.1;
-    }
+    0%, 100% { transform: scale(1); opacity: 0.08; }
+    50% { transform: scale(1.2); opacity: 0.1; }
   }
 
-  /* 3D Popup Effects */
+  /* 3D popup effects on hero text + cards */
   h1, .bg-gaia-card {
     transform: translateZ(20px);
     box-shadow:
@@ -327,24 +479,47 @@ import Footer from '../components/Footer.astro';
     pointer-events: none;
   }
 
-  .bg-gaia-card::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(600px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
-      rgba(237, 28, 36, 0.1),
-      transparent 40%);
-    border-radius: inherit;
-    opacity: 0;
-    transition: opacity 0.3s;
-    pointer-events: none;
+  /* OS pill buttons */
+  .os-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    background: rgba(30, 30, 46, 0.5);
+    border: 1px solid #3f3f46;
+    border-radius: 0.5rem;
+    color: #d4d4d8;
+    font-size: 0.8rem;
+    transition: all 0.2s ease;
   }
 
-  .bg-gaia-card:hover::after {
-    opacity: 1;
+  .os-pill:hover {
+    background: rgba(30, 30, 46, 0.9);
+    border-color: rgba(237, 28, 36, 0.5);
+    color: #fff;
   }
 
-  /* Folder Tab Styling - Clean and Simple */
+  .os-pill.detected {
+    border-color: rgba(237, 28, 36, 0.6);
+    box-shadow: 0 0 0 1px rgba(237, 28, 36, 0.3);
+  }
+
+  /* Capability cards */
+  .capability-card {
+    padding: 1.25rem;
+    background: rgba(30, 30, 46, 0.4);
+    border: 1px solid #3f3f46;
+    border-radius: 0.75rem;
+    transition: all 0.2s ease;
+  }
+
+  .capability-card:hover {
+    border-color: rgba(237, 28, 36, 0.4);
+    background: rgba(30, 30, 46, 0.6);
+    transform: translateY(-2px);
+  }
+
+  /* Folder Tab Styling */
   .folder-tab, .os-tab {
     position: relative;
     padding: 0.5rem 0.75rem;
@@ -388,67 +563,107 @@ import Footer from '../components/Footer.astro';
     background: #1e1e2e;
     z-index: 2;
   }
+
+  /* Demo placeholder shimmer */
+  .demo-placeholder {
+    background: linear-gradient(135deg, rgba(30, 30, 46, 0.9) 0%, rgba(20, 20, 30, 0.9) 100%);
+  }
 </style>
 
 <script is:inline>
-  // Typewriter effect
-  const words = ['free', 'local', 'private', 'open'];
-  let wordIndex = 0;
-  let charIndex = 0;
-  let isDeleting = false;
-  const dynamicTextWrapper = document.getElementById('dynamic-text-wrapper');
-
-  function typeWriter() {
-    const currentWord = words[wordIndex];
-
-    if (isDeleting) {
-      // Erase characters
-      const text = currentWord.substring(0, charIndex - 1);
-      dynamicTextWrapper.innerHTML = text + '<span class="cursor">|</span>';
-      charIndex--;
-
-      if (charIndex === 0) {
-        isDeleting = false;
-        wordIndex = (wordIndex + 1) % words.length;
-        setTimeout(typeWriter, 500); // Pause before typing next word
-        return;
-      }
-    } else {
-      // Type characters
-      const text = currentWord.substring(0, charIndex + 1);
-      dynamicTextWrapper.innerHTML = text + '<span class="cursor">|</span>';
-      charIndex++;
-
-      if (charIndex === currentWord.length) {
-        isDeleting = true;
-        setTimeout(typeWriter, 2000); // Pause at end of word
-        return;
-      }
-    }
-
-    setTimeout(typeWriter, isDeleting ? 50 : 100); // Faster when deleting
+  // ===== Detect OS and pick the right primary download =====
+  function detectOS() {
+    const ua = navigator.userAgent;
+    if (/Win/i.test(ua)) return 'windows';
+    if (/Mac/i.test(ua)) return 'macos';
+    if (/Linux/i.test(ua)) return 'linux';
+    return 'unknown';
   }
 
-  // Start animation after a brief delay
-  setTimeout(typeWriter, 1000);
+  const osIcons = {
+    windows: '<path d="M3 5.479L10.5 4.5v7.5H3V5.479zm0 13.042V12h7.5v7.5L3 18.521zM11.5 12H21v7.5l-9.5-1V12zm0-7.5L21 3.5V11h-9.5V4.5z"/>',
+    macos: '<path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>',
+    linux: '<path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>'
+  };
 
-  // OS tab switching for install commands
+  const osLabels = {
+    windows: 'Download for Windows',
+    macos: 'Download for macOS',
+    linux: 'Download for Linux',
+    unknown: 'Download GAIA'
+  };
+
+  // ===== Fetch latest release and wire up direct-download URLs =====
+  async function fetchLatestRelease() {
+    const primaryBtn = document.getElementById('download-primary');
+    const primaryLabel = document.getElementById('download-label');
+    const primaryIcon = document.getElementById('download-os-icon');
+    const versionBadge = document.getElementById('download-version');
+    const detectedOS = detectOS();
+
+    // Update icon and label based on detected OS, even before fetch resolves
+    if (osIcons[detectedOS]) primaryIcon.innerHTML = osIcons[detectedOS];
+    primaryLabel.textContent = osLabels[detectedOS];
+
+    // Mark the matching pill button as detected
+    const pillMap = { windows: 'dl-windows', macos: 'dl-macos', linux: 'dl-linux-deb' };
+    const pillId = pillMap[detectedOS];
+    if (pillId) document.getElementById(pillId)?.classList.add('detected');
+
+    try {
+      const res = await fetch('https://api.github.com/repos/amd/gaia/releases/latest', {
+        headers: { Accept: 'application/vnd.github+json' }
+      });
+      if (!res.ok) throw new Error('GitHub API ' + res.status);
+      const data = await res.json();
+      const tag = data.tag_name || '';
+      const assets = data.assets || [];
+
+      // Match assets by suffix
+      const findAsset = (suffix) => assets.find(a => a.name.endsWith(suffix));
+      const winExe = findAsset('-x64-setup.exe');
+      const macDmgArm = findAsset('-arm64.dmg');
+      const macDmgIntel = findAsset('-x64.dmg') || findAsset('-x86_64.dmg');
+      const linuxDeb = findAsset('-amd64.deb');
+      const linuxApp = findAsset('-x86_64.AppImage');
+
+      // Update each pill with its direct download URL
+      if (winExe) document.getElementById('dl-windows').href = winExe.browser_download_url;
+      const macAsset = macDmgArm || macDmgIntel;
+      if (macAsset) document.getElementById('dl-macos').href = macAsset.browser_download_url;
+      if (linuxDeb) document.getElementById('dl-linux-deb').href = linuxDeb.browser_download_url;
+      if (linuxApp) document.getElementById('dl-linux-appimage').href = linuxApp.browser_download_url;
+
+      // Update primary button to point at detected OS asset
+      const primaryAsset = {
+        windows: winExe,
+        macos: macAsset,
+        linux: linuxDeb || linuxApp
+      }[detectedOS];
+
+      if (primaryAsset) {
+        primaryBtn.href = primaryAsset.browser_download_url;
+      }
+
+      if (tag) versionBadge.textContent = tag;
+    } catch (err) {
+      // Graceful fallback: leave links pointing at /releases/latest
+      console.warn('Could not fetch latest release, falling back to releases page', err);
+      versionBadge.textContent = 'latest';
+    }
+  }
+
+  fetchLatestRelease();
+
+  // ===== SDK install: OS tab switching =====
   const osTabs = document.querySelectorAll('.os-tab');
   const installCmds = document.querySelectorAll('.install-cmd');
 
   osTabs.forEach(tab => {
     tab.addEventListener('click', () => {
       const targetOS = tab.getAttribute('data-os');
-
-      // Update tab states
-      osTabs.forEach(t => {
-        t.classList.remove('active', 'bg-gaia-accent', 'text-white');
-        t.classList.add('bg-gaia-border', 'text-gaia-muted');
-      });
-      tab.classList.add('active', 'bg-gaia-accent', 'text-white');
-      tab.classList.remove('bg-gaia-border', 'text-gaia-muted');
-
-      // Show/hide install commands
+      osTabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
       installCmds.forEach(cmd => {
         if (cmd.id === `install-${targetOS}`) {
           cmd.classList.remove('hidden');
@@ -459,20 +674,16 @@ import Footer from '../components/Footer.astro';
     });
   });
 
-  // Copy buttons for install commands
-  const copyInstallBtns = document.querySelectorAll('.copy-install-btn');
-  copyInstallBtns.forEach(btn => {
+  // ===== Copy buttons for install commands =====
+  document.querySelectorAll('.copy-install-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const text = btn.getAttribute('data-copy') || '';
       await navigator.clipboard.writeText(text);
-
-      // Change to checkmark icon
       const originalIcon = btn.innerHTML;
       btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
       </svg>`;
       btn.classList.add('text-green-400');
-
       setTimeout(() => {
         btn.innerHTML = originalIcon;
         btn.classList.remove('text-green-400');
@@ -480,7 +691,7 @@ import Footer from '../components/Footer.astro';
     });
   });
 
-  // Code examples - match "Built For" section
+  // ===== Code typewriter for SDK section =====
   const codeExamples = {
     docs: `<span class="text-purple-400">from</span> <span class="text-yellow-400">gaia.rag.sdk</span> <span class="text-purple-400">import</span> RAGSDK, RAGConfig
 
@@ -569,7 +780,6 @@ agent.process_query(<span class="text-green-400">"What's the weather in Austin?"
 <span class="text-gaia-muted"># ✅ GitHub, Slack, databases, and more</span>`
   };
 
-  // Plain text versions for copying
   const codePlainText = {
     docs: `from gaia.rag.sdk import RAGSDK, RAGConfig
 
@@ -658,20 +868,16 @@ agent.process_query("What's the weather in Austin?")
 # ✅ GitHub, Slack, databases, and more`
   };
 
-  // Copy button for code examples
   const copyCodeBtn = document.getElementById('copy-code-btn');
   if (copyCodeBtn) {
     copyCodeBtn.addEventListener('click', async () => {
       const text = codePlainText[currentTab] || '';
       await navigator.clipboard.writeText(text);
-
-      // Change to checkmark icon
       const originalIcon = copyCodeBtn.innerHTML;
       copyCodeBtn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
       </svg>`;
       copyCodeBtn.classList.add('text-green-400');
-
       setTimeout(() => {
         copyCodeBtn.innerHTML = originalIcon;
         copyCodeBtn.classList.remove('text-green-400');
@@ -679,45 +885,31 @@ agent.process_query("What's the weather in Austin?")
     });
   }
 
-  // Code typing animation
   let currentCodeIndex = 0;
   let typingTimeoutId = null;
   const codeDisplay = document.getElementById('code-display');
   let currentTab = 'docs';
 
   function typeCode(code, callback) {
-    // Cancel any ongoing typing animation
     if (typingTimeoutId) {
       clearTimeout(typingTimeoutId);
       typingTimeoutId = null;
     }
-
-    // Clear current code
     codeDisplay.innerHTML = '<span class="cursor-code">|</span>';
     currentCodeIndex = 0;
-
-    // Strip HTML to get plain text for character counting
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = code;
     const plainText = tempDiv.textContent || tempDiv.innerText;
 
     function type() {
       if (currentCodeIndex < plainText.length) {
-        // Get the HTML substring up to current position
-        let htmlSoFar = '';
-        let charCount = 0;
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(code, 'text/html');
-
-        // Simple approach: show progressively more of the HTML
         const percentage = currentCodeIndex / plainText.length;
         const htmlLength = code.length;
         const showUpTo = Math.floor(htmlLength * percentage);
-        htmlSoFar = code.substring(0, showUpTo);
-
+        const htmlSoFar = code.substring(0, showUpTo);
         codeDisplay.innerHTML = htmlSoFar + '<span class="cursor-code">|</span>';
         currentCodeIndex++;
-        typingTimeoutId = setTimeout(type, 10); // Fast typing speed
+        typingTimeoutId = setTimeout(type, 10);
       } else {
         codeDisplay.innerHTML = code + '<span class="cursor-code">|</span>';
         typingTimeoutId = null;
@@ -728,31 +920,21 @@ agent.process_query("What's the weather in Austin?")
     type();
   }
 
-  // Tab switching with code animation
   const tabButtons = document.querySelectorAll('.folder-tab');
-
   tabButtons.forEach(button => {
     button.addEventListener('click', () => {
       const targetTab = button.getAttribute('data-tab');
-      const fileName = button.getAttribute('data-file');
-
-      if (targetTab === currentTab) return; // Don't re-type same tab
-
+      if (targetTab === currentTab) return;
       currentTab = targetTab;
-
-      // Update button states
-      tabButtons.forEach(btn => {
-        btn.classList.remove('active');
-      });
+      tabButtons.forEach(btn => btn.classList.remove('active'));
       button.classList.add('active');
-
-      // Type the new code (this will cancel any ongoing animation)
       typeCode(codeExamples[targetTab]);
     });
   });
 
-  // Type initial code on load
   setTimeout(() => {
     typeCode(codeExamples['docs']);
   }, 500);
 </script>
+</content>
+</invoke>
