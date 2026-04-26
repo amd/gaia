@@ -35,7 +35,7 @@ import Footer from '../components/Footer.astro';
           </h1>
 
           <p class="text-xl text-gaia-muted mb-10 max-w-lg leading-relaxed">
-            GAIA is the open-source desktop app and SDK for running AI agents locally on AMD Ryzen AI hardware. Chat with your documents in the app today; build voice, code, and image agents with the SDK — without sending a single token to the cloud.
+            GAIA is the open-source desktop app and SDK for running AI agents locally on AMD Ryzen AI hardware. Chat with your documents in the app today; build voice, code, and image agents with the SDK — running entirely on your machine.
           </p>
 
           <!-- Download CTAs -->
@@ -159,7 +159,7 @@ import Footer from '../components/Footer.astro';
     <section class="px-4 sm:px-6 lg:px-8 py-20 border-t border-gaia-border/50">
       <div class="max-w-7xl mx-auto">
         <div class="text-center mb-10">
-          <h2 class="text-3xl lg:text-4xl font-bold text-white mb-3">Everything an AI assistant can do —<br /><span class="text-gaia-accent">without the cloud bill.</span></h2>
+          <h2 class="text-3xl lg:text-4xl font-bold text-white mb-3">What GAIA can do today.</h2>
           <p class="text-gaia-muted max-w-2xl mx-auto">Some capabilities ship inside the desktop app today; the rest live in the GAIA Python SDK while the app catches up.</p>
           <div class="flex justify-center gap-4 mt-5 text-xs">
             <span class="inline-flex items-center gap-1.5"><span class="badge badge-today">Today</span><span class="text-gaia-muted">In the Agent UI app</span></span>
@@ -203,13 +203,6 @@ import Footer from '../components/Footer.astro';
             </div>
             <p class="text-sm text-gaia-muted">Stable Diffusion XL Turbo on the iGPU. Prompt → PNG in seconds, fully offline.</p>
           </div>
-          <div class="capability-card">
-            <div class="flex items-start justify-between gap-2 mb-1">
-              <h3 class="font-semibold text-white">Automate Blender</h3>
-              <span class="badge badge-sdk flex-shrink-0">SDK</span>
-            </div>
-            <p class="text-sm text-gaia-muted">Drive 3D scene creation by chat — the agent talks to Blender over MCP.</p>
-          </div>
         </div>
       </div>
     </section>
@@ -221,13 +214,12 @@ import Footer from '../components/Footer.astro';
       <div class="max-w-5xl mx-auto">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
           <div>
-            <p class="text-xs text-gaia-accent uppercase tracking-wider mb-3 font-semibold">Why local</p>
-            <h2 class="text-3xl lg:text-4xl font-bold text-white mb-5">Stop renting AI.<br />Start owning it.</h2>
+            <p class="text-xs text-gaia-accent uppercase tracking-wider mb-5 font-semibold">Why local</p>
             <ul class="space-y-3 text-gaia-muted">
               <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">No API keys.</strong> No spend. No rate limits.</span></li>
-              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">No data leaves your PC.</strong> HIPAA-friendly by construction — there is nowhere for it to go.</span></li>
+              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">No data leaves your PC.</strong> Files, prompts, and model outputs all stay local.</span></li>
               <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">NPU + iGPU acceleration.</strong> Optimised for AMD Ryzen AI via Lemonade Server.</span></li>
-              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">Open source, MIT licensed.</strong> Fork it, ship it inside your product, run it on a plane.</span></li>
+              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">Open source, MIT licensed.</strong> Fork it, ship it inside your product, use it offline.</span></li>
             </ul>
           </div>
 
@@ -342,8 +334,7 @@ import Footer from '../components/Footer.astro';
     <!-- ============================================================== -->
     <section class="px-4 sm:px-6 lg:px-8 py-20 border-t border-gaia-border/50">
       <div class="max-w-3xl mx-auto text-center">
-        <h2 class="text-3xl lg:text-4xl font-bold text-white mb-4">Ready to own your AI?</h2>
-        <p class="text-gaia-muted mb-8">Free, open source, and shipped today.</p>
+        <p class="text-gaia-muted mb-6">Free. MIT-licensed. No signup.</p>
         <a id="download-final" href="https://github.com/amd/gaia/releases/latest" class="inline-flex items-center gap-3 px-8 py-4 bg-gaia-accent hover:bg-gaia-accent/90 text-white font-semibold rounded-lg transition-all shadow-lg shadow-gaia-accent/20 hover:shadow-gaia-accent/40">
           <span id="download-final-label">Download GAIA</span>
           <span id="download-final-version" class="text-xs font-mono opacity-80"></span>
