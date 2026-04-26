@@ -203,19 +203,33 @@ class AgentRegistry:
         )
         logger.info("registry: Registered built-in agent: chat (ChatAgent)")
 
-        # --- Gaia Lite (smaller 4B model, Mac/low-memory friendly) ---
-        # Reuses the full ChatAgent feature set but presets model_id to a 4B
-        # checkpoint so it runs on hardware that can't host the 35B default.
-        # It's an agent (tools + RAG + MCP), not a bare chat bot — the "Lite"
-        # refers only to the model size. The preset is applied via setdefault
-        # so callers can still override (e.g. for tests or explicit user
-        # selection).
+        # --- Gaia Lite (smaller ~4B model, Mac/low-memory friendly) ---
+        # Reuses the full ChatAgent feature set but presets model_id to a
+        # compact ~4B checkpoint so it runs on hardware that can't host the
+        # 35B default. It's an agent (tools + RAG + MCP), not a bare chat
+        # bot — the "Lite" refers only to the model size. The preset is
+        # applied via setdefault so callers can still override (e.g. for
+        # tests or explicit user selection).
+        #
+        # Primary: Gemma-4-E4B-it-GGUF — current-gen Google Gemma at ~4B
+        # effective params, strong instruction-following at low footprint,
+        # natively multimodal, 128K context, Apache 2.0.
+        # Fallback: Gemma-3-4b-it-GGUF — prior-gen, widely available in
+        # Lemonade catalogs that haven't picked up the Gemma 4 drop yet.
+        # Single source of truth — the factory's setdefault below MUST agree
+        # with this list's first entry, or the runtime preset and the UI's
+        # advertised primary will diverge.
+        _GAIA_LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Gemma-3-4b-it-GGUF"]
+
         def gaia_lite_factory(**kwargs):
             from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
             valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
             filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-            filtered.setdefault("model_id", "Qwen3-4B-Instruct-2507-GGUF")
+            # setdefault pulls from the registration's preferred-models list
+            # so the runtime preset stays in lockstep with the UI's advertised
+            # primary — change the list, the factory follows automatically.
+            filtered.setdefault("model_id", _GAIA_LITE_MODELS[0])
             config = ChatAgentConfig(**filtered)
             return ChatAgent(config=config)
 
@@ -225,7 +239,7 @@ class AgentRegistry:
                 name="Gaia Lite",
                 description=(
                     "Lightweight GAIA agent — same features as the default Chat "
-                    "Agent (RAG, file tools, MCP) but runs on a 4B model, "
+                    "Agent (RAG, file tools, MCP) but runs on a ~4B model, "
                     "suitable for Mac and other hardware that cannot host the "
                     "35B default."
                 ),
@@ -237,15 +251,16 @@ class AgentRegistry:
                 ],
                 factory=gaia_lite_factory,
                 agent_dir=None,
-                models=["Qwen3-4B-Instruct-2507-GGUF", "Qwen3-4B-GGUF"],
-                # Qwen3-4B Q4_K_M weights are ~2.5 GB; add context + runtime
-                # headroom → 5 GB is the comfortable floor. Under this the UI
-                # warns that load may fail or swap heavily.
+                models=_GAIA_LITE_MODELS,
+                # Gemma 4 E4B Q4 GGUF weights are ~2.7 GB; add KV-cache +
+                # runtime headroom → 5 GB is the comfortable floor. Below
+                # this the UI warns that load may fail or swap heavily.
                 min_memory_gb=5.0,
             )
         )
         logger.info(
-            "registry: Registered built-in agent: gaia-lite (ChatAgent with Qwen3-4B)"
+            "registry: Registered built-in agent: gaia-lite (ChatAgent, primary %s)",
+            _GAIA_LITE_MODELS[0],
         )
 
         # --- BuilderAgent ---
