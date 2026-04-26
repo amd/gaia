@@ -1513,6 +1513,51 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
                     }
                 except Exception as e:
                     return {"status": "error", "error": str(e)}
+            elif system == "Darwin":
+                # macOS: AppleScript via osascript (always present on Mac).
+                # System Events returns every visible (non-background) process,
+                # which is the equivalent of "open apps" for users.
+                try:
+                    import subprocess
+
+                    script = (
+                        'tell application "System Events" to get name of '
+                        "every process whose background only is false"
+                    )
+                    result = subprocess.run(
+                        ["osascript", "-e", script],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        # osascript returns names comma-space-separated.
+                        names = [
+                            x.strip()
+                            for x in result.stdout.strip().split(",")
+                            if x.strip()
+                        ]
+                        for nm in names:
+                            windows.append({"title": nm, "process": nm})
+                        return {
+                            "status": "success",
+                            "windows": windows,
+                            "count": len(windows),
+                            "note": (
+                                "macOS: visible apps from System Events "
+                                "(Mission Control equivalent)"
+                            ),
+                        }
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+                return {
+                    "status": "error",
+                    "error": (
+                        "Window listing failed on macOS. osascript may "
+                        "have been blocked by accessibility permissions."
+                    ),
+                }
             else:
                 try:
                     import subprocess

@@ -2097,69 +2097,102 @@ Do NOT wrap conversational replies in JSON.
                             prompt, f"Prompt (Step {steps_taken})"
                         )
 
-                # Get streaming response from AgentSDK with proper conversation history
-                try:
-                    response_stream = self.chat.send_messages_stream(
-                        messages=messages,
-                        system_prompt=self.system_prompt,
-                        tools=self._openai_tools,
-                    )
+                # Get streaming response. Same context-overflow retry-on-trim
+                # behaviour as the non-streaming branch below — needed because
+                # multi-step ReAct loops accumulate tool results in `messages`.
+                _retried_after_trim_stream = False
+                while True:
+                    try:
+                        response_stream = self.chat.send_messages_stream(
+                            messages=messages,
+                            system_prompt=self.system_prompt,
+                            tools=self._openai_tools,
+                        )
 
-                    # Process the streaming response chunks as they arrive
-                    full_response = ""
-                    for chunk_response in response_stream:
-                        if chunk_response.is_complete:
-                            response_stats = chunk_response.stats
-                            # Non-empty complete chunk = tool_calls sentinel from
-                            # native tool-calling path (no streaming for tool calls)
-                            if chunk_response.text:
-                                full_response = chunk_response.text
+                        # Process the streaming response chunks as they arrive
+                        full_response = ""
+                        for chunk_response in response_stream:
+                            if chunk_response.is_complete:
+                                response_stats = chunk_response.stats
+                                # Non-empty complete chunk = tool_calls sentinel from
+                                # native tool-calling path (no streaming for tool calls)
+                                if chunk_response.text:
+                                    full_response = chunk_response.text
+                            else:
+                                self.console.print_streaming_text(chunk_response.text)
+                                full_response += chunk_response.text
+
+                        self.console.print_streaming_text("", end_of_stream=True)
+                        response = full_response
+                        break
+                    except ConnectionError as e:
+                        error_msg = (
+                            f"LLM Server Connection Failed (streaming): {str(e)}"
+                        )
+                        logger.error(error_msg)
+                        self.console.print_error(error_msg)
+                        self.error_history.append(
+                            {
+                                "step": steps_taken,
+                                "error": error_msg,
+                                "type": "llm_connection_error",
+                            }
+                        )
+                        final_answer = (
+                            f"I'm having trouble reaching the language model right now. "
+                            f"Please make sure Lemonade Server is running.\n\n"
+                            f"*Technical details: {str(e)}*"
+                        )
+                        break
+                    except Exception as e:
+                        logger.error(f"Unexpected error during streaming: {e}")
+                        err_text = str(e).lower()
+                        is_ctx_overflow = (
+                            "exceed_context_size" in err_text
+                            or "exceeds the available context size" in err_text
+                            or "got too long" in err_text
+                        )
+                        if is_ctx_overflow and not _retried_after_trim_stream:
+                            trimmed = messages[:1]
+                            tail = messages[-4:]
+                            messages = trimmed + tail
+                            self.error_history.append(
+                                {
+                                    "step": steps_taken,
+                                    "error": str(e),
+                                    "type": "llm_context_overflow_trimmed",
+                                }
+                            )
+                            logger.warning(
+                                "Context overflow mid-loop (streaming) — "
+                                "trimmed messages to %d entries and retrying",
+                                len(messages),
+                            )
+                            _retried_after_trim_stream = True
+                            continue
+
+                        self.error_history.append(
+                            {
+                                "step": steps_taken,
+                                "error": str(e),
+                                "type": "llm_streaming_error",
+                            }
+                        )
+                        if is_ctx_overflow:
+                            final_answer = (
+                                "I had to trim the conversation to fit my "
+                                "memory but I'm still not making progress. "
+                                "Could you re-ask in a fresh chat with just "
+                                "the essentials?"
+                            )
                         else:
-                            self.console.print_streaming_text(chunk_response.text)
-                            full_response += chunk_response.text
-
-                    self.console.print_streaming_text("", end_of_stream=True)
-                    response = full_response
-                except ConnectionError as e:
-                    # Handle LLM server connection errors specifically
-                    error_msg = f"LLM Server Connection Failed (streaming): {str(e)}"
-                    logger.error(error_msg)
-                    self.console.print_error(error_msg)
-
-                    # Add error to history
-                    self.error_history.append(
-                        {
-                            "step": steps_taken,
-                            "error": error_msg,
-                            "type": "llm_connection_error",
-                        }
-                    )
-
-                    # Return error response
-                    final_answer = (
-                        f"I'm having trouble reaching the language model right now. "
-                        f"Please make sure Lemonade Server is running.\n\n"
-                        f"*Technical details: {str(e)}*"
-                    )
-                    break
-                except Exception as e:
-                    logger.error(f"Unexpected error during streaming: {e}")
-
-                    # Add to error history
-                    self.error_history.append(
-                        {
-                            "step": steps_taken,
-                            "error": str(e),
-                            "type": "llm_streaming_error",
-                        }
-                    )
-
-                    # Return error response
-                    final_answer = (
-                        f"Sorry, I ran into a problem while processing your request. "
-                        f"This might be a temporary issue — try again in a moment.\n\n"
-                        f"*Technical details: {str(e)}*"
-                    )
+                            final_answer = (
+                                f"Sorry, I ran into a problem while processing your request. "
+                                f"This might be a temporary issue — try again in a moment.\n\n"
+                                f"*Technical details: {str(e)}*"
+                            )
+                        break
+                if final_answer is not None:
                     break
             else:
                 # Use progress indicator for non-streaming mode
@@ -2188,54 +2221,103 @@ Do NOT wrap conversational replies in JSON.
                             f"[DEBUG] Current step: {self.current_step}/{self.total_plan_steps}"
                         )
 
-                # Get complete response from AgentSDK
-                try:
-                    chat_response = self.chat.send_messages(
-                        messages=messages,
-                        system_prompt=self.system_prompt,
-                        tools=self._openai_tools,
-                    )
-                    response = chat_response.text
-                    response_stats = chat_response.stats
-                except ConnectionError as e:
-                    self.console.stop_progress()
-                    error_msg = f"LLM Server Connection Failed: {str(e)}"
-                    logger.error(error_msg)
-                    self.console.print_error(error_msg)
+                # Get complete response from AgentSDK. On context overflow
+                # mid-loop (the cumulative messages array got too long during
+                # this turn — common after several search_file/index calls),
+                # trim the oldest tool-result messages and retry ONCE before
+                # giving up. Keeps the conversation salvageable instead of
+                # failing the whole turn.
+                _retried_after_trim = False
+                while True:
+                    try:
+                        chat_response = self.chat.send_messages(
+                            messages=messages,
+                            system_prompt=self.system_prompt,
+                            tools=self._openai_tools,
+                        )
+                        response = chat_response.text
+                        response_stats = chat_response.stats
+                        break  # success → exit retry loop
+                    except ConnectionError as e:
+                        self.console.stop_progress()
+                        error_msg = f"LLM Server Connection Failed: {str(e)}"
+                        logger.error(error_msg)
+                        self.console.print_error(error_msg)
+                        self.error_history.append(
+                            {
+                                "step": steps_taken,
+                                "error": error_msg,
+                                "type": "llm_connection_error",
+                            }
+                        )
+                        final_answer = (
+                            f"I'm having trouble reaching the language model right now. "
+                            f"Please make sure Lemonade Server is running.\n\n"
+                            f"*Technical details: {str(e)}*"
+                        )
+                        break
+                    except Exception as e:
+                        self.console.stop_progress()
+                        if self.debug:
+                            print(f"[DEBUG] Error calling LLM: {e}")
+                        logger.error(f"Unexpected error calling LLM: {e}")
 
-                    # Add error to history and update state
-                    self.error_history.append(
-                        {
-                            "step": steps_taken,
-                            "error": error_msg,
-                            "type": "llm_connection_error",
-                        }
-                    )
+                        # Did we hit a context-overflow mid-loop? Detect by
+                        # substring (typed exceptions get wrapped by AgentSDK).
+                        err_text = str(e).lower()
+                        is_ctx_overflow = (
+                            "exceed_context_size" in err_text
+                            or "exceeds the available context size" in err_text
+                            or "got too long" in err_text
+                        )
+                        if is_ctx_overflow and not _retried_after_trim:
+                            # Trim the OLDEST tool-result entries from messages.
+                            # Keep the user input (first message) and the most
+                            # recent 2 turns so the model still sees current
+                            # context.
+                            trimmed = messages[:1]  # original user query
+                            tail = messages[-4:]  # last 2 turn pairs roughly
+                            messages = trimmed + tail
+                            self.error_history.append(
+                                {
+                                    "step": steps_taken,
+                                    "error": str(e),
+                                    "type": "llm_context_overflow_trimmed",
+                                }
+                            )
+                            logger.warning(
+                                "Context overflow mid-loop — trimmed messages "
+                                "to %d entries and retrying once",
+                                len(messages),
+                            )
+                            _retried_after_trim = True
+                            continue  # retry with smaller payload
 
-                    # Return error response
-                    final_answer = (
-                        f"I'm having trouble reaching the language model right now. "
-                        f"Please make sure Lemonade Server is running.\n\n"
-                        f"*Technical details: {str(e)}*"
-                    )
-                    break
-                except Exception as e:
-                    self.console.stop_progress()
-                    if self.debug:
-                        print(f"[DEBUG] Error calling LLM: {e}")
-                    logger.error(f"Unexpected error calling LLM: {e}")
-
-                    # Add to error history
-                    self.error_history.append(
-                        {"step": steps_taken, "error": str(e), "type": "llm_error"}
-                    )
-
-                    # Return error response
-                    final_answer = (
-                        f"Sorry, I ran into an unexpected problem. "
-                        f"This might be a temporary issue — try again in a moment.\n\n"
-                        f"*Technical details: {str(e)}*"
-                    )
+                        # Either context-overflow after trim, or unrelated.
+                        # Give up gracefully.
+                        self.error_history.append(
+                            {
+                                "step": steps_taken,
+                                "error": str(e),
+                                "type": "llm_error",
+                            }
+                        )
+                        if is_ctx_overflow:
+                            final_answer = (
+                                "I had to trim the conversation to fit my "
+                                "memory but I'm still not making progress. "
+                                "Could you re-ask in a fresh chat with just "
+                                "the essentials?"
+                            )
+                        else:
+                            final_answer = (
+                                f"Sorry, I ran into an unexpected problem. "
+                                f"This might be a temporary issue — try "
+                                f"again in a moment.\n\n"
+                                f"*Technical details: {str(e)}*"
+                            )
+                        break
+                if final_answer is not None:
                     break
 
                 # Stop the progress indicator
