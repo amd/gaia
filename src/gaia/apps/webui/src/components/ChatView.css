@@ -834,16 +834,11 @@
     position: relative;
 }
 
-/* Block cursor — terminal aesthetic, tracks caret position via inline style */
-.input-cursor {
-    position: absolute;
-    width: 10px;
-    height: 18px;
-    background: var(--amd-red);
-    animation: cursorBlink 1s step-end infinite;
-    pointer-events: none;
-    box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
-}
+/* Custom block cursor in the input box was removed — its 1 Hz red
+ * blink + red glow was visually distracting on every chat screen.
+ * The native browser caret is enough.  ``cursorBlink`` keyframes are
+ * still defined globally and used by the terminal-style cursors in
+ * AgentActivity / MessageBubble streaming indicators. */
 
 .input-box.has-attachments {
     flex-direction: column;
