@@ -39,6 +39,7 @@ static const char* kFilterLLM    = "LLMIntegrationTest.*";
 static const char* kFilterMCP    = "IntegrationMCP.*";
 static const char* kFilterWiFi   = "IntegrationWiFi.*";
 static const char* kFilterHealth = "IntegrationHealth*.*";
+static const char* kFilterVLM    = "VLMIntegrationTest.*";
 static const char* kFilterAll    = "*";
 
 // ---------------------------------------------------------------------------
@@ -56,7 +57,8 @@ static const MenuItem kTestMenu[] = {
     {"MCP tests",    "connection, tool discovery, reconnect, prompt rebuild  (5 tests)", kFilterMCP},
     {"WiFi tests",   "real PowerShell diagnostics + LLM reasoning  (4 tests)",          kFilterWiFi},
     {"Health tests", "LLM + MCP + real PowerShell system health  (3 tests)",            kFilterHealth},
-    {"All tests",    "run everything  (17 tests)",                                      kFilterAll},
+    {"VLM tests",    "live Lemonade vision model smoke + ctx overflow  (3 tests)",      kFilterVLM},
+    {"All tests",    "run everything  (20 tests)",                                      kFilterAll},
 };
 static constexpr size_t kMenuSize = sizeof(kTestMenu) / sizeof(kTestMenu[0]);
 
@@ -90,6 +92,7 @@ struct CliOptions {
     bool mcp    = false;
     bool wifi   = false;
     bool health = false;
+    bool vlm    = false;
     bool all    = false;
     std::string model;
     std::string url;
@@ -104,6 +107,7 @@ static CliOptions parseCli(int argc, char** argv) {
         else if (arg == "--mcp")    { opts.mcp = true; opts.hasSection = true; }
         else if (arg == "--wifi")   { opts.wifi = true; opts.hasSection = true; }
         else if (arg == "--health") { opts.health = true; opts.hasSection = true; }
+        else if (arg == "--vlm")    { opts.vlm = true; opts.hasSection = true; }
         else if (arg == "--all")    { opts.all = true; opts.hasSection = true; }
         else if (arg == "--model" && i + 1 < argc) { opts.model = argv[++i]; }
         else if (arg == "--url"   && i + 1 < argc) { opts.url   = argv[++i]; }
@@ -122,6 +126,7 @@ static std::string buildFilter(const CliOptions& opts) {
     if (opts.mcp)    filters.push_back(kFilterMCP);
     if (opts.wifi)   filters.push_back(kFilterWiFi);
     if (opts.health) filters.push_back(kFilterHealth);
+    if (opts.vlm)    filters.push_back(kFilterVLM);
 
     if (filters.empty()) return kFilterAll;
 
@@ -167,7 +172,7 @@ static std::string showMenu() {
               << "  ========================================================================================"
               << color::RESET << std::endl;
     std::cout << color::GRAY
-              << "  CLI: --llm --mcp --wifi --health --all  |  --model <id>  --url <base-url>"
+              << "  CLI: --llm --mcp --wifi --health --vlm --all  |  --model <id>  --url <base-url>"
               << color::RESET << std::endl;
     std::cout << std::endl;
     std::cout << color::BOLD << "  > " << color::RESET << std::flush;

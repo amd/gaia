@@ -120,3 +120,121 @@ class TestAgentsRouterWithoutRegistry:
         client = TestClient(app)
         resp = client.get("/api/agents")
         assert resp.status_code == 503
+
+
+class TestExportImportSecurityGuards:
+    """Verify the three security guards on export/import endpoints.
+
+    TestClient uses host="testclient" (not in _LOCALHOST_HOSTS), so the
+    localhost guard fires naturally for non-localhost tests.
+    """
+
+    def test_non_localhost_export_returns_403(self, app_with_registry):
+        client = TestClient(app_with_registry)
+        resp = client.post("/api/agents/export", headers={"X-Gaia-UI": "1"})
+        assert resp.status_code == 403
+
+    def test_non_localhost_import_returns_403(self, app_with_registry):
+        client = TestClient(app_with_registry)
+        resp = client.post(
+            "/api/agents/import",
+            headers={"X-Gaia-UI": "1"},
+            files={"bundle": ("x.zip", b"", "application/zip")},
+        )
+        assert resp.status_code == 403
+
+    def test_missing_ui_header_export_returns_403(self, app_with_registry):
+        from gaia.ui.routers.agents import _require_localhost
+
+        app_with_registry.dependency_overrides[_require_localhost] = lambda: None
+        try:
+            client = TestClient(app_with_registry)
+            resp = client.post("/api/agents/export")  # no X-Gaia-UI header
+            assert resp.status_code == 403
+        finally:
+            app_with_registry.dependency_overrides.clear()
+
+    def test_missing_ui_header_import_returns_403(self, app_with_registry):
+        from gaia.ui.routers.agents import _require_localhost
+
+        app_with_registry.dependency_overrides[_require_localhost] = lambda: None
+        try:
+            client = TestClient(app_with_registry)
+            resp = client.post(
+                "/api/agents/import",
+                files={"bundle": ("x.zip", b"", "application/zip")},
+            )
+            assert resp.status_code == 403
+        finally:
+            app_with_registry.dependency_overrides.clear()
+
+    def test_tunnel_active_export_returns_503(self, app_with_registry, monkeypatch):
+        import gaia.ui.server as _srv
+        from gaia.ui.routers.agents import _require_localhost
+
+        # TestClient uses scope["client"] = ("testclient", 50000); treat it as
+        # localhost so TunnelAuthMiddleware passes through and _require_tunnel_inactive
+        # can fire its 503 instead of the middleware's 401.
+        monkeypatch.setattr(_srv, "_LOCAL_HOSTS", _srv._LOCAL_HOSTS | {"testclient"})
+
+        mock_tunnel = MagicMock()
+        mock_tunnel.active = True
+        app_with_registry.state.tunnel = mock_tunnel
+        app_with_registry.dependency_overrides[_require_localhost] = lambda: None
+        try:
+            client = TestClient(app_with_registry)
+            resp = client.post("/api/agents/export", headers={"X-Gaia-UI": "1"})
+            assert resp.status_code == 503
+        finally:
+            app_with_registry.dependency_overrides.clear()
+            del app_with_registry.state.tunnel
+
+    def test_tunnel_active_import_returns_503(self, app_with_registry, monkeypatch):
+        import gaia.ui.server as _srv
+        from gaia.ui.routers.agents import _require_localhost
+
+        monkeypatch.setattr(_srv, "_LOCAL_HOSTS", _srv._LOCAL_HOSTS | {"testclient"})
+
+        mock_tunnel = MagicMock()
+        mock_tunnel.active = True
+        app_with_registry.state.tunnel = mock_tunnel
+        app_with_registry.dependency_overrides[_require_localhost] = lambda: None
+        try:
+            client = TestClient(app_with_registry)
+            resp = client.post(
+                "/api/agents/import",
+                headers={"X-Gaia-UI": "1"},
+                files={"bundle": ("x.zip", b"", "application/zip")},
+            )
+            assert resp.status_code == 503
+        finally:
+            app_with_registry.dependency_overrides.clear()
+            del app_with_registry.state.tunnel
+
+
+class TestRouteShadowing:
+    """Confirm that literal /export and /import routes shadow the {agent_id:path} wildcard.
+
+    TestClient sends from host "testclient" (not localhost), so the localhost guard
+    fires 403 — which proves the named route resolved first (405 would mean it didn't).
+    """
+
+    def test_post_export_resolves_named_route_not_wildcard(self, client):
+        resp = client.post("/api/agents/export", headers={"X-Gaia-UI": "1"})
+        assert resp.status_code == 403
+        assert "method not allowed" not in resp.text.lower()
+
+    def test_post_import_resolves_named_route_not_wildcard(self, client):
+        resp = client.post(
+            "/api/agents/import",
+            headers={"X-Gaia-UI": "1"},
+            files={"bundle": ("x.zip", b"", "application/zip")},
+        )
+        assert resp.status_code == 403
+        assert "method not allowed" not in resp.text.lower()
+
+    def test_get_export_returns_404_not_405(self, client):
+        # GET /api/agents/export is handled by the GET /{agent_id:path} route;
+        # "export" is not a registered agent, so 404 is expected — not 405.
+        resp = client.get("/api/agents/export")
+        assert resp.status_code == 404

@@ -1,0 +1,17 @@
+{
+  "model": "Gemma-4-E4B-it-GGUF",
+  "commit": "d71cd914",
+  "date": "2026-04-24",
+  "lemonade_url": "https://itomek-gaia-1.ngrok.app/api/v1",
+  "lemonade_version": "10.2.0",
+  "gemma_ctx_size": 32768,
+  "categories": ["tool_selection", "rag_quality", "context_retention"],
+  "purpose": "post-swap baseline, first eval on Gemma 4 E4B with native tool_calls on Lemonade v10.2.0",
+  "eval_model": "claude-sonnet-4-6",
+  "hardware": "AMD Ryzen 9 9950X + gfx1036 iGPU (2GB VRAM)",
+  "rerun_notes": {
+    "initial_run": "Lemonade initially loaded Gemma with default ctx_size=4096, causing 3 ctx-overflow failures (budget_query, smart_discovery, cross_turn_file_recall).",
+    "reloaded": "Reloaded Gemma with ctx_size=32768; re-ran the 3 affected scenarios and all passed.",
+    "known_path_read_rerun": "Also re-ran known_path_read after reload; still FAIL at 5.6. Confirms real model regression, not ctx-masked. Kept original 6.67 score in the scorecard."
+  }
+}

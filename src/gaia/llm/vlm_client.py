@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Default Lemonade server URL (can be overridden via LEMONADE_BASE_URL env var)
-DEFAULT_LEMONADE_URL = "http://localhost:8000/api/v1"
+DEFAULT_LEMONADE_URL = "http://localhost:13305/api/v1"
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class VLMClient:
 
     def __init__(
         self,
-        vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF",
+        vlm_model: str = "Gemma-4-E4B-it-GGUF",
         base_url: Optional[str] = None,
         auto_load: bool = True,
     ):
@@ -95,7 +95,7 @@ class VLMClient:
         # Parse base_url to extract host and port for LemonadeClient
         parsed = urlparse(base_url)
         host = parsed.hostname or "localhost"
-        port = parsed.port or 8000
+        port = parsed.port or 13305
 
         # Get base server URL (without /api/v1) for user-facing messages
         self.server_url = f"http://{host}:{port}"

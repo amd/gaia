@@ -281,7 +281,8 @@ export function FileBrowser() {
         });
         if (!hasSupported) {
             const firstFile = files[0];
-            const ext = '.' + firstFile.split('.').pop()?.toLowerCase();
+            const dotIdx = firstFile.lastIndexOf('.');
+            const ext = dotIdx > 0 ? firstFile.slice(dotIdx).toLowerCase() : '';
             const category = getUnsupportedCategory(ext);
             setIndexError({
                 filename: files.length === 1
@@ -337,7 +338,8 @@ export function FileBrowser() {
             const result = await indexAndAttachFiles(files, entries, currentSessionId, updateSessionInList);
 
             if (result.supported.length === 0) {
-                const ext = '.' + files[0].split('.').pop()?.toLowerCase();
+                const dotIdx = files[0].lastIndexOf('.');
+                const ext = dotIdx > 0 ? files[0].slice(dotIdx).toLowerCase() : '';
                 const category = getUnsupportedCategory(ext);
                 setIndexError({
                     filename: files.length === 1 ? files[0].split(/[\\/]/).pop() || files[0] : `${files.length} files`,

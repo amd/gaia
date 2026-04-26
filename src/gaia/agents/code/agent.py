@@ -21,6 +21,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.api_agent import ApiAgent
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.code_index.tools.mixin import CodeIndexToolsMixin
 from gaia.security import PathValidator
 
 from .orchestration import (
@@ -76,6 +77,7 @@ class CodeAgent(
     CLIToolsMixin,  # Universal CLI execution with process management
     ExternalToolsMixin,  # Context7 and Perplexity integration for documentation and web search
     ValidationToolsMixin,  # Validation and testing tools
+    CodeIndexToolsMixin,  # Semantic code search / repository indexing
 ):
     """
     Intelligent autonomous code agent for comprehensive Python development workflows.
@@ -93,7 +95,9 @@ class CodeAgent(
         # Agent will plan, generate, lint, fix, test, and verify automatically
     """
 
-    def __init__(self, language="python", project_type="script", **kwargs):
+    def __init__(
+        self, language="python", project_type="script", repo_path=".", **kwargs
+    ):
         """Initialize the Code agent.
 
         Args:
@@ -135,6 +139,12 @@ class CodeAgent(
 
         # Workspace root for API mode (passed from VSCode)
         self.workspace_root = None
+
+        # Code-index state (used by CodeIndexToolsMixin)
+        code_index_config = kwargs.pop("code_index_config", None)
+        self._init_code_index_state(
+            repo_path=repo_path, code_index_config=code_index_config
+        )
 
         # Progress callback for real-time updates
         self.progress_callback = None
@@ -197,6 +207,7 @@ class CodeAgent(
         self.register_cli_tools()  # CLIToolsMixin (Universal CLI execution)
         self.register_external_tools()  # ExternalToolsMixin (Context7 & Perplexity)
         self.register_validation_tools()  # ValidationToolsMixin (Testing and validation)
+        self.register_code_index_tools()  # CodeIndexToolsMixin (Semantic code search)
 
     def process_query(
         self, user_input: str, workspace_root=None, progress_callback=None, **kwargs
