@@ -2211,6 +2211,31 @@ Do NOT wrap conversational replies in JSON.
                             or "exceeds the available context size" in err_text
                             or "got too long" in err_text
                         )
+                        # See non-streaming branch for explanation: re-raise
+                        # if model was loaded with the wrong (small) ctx so
+                        # the chat helper can reload it at 32K.
+                        is_wrong_ctx_loaded = is_ctx_overflow and (
+                            "context size (4096" in err_text
+                            or "context size (8192" in err_text
+                            or "context size (16384" in err_text
+                            or "n_ctx': 4096" in err_text
+                            or "n_ctx': 8192" in err_text
+                            or "n_ctx': 16384" in err_text
+                        )
+                        if is_wrong_ctx_loaded:
+                            self.error_history.append(
+                                {
+                                    "step": steps_taken,
+                                    "error": str(e),
+                                    "type": "llm_wrong_ctx_loaded_reraise",
+                                }
+                            )
+                            logger.warning(
+                                "Wrong ctx_size loaded (streaming) — re-raising"
+                                " so chat helper can reload model: %s",
+                                e,
+                            )
+                            raise
                         if is_ctx_overflow and not _retried_after_trim_stream:
                             messages = self._shrink_messages_for_overflow(messages)
                             self.error_history.append(
@@ -2327,6 +2352,33 @@ Do NOT wrap conversational replies in JSON.
                             or "exceeds the available context size" in err_text
                             or "got too long" in err_text
                         )
+                        # Detect "wrong ctx size loaded" — model reloaded with
+                        # ctx=4096 / 8192 / 16384 (some default smaller than
+                        # GAIA's expected 32K). Re-raise so the chat helper's
+                        # reload-and-retry kicks in (it knows how to call
+                        # _maybe_load_expected_model).
+                        is_wrong_ctx_loaded = is_ctx_overflow and (
+                            "context size (4096" in err_text
+                            or "context size (8192" in err_text
+                            or "context size (16384" in err_text
+                            or "n_ctx': 4096" in err_text
+                            or "n_ctx': 8192" in err_text
+                            or "n_ctx': 16384" in err_text
+                        )
+                        if is_wrong_ctx_loaded:
+                            self.error_history.append(
+                                {
+                                    "step": steps_taken,
+                                    "error": str(e),
+                                    "type": "llm_wrong_ctx_loaded_reraise",
+                                }
+                            )
+                            logger.warning(
+                                "Wrong ctx_size loaded — re-raising so chat "
+                                "helper can reload model: %s",
+                                e,
+                            )
+                            raise
                         if is_ctx_overflow and not _retried_after_trim:
                             # Aggressive shrink: keep all message slots so the
                             # model still sees its tool-call history, but cap
