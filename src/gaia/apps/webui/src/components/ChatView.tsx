@@ -2,14 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link, Bot, ChevronDown, Plus } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import { getSessionHash } from '../utils/format';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
 import './ChatView.css';
@@ -1115,21 +1114,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }
     };
 
-    // Session hash link copy
-    const [hashCopied, setHashCopied] = useState(false);
-    const handleCopyHash = useCallback((e: React.MouseEvent) => {
-        e.preventDefault();
-        const hash = getSessionHash(sessionId);
-        const url = `${window.location.origin}${window.location.pathname}#${hash}`;
-        navigator.clipboard.writeText(url).then(() => {
-            log.ui.info(`Copied session link: ${url}`);
-            setHashCopied(true);
-            setTimeout(() => setHashCopied(false), 1500);
-        }).catch(() => {
-            log.ui.warn('Clipboard write failed');
-        });
-    }, [sessionId]);
-
     // Title editing
     const startEditTitle = () => {
         setTitleDraft(session?.title || '');
@@ -1274,17 +1258,26 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     )}
                 </div>
                 <div className="chat-header-right">
-                    <a
-                        className={`session-hash-badge ${hashCopied ? 'copied' : ''}`}
-                        href={`#${getSessionHash(sessionId)}`}
-                        onClick={handleCopyHash}
-                        title={hashCopied ? 'Copied!' : `Copy session link #${getSessionHash(sessionId)}`}
-                        aria-label={`Copy link for session ${getSessionHash(sessionId)}`}
+                    <span
+                        className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
+                        title={
+                            systemStatus?.model_loaded && systemStatus?.model_context_size
+                                ? `${systemStatus.model_loaded} · context window: ${systemStatus.model_context_size.toLocaleString()} tokens`
+                                : (systemStatus?.model_loaded || 'No model loaded')
+                        }
                     >
-                        <Link size={10} />
-                        <span>#{getSessionHash(sessionId)}</span>
-                    </a>
-                    <span className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}>{systemStatus?.model_loaded || 'No model loaded'}</span>
+                        {systemStatus?.model_loaded || 'No model loaded'}
+                        {systemStatus?.model_loaded && systemStatus?.model_context_size != null && (
+                            <span className="model-ctx-size">
+                                {/* Pretty-print the context window: 32768 → "32K", 8192 → "8K", etc.
+                                    Falls back to a localized integer for odd sizes. */}
+                                {' · '}
+                                {systemStatus.model_context_size % 1024 === 0
+                                    ? `${systemStatus.model_context_size / 1024}K`
+                                    : systemStatus.model_context_size.toLocaleString()}
+                            </span>
+                        )}
+                    </span>
                     <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Attach documents">
                         <Paperclip size={15} />
                     </button>

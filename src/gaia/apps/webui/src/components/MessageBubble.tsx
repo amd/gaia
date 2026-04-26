@@ -349,8 +349,19 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
         onResend?.(message);
     }, [message, onResend]);
 
+    // Tooltip shown on hover anywhere over the bubble — full absolute
+    // timestamp (e.g. "Apr 25, 2026, 11:02:04 PM"). Both user and assistant
+    // bubbles get one; previously only the assistant had a visible
+    // timestamp readout via msg-stats-ts.
+    const hoverTimestamp = message.created_at
+        ? `${message.role === 'user' ? 'Sent' : 'Replied'} ${formatFullTimestamp(message.created_at)}`
+        : undefined;
+
     return (
-        <div className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}>
+        <div
+            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}
+            title={hoverTimestamp}
+        >
             <div className="msg-inner">
                 <div className="msg-header">
                     <div className="msg-header-left">
