@@ -173,13 +173,20 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                     </div>
                 )}
 
-                {/* First-run setup hints */}
+                {/* First-run setup hints. Size hint is sourced from the
+                    catalog (``default_model_size_gb``) so it tracks the
+                    current default model — the previous hard-coded
+                    "~25 GB" was a stale remnant from when the default was
+                    Qwen3.5-35B. */}
                 {notInitialized && (
                     <div className="welcome-setup-hint">
                         <Terminal size={14} />
                         <span>
                             <strong>First time?</strong> Run <code>gaia init --profile chat</code> in a terminal to
-                            install Lemonade Server and download the required AI models (~25&nbsp;GB).
+                            install Lemonade Server and download the required AI model
+                            {systemStatus?.default_model_size_gb
+                                ? ` (~${systemStatus.default_model_size_gb.toFixed(1)} GB).`
+                                : '.'}
                         </span>
                     </div>
                 )}
@@ -187,7 +194,10 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                     <div className="welcome-setup-hint">
                         <Terminal size={14} />
                         <span>
-                            No model loaded. Run <code>gaia init --profile chat</code> to download models (~25&nbsp;GB).
+                            No model loaded. Run <code>gaia init --profile chat</code> to download
+                            {systemStatus?.default_model_size_gb
+                                ? ` (~${systemStatus.default_model_size_gb.toFixed(1)} GB).`
+                                : '.'}
                         </span>
                     </div>
                 )}
