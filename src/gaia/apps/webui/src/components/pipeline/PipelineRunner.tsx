@@ -191,12 +191,38 @@ export function PipelineRunner({ onViewChange }: { onViewChange?: (view: 'chat' 
   const handleRun = useCallback(() => {
     if (!taskDescription.trim() || !sessionId || isRunning) return;
 
+    // Collect canvas loop and supervisor config from the canvas store
+    const canvasState = usePipelineCanvasStore.getState();
+    const loopNodes = canvasState.nodes.filter((n) => n.type === 'loop' && n.loopConfig);
+    const canvasLoops = loopNodes.map((n) => ({
+      loop_id: n.loopConfig!.loop_id,
+      label: n.loopConfig!.label,
+      agent_ids: n.loopConfig!.agent_ids,
+      max_iterations: n.loopConfig!.max_iterations,
+      quality_threshold: n.loopConfig!.quality_threshold,
+      source_stage: n.loopConfig!.source_stage,
+      target_stage: n.loopConfig!.target_stage,
+      condition: n.loopConfig!.condition || 'quality_below_threshold',
+    }));
+
+    const supervisorNodes = canvasState.nodes.filter((n) => n.type === 'supervisor' && n.supervisorConfig);
+    const canvasSupervisors = supervisorNodes.map((n) => ({
+      supervisor_id: n.supervisorConfig!.supervisor_id,
+      label: n.supervisorConfig!.label,
+      agent_id: n.supervisorConfig!.agent_id,
+      decision_condition: n.supervisorConfig!.decision_condition,
+      decision_type: n.supervisorConfig!.decision_type,
+      monitoring_targets: n.supervisorConfig!.monitoring_targets || [],
+    }));
+
     const result = runPipeline({
       session_id: sessionId,
       task_description: taskDescription,
       auto_spawn: autoSpawn,
       template_name: templateName || undefined,
       stream: true,
+      canvas_loops: canvasLoops.length > 0 ? canvasLoops : undefined,
+      canvas_supervisors: canvasSupervisors.length > 0 ? canvasSupervisors : undefined,
     });
 
     if (result) {

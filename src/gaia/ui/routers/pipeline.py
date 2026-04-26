@@ -1127,10 +1127,13 @@ async def run_pipeline_endpoint(
                         request.template_name,
                         True,  # recursive=True
                         output_handler,
+                        getattr(request, "canvas_loops", None),
+                        getattr(request, "canvas_supervisors", None),
                     )
 
                     # Stream any buffered output handler events
-                    output_handler.drain(output_handler.event_queue)
+                    for event_str in output_handler.drain(output_handler.event_queue):
+                        yield event_str
 
                     # Emit completion event (include recursive pipeline metadata)
                     try:
@@ -1195,6 +1198,8 @@ async def run_pipeline_endpoint(
                     auto_spawn=request.auto_spawn,
                     template_name=request.template_name,
                     recursive=False,
+                    canvas_loops=getattr(request, "canvas_loops", None),
+                    canvas_supervisors=getattr(request, "canvas_supervisors", None),
                 )
                 return PipelineRunResponse(
                     pipeline_id=pipeline_id,
@@ -1219,6 +1224,8 @@ def _execute_and_record(
     template_name: str | None = None,
     recursive: bool = False,
     sse_handler=None,
+    canvas_loops: list | None = None,
+    canvas_supervisors: list | None = None,
 ) -> dict:
     """Execute pipeline and record the result in execution history."""
     start_time = time.time()
@@ -1229,6 +1236,8 @@ def _execute_and_record(
             template_name=template_name,
             recursive=recursive,
             sse_handler=sse_handler,
+            canvas_loops=canvas_loops,
+            canvas_supervisors=canvas_supervisors,
         )
         end_time = time.time()
         record_execution(
@@ -1264,6 +1273,8 @@ def _execute_pipeline_sync(
     template_name: str | None = None,
     recursive: bool = False,
     sse_handler=None,
+    canvas_loops: list | None = None,
+    canvas_supervisors: list | None = None,
 ) -> dict:
     """Execute pipeline synchronously (for executor thread).
 
@@ -1281,6 +1292,8 @@ def _execute_pipeline_sync(
             task_description=task_description,
             sse_handler=sse_handler,
             template_name=template_name or "generic",
+            canvas_loops=canvas_loops,
+            canvas_supervisors=canvas_supervisors,
         )
 
     try:

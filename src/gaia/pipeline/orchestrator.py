@@ -564,6 +564,8 @@ def _execute_recursive_pipeline(
     sse_handler=None,
     template_name: str = "generic",
     max_iterations: int = 10,
+    canvas_loops: Optional[list] = None,
+    canvas_supervisors: Optional[list] = None,
 ) -> Dict[str, Any]:
     """
     Execute recursive pipeline using PipelineEngine with SSE event emission.
@@ -605,7 +607,15 @@ def _execute_recursive_pipeline(
             user_goal=task_description,
             max_iterations=max_iterations,
         )
-        config = {"template": template_name}
+        config = {
+            "template": template_name,
+        }
+        if sse_handler:
+            config["sse_handler"] = sse_handler
+        if canvas_loops:
+            config["canvas_loops"] = canvas_loops
+        if canvas_supervisors:
+            config["canvas_supervisors"] = canvas_supervisors
         await engine.initialize(context, config)
 
         # Emit iteration_start for first iteration

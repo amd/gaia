@@ -637,6 +637,26 @@ export interface PipelineRunRequest {
     template_name?: string;
     auto_spawn?: boolean;
     stream?: boolean;
+    /** Canvas-driven loop configurations from UI */
+    canvas_loops?: Array<{
+        loop_id: string;
+        label: string;
+        agent_ids: string[];
+        max_iterations: number;
+        quality_threshold?: number;
+        source_stage?: string;
+        target_stage?: string;
+        condition: string;
+    }>;
+    /** Canvas-driven supervisor configurations from UI */
+    canvas_supervisors?: Array<{
+        supervisor_id: string;
+        label: string;
+        agent_id?: string;
+        decision_condition: string;
+        decision_type: string;
+        monitoring_targets?: string[];
+    }>;
 }
 
 /** Response from non-streaming pipeline execution */

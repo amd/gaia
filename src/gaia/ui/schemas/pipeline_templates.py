@@ -188,6 +188,12 @@ class PipelineRunRequest(BaseModel):
     )
     auto_spawn: bool = Field(default=True, description="Auto-generate missing agents")
     stream: bool = Field(default=True, description="Enable SSE streaming")
+    canvas_loops: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="Canvas-driven loop configurations from UI"
+    )
+    canvas_supervisors: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="Canvas-driven supervisor configurations from UI"
+    )
 
 
 class PipelineRunResponse(BaseModel):

@@ -286,6 +286,16 @@ class PipelineEngine:
             self._hook_executor = HookExecutor(self._hook_registry)
             self._register_default_hooks()
 
+            # Register SSE emission hooks if sse_handler is in config
+            sse_handler = self._config.get("sse_handler")
+            if sse_handler:
+                from gaia.pipeline.sse_hooks import create_sse_hook_group
+
+                sse_hooks = create_sse_hook_group(sse_handler)
+                for hook in sse_hooks:
+                    self._hook_registry.register(hook)
+                logger.info(f"Registered {len(sse_hooks)} SSE emission hooks")
+
         # Transition to READY state
         self._state_machine.transition(
             PipelineState.READY,
@@ -339,57 +349,60 @@ class PipelineEngine:
         """
         import dataclasses
 
-        template = self._current_template
-        if template is None:
-            return
+        try:
+            template = self._current_template
+            if template is None:
+                return
 
-        # Clone template to avoid mutating shared singleton in registry
-        template = dataclasses.replace(template)
-        self._current_template = template
+            # Clone template to avoid mutating shared singleton in registry
+            template = dataclasses.replace(template)
+            self._current_template = template
 
-        canvas_loops_raw = config.get("canvas_loops", [])
-        if canvas_loops_raw:
-            from gaia.pipeline.recursive_template import CanvasLoopTemplateConfig, CanvasSupervisorTemplateConfig
+            canvas_loops_raw = config.get("canvas_loops", [])
+            if canvas_loops_raw:
+                from gaia.pipeline.recursive_template import CanvasLoopTemplateConfig, CanvasSupervisorTemplateConfig
 
-            canvas_loops = []
-            for loop_data in canvas_loops_raw:
-                if isinstance(loop_data, dict):
-                    canvas_loops.append(CanvasLoopTemplateConfig(
-                        loop_id=loop_data.get("loop_id", ""),
-                        label=loop_data.get("label", ""),
-                        agent_ids=loop_data.get("agent_ids", []),
-                        max_iterations=loop_data.get("max_iterations", 10),
-                        quality_threshold=loop_data.get("quality_threshold"),
-                        source_stage=loop_data.get("source_stage"),
-                        target_stage=loop_data.get("target_stage"),
-                        condition=loop_data.get("condition", "quality_below_threshold"),
-                    ))
-            template.canvas_loops = canvas_loops
-            logger.info(
-                f"Applied {len(canvas_loops)} canvas loop(s) from API config",
-                extra={"loop_count": len(canvas_loops)},
-            )
+                canvas_loops = []
+                for loop_data in canvas_loops_raw:
+                    if isinstance(loop_data, dict):
+                        canvas_loops.append(CanvasLoopTemplateConfig(
+                            loop_id=loop_data.get("loop_id", ""),
+                            label=loop_data.get("label", ""),
+                            agent_ids=loop_data.get("agent_ids", []),
+                            max_iterations=loop_data.get("max_iterations", 10),
+                            quality_threshold=loop_data.get("quality_threshold"),
+                            source_stage=loop_data.get("source_stage"),
+                            target_stage=loop_data.get("target_stage"),
+                            condition=loop_data.get("condition", "quality_below_threshold"),
+                        ))
+                template.canvas_loops = canvas_loops
+                logger.info(
+                    f"Applied {len(canvas_loops)} canvas loop(s) from API config",
+                    extra={"loop_count": len(canvas_loops)},
+                )
 
-        canvas_supervisors_raw = config.get("canvas_supervisors", [])
-        if canvas_supervisors_raw:
-            from gaia.pipeline.recursive_template import CanvasSupervisorTemplateConfig
+            canvas_supervisors_raw = config.get("canvas_supervisors", [])
+            if canvas_supervisors_raw:
+                from gaia.pipeline.recursive_template import CanvasSupervisorTemplateConfig
 
-            canvas_supervisors = []
-            for sup_data in canvas_supervisors_raw:
-                if isinstance(sup_data, dict):
-                    canvas_supervisors.append(CanvasSupervisorTemplateConfig(
-                        supervisor_id=sup_data.get("supervisor_id", ""),
-                        label=sup_data.get("label", ""),
-                        agent_id=sup_data.get("agent_id"),
-                        decision_condition=sup_data.get("decision_condition", "quality_below_threshold"),
-                        decision_type=sup_data.get("decision_type", "CONTINUE"),
-                        monitoring_targets=sup_data.get("monitoring_targets", []),
-                    ))
-            template.canvas_supervisors = canvas_supervisors
-            logger.info(
-                f"Applied {len(canvas_supervisors)} canvas supervisor(s) from API config",
-                extra={"supervisor_count": len(canvas_supervisors)},
-            )
+                canvas_supervisors = []
+                for sup_data in canvas_supervisors_raw:
+                    if isinstance(sup_data, dict):
+                        canvas_supervisors.append(CanvasSupervisorTemplateConfig(
+                            supervisor_id=sup_data.get("supervisor_id", ""),
+                            label=sup_data.get("label", ""),
+                            agent_id=sup_data.get("agent_id"),
+                            decision_condition=sup_data.get("decision_condition", "quality_below_threshold"),
+                            decision_type=sup_data.get("decision_type", "CONTINUE"),
+                            monitoring_targets=sup_data.get("monitoring_targets", []),
+                        ))
+                template.canvas_supervisors = canvas_supervisors
+                logger.info(
+                    f"Applied {len(canvas_supervisors)} canvas supervisor(s) from API config",
+                    extra={"supervisor_count": len(canvas_supervisors)},
+                )
+        except Exception as e:
+            logger.warning(f"Failed to apply canvas config: {e}. Proceeding with default template config.")
 
     def _get_canvas_loops_for_phase(self, phase) -> List[Dict[str, Any]]:
         """
