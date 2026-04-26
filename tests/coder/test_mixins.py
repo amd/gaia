@@ -528,11 +528,15 @@ def test_semantic_search_warns_when_no_index(tmp_path, search_mixin, caplog):
     """
     semantic_search = _get_tool("semantic_search")
     with caplog.at_level("WARNING", logger="gaia.coder.tools.search"):
-        results = semantic_search("how do we verify webhook signatures", repo_path=str(tmp_path))
+        results = semantic_search(
+            "how do we verify webhook signatures", repo_path=str(tmp_path)
+        )
     assert results == []
     # Surface the build-an-index hint, not silent emptiness.
-    assert any("no index found" in r.message for r in caplog.records), (
-        "expected a 'no index found' WARN; got: " + repr([r.message for r in caplog.records])
+    assert any(
+        "no index found" in r.message for r in caplog.records
+    ), "expected a 'no index found' WARN; got: " + repr(
+        [r.message for r in caplog.records]
     )
 
 
@@ -555,7 +559,9 @@ def test_semantic_search_returns_hits_from_indexed_repo(
     )
     fake_sdk = MagicMock()
     fake_sdk.get_status.return_value = {"indexed": True}
-    fake_sdk.search.return_value = [SearchResult(chunk=fake_chunk, score=0.91, result_type="code")]
+    fake_sdk.search.return_value = [
+        SearchResult(chunk=fake_chunk, score=0.91, result_type="code")
+    ]
 
     # Patch the lazy-imported CodeIndexSDK constructor inside the helper.
     import gaia.coder.tools.search as search_mod
@@ -563,7 +569,9 @@ def test_semantic_search_returns_hits_from_indexed_repo(
     def fake_ctor(_config):
         return fake_sdk
 
-    monkeypatch.setattr(search_mod, "_semantic_search_impl", search_mod._semantic_search_impl)
+    monkeypatch.setattr(
+        search_mod, "_semantic_search_impl", search_mod._semantic_search_impl
+    )
     monkeypatch.setattr("gaia.code_index.CodeIndexSDK", fake_ctor)
 
     semantic_search = _get_tool("semantic_search")
@@ -577,7 +585,9 @@ def test_semantic_search_returns_hits_from_indexed_repo(
     assert "verify_hmac" in hits[0]["snippet"]
 
 
-def test_semantic_search_raises_when_rag_extra_missing(tmp_path, search_mixin, monkeypatch):
+def test_semantic_search_raises_when_rag_extra_missing(
+    tmp_path, search_mixin, monkeypatch
+):
     """Missing faiss/numpy → actionable RuntimeError pointing at the [rag] extra."""
     import builtins
 
