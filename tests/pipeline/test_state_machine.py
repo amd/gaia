@@ -7,9 +7,15 @@ Tests cover:
 - Timestamp tracking
 - Chronicle entries
 - Thread safety
+- Context validation and boundary conditions
+- Snapshot serialization round-trip
+- FSM helper methods
+- Thread safety (RLock concurrent access)
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
+import threading
+import time
 
 import pytest
 
@@ -114,15 +120,11 @@ class TestPipelineSnapshot:
 
     def test_elapsed_time(self):
         """Test elapsed time calculation."""
-        from datetime import timezone
-
         snapshot = PipelineSnapshot(state=PipelineState.INITIALIZING)
         assert snapshot.elapsed_time() is None  # Not started
 
         snapshot.started_at = datetime.now(timezone.utc)
         # Small delay to ensure time difference
-        import time
-
         time.sleep(0.01)
         elapsed = snapshot.elapsed_time()
         assert elapsed is not None
@@ -313,3 +315,283 @@ class TestPipelineStateMachine:
         assert state_machine.is_valid_transition(PipelineState.READY)
         assert not state_machine.is_valid_transition(PipelineState.RUNNING)
         assert not state_machine.is_valid_transition(PipelineState.COMPLETED)
+
+
+class TestPipelineContextValidation:
+    """Boundary and validation edge cases for PipelineContext."""
+
+    def test_context_empty_pipeline_id_rejected(self):
+        """Empty string pipeline_id should be rejected."""
+        with pytest.raises(ValueError):
+            PipelineContext(pipeline_id="", user_goal="Test goal")
+
+    def test_context_empty_user_goal_rejected(self):
+        """Empty string user_goal should be rejected."""
+        with pytest.raises(ValueError):
+            PipelineContext(pipeline_id="test-001", user_goal="")
+
+    def test_context_boundary_quality_threshold_zero(self):
+        """quality_threshold=0.0 is valid boundary."""
+        ctx = PipelineContext(
+            pipeline_id="test", user_goal="Test", quality_threshold=0.0
+        )
+        assert ctx.quality_threshold == 0.0
+
+    def test_context_boundary_quality_threshold_one(self):
+        """quality_threshold=1.0 is valid boundary."""
+        ctx = PipelineContext(
+            pipeline_id="test", user_goal="Test", quality_threshold=1.0
+        )
+        assert ctx.quality_threshold == 1.0
+
+    def test_context_boundary_concurrent_loops_zero_rejected(self):
+        """concurrent_loops=0 should be rejected (must be >= 1)."""
+        with pytest.raises(ValueError):
+            PipelineContext(
+                pipeline_id="test", user_goal="Test", concurrent_loops=0
+            )
+
+
+class TestPipelineSnapshotRoundTrip:
+    """Serialization round-trip and edge cases for PipelineSnapshot."""
+
+    def test_snapshot_round_trip_from_dict(self):
+        """Full round-trip: to_dict -> from_dict preserves all fields."""
+        original = PipelineSnapshot(
+            state=PipelineState.RUNNING,
+            current_phase="DEVELOPMENT",
+            current_loop=2,
+            iteration_count=5,
+            quality_score=0.85,
+            error_message="Test error",
+            artifacts={"key": {"nested": "value"}},
+            chronicle=[{"event": "TEST", "timestamp": "2024-01-01T00:00:00+00:00"}],
+            started_at=datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 1, 1, 12, 5, 0, tzinfo=timezone.utc),
+            defects=[{"description": "Bug", "severity": "high"}],
+            context_injected={"key": "value"},
+            provenance={"artifact1": {"source": "agent-1"}},
+        )
+        data = original.to_dict()
+        restored = PipelineSnapshot.from_dict(data)
+
+        assert restored.state == PipelineState.RUNNING
+        assert restored.current_phase == "DEVELOPMENT"
+        assert restored.current_loop == 2
+        assert restored.iteration_count == 5
+        assert restored.quality_score == 0.85
+        assert restored.started_at == original.started_at
+        assert restored.completed_at == original.completed_at
+        assert restored.defects == original.defects
+        assert restored.provenance == original.provenance
+        assert restored.context_injected == original.context_injected
+        assert restored.error_message == "Test error"
+
+    def test_snapshot_from_dict_minimal(self):
+        """from_dict with minimal required fields uses defaults."""
+        data = {"state": "INITIALIZING"}
+        snapshot = PipelineSnapshot.from_dict(data)
+        assert snapshot.state == PipelineState.INITIALIZING
+        assert snapshot.current_phase is None
+        assert snapshot.iteration_count == 0
+        assert snapshot.artifacts == {}
+        assert snapshot.defects == []
+        assert snapshot.provenance == {}
+
+    def test_snapshot_elapsed_time_with_completed_at(self):
+        """elapsed_time uses completed_at when set, not datetime.now()."""
+        start = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        end = datetime(2024, 1, 1, 12, 5, 30, tzinfo=timezone.utc)
+        snapshot = PipelineSnapshot(
+            state=PipelineState.COMPLETED,
+            started_at=start,
+            completed_at=end,
+        )
+        assert snapshot.elapsed_time() == 330.0  # 5m 30s
+
+
+class TestPipelineStateMachineMethods:
+    """Tests for FSM methods not covered by transition tests."""
+
+    @pytest.fixture
+    def context(self) -> PipelineContext:
+        return PipelineContext(
+            pipeline_id="test-pipeline-001",
+            user_goal="Implement feature X",
+        )
+
+    @pytest.fixture
+    def state_machine(self, context: PipelineContext) -> PipelineStateMachine:
+        return PipelineStateMachine(context)
+
+    def test_fsm_increment_iteration(self, state_machine: PipelineStateMachine):
+        """increment_iteration returns sequential counts."""
+        assert state_machine.increment_iteration() == 1
+        assert state_machine.increment_iteration() == 2
+        assert state_machine.increment_iteration() == 3
+        assert state_machine.snapshot.iteration_count == 3
+
+    def test_fsm_add_defects_batch(self, state_machine: PipelineStateMachine):
+        """add_defects adds multiple defects at once."""
+        defects = [
+            {"description": "Bug 1", "severity": "high"},
+            {"description": "Bug 2", "severity": "medium"},
+        ]
+        state_machine.add_defects(defects)
+        assert len(state_machine.snapshot.defects) == 2
+        assert state_machine.snapshot.defects[0]["description"] == "Bug 1"
+        assert state_machine.snapshot.defects[1]["description"] == "Bug 2"
+
+    def test_fsm_inject_context(self, state_machine: PipelineStateMachine):
+        """inject_context merges dicts across multiple calls."""
+        state_machine.inject_context({"key1": "value1"})
+        state_machine.inject_context({"key2": "value2"})
+        assert state_machine.snapshot.context_injected["key1"] == "value1"
+        assert state_machine.snapshot.context_injected["key2"] == "value2"
+        assert len(state_machine.snapshot.context_injected) == 2
+
+    def test_fsm_set_error(self, state_machine: PipelineStateMachine):
+        """set_error stores error message."""
+        state_machine.set_error("Connection timeout after 30s")
+        assert state_machine.snapshot.error_message == "Connection timeout after 30s"
+
+    def test_fsm_reset_to_ready(self, state_machine: PipelineStateMachine):
+        """reset_to_ready clears state and returns to READY."""
+        # Build up some state first
+        state_machine.transition(PipelineState.READY, "Config validated")
+        state_machine.transition(PipelineState.RUNNING, "Start execution")
+        state_machine.set_phase("DEVELOPMENT")
+        state_machine.set_quality_score(0.85)
+        state_machine.add_artifact("plan", {"data": "value"})
+        state_machine.add_defect({"description": "bug"})
+
+        # Reset
+        state_machine.reset_to_ready()
+
+        assert state_machine.current_state == PipelineState.READY
+        assert state_machine.snapshot.iteration_count == 0
+        assert state_machine.snapshot.artifacts == {}
+        assert state_machine.snapshot.quality_score is None
+        assert len(state_machine.transition_log) == 1
+        assert state_machine.transition_log[0].from_state == PipelineState.INITIALIZING
+        assert state_machine.transition_log[0].to_state == PipelineState.READY
+
+    def test_fsm_set_loop(self, state_machine: PipelineStateMachine):
+        """set_loop stores current loop number."""
+        state_machine.set_loop(3)
+        assert state_machine.snapshot.current_loop == 3
+
+    def test_fsm_add_chronicle_entry(self, state_machine: PipelineStateMachine):
+        """add_chronicle_entry creates a structured log entry."""
+        state_machine.set_phase("DEVELOPMENT")
+        state_machine.add_chronicle_entry(
+            "ARTIFACT_PRODUCED", data={"artifact": "plan", "size_kb": 12}
+        )
+        entry = state_machine.chronicle[-1]
+        assert entry["event"] == "ARTIFACT_PRODUCED"
+        assert entry["pipeline_id"] == "test-pipeline-001"
+        assert entry["phase"] == "DEVELOPMENT"
+        assert entry["data"]["artifact"] == "plan"
+        assert "timestamp" in entry
+
+    def test_fsm_add_artifact_with_provenance(self, state_machine: PipelineStateMachine):
+        """add_artifact with source tracks provenance metadata."""
+        state_machine.add_artifact(
+            "design_doc",
+            {"sections": ["intro", "implementation"]},
+            source="planning-agent",
+            source_metadata={"loop_id": 1, "phase": "PLANNING"},
+        )
+        assert "design_doc" in state_machine.snapshot.artifacts
+        assert state_machine.snapshot.provenance["design_doc"]["source"] == "planning-agent"
+        assert state_machine.snapshot.provenance["design_doc"]["loop_id"] == 1
+        assert "timestamp" in state_machine.snapshot.provenance["design_doc"]
+
+    def test_valid_transitions_exhaustiveness(self):
+        """VALID_TRANSITIONS covers all 7 states with valid targets only."""
+        vt = PipelineStateMachine.VALID_TRANSITIONS
+        # All 7 states must have entries
+        assert set(vt.keys()) == set(PipelineState)
+        # All transition targets must be valid PipelineState values
+        for source, targets in vt.items():
+            for target in targets:
+                assert isinstance(target, PipelineState), (
+                    f"Invalid target {target} for {source}"
+                )
+
+
+class TestPipelineStateMachineThreadSafety:
+    """Thread safety tests for PipelineStateMachine RLock."""
+
+    @pytest.fixture
+    def running_machine(self) -> PipelineStateMachine:
+        """Create a machine in RUNNING state for concurrent testing."""
+        ctx = PipelineContext(pipeline_id="thread-test", user_goal="Test")
+        machine = PipelineStateMachine(ctx)
+        machine.transition(PipelineState.READY, "Ready")
+        machine.transition(PipelineState.RUNNING, "Start")
+        return machine
+
+    def test_concurrent_increment_iteration(self, running_machine: PipelineStateMachine):
+        """RLock protects iteration counter from race conditions.
+
+        10 threads x 100 increments = 1000 expected.
+        """
+        num_threads = 10
+        increments_per_thread = 100
+
+        def worker(machine: PipelineStateMachine, count: int):
+            for _ in range(count):
+                machine.increment_iteration()
+                machine.add_defect({"description": "concurrent-defect"})
+
+        threads = [
+            threading.Thread(target=worker, args=(running_machine, increments_per_thread))
+            for _ in range(num_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert running_machine.snapshot.iteration_count == num_threads * increments_per_thread
+        assert len(running_machine.snapshot.defects) == num_threads * increments_per_thread
+
+    def test_concurrent_mixed_operations(self, running_machine: PipelineStateMachine):
+        """Mixed operations under concurrent access do not deadlock or corrupt."""
+        exceptions: list[Exception] = []
+
+        def quality_worker():
+            try:
+                for i in range(50):
+                    running_machine.set_quality_score(0.5 + i * 0.01)
+            except Exception as e:
+                exceptions.append(e)
+
+        def artifact_worker():
+            try:
+                for i in range(50):
+                    running_machine.add_artifact(f"artifact_{i}", {"data": i})
+            except Exception as e:
+                exceptions.append(e)
+
+        def chronicle_worker():
+            try:
+                for i in range(50):
+                    running_machine.add_chronicle_entry("EVENT", data={"iter": i})
+            except Exception as e:
+                exceptions.append(e)
+
+        threads = [
+            threading.Thread(target=quality_worker),
+            threading.Thread(target=artifact_worker),
+            threading.Thread(target=chronicle_worker),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert len(exceptions) == 0, f"Exceptions occurred: {exceptions}"
+        assert len(running_machine.snapshot.artifacts) == 50
+        assert len(running_machine.chronicle) >= 50  # includes transitions + entries

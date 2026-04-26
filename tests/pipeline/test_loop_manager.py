@@ -7,10 +7,14 @@ Tests cover:
 - Loop state tracking
 - Queue management
 - Cancellation
+- QualityScorer integration
+- Agent registry execution path
+- Edge cases and boundary conditions
 """
 
 import asyncio
 import time
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
@@ -397,3 +401,246 @@ class TestLoopManager:
         state = loop_manager.get_loop_state("fail-loop")
         assert state.status == LoopStatus.FAILED
         assert "Max iterations" in state.error
+
+
+class TestLoopConfigValidation:
+    """Additional validation edge cases for LoopConfig."""
+
+    def test_loop_config_empty_loop_id_rejected(self):
+        """Empty loop_id should raise ValueError."""
+        with pytest.raises(ValueError):
+            LoopConfig(
+                loop_id="",
+                phase_name="DEV",
+                agent_sequence=["a"],
+                exit_criteria={},
+            )
+
+    def test_loop_config_empty_phase_name_rejected(self):
+        """Empty phase_name should raise ValueError."""
+        with pytest.raises(ValueError):
+            LoopConfig(
+                loop_id="test",
+                phase_name="",
+                agent_sequence=["a"],
+                exit_criteria={},
+            )
+
+    def test_loop_config_zero_timeout_rejected(self):
+        """timeout_seconds=0 should raise ValueError."""
+        with pytest.raises(ValueError):
+            LoopConfig(
+                loop_id="test",
+                phase_name="DEV",
+                agent_sequence=["a"],
+                exit_criteria={},
+                timeout_seconds=0,
+            )
+
+
+class TestLoopManagerQualityEvaluation:
+    """QualityScorer integration and simulated quality edge cases."""
+
+    @pytest.fixture
+    def loop_manager(self) -> LoopManager:
+        return LoopManager(max_concurrent=1)
+
+    def _make_loop_state(self, iteration: int = 1, defects: list = None) -> LoopState:
+        config = LoopConfig(
+            loop_id="quality-test",
+            phase_name="DEV",
+            agent_sequence=["agent"],
+            exit_criteria={},
+        )
+        state = LoopState(
+            config=config,
+            iteration=iteration,
+            defects=defects or [],
+        )
+        state.artifacts["agent"] = "some artifact content"
+        return state
+
+    def test_evaluate_quality_with_quality_scorer(self):
+        """QualityScorer path: returns normalized score and extracts defects."""
+        loop_state = self._make_loop_state(iteration=1, defects=[])
+        manager = LoopManager(max_concurrent=1)
+
+        # Build mock report
+        mock_report = MagicMock()
+        mock_report.overall_score = 85.0
+        mock_category = MagicMock()
+        mock_category.category_name = "Code Quality"
+        mock_category.defects = [
+            {"severity": "low", "description": "Minor style issue"}
+        ]
+        mock_report.category_scores = [mock_category]
+
+        mock_scorer = MagicMock()
+        mock_scorer.evaluate = AsyncMock(return_value=mock_report)
+
+        with patch("gaia.quality.scorer.QualityScorer", return_value=mock_scorer):
+            score = manager._evaluate_quality(loop_state)
+
+        # 85.0 / 100.0 = 0.85
+        assert score == pytest.approx(0.85, abs=0.01)
+        assert len(loop_state.defects) == 1
+        assert loop_state.defects[0]["category"] == "Code Quality"
+
+    def test_evaluate_quality_scorer_falls_back_to_simulated(self):
+        """When QualityScorer import fails, falls back to _simulated_quality."""
+        loop_state = self._make_loop_state(iteration=1, defects=[])
+        manager = LoopManager(max_concurrent=1)
+
+        with patch("gaia.quality.scorer.QualityScorer", side_effect=ImportError("No module")):
+            score = manager._evaluate_quality(loop_state)
+
+        # Should use simulated quality: 0.7 + 0.03*1 - 0 = 0.73
+        assert score == pytest.approx(0.73, abs=0.01)
+
+    def test_simulated_quality_zero_iterations(self):
+        """Simulated quality with zero iterations: base score only."""
+        loop_state = self._make_loop_state(iteration=0, defects=[])
+        score = LoopManager._simulated_quality(loop_state)
+        # 0.7 + min(0.0, 0.25) - 0.0 = 0.7
+        assert score == pytest.approx(0.7, abs=0.001)
+
+    def test_simulated_quality_high_defects_penalty(self):
+        """Simulated quality with many defects clamps to 0.0."""
+        loop_state = self._make_loop_state(
+            iteration=10,
+            defects=[{"x": i} for i in range(20)],
+        )
+        score = LoopManager._simulated_quality(loop_state)
+        # 0.7 + 0.25 (capped) - 0.05*20 = 0.95 - 1.0 = -0.05 -> clamped to 0.0
+        assert score == pytest.approx(0.0, abs=0.001)
+
+    def test_simulated_quality_bonus_cap(self):
+        """Simulated quality caps iteration bonus at 0.25."""
+        loop_state = self._make_loop_state(iteration=100, defects=[])
+        score = LoopManager._simulated_quality(loop_state)
+        # 0.7 + min(3.0, 0.25) - 0.0 = 0.95
+        assert score == pytest.approx(0.95, abs=0.001)
+
+
+class TestLoopManagerEdgeCases:
+    """Edge cases for LoopManager operations."""
+
+    @pytest.fixture
+    def loop_manager(self) -> LoopManager:
+        return LoopManager(max_concurrent=3)
+
+    def _make_config(self, loop_id: str = "test") -> LoopConfig:
+        return LoopConfig(
+            loop_id=loop_id,
+            phase_name="DEV",
+            agent_sequence=["agent"],
+            exit_criteria={},
+            quality_threshold=0.5,
+            max_iterations=1,
+        )
+
+    def test_execute_agent_with_registry(self):
+        """Agent registry path: ConfigurableAgent is instantiated and executed."""
+        manager = LoopManager(max_concurrent=1)
+
+        # Mock registry returning an agent definition
+        mock_agent_def = MagicMock()
+        mock_agent_def.model_id = "Qwen3.5-35B"
+        mock_agent_def.tools = ["tool_1"]
+        mock_agent_def.capabilities = MagicMock()
+        mock_agent_def.capabilities.capabilities = ["code_gen"]
+
+        mock_registry = MagicMock()
+        mock_registry.get_agent.return_value = mock_agent_def
+        manager._agent_registry = mock_registry
+
+        loop_state = self._make_loop_state_for_agent()
+
+        with patch("gaia.pipeline.loop_manager.ConfigurableAgent") as mock_agent_cls:
+            mock_agent_instance = MagicMock()
+            mock_agent_instance.initialize = AsyncMock()
+            mock_agent_instance.execute = AsyncMock(
+                return_value={"success": True, "artifact": "generated code"}
+            )
+            mock_agent_cls.return_value = mock_agent_instance
+
+            result = manager._execute_agent("senior-developer", loop_state)
+
+        assert result["success"] is True
+        assert result["artifact"] == "generated code"
+        mock_registry.get_agent.assert_called_once_with("senior-developer")
+
+    def test_execute_agent_not_found_in_registry(self):
+        """Registry returns None for unknown agent."""
+        manager = LoopManager(max_concurrent=1)
+
+        mock_registry = MagicMock()
+        mock_registry.get_agent.return_value = None
+        manager._agent_registry = mock_registry
+
+        loop_state = self._make_loop_state_for_agent()
+
+        result = manager._execute_agent("unknown-agent", loop_state)
+
+        assert result["success"] is False
+        assert result["error"] == "Agent not found: unknown-agent"
+
+    @pytest.mark.asyncio
+    async def test_cancel_nonexistent_loop(self, loop_manager: LoopManager):
+        """cancel_loop returns False for non-existent loop."""
+        result = await loop_manager.cancel_loop("ghost-loop")
+        assert result is False
+
+    def test_on_loop_complete_fallback_no_main_loop(self):
+        """_on_loop_complete fallback path when _main_loop is None."""
+        manager = LoopManager(max_concurrent=1)
+        manager._main_loop = None
+        mock_future = MagicMock(done=MagicMock(return_value=False))
+        manager._running_futures["test-loop"] = mock_future
+
+        # Should not raise
+        manager._on_loop_complete("test-loop")
+
+        # Future should be popped
+        assert "test-loop" not in manager._running_futures
+
+    @pytest.mark.asyncio
+    async def test_start_loop_returns_existing_future_when_running(
+        self, loop_manager: LoopManager
+    ):
+        """start_loop returns existing future when loop is already running."""
+        config = self._make_config("running-loop")
+        await loop_manager.create_loop(config)
+
+        future1 = await loop_manager.start_loop("running-loop")
+        assert future1 is not None
+
+        # Call start_loop again immediately
+        future2 = await loop_manager.start_loop("running-loop")
+
+        # Should return the same future
+        assert future2 is future1
+
+    @pytest.mark.asyncio
+    async def test_execute_loop_exception_handler(self, loop_manager: LoopManager):
+        """_execute_loop catches exceptions and sets status to FAILED."""
+        config = self._make_config("error-loop")
+        await loop_manager.create_loop(config)
+
+        with patch.object(loop_manager, "_execute_agent", side_effect=RuntimeError("Agent crash")):
+            await loop_manager.start_loop("error-loop")
+            await asyncio.sleep(0.3)
+
+        state = loop_manager.get_loop_state("error-loop")
+        assert state.status == LoopStatus.FAILED
+        assert "Agent crash" in state.error
+        assert state.completed_at is not None
+
+    def _make_loop_state_for_agent(self) -> LoopState:
+        config = LoopConfig(
+            loop_id="agent-test",
+            phase_name="DEV",
+            agent_sequence=["senior-developer"],
+            exit_criteria={"goal": "Complete the task"},
+        )
+        return LoopState(config=config)

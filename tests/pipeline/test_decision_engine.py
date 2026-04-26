@@ -335,3 +335,89 @@ class TestDecisionEngineCustomPatterns:
         stats = engine.get_statistics()
         assert len(stats["critical_patterns"]) > 0
         assert "security" in str(stats["critical_patterns"]).lower()
+
+
+class TestDecisionEngineEdgeCases:
+    """Edge cases and boundary conditions for DecisionEngine."""
+
+    def test_decision_to_dict_loop_back_and_fail(self):
+        """Decision.to_dict() correctly serializes LOOP_BACK and FAIL variants."""
+        loop_back = Decision.loop_back_decision(
+            reason="Quality below threshold",
+            target_phase="PLANNING",
+            defects=[{"description": "Bug"}],
+            metadata={"score": 0.75},
+        )
+        lb_data = loop_back.to_dict()
+        assert lb_data["decision_type"] == "LOOP_BACK"
+        assert lb_data["target_phase"] == "PLANNING"
+        assert lb_data["defects_count"] == 1
+        assert lb_data["defects"][0]["description"] == "Bug"
+        assert lb_data["metadata"]["score"] == 0.75
+        assert "made_at" in lb_data
+
+        fail = Decision.fail_decision(
+            reason="Max iterations exceeded",
+            defects=[{"description": "Unfixable"}],
+            metadata={"iterations": 5},
+        )
+        fail_data = fail.to_dict()
+        assert fail_data["decision_type"] == "FAIL"
+        assert fail_data["target_phase"] is None
+        assert fail_data["defects_count"] == 1
+        assert fail_data["metadata"]["iterations"] == 5
+
+    def test_decision_factory_metadata_passthrough(self):
+        """All 5 factory methods preserve custom metadata."""
+        meta = {"custom_key": "custom_value", "count": 42}
+
+        assert Decision.continue_decision(reason="x", metadata=meta).metadata["custom_key"] == "custom_value"
+        assert Decision.loop_back_decision(reason="x", target_phase="P", defects=[], metadata=meta).metadata["count"] == 42
+        assert Decision.pause_decision(reason="x", defects=[], metadata=meta).metadata["custom_key"] == "custom_value"
+        assert Decision.complete_decision(reason="x", metadata=meta).metadata["count"] == 42
+        assert Decision.fail_decision(reason="x", defects=[], metadata=meta).metadata["custom_key"] == "custom_value"
+
+    def test_evaluate_max_iterations_zero_unlimited(self):
+        """max_iterations=0 never triggers FAIL, always loops back."""
+        engine = DecisionEngine()
+        decision = engine.evaluate(
+            phase_name="DEVELOPMENT",
+            quality_score=0.50,
+            quality_threshold=0.90,
+            defects=[{"description": "Minor issue"}],
+            iteration=100,  # Very high iteration
+            max_iterations=0,  # Unlimited
+            is_final_phase=False,
+        )
+        # 0 > 0 is False, so max_iterations check is bypassed -> LOOP_BACK
+        assert decision.decision_type == DecisionType.LOOP_BACK
+
+    def test_evaluate_boundary_one_before_max_iterations(self):
+        """iteration = max_iterations - 1 should LOOP_BACK, not FAIL."""
+        engine = DecisionEngine()
+        decision = engine.evaluate(
+            phase_name="DEVELOPMENT",
+            quality_score=0.75,
+            quality_threshold=0.90,
+            defects=[{"description": "Issue"}],
+            iteration=4,  # max_iterations=5, so 4 < 5
+            max_iterations=5,
+            is_final_phase=False,
+        )
+        # 4 >= 5 is False -> should LOOP_BACK
+        assert decision.decision_type == DecisionType.LOOP_BACK
+
+    def test_evaluate_quality_exact_threshold_boundary(self):
+        """quality_score == quality_threshold should CONTINUE (uses >=)."""
+        engine = DecisionEngine()
+        decision = engine.evaluate(
+            phase_name="DEVELOPMENT",
+            quality_score=0.90,  # Exactly equals threshold
+            quality_threshold=0.90,
+            defects=[],
+            iteration=1,
+            max_iterations=5,
+            is_final_phase=False,
+        )
+        # 0.90 >= 0.90 is True -> CONTINUE
+        assert decision.decision_type == DecisionType.CONTINUE
