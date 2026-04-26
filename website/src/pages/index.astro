@@ -151,9 +151,6 @@ import Footer from '../components/Footer.astro';
               </div>
             </div>
           </div>
-          <p class="text-xs text-gaia-muted text-center mt-3 font-mono opacity-60">
-            (placeholder — drop screenshot/video into website/public/)
-          </p>
         </div>
       </div>
     </section>
@@ -185,7 +182,7 @@ import Footer from '../components/Footer.astro';
               <h3 class="font-semibold text-white">Connect your stack</h3>
               <span class="badge badge-today flex-shrink-0">Today</span>
             </div>
-            <p class="text-sm text-gaia-muted">MCP client + bridge means Jira, Docker, GitHub, Slack — anything with an MCP server.</p>
+            <p class="text-sm text-gaia-muted">Bring any MCP server — Jira, Docker, GitHub, Slack, your own — and chat with it through the Chat Agent.</p>
           </div>
           <div class="capability-card fade-in-up" style="--stagger: 0.16s">
             <div class="flex items-start justify-between gap-2 mb-1">
@@ -223,7 +220,7 @@ import Footer from '../components/Footer.astro';
             <ul class="space-y-3 text-gaia-muted">
               <li class="flex gap-3 fade-in-up" style="--stagger: 0.05s"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">No API keys.</strong> No spend. No rate limits.</span></li>
               <li class="flex gap-3 fade-in-up" style="--stagger: 0.13s"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">No data leaves your PC.</strong> Files, prompts, and model outputs all stay local.</span></li>
-              <li class="flex gap-3 fade-in-up" style="--stagger: 0.21s"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">NPU + iGPU acceleration.</strong> Optimised for AMD Ryzen AI via Lemonade Server.</span></li>
+              <li class="flex gap-3 fade-in-up" style="--stagger: 0.21s"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">NPU + iGPU acceleration.</strong> Optimised for AMD Ryzen AI via <a href="https://github.com/lemonade-sdk/lemonade" class="text-gaia-text underline decoration-gaia-accent/40 underline-offset-2 hover:decoration-gaia-accent">Lemonade Server</a>, the local LLM runtime gaia talks to.</span></li>
               <li class="flex gap-3 fade-in-up" style="--stagger: 0.29s"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">Open source, MIT licensed.</strong> Fork it, ship it inside your product, use it offline.</span></li>
             </ul>
           </div>
@@ -339,13 +336,17 @@ import Footer from '../components/Footer.astro';
     <!-- ============================================================== -->
     <section class="px-4 sm:px-6 lg:px-8 py-20 border-t border-gaia-border/50">
       <div class="max-w-3xl mx-auto text-center fade-in-up">
-        <p class="text-gaia-muted mb-6">Free. MIT-licensed. No signup.</p>
+        <p class="text-gaia-muted mb-6">Free, MIT-licensed, no signup.</p>
         <a id="download-final" href="https://github.com/amd/gaia/releases/latest" class="inline-flex items-center gap-3 px-8 py-4 bg-gaia-accent hover:bg-gaia-accent/90 text-white font-semibold rounded-lg transition-all shadow-lg shadow-gaia-accent/20 hover:shadow-gaia-accent/40">
           <span id="download-final-label">Download gaia</span>
           <span id="download-final-version" class="text-xs font-mono opacity-80"></span>
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
         </a>
-        <p class="text-xs text-gaia-muted mt-4">Or for developers: <code class="text-gaia-text">uv pip install amd-gaia</code></p>
+        <p class="text-xs text-gaia-muted mt-4">
+          Or for developers: <code class="text-gaia-text">uv pip install amd-gaia</code>
+          <span class="text-gaia-border mx-2">·</span>
+          <a href="https://github.com/amd/gaia/releases" class="text-gaia-muted hover:text-white underline decoration-gaia-border underline-offset-2">release notes</a>
+        </p>
       </div>
     </section>
 
