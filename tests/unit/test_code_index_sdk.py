@@ -179,8 +179,11 @@ class TestSearch:
             "chunks": [],
         }
 
-        with patch.object(sdk, "_load_embedder"), patch.object(
-            sdk, "_encode_texts", side_effect=ConnectionError("backend dead")
+        with (
+            patch.object(sdk, "_load_embedder"),
+            patch.object(
+                sdk, "_encode_texts", side_effect=ConnectionError("backend dead")
+            ),
         ):
             with pytest.raises(RuntimeError, match="Query encoding failed"):
                 sdk.search("anything")
