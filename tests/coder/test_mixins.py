@@ -510,5 +510,86 @@ def test_list_files_excludes_directories(tmp_path, search_mixin):
 
 
 def test_search_tools_all_registered(search_mixin):
-    expected = {"grep", "find_symbol", "list_files"}
+    expected = {"grep", "find_symbol", "list_files", "semantic_search"}
     assert expected.issubset(_TOOL_REGISTRY.keys())
+
+
+# ---------------------------------------------------------------------------
+# SearchToolsMixin — semantic_search (delegates to gaia.code_index)
+# ---------------------------------------------------------------------------
+
+
+def test_semantic_search_warns_when_no_index(tmp_path, search_mixin, caplog):
+    """No index built yet → returns [] and emits an actionable WARN.
+
+    The §6.5 contract: never auto-index from a tool call (that's an EM-
+    driven operation via `rag refresh`). Just point the EM at the right
+    next step.
+    """
+    semantic_search = _get_tool("semantic_search")
+    with caplog.at_level("WARNING", logger="gaia.coder.tools.search"):
+        results = semantic_search("how do we verify webhook signatures", repo_path=str(tmp_path))
+    assert results == []
+    # Surface the build-an-index hint, not silent emptiness.
+    assert any("no index found" in r.message for r in caplog.records), (
+        "expected a 'no index found' WARN; got: " + repr([r.message for r in caplog.records])
+    )
+
+
+def test_semantic_search_returns_hits_from_indexed_repo(
+    tmp_path, search_mixin, monkeypatch
+):
+    """When the SDK reports indexed=True, results round-trip into SemanticHit dicts."""
+    from unittest.mock import MagicMock
+
+    from gaia.code_index.sdk import CodeChunk, SearchResult
+
+    fake_chunk = CodeChunk(
+        content="def verify_hmac(body, sig): ...",
+        file_path="src/webhook.py",
+        language="python",
+        start_line=42,
+        end_line=58,
+        symbol_name="verify_hmac",
+        symbol_type="function",
+    )
+    fake_sdk = MagicMock()
+    fake_sdk.get_status.return_value = {"indexed": True}
+    fake_sdk.search.return_value = [SearchResult(chunk=fake_chunk, score=0.91, result_type="code")]
+
+    # Patch the lazy-imported CodeIndexSDK constructor inside the helper.
+    import gaia.coder.tools.search as search_mod
+
+    def fake_ctor(_config):
+        return fake_sdk
+
+    monkeypatch.setattr(search_mod, "_semantic_search_impl", search_mod._semantic_search_impl)
+    monkeypatch.setattr("gaia.code_index.CodeIndexSDK", fake_ctor)
+
+    semantic_search = _get_tool("semantic_search")
+    hits = semantic_search("verify webhook signature", repo_path=str(tmp_path))
+
+    assert len(hits) == 1
+    assert hits[0]["path"] == "src/webhook.py"
+    assert hits[0]["start_line"] == 42
+    assert hits[0]["symbol_name"] == "verify_hmac"
+    assert 0.0 < hits[0]["score"] <= 1.0
+    assert "verify_hmac" in hits[0]["snippet"]
+
+
+def test_semantic_search_raises_when_rag_extra_missing(tmp_path, search_mixin, monkeypatch):
+    """Missing faiss/numpy → actionable RuntimeError pointing at the [rag] extra."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name.startswith("gaia.code_index"):
+            raise ImportError("No module named 'gaia.code_index' (simulated)")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+    semantic_search = _get_tool("semantic_search")
+    with pytest.raises(RuntimeError, match=r"requires the 'rag' extra"):
+        semantic_search("anything", repo_path=str(tmp_path))
