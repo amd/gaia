@@ -109,10 +109,14 @@ class TestBuiltinRegistration:
         registry.discover()
         reg = registry.get("gaia-lite")
         assert reg.models, "gaia-lite should list preferred models"
-        # The primary preference must be a 4B GGUF checkpoint — that's the
-        # whole reason this agent exists alongside ChatAgent.
-        assert reg.models[0] == "Qwen3-4B-Instruct-2507-GGUF"
-        assert all("4B" in m for m in reg.models), reg.models
+        # The primary preference must be a ~4B GGUF checkpoint — that's the
+        # whole reason this agent exists alongside ChatAgent. We currently
+        # ship Gemma 4 E4B as primary, with Gemma 3 4B as the fallback for
+        # catalogs that haven't picked up the Gemma 4 drop yet.
+        assert reg.models[0] == "Gemma-4-E4B-it-GGUF"
+        # Case-insensitive "4B" check — Gemma 3 uses lowercase "4b" in its
+        # checkpoint name, Gemma 4 E4B uses uppercase. Both are ~4B models.
+        assert all("4b" in m.lower() for m in reg.models), reg.models
 
     def test_gaia_lite_factory_presets_model_id(self):
         """Factory must preset ``model_id`` so ChatAgent skips the 35B default."""
@@ -126,7 +130,7 @@ class TestBuiltinRegistration:
             reg.factory()  # no kwargs — factory must still set model_id
         mock_agent.assert_called_once()
         config = mock_agent.call_args.kwargs["config"]
-        assert config.model_id == "Qwen3-4B-Instruct-2507-GGUF"
+        assert config.model_id == "Gemma-4-E4B-it-GGUF"
 
     def test_gaia_lite_factory_respects_caller_override(self):
         """Explicit ``model_id`` from the caller wins over the preset default."""
@@ -155,7 +159,8 @@ class TestBuiltinRegistration:
         registry = AgentRegistry()
         registry.discover()
         reg = registry.get("gaia-lite")
-        # 4B Q4_K_M is ~2.5 GB on disk; 5 GB free is the comfortable load floor.
+        # Gemma 4 E4B Q4 GGUF is ~2.7 GB on disk; 5 GB free is the
+        # comfortable load floor (weights + KV cache + runtime overhead).
         assert reg.min_memory_gb == 5.0
 
     def test_legacy_chat_lite_id_resolves_to_gaia_lite(self):
@@ -182,8 +187,8 @@ class TestBuiltinRegistration:
             registry.create_agent("chat-lite")
         mock_agent.assert_called_once()
         config = mock_agent.call_args.kwargs["config"]
-        # Same 4B preset as gaia-lite — confirming the alias hit.
-        assert config.model_id == "Qwen3-4B-Instruct-2507-GGUF"
+        # Same ~4B preset as gaia-lite — confirming the alias hit.
+        assert config.model_id == "Gemma-4-E4B-it-GGUF"
 
     def test_legacy_chat_lite_resolve_model_returns_4b(self):
         """``resolve_model('chat-lite')`` must honour the alias.
@@ -200,9 +205,9 @@ class TestBuiltinRegistration:
         # Lemonade HTTP call).
         resolved = registry.resolve_model(
             "chat-lite",
-            available_models=["Qwen3-4B-Instruct-2507-GGUF", "Something-Else"],
+            available_models=["Gemma-4-E4B-it-GGUF", "Something-Else"],
         )
-        assert resolved == "Qwen3-4B-Instruct-2507-GGUF"
+        assert resolved == "Gemma-4-E4B-it-GGUF"
 
     def test_canonical_id_maps_aliases_and_passes_through_known_ids(self):
         """``canonical_id`` is the single source of alias truth."""
