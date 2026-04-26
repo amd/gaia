@@ -258,7 +258,12 @@ Do NOT wrap conversational replies in JSON.
             base_url=base_url,
             show_stats=True,  # Always collect stats for token tracking
             max_history_length=20,  # Keep more history for agent conversations
-            max_tokens=4096,  # Increased for complex code generation
+            # Output token cap. With our 32K ctx_size and a ~7.7K-token system
+            # prompt + history, leaving 8K for output gives plenty of headroom
+            # for both prose answers and long tool-call arg blobs (the eval
+            # surfaced 4K cutting off mid-tool-call on Qwen 4B). Going much
+            # higher would steal from the input-history budget.
+            max_tokens=8192,
         )
         self.chat = AgentSDK(chat_config)
         self.model_id = model_id
@@ -956,9 +961,19 @@ Do NOT wrap conversational replies in JSON.
             tool_calls = envelope["__tool_calls__"]
             finish_reason = envelope.get("finish_reason", "")
             if finish_reason == "length":
+                # ``finish_reason="length"`` from the OpenAI completions API
+                # signals the model hit the **max_tokens output cap**, NOT the
+                # context window — those are separate limits and conflating
+                # them led to misleading error messages telling users to
+                # raise ``--ctx-size`` when their ctx was already 32K. The
+                # actual fix is bumping the output budget in
+                # ``AgentConfig.max_tokens`` (or, for one-off long tool calls,
+                # asking the model to pick a single value rather than
+                # concatenating).
                 raise ValueError(
                     f"Tool call truncated mid-arguments (finish_reason=length). "
-                    f"Increase --ctx-size for model {self.model_id}."
+                    f"Model {self.model_id} ran out of output tokens before "
+                    f"finishing the call — increase AgentConfig.max_tokens."
                 )
             if len(tool_calls) > 1:
                 raise NotImplementedError(
