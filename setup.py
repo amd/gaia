@@ -83,8 +83,11 @@ setup(
         "gaia.coder.review",
         "gaia.coder.introspect",
         "gaia.coder.self_fix",
+        "gaia.coder.subagents",
         "gaia.coder.tests",
-        "gaia.coder.skills",
+        "gaia.eval.runners",
+        "gaia.eval.suites",
+        "gaia.eval.suites.gaia_internal_20",
         "gaia.code_index",
     ],
     package_data={
