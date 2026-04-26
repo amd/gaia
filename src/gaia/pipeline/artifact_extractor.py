@@ -103,7 +103,17 @@ def write_code_files(
 
         if blocks:
             for lang, filename, content in blocks:
-                file_path = workspace / filename
+                # SEC-003: Path traversal protection - resolve and verify
+                # filename comes from untrusted LLM output
+                file_path = (workspace / filename).resolve()
+                workspace_resolved = workspace.resolve()
+                try:
+                    file_path.relative_to(workspace_resolved)
+                except ValueError:
+                    logger.warning(
+                        f"Path traversal blocked: {filename!r} resolves outside workspace"
+                    )
+                    continue
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.write_text(content, encoding="utf-8")
                 written_files.append(str(file_path))
@@ -115,7 +125,16 @@ def write_code_files(
                 "code_"
             ):
                 safe_name = artifact_name.replace("/", "_").replace("\\", "_")
-                file_path = workspace / f"{safe_name}.txt"
+                # SEC-003: Path traversal protection for raw artifact fallback
+                file_path = (workspace / f"{safe_name}.txt").resolve()
+                workspace_resolved = workspace.resolve()
+                try:
+                    file_path.relative_to(workspace_resolved)
+                except ValueError:
+                    logger.warning(
+                        f"Path traversal blocked (raw): {safe_name!r} resolves outside workspace"
+                    )
+                    continue
                 file_path.write_text(artifact_text, encoding="utf-8")
                 written_files.append(str(file_path))
                 logger.info(f"Wrote raw artifact to {file_path}")
