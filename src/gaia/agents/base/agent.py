@@ -982,17 +982,31 @@ Do NOT wrap conversational replies in JSON.
                 )
             tc = tool_calls[0]
             name = tc["function"]["name"]
-            arguments_str = tc["function"].get("arguments") or ""
-            if arguments_str:
+            arguments_raw = tc["function"].get("arguments")
+            # ``arguments`` is canonically a JSON string per OpenAI spec, but
+            # llama.cpp 4B-class models occasionally emit it pre-parsed as a
+            # dict. Accept both shapes — only call ``json.loads`` when it's
+            # actually a string.
+            if arguments_raw is None or arguments_raw == "":
+                tool_args = {}
+            elif isinstance(arguments_raw, dict):
+                tool_args = arguments_raw
+            elif isinstance(arguments_raw, (str, bytes, bytearray)):
                 try:
-                    tool_args = json.loads(arguments_str)
+                    tool_args = json.loads(arguments_raw)
                 except json.JSONDecodeError as exc:
                     raise ValueError(
                         f"Malformed tool_call arguments for '{name}': {exc}. "
-                        f"Raw arguments: {arguments_str[:200]}"
+                        f"Raw arguments: {str(arguments_raw)[:200]}"
                     ) from exc
             else:
-                tool_args = {}
+                # Unexpected shape (list / int / None-ish) — treat as malformed
+                # so the recovery layer in process_query nudges the model to
+                # retry with valid arguments.
+                raise ValueError(
+                    f"Malformed tool_call arguments for '{name}': expected "
+                    f"str or dict, got {type(arguments_raw).__name__}"
+                )
             logger.debug(
                 "[PARSE] tool_call_path=native model_id=%s tool=%s", self.model_id, name
             )
