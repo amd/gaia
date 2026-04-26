@@ -382,9 +382,77 @@ class CoderLLM:
         )
 
 
+# ---------------------------------------------------------------------------
+# Default completion client for self-fix sub-loops
+# ---------------------------------------------------------------------------
+
+
+def default_completion_client(
+    *,
+    prompt: str,
+    max_tokens: int = 2048,
+    temperature: float = 0.0,
+    model: Optional[str] = None,
+    **_ignored: Any,
+) -> str:
+    """One-shot completion via :class:`CoderLLM` — the default LLM seam for
+    self-fix triage / critique / classify-failure.
+
+    Each :class:`CoderLLM` is constructed lazily inside this function so the
+    importing modules (``gaia.coder.self_fix.triage`` etc.) stay import-clean
+    on systems without the ``anthropic`` SDK installed (CI for store-only
+    tests, the user's machine before ``uv pip install anthropic``).
+
+    The ``**_ignored`` swallow is intentional: the
+    ``TriageClient`` / ``CritiqueClient`` / ``ClassifyClient`` protocols pass
+    structured kwargs (``feedback_id``, ``recent_tool_calls``, ``kind``, …)
+    that the *rendered* ``prompt`` already includes verbatim. We don't need
+    them a second time — we just need the prompt and the LLM.
+
+    Args:
+        prompt: Fully rendered user message.
+        max_tokens: Cap on output tokens. Defaults to 2048 — large enough for
+            the JSON envelopes the self-fix prompts request, small enough to
+            avoid runaway cost.
+        temperature: Sampling temperature. Defaults to 0 — every self-fix
+            prompt expects deterministic, schema-compliant output.
+        model: Override the underlying :class:`CoderLLM` model. Defaults to
+            :data:`CoderLLM.DEFAULT_MODEL`.
+        **_ignored: Swallowed structured args (see above).
+
+    Returns:
+        The raw assistant text. Self-fix callers parse this as JSON.
+
+    Raises:
+        RuntimeError: when the ``anthropic`` SDK is not installed in the
+            runtime. Callers may opt out by injecting a different client via
+            the ``client=`` keyword argument on each public entry point.
+            All other failures (missing ``ANTHROPIC_API_KEY``, Anthropic
+            transport errors after retries) propagate unchanged so the
+            self-fix loop sees a real, debuggable error rather than a silent
+            stub — fail-loudly per CLAUDE.md.
+    """
+    try:
+        llm = CoderLLM(model=model, max_tokens=max_tokens)
+    except ImportError as exc:
+        raise RuntimeError(
+            "default_completion_client requires the anthropic SDK. Install "
+            "with `uv pip install anthropic` (or `uv pip install -e .[eval]`) "
+            "and set ANTHROPIC_API_KEY, or inject a custom client via the "
+            "`client=` keyword argument on the self-fix entry point."
+        ) from exc
+    return llm.complete(
+        prompt=prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        model=model,
+    )
+
+
 __all__ = [
     "AssistantTurn",
     "CoderLLM",
     "ToolUse",
     "Usage",
+    "default_completion_client",
 ]

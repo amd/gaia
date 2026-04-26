@@ -275,3 +275,38 @@ def test_restart_self_stale_timestamps_are_purged():
 def test_restart_self_unknown_kind_raises():
     with pytest.raises(ValueError, match="unknown kind"):
         self_heal.restart_self("x", kind="banana", exit_fn=lambda _: None)
+
+
+# ---------------------------------------------------------------------------
+# Default classify_failure client wiring (CoderLLM)
+# ---------------------------------------------------------------------------
+
+
+def test_default_classify_client_routes_through_coder_llm(mocker):
+    """The default classify_failure client MUST forward the prompt to
+    :func:`gaia.coder.llm.default_completion_client` — verifying the §7.5
+    self-heal triage path is wired to the coder's single LLM seam.
+    """
+    # Lazy import inside ``_default_classify_client`` — patch the source
+    # module so the in-function ``from gaia.coder.llm import …`` resolves
+    # to the mock at call time.
+    fake = mocker.patch(
+        "gaia.coder.llm.default_completion_client",
+        return_value=_valid_response("self-code", 85),
+    )
+    # No client= override → default path runs.
+    result = self_heal.classify_failure(
+        error={
+            "message": "AttributeError: foo",
+            "stack": "<stack>",
+            "tool_name": "edit_file",
+            "tool_args": {"path": "x.py"},
+        },
+        context_json={"recent_tool_calls": []},
+        dev_mode_on=True,
+    )
+    assert result.kind == "self-code"
+    fake.assert_called_once()
+    kwargs = fake.call_args.kwargs
+    assert "AttributeError: foo" in kwargs["prompt"]
+    assert kwargs["max_tokens"] == 2048

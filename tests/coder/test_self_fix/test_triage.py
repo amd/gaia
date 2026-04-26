@@ -143,3 +143,44 @@ def test_localise_skips_missing_files(tmp_path: Path) -> None:
     candidates = (CandidateFile(path="does/not/exist.py", why="nope"),)
     hits = localise("tool", candidates, repo_root=tmp_path)
     assert hits == []
+
+
+# ---------------------------------------------------------------------------
+# Default triage client wiring (CoderLLM)
+# ---------------------------------------------------------------------------
+
+
+def test_default_triage_client_routes_through_coder_llm(mocker) -> None:
+    """The default triage client MUST forward the rendered prompt to
+    :func:`gaia.coder.llm.default_completion_client` — verifying the
+    self-fix triage path is wired to the coder's single LLM seam.
+    """
+    # Lazy import inside ``_default_triage_client`` — patch the source
+    # module so the in-function ``from gaia.coder.llm import …`` resolves
+    # to the mock at call time.
+    fake = mocker.patch(
+        "gaia.coder.llm.default_completion_client",
+        return_value=json.dumps(
+            {
+                "fix_class": "tool",
+                "root_cause_hypothesis": "h",
+                "candidate_files": [],
+                "prior_pattern_hit": None,
+                "confidence": 90,
+            }
+        ),
+    )
+    ctx = TriageContext(
+        feedback_id="fb-default",
+        received_at="2026-04-20T00:00:00+00:00",
+        from_handle="em",
+        severity="med",
+    )
+    # No client= override → default path runs.
+    result = classify_fix_class("classify_failure misfires", ctx)
+    assert result.fix_class == "tool"
+    fake.assert_called_once()
+    # The default forwards the rendered prompt + a 2048 max-token cap.
+    kwargs = fake.call_args.kwargs
+    assert "fb-default" in kwargs["prompt"]
+    assert kwargs["max_tokens"] == 2048

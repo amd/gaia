@@ -87,12 +87,28 @@ class CritiqueClient(Protocol):
 CritiqueClientFn = Callable[..., str]
 
 
-def _default_critique_client(**_kwargs: Any) -> str:  # pragma: no cover
-    raise RuntimeError(
-        "No CritiqueClient configured. Inject one via "
-        "critique_recent_output(client=...) or wire the default Anthropic "
-        "client in Phase 7."
-    )
+#: Token cap for the P2 critique prompt. The spec caps every critique
+#: response at one finding plus a most-impactful field; 2k is plenty.
+_CRITIQUE_MAX_TOKENS: int = 2048
+
+
+def _default_critique_client(*, prompt: str, **_kwargs: Any) -> str:
+    """Run the critique prompt through :class:`gaia.coder.llm.CoderLLM`.
+
+    The :class:`CritiqueClient` protocol passes structured kwargs
+    (``success_criterion``, ``recent_output``, ``kind``) that the rendered
+    ``prompt`` already includes — this default forwards only the prompt.
+
+    Raises:
+        RuntimeError: when the ``anthropic`` SDK is not installed. Other
+            failures (missing ``ANTHROPIC_API_KEY``, transport errors)
+            propagate unchanged per the fail-loudly rule in ``CLAUDE.md``.
+    """
+    # Lazy import — see :func:`triage._default_triage_client` for the
+    # rationale (keeps the module importable on stores-only CI lines).
+    from gaia.coder.llm import default_completion_client
+
+    return default_completion_client(prompt=prompt, max_tokens=_CRITIQUE_MAX_TOKENS)
 
 
 # ---------------------------------------------------------------------------

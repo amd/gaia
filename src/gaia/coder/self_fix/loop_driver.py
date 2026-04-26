@@ -181,11 +181,11 @@ class FeedbackLoopDriver:
             config: Paths + EM config.
             triage_client: LLM call injected into :func:`classify_fix_class`.
             edit_hunk_planner: Callable returning the concrete edit hunks the
-                fixer will apply. Phase 6 does not auto-generate these; the
-                caller is responsible. When omitted, :meth:`_default_edit_hunks`
-                produces a no-op placeholder (touching a safe header line) so
-                the end-to-end tests exercise the branch-creation and PR
-                path without needing LLM-backed fix generation.
+                fixer will apply. When omitted, :meth:`_default_edit_hunks`
+                drives :class:`gaia.coder.llm.CoderLLM` against the
+                ``prompts/edit_hunks.md`` template (production path). Tests
+                inject a deterministic stub here so they never hit the LLM —
+                see ``tests/coder/test_self_fix/test_loop_driver.py``.
             gh_runner: ``gh`` subprocess shim for tests.
             inbox_writer: Phase-5 trust inbox ``enqueue`` — optional.
             review_gate_runner: Phase-4 review-gate runner — optional. When
@@ -470,33 +470,48 @@ class FeedbackLoopDriver:
         self,
         *,
         plan: Plan,
-        fix_class: FixClassResult,  # pylint: disable=unused-argument
+        fix_class: FixClassResult,
         hits: Sequence[LocalisationHit],
     ) -> Sequence[EditHunk]:
-        """Fallback hunk planner for tests.
+        """LLM-driven hunk planner — the production default.
 
-        Produces a single no-op edit on the first located file: appends a
-        ``# gaia-coder self-fix placeholder`` comment. This keeps the branch
-        "real" (a genuine change) without demanding an LLM.
+        Renders ``src/gaia/coder/prompts/edit_hunks.md`` with the plan, the
+        triage classification, and the localised hits, then asks
+        :class:`gaia.coder.llm.CoderLLM` for a JSON list of concrete edit
+        hunks. The response is parsed with :func:`json.loads` and validated
+        against the constraints in the prompt's ``<output_contract>``:
+
+        * ``edits`` must be a JSON array of objects.
+        * Each object must carry at least ``path`` / ``old_string`` /
+          ``new_string`` (``replace_all`` defaults to ``False``).
+        * ``path`` must match a path that appeared in the localised hits —
+          we refuse to edit files the triage step never proposed.
+
+        Any violation raises :class:`RuntimeError` with the first 500
+        characters of the raw response embedded so the caller has something
+        actionable to debug — fail-loudly per ``CLAUDE.md``.
+
+        Tests substitute this default by passing ``edit_hunk_planner=`` to
+        :class:`FeedbackLoopDriver` (see ``tests/coder/test_self_fix/
+        test_loop_driver.py``) so they never hit a real LLM.
         """
         if not hits:
             raise RuntimeError(
-                "_default_edit_hunks: no localised hits and no caller-supplied "
-                "edit_hunk_planner — cannot synthesise a fix."
+                "_default_edit_hunks: no localised hits — triage did not "
+                "produce any candidate files for the planner to edit. "
+                "Either inject `edit_hunk_planner=` or fix the upstream "
+                "localisation step."
             )
-        first = hits[0]
-        return [
-            EditHunk(
-                path=first.path,
-                old_string=first.snippet,
-                new_string=(
-                    first.snippet
-                    + "\n# gaia-coder self-fix placeholder for "
-                    + plan.feedback_id
-                ),
-                replace_all=False,
-            )
-        ]
+
+        prompt = _render_edit_hunks_prompt(plan=plan, fix_class=fix_class, hits=hits)
+
+        # Lazy import — same rationale as the triage / critique defaults:
+        # the loop_driver module stays importable on hosts without the
+        # anthropic SDK installed.
+        from gaia.coder.llm import default_completion_client
+
+        raw = default_completion_client(prompt=prompt, max_tokens=4096)
+        return _parse_edit_hunks_response(raw, allowed_paths={h.path for h in hits})
 
     def _create_branch_only(self, feedback_id: str) -> str:
         """Create the self-fix branch without applying any edits."""
@@ -582,6 +597,154 @@ def _keywords_from_body(body: str, *, max_keywords: int = 5) -> List[str]:
         ordered.append(t)
     ordered.sort(key=len, reverse=True)
     return ordered[:max_keywords]
+
+
+# ---------------------------------------------------------------------------
+# Edit-hunks prompt rendering + response parsing
+# ---------------------------------------------------------------------------
+
+
+_EDIT_HUNKS_PROMPT_PATH: Path = (
+    Path(__file__).resolve().parent.parent / "prompts" / "edit_hunks.md"
+)
+
+
+def _render_edit_hunks_prompt(
+    *,
+    plan: Plan,
+    fix_class: FixClassResult,
+    hits: Sequence[LocalisationHit],
+) -> str:
+    """Render ``prompts/edit_hunks.md`` for the LLM-driven hunk planner.
+
+    Substitutes the double-brace placeholders in the canonical prompt with
+    a stable, deterministic projection of the plan + hits — same convention
+    used by ``prompts/triage.md`` and ``prompts/critique.md``.
+
+    The ``hits_block`` slot lists every hit as ``<path>:<start>-<end>``
+    followed by its snippet inside a fenced code block; this is what the
+    prompt's self-check ("does each ``old_string`` appear inside one of the
+    localised snippets?") actually verifies.
+    """
+    if not _EDIT_HUNKS_PROMPT_PATH.exists():
+        raise FileNotFoundError(
+            f"prompt template missing: {_EDIT_HUNKS_PROMPT_PATH}. "
+            "Create it under src/gaia/coder/prompts/."
+        )
+    template = _EDIT_HUNKS_PROMPT_PATH.read_text(encoding="utf-8")
+
+    hit_blocks: List[str] = []
+    for hit in hits:
+        hit_blocks.append(
+            f"### {hit.path}:{hit.line_start}-{hit.line_end}\n"
+            "```\n"
+            f"{hit.snippet}\n"
+            "```"
+        )
+    hits_block = "\n\n".join(hit_blocks) if hit_blocks else "(no localised hits)"
+
+    subs: dict[str, str] = {
+        "feedback_id": plan.feedback_id,
+        "fix_class": fix_class.fix_class,
+        "root_cause": plan.root_cause,
+        "proposed_change": plan.proposed_change,
+        "success_criterion": plan.success_criterion,
+        "hits_block": hits_block,
+    }
+    rendered = template
+    for key, value in subs.items():
+        rendered = rendered.replace("{{" + key + "}}", value)
+    return rendered
+
+
+def _parse_edit_hunks_response(
+    raw: str,
+    *,
+    allowed_paths: set[str],
+) -> List[EditHunk]:
+    """Parse the JSON response from the edit-hunks LLM call.
+
+    Validates against the prompt's ``<output_contract>``:
+
+    * Must parse as a JSON object with an ``edits`` array.
+    * Each entry must carry ``path`` / ``old_string`` / ``new_string`` of
+      the right type; ``replace_all`` defaults to ``False``.
+    * ``path`` must be in ``allowed_paths`` — i.e. a path the localisation
+      step actually proposed. Reject silently invented files.
+    * The list may be empty, but each entry that *is* present must be
+      complete.
+
+    On any violation raises :class:`RuntimeError` with the first 500
+    characters of the raw response embedded — fail-loudly per CLAUDE.md.
+    The 500-char cap protects logs / audit trail from runaway responses.
+    """
+    snippet = raw[:500]
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"edit_hunks response is not valid JSON: {exc}. "
+            f"First 500 chars of response: {snippet!r}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError(
+            "edit_hunks response must be a JSON object with an 'edits' key. "
+            f"First 500 chars of response: {snippet!r}"
+        )
+    edits_raw = parsed.get("edits")
+    if not isinstance(edits_raw, list):
+        raise RuntimeError(
+            "edit_hunks response 'edits' must be a JSON array. "
+            f"First 500 chars of response: {snippet!r}"
+        )
+
+    out: List[EditHunk] = []
+    for index, entry in enumerate(edits_raw):
+        if not isinstance(entry, dict):
+            raise RuntimeError(
+                f"edit_hunks edits[{index}] must be a JSON object. "
+                f"First 500 chars of response: {snippet!r}"
+            )
+        path = entry.get("path")
+        old_string = entry.get("old_string")
+        new_string = entry.get("new_string")
+        replace_all = entry.get("replace_all", False)
+        if not isinstance(path, str) or not path:
+            raise RuntimeError(
+                f"edit_hunks edits[{index}].path must be a non-empty string. "
+                f"First 500 chars of response: {snippet!r}"
+            )
+        if path not in allowed_paths:
+            raise RuntimeError(
+                f"edit_hunks edits[{index}].path={path!r} is not one of the "
+                f"localised paths {sorted(allowed_paths)!r}. The model is "
+                "not allowed to invent files. "
+                f"First 500 chars of response: {snippet!r}"
+            )
+        if not isinstance(old_string, str) or not old_string:
+            raise RuntimeError(
+                f"edit_hunks edits[{index}].old_string must be a non-empty "
+                f"string. First 500 chars of response: {snippet!r}"
+            )
+        if not isinstance(new_string, str):
+            raise RuntimeError(
+                f"edit_hunks edits[{index}].new_string must be a string. "
+                f"First 500 chars of response: {snippet!r}"
+            )
+        if not isinstance(replace_all, bool):
+            raise RuntimeError(
+                f"edit_hunks edits[{index}].replace_all must be a bool. "
+                f"First 500 chars of response: {snippet!r}"
+            )
+        out.append(
+            EditHunk(
+                path=path,
+                old_string=old_string,
+                new_string=new_string,
+                replace_all=replace_all,
+            )
+        )
+    return out
 
 
 __all__ = [

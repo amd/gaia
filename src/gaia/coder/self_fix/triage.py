@@ -102,19 +102,33 @@ class TriageClient(Protocol):
 TriageClientFn = Callable[..., str]
 
 
-def _default_triage_client(**_kwargs: Any) -> str:  # pragma: no cover
-    """Default client raises — forces callers to inject a real client.
+#: Token cap for the P1 triage prompt. Spec §15.8 reserves 2k for the
+#: classifier's JSON envelope; tests can shrink this by injecting a custom
+#: client.
+_TRIAGE_MAX_TOKENS: int = 2048
 
-    This keeps the module import-clean on systems without the ``anthropic``
-    package (e.g. CI for store-only tests). Fail-loudly per ``CLAUDE.md``.
+
+def _default_triage_client(*, prompt: str, **_kwargs: Any) -> str:
+    """Run the triage prompt through :class:`gaia.coder.llm.CoderLLM`.
+
+    The :class:`TriageClient` protocol passes structured kwargs
+    (``feedback_id``, ``feedback_body``, ``context_json``) for clients that
+    want to log them — the rendered ``prompt`` already contains those
+    fields, so this default ignores them and just forwards the prompt.
+
+    Raises:
+        RuntimeError: when the ``anthropic`` SDK is not installed. The
+            module stays importable on stores-only CI lines because
+            :class:`CoderLLM` is constructed lazily inside the helper.
+            Other failures (missing ``ANTHROPIC_API_KEY``, transport
+            errors) propagate per the fail-loudly rule in ``CLAUDE.md``.
     """
-    raise RuntimeError(
-        "No TriageClient configured. The self-fix loop needs an LLM "
-        "(default-client wiring lands in Phase 7). For now, either "
-        "inject one via classify_fix_class(client=...) — see "
-        "tests/coder/test_self_fix/conftest.py — or set ANTHROPIC_API_KEY "
-        "and instantiate an anthropic.Anthropic() client by hand."
-    )
+    # Imported lazily so importing :mod:`gaia.coder.self_fix.triage` on a
+    # box without the anthropic SDK does not fail at module import time —
+    # only callers that actually run the default pay the import cost.
+    from gaia.coder.llm import default_completion_client
+
+    return default_completion_client(prompt=prompt, max_tokens=_TRIAGE_MAX_TOKENS)
 
 
 # ---------------------------------------------------------------------------
