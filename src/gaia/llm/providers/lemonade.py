@@ -4,7 +4,7 @@
 
 import json
 import logging
-from typing import Iterator, List, Optional, Union
+from typing import Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
 from ..lemonade_client import DEFAULT_MODEL_NAME, LemonadeClient, is_tool_calling_model
@@ -14,6 +14,118 @@ logger = logging.getLogger(__name__)
 # Sentinel key used to encode native tool_calls inside a JSON string so that
 # the response type stays `str` everywhere (no callers need updating).
 _NATIVE_TC_KEY = "__tool_calls__"
+
+
+# ── Typed errors ────────────────────────────────────────────────────────
+#
+# Lemonade returns structured errors as ``{"error": {"type": ..., "message": ...}}``.
+# We translate the well-known transient failure modes into typed exceptions
+# so the chat layer can decide whether to retry (after a model reload, etc.)
+# vs. surface a friendly message immediately. Anything we don't recognise
+# falls through to ``LemonadeError`` with the raw payload preserved.
+
+
+class LemonadeError(ValueError):
+    """Base class for Lemonade-side failures.
+
+    Carries the raw response payload (when available) on ``.payload`` so
+    higher layers can log it for diagnostics; ``.user_message`` is the
+    short, plain-English text we'd show the end user.
+    """
+
+    retryable: bool = False
+    user_message: str = "Something went wrong talking to the local LLM."
+
+    def __init__(
+        self,
+        user_message: Optional[str] = None,
+        payload: Optional[dict] = None,
+    ):
+        if user_message is not None:
+            self.user_message = user_message
+        self.payload = payload
+        super().__init__(self.user_message)
+
+
+class LemonadeModelNotLoadedError(LemonadeError):
+    retryable = True
+    user_message = "Reloading the model — give it a few seconds and try again."
+
+
+class LemonadeContextOverflowError(LemonadeError):
+    retryable = False
+    user_message = (
+        "This conversation got too long for the model's context window. "
+        "Start a fresh task to keep going."
+    )
+
+
+class LemonadeNetworkError(LemonadeError):
+    retryable = True
+    user_message = (
+        "Couldn't reach the local LLM. It may be loading or briefly busy "
+        "— try sending the message again."
+    )
+
+
+def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError], bool]:
+    """Inspect a Lemonade response dict for a known error shape.
+
+    Returns ``(error_instance_or_None, is_error)``. ``is_error=True`` with
+    ``None`` means we saw an error envelope but couldn't classify it —
+    caller should fall back to the generic ``LemonadeError``.
+    """
+    if not isinstance(response, dict):
+        return None, False
+    err = response.get("error")
+    if not isinstance(err, dict):
+        return None, False
+
+    # Lemonade may nest the upstream llama-server error inside
+    # ``details.response.error`` for ``backend_error`` envelopes.
+    nested = (
+        (err.get("details") or {}).get("response", {}).get("error")
+        if isinstance(err.get("details"), dict)
+        else None
+    )
+    candidate_types = []
+    candidate_messages = []
+    if isinstance(nested, dict):
+        candidate_types.append((nested.get("type") or "").lower())
+        candidate_messages.append(nested.get("message") or "")
+    candidate_types.append((err.get("type") or "").lower())
+    candidate_messages.append(err.get("message") or "")
+
+    type_blob = " ".join(t for t in candidate_types if t)
+    msg_blob = " ".join(m for m in candidate_messages if m).lower()
+
+    if "model_not_loaded" in type_blob or "no model loaded" in msg_blob:
+        return LemonadeModelNotLoadedError(payload=response), True
+    if (
+        "exceed_context_size" in type_blob
+        or "exceeds the available context size" in msg_blob
+    ):
+        return LemonadeContextOverflowError(payload=response), True
+    if (
+        "network_error" in type_blob
+        or "curl error" in msg_blob
+        or "timeout was reached" in msg_blob
+        or "connection refused" in msg_blob
+    ):
+        return LemonadeNetworkError(payload=response), True
+
+    # Recognised the error envelope but couldn't bucket it specifically.
+    user_text = candidate_messages[0] if candidate_messages else ""
+    return (
+        LemonadeError(
+            user_message=(
+                "The local LLM hit an unexpected error. "
+                f"{user_text[:200] if user_text else 'Try again in a moment.'}"
+            ),
+            payload=response,
+        ),
+        True,
+    )
 
 
 class LemonadeProvider(LLMClient):
@@ -122,10 +234,31 @@ class LemonadeProvider(LLMClient):
         if effective_stream:
             return self._handle_stream(response)
 
-        # Handle error responses gracefully
+        # Handle error responses — classify into typed exceptions so the
+        # chat layer can decide whether to auto-retry vs. surface a
+        # friendly message. Raw payload is preserved on the exception
+        # for diagnostic logging.
         if not isinstance(response, dict) or "choices" not in response:
-            error_msg = f"Unexpected response format from Lemonade Server: {response}"
-            raise ValueError(error_msg)
+            classified, is_err = _classify_lemonade_response(
+                response if isinstance(response, dict) else {}
+            )
+            if classified is not None:
+                logger.warning(
+                    "Lemonade error: type=%s payload=%r",
+                    type(classified).__name__,
+                    response,
+                )
+                raise classified
+            # Truly unrecognised shape (no error envelope, no choices) —
+            # last-resort generic.
+            logger.warning("Unexpected Lemonade response: %r", response)
+            raise LemonadeError(
+                user_message=(
+                    "The local LLM returned an unexpected response. "
+                    "Try the message again."
+                ),
+                payload=response if isinstance(response, dict) else {"raw": response},
+            )
 
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")

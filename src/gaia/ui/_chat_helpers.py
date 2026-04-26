@@ -88,6 +88,51 @@ _mcp_status_lock = threading.Lock()
 model_load_lock = threading.Lock()
 
 
+# ── Lemonade error classification (chat-side helper) ───────────────────────
+#
+# AgentSDK + the agent loop wrap LLM errors in their own exception types,
+# so a raw ``LemonadeError`` raised by the provider often arrives at the
+# chat layer as ``ValueError("...")`` or ``RuntimeError("...")`` with the
+# original message preserved as text.  We walk the exception chain and
+# also pattern-match the message string so retry decisions don't depend
+# on the exception type bubbling through unchanged.
+
+
+def _classify_chat_exception(exc: BaseException):
+    """Return a typed ``LemonadeError`` instance if *exc* (or anything in
+    its ``__cause__`` chain) corresponds to a known Lemonade failure mode.
+
+    Returns ``None`` when the exception is unrelated.  Used by the chat
+    streaming/non-streaming paths to decide whether to auto-retry and
+    what user-facing message to surface.
+    """
+    from gaia.llm.providers.lemonade import (  # local import to avoid cycle at import time
+        LemonadeContextOverflowError,
+        LemonadeError,
+        LemonadeModelNotLoadedError,
+        LemonadeNetworkError,
+    )
+
+    # 1. Direct typed match anywhere in the cause chain.
+    cur: Optional[BaseException] = exc
+    while cur is not None:
+        if isinstance(cur, LemonadeError):
+            return cur
+        cur = cur.__cause__
+
+    # 2. Substring match on the stringified exception — covers the case
+    # where AgentSDK re-raises with ``str(original)`` as the message,
+    # losing the typed-class info.
+    text = str(exc).lower()
+    if "no model loaded" in text or "model_not_loaded" in text:
+        return LemonadeModelNotLoadedError()
+    if "exceed_context_size" in text or "exceeds the available context size" in text:
+        return LemonadeContextOverflowError()
+    if "network_error" in text or "curl error" in text or "timeout was reached" in text:
+        return LemonadeNetworkError()
+    return None
+
+
 # ── Auto-titling ────────────────────────────────────────────────────────────
 #
 # After the agent finishes a turn, kick off a background task that asks the
@@ -1380,9 +1425,56 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     _effective_model(agent, model_id), sse_handler
                 )
 
-                # -- Phase 5: Query processing --
+                # -- Phase 5: Query processing.  One automatic retry on
+                # known-transient Lemonade errors (model evicted between
+                # turns, network blip, etc.). The retry forces a fresh
+                # model reload at our 32K ctx_size before re-issuing the
+                # query so we don't replay against a still-broken backend.
                 t_query = _time.monotonic()
-                result = agent.process_query(request.message)
+                try:
+                    result = agent.process_query(request.message)
+                except Exception as first_exc:  # pylint: disable=broad-except
+                    classified = _classify_chat_exception(first_exc)
+                    if classified is None or not classified.retryable:
+                        raise
+                    logger.warning(
+                        "Chat hit retryable Lemonade error (%s) — reloading "
+                        "model and retrying once. Original: %s",
+                        type(classified).__name__,
+                        first_exc,
+                    )
+                    # Force a reload at the canonical ctx; this is the
+                    # same helper the pre-flight uses but called
+                    # mid-conversation when the model got evicted.
+                    try:
+                        _maybe_load_expected_model(
+                            _effective_model(agent, model_id), sse_handler
+                        )
+                    except Exception:  # pylint: disable=broad-except
+                        # Reload failure is non-fatal — the retry might
+                        # still succeed if Lemonade caught up on its own.
+                        pass
+                    # Surface a brief status line to the SSE so the user
+                    # sees we're recovering, not silently retrying.
+                    sse_handler._emit(
+                        {
+                            "type": "status",
+                            "status": "info",
+                            "message": "Model reloaded — retrying...",
+                        }
+                    )
+                    # One more attempt. If THIS fails, surface the
+                    # friendlier classified message.
+                    try:
+                        result = agent.process_query(request.message)
+                    except Exception as second_exc:  # pylint: disable=broad-except
+                        second_classified = _classify_chat_exception(second_exc)
+                        msg = (
+                            second_classified.user_message
+                            if second_classified is not None
+                            else str(second_exc)
+                        )
+                        raise type(second_exc)(msg) from second_exc
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],
@@ -1397,7 +1489,15 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     result_holder["answer"] = str(result) if result else ""
             except Exception as e:
                 logger.error("Agent error: %s", e, exc_info=True)
-                result_holder["error"] = str(e)
+                # Prefer the typed Lemonade error's user_message over the
+                # raw exception string. ``_classify_chat_exception`` walks
+                # the exception chain so we catch errors raised inside
+                # AgentSDK that wrap the original LemonadeError.
+                classified = _classify_chat_exception(e)
+                if classified is not None:
+                    result_holder["error"] = classified.user_message
+                else:
+                    result_holder["error"] = str(e)
             finally:
                 sse_handler.signal_done()
 
