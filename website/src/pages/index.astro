@@ -7,7 +7,7 @@ import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 ---
 
-<Layout title="GAIA — Private AI on your Ryzen AI PC">
+<Layout title="gaia — local agents on your PC">
   <!-- Neural Network / Circuit Background -->
   <div class="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
     <div class="circuit-bg"></div>
@@ -16,6 +16,11 @@ import Footer from '../components/Footer.astro';
     <div class="data-stream stream-2"></div>
     <div class="processor-glow glow-1"></div>
     <div class="processor-glow glow-2"></div>
+  </div>
+
+  <!-- Scroll progress indicator -->
+  <div class="fixed top-0 left-0 right-0 h-0.5 z-50 pointer-events-none">
+    <div id="scroll-progress" class="h-full bg-gaia-accent transition-[width] duration-100 ease-out" style="width: 0%; box-shadow: 0 0 8px rgba(237, 28, 36, 0.6);"></div>
   </div>
 
   <Header />
@@ -35,7 +40,7 @@ import Footer from '../components/Footer.astro';
           </h1>
 
           <p class="text-xl text-gaia-muted mb-10 max-w-lg leading-relaxed">
-            GAIA is the open-source desktop app and SDK for running AI agents locally on AMD Ryzen AI hardware. Chat with your documents in the app today; build voice, code, and image agents with the SDK — running entirely on your machine.
+            gaia is the open-source desktop app and SDK for running AI agents locally on AMD Ryzen AI hardware. Chat with your documents in the app today; build voice, code, and image agents with the SDK — running entirely on your machine.
           </p>
 
           <!-- Download CTAs -->
@@ -128,7 +133,7 @@ import Footer from '../components/Footer.astro';
                 <span class="w-3 h-3 rounded-full bg-red-500/80"></span>
                 <span class="w-3 h-3 rounded-full bg-yellow-500/80"></span>
                 <span class="w-3 h-3 rounded-full bg-green-500/80"></span>
-                <span class="ml-3 text-xs text-gaia-muted font-mono">GAIA Agent UI</span>
+                <span class="ml-3 text-xs text-gaia-muted font-mono">gaia agent ui</span>
               </div>
               <!-- Mock chat surface -->
               <div class="flex-1 flex flex-col gap-3 p-6 overflow-hidden">
@@ -158,9 +163,9 @@ import Footer from '../components/Footer.astro';
     <!-- ============================================================== -->
     <section class="px-4 sm:px-6 lg:px-8 py-20 border-t border-gaia-border/50">
       <div class="max-w-7xl mx-auto">
-        <div class="text-center mb-10">
-          <h2 class="text-3xl lg:text-4xl font-bold text-white mb-3">What GAIA can do today.</h2>
-          <p class="text-gaia-muted max-w-2xl mx-auto">Some capabilities ship inside the desktop app today; the rest live in the GAIA Python SDK while the app catches up.</p>
+        <div class="text-center mb-10 fade-in-up">
+          <h2 class="text-3xl lg:text-4xl font-bold text-white mb-3">What gaia can do today.</h2>
+          <p class="text-gaia-muted max-w-2xl mx-auto">Some capabilities ship inside the desktop app today; the rest live in the gaia Python SDK while the app catches up.</p>
           <div class="flex justify-center gap-4 mt-5 text-xs">
             <span class="inline-flex items-center gap-1.5"><span class="badge badge-today">Today</span><span class="text-gaia-muted">In the Agent UI app</span></span>
             <span class="inline-flex items-center gap-1.5"><span class="badge badge-sdk">SDK</span><span class="text-gaia-muted">Python / CLI only — Agent UI integration coming</span></span>
@@ -168,35 +173,35 @@ import Footer from '../components/Footer.astro';
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <div class="capability-card">
+          <div class="capability-card fade-in-up" style="--stagger: 0s">
             <div class="flex items-start justify-between gap-2 mb-1">
               <h3 class="font-semibold text-white">Chat with your documents</h3>
               <span class="badge badge-today flex-shrink-0">Today</span>
             </div>
             <p class="text-sm text-gaia-muted">Drop a PDF in, ask questions. RAG runs locally — your files never leave the machine.</p>
           </div>
-          <div class="capability-card">
+          <div class="capability-card fade-in-up" style="--stagger: 0.08s">
             <div class="flex items-start justify-between gap-2 mb-1">
               <h3 class="font-semibold text-white">Connect your stack</h3>
               <span class="badge badge-today flex-shrink-0">Today</span>
             </div>
             <p class="text-sm text-gaia-muted">MCP client + bridge means Jira, Docker, GitHub, Slack — anything with an MCP server.</p>
           </div>
-          <div class="capability-card">
+          <div class="capability-card fade-in-up" style="--stagger: 0.16s">
             <div class="flex items-start justify-between gap-2 mb-1">
               <h3 class="font-semibold text-white">Talk to it out loud</h3>
               <span class="badge badge-sdk flex-shrink-0">SDK</span>
             </div>
             <p class="text-sm text-gaia-muted">Whisper ASR + Kokoro TTS for voice in, voice out. Run via <code class="text-gaia-accent text-xs">gaia talk</code>.</p>
           </div>
-          <div class="capability-card">
+          <div class="capability-card fade-in-up" style="--stagger: 0.24s">
             <div class="flex items-start justify-between gap-2 mb-1">
               <h3 class="font-semibold text-white">Generate code</h3>
               <span class="badge badge-sdk flex-shrink-0">SDK</span>
             </div>
             <p class="text-sm text-gaia-muted">A code agent that orchestrates tools, validates output, and writes files. Run via <code class="text-gaia-accent text-xs">gaia-code</code>.</p>
           </div>
-          <div class="capability-card">
+          <div class="capability-card fade-in-up" style="--stagger: 0.32s">
             <div class="flex items-start justify-between gap-2 mb-1">
               <h3 class="font-semibold text-white">Generate images</h3>
               <span class="badge badge-sdk flex-shrink-0">SDK</span>
@@ -213,24 +218,24 @@ import Footer from '../components/Footer.astro';
     <section class="px-4 sm:px-6 lg:px-8 py-20">
       <div class="max-w-5xl mx-auto">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
-          <div>
+          <div class="fade-in-up">
             <p class="text-xs text-gaia-accent uppercase tracking-wider mb-5 font-semibold">Why local</p>
             <ul class="space-y-3 text-gaia-muted">
-              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">No API keys.</strong> No spend. No rate limits.</span></li>
-              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">No data leaves your PC.</strong> Files, prompts, and model outputs all stay local.</span></li>
-              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">NPU + iGPU acceleration.</strong> Optimised for AMD Ryzen AI via Lemonade Server.</span></li>
-              <li class="flex gap-3"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">Open source, MIT licensed.</strong> Fork it, ship it inside your product, use it offline.</span></li>
+              <li class="flex gap-3 fade-in-up" style="--stagger: 0.05s"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">No API keys.</strong> No spend. No rate limits.</span></li>
+              <li class="flex gap-3 fade-in-up" style="--stagger: 0.13s"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">No data leaves your PC.</strong> Files, prompts, and model outputs all stay local.</span></li>
+              <li class="flex gap-3 fade-in-up" style="--stagger: 0.21s"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">NPU + iGPU acceleration.</strong> Optimised for AMD Ryzen AI via Lemonade Server.</span></li>
+              <li class="flex gap-3 fade-in-up" style="--stagger: 0.29s"><span class="text-gaia-accent flex-shrink-0">→</span><span><strong class="text-white">Open source, MIT licensed.</strong> Fork it, ship it inside your product, use it offline.</span></li>
             </ul>
           </div>
 
-          <div class="bg-gaia-card border border-gaia-border rounded-xl p-6">
+          <div class="bg-gaia-card border border-gaia-border rounded-xl p-6 fade-in-up" style="--stagger: 0.15s">
             <p class="text-xs text-gaia-muted uppercase tracking-wider mb-5">Architecture</p>
             <div class="space-y-2">
               <div class="arch-step"><span class="arch-label">You</span><span class="arch-meta">human</span></div>
               <div class="arch-arrow">↓</div>
               <div class="arch-step"><span class="arch-label">Agent UI</span><span class="arch-meta">desktop app</span></div>
               <div class="arch-arrow">↓</div>
-              <div class="arch-step"><span class="arch-label">GAIA SDK</span><span class="arch-meta">Python / C++</span></div>
+              <div class="arch-step"><span class="arch-label">gaia SDK</span><span class="arch-meta">Python / C++</span></div>
               <div class="arch-arrow">↓</div>
               <div class="arch-step"><span class="arch-label">Lemonade Server</span><span class="arch-meta">local LLM runtime</span></div>
               <div class="arch-arrow">↓</div>
@@ -247,7 +252,7 @@ import Footer from '../components/Footer.astro';
     <!-- ============================================================== -->
     <section class="px-4 sm:px-6 lg:px-8 py-20 border-t border-gaia-border/50">
       <div class="max-w-7xl mx-auto">
-        <div class="text-center mb-14">
+        <div class="text-center mb-14 fade-in-up">
           <p class="text-xs text-gaia-accent uppercase tracking-wider mb-3 font-semibold">For developers</p>
           <h2 class="text-3xl lg:text-4xl font-bold text-white mb-3">Build your own agent in a few lines.</h2>
           <p class="text-gaia-muted max-w-2xl mx-auto">Same SDK that powers the Agent UI — Pythonic, composable, with built-in chat, RAG, MCP, voice, and vision.</p>
@@ -255,7 +260,7 @@ import Footer from '../components/Footer.astro';
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
           <!-- SDK install -->
-          <div>
+          <div class="fade-in-up">
             <p class="text-xs text-gaia-muted uppercase tracking-wider mb-3">Install the SDK</p>
 
             <!-- Install method tabs -->
@@ -309,7 +314,7 @@ import Footer from '../components/Footer.astro';
           </div>
 
           <!-- Code typewriter -->
-          <div>
+          <div class="fade-in-up" style="--stagger: 0.12s">
             <div class="flex gap-1 px-4 pt-4 flex-wrap">
               <button class="folder-tab active" data-tab="docs" data-file="rag_doc_agent.py">Document Q&amp;A</button>
               <button class="folder-tab" data-tab="voice" data-file="voice_agent.py">Voice</button>
@@ -333,10 +338,10 @@ import Footer from '../components/Footer.astro';
     <!-- 5. Final CTA                                                     -->
     <!-- ============================================================== -->
     <section class="px-4 sm:px-6 lg:px-8 py-20 border-t border-gaia-border/50">
-      <div class="max-w-3xl mx-auto text-center">
+      <div class="max-w-3xl mx-auto text-center fade-in-up">
         <p class="text-gaia-muted mb-6">Free. MIT-licensed. No signup.</p>
         <a id="download-final" href="https://github.com/amd/gaia/releases/latest" class="inline-flex items-center gap-3 px-8 py-4 bg-gaia-accent hover:bg-gaia-accent/90 text-white font-semibold rounded-lg transition-all shadow-lg shadow-gaia-accent/20 hover:shadow-gaia-accent/40">
-          <span id="download-final-label">Download GAIA</span>
+          <span id="download-final-label">Download gaia</span>
           <span id="download-final-version" class="text-xs font-mono opacity-80"></span>
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
         </a>
@@ -658,6 +663,29 @@ import Footer from '../components/Footer.astro';
   .demo-placeholder {
     background: linear-gradient(135deg, rgba(30, 30, 46, 0.9) 0%, rgba(20, 20, 30, 0.9) 100%);
   }
+
+  /* Scroll-triggered fade-in. Elements start hidden, become visible when
+     IntersectionObserver flips `.is-visible`. Stagger via inline `--stagger`
+     style on the element. Disabled under prefers-reduced-motion. */
+  .fade-in-up {
+    opacity: 0;
+    transform: translateY(20px);
+    transition:
+      opacity 0.7s ease-out var(--stagger, 0s),
+      transform 0.7s ease-out var(--stagger, 0s);
+    will-change: opacity, transform;
+  }
+  .fade-in-up.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fade-in-up {
+      opacity: 1;
+      transform: none;
+      transition: none;
+    }
+  }
 </style>
 
 <script is:inline>
@@ -680,7 +708,7 @@ import Footer from '../components/Footer.astro';
     windows: 'Download for Windows',
     macos: 'Download for macOS',
     linux: 'Download for Linux',
-    unknown: 'Download GAIA'
+    unknown: 'Download gaia'
   };
 
   // ===== Fetch latest release and wire up direct-download URLs =====
@@ -862,7 +890,8 @@ agent.process_query(<span class="text-green-400">"Write a REST API endpoint for 
 agent = InvoiceProcessor()
 <span class="text-gaia-muted"># ✅ Runs 24/7 automatically</span>`,
 
-    mcp: `<span class="text-purple-400">from</span> <span class="text-yellow-400">gaia</span> <span class="text-purple-400">import</span> Agent, MCPClientMixin
+    mcp: `<span class="text-purple-400">from</span> <span class="text-yellow-400">gaia</span> <span class="text-purple-400">import</span> Agent
+<span class="text-purple-400">from</span> <span class="text-yellow-400">gaia.mcp</span> <span class="text-purple-400">import</span> MCPClientMixin
 
 <span class="text-purple-400">class</span> <span class="text-yellow-400">WeatherAgent</span>(Agent, MCPClientMixin):
     <span class="text-green-400">"""Connect to any MCP server."""</span>
@@ -950,7 +979,8 @@ class InvoiceProcessor(Agent, FileWatcherMixin):
 agent = InvoiceProcessor()
 # ✅ Runs 24/7 automatically`,
 
-    mcp: `from gaia import Agent, MCPClientMixin
+    mcp: `from gaia import Agent
+from gaia.mcp import MCPClientMixin
 
 class WeatherAgent(Agent, MCPClientMixin):
     """Connect to any MCP server."""
@@ -1039,6 +1069,44 @@ agent.process_query("What's the weather in Austin?")
   // Initial paint: show full code immediately (no typing wait on first impression).
   // Animation is reserved for tab clicks.
   codeDisplay.innerHTML = codeExamples['docs'] + '<span class="cursor-code">|</span>';
+
+  // ===== Scroll progress bar =====
+  // Thin red bar across the top whose width tracks how far you've scrolled.
+  const progressBar = document.getElementById('scroll-progress');
+  if (progressBar) {
+    const updateProgress = () => {
+      const scrolled = window.scrollY;
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      const pct = max > 0 ? (scrolled / max) * 100 : 0;
+      progressBar.style.width = pct + '%';
+    };
+    window.addEventListener('scroll', updateProgress, { passive: true });
+    window.addEventListener('resize', updateProgress, { passive: true });
+    updateProgress();
+  }
+
+  // ===== Scroll-triggered fade-in =====
+  // Each `.fade-in-up` element gets `.is-visible` once it enters the viewport
+  // (10% threshold). Once shown, stop watching it — fades are one-way to keep
+  // upward scrolls from re-triggering animations.
+  const fadeTargets = document.querySelectorAll('.fade-in-up');
+  if ('IntersectionObserver' in window && fadeTargets.length > 0) {
+    const fadeObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-visible');
+            fadeObserver.unobserve(entry.target);
+          }
+        });
+      },
+      { threshold: 0.12, rootMargin: '0px 0px -8% 0px' }
+    );
+    fadeTargets.forEach((el) => fadeObserver.observe(el));
+  } else {
+    // No IO support → just show everything.
+    fadeTargets.forEach((el) => el.classList.add('is-visible'));
+  }
 </script>
 </content>
 </invoke>
