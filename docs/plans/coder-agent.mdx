@@ -6,9 +6,9 @@ icon: "code-branch"
 
 # GAIA Coder — Plan
 
-> **Date:** 2026-04-20
+> **Date:** 2026-04-20 (status updated 2026-04-25)
 >
-> **Status:** Planning (0% implemented)
+> **Status:** Implementing (REPL + foundation landed; self-fix LLM + CLI commands + safety seams in flight)
 >
 > **Author:** Kalin Ovtcharov
 >
@@ -23,6 +23,32 @@ icon: "code-branch"
 > - [Email & Calendar Integration](email-calendar-integration.mdx) — optional reporting channel
 >
 > **Surface (v1):** CLI / TUI only. The agent ships as a long-running process with a `gaia-coder` binary and a Textual-based TUI for status, feedback intake, promotion, and audit browsing. No Agent-UI integration. Agent-UI panels can be added in a later milestone if there is demand.
+
+---
+
+## Implementation status (2026-04-25)
+
+This section is a living changelog of what is on `main` vs. what is still in flight. The rest of this document describes the *target* design; this section describes *current reality*.
+
+**Landed on `main`:**
+
+- **Phase 1-11 scaffolding.** Trust contract (`em.toml`, promote / demote, audit log), EM inbox verbs (`ask` / `note` / `critical`), Phase 2 stub daemon for the eval harness, feedback queue + self-fix driver skeleton, dev-mode CLI surface, debug sub-loop scaffold, RAG freshness contract, code-index SDK + `semantic_search` tool, file / shell / search / GitHub tool mixins, `CoderLLM` seam over [`gaia.eval.claude.ClaudeClient`](../../src/gaia/eval/claude.py).
+- **Interactive REPL** ([`src/gaia/coder/repl.py`](../../src/gaia/coder/repl.py), [`src/gaia/coder/agent.py`](../../src/gaia/coder/agent.py)) — `gaia-coder` with no subcommand drops into a Claude-Code-style multi-turn tool-use loop bound to the current repo. 25 tools registered by default, `CLAUDE.md` / `AGENTS.md` / `GAIA.md` / `ARCHITECTURE.md` / `PROJECT_MAP.md` injected into the system prompt every turn, permission policy that auto-approves reads and prompts for writes, `--yes` for trusted environments, session persistence under `$GAIA_CODER_HOME/sessions/`, cost telemetry with `MODEL_PRICING` lookup, 15 slash commands (`/help` / `/cost` / `/tools` / `/save` / `/load` / `/system` / `/cd` / `/model` / `/trust` / `/feedback` / ...). User guide at [`docs/guides/coder.mdx`](../guides/coder.mdx).
+
+**Adjacent feature branches in flight (as of 2026-04-25):**
+
+- `feat/coder-self-fix-llm-wired` — wires the `CoderLLM` seam into the self-fix loop's triage / critique / classify-failure / standup callers (currently rendered prompts that route through stubs).
+- `feat/coder-cli-stubs-real` — replaces the generic `not yet implemented` handlers for `doctor` / `status` / `audit` / `spend` / `egress` / `introspect` / `skill` with real implementations against the existing data layers.
+- `feat/coder-safety-and-pass2` — Pass 2 (test execution) for the seven-pass self-review, the `enforce_action` boundary that gates every write tool against the active capability tier, and a logger refactor.
+
+**Still deferred:**
+
+- **Long-lived autonomous daemon** (Phase 2 of the C-roadmap, full version) — a real `gaia-coder daemon` lifecycle that polls the inbox, runs the self-fix loop continuously, posts standups, and reports via the EM inbox. Today there is only a stub daemon used by the eval harness.
+- **GitHub-webhook event bridge** — inbound PR / issue / CI events into the daemon queue.
+- **Phase-12 self-edit gate** — `dev-mode enable` lands the CLI plumbing, but the gate that actually arbitrates a self-edit PR (tier check + `__file__` writability check + EM allowlist + audit-trail write) remains a separate deliverable.
+- **Production swap of the debug sub-loop** — `DebugSubLoop` is a Python-only surface today; the CLI scaffold (`gaia-coder debug repro` / `bisect` / ...) prints stub messages.
+
+The narrative below treats the plan as the design contract; the bullets above are the source of truth for *what is wired*.
 
 ---
 

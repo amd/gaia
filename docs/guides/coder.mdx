@@ -1,0 +1,338 @@
+---
+title: "GAIA Coder"
+description: "Interactive Claude-Code-style coding REPL bound to your repo — built to replace external coding tools for GAIA development."
+icon: "code-branch"
+---
+
+<Info>
+  **Source code:** [`src/gaia/coder/repl.py`](https://github.com/amd/gaia/blob/main/src/gaia/coder/repl.py) · [`src/gaia/coder/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/coder/agent.py) · [`src/gaia/coder/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/coder/tools)
+</Info>
+
+<Note>
+  `gaia-coder` is **dev tooling**, not a GAIA agent. It runs on the engineering manager's workstation, calls Anthropic's cloud API, and ships only to the engineering team. The GAIA product remains local-first and hardware-bound — see [`docs/plans/coder-agent.mdx`](/plans/coder-agent) §1 for the framing.
+</Note>
+
+## What it is
+
+`gaia-coder` is the engineering-facing coding agent for `amd/gaia`. Run `gaia-coder` with no subcommand and you drop into a Claude-Code-style REPL bound to your repo, with file / shell / search / git tools wired in by default and `CLAUDE.md` / `AGENTS.md` / `GAIA.md` / `ARCHITECTURE.md` / `PROJECT_MAP.md` injected into the system prompt. Built to replace external coding tools for GAIA development — same multi-turn tool-use loop, same surgical-edit defaults, same permission prompts, but inside the repo with the repo's own conventions in scope.
+
+The REPL is the daily-driver surface. The other `gaia-coder <subcommand>` verbs (`trust`, `feedback`, `self-fix`, `dev-mode`, `rag`, `ask`, ...) are the long-running-daemon control plane and are documented separately in [`docs/plans/coder-agent.mdx`](/plans/coder-agent).
+
+## Installation
+
+`gaia-coder` is registered as a console script in [`setup.py`](https://github.com/amd/gaia/blob/main/setup.py) under `gaia.coder.cli:main`. If you've already run `uv pip install -e ".[dev]"` from the repo root, you have it.
+
+```bash
+which gaia-coder
+gaia-coder --help
+```
+
+**Required environment:**
+
+- `ANTHROPIC_API_KEY` — the underlying [`gaia.eval.claude.ClaudeClient`](https://github.com/amd/gaia/blob/main/src/gaia/eval/claude.py) raises an actionable error at construction if it's missing.
+- `gh` CLI (optional but recommended) — required for the 11 GitHub tools. Run `gh auth status` to confirm. Without it, pass `--no-github` so the agent boots without the gh family.
+- `rich` and `prompt_toolkit` (optional) — already pulled in by `[dev]`. The REPL falls back to `print` / `input` if either is missing.
+
+**Default model:** [`gaia.eval.config.DEFAULT_CLAUDE_MODEL`](https://github.com/amd/gaia/blob/main/src/gaia/eval/config.py) — currently `claude-sonnet-4-6`. Override per-session with `--model`, mid-session with `/model`.
+
+**Config directory:** `$GAIA_CODER_HOME` if set, otherwise `~/.gaia/coder/`. Sessions land under `$GAIA_CODER_HOME/sessions/`, REPL line history under `$GAIA_CODER_HOME/repl_history.txt`.
+
+## First session
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+cd ~/Work/gaia
+gaia-coder
+```
+
+You see a banner, a prompt, and an empty conversation:
+
+```
+╭──────────────────────────────────────────────────────────╮
+│ gaia-coder — interactive coding session                  │
+│ model: claude-sonnet-4-6   repo: /Users/you/Work/gaia    │
+│ tools: 25                                                │
+│ /help for commands, Ctrl-D or /quit to exit              │
+╰──────────────────────────────────────────────────────────╯
+» read README.md and tell me what GAIA is in two sentences
+```
+
+The agent runs the tool, then answers:
+
+```
+you: read README.md and tell me what GAIA is in two sentences
+  • read_file(path='README.md')
+  # GAIA — Generative AI Is Awesome
+  AMD's open-source framework for running generative AI applications
+  locally on AMD hardware...
+  …(+212 lines, /history for full)
+╭─ gaia-coder ────────────────────────────────────────────╮
+│ GAIA is AMD's open-source framework for running         │
+│ generative AI applications locally on AMD hardware,     │
+│ with first-class support for Ryzen AI NPU acceleration. │
+│ It ships agents (chat / code / blender / jira / …),     │
+│ a Lemonade-backed local LLM runtime, an MCP bridge,     │
+│ and an OpenAI-compatible REST API.                      │
+╰─────────────────────────────────────────────────────────╯
+session: 1 turns, 18,432 in + 142 out tokens, $0.0573
+```
+
+That's the loop: you type, the agent reads (auto-approved), thinks, replies. Mutating tools (`write_file`, `edit_file`, `run_cli_command`, `gh_pr_create`, ...) prompt for confirmation before they run. `Ctrl-D` or `/quit` exits.
+
+## Slash commands
+
+Every line that starts with `/` is parsed by the REPL, not sent to the model. The full set is registered in [`src/gaia/coder/repl.py`](https://github.com/amd/gaia/blob/main/src/gaia/coder/repl.py) as `_SLASH_COMMANDS`.
+
+| Command | Description |
+|---|---|
+| `/help`, `/?` | Print the slash-command table. |
+| `/clear` | Drop the conversation history (keeps the agent, model, tools). |
+| `/cost` | Print running token + USD totals for the session. |
+| `/tools` | List every registered tool with its first-line description. |
+| `/history` | Dump the raw conversation history (truncated per row). For debugging. |
+| `/yes` | Toggle auto-approve mode for the rest of the session. |
+| `/save [id]` | Save the session to `$GAIA_CODER_HOME/sessions/<id>.json`. ID defaults to a timestamp. |
+| `/load <id>` | Resume a saved session by id. |
+| `/sessions` | List saved sessions (id, saved-at, model, message count). |
+| `/system` | Re-read `CLAUDE.md` / `AGENTS.md` / `GAIA.md` / `ARCHITECTURE.md` / `PROJECT_MAP.md` on the next send. Use after editing them. |
+| `/cd <path>` | Change the agent's bound repo root. |
+| `/model <name>` | Switch the LLM model for subsequent turns. |
+| `/trust` | Print the current `em.toml` trust-contract snapshot. |
+| `/feedback [--severity X] <body>` | Enqueue a feedback row to `feedback.db` for the self-fix loop. |
+| `/quit`, `/exit` | Leave the REPL (also `Ctrl-D`). |
+
+Unknown slash commands print `unknown command '/foo'; /help for the list` and do **not** get sent to the model — the REPL never silently routes a slash to the LLM.
+
+## Tools available to the agent
+
+The agent boots with **25 tools** registered. The Anthropic tool-use API decides which to call; the dispatcher in [`src/gaia/coder/tool_schema.py`](https://github.com/amd/gaia/blob/main/src/gaia/coder/tool_schema.py) runs them and pipes results back. Tool output is capped at 100,000 characters per call — beyond that the result is truncated with a marker so the model can ask for a narrower slice.
+
+### File tools (6)
+
+Source: [`src/gaia/coder/tools/file.py`](https://github.com/amd/gaia/blob/main/src/gaia/coder/tools/file.py)
+
+| Tool | Description |
+|---|---|
+| `read_file` | Read a text file, optionally slicing an inclusive 1-indexed line range. |
+| `write_file` | Write content to a path, creating parent directories. Returns byte count. |
+| `edit_file` | Exact-match string replace with uniqueness enforcement (Claude-Code-style). |
+| `search_code` | Pure-Python regex search across files under a path (no ripgrep dependency). |
+| `glob` | List files matching a pattern with `pathlib`-style `**` recursion. |
+| `generate_diff` | Unified `difflib` diff between two files. Empty string when identical. |
+
+### CLI / process tools (4)
+
+Source: [`src/gaia/coder/tools/cli.py`](https://github.com/amd/gaia/blob/main/src/gaia/coder/tools/cli.py)
+
+| Tool | Description |
+|---|---|
+| `run_cli_command` | Run a command (allowlist-gated) with a timeout, capturing stdout/stderr. |
+| `stop_process` | SIGINT then SIGKILL a tracked background process by PID. |
+| `list_processes` | Snapshot of currently-tracked background processes. |
+| `get_process_logs` | Tail the captured stdout+stderr for a tracked PID. |
+
+### Search / index tools (4)
+
+Source: [`src/gaia/coder/tools/search.py`](https://github.com/amd/gaia/blob/main/src/gaia/coder/tools/search.py)
+
+| Tool | Description |
+|---|---|
+| `grep` | Faster line-oriented regex search (delegates to `ripgrep` when present). |
+| `find_symbol` | Locate Python functions / classes by name across the repo. |
+| `list_files` | List files honouring `.gitignore`, with size and line-count metadata. |
+| `semantic_search` | Embedding-backed code search via the `code_index` SDK. |
+
+### GitHub tools (11)
+
+Source: [`src/gaia/coder/tools/github.py`](https://github.com/amd/gaia/blob/main/src/gaia/coder/tools/github.py). All shell out to `gh` — `gh auth status` must succeed first.
+
+| Tool | Description |
+|---|---|
+| `gh_pr_create` | Open a PR from the current branch with title + body. |
+| `gh_pr_view` | Fetch a PR's status, diff stats, checks, and review state. |
+| `gh_pr_comment` | Post a body comment on a PR. |
+| `gh_pr_review` | Submit a PR review (approve / request-changes / comment). |
+| `gh_pr_merge` | Merge a PR (squash / rebase / merge). |
+| `gh_issue_create` | Open a GitHub issue with title + body + labels. |
+| `gh_issue_comment` | Post a body comment on an issue. |
+| `gh_run_list` | List recent GitHub Actions workflow runs. |
+| `gh_run_watch` | Block until a workflow run completes; stream status. |
+| `gh_run_view_log` | Fetch the log output of a completed workflow run. |
+| `gh_release_create` | Cut a GitHub release with notes + assets. |
+
+Run `/tools` inside the REPL to see the live list — it reads from the active registry and matches whatever was registered at construction.
+
+## Permission model
+
+The REPL classifies every tool into one of two sets, defined in [`src/gaia/coder/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/coder/agent.py):
+
+- **`READ_TOOLS`** — auto-approved. The agent can read, search, glob, list processes, view PRs, and watch CI runs without ever interrupting you.
+- **`WRITE_TOOLS`** — prompted. `write_file`, `edit_file`, `run_cli_command`, `stop_process`, `gh_pr_create`, `gh_pr_comment`, `gh_pr_merge`, `gh_pr_review`, `gh_issue_create`, `gh_issue_comment`, `gh_release_create`. Anything that mutates the filesystem, runs a subprocess, or hits the network goes through a confirmation prompt.
+
+A typical prompt looks like:
+
+```
+? tool edit_file(path='src/gaia/coder/agent.py', old_string='max_iter=20', new_string='max_iter=30')
+   y=yes, n=no, a=yes-to-all, q=cancel turn
+> 
+```
+
+Four answers:
+
+- `y` / `yes` — approve this one call. Default if you press `Enter` is **`n`** (deny).
+- `n` / `no` — deny this call. The model receives an `is_error=True` `tool_result` saying you declined; it can recover (try a different path, ask a question, give up).
+- `a` / `all` / `yes-to-all` — flip the policy to auto-approve for the rest of the session. Same effect as starting with `--yes`.
+- `q` / `quit` / `cancel` — abort the entire turn. Anything done so far stays; nothing else runs.
+
+**Trusted-environment shortcut:** `gaia-coder --yes` (or `-y`) starts in auto-approve mode. Use it inside Docker, CI, or a sandboxed dev VM where you've already accepted the blast radius. **Don't** run `--yes` against a working tree you care about.
+
+**Mid-session toggle:** `/yes` flips auto-approve on / off without restarting.
+
+A tool that is in **neither** `READ_TOOLS` nor `WRITE_TOOLS` is denied — the agent fails loudly so you classify it before letting it run. This is by design: silent auto-approval of an un-classified tool is exactly the regression the policy exists to prevent.
+
+## Session persistence
+
+Sessions live under `$GAIA_CODER_HOME/sessions/<id>.json` (default `~/.gaia/coder/sessions/`). Schema is JSON v1 — see `save_session` in [`src/gaia/coder/repl.py`](https://github.com/amd/gaia/blob/main/src/gaia/coder/repl.py). Each file holds the full conversation history, the model used, the bound repo root, and the running token / cost totals.
+
+```
+» /save morning-debug
+saved → /Users/you/.gaia/coder/sessions/morning-debug.json
+
+» /quit
+$ gaia-coder --resume morning-debug
+resumed session 'morning-debug' (14 messages)
+» 
+```
+
+`/sessions` lists every saved session in a table:
+
+```
+» /sessions
+slash commands
+id              | saved_at                   | model               | msgs
+--------------------------------------------------------------------------
+morning-debug   | 2026-04-25T09:14:32+00:00  | claude-sonnet-4-6   | 14
+phase-12-spike  | 2026-04-24T16:02:08+00:00  | claude-opus-4-7     | 38
+```
+
+Sessions are also implicitly preserved by the REPL line-history file at `$GAIA_CODER_HOME/repl_history.txt` (managed by `prompt_toolkit`'s `FileHistory`) — `↑` recalls your previous prompts the way bash does.
+
+## Cost telemetry
+
+Every assistant turn returns a [`Usage`](https://github.com/amd/gaia/blob/main/src/gaia/coder/llm.py) record with input + output tokens and a USD figure computed from [`gaia.eval.config.MODEL_PRICING`](https://github.com/amd/gaia/blob/main/src/gaia/eval/config.py). The REPL prints a one-line cost footer after each turn and accumulates a session total:
+
+```
+session: 7 turns, 142,883 in + 4,201 out tokens, $0.4831
+```
+
+Run `/cost` at any time for the running total. Pricing for unknown models falls back to the `default` row in `MODEL_PRICING` — log a warning and override per-session with `--model` if you're using a model the table doesn't yet know about.
+
+## Switching models
+
+```bash
+gaia-coder --model claude-opus-4-7    # full session on Opus
+```
+
+Or mid-session:
+
+```
+» /model claude-opus-4-7
+model → claude-opus-4-7
+» now do the architecture review
+```
+
+`/model` constructs a fresh `CoderLLM` with the new model; subsequent turns route through it. The conversation history stays intact, so you can switch models inside a single thread (e.g. cheap drafts on Sonnet, careful review on Opus).
+
+## Working with the bound repo
+
+The agent is bound to one repo root — by default the directory you launched from. Override with `--repo-root /path/to/other` or change at runtime with `/cd /path/to/other`. The bound root drives two things:
+
+1. **System-prompt context.** On every `send`, the agent re-reads `CLAUDE.md`, `AGENTS.md`, `GAIA.md`, `ARCHITECTURE.md`, and `PROJECT_MAP.md` from disk and injects them into the system prompt, each wrapped in an XML-style tag (`<repo_claude_md>...</repo_claude_md>`) so the model can locate them. Missing files are skipped silently. This is how the agent knows the repo's conventions on every turn — no manual pasting of `CLAUDE.md` into context.
+2. **Tool working directory.** File tools resolve paths relative to `Path.cwd()` (or the repo root, depending on the tool); shell tools inherit the same. Don't ask the agent to read `../other-repo/foo.py` and expect it to work — bind to the right repo first.
+
+After editing `CLAUDE.md` or `GAIA.md` mid-session, run `/system`. The next turn picks up the change.
+
+## Daily-driver workflows
+
+Five worked examples. Each shows what you type, what the agent does, and what you'd see.
+
+### 1. Run a failing test and fix the regression
+
+```
+» pytest tests/coder/test_repl.py::test_save_session_round_trip is failing — run it,
+  read the failure, find the regression, and propose a fix
+```
+
+The agent calls `run_cli_command(['pytest', 'tests/coder/test_repl.py::test_save_session_round_trip', '-xvs'])`, reads the assertion error, calls `read_file('src/gaia/coder/repl.py')`, locates the `save_session` body, calls `edit_file(...)` for the fix (you confirm `y`), and re-runs the test to verify green.
+
+### 2. Read a plan and propose an implementation outline
+
+```
+» read docs/plans/coder-agent.mdx §7.4 and propose an implementation outline
+  for the self-fix loop. Cite file:line for every component you reference.
+```
+
+The agent reads the plan, then calls `find_symbol('FeedbackLoopDriver')` and `read_file('src/gaia/coder/self_fix/...')` to confirm what's already wired vs. what's still open, and replies with a numbered outline plus citations like `src/gaia/coder/self_fix/driver.py:142`.
+
+### 3. Review the staged diff
+
+```
+» run `git diff --staged` and review what's about to be committed —
+  flag scope creep, missing tests, and CLAUDE.md violations
+```
+
+`run_cli_command(['git', 'diff', '--staged'])` runs (you approve), the agent reads the diff, calls `read_file('CLAUDE.md')` (auto-approved) to ground the rules, then writes a structured review with severity tags. Anything it wants to change it asks first — it does not silently `edit_file`.
+
+### 4. Find callers of a function
+
+```
+» search for callers of `gaia.coder.llm.CoderLLM.complete` and tell me
+  what would break if I changed its signature to require `system=`
+```
+
+`grep` and `find_symbol` collect call sites; `read_file` opens each one to read the surrounding context; the agent replies with an enumerated list of every caller, what argument shape they pass, and the migration each one would need.
+
+### 5. Run pytest on a path and summarise failures
+
+```
+» run `pytest tests/coder/ -xvs --tb=short` and summarise the failures
+  in a single table — file, test, one-line cause, suggested fix
+```
+
+The agent runs pytest, reads the output, follows up with `read_file` on each failing test source if the cause is non-obvious, and produces the table. If there's a single root cause across many tests, it says so explicitly rather than listing the same fix nine times.
+
+## Troubleshooting
+
+**`ANTHROPIC_API_KEY is not set`** — the underlying `ClaudeClient` raises at construction time. Set the env var (`export ANTHROPIC_API_KEY=sk-ant-...`) and re-run.
+
+**`gh: command not found` or 401 on `gh_pr_view`** — the GitHub tool family shells out to `gh`. Run `gh auth status`; if it isn't installed or authenticated, either fix it (`brew install gh && gh auth login`) or boot with `--no-github` so the agent skips the `gh` family entirely.
+
+**Tool denied by permission prompt** — pressing `Enter` defaults to `n`. If you actually want to approve, type `y`. If the prompt is interrupting too much, run `/yes` or restart with `--yes`.
+
+**`path does not exist or is not a directory: ...` on `/cd`** — the path is resolved with `expanduser().resolve()`. Pass an absolute path or one relative to your current shell `pwd`, not the bound repo root.
+
+**Tool runs but returns truncated output** — the dispatcher caps tool output at 100,000 chars. The model knows it was capped (the truncation marker is appended); ask it to read a narrower slice (`read_file(path, start_line=200, end_line=400)`) or use `grep` instead.
+
+**Tool-use loop hits `max_iterations=30` without `end_turn`** — the agent raises `RuntimeError: tool-use loop exceeded max_iterations=30`. The session is preserved; inspect `agent.history` (`/history`) for the last 30 turns to see what looped. Usually a sign of the model failing to converge — break the task into smaller asks.
+
+**Lost session after `Ctrl-C`** — `Ctrl-C` cancels the current turn but does not save. Run `/save` first if you care about the conversation. Sessions are only persisted explicitly.
+
+## Limitations and roadmap
+
+The interactive REPL is the *daily-driver foundation*. Several adjacent capabilities are tracked in feature branches and on the plan:
+
+- **Long-lived autonomous daemon** (Phase 2 of the C-roadmap) — a separate `gaia-coder daemon` lifecycle that polls an inbox, runs the self-fix loop continuously, and reports via the EM inbox. Today there's only a Phase-2 stub daemon used by the eval harness; the real daemon is a separate deliverable.
+- **GitHub-webhook event bridge** — wiring inbound PR / issue / CI events into the daemon's queue. Not in scope for the REPL.
+- **Phase-12 self-edit gate** — the dev-mode contract that lets the agent write to its own source under controlled conditions. Available behind `gaia-coder dev-mode enable --reason ...` with the §7.1 hard precondition (editable install + EM allowlist).
+- **Real implementations of stubbed CLI commands** — `doctor`, `status`, `audit`, `spend`, `egress`, `introspect`, `skill` print `not yet implemented` today; tracked on `feat/coder-cli-stubs-real`.
+- **LLM wiring in the self-fix loop** — the triage / critique / classify-failure callers route through `CoderLLM.complete` on `feat/coder-self-fix-llm-wired`.
+- **Pass 2 + safety enforcement seam** — Pass-2 test execution and the `enforce_action` boundary land on `feat/coder-safety-and-pass2`.
+
+For the full specification — design principles, capability tiers, EM inbox contract, RAG freshness, audit log, seven-pass self-review — see [`docs/plans/coder-agent.mdx`](/plans/coder-agent).
+
+## Related documentation
+
+- [GAIA Coder Plan](/plans/coder-agent) — the specification this implementation tracks.
+- [Code Agent](/guides/code) — the unrelated, product-side Next.js scaffolder (`gaia-code`, not `gaia-coder`).
+- [Development guide](/reference/dev) — repo setup, linting, testing.
+- [`CLAUDE.md`](https://github.com/amd/gaia/blob/main/CLAUDE.md) — the contributor rules the agent loads on every turn.
