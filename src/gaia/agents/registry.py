@@ -212,28 +212,39 @@ class AgentRegistry:
         # applied via setdefault so callers can still override (e.g. for
         # tests or explicit user selection).
         #
-        # Preferred-model list is platform-conditional because Gemma 4
-        # support is currently broken on macOS — Lemonade v10.2.0's
-        # bundled llama.cpp (b8460) predates the gemma4 architecture
-        # handler (added in llama.cpp b8637 / ggml-org/llama.cpp#21309)
-        # AND Lemonade actively reverts any local binary swap on
-        # restart. Tracked upstream at lemonade-sdk/lemonade#1741.
+        # Preferred-model list is platform-conditional:
         #
-        # On Linux/Windows the AMD GPU/NPU paths use a different
-        # llama.cpp bundle that does ship gemma4 support, so Gemma 4
-        # is the better default there.
+        # macOS primary is **Qwen3.5-4B-GGUF** (2.91 GB, "tool-calling"
+        # label in the Lemonade catalog). Empirically Gemma-3-4b-it-GGUF
+        # emits tool calls as Gemini-style ```tool_code``` text blocks
+        # rather than OpenAI-compatible function calls — the GAIA agent
+        # runtime never executes them, so the model can't actually use
+        # RAG, file search, or any other tool. The "personality" eval
+        # category dropped to 1/3 PASS with Gemma 3 4B, with both
+        # failures rooted in this format mismatch (see the eval run
+        # at eval/results/eval-20260426-061705).
+        # Qwen 3.5 is explicitly trained for the OpenAI tool-call format.
         #
-        # Both lists keep the other model as a fallback so once the
-        # macOS Lemonade pin gets bumped (or the Linux build regresses),
-        # ``resolve_model`` can fall through without code changes.
+        # Linux/Windows still leads with Gemma-4-E4B-it-GGUF — those
+        # platforms use a different llama.cpp bundle that ships the
+        # gemma4 architecture handler (added in llama.cpp b8637 /
+        # ggml-org/llama.cpp#21309), and Gemma 4 also carries the
+        # "tool-calling" label. macOS Lemonade v10.2.0 ships an older
+        # bundle (b8460) that can't load Gemma 4, and Lemonade actively
+        # reverts local binary swaps on restart — tracked upstream at
+        # lemonade-sdk/lemonade#1741.
+        #
+        # Each list keeps the alternative platform's primary as a
+        # fallback so ``resolve_model`` can fall through if the primary
+        # is unavailable on a given install.
         #
         # Single source of truth — the factory's setdefault below MUST
         # agree with this list's first entry, or the runtime preset and
         # the UI's advertised primary will diverge.
         if platform.system() == "Darwin":
-            _GAIA_LITE_MODELS = ["Gemma-3-4b-it-GGUF", "Gemma-4-E4B-it-GGUF"]
+            _GAIA_LITE_MODELS = ["Qwen3.5-4B-GGUF", "Gemma-4-E4B-it-GGUF"]
         else:
-            _GAIA_LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Gemma-3-4b-it-GGUF"]
+            _GAIA_LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Qwen3.5-4B-GGUF"]
 
         def gaia_lite_factory(**kwargs):
             from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig

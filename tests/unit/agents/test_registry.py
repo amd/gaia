@@ -17,11 +17,17 @@ from gaia.agents.registry import (
     AgentRegistry,
 )
 
-# gaia-lite's primary model is platform-conditional: macOS hits a Lemonade
-# llama.cpp pin (lemonade-sdk/lemonade#1741) that lacks gemma4 arch support,
-# so it falls back to Gemma 3 4B; Linux/Windows can use Gemma 4 E4B directly.
+# gaia-lite's primary model is platform-conditional:
+# - macOS hits a Lemonade llama.cpp pin (lemonade-sdk/lemonade#1741) that lacks
+#   gemma4 arch support, so it can't run Gemma 4 E4B. Gemma 3 4B is loadable
+#   but emits Gemini-style tool_code text blocks that the agent runtime can't
+#   parse — see eval run eval/results/eval-20260426-061705 (1/3 PASS, both
+#   failures attributed to the tool-call format mismatch). macOS therefore
+#   uses Qwen3.5-4B-GGUF, which carries the catalog "tool-calling" label.
+# - Linux/Windows ship a llama.cpp bundle with gemma4 support, so Gemma 4
+#   E4B (also tool-calling-labelled) remains the primary there.
 _EXPECTED_PRIMARY = (
-    "Gemma-3-4b-it-GGUF" if platform.system() == "Darwin" else "Gemma-4-E4B-it-GGUF"
+    "Qwen3.5-4B-GGUF" if platform.system() == "Darwin" else "Gemma-4-E4B-it-GGUF"
 )
 
 # ---------------------------------------------------------------------------
