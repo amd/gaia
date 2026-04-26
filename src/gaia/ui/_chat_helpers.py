@@ -22,6 +22,7 @@ import re as _re
 import threading
 import time as _time
 from pathlib import Path
+from typing import Optional
 
 from .database import SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
@@ -85,6 +86,182 @@ _mcp_status_lock = threading.Lock()
 # path (_maybe_load_expected_model) and the boot-time preload task in server.py.
 # Public (no underscore) because it is intentionally accessed cross-module.
 model_load_lock = threading.Lock()
+
+
+# ── Auto-titling ────────────────────────────────────────────────────────────
+#
+# After the agent finishes a turn, kick off a background task that asks the
+# same LLM to generate a 3-6 word title summarising the conversation, then
+# update the session title in the DB. Fires when:
+#   * Title is still the default ("New Chat" / "New Task" / starts with
+#     "Untitled") — first-response pass
+#   * The new user message has low word-overlap with the existing title
+#     (≤ 0.15 Jaccard on lowercase words) AND the message is substantive
+#     (≥ 25 chars) — topic-shift pass
+#
+# Skipped when:
+#   * Title starts with "Eval:" — those are owned by the eval framework
+#   * Title was last updated < 30 s ago — prevents thrash mid-conversation
+#   * No agent / no Lemonade base URL available
+#
+# Throttled by a per-session timestamp dict so concurrent fire-and-forget
+# tasks don't pile up.
+_AUTO_TITLE_DEFAULTS = {
+    "new chat",
+    "new task",
+    "untitled",
+    "untitled session",
+    "chat",
+}
+_AUTO_TITLE_LOCK = threading.Lock()
+_AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
+_AUTO_TITLE_THROTTLE_S = 30.0
+_AUTO_TITLE_RE_NONWORD = _re.compile(r"[^a-z0-9 ]+")
+
+
+def _title_word_set(s: str) -> set[str]:
+    """Lowercase word set for overlap comparison; strips punctuation,
+    drops 1-letter tokens (mostly noise like "a" / "I")."""
+    cleaned = _AUTO_TITLE_RE_NONWORD.sub(" ", (s or "").lower())
+    return {w for w in cleaned.split() if len(w) > 1}
+
+
+def _should_retitle(current_title: str, last_user_msg: str) -> bool:
+    """Decide whether the session deserves a fresh title.
+
+    See module-level comment for the rule set.  Returns True/False; pure
+    function so it's easy to unit-test in isolation.
+    """
+    title = (current_title or "").strip()
+    title_lower = title.lower()
+    if title.startswith("Eval:"):
+        return False  # eval framework owns these
+    if not title or title_lower in _AUTO_TITLE_DEFAULTS:
+        return True  # first-response pass: replace the default
+    # Topic-shift pass: low overlap + substantive new message.
+    user_msg = (last_user_msg or "").strip()
+    if len(user_msg) < 25:
+        return False
+    title_words = _title_word_set(title)
+    user_words = _title_word_set(user_msg)
+    if not title_words:
+        return True
+    overlap = len(title_words & user_words) / len(title_words)
+    return overlap <= 0.15
+
+
+async def _generate_session_title(
+    base_url: str,
+    model_id: str,
+    user_msg: str,
+    assistant_msg: str,
+) -> Optional[str]:
+    """Call Lemonade chat completions to produce a short tab-style title.
+
+    Returns the cleaned title (≤ 64 chars, no quotes, no trailing
+    punctuation) or None on any failure.  Times out at 30 s so a hung
+    LLM doesn't keep the background task alive forever.
+    """
+    import httpx  # pylint: disable=import-outside-toplevel
+
+    prompt = (
+        "Summarise the user's task in 3 to 6 plain words for a tab/window "
+        "title.  Reply with ONLY the title, no quotes, no trailing "
+        "punctuation, no leading verbs like 'Task:' or 'Title:'.\n\n"
+        f"User: {user_msg[:400]}\n"
+        f"Assistant: {(assistant_msg or '')[:200]}\n"
+        "Title:"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                json={
+                    "model": model_id,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 24,
+                    # Low temperature: titles should be deterministic-ish
+                    # for the same conversation.
+                    "temperature": 0.3,
+                },
+            )
+            if resp.status_code != 200:
+                logger.debug(
+                    "Auto-title HTTP %d: %s", resp.status_code, resp.text[:200]
+                )
+                return None
+            data = resp.json()
+            content = (
+                data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+            )
+            title = content.strip().split("\n")[0].strip()
+            # Strip wrapping quotes and trailing punctuation that some
+            # models always add despite the instruction.
+            title = title.strip("\"'`").rstrip(".!?;:,").strip()
+            # Strip stock prefixes models sometimes emit anyway.
+            for prefix in ("title:", "tab:", "summary:"):
+                if title.lower().startswith(prefix):
+                    title = title[len(prefix) :].strip()
+            return title[:64] if title else None
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("Auto-title LLM call failed: %s", exc)
+        return None
+
+
+async def _maybe_update_session_title(
+    db: ChatDatabase,
+    session_id: str,
+    user_msg: str,
+    assistant_msg: str,
+    model_id: Optional[str],
+) -> None:
+    """Best-effort background task: re-title the session if the rules say so.
+
+    Called fire-and-forget after each assistant turn finishes — never
+    blocks the user's response.  Failures are logged at debug level
+    only because nothing user-visible breaks if the title doesn't update.
+    """
+    if not model_id:
+        return
+    # Lookup current session.  If it's gone (deleted while we were
+    # generating), bail silently.
+    session = db.get_session(session_id)
+    if not session:
+        return
+    current_title = session.get("title") or ""
+    if not _should_retitle(current_title, user_msg):
+        return
+
+    # Throttle: don't re-title if we updated within the last 30 s.
+    now = _time.monotonic()
+    with _AUTO_TITLE_LOCK:
+        last = _AUTO_TITLE_LAST_AT.get(session_id, 0.0)
+        if now - last < _AUTO_TITLE_THROTTLE_S:
+            return
+        _AUTO_TITLE_LAST_AT[session_id] = now
+
+    # Use the same Lemonade endpoint the chat just used.
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+    new_title = await _generate_session_title(
+        base_url=base_url,
+        model_id=model_id,
+        user_msg=user_msg,
+        assistant_msg=assistant_msg,
+    )
+    if not new_title or new_title.lower() == current_title.lower():
+        return
+    try:
+        db.update_session(session_id, title=new_title)
+        logger.info(
+            "Auto-titled session %s: %r → %r",
+            session_id[:8],
+            current_title,
+            new_title,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("Auto-title DB update failed: %s", exc)
 
 
 def _build_create_kwargs(
@@ -1500,6 +1677,27 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 full_response,
                 agent_steps=captured_steps if captured_steps else None,
                 inference_stats=inference_stats,
+            )
+            # Fire-and-forget auto-titling: GAIA renames its own session
+            # once the response is complete. Skips Eval: titles, throttled
+            # to 30 s/session, runs on the same Lemonade slot the chat
+            # just used. Never blocks the user's response.
+            _bg = asyncio.create_task(
+                _maybe_update_session_title(
+                    db=db,
+                    session_id=request.session_id,
+                    user_msg=request.message,
+                    assistant_msg=full_response,
+                    model_id=_effective_model(agent, model_id),
+                )
+            )
+            # Hold a reference so the GC doesn't kill the task before
+            # it completes; discard on done.
+            _active_sse_handlers.setdefault(f"_titlebg:{request.session_id}", _bg)
+            _bg.add_done_callback(
+                lambda _t, _sid=request.session_id: _active_sse_handlers.pop(
+                    f"_titlebg:{_sid}", None
+                )
             )
             done_event: dict = {
                 "type": "done",
