@@ -1540,6 +1540,39 @@ Do NOT wrap conversational replies in JSON.
         conversation.append(tool_entry)
         return truncated_result
 
+    def _is_loaded_ctx_too_small(self) -> bool:
+        """Probe Lemonade's health endpoint to see whether the active LLM is
+        loaded with a context size smaller than GAIA's expected 32K.
+
+        Used when a context-overflow error fires but ``str(exception)`` no
+        longer carries the raw ``n_ctx`` value (typical when AgentSDK
+        re-raises with the typed exception's friendly user_message).
+        Returns False on any probe failure so the caller falls through to
+        the safe in-loop trim path rather than crashing.
+        """
+        try:
+            import httpx
+
+            from gaia.llm.lemonade_manager import LemonadeManager
+
+            base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+            # ``api/v0/health`` exposes ``all_models_loaded`` with ctx_size.
+            # The base_url already ends in /api/v1; strip the v1 suffix to
+            # reach the v0 health endpoint.
+            health_url = base_url.replace("/api/v1", "/api/v0/health")
+            resp = httpx.get(health_url, timeout=3.0)
+            if resp.status_code != 200:
+                return False
+            data = resp.json()
+            for m in data.get("all_models_loaded", []):
+                if m.get("type") in ("llm", "vlm"):
+                    ctx = m.get("recipe_options", {}).get("ctx_size") or 0
+                    if 0 < ctx < 32768:
+                        return True
+            return False
+        except Exception:  # pylint: disable=broad-except
+            return False
+
     def _shrink_messages_for_overflow(
         self, messages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -2236,6 +2269,8 @@ Do NOT wrap conversational replies in JSON.
                             or "n_ctx': 8192" in err_text
                             or "n_ctx': 16384" in err_text
                         )
+                        if is_ctx_overflow and not is_wrong_ctx_loaded:
+                            is_wrong_ctx_loaded = self._is_loaded_ctx_too_small()
                         if is_wrong_ctx_loaded:
                             self.error_history.append(
                                 {
@@ -2366,11 +2401,11 @@ Do NOT wrap conversational replies in JSON.
                             or "exceeds the available context size" in err_text
                             or "got too long" in err_text
                         )
-                        # Detect "wrong ctx size loaded" — model reloaded with
-                        # ctx=4096 / 8192 / 16384 (some default smaller than
-                        # GAIA's expected 32K). Re-raise so the chat helper's
-                        # reload-and-retry kicks in (it knows how to call
-                        # _maybe_load_expected_model).
+                        # Detect "wrong ctx size loaded" — substring match on
+                        # error text first (when raw payload is preserved),
+                        # then probe Lemonade health if substring missed
+                        # (typical: AgentSDK stringifies typed exception to
+                        # user_message, dropping n_ctx detail).
                         is_wrong_ctx_loaded = is_ctx_overflow and (
                             "context size (4096" in err_text
                             or "context size (8192" in err_text
@@ -2379,6 +2414,8 @@ Do NOT wrap conversational replies in JSON.
                             or "n_ctx': 8192" in err_text
                             or "n_ctx': 16384" in err_text
                         )
+                        if is_ctx_overflow and not is_wrong_ctx_loaded:
+                            is_wrong_ctx_loaded = self._is_loaded_ctx_too_small()
                         if is_wrong_ctx_loaded:
                             self.error_history.append(
                                 {
