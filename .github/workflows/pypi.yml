@@ -22,12 +22,45 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
       - name: Clean previous builds
         run: rm -rf dist/ build/ *.egg-info
+      - name: Install frontend dependencies
+        working-directory: src/gaia/apps/webui
+        # --ignore-scripts: this workflow runs on `pull_request`, including
+        # PRs from forks. A malicious lockfile could otherwise execute
+        # arbitrary postinstall code on the runner. publish.yml's build-npm
+        # job, which runs only on tag pushes from main, omits this flag.
+        run: npm ci --ignore-scripts
+      - name: Build frontend
+        working-directory: src/gaia/apps/webui
+        run: npm run build
+      - name: Verify frontend dist/ is non-empty and clean
+        run: python util/verify_wheel_dist.py src/gaia/apps/webui/dist
+      - name: Verify the gate actually bites (negative test)
+        # Plant a sourcemap, confirm the verifier exits non-zero, then revert.
+        # Without this step the verifier could silently regress to a no-op.
+        run: |
+          set -e
+          touch src/gaia/apps/webui/dist/leak.js.map
+          if python util/verify_wheel_dist.py src/gaia/apps/webui/dist; then
+            echo "FAIL: verifier did not catch planted sourcemap"
+            rm -f src/gaia/apps/webui/dist/leak.js.map
+            exit 1
+          fi
+          rm -f src/gaia/apps/webui/dist/leak.js.map
+          python util/verify_wheel_dist.py src/gaia/apps/webui/dist
+          echo "Verifier gate confirmed working"
       - name: Build release distributions
         run: |
           python -m pip install build
           python -m build
+      - name: Verify wheel ships frontend assets
+        run: |
+          WHL=$(ls dist/*.whl | head -1)
+          python util/verify_wheel_dist.py --wheel "$WHL"
       - name: Verify package with twine
         run: |
           python -m pip install twine

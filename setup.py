@@ -77,6 +77,7 @@ setup(
         "gaia.vlm",
         "gaia.api",
         "gaia.code_index",
+        "gaia.apps.webui",
     ],
     package_data={
         "gaia.eval": [
@@ -86,6 +87,21 @@ setup(
             "webapp/public/*.html",
             "webapp/public/*.css",
             "webapp/public/*.js",
+        ],
+        # Browser-mode Agent UI bundle. Recursive globs in package_data are
+        # unreliable across setuptools versions, so we list shallow patterns
+        # here and back them up with `recursive-include` in MANIFEST.in. The
+        # CI verifier (util/verify_wheel_dist.py) enforces that the wheel
+        # actually contains these entries before publish.
+        "gaia.apps.webui": [
+            "dist/index.html",
+            "dist/*.svg",
+            "dist/*.png",
+            "dist/*.ico",
+            "dist/*.webmanifest",
+            "dist/*.json",
+            "dist/*.txt",
+            "dist/assets/*",
         ],
     },
     install_requires=[
