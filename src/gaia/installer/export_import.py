@@ -44,7 +44,8 @@ MAX_ENTRIES = 1000
 MAX_UNCOMPRESSED_TOTAL = 500 * 1024 * 1024  # 500 MB
 MAX_UNCOMPRESSED_PER_FILE = 50 * 1024 * 1024  # 50 MB
 
-# Same regex as AgentManifest.validate_id in gaia.agents.registry.
+# Lowercase letters/digits/hyphens, 1-52 chars, must start and end with
+# alphanumeric.  Mirrored by BuilderAgent's agent-id template.
 _AGENT_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$")
 
 # Reserved Windows device names (case-insensitive).
@@ -91,10 +92,13 @@ def _agents_root() -> Path:
 
 
 def _is_custom_agent_dir(path: Path) -> bool:
-    """A directory qualifies as a custom agent if it holds agent.py or agent.yaml."""
-    return path.is_dir() and (
-        (path / "agent.py").is_file() or (path / "agent.yaml").is_file()
-    )
+    """A directory qualifies as a custom agent if it holds ``agent.py``.
+
+    YAML-manifest agents (``agent.yaml`` without a sibling ``agent.py``)
+    were removed in v0.17.5; such directories are intentionally excluded
+    from export so we don't ship bundles that the importer would reject.
+    """
+    return path.is_dir() and (path / "agent.py").is_file()
 
 
 def _validate_agent_id(agent_id: str) -> None:
@@ -353,6 +357,27 @@ def import_agent_bundle(bundle_path: Path) -> ImportResult:
                         f"{agent_id}: bundle declared this agent but no "
                         f"directory was present in the archive"
                     )
+                    continue
+
+                # Every importable agent must ship an agent.py.  Surface a
+                # clear, actionable message instead of silently importing
+                # a directory the registry cannot load.  Legacy YAML-manifest
+                # bundles from v0.17.4 hit the first branch; bundles missing
+                # agent.py for any other reason hit the second.
+                if not (staged_dir / "agent.py").is_file():
+                    if (staged_dir / "agent.yaml").is_file():
+                        result.errors.append(
+                            f"{agent_id}: bundle contains a legacy YAML "
+                            f"manifest (agent.yaml) but no agent.py. YAML "
+                            f"manifest agents were removed in v0.17.5. "
+                            f"Convert this agent to agent.py and re-export "
+                            f"(see https://amd-gaia.ai/guides/custom-agent)."
+                        )
+                    else:
+                        result.errors.append(
+                            f"{agent_id}: bundle contains no agent.py — "
+                            f"cannot load this agent"
+                        )
                     continue
 
                 final_dir = agents_root / agent_id

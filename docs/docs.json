@@ -405,6 +405,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.17.5",
               "releases/v0.17.4",
               "releases/v0.17.3",
               "releases/v0.17.2",
