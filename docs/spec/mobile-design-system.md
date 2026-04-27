@@ -460,7 +460,7 @@ agent has a worse starting point.
 - Apple HIG, Touch Targets:
   https://developer.apple.com/design/human-interface-guidelines/buttons
 - Material 3 Touch Target Sizing:
-  https://m3.material.io/foundations/accessible-design/accessibility-basics
+  https://m3.material.io/foundations/accessible-design
 - WCAG 2.1 AA: https://www.w3.org/WAI/WCAG21/quickref/?levels=aa
 - Visual Viewport API:
   https://developer.mozilla.org/en-US/docs/Web/API/Visual_Viewport_API
