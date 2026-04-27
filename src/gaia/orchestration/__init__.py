@@ -24,6 +24,10 @@ from gaia.orchestration.models import (
 from gaia.orchestration.adapters import OrchestratorPipelineAdapter
 from gaia.orchestration.engine import ProjectOrchestrator
 from gaia.orchestration.hooks import (
+    GitBranchHook,
+    GitCommitHook,
+    GitPRHook,
+    GitRollbackHook,
     ObjectiveUpdateHook,
     TaskSpawnHook,
 )
@@ -50,6 +54,10 @@ __all__ = [
     "ProjectOrchestrator",
     "ObjectiveUpdateHook",
     "TaskSpawnHook",
+    "GitBranchHook",
+    "GitCommitHook",
+    "GitPRHook",
+    "GitRollbackHook",
     "HealthScore",
     "ObjectiveOutcome",
     "ProjectSupervisor",

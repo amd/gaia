@@ -55,6 +55,10 @@ class HookEvent(Enum):
     # Decision events
     DECISION_MAKE = auto()
 
+    # Orchestrator events
+    ORCHESTRATOR_START = auto()
+    ORCHESTRATOR_COMPLETE = auto()
+
     # Processing events
     DEFECT_EXTRACT = auto()
     CONTEXT_INJECT = auto()
@@ -158,6 +162,7 @@ class HookResult:
     defects: List[Dict[str, Any]] = field(default_factory=list)
     error_message: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    skipped: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -171,6 +176,7 @@ class HookResult:
             "defects": self.defects,
             "error_message": self.error_message,
             "metadata": self.metadata,
+            "skipped": self.skipped,
         }
 
     @classmethod
@@ -179,6 +185,7 @@ class HookResult:
         modify_data: Optional[Dict[str, Any]] = None,
         inject_context: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        skipped: bool = False,
     ) -> "HookResult":
         """Create a success result with optional modifications."""
         return cls(
@@ -186,6 +193,7 @@ class HookResult:
             modify_data=modify_data,
             inject_context=inject_context,
             metadata=metadata or {},
+            skipped=skipped,
         )
 
     @classmethod

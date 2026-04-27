@@ -61,6 +61,8 @@ OBJECTIVE_COMPLETE = "OBJECTIVE_COMPLETE"
 OBJECTIVE_FAILED = "OBJECTIVE_FAILED"
 PHASE_COMPLETE = "PHASE_COMPLETE"
 CYCLE_COMPLETE = "CYCLE_COMPLETE"
+ORCHESTRATOR_START = "ORCHESTRATOR_START"
+ORCHESTRATOR_COMPLETE = "ORCHESTRATOR_COMPLETE"
 
 
 @dataclass
@@ -104,6 +106,7 @@ class OrchestratorState:
     objectives_processed: int = 0
     objectives_failed: int = 0
     execution_history: List[Dict[str, Any]] = field(default_factory=list)
+    objective_branches: Dict[str, str] = field(default_factory=dict)
 
     def record_cycle(self, objective_id: str, success: bool) -> None:
         """Record a completed dispatch-evaluate cycle."""
@@ -360,6 +363,15 @@ class ProjectOrchestrator:
         if self._project is None:
             self.load_objectives()
 
+        # Emit ORCHESTRATOR_START event
+        await self._hook_executor.execute_hooks(
+            ORCHESTRATOR_START,
+            HookContext(
+                event=ORCHESTRATOR_START,
+                pipeline_id=f"orchestrator-{self._project.project_id if self._project else 'unknown'}",
+            ),
+        )
+
         logger.info("Starting orchestrator dispatch loop")
         self._commit_event("orchestrator_started", {"path": self._config.objectives_path})
 
@@ -418,6 +430,12 @@ class ProjectOrchestrator:
                     f"Hook halted execution at objective '{objective.title}'"
                 )
                 break
+
+            # Store branch name from hook inject_context (set by GitBranchHook)
+            if hook_result.inject_context:
+                branch = hook_result.inject_context.get("_git_branch")
+                if branch:
+                    self._state.objective_branches[objective.objective_id] = branch
 
             # Dispatch
             result = await self._adapter.execute_with_result_update(objective)
@@ -523,6 +541,15 @@ class ProjectOrchestrator:
                     "cycle_count": self._state.cycle_count,
                 },
             )
+
+        # Emit ORCHESTRATOR_COMPLETE event
+        await self._hook_executor.execute_hooks(
+            ORCHESTRATOR_COMPLETE,
+            HookContext(
+                event=ORCHESTRATOR_COMPLETE,
+                pipeline_id=f"orchestrator-{self._project.project_id if self._project else 'unknown'}",
+            ),
+        )
 
         logger.info(
             "Orchestrator dispatch loop finished",
@@ -669,6 +696,28 @@ class ProjectOrchestrator:
             logger.warning(f"Git commit failed: {e}")
 
     # -----------------------------------------------------------------------
+    # Slug utility
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _build_objective_slug(title: str) -> str:
+        """
+        Convert an objective title to a URL-safe slug.
+
+        Args:
+            title: The objective title to slugify.
+
+        Returns:
+            Lowercase slug with hyphens, max 50 chars.
+        """
+        import re
+
+        slug = re.sub(r'[^a-z0-9\s-]', '', title.lower().strip())
+        slug = re.sub(r'\s+', '-', slug)
+        slug = slug.strip('-')
+        return slug[:50]
+
+    # -----------------------------------------------------------------------
     # Hook context building
     # -----------------------------------------------------------------------
 
@@ -686,7 +735,10 @@ class ProjectOrchestrator:
                 "cycle_count": self._state.cycle_count,
             },
             data={
+                "objective_id": objective.objective_id,
                 "objective_title": objective.title,
                 "objective_description": objective.description,
+                "git_supervisor": self._git_supervisor,
+                "_git_branch": self._state.objective_branches.get(objective.objective_id),
             },
         )
