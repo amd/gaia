@@ -91,15 +91,6 @@ class TestLemonadeInstaller(unittest.TestCase):
         self.assertIn("github.com", url)
 
     @patch("platform.system")
-    def test_get_download_url_linux(self, mock_system):
-        """Test download URL generation for Linux."""
-        mock_system.return_value = "Linux"
-        installer = LemonadeInstaller(target_version="9.1.4")
-        url = installer.get_download_url()
-        self.assertIn("v9.1.4/lemonade-server_9.1.4_amd64.deb", url)
-        self.assertIn("github.com", url)
-
-    @patch("platform.system")
     def test_get_download_url_unsupported(self, mock_system):
         """Test download URL raises error for unsupported platform."""
         mock_system.return_value = "Darwin"
@@ -656,15 +647,12 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
 
 
 class TestLegacyFallback(unittest.TestCase):
-    """Regression: when Lemonade is NOT installed (e.g. bundled MSI install
-    failed or user is on Linux without a bundled installer), gaia init must
-    still fall through to the runtime download path.
-
-    Protects acceptance criterion AC5.
+    """Regression: when Lemonade is NOT installed, gaia init falls through to
+    the runtime install path.  Linux uses PPA; Windows uses download+install.
     """
 
-    def test_not_installed_proceeds_to_download(self):
-        """check_installation returns not-installed -> download + install called."""
+    def test_not_installed_on_linux_proceeds_to_install_via_ppa(self):
+        """On Linux: check_installation not-installed -> install called WITHOUT download."""
         from gaia.installer.init_command import InitCommand
 
         info = LemonadeInfo(installed=False, error="lemonade-server not found in PATH")
@@ -672,19 +660,13 @@ class TestLegacyFallback(unittest.TestCase):
         with patch("gaia.installer.init_command.LemonadeInstaller") as mock_cls:
             mock_installer = MagicMock()
             mock_installer.is_platform_supported.return_value = True
-            mock_installer.get_platform_name.return_value = "Linux"
-            mock_installer.check_installation.return_value = info
-            # Simulate successful download + install
-            from pathlib import Path as _P
-
-            mock_installer.download_installer.return_value = _P("/tmp/lemonade.deb")
+            mock_installer.system = "linux"
             mock_installer.install.return_value = InstallResult(
                 success=True, version=LEMONADE_VERSION, message="ok"
             )
-            # Verify step calls check_installation again — now installed
             mock_installer.check_installation.side_effect = [
-                info,  # first call: not installed
-                LemonadeInfo(  # post-install verification call
+                info,
+                LemonadeInfo(
                     installed=True,
                     version=LEMONADE_VERSION,
                     path="/usr/bin/lemonade-server",
@@ -696,9 +678,290 @@ class TestLegacyFallback(unittest.TestCase):
             result = cmd._ensure_lemonade_installed()
 
         self.assertTrue(result)
-        # The download path MUST be taken
+        mock_installer.download_installer.assert_not_called()
+        mock_installer.install.assert_called_once()
+
+    def test_not_installed_on_windows_proceeds_to_download_and_install(self):
+        """On Windows: check_installation not-installed -> download + install called."""
+        from pathlib import Path as _P
+
+        from gaia.installer.init_command import InitCommand
+
+        info = LemonadeInfo(installed=False, error="lemonade-server not found in PATH")
+
+        with patch("gaia.installer.init_command.LemonadeInstaller") as mock_cls:
+            mock_installer = MagicMock()
+            mock_installer.is_platform_supported.return_value = True
+            mock_installer.system = "windows"
+            mock_installer.download_installer.return_value = _P("/tmp/lemonade.msi")
+            mock_installer.install.return_value = InstallResult(
+                success=True, version=LEMONADE_VERSION, message="ok"
+            )
+            mock_installer.check_installation.side_effect = [
+                info,
+                LemonadeInfo(
+                    installed=True,
+                    version=LEMONADE_VERSION,
+                    path="C:\\lemonade-server.exe",
+                ),
+            ]
+            mock_cls.return_value = mock_installer
+
+            cmd = InitCommand(profile="minimal", yes=True)
+            result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
         mock_installer.download_installer.assert_called_once()
         mock_installer.install.assert_called_once()
+
+
+class TestInstallViaPpa(unittest.TestCase):
+    """Tests for _install_via_ppa — the Linux PPA-based install path."""
+
+    def _make_linux_installer(self):
+        with patch("platform.system", return_value="Linux"):
+            return LemonadeInstaller(target_version="10.2.0")
+
+    def _ok_run(self):
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = ""
+        result.stderr = ""
+        return result
+
+    def _fail_run(self, stdout="", stderr="error output"):
+        result = MagicMock()
+        result.returncode = 1
+        result.stdout = stdout
+        result.stderr = stderr
+        return result
+
+    @patch("os.geteuid", return_value=1000)
+    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
+    @patch("subprocess.run")
+    def test_install_via_ppa_runs_commands_in_order(
+        self, mock_run, mock_which, mock_geteuid
+    ):
+        """Three subprocess calls in order: add-apt-repository, apt-get update, apt-get install."""
+        import subprocess as _sub
+
+        installer = self._make_linux_installer()
+        mock_run.return_value = self._ok_run()
+
+        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
+            with patch.object(installer, "check_installation") as mock_check:
+                mock_check.return_value = LemonadeInfo(
+                    installed=True, version="10.2.0", path="/usr/bin/lemonade-server"
+                )
+                result = installer._install_via_ppa(non_interactive=False)
+
+        self.assertTrue(result.success)
+        self.assertEqual(mock_run.call_count, 3)
+
+        calls = mock_run.call_args_list
+        first_cmd = calls[0][0][0]
+        self.assertIn("sudo", first_cmd)
+        self.assertIn("add-apt-repository", first_cmd)
+
+        second_cmd = calls[1][0][0]
+        self.assertIn("apt-get", second_cmd)
+        self.assertIn("update", second_cmd)
+
+        third_cmd = calls[2][0][0]
+        self.assertIn("apt-get", third_cmd)
+        self.assertIn("install", third_cmd)
+        self.assertIn("lemonade-server", third_cmd)
+
+        for call in calls:
+            self.assertEqual(call[1].get("stdin"), _sub.DEVNULL)
+
+    @patch("os.geteuid", return_value=1000)
+    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
+    @patch("subprocess.run")
+    def test_install_via_ppa_noninteractive_sets_env_and_devnull_stdin(
+        self, mock_run, mock_which, mock_geteuid
+    ):
+        """non_interactive=True: DEBIAN_FRONTEND=noninteractive and stdin=DEVNULL on all calls."""
+        import subprocess as _sub
+
+        installer = self._make_linux_installer()
+
+        sudo_ok = self._ok_run()
+        install_ok = self._ok_run()
+        mock_run.side_effect = [sudo_ok, install_ok, install_ok, install_ok]
+
+        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
+            with patch.object(installer, "check_installation") as mock_check:
+                mock_check.return_value = LemonadeInfo(
+                    installed=True, version="10.2.0", path="/usr/bin/lemonade-server"
+                )
+                result = installer._install_via_ppa(non_interactive=True)
+
+        self.assertTrue(result.success)
+        for call in mock_run.call_args_list:
+            self.assertEqual(call[1].get("stdin"), _sub.DEVNULL)
+            env = call[1].get("env", {})
+            if call[0][0] != ["sudo", "-n", "true"]:
+                self.assertEqual(env.get("DEBIAN_FRONTEND"), "noninteractive")
+
+    @patch("os.geteuid", return_value=1000)
+    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
+    @patch("subprocess.run")
+    def test_install_via_ppa_sudo_password_required_returns_clear_error(
+        self, mock_run, mock_which, mock_geteuid
+    ):
+        """non_interactive+not-root+sudo requires password -> clear error, not timeout."""
+        installer = self._make_linux_installer()
+        mock_run.return_value = self._fail_run(stderr="sudo: a password is required")
+
+        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
+            result = installer._install_via_ppa(non_interactive=True)
+
+        self.assertFalse(result.success)
+        self.assertIn("sudo", result.error.lower())
+        self.assertIn("passwordless", result.error.lower())
+        mock_run.assert_called_once()
+
+    @patch("os.geteuid", return_value=1000)
+    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
+    @patch("subprocess.run")
+    def test_install_via_ppa_apt_install_failure_returns_actionable_error(
+        self, mock_run, mock_which, mock_geteuid
+    ):
+        """apt-get install failure: error names step, stdout+stderr, docs URL."""
+        installer = self._make_linux_installer()
+
+        ok = self._ok_run()
+        fail = self._fail_run(stdout="E: Package not found", stderr="dpkg error")
+        mock_run.side_effect = [ok, ok, fail]
+
+        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
+            result = installer._install_via_ppa(non_interactive=False)
+
+        self.assertFalse(result.success)
+        self.assertIn("lemonade-server", result.error)
+        self.assertIn("amd-gaia.ai", result.error)
+
+    @patch("os.geteuid", return_value=1000)
+    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
+    @patch("subprocess.run")
+    def test_install_via_ppa_unsupported_distro_returns_clear_error(
+        self, mock_run, mock_which, mock_geteuid
+    ):
+        """_check_linux_version returns error string -> early return with that message."""
+        installer = self._make_linux_installer()
+        version_msg = "Requires Ubuntu 24.04+. Detected: Ubuntu 22.04"
+
+        with patch.object(
+            LemonadeInstaller, "_check_linux_version", return_value=version_msg
+        ):
+            result = installer._install_via_ppa(non_interactive=False)
+
+        self.assertFalse(result.success)
+        self.assertIn("Ubuntu 22.04", result.error)
+        mock_run.assert_not_called()
+
+    @patch("os.geteuid", return_value=1000)
+    @patch("shutil.which", return_value=None)
+    @patch("subprocess.run")
+    def test_install_via_ppa_missing_add_apt_repository_clear_error(
+        self, mock_run, mock_which, mock_geteuid
+    ):
+        """add-apt-repository missing -> error mentions software-properties-common."""
+        installer = self._make_linux_installer()
+
+        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
+            result = installer._install_via_ppa(non_interactive=False)
+
+        self.assertFalse(result.success)
+        self.assertIn("software-properties-common", result.error)
+        mock_run.assert_not_called()
+
+    @patch("os.geteuid", return_value=1000)
+    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
+    @patch("subprocess.run")
+    def test_install_via_ppa_returns_real_version_from_check_installation(
+        self, mock_run, mock_which, mock_geteuid
+    ):
+        """Returned version comes from check_installation(), not self.target_version."""
+        installer = self._make_linux_installer()
+        mock_run.return_value = self._ok_run()
+
+        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
+            with patch.object(installer, "check_installation") as mock_check:
+                mock_check.return_value = LemonadeInfo(
+                    installed=True, version="10.3.0", path="/usr/bin/lemonade-server"
+                )
+                result = installer._install_via_ppa(non_interactive=False)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.version, "10.3.0")
+        self.assertNotEqual(result.version, installer.target_version)
+
+    @patch("platform.system", return_value="Linux")
+    def test_install_dispatches_to_ppa_on_linux(self, mock_system):
+        """install() on Linux calls _install_via_ppa without requiring installer_path."""
+        installer = LemonadeInstaller()
+
+        expected = InstallResult(success=True, version="10.2.0", message="via ppa")
+        with patch.object(
+            installer, "_install_via_ppa", return_value=expected
+        ) as mock_ppa:
+            result = installer.install(silent=True)
+
+        mock_ppa.assert_called_once_with(non_interactive=True)
+        self.assertTrue(result.success)
+
+    @patch("platform.system", return_value="Windows")
+    def test_install_windows_still_requires_installer_path(self, mock_system):
+        """install() on Windows with missing path returns failure immediately."""
+        from pathlib import Path
+
+        installer = LemonadeInstaller()
+        result = installer.install(
+            installer_path=Path("/nonexistent_does_not_exist.msi")
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("not found", result.error.lower())
+
+
+class TestUpgradeLemonadeOnLinux(unittest.TestCase):
+    """Verify _upgrade_lemonade routes through _install_lemonade which uses PPA on Linux."""
+
+    def test_upgrade_lemonade_on_linux_uses_ppa(self):
+        """_upgrade_lemonade calls _install_lemonade which routes Linux through install(None)."""
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller") as mock_cls:
+            mock_installer = MagicMock()
+            mock_installer.system = "linux"
+            mock_installer.uninstall.return_value = InstallResult(
+                success=True, message="uninstalled"
+            )
+            mock_installer.wait_for_msi_mutex.return_value = True
+            mock_installer.install.return_value = InstallResult(
+                success=True, version=LEMONADE_VERSION, message="ok"
+            )
+            mock_installer.check_installation.return_value = LemonadeInfo(
+                installed=True,
+                version=LEMONADE_VERSION,
+                path="/usr/bin/lemonade-server",
+            )
+            mock_cls.return_value = mock_installer
+
+            cmd = InitCommand(profile="minimal", yes=True)
+            cmd._upgrade_lemonade("10.1.0")
+
+        mock_installer.download_installer.assert_not_called()
+        mock_installer.install.assert_called_once()
+        call_kwargs = mock_installer.install.call_args
+        installer_path_arg = (
+            call_kwargs[0][0]
+            if call_kwargs[0]
+            else call_kwargs[1].get("installer_path")
+        )
+        self.assertIsNone(installer_path_arg)
 
 
 class TestWaitForMsiMutex(unittest.TestCase):

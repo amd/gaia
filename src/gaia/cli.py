@@ -4846,10 +4846,14 @@ Let me know your answer!
                     sys.exit(0)
 
             # Download and install
-            print("Downloading Lemonade Server...")
             try:
-                installer_path = installer.download_installer()
-                print("Installing...")
+                if installer.system == "linux":
+                    print("Adding Lemonade PPA and installing lemonade-server...")
+                    installer_path = None
+                else:
+                    print("Downloading Lemonade Server...")
+                    installer_path = installer.download_installer()
+                    print("Installing...")
                 result = installer.install(installer_path, silent=args.silent)
 
                 if result.success:
