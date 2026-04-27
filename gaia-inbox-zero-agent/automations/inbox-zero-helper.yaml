@@ -1,0 +1,147 @@
+name: inbox-zero-helper
+description: >
+  Categorize, summarize, and draft responses for your email inbox.
+  Data source: Gmail MBOX takeout file.
+author: cluka
+version: 2.1.0
+
+requires:
+  - capability: llm-analysis
+
+trigger:
+  schedule: "0 8,14,18 * * *"
+  manual: true
+
+config:
+  mbox_path:
+    description: "Path to Gmail MBOX takeout file"
+    default: "C:\\Users\\antmi\\Downloads\\takeout-20260420T224647Z-3-001\\Takeout\\Mail\\All mail Including Spam and Trash.mbox"
+
+  max_emails:
+    description: "Maximum emails to process per run"
+    default: 100
+
+  batch_size:
+    description: "Emails per LLM batch (larger = fewer API calls, smaller = faster per-batch)"
+    default: 20
+
+  auto_archive:
+    description: "Auto-archive low-priority/promotional emails"
+    default: true
+
+  draft_responses:
+    description: "Draft responses for action-needed emails"
+    default: true
+
+  categories:
+    description: "Email categories to use"
+    default: ["URGENT", "NEEDS_RESPONSE", "FYI", "PROMOTIONAL", "PERSONAL"]
+
+steps:
+  # Step 1: Fetch emails from local MBOX file via command
+  - name: fetch-unread
+    command: >
+      python -m gaia_inbox_zero.cli.batch_classifier
+      --limit ${config.max_emails}
+      --mbox-path "${config.mbox_path}"
+    capture: emails_raw
+
+  # Step 2: Classify emails using LLM analysis capability
+  - name: categorize-emails
+    capability: llm-analysis
+    method: classify
+    args:
+      items: "${emails_raw.emails}"
+      categories: "${config.categories}"
+      prompt: |
+        Categorize each email into exactly one category:
+        - URGENT: Needs response within hours, time-sensitive
+        - NEEDS_RESPONSE: Requires a response or action, but not urgent
+        - FYI: Informational, no action needed
+        - PROMOTIONAL: Marketing, newsletters, deals
+        - PERSONAL: Friends, family, non-work
+
+        Return JSON: [{ "id": "email_id", "category": "category", "summary": "one-line summary", "suggestedAction": "reply|archive|star|none" }]
+    capture: categorized
+
+  # Step 3: Group emails by category using JavaScript expression
+  - name: group-by-category
+    action: evaluate
+    expression: |
+      const emails = categorized.results || categorized;  // support both new and old format
+      const grouped = {};
+      for (const cat of config.categories) {
+        grouped[cat] = emails.filter(e => e.category === cat);
+      }
+      grouped
+    capture: byCategory
+
+  # Step 3b: Capture token usage from classification
+  - name: token-summary
+    action: evaluate
+    expression: |
+      const ts = categorized.token_summary || {};
+      ({
+        input_tokens: ts.total_input_tokens || 0,
+        output_tokens: ts.total_output_tokens || 0,
+        total_tokens: ts.total_tokens || 0,
+      })
+    capture: tokenSummary
+
+  # Step 4: Auto-archive promotional emails (conditional command)
+  - name: auto-archive-promotional
+    condition: "config.auto_archive && byCategory.PROMOTIONAL.length > 0"
+    onFalse: skip-to:check-drafts
+    command: >
+      python "C:\Users\antmi\.openclaw\workspace-dev\skills\mbox-email-reader\scripts\read-mbox.py" archive
+      --ids '${JSON.stringify(byCategory.PROMOTIONAL.map(e => e.id))}'
+      --mbox-path "${config.mbox_path}"
+    capture: archived
+
+  # Step 5: Draft responses for action-needed emails (conditional capability)
+  - name: check-drafts
+    condition: "config.draft_responses && byCategory.NEEDS_RESPONSE.length > 0"
+    onFalse: skip-to:notify-summary
+    capability: llm-analysis
+    method: generate
+    args:
+      emails: "${byCategory.NEEDS_RESPONSE.slice(0, 5)}"
+      prompt: |
+        For each email that needs a response, draft a reply.
+        Keep responses concise and professional.
+        Match the tone of the sender.
+
+        Return JSON: [{ "id": "email_id", "draft": "response text" }]
+    capture: drafts
+
+  # Step 6: Compute metrics summary
+  - name: metrics-summary
+    action: evaluate
+    expression: |
+      const emailsArray = emails_raw.emails || [];
+      ({
+        timestamp: new Date().toISOString(),
+        total_emails: emailsArray.length,
+        categories: Object.fromEntries(
+          Object.entries(byCategory).map(([k, v]) => [k, v.length])
+        ),
+        urgent_count: byCategory.URGENT ? byCategory.URGENT.length : 0,
+        action_needed_count: byCategory.NEEDS_RESPONSE ? byCategory.NEEDS_RESPONSE.length : 0,
+        archived_count: archived ? archived.count : 0,
+        drafts_count: drafts ? drafts.length : 0,
+        input_tokens: tokenSummary.input_tokens || 0,
+        output_tokens: tokenSummary.output_tokens || 0,
+        total_tokens: tokenSummary.total_tokens || 0,
+      })
+    capture: metrics
+
+  # Step 7: Deliver summary notification
+  - name: notify-summary
+    action: notify
+    message: |
+      Inbox Zero Helper Summary
+
+      ${byCategory.URGENT && byCategory.URGENT.length > 0 ? `**URGENT (${byCategory.URGENT.length}):**\n${byCategory.URGENT.map(e => `• ${e.summary}`).join('\n')}\n\n` : ''}${byCategory.NEEDS_RESPONSE && byCategory.NEEDS_RESPONSE.length > 0 ? `**Action Needed (${byCategory.NEEDS_RESPONSE.length}):**\n${byCategory.NEEDS_RESPONSE.map(e => `• ${e.summary}`).join('\n')}\n\n` : ''}${byCategory.FYI && byCategory.FYI.length > 0 ? `**FYI (${byCategory.FYI.length}):**\n${byCategory.FYI.slice(0, 3).map(e => `• ${e.summary}`).join('\n')}${byCategory.FYI.length > 3 ? `\n• ...and ${byCategory.FYI.length - 3} more` : ''}\n\n` : ''}${config.auto_archive && archived ? `Archived ${archived.count} promotional emails\n\n` : ''}${drafts && drafts.length > 0 ? `Drafted ${drafts.length} responses (review in drafts folder)` : ''}
+
+      Data source: MBOX (${metrics.total_emails} emails processed)
+      Tokens: ${metrics.input_tokens || 0} input / ${metrics.output_tokens || 0} output / ${metrics.total_tokens || 0} total
