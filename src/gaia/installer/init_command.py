@@ -812,27 +812,36 @@ class InitCommand:
             True on success, False on failure
         """
         self._print("")
-        if RICH_AVAILABLE and self.console:
-            self.console.print(
-                f"   [bold]Downloading[/bold] Lemonade [cyan]v{LEMONADE_VERSION}[/cyan]..."
-            )
-        else:
-            self._print(f"   Downloading Lemonade v{LEMONADE_VERSION}...")
 
         try:
-            # Download installer
-            installer_path = self.installer.download_installer()
-            self._print("")
-            self._print_success("Download complete")
+            if self.installer.system == "linux":
+                label = f"Adding Lemonade [cyan]v{LEMONADE_VERSION}[/cyan] PPA and installing..."
+                installer_path = None
+            else:
+                label = f"Downloading Lemonade [cyan]v{LEMONADE_VERSION}[/cyan]..."
+                installer_path = self.installer.download_installer()
+                self._print("")
+                self._print_success("Download complete")
 
-            # Install (silent in CI with --yes, interactive otherwise for desktop icon)
-            self.console.print("   [bold]Installing...[/bold]")
-            if not self.yes:
-                self.console.print()
-                self.console.print(
-                    "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
-                )
-                self.console.print()
+            if RICH_AVAILABLE and self.console:
+                self.console.print(f"   [bold]{label}[/bold]")
+            else:
+                import re as _re
+
+                plain_label = _re.sub(r"\[.*?\]", "", label)
+                self._print(f"   {plain_label}")
+
+            if installer_path is not None and not self.yes:
+                if RICH_AVAILABLE and self.console:
+                    self.console.print()
+                    self.console.print(
+                        "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
+                    )
+                    self.console.print()
+                else:
+                    self._print(
+                        "   ⚠️  The installer window will appear - please complete the installation"
+                    )
             result = self.installer.install(installer_path, silent=self.yes)
 
             if result.success:
