@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 
 import re
+import sys
+from pathlib import Path
 
 from setuptools import setup
 
@@ -13,6 +15,37 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
     gaia_version = version_match.group(1)
 
 tkml_version = "5.0.4"
+
+# Guard against shipping a wheel without the Agent UI bundle. When building a
+# wheel (anything other than `sdist`), the pre-built React assets MUST exist
+# under src/gaia/apps/webui/dist/ — otherwise `pip install amd-gaia[ui]` would
+# silently fall through to the "frontend not built" page on every install. The
+# CI publish pipeline runs `npm run build` before `python -m build`; this guard
+# turns a forgotten step into a loud failure rather than a quiet bad release.
+_WEBUI_DIST_INDEX = (
+    Path(__file__).parent / "src" / "gaia" / "apps" / "webui" / "dist" / "index.html"
+)
+# Bypass the guard for any setuptools command other than wheel building.
+# `egg_info`, `develop`, `editable_wheel`, `dist_info` are all invoked by
+# editable-install paths (`pip install -e .`) across pip/setuptools versions;
+# `sdist` doesn't need the bundle. We only fail when the user is actually
+# producing a binary wheel.
+_BUILD_BYPASS_COMMANDS = {
+    "sdist",
+    "egg_info",
+    "develop",
+    "editable_wheel",
+    "dist_info",
+    "check",
+    "--help-commands",
+}
+_GUARD_BYPASS = any(arg in _BUILD_BYPASS_COMMANDS for arg in sys.argv[1:])
+if not _WEBUI_DIST_INDEX.is_file() and not _GUARD_BYPASS:
+    raise SystemExit(
+        f"Frontend bundle not found at {_WEBUI_DIST_INDEX}.\n"
+        f"Run `npm ci && npm run build` in src/gaia/apps/webui/ before "
+        f"building the wheel, or use `python -m build --sdist` to skip the bundle."
+    )
 
 setup(
     name="amd-gaia",
@@ -77,6 +110,7 @@ setup(
         "gaia.vlm",
         "gaia.api",
         "gaia.code_index",
+        "gaia.apps.webui",
     ],
     package_data={
         "gaia.eval": [
@@ -86,6 +120,21 @@ setup(
             "webapp/public/*.html",
             "webapp/public/*.css",
             "webapp/public/*.js",
+        ],
+        # Browser-mode Agent UI bundle. Recursive globs in package_data are
+        # unreliable across setuptools versions, so we list shallow patterns
+        # here and back them up with `recursive-include` in MANIFEST.in. The
+        # CI verifier (util/verify_wheel_dist.py) enforces that the wheel
+        # actually contains these entries before publish.
+        "gaia.apps.webui": [
+            "dist/index.html",
+            "dist/*.svg",
+            "dist/*.png",
+            "dist/*.ico",
+            "dist/*.webmanifest",
+            "dist/*.json",
+            "dist/*.txt",
+            "dist/assets/*",
         ],
     },
     install_requires=[
