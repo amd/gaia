@@ -278,6 +278,15 @@ class AgentRegistry:
                         )
                     raw_models = yaml_data.get("models")
                     if isinstance(raw_models, list):
+                        bad = [m for m in raw_models if not isinstance(m, str)]
+                        if bad:
+                            logger.warning(
+                                "registry: companion YAML %s: 'models' "
+                                "contains non-string entries %r — ignoring "
+                                "those",
+                                yaml_file,
+                                bad,
+                            )
                         models = [m for m in raw_models if isinstance(m, str)]
                     elif raw_models is not None:
                         logger.warning(

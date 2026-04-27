@@ -144,6 +144,23 @@ def export_custom_agents(output_path: Path) -> ExportResult:
     if not agents_root.exists():
         raise ValueError("No custom agents found to export")
 
+    # Surface skipped legacy YAML-only directories so users notice they need
+    # to migrate those agents to agent.py rather than silently shipping a
+    # bundle with the YAML agents missing.
+    for entry in sorted(agents_root.iterdir(), key=lambda p: p.name):
+        if (
+            entry.is_dir()
+            and not (entry / "agent.py").is_file()
+            and (entry / "agent.yaml").is_file()
+        ):
+            log.warning(
+                "Skipping legacy YAML-only agent at %s (no agent.py). YAML "
+                "manifest agents were removed in v0.17.5; convert to agent.py "
+                "to include this agent in the export "
+                "(see https://amd-gaia.ai/guides/custom-agent).",
+                entry,
+            )
+
     agent_dirs = sorted(
         (d for d in agents_root.iterdir() if _is_custom_agent_dir(d)),
         key=lambda p: p.name,

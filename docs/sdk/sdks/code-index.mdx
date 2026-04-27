@@ -201,17 +201,9 @@ class MyResearchAgent(CodeIndexToolsMixin, Agent):
 
 State is initialised lazily — calling `_init_code_index_state` is optional but recommended so the agent honours the repo path you intended.
 
-### Opting in from a YAML-manifest agent
+### `KNOWN_TOOLS` entry
 
-`code_index` is registered in `KNOWN_TOOLS` ([`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)), so a manifest can list it directly:
-
-```yaml
-name: my_research_agent
-class_path: my_pkg.agent:MyResearchAgent
-tools:
-  - code_index   # composes CodeIndexToolsMixin
-  - file_search
-```
+`code_index` is registered in `KNOWN_TOOLS` ([`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)) so the BuilderAgent template ([`src/gaia/agents/builder/template.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/builder/template.py)) can scaffold the import and base class for new agents that opt into it. See the [Custom Agents guide](/guides/custom-agent) for the Python-agent shape.
 
 ## Privacy and safety
 

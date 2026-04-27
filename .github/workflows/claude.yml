@@ -192,8 +192,8 @@ jobs:
             - **Standards Compliance:** Reference `CLAUDE.md` and `docs/reference/dev.mdx`
 
             ### 2. GAIA-Specific Architecture Checks
-            - **New agents** should preferably be registered via YAML manifest in `src/gaia/agents/registry.py` (Pydantic-validated) rather than a hand-rolled class, when the agent only needs existing tool mixins.
-            - **New tool mixins** MUST be added to `KNOWN_TOOLS` in `src/gaia/agents/registry.py` so YAML-manifest agents can declare them.
+            - **New agents** must be registered as a Python `agent.py` (subclass of `Agent` with `AGENT_ID` / `AGENT_NAME` class attributes). YAML manifests were removed in v0.17.5 (#912).
+            - **New tool mixins** MUST be added to `KNOWN_TOOLS` in `src/gaia/agents/registry.py`; the BuilderAgent template uses this map to scaffold imports for new `agent.py` files.
             - **New LLM providers** belong under `src/gaia/llm/providers/` with registration in `src/gaia/llm/factory.py` (`create_client`).
             - **AMD-specific paths** (NPU / Ryzen AI / Lemonade): use existing `src/gaia/llm/lemonade_client.py` — flag direct HTTP calls to the Lemonade server as a pattern violation.
             - **New CLI commands** need both an entry in `src/gaia/cli.py` subparsers AND `docs/reference/cli.mdx`.

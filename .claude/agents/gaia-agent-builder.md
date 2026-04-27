@@ -1,15 +1,15 @@
 ---
 name: gaia-agent-builder
-description: GAIA agent creation specialist. Use PROACTIVELY when CREATING a new GAIA agent — inheriting from the base `Agent`, registering tools, wiring state management, or scaffolding via YAML manifest. Not for general LLM work (use `lemonade-specialist`) or SDK design (use `sdk-architect`).
+description: GAIA agent creation specialist. Use PROACTIVELY when CREATING a new GAIA agent — inheriting from the base `Agent`, registering tools, wiring state management, or scaffolding via the BuilderAgent template. Not for general LLM work (use `lemonade-specialist`) or SDK design (use `sdk-architect`).
 tools: Read, Write, Edit, Bash, Grep
 model: opus
 ---
 
-You create new GAIA agents. There are two shapes — Python class or YAML manifest — and you must pick the right one before writing code.
+You create new GAIA agents. Every custom agent is a Python `agent.py` defining a subclass of `Agent` with `AGENT_ID` / `AGENT_NAME` class attributes. (YAML manifest agents were removed in v0.17.5 — issue #912.)
 
 ## When to use
 
-- Creating a new agent under `src/gaia/agents/<id>/agent.py` (built-in) or `~/.gaia/agents/<id>/agent.yaml` (user-authored)
+- Creating a new agent under `src/gaia/agents/<id>/agent.py` (built-in) or `~/.gaia/agents/<id>/agent.py` (user-authored)
 - Adding a new mixin and wiring it into `KNOWN_TOOLS`
 - Converting a prototype script into a proper `Agent` subclass
 - Designing state machines for multi-step agent flows
@@ -25,22 +25,18 @@ You create new GAIA agents. There are two shapes — Python class or YAML manife
 ## Before you write anything, read:
 - [`CLAUDE.md`](../../CLAUDE.md) — project conventions, "No Silent Fallbacks" rule, agent registry table
 - [`src/gaia/agents/base/agent.py`](../../src/gaia/agents/base/agent.py) — base `Agent`
-- [`src/gaia/agents/registry.py`](../../src/gaia/agents/registry.py) — `KNOWN_TOOLS` + `AgentManifest`
+- [`src/gaia/agents/registry.py`](../../src/gaia/agents/registry.py) — `KNOWN_TOOLS` + Python loader
+- [`src/gaia/agents/builder/template.py`](../../src/gaia/agents/builder/template.py) — the `agent.py` source emitted by BuilderAgent (canonical Python shape)
 - [`docs/sdk/patterns.mdx`](../../docs/sdk/patterns.mdx) — canonical copy-pasteable patterns
+- [`docs/guides/custom-agent.mdx`](../../docs/guides/custom-agent.mdx) — user-facing custom agent guide, including the YAML-manifest migration recipe
 
-## The two agent shapes
+## Agent shape
 
-### A. Python class — `src/gaia/agents/<id>/agent.py`
+Python class — `src/gaia/agents/<id>/agent.py` (built-in) or `~/.gaia/agents/<id>/agent.py` (user-authored)
 - Full control: custom `process_query`, state machine, `@tool` methods, mixin composition
-- Choose when the agent needs custom logic, a new tool set, or ships as built-in
-- Must: inherit from `Agent` (or `MCPAgent`); implement `_get_system_prompt` and `_register_tools`
+- Must: inherit from `Agent` (or `MCPAgent`); declare `AGENT_ID` and `AGENT_NAME`; implement `_get_system_prompt` and `_register_tools`
 
-### B. YAML manifest — `~/.gaia/agents/<id>/agent.yaml`
-- Declarative: registry synthesises the class via `type()` at load time
-- Choose when the agent is just "system prompt + mixins from `KNOWN_TOOLS` + optional MCP servers"
-- Must: validate against `AgentManifest` (see `registry.py:37`); every `tools:` entry must be a `KNOWN_TOOLS` key
-
-Fastest path for end users: `gaia chat --ui` → "+" → **BuilderAgent** (interactive scaffolding).
+Fastest path for end users: `gaia chat --ui` → "+" → **BuilderAgent** (interactive scaffolding emits a working `agent.py`).
 
 ## Checklist for a built-in agent
 
@@ -62,13 +58,13 @@ Missing any of these will fail `python util/lint.py --agents` or silently produc
 
 **Optional:**
 - `_create_console(self) -> AgentConsole` — only override if you need a custom console; the base class provides a default
-- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — required *only* for agents exposed through the registry/BuilderAgent flow (see `src/gaia/agents/builder/agent.py`). YAML-manifest agents carry these fields in the manifest; most concrete Python agents (`ChatAgent`, `CodeAgent`, `JiraAgent`, …) don't declare them at all.
+- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — required for agents exposed through the registry / BuilderAgent flow (the registry's Python loader looks for `AGENT_ID` and `AGENT_NAME` to locate the agent class). Most concrete *built-in* Python agents (`ChatAgent`, `CodeAgent`, `JiraAgent`, …) don't declare them because they wire factories directly in `_register_builtin_agents` rather than going through the discovery loader.
 
 ### 2. Tools
 - [ ] Every tool decorated with `@tool` inside `_register_tools` so `self` is in closure scope
 - [ ] Docstring describes args + return (the LLM reads this)
 - [ ] Reusable tools → pull into a mixin under `src/gaia/agents/tools/` or `src/gaia/agents/<agent>/tools/`
-- [ ] Add the mixin to `KNOWN_TOOLS` in `registry.py:26` so YAML agents can opt in
+- [ ] Add the mixin to `KNOWN_TOOLS` in `registry.py:26` so the BuilderAgent template can scaffold imports for new agents
 
 ### 3. Registry wiring
 - [ ] Add a `_register_*_agent` block in `AgentRegistry._register_builtin_agents`
@@ -110,7 +106,7 @@ Missing any of these will fail `python util/lint.py --agents` or silently produc
 | Stable Diffusion | `SDToolsMixin` (`sd`) | `src/gaia/sd/mixin.py` |
 | Vision / structured extraction | `VLMToolsMixin` (`vlm`) | `src/gaia/vlm/mixin.py` |
 
-**MRO rule (GAIA convention, verified against the tree):** `Agent` is **first**, mixins after. Matches `ChatAgent`, `SDAgent`, `MedicalIntakeAgent`, and the registry's dynamic class in `registry.py:358`. Works because `Agent.__init__` does not call `super().__init__()` and the mixins that do have `__init__` (e.g. `ShellToolsMixin`) defensively initialize state lazily with `hasattr` guards. If you ever add a mixin whose `__init__` must run at construction, either (a) make it lazy-init like `ShellToolsMixin` or (b) override `__init__` on the concrete agent class and call the mixin's setup explicitly — do **not** silently flip the MRO, which would diverge from every other agent in the tree.
+**MRO rule (GAIA convention, verified against the tree):** `Agent` is **first**, mixins after. Matches `ChatAgent`, `SDAgent`, `MedicalIntakeAgent`, and the BuilderAgent template's emitted `agent.py`. Works because `Agent.__init__` does not call `super().__init__()` and the mixins that do have `__init__` (e.g. `ShellToolsMixin`) defensively initialize state lazily with `hasattr` guards. If you ever add a mixin whose `__init__` must run at construction, either (a) make it lazy-init like `ShellToolsMixin` or (b) override `__init__` on the concrete agent class and call the mixin's setup explicitly — do **not** silently flip the MRO, which would diverge from every other agent in the tree.
 
 ## Default models (verified)
 
@@ -134,7 +130,7 @@ Surface failures with: what failed, which resource, what the user should do.
 - **Forgot `_TOOL_REGISTRY.clear()`** at the top of `_register_tools` — tools from a prior agent leak in
 - **`@tool` at module top-level** — decorator needs `self` in closure; silently drops `self` binding
 - **MRO departure from convention** — every in-tree agent uses `class X(Agent, MyMixin)`; don't flip to `class X(MyMixin, Agent)` "for textbook Python MRO reasons." Agent-first works because `Agent.__init__` doesn't `super().__init__()` and mixins handle it (see the MRO note above). If your mixin must run custom init, make it lazy or override `__init__` on the concrete class.
-- **New tool mixin not added to `KNOWN_TOOLS`** — YAML manifests can't opt in by name
+- **New tool mixin not added to `KNOWN_TOOLS`** — BuilderAgent template can't scaffold imports for it
 - **Subprocess injection** — never pass user input directly to `subprocess.call`; use list args or `shlex.quote`
 - **`docs.json` not updated** — `.mdx` exists but Mintlify shows 404
 - **MCP init order** — if mixing `MCPClientMixin` with custom `__init__`, set `self._mcp_manager` *before* `super().__init__()`

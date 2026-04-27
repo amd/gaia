@@ -167,6 +167,44 @@ class TestPythonAgentLoading:
         reg = registry.get("yaml-companion")
         assert reg.models == ["Qwen3.5-35B-A3B-GGUF"]
 
+    def test_companion_yaml_models_non_string_entries_dropped_with_warning(
+        self, tmp_path, caplog
+    ):
+        """A list `models:` containing non-string entries must drop those
+        entries and emit a logger warning, mirroring the scalar-value path."""
+        agent_dir = tmp_path / "mixed-models"
+        agent_dir.mkdir()
+        (agent_dir / "agent.py").write_text(textwrap.dedent("""
+            from gaia.agents.base.agent import Agent
+
+            class MixedAgent(Agent):
+                AGENT_ID = "mixed-models"
+                AGENT_NAME = "Mixed Models"
+                def _get_system_prompt(self):
+                    return "test"
+                def _register_tools(self):
+                    pass
+        """))
+        (agent_dir / "agent.yaml").write_text(textwrap.dedent("""
+            models:
+              - 123
+              - Qwen3-0.6B-GGUF
+              - null
+        """))
+
+        registry = AgentRegistry()
+        with caplog.at_level("WARNING", logger="gaia.agents.registry"):
+            registry._load_python_agent(
+                agent_dir, agent_dir / "agent.py", agent_dir / "agent.yaml"
+            )
+
+        reg = registry.get("mixed-models")
+        assert reg is not None
+        assert reg.models == ["Qwen3-0.6B-GGUF"]
+        assert any(
+            "non-string entries" in r.message for r in caplog.records
+        ), f"expected non-string warning, got: {[r.message for r in caplog.records]}"
+
     def test_companion_yaml_models_scalar_is_ignored(self, tmp_path):
         """A scalar `models:` value must not silently leak into the
         registration as a string (which would later be iterated as

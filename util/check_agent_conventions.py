@@ -14,7 +14,6 @@ Hard checks (block CI on failure):
 - ``_register_tools`` contains ``_TOOL_REGISTRY.clear()`` (when defined locally)
 - Copyright header + SPDX line present
 - ``KNOWN_TOOLS`` entries in registry.py resolve to importable classes
-- Manifest JSON Schema is not stale
 
 Soft checks (non-blocking warnings):
 - A test file exists (``tests/test_<name>.py`` or ``tests/<name>/``)
