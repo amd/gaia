@@ -83,7 +83,7 @@ jobs:
           # Start the server in the background as a process (not PowerShell job)
           Write-Host "Starting lemonade-server in background..."
           # Start the server as a background process
-          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray" -PassThru -WindowStyle Hidden
+          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray", "--port", "13305" -PassThru -WindowStyle Hidden
           Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
 
           # Wait for server to start up
@@ -97,7 +97,7 @@ jobs:
               $waitTime += 2
 
               try {
-                  $response = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 5
+                  $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 5
                   Write-Host "Server is ready and responding to health checks"
                   $serverReady = $true
               } catch {
@@ -145,6 +145,8 @@ jobs:
 
           REM Run the comprehensive integration test suite
           set PYTHONIOENCODING=utf-8
+          REM Use the model that was pulled above (overrides DEFAULT_MODEL_NAME=Gemma-4-E4B)
+          set GAIA_TEST_MODEL=Llama-3.2-3B-Instruct-Hybrid
           python tests\test_agent_sdk.py
           set integration_exit=%ERRORLEVEL%
 

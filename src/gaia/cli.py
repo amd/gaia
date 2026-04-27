@@ -147,6 +147,7 @@ def initialize_lemonade_for_agent(
     agent_context_sizes = {
         "code": 32768,
         "chat": 32768,
+        "code_index": 32768,
         "jira": 32768,
         "blender": 32768,
         "docker": 32768,
@@ -897,7 +898,7 @@ def main():
         "--base-url",
         default=None,
         help=(
-            "Remote Lemonade server base URL (e.g. https://host:8000/api/v1)."
+            "Remote Lemonade server base URL (e.g. https://host:13305/api/v1)."
             " Used with --ui."
         ),
     )
@@ -1471,8 +1472,8 @@ Available agents: chat, code, talk, rag, blender, jira, docker, vlm, minimal, mc
     download_parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Lemonade server port (default: 8000)",
+        default=13305,
+        help="Lemonade server port (default: 13305)",
     )
     download_parser.set_defaults(action="download")
 
@@ -1556,7 +1557,7 @@ Available agents: chat, code, talk, rag, blender, jira, docker, vlm, minimal, mc
     kill_parser.add_argument(
         "--lemonade",
         action="store_true",
-        help="Kill Lemonade server (port 8000)",
+        help="Kill Lemonade server (port 13305)",
     )
 
     # Add LLM app command
@@ -3403,7 +3404,7 @@ Let me know your answer!
                 else:
                     # Fallback to port kill if stop command fails
                     log.warning(f"lemonade-server stop failed: {result.stderr}")
-                    port_result = kill_process_by_port(8000)
+                    port_result = kill_process_by_port(13305)
                     if port_result["success"]:
                         print(f"✅ {port_result['message']}")
                     else:
@@ -3411,7 +3412,7 @@ Let me know your answer!
             except FileNotFoundError:
                 # lemonade-server not in PATH, fallback to port kill
                 log.warning("lemonade-server not found, falling back to port kill")
-                port_result = kill_process_by_port(8000)
+                port_result = kill_process_by_port(13305)
                 if port_result["success"]:
                     print(f"✅ {port_result['message']}")
                 else:
@@ -5543,7 +5544,7 @@ def handle_sd_command(args):
     # Create config - ensure LLM model is set
     llm_model = getattr(args, "model", None)
     if not llm_model:
-        llm_model = "Qwen3-8B-GGUF"  # Default LLM for prompt enhancement
+        llm_model = "Gemma-4-E4B-it-GGUF"  # Default LLM for prompt enhancement
 
     config = SDAgentConfig(
         sd_model=args.sd_model,
@@ -5552,7 +5553,7 @@ def handle_sd_command(args):
         show_stats=getattr(args, "stats", False),
         use_claude=getattr(args, "use_claude", False),
         use_chatgpt=getattr(args, "use_chatgpt", False),
-        base_url=getattr(args, "base_url", "http://localhost:8000/api/v1"),
+        base_url=getattr(args, "base_url", "http://localhost:13305/api/v1"),
         model_id=llm_model,
     )
 

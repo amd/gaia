@@ -235,7 +235,7 @@ When running the dashboard, these endpoints are available:
 
 Environment variables (optional):
 
-- `LEMONADE_BASE_URL` - Lemonade server URL (default: http://localhost:8000/api/v1)
+- `LEMONADE_BASE_URL` - Lemonade server URL (default: http://localhost:13305/api/v1)
 
 ## License
 

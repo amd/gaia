@@ -160,7 +160,8 @@ class TestBuilderAgentFormat:
 
             agent = BuilderAgent()
         prompt = agent.system_prompt
-        assert "Respond in plain text for normal conversation" in prompt
+        # BuilderAgent uses Gemma-4-E4B (tool-calling): the embedded-JSON
+        # format template is not injected since the model uses native tool_calls.
         assert "You must respond ONLY in valid JSON" not in prompt
 
     def test_builder_no_compose_override(self):
