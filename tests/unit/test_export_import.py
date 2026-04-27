@@ -523,4 +523,8 @@ def test_export_skips_yaml_only_dirs(tmp_path, fake_home, agents_root, caplog):
     assert (
         len(skip_warnings) == 1
     ), "expected exactly one warning naming the skipped YAML-only directory"
-    assert "v0.17.5" in skip_warnings[0].getMessage()
+    msg = skip_warnings[0].getMessage().lower()
+    assert "yaml" in msg and "agent.py" in msg, (
+        "warning should explain why the dir was skipped and what to do — "
+        f"got: {skip_warnings[0].getMessage()!r}"
+    )

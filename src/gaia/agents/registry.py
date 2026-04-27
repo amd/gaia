@@ -280,11 +280,17 @@ class AgentRegistry:
                     if isinstance(raw_models, list):
                         bad = [m for m in raw_models if not isinstance(m, str)]
                         if bad:
+                            preview = bad[:5]
+                            suffix = (
+                                f" (and {len(bad) - 5} more)" if len(bad) > 5 else ""
+                            )
                             logger.warning(
                                 "registry: companion YAML %s: 'models' contains "
-                                "non-string entries %r — ignoring those",
+                                "%d non-string entries — ignoring (sample: %r%s)",
                                 yaml_file,
-                                bad,
+                                len(bad),
+                                preview,
+                                suffix,
                             )
                         models = [m for m in raw_models if isinstance(m, str)]
                     elif raw_models is not None:
