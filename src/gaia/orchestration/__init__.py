@@ -34,6 +34,11 @@ from gaia.orchestration.supervisor import (
     SupervisorConfig,
     Verdict,
 )
+from gaia.orchestration.supervisors import (
+    GitOperation,
+    GitSupervisor,
+    SupervisorRegistry,
+)
 
 __all__ = [
     "Artifact",
@@ -50,6 +55,9 @@ __all__ = [
     "ProjectSupervisor",
     "SupervisorConfig",
     "Verdict",
+    "GitOperation",
+    "GitSupervisor",
+    "SupervisorRegistry",
 ]
 
 __version__ = "1.0.0"

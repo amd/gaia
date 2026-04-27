@@ -51,6 +51,7 @@ from gaia.orchestration.supervisor import (
     SupervisorConfig,
     Verdict,
 )
+from gaia.orchestration.supervisors import GitSupervisor, SupervisorRegistry
 
 logger = get_logger(__name__)
 
@@ -76,6 +77,7 @@ class OrchestratorConfig:
         enable_nexus: Whether to integrate with NexusService
         enable_supervisor: Whether to enable ProjectSupervisor governance
         supervisor_config: Custom SupervisorConfig (defaults used if None)
+        enable_git_supervisor: Whether to enable GitSupervisor with CircuitBreaker
     """
 
     objectives_path: str = ".gaia/objectives.yaml"
@@ -86,6 +88,7 @@ class OrchestratorConfig:
     enable_nexus: bool = True
     enable_supervisor: bool = False
     supervisor_config: Optional[SupervisorConfig] = None
+    enable_git_supervisor: bool = False  # GitSupervisor with CircuitBreaker
 
 
 @dataclass
@@ -178,6 +181,18 @@ class ProjectOrchestrator:
             )
             logger.info("ProjectSupervisor enabled")
 
+        # SupervisorRegistry + GitSupervisor (optional git automation)
+        self._supervisor_registry = SupervisorRegistry()
+        self._git_supervisor: Optional[GitSupervisor] = None
+        if self._config.enable_git_supervisor:
+            self._git_supervisor = GitSupervisor(
+                repo_path=Path(self._config.objectives_path).parent.parent,
+                git_user_name=self.git_user_name,
+                git_user_email=self.git_user_email,
+            )
+            self._supervisor_registry.register("git", self._git_supervisor)
+            logger.info("GitSupervisor enabled and registered")
+
         logger.info(
             "ProjectOrchestrator initialized",
             extra={
@@ -211,6 +226,16 @@ class ProjectOrchestrator:
     def supervisor(self) -> Optional[ProjectSupervisor]:
         """Get the supervisor if enabled."""
         return self._supervisor
+
+    @property
+    def git_supervisor(self) -> Optional[GitSupervisor]:
+        """Get the GitSupervisor if enabled."""
+        return self._git_supervisor
+
+    @property
+    def supervisor_registry(self) -> SupervisorRegistry:
+        """Get the SupervisorRegistry."""
+        return self._supervisor_registry
 
     # -----------------------------------------------------------------------
     # Git integration

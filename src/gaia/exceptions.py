@@ -309,3 +309,58 @@ class ChronicleCompactionError(ChronicleError):
     """Raised when chronicle compaction fails."""
 
     pass
+
+
+# =============================================================================
+# Orchestration Exceptions
+# =============================================================================
+
+
+class OrchestrationError(GAIAException):
+    """Base exception for orchestration-related errors."""
+
+    pass
+
+
+class ObjectivesLoadError(OrchestrationError):
+    """Raised when objectives file loading fails."""
+
+    def __init__(self, path: str, error: str):
+        super().__init__(
+            f"Failed to load objectives from '{path}': {error}",
+            {"path": path, "error": error},
+        )
+        self.path = path
+        self.error = error
+
+
+class ObjectivesSaveError(OrchestrationError):
+    """Raised when objectives file saving fails."""
+
+    def __init__(self, path: str, error: str):
+        super().__init__(
+            f"Failed to save objectives to '{path}': {error}",
+            {"path": path, "error": error},
+        )
+        self.path = path
+        self.error = error
+
+
+class OrchestratorNotReadyError(OrchestrationError):
+    """Raised when orchestrator operations are called before initialization."""
+
+    def __init__(self, message: str = "Orchestrator is not ready"):
+        super().__init__(message)
+
+
+class GitOperationError(OrchestrationError):
+    """Raised when a git operation fails."""
+
+    def __init__(self, operation: str, error: str, branch: str | None = None):
+        super().__init__(
+            f"Git operation '{operation}' failed: {error}",
+            {"operation": operation, "error": error, "branch": branch},
+        )
+        self.operation = operation
+        self.error = error
+        self.branch = branch
