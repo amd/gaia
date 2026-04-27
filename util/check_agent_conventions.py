@@ -26,7 +26,6 @@ Run via: ``python util/lint.py --agents`` or ``python util/check_agent_conventio
 
 import ast
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import List, Tuple
@@ -259,32 +258,6 @@ def _check_known_tools() -> Tuple[List[str], List[str]]:
     return errors, warnings
 
 
-def _check_manifest_schema() -> Tuple[List[str], List[str]]:
-    """Confirm schemas/agent-manifest.schema.json is up to date."""
-    errors: List[str] = []
-    warnings: List[str] = []
-    schema_path = REPO_ROOT / "schemas" / "agent-manifest.schema.json"
-    gen_script = REPO_ROOT / "util" / "gen_manifest_schema.py"
-    if not schema_path.exists():
-        warnings.append(
-            f"{schema_path.relative_to(REPO_ROOT)} missing — run "
-            "`python util/gen_manifest_schema.py` to generate it"
-        )
-        return errors, warnings
-    if not gen_script.exists():
-        return errors, warnings
-    result = subprocess.run(
-        [sys.executable, str(gen_script), "--check"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        msg = (result.stdout + result.stderr).strip() or "stale schema"
-        errors.append(f"agent-manifest.schema.json: {msg}")
-    return errors, warnings
-
-
 def _format_report(all_errors: List[str], all_warnings: List[str]) -> str:
     lines: List[str] = []
     if all_errors:
@@ -312,10 +285,6 @@ def run_check() -> Tuple[int, int, str]:
         all_warnings.extend(warns)
 
     errs, warns = _check_known_tools()
-    all_errors.extend(errs)
-    all_warnings.extend(warns)
-
-    errs, warns = _check_manifest_schema()
     all_errors.extend(errs)
     all_warnings.extend(warns)
 

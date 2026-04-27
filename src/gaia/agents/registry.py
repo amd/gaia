@@ -6,23 +6,24 @@ import dataclasses
 import importlib
 import importlib.util
 import inspect
-import json
 import os
 import re
 import threading
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, field_validator
 
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
-# KNOWN_TOOLS maps tool name -> (module_path, class_name) for lazy import
+# KNOWN_TOOLS maps tool name -> (module_path, class_name) for lazy import.
+# Consumed by BuilderAgent's template (src/gaia/agents/builder/template.py) to
+# scaffold tool-mixin imports and base classes when generating agent.py files.
 KNOWN_TOOLS: Dict[str, tuple] = {
     "rag": ("gaia.agents.chat.tools.rag_tools", "RAGToolsMixin"),
     "code_index": ("gaia.agents.code_index.tools.mixin", "CodeIndexToolsMixin"),
@@ -34,39 +35,11 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     "vlm": ("gaia.vlm.mixin", "VLMToolsMixin"),
 }
 
-
-class AgentManifest(BaseModel):
-    """Pydantic v2 model for validating YAML agent manifests."""
-
-    manifest_version: int = 1
-    id: str
-    name: str
-    description: str = ""
-    instructions: str = ""  # System prompt for YAML-only agents
-    tools: List[str] = ["rag", "file_search"]
-    mcp_servers: Dict[str, Dict[str, Any]] = {}
-    models: List[str] = []  # Ordered preference list
-    conversation_starters: List[str] = []
-
-    @field_validator("tools")
-    @classmethod
-    def validate_tools(cls, v):
-        unknown = [t for t in v if t not in KNOWN_TOOLS]
-        if unknown:
-            raise ValueError(f"Unknown tools: {unknown}. Valid: {list(KNOWN_TOOLS)}")
-        return v
-
-    @field_validator("id")
-    @classmethod
-    def validate_id(cls, v):
-        if not v or not v.strip():
-            raise ValueError("Agent ID cannot be empty")
-        if not re.match(r"^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$", v):
-            raise ValueError(
-                f"Agent ID '{v}' is invalid. "
-                "Use lowercase letters, digits, and hyphens (e.g. 'my-agent')."
-            )
-        return v
+# Manifest-fingerprint keys used to detect a legacy YAML manifest masquerading
+# as a companion sidecar.  The companion sidecar may carry only `models:`.
+_MANIFEST_FINGERPRINT_KEYS = frozenset(
+    {"manifest_version", "tools", "instructions", "mcp_servers", "id"}
+)
 
 
 @dataclass
@@ -76,7 +49,7 @@ class AgentRegistration:
     id: str
     name: str
     description: str
-    source: str  # "builtin" | "custom_python" | "custom_manifest"
+    source: Literal["builtin", "custom_python"]
     conversation_starters: List[str]
     factory: Callable[..., Any]  # returns Agent instance
     agent_dir: Optional[Path]
@@ -207,7 +180,12 @@ class AgentRegistry:
     # ------------------------------------------------------------------
 
     def _load_from_dir(self, agent_dir: Path) -> None:
-        """Load agent from a directory. Python takes precedence over YAML."""
+        """Load agent from a directory. Only ``agent.py`` is supported.
+
+        A directory containing only ``agent.yaml`` (no ``agent.py``) is the
+        legacy YAML-manifest format, removed in v0.17.5.  Such directories
+        emit a ``DeprecationWarning`` and are skipped.
+        """
         py_file = agent_dir / "agent.py"
         yaml_file = agent_dir / "agent.yaml"
 
@@ -215,12 +193,22 @@ class AgentRegistry:
             self._load_python_agent(
                 agent_dir, py_file, yaml_file if yaml_file.exists() else None
             )
-        elif yaml_file.exists():
-            self._load_manifest_agent(agent_dir, yaml_file)
-        else:
-            logger.warning(
-                "registry: No agent.py or agent.yaml in %s, skipping", agent_dir
+            return
+
+        if yaml_file.exists():
+            warnings.warn(
+                f"YAML manifest agents are no longer supported. "
+                f"Convert {agent_dir}/agent.yaml to agent.py "
+                f"(see https://amd-gaia.ai/guides/custom-agent). Skipping.",
+                DeprecationWarning,
+                stacklevel=2,
             )
+            logger.warning(
+                "registry: skipping YAML-only agent at %s (deprecated)", agent_dir
+            )
+            return
+
+        logger.warning("registry: No agent.py in %s, skipping", agent_dir)
 
     # ------------------------------------------------------------------
     # Python agent loading
@@ -269,14 +257,35 @@ class AgentRegistry:
         agent_desc = getattr(agent_class, "AGENT_DESCRIPTION", "")
         starters = getattr(agent_class, "CONVERSATION_STARTERS", [])
 
-        # Read optional companion YAML for models/mcp_servers metadata
+        # Read optional companion YAML for `models:` metadata.  Anything outside
+        # `models:` is a manifest leftover and should be migrated into agent.py.
         models: List[str] = []
         if yaml_file:
             try:
                 with open(yaml_file, encoding="utf-8") as f:
                     yaml_data = yaml.safe_load(f)
-                if yaml_data:
-                    models = yaml_data.get("models", [])
+                if isinstance(yaml_data, dict):
+                    leftover = _MANIFEST_FINGERPRINT_KEYS & yaml_data.keys()
+                    if leftover:
+                        warnings.warn(
+                            f"{yaml_file}: manifest-style keys "
+                            f"{sorted(leftover)} are ignored; only `models:` is "
+                            "read from the companion YAML. Move these into "
+                            "agent.py "
+                            "(see https://amd-gaia.ai/guides/custom-agent).",
+                            DeprecationWarning,
+                            stacklevel=2,
+                        )
+                    raw_models = yaml_data.get("models")
+                    if isinstance(raw_models, list):
+                        models = [m for m in raw_models if isinstance(m, str)]
+                    elif raw_models is not None:
+                        logger.warning(
+                            "registry: companion YAML %s: 'models' must be a "
+                            "list of strings, got %s — ignoring",
+                            yaml_file,
+                            type(raw_models).__name__,
+                        )
             except Exception as e:
                 logger.warning(
                     "registry: Could not read companion YAML %s: %s", yaml_file, e
@@ -306,193 +315,19 @@ class AgentRegistry:
         )
 
     # ------------------------------------------------------------------
-    # YAML manifest agent loading
+    # Runtime registration helper
     # ------------------------------------------------------------------
-
-    def _load_manifest_agent(self, agent_dir: Path, yaml_file: Path) -> None:
-        """Load a YAML manifest agent and create a dynamic class via ``type()``."""
-        logger.info("registry: Loading YAML manifest from %s", yaml_file)
-
-        max_size = 1_048_576  # 1 MB
-        if yaml_file.stat().st_size > max_size:
-            raise ValueError(
-                f"Agent manifest too large ({yaml_file.stat().st_size} bytes > {max_size}): {yaml_file}"
-            )
-
-        with open(yaml_file, encoding="utf-8") as f:
-            raw = yaml.safe_load(f)
-
-        manifest = AgentManifest(**raw)
-
-        agent_class = self._create_manifest_agent_class(manifest, agent_dir)
-
-        klass = agent_class
-
-        def manifest_factory(klass=klass, **kwargs):
-            return klass(**kwargs)  # pylint: disable=abstract-class-instantiated
-
-        self._register(
-            AgentRegistration(
-                id=manifest.id,
-                name=manifest.name,
-                description=manifest.description,
-                source="custom_manifest",
-                conversation_starters=manifest.conversation_starters,
-                factory=manifest_factory,
-                agent_dir=agent_dir,
-                models=manifest.models,
-            )
-        )
-        logger.info(
-            "registry: Registered manifest agent: %s (%s) with tools: %s",
-            manifest.id,
-            manifest.name,
-            manifest.tools,
-        )
-
-    def _create_manifest_agent_class(self, manifest: AgentManifest, agent_dir: Path):
-        """Build a dynamic Agent subclass from a YAML manifest."""
-        from gaia.agents.base.agent import Agent as BaseAgent
-        from gaia.mcp.mixin import MCPClientMixin
-
-        # Build MRO: Agent + tool mixins + MCPClientMixin
-        bases: list = [BaseAgent]
-        for tool_name in manifest.tools:
-            if tool_name not in KNOWN_TOOLS:
-                continue
-            module_path, class_name = KNOWN_TOOLS[tool_name]
-            try:
-                mod = importlib.import_module(module_path)
-                mixin_class = getattr(mod, class_name)
-                bases.append(mixin_class)
-            except Exception as e:
-                logger.warning(
-                    "registry: Could not load tool mixin %s: %s", tool_name, e
-                )
-        if manifest.mcp_servers:
-            bases.append(MCPClientMixin)
-
-        # Write merged MCP config to agent_dir for this agent's use
-        merged_config_path = self._write_merged_mcp_config(manifest, agent_dir)
-
-        # Capture manifest data for closures
-        manifest_id = manifest.id
-        instructions = manifest.instructions
-        merged_config_path_str = str(merged_config_path) if merged_config_path else None
-        tool_names = list(manifest.tools)
-
-        dyn_class_name = (
-            "".join(w.capitalize() for w in manifest.name.split()) + "Agent"
-        )
-
-        def _get_system_prompt(_):
-            return instructions
-
-        def _register_tools(self_inner):
-            from gaia.agents.base.tools import _TOOL_REGISTRY
-
-            _TOOL_REGISTRY.clear()
-            for t_name in tool_names:
-                register_method = f"register_{t_name}_tools"
-                if hasattr(self_inner, register_method):
-                    getattr(self_inner, register_method)()
-                else:
-                    logger.warning(
-                        "registry: manifest agent '%s' requests tool '%s' but "
-                        "no %s() method found — tool will be unavailable",
-                        manifest_id,
-                        t_name,
-                        register_method,
-                    )
-            # Load MCP tools after Python tools so they aren't wiped by the clear above.
-            # Load MCP tools last so they survive the TOOL_REGISTRY.clear() above.
-            if getattr(self_inner, "_mcp_manager", None) is not None:
-                self_inner.load_mcp_servers_from_config()
-
-        def _create_console(_):
-            from gaia.agents.base.console import AgentConsole
-
-            return AgentConsole()
-
-        # Build the class without __init__ first so agent_class is defined before
-        # the __init__ closure captures it (avoids forward-reference fragility).
-        agent_class = type(
-            dyn_class_name,
-            tuple(bases),
-            {
-                "_get_system_prompt": _get_system_prompt,
-                "_register_tools": _register_tools,
-                "_create_console": _create_console,
-                "AGENT_ID": manifest.id,
-                "AGENT_NAME": manifest.name,
-                "AGENT_DESCRIPTION": manifest.description,
-                "CONVERSATION_STARTERS": manifest.conversation_starters,
-            },
-        )
-
-        # Define __init__ after agent_class exists so super(agent_class, ...) is safe.
-        # Manually initialize _mcp_manager BEFORE super().__init__() because
-        # Agent.__init__ calls _register_tools() which may reference
-        # self._mcp_manager.  MCPClientMixin.__init__ is never called implicitly
-        # here (Agent.__init__ doesn't propagate super() through the full MRO),
-        # so we set up the manager directly.
-        def __init__(self_inner, _cls=agent_class, **kwargs):
-            if merged_config_path_str:
-                try:
-                    from gaia.mcp.client.config import MCPConfig
-                    from gaia.mcp.client.mcp_client_manager import MCPClientManager
-
-                    mcp_config = MCPConfig(config_file=merged_config_path_str)
-                    self_inner._mcp_manager = MCPClientManager(config=mcp_config)
-                    # Do NOT call load_mcp_servers_from_config here — super().__init__()
-                    # triggers _register_tools() which clears _TOOL_REGISTRY and then
-                    # re-loads MCP tools at the end.  Loading here would be wiped.
-                except Exception as _mcp_err:
-                    logger.warning(
-                        "registry: MCP init failed for %s: %s", _cls.__name__, _mcp_err
-                    )
-                    self_inner._mcp_manager = None
-            super(_cls, self_inner).__init__(**kwargs)
-
-        agent_class.__init__ = __init__
-        return agent_class
-
-    # ------------------------------------------------------------------
-    # MCP config merging
-    # ------------------------------------------------------------------
-
-    def _write_merged_mcp_config(
-        self, manifest: AgentManifest, agent_dir: Path
-    ) -> Optional[Path]:
-        """Merge manifest mcp_servers with global config, write to agent_dir."""
-        if not manifest.mcp_servers:
-            return None
-
-        try:
-            from gaia.mcp.client.config import MCPConfig
-
-            global_config = MCPConfig()
-            global_servers = global_config.get_servers()
-            # Manifest wins on conflicts (additive merge)
-            merged = {**global_servers, **manifest.mcp_servers}
-            config_path = agent_dir / "mcp_servers.json"
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump({"mcpServers": merged}, f, indent=2)
-            return config_path
-        except Exception as e:
-            logger.warning("registry: Could not write merged MCP config: %s", e)
-            return None
 
     def register_from_dir(self, agent_dir: Path) -> None:
         """Load a single agent directory and register it at runtime.
 
         Used by BuilderAgent's ``create_agent`` tool so a newly written
-        manifest is immediately available without a server restart.
+        ``agent.py`` is immediately available without a server restart.
 
         Args:
-            agent_dir: Path to the agent directory (must contain agent.py or
-                agent.yaml).  Must be located under ``~/.gaia/agents/`` to
-                prevent loading code from arbitrary filesystem locations.
+            agent_dir: Path to the agent directory (must contain ``agent.py``).
+                Must be located under ``~/.gaia/agents/`` to prevent loading
+                code from arbitrary filesystem locations.
         """
         agent_dir = Path(agent_dir).resolve()
         agents_root = (Path.home() / ".gaia" / "agents").resolve()

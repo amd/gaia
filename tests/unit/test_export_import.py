@@ -435,3 +435,85 @@ def test_wrong_format_version(tmp_path, fake_home):
     )
     with pytest.raises(ValueError, match="format_version"):
         import_agent_bundle(bundle)
+
+
+# ---------------------------------------------------------------------------
+# 15. Legacy YAML-only bundle (#912)
+# ---------------------------------------------------------------------------
+
+
+def test_import_yaml_only_bundle_surfaces_migration_error(
+    tmp_path, fake_home, agents_root
+):
+    """A v0.17.4 bundle with only ``agent.yaml`` must surface a clear
+    migration message rather than silently importing an unloadable agent.
+    """
+    bundle = tmp_path / "legacy.zip"
+    _write_bundle(
+        bundle,
+        manifest={
+            "format_version": BUNDLE_FORMAT_VERSION,
+            "exported_at": "2026-04-17T00:00:00Z",
+            "gaia_version": "0.17.4",
+            "agent_ids": ["legacy-bot"],
+        },
+        files={
+            "legacy-bot/agent.yaml": (
+                b"manifest_version: 1\nid: legacy-bot\nname: Legacy Bot\n"
+                b"tools:\n  - rag\n"
+            ),
+        },
+    )
+
+    result = import_agent_bundle(bundle)
+
+    assert "legacy-bot" not in result.imported
+    assert result.errors, "expected a migration error for the YAML-only entry"
+    err = " ".join(result.errors)
+    assert "legacy-bot" in err
+    assert "agent.py" in err
+    # The YAML-only directory must NOT have been moved into the agents root.
+    assert not (agents_root / "legacy-bot").exists()
+
+
+def test_import_bundle_dir_with_no_agent_py_surfaces_error(
+    tmp_path, fake_home, agents_root
+):
+    """A bundle whose entry directory contains neither agent.py nor
+    agent.yaml must surface an actionable error rather than silently
+    moving an unloadable directory into the agents root."""
+    bundle = tmp_path / "no-py.zip"
+    _write_bundle(
+        bundle,
+        manifest={
+            "format_version": BUNDLE_FORMAT_VERSION,
+            "exported_at": "2026-04-17T00:00:00Z",
+            "gaia_version": "0.17.5",
+            "agent_ids": ["no-py-bot"],
+        },
+        files={"no-py-bot/README.md": b"# orphan\n"},
+    )
+
+    result = import_agent_bundle(bundle)
+
+    assert "no-py-bot" not in result.imported
+    assert any(
+        "no-py-bot" in e and "agent.py" in e for e in result.errors
+    ), f"expected migration error mentioning agent.py, got: {result.errors}"
+    assert not (agents_root / "no-py-bot").exists()
+
+
+def test_export_skips_yaml_only_dirs(tmp_path, fake_home, agents_root):
+    """Export should ignore legacy YAML-only directories silently rather
+    than emitting a bundle the importer would reject."""
+    py_dir = agents_root / "py-bot"
+    py_dir.mkdir()
+    (py_dir / "agent.py").write_text("# python\n")
+
+    yaml_dir = agents_root / "yaml-bot"
+    yaml_dir.mkdir()
+    (yaml_dir / "agent.yaml").write_text("id: yaml-bot\nname: YAML Bot\n")
+
+    out = tmp_path / "export.zip"
+    result = export_custom_agents(out)
+    assert result.agent_ids == ["py-bot"]

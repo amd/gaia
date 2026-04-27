@@ -3,7 +3,7 @@
 
 """Pydantic models for GAIA Agent UI API."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -115,7 +115,7 @@ class AgentInfo(BaseModel):
     id: str
     name: str
     description: str
-    source: str  # "builtin" | "custom_python" | "custom_manifest"
+    source: Literal["builtin", "custom_python"]
     conversation_starters: List[str] = Field(default_factory=list)
     models: List[str] = Field(default_factory=list)
 

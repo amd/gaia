@@ -55,8 +55,8 @@ For full control — custom tools, built-in tool mixins, MCP servers, or complex
 ```
 ~/.gaia/agents/
 └── my-agent/
-    ├── agent.py          # required
-    └── agent.yaml        # optional — used only for the `models` field
+    ├── agent.py          # required — defines the Agent subclass
+    └── agent.yaml        # optional sidecar — only the `models:` list is read
 ```
 
 ### Minimal Python agent
@@ -121,7 +121,82 @@ def __init__(self, **kwargs):
     super().__init__(**kwargs)
 ```
 
-Alternatively, create a companion `agent.yaml` next to `agent.py` with a `models:` list — the registry reads that list as an ordered preference.
+Alternatively, create a companion `agent.yaml` next to `agent.py` with a `models:` list — the registry reads that list as an ordered preference. The sidecar is intentionally limited to `models:`; any other top-level key (`tools`, `instructions`, `mcp_servers`, `id`, `manifest_version`) is a leftover from the legacy YAML manifest format and is ignored with a deprecation warning.
+
+---
+
+## Migrating from a YAML Manifest
+
+<Warning>
+  **Removed in v0.17.5:** YAML manifest agents (a directory containing only `agent.yaml`, no `agent.py`) are no longer loaded. The registry emits a `DeprecationWarning` per such directory and skips it. Convert each manifest to `agent.py` using the table below or scaffold a fresh agent with the [Gaia Builder Agent](#quick-start-gaia-builder-agent).
+</Warning>
+
+Manifest fields map to Python class attributes and base classes:
+
+| YAML manifest field | Python equivalent in `agent.py` |
+|---|---|
+| `id: my-bot` | `AGENT_ID = "my-bot"` |
+| `name: My Bot` | `AGENT_NAME = "My Bot"` |
+| `description: ...` | `AGENT_DESCRIPTION = "..."` |
+| `instructions: ...` | Return the string from `_get_system_prompt()` |
+| `tools: [rag, file_search]` | Inherit `RAGToolsMixin`, `FileSearchToolsMixin`; call `self.register_rag_tools()` etc. from `_register_tools()` |
+| `conversation_starters: [...]` | `CONVERSATION_STARTERS = [...]` |
+| `mcp_servers: { ... }` | Inherit `MCPClientMixin` and load servers from a `mcp_servers.json` written next to `agent.py` (see the BuilderAgent MCP template) |
+| `models: [...]` | Either `kwargs.setdefault("model_id", "...")` in `__init__()` **or** keep a sidecar `agent.yaml` with `models:` only |
+
+### Example conversion
+
+```yaml
+# agent.yaml — old manifest (no longer loaded in v0.17.5)
+manifest_version: 1
+id: research-bot
+name: Research Bot
+description: Searches documents and files
+instructions: |
+  You are a thorough research assistant. Cite sources.
+tools:
+  - rag
+  - file_search
+conversation_starters:
+  - Summarize my project notes
+models:
+  - Qwen3.5-35B-A3B-GGUF
+```
+
+becomes
+
+```python
+# agent.py — equivalent Python agent
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
+from gaia.agents.tools.file_tools import FileSearchToolsMixin
+
+
+class ResearchBot(Agent, RAGToolsMixin, FileSearchToolsMixin):
+    AGENT_ID = "research-bot"
+    AGENT_NAME = "Research Bot"
+    AGENT_DESCRIPTION = "Searches documents and files"
+    CONVERSATION_STARTERS = ["Summarize my project notes"]
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("model_id", "Qwen3.5-35B-A3B-GGUF")
+        super().__init__(**kwargs)
+
+    def _get_system_prompt(self) -> str:
+        return "You are a thorough research assistant. Cite sources."
+
+    def _create_console(self) -> AgentConsole:
+        return AgentConsole()
+
+    def _register_tools(self) -> None:
+        _TOOL_REGISTRY.clear()
+        self.register_rag_tools()
+        self.register_file_search_tools()
+```
+
+If you used a manifest with `mcp_servers:`, the BuilderAgent's MCP template emits the equivalent Python wiring — run `gaia chat --ui`, click **+** in the chat footer, and choose **Build a Custom Agent** with MCP enabled to scaffold a working starting point.
 
 ---
 
