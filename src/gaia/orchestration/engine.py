@@ -45,6 +45,12 @@ from gaia.orchestration.models import (
     ObjectiveStatus,
     ProjectObjectives,
 )
+from gaia.orchestration.supervisor import (
+    ObjectiveOutcome,
+    ProjectSupervisor,
+    SupervisorConfig,
+    Verdict,
+)
 
 logger = get_logger(__name__)
 
@@ -68,6 +74,8 @@ class OrchestratorConfig:
         enable_evaluation: Whether to run post-execution evaluation (default: False)
         max_cycle_iterations: Maximum dispatch-evaluate cycles before stopping
         enable_nexus: Whether to integrate with NexusService
+        enable_supervisor: Whether to enable ProjectSupervisor governance
+        supervisor_config: Custom SupervisorConfig (defaults used if None)
     """
 
     objectives_path: str = ".gaia/objectives.yaml"
@@ -76,6 +84,8 @@ class OrchestratorConfig:
     enable_evaluation: bool = False
     max_cycle_iterations: int = 100
     enable_nexus: bool = True
+    enable_supervisor: bool = False
+    supervisor_config: Optional[SupervisorConfig] = None
 
 
 @dataclass
@@ -160,6 +170,14 @@ class ProjectOrchestrator:
         # NexusService
         self._nexus: Optional[NexusService] = None
 
+        # ProjectSupervisor (optional governance layer)
+        self._supervisor: Optional[ProjectSupervisor] = None
+        if self._config.enable_supervisor:
+            self._supervisor = ProjectSupervisor(
+                config=self._config.supervisor_config
+            )
+            logger.info("ProjectSupervisor enabled")
+
         logger.info(
             "ProjectOrchestrator initialized",
             extra={
@@ -188,6 +206,11 @@ class ProjectOrchestrator:
     def project(self) -> Optional[ProjectObjectives]:
         """Get the loaded project objectives."""
         return self._project
+
+    @property
+    def supervisor(self) -> Optional[ProjectSupervisor]:
+        """Get the supervisor if enabled."""
+        return self._supervisor
 
     # -----------------------------------------------------------------------
     # Git integration
@@ -383,6 +406,40 @@ class ProjectOrchestrator:
             # Record cycle
             self._state.record_cycle(objective.objective_id, result.success)
 
+            # Supervisor evaluation (if enabled)
+            if self._supervisor is not None:
+                try:
+                    outcome = ObjectiveOutcome(
+                        objective_id=objective.objective_id,
+                        success=result.success,
+                        quality_score=result.quality_score,
+                        phase=objective.phase,
+                        error_message=result.error_message,
+                    )
+                    verdict = self._supervisor.evaluate_cycle(
+                        outcome=outcome,
+                        project=self._project,
+                        dep_graph=self._dep_graph,
+                    )
+                    if verdict == Verdict.ABORT:
+                        logger.error(
+                            f"Supervisor ABORT: {self._supervisor.state.aborted_reason}"
+                        )
+                        break
+                    elif verdict == Verdict.PAUSE:
+                        logger.warning(
+                            f"Supervisor PAUSE: {self._supervisor.state.paused_reason}"
+                        )
+                        self._state.paused = True
+                        await self._wait_for_resume()
+                        continue
+                    elif verdict == Verdict.REMEDIATE:
+                        logger.warning(
+                            f"Supervisor REMEDIATE: quality trend declining"
+                        )
+                except Exception as e:
+                    logger.error(f"Supervisor evaluation failed: {e}")
+
             # Check for circular dependency issues
             cycles = self._dep_graph.detect_cycles()
             if cycles:
@@ -405,6 +462,33 @@ class ProjectOrchestrator:
                 CYCLE_COMPLETE,
                 self._build_hook_context(CYCLE_COMPLETE, objective),
             )
+
+            # Phase completion check (if supervisor is enabled)
+            if self._supervisor is not None:
+                completed_phases = set()
+                for o in self._project.objectives:
+                    if o.status in (
+                        ObjectiveStatus.COMPLETED,
+                        ObjectiveStatus.CANCELLED,
+                    ):
+                        completed_phases.add(o.phase)
+
+                # Check each unique phase for completion
+                unique_phases = list(
+                    {o.phase for o in self._project.objectives if o.phase}
+                )
+                for phase in unique_phases:
+                    if self._supervisor.check_phase_completion(
+                        self._project, phase
+                    ):
+                        await self._hook_executor.execute_hooks(
+                            PHASE_COMPLETE,
+                            HookContext(
+                                event=PHASE_COMPLETE,
+                                pipeline_id=f"orchestrator-{self._project.project_id}",
+                                phase=phase,
+                            ),
+                        )
 
             self._commit_event(
                 "cycle_complete",

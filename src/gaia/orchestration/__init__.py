@@ -27,6 +27,13 @@ from gaia.orchestration.hooks import (
     ObjectiveUpdateHook,
     TaskSpawnHook,
 )
+from gaia.orchestration.supervisor import (
+    HealthScore,
+    ObjectiveOutcome,
+    ProjectSupervisor,
+    SupervisorConfig,
+    Verdict,
+)
 
 __all__ = [
     "Artifact",
@@ -38,6 +45,11 @@ __all__ = [
     "ProjectOrchestrator",
     "ObjectiveUpdateHook",
     "TaskSpawnHook",
+    "HealthScore",
+    "ObjectiveOutcome",
+    "ProjectSupervisor",
+    "SupervisorConfig",
+    "Verdict",
 ]
 
 __version__ = "1.0.0"
