@@ -48,6 +48,7 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "--tb=short --strict-markers"
+asyncio_mode = "auto"
 
 # UV configuration for PyTorch CPU-only builds
 # GAIA is optimized for AMD hardware and doesn't require NVIDIA/CUDA dependencies

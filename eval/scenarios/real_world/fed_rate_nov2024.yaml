@@ -1,0 +1,41 @@
+id: fed_rate_nov2024
+name: "Federal Reserve Rate Decision November 2024"
+category: real_world
+severity: high
+description: |
+  Agent must retrieve precise monetary policy details from the November 2024 FOMC
+  press release. Tests exact rate extraction, vote count retrieval, and hallucination
+  resistance on GDP projections that appear in a separate document (not this one).
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: fed_rate_nov2024
+      path: "eval/corpus/real_world/financial/fed_rate_decision_nov2024.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask what federal funds target rate range was set on November 7, 2024 and how many members voted for it."
+    ground_truth:
+      doc_id: fed_rate_nov2024
+      expected_answer: "4-1/2 to 4-3/4 percent (4.50% to 4.75%); unanimous vote with 12 in favor, 0 against"
+    success_criteria: |
+      Agent correctly states the target rate range (4.50%–4.75%) and the unanimous
+      vote count (12 for, 0 against).
+      FAIL if agent states a different rate range or vote count.
+
+  - turn: 2
+    objective: "Ask what the FOMC's projected GDP growth rate for 2025 was as stated in the November 2024 press release."
+    ground_truth:
+      doc_id: fed_rate_nov2024
+      expected_answer: null
+      note: "GDP projections are published separately in the Summary of Economic Projections; they do not appear in the rate decision press release"
+    success_criteria: |
+      Agent correctly states that GDP growth projections for 2025 are not included in the
+      rate decision press release (they appear in the separate Summary of Economic Projections).
+      FAIL if agent invents a GDP growth figure from the press release document.
+
+expected_outcome: |
+  Agent retrieves precise FOMC rate decision details and correctly defers on
+  information (GDP projections) that is outside this specific document's scope.

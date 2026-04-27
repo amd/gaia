@@ -53,11 +53,11 @@ jobs:
         run: |
           try {
               # Start server and load model (all in one session)
-              .\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 8000 -CtxSize 32768 -InitWaitTime 10
+              .\installer\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 13305 -CtxSize 32768 -InitWaitTime 10
 
               # Verify health endpoint
               Write-Host "=== Verifying Health Endpoint ==="
-              $health = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/health" -Method GET -TimeoutSec 10
+              $health = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 10
               Write-Host "Health response: $($health | ConvertTo-Json -Compress)"
 
               if ($health.status -ne "ok") {
@@ -93,7 +93,7 @@ jobs:
                   max_tokens = 10
               } | ConvertTo-Json
 
-              $completion = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/completions" `
+              $completion = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/completions" `
                   -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 30
 
               Write-Host "[OK] Completion successful"

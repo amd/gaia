@@ -226,7 +226,7 @@ class Context7RateLimiter:
             try:
                 open_until = datetime.fromisoformat(self.state.circuit_open_until)
                 if datetime.now() < open_until:
-                    remaining = (open_until - datetime.now()).seconds
+                    remaining = int((open_until - datetime.now()).total_seconds())
                     return False, f"Circuit breaker open. Retry in {remaining}s"
                 else:
                     # Circuit recovered

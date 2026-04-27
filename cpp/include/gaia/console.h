@@ -61,6 +61,16 @@ public:
     virtual void printToolInfo(const std::string& /*name*/, const std::string& /*params*/,
                                const std::string& /*description*/) {}
     virtual void printDecisionMenu(const std::vector<Decision>& /*decisions*/) {}
+
+    // === Streaming Methods (default no-op) ===
+
+    /// Called for each token as it arrives during streaming inference.
+    /// TerminalConsole prints immediately; SilentConsole is a no-op.
+    virtual void printStreamToken(const std::string& /*token*/) {}
+
+    /// Called once after the streaming response completes.
+    /// TerminalConsole prints a trailing newline.
+    virtual void printStreamEnd() {}
 };
 
 /// Terminal console with ANSI color output.
@@ -88,6 +98,8 @@ public:
     void printSeparator(int length = 50) override;
     void printToolInfo(const std::string& name, const std::string& params,
                        const std::string& description) override;
+    void printStreamToken(const std::string& token) override;
+    void printStreamEnd() override;
 
 private:
     // ANSI color codes

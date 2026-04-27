@@ -228,11 +228,11 @@ class Evaluator:
             "threshold": results["metadata"]["similarity_threshold"],
             "num_questions": len(qa_results),
             "similarity_scores": {
-                "mean": float(np.mean(similarities)),
-                "median": float(np.median(similarities)),
-                "std": float(np.std(similarities)),
-                "min": float(np.min(similarities)),
-                "max": float(np.max(similarities)),
+                "mean": float(np.mean(similarities)) if similarities else 0.0,
+                "median": float(np.median(similarities)) if similarities else 0.0,
+                "std": float(np.std(similarities)) if similarities else 0.0,
+                "min": float(np.min(similarities)) if similarities else 0.0,
+                "max": float(np.max(similarities)) if similarities else 0.0,
             },
             "threshold_metrics": {
                 "num_passed": passed_questions,
@@ -457,12 +457,14 @@ class Evaluator:
                     usage = response_data["usage"]
                     cost = response_data["cost"]
 
-                    if isinstance(response, list):
+                    if isinstance(response, list) and response:
                         response_text = (
                             response[0].text
                             if hasattr(response[0], "text")
                             else str(response[0])
                         )
+                    elif isinstance(response, list):
+                        response_text = ""
                     else:
                         response_text = (
                             response.text
@@ -648,11 +650,11 @@ class Evaluator:
                 Accuracy: {accuracy * 100:.1f}%
 
                 Similarity statistics:
-                - Mean: {np.mean(calculated_similarities):.3f}
-                - Median: {np.median(calculated_similarities):.3f}
-                - Min: {np.min(calculated_similarities):.3f}
-                - Max: {np.max(calculated_similarities):.3f}
-                - Standard Deviation: {np.std(calculated_similarities):.3f}
+                - Mean: {(np.mean(calculated_similarities) if calculated_similarities else 0.0):.3f}
+                - Median: {(np.median(calculated_similarities) if calculated_similarities else 0.0):.3f}
+                - Min: {(np.min(calculated_similarities) if calculated_similarities else 0.0):.3f}
+                - Max: {(np.max(calculated_similarities) if calculated_similarities else 0.0):.3f}
+                - Standard Deviation: {(np.std(calculated_similarities) if calculated_similarities else 0.0):.3f}
 
                 Individual analyses: {json.dumps(analysis['per_question'], indent=2)}
 
@@ -702,12 +704,14 @@ class Evaluator:
                 overall_usage = overall_response_data["usage"]
                 overall_cost = overall_response_data["cost"]
 
-                if isinstance(overall_response, list):
+                if isinstance(overall_response, list) and overall_response:
                     response_text = (
                         overall_response[0].text
                         if hasattr(overall_response[0], "text")
                         else str(overall_response[0])
                     )
+                elif isinstance(overall_response, list):
+                    response_text = ""
                 else:
                     response_text = (
                         overall_response.text
@@ -1288,12 +1292,14 @@ class Evaluator:
                     cost = response_data["cost"]
 
                     # Extract text from response
-                    if isinstance(response, list):
+                    if isinstance(response, list) and response:
                         response_text = (
                             response[0].text
                             if hasattr(response[0], "text")
                             else str(response[0])
                         )
+                    elif isinstance(response, list):
+                        response_text = ""
                     else:
                         response_text = (
                             response.text
@@ -1554,6 +1560,12 @@ class Evaluator:
                 else:
                     self.log.warning("No summaries found for analysis")
                     overall_rating = "unknown"
+                # Skip LLM overall analysis when there are no valid summaries
+                analysis["overall_rating"] = overall_rating
+                analysis["overall_analysis"] = (
+                    "No valid summaries available for analysis."
+                )
+                return analysis
             elif excellent_count >= total_summaries * 0.7:
                 overall_rating = "excellent"
             elif (excellent_count + good_count) >= total_summaries * 0.7:
@@ -1624,12 +1636,14 @@ class Evaluator:
                 overall_usage = overall_response_data["usage"]
                 overall_cost = overall_response_data["cost"]
 
-                if isinstance(overall_response, list):
+                if isinstance(overall_response, list) and overall_response:
                     response_text = (
                         overall_response[0].text
                         if hasattr(overall_response[0], "text")
                         else str(overall_response[0])
                     )
+                elif isinstance(overall_response, list):
+                    response_text = ""
                 else:
                     response_text = (
                         overall_response.text
@@ -2709,7 +2723,8 @@ class Evaluator:
                 "poor": "Poor",
                 "unknown": "Unknown",
             }
-            rating = rating_map.get(model["rating"], model["rating"].title())
+            model_rating = model["rating"] or "unknown"
+            rating = rating_map.get(model_rating, model_rating.title())
 
             table_rows.append(
                 f"| **{model['name']}** | {excellent_rate:.0f}% | {excellent_count}/{total_summaries} | {good_count} | {fair_count} | {poor_count} | {rating} |"
@@ -3084,7 +3099,8 @@ Performance ranking: {ranking_text}
                 "poor": "Poor",
                 "unknown": "Unknown",
             }
-            rating = rating_map.get(model["rating"], model["rating"].title())
+            model_rating = model["rating"] or "unknown"
+            rating = rating_map.get(model_rating, model_rating.title())
             table_rows.append(
                 f"| **{model['name']}** | {model['pass_rate']:.0%} | {model['mean_similarity']:.3f} | {model['std_similarity']:.3f} | {rating} |"
             )
@@ -3112,17 +3128,12 @@ Performance ranking: {ranking_text}
             )
             # Add specific issues from analysis
             for model in accuracy_issues[:3]:  # Limit to top 3 worst performers
-                if (
-                    "jurisdictional" in model["analysis"].lower()
-                    or "confusion" in model["analysis"].lower()
-                ):
+                analysis_text = (model["analysis"] or "").lower()
+                if "jurisdictional" in analysis_text or "confusion" in analysis_text:
                     failure_patterns.append(
                         f"- **{model['name']}**: Jurisdictional confusion (US vs Canadian regulations)"
                     )
-                if (
-                    "incorrect" in model["analysis"].lower()
-                    or "wrong" in model["analysis"].lower()
-                ):
+                if "incorrect" in analysis_text or "wrong" in analysis_text:
                     failure_patterns.append(
                         f"- **{model['name']}**: Incorrect core values, wrong regulatory stages"
                     )
@@ -3278,20 +3289,25 @@ if __name__ == "__main__":
         # Print metrics if available
         metrics = overall_rating.get("metrics", {})
         if metrics:
+
+            def _fmt(val, spec=".3f"):
+                """Format a numeric value or return 'N/A' for missing data."""
+                if val is None or val == "N/A":
+                    return "N/A"
+                return f"{val:{spec}}"
+
             print("\nMetrics:")
             print(f"Number of questions: {metrics.get('num_questions', 'N/A')}")
-            print(
-                f"Similarity threshold: {metrics.get('similarity_threshold', 'N/A'):.3f}"
-            )
-            print(f"Pass rate: {metrics.get('pass_rate', 'N/A'):.3f}")
+            print(f"Similarity threshold: {_fmt(metrics.get('similarity_threshold'))}")
+            print(f"Pass rate: {_fmt(metrics.get('pass_rate'))}")
             print(f"Passed threshold: {metrics.get('num_passed', 'N/A')}")
             print(f"Failed threshold: {metrics.get('num_failed', 'N/A')}")
             print("\nSimilarity Statistics:")
-            print(f"Mean: {metrics.get('mean_similarity', 'N/A'):.3f}")
-            print(f"Median: {metrics.get('median_similarity', 'N/A'):.3f}")
-            print(f"Min: {metrics.get('min_similarity', 'N/A'):.3f}")
-            print(f"Max: {metrics.get('max_similarity', 'N/A'):.3f}")
-            print(f"Standard deviation: {metrics.get('std_similarity', 'N/A'):.3f}")
+            print(f"Mean: {_fmt(metrics.get('mean_similarity'))}")
+            print(f"Median: {_fmt(metrics.get('median_similarity'))}")
+            print(f"Min: {_fmt(metrics.get('min_similarity'))}")
+            print(f"Max: {_fmt(metrics.get('max_similarity'))}")
+            print(f"Standard deviation: {_fmt(metrics.get('std_similarity'))}")
 
         print("\nAnalysis:", evaluation_data.get("overall_analysis", "N/A"))
 

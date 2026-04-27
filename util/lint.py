@@ -39,7 +39,8 @@ PYLINT_CONFIG = ".pylintrc"
 # R0401: Cyclic import
 # E0401: Import error (handled separately)
 # W0718: Broad exception
-DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718"
+# W0212: Protected access (common in intra-package imports of _helper functions)
+DISABLED_CHECKS = "C0103,C0301,W0246,W0221,E1102,R0401,E0401,W0718,W0212"
 EXCLUDE_DIRS = (
     ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
 )
@@ -67,6 +68,7 @@ def uvx(tool: str, *args: str) -> list[str]:
     """Build a uvx command for a tool (auto-downloads if not installed)."""
     # Check if uvx is available
     import shutil
+
     if shutil.which("uvx"):
         return ["uvx", tool, *args]
     else:
@@ -79,7 +81,7 @@ def check_black(fix: bool = False) -> CheckResult:
     if fix:
         print("\n[1/2] Fixing code formatting with Black...")
     else:
-        print("\n[1/8] Checking code formatting with Black...")
+        print("\n[1/9] Checking code formatting with Black...")
     print("-" * 40)
 
     if fix:
@@ -153,7 +155,7 @@ def check_isort(fix: bool = False) -> CheckResult:
     if fix:
         print("\n[2/2] Fixing import sorting with isort...")
     else:
-        print("\n[2/8] Checking import sorting with isort...")
+        print("\n[2/9] Checking import sorting with isort...")
     print("-" * 40)
 
     if fix:
@@ -198,7 +200,7 @@ def check_isort(fix: bool = False) -> CheckResult:
 
 def check_pylint() -> CheckResult:
     """Run Pylint (errors only)."""
-    print("\n[3/8] Running Pylint (errors only)...")
+    print("\n[3/9] Running Pylint (errors only)...")
     print("-" * 40)
 
     cmd = uvx(
@@ -223,7 +225,7 @@ def check_pylint() -> CheckResult:
 
 def check_flake8() -> CheckResult:
     """Run Flake8."""
-    print("\n[4/8] Running Flake8...")
+    print("\n[4/9] Running Flake8...")
     print("-" * 40)
 
     cmd = uvx(
@@ -256,7 +258,7 @@ def check_flake8() -> CheckResult:
 
 def check_mypy() -> CheckResult:
     """Run MyPy type checking (warning only)."""
-    print("\n[5/8] Running MyPy type checking (warning only)...")
+    print("\n[5/9] Running MyPy type checking (warning only)...")
     print("-" * 40)
 
     cmd = uvx("mypy", SRC_DIR, "--ignore-missing-imports")
@@ -283,7 +285,7 @@ def check_mypy() -> CheckResult:
 
 def check_bandit() -> CheckResult:
     """Run Bandit security check (warning only)."""
-    print("\n[6/8] Running security check with Bandit (warning only)...")
+    print("\n[6/9] Running security check with Bandit (warning only)...")
     print("-" * 40)
 
     cmd = uvx("bandit", "-r", SRC_DIR, "-ll", "--exclude", EXCLUDE_DIRS)
@@ -309,7 +311,7 @@ def check_bandit() -> CheckResult:
 
 def check_imports() -> CheckResult:
     """Test comprehensive SDK imports."""
-    print("\n[7/8] Testing comprehensive SDK imports...")
+    print("\n[7/9] Testing comprehensive SDK imports...")
     print("-" * 40)
 
     # Pre-check: verify gaia is installed
@@ -333,12 +335,12 @@ def check_imports() -> CheckResult:
         ("from", "gaia.llm", "VLMClient", "Vision LLM client", False),
         ("from", "gaia.llm", "create_client", "LLM factory", False),
         ("from", "gaia.llm", "NotSupportedError", "LLM exception", False),
-        # Chat SDK
-        ("import", "gaia.chat.sdk", "Chat SDK module", False),
-        ("from", "gaia.chat.sdk", "ChatSDK", "Chat SDK class", False),
-        ("from", "gaia.chat.sdk", "ChatConfig", "Chat configuration", False),
-        ("from", "gaia.chat.sdk", "ChatSession", "Chat session", False),
-        ("from", "gaia.chat.sdk", "ChatResponse", "Chat response", False),
+        # Agent SDK
+        ("import", "gaia.chat.sdk", "Agent SDK module", False),
+        ("from", "gaia.chat.sdk", "AgentSDK", "Agent SDK class", False),
+        ("from", "gaia.chat.sdk", "AgentConfig", "Agent configuration", False),
+        ("from", "gaia.chat.sdk", "AgentSession", "Agent session", False),
+        ("from", "gaia.chat.sdk", "AgentResponse", "Agent response", False),
         ("from", "gaia.chat.sdk", "quick_chat", "Quick chat function", False),
         # RAG SDK
         ("import", "gaia.rag.sdk", "RAG SDK module", False),
@@ -425,9 +427,43 @@ def check_imports() -> CheckResult:
     return CheckResult("Import Validation", True, False, 0, "")
 
 
+def check_agents() -> CheckResult:
+    """Check GAIA agent conventions — inheritance, tests, docs, registry wiring."""
+    print("\n[8/9] Checking agent conventions...")
+    print("-" * 40)
+
+    # Import lazily so the check is self-contained and testable standalone.
+    try:
+        from check_agent_conventions import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_agent_conventions import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_agent_conventions.py: {exc}")
+            return CheckResult("Agent Conventions", False, False, 1, str(exc))
+
+    errors, warnings, output = run_check()
+
+    if errors:
+        print(output)
+        print(f"\n[!] Agent convention check failed ({errors} error(s), {warnings} warning(s)).")
+        return CheckResult("Agent Conventions", False, False, errors, output)
+
+    if warnings:
+        print(output)
+        print(f"\n[WARNING] {warnings} soft warning(s) — non-blocking.")
+        return CheckResult("Agent Conventions", False, True, warnings, output)
+
+    print("[OK] All agent conventions satisfied!")
+    return CheckResult("Agent Conventions", True, False, 0, output)
+
+
 def check_doc_versions() -> CheckResult:
     """Check documentation version consistency."""
-    print("\n[8/8] Checking documentation version consistency...")
+    print("\n[9/9] Checking documentation version consistency...")
     print("-" * 40)
 
     # Import and run the check
@@ -449,8 +485,11 @@ def check_doc_versions() -> CheckResult:
 
     if exit_code != 0:
         return CheckResult(
-            "Doc Version Consistency", False, False, 1,
-            "Version mismatches found in documentation"
+            "Doc Version Consistency",
+            False,
+            False,
+            1,
+            "Version mismatches found in documentation",
         )
 
     return CheckResult("Doc Version Consistency", True, False, 0, "")
@@ -588,6 +627,11 @@ def main():
     parser.add_argument("--bandit", action="store_true", help="Run Bandit")
     parser.add_argument("--imports", action="store_true", help="Test imports")
     parser.add_argument(
+        "--agents",
+        action="store_true",
+        help="Check agent conventions (inheritance, tests, docs)",
+    )
+    parser.add_argument(
         "--doc-versions",
         action="store_true",
         help="Check doc version consistency",
@@ -608,6 +652,7 @@ def main():
             args.mypy,
             args.bandit,
             args.imports,
+            args.agents,
             args.doc_versions,
             args.all,
         ]
@@ -653,6 +698,9 @@ def main():
 
     if args.bandit or run_all:
         results.append(check_bandit())
+
+    if args.agents or run_all:
+        results.append(check_agents())
 
     if args.doc_versions or run_all:
         results.append(check_doc_versions())

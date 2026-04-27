@@ -14,7 +14,7 @@ This test validates end-to-end RAG workflows:
 - Chat SDK integration
 
 Requirements:
-- LLM server running on localhost:8000 (use: gaia docker up)
+- LLM server running on localhost:13305 (use: gaia docker up)
 - Test PDF: data/pdf/Oil-and-Gas-Activity-Operations-Manual-1-10.pdf
 - Dependencies: pip install -e .[rag]
 
@@ -232,11 +232,11 @@ def test_chat_integration():
     print("-" * 40)
 
     try:
-        from gaia.chat.sdk import ChatConfig, ChatSDK
+        from gaia.chat.sdk import AgentConfig, AgentSDK
 
         # Create chat with RAG
-        chat_config = ChatConfig(show_stats=False)
-        chat = ChatSDK(chat_config)
+        chat_config = AgentConfig(show_stats=False)
+        chat = AgentSDK(chat_config)
         print("✅ Chat SDK initialized")
 
         # Test enabling RAG
@@ -421,7 +421,7 @@ def main():
         print("\n⚠️  Some tests failed. Check the output above for details.")
         print("\nCommon issues:")
         print("  • Missing dependencies: pip install -e .[rag]")
-        print("  • LLM service not running on localhost:8000")
+        print("  • LLM service not running on localhost:13305")
         print("  • Insufficient memory for large PDF processing")
         print("  • Test PDF not found in data/pdf/ directory")
 

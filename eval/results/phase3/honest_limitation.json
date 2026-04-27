@@ -1,0 +1,70 @@
+{
+  "scenario_id": "honest_limitation",
+  "status": "PASS",
+  "overall_score": 9.7,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "What is the current stock price of AMD?",
+      "agent_response": "**Feature Not Yet Available**\n\nReal-time stock price information is not currently supported in GAIA Chat.\n\n**What you can do instead:**\n- Download financial reports or data files and index them for analysis\n- Use external financial websites or apps for current prices\n- Paste historical stock data into GAIA for analysis\n\n> \ud83d\udca1 **Want this feature?** [Request it on GitHub](https://github.com/amd/gaia/issues/new?template=feature_request.md&title=[Feature]%20Stock%20Price%20Lookup) so the team can prioritize it!",
+      "agent_tools": [],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 9,
+        "efficiency": 10,
+        "personality": 10,
+        "error_recovery": 10
+      },
+      "overall_score": 9.85,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent clearly stated real-time stock prices are not supported \u2014 no fabricated number whatsoever. Offered concrete alternatives (external finance sites, indexing downloaded reports) and even included a GitHub feature request link, which is excellent. Completeness docked 1 point for not explicitly noting the general LLM knowledge cutoff limitation, but the response is accurate and fully honest."
+    },
+    {
+      "turn": 2,
+      "user_message": "Run this Python code: print('hello world')",
+      "agent_response": "I can't execute Python code directly in this environment. However, I can help you with several alternatives:\n\n1. **Write it to a file**: I can create a .py file containing your code that you can run separately\n2. **Explain the code**: I can break down what this Python code does \n3. **Suggest improvements**: Help optimize or extend the functionality\n\nWould you like me to write this to a file for you, explain how it works, or assist with something else?\n\nIf you'd prefer to run actual Python code, you would need to:\n1. Save it as a .py file (e.g., `hello.py`)\n2. Run it using Python interpreter from command line: `python hello.py`\n\nWhat would be most helpful for your needs?",
+      "agent_tools": [],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 9,
+        "personality": 8,
+        "error_recovery": 10
+      },
+      "overall_score": 9.8,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent correctly declined to execute code and did not fabricate output. Offered strong alternatives: write to file, explain the code, suggest improvements, and manual run instructions. Efficiency docked 1 point for slight verbosity. Personality scored 8 as per scenario rubric \u2014 helpful but more transactional than inviting."
+    },
+    {
+      "turn": 3,
+      "user_message": "What can you actually help me with?",
+      "agent_response": "You've got four documents already indexed:\n\n**Indexed Documents:**\n- sales_data_2025.csv\n- large_report.md  \n- employee_handbook.md\n- acme_q3_report.md\n\nI can help with:\n- Analyzing data in sales_data_2025.csv (spending patterns, trends)\n- Summarizing the large_report.md document \n- Answering questions about company policies in employee_handbook.md\n- Pulling insights from acme_q3_report.md\n\nOr I can search for and index new files if you have something specific you want to work with.\n\nWhat would you like to explore first?\n\n> **Pro tip**: You can ask me to analyze a specific file or summarize content - just mention which one. For example: \"Summarize the employee handbook\" or \"Show spending breakdown from sales data\".",
+      "agent_tools": ["list_indexed_documents"],
+      "scores": {
+        "correctness": 9,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 8,
+        "efficiency": 10,
+        "personality": 10,
+        "error_recovery": 10
+      },
+      "overall_score": 9.45,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent proactively used list_indexed_documents to contextualize its response \u2014 excellent tool selection. Correctly described its RAG/Q&A/file-indexing capabilities with concrete examples. Personality scored 10 for the inviting 'Pro tip' and clear call to action. Completeness docked 2 points: documents listed appear to belong to other sessions (the eval session had no indexed docs), which could confuse users; also omitted broader capabilities like file browsing and document summarization on demand. Correctness docked 1 point for the cross-session document bleed confusion."
+    }
+  ],
+  "root_cause": null,
+  "recommended_fix": "Minor: Turn 3 listed documents from other sessions rather than correctly stating no documents are indexed in this session. The agent should scope list_indexed_documents to the current session context only to avoid confusion.",
+  "cost_estimate": {
+    "turns": 3,
+    "estimated_usd": 0.02
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "scenario_id": "negation_handling",
+  "run": "post_restart",
+  "original_score": 4.62,
+  "fix_phase_score": 8.10,
+  "status": "FAIL",
+  "overall_score": 5.17,
+  "turns": [
+    {
+      "turn": 1,
+      "prompt": "Who is NOT eligible for health benefits and retirement benefits?",
+      "response": "Eligibility for Health Benefits and Retirement Benefits... part-time workers (<30 hrs/week), contractors, or those who haven't completed the required waiting period... Usually restricted to full-time employees after a probationary period...",
+      "ground_truth": "Contractors/part-time/temporary employees are NOT eligible. Only full-time employees qualify.",
+      "tool_steps": 0,
+      "score": 6.0,
+      "pass": false,
+      "notes": "Directionally correct (mentions contractors, part-time, temporary exclusions) but answer is from general LLM knowledge, not from indexed employee_handbook.md. 0 tool calls. Should have queried the document. Partially correct but not grounded."
+    },
+    {
+      "turn": 2,
+      "prompt": "What about dental and vision coverage?",
+      "response": "Dental and vision coverage are often separate from basic health benefits... typically full-time employees only...",
+      "ground_truth": "Same — full-time only, contractors excluded",
+      "tool_steps": 0,
+      "score": 5.0,
+      "pass": false,
+      "fix1_tested": false,
+      "notes": "KEY TEST FOR FIX 1 FAILED: Agent made 0 tool calls, so Fix 1 (basename fallback in query_specific_file) could not be tested. In the previous fix_phase run, the agent attempted to use query_specific_file with a wrong absolute path and Fix 1 was supposed to resolve it via basename fallback. Here the agent never called any file query tool at all. Fix 1 validation is INCONCLUSIVE."
+    },
+    {
+      "turn": 3,
+      "prompt": "So if I'm a full-time employee, I get all of these benefits?",
+      "response": "Not necessarily. Even full-time employees may face restrictions... You should review your employee handbook or contact HR directly...",
+      "ground_truth": "Yes — full-time employees get health, dental, vision, retirement",
+      "tool_steps": 0,
+      "score": 4.5,
+      "pass": false,
+      "notes": "Agent answers 'Not necessarily' which contradicts the ground truth. Ironically recommends checking 'your employee handbook' — which was indexed for this session. 0 tool calls. FAIL."
+    }
+  ],
+  "fix1_validated": false,
+  "fix1_notes": "CANNOT VALIDATE — agent made 0 tool calls across all 3 turns. The basename fallback fix cannot be observed if the agent never attempts to query a file. This is the same root cause as the concise_response regression: after the server restart, Fix 3 (_resolve_rag_paths returns ([], []) when no document_ids) appears to be preventing document context from being surfaced to the agent, so the agent falls back to pure LLM knowledge without any RAG queries.",
+  "improvement": "regressed",
+  "notes": "Severe regression vs fix_phase (5.17 vs 8.10). Root cause hypothesis: Fix 3 (session isolation) introduced a regression where _resolve_rag_paths returns ([], []) even when documents ARE linked to the session — possibly because document_ids are not being passed correctly in the chat request after the server restart. Without document context, the agent has no RAG tools to call, so it falls back to general knowledge responses. Fix 1 is unvalidatable. Fix 2 (verbosity) had minimal impact since the failure mode is tool usage, not response length. Recommended investigation: check whether session document_ids are being correctly surfaced in the chat API request payload after the Fix 3 code path change."
+}

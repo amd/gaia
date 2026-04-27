@@ -1,0 +1,657 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* GAIA Agent UI - Global Styles
+ * Design: refined dark interface with AMD brand accents.
+ * Inspired by premium report aesthetics — deep backgrounds,
+ * subtle grain, glassmorphism, and sophisticated typography.
+ */
+
+/* ── Self-hosted Fonts (privacy-first, no external CDN) ──────────── */
+
+@font-face {
+    font-family: 'DM Sans';
+    src: url('../assets/fonts/dm-sans-latin.woff2') format('woff2');
+    font-weight: 300 700;
+    font-style: normal;
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+    font-family: 'Space Mono';
+    src: url('../assets/fonts/space-mono-400.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+    font-family: 'JetBrains Mono';
+    src: url('../assets/fonts/jetbrains-mono-latin.woff2') format('woff2');
+    font-weight: 400 700;
+    font-style: normal;
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+    --amd-red: #ED1C24;
+    --amd-red-dark: #c41820;
+    --amd-red-light: #ff4f56;
+    --amd-red-soft: #f04048;
+    --amd-red-dim: rgba(237, 28, 36, 0.12);
+    --amd-red-dim2: rgba(237, 28, 36, 0.06);
+
+    /* Terminal green accent for active/success states */
+    --terminal-green: #4ec932;
+    --terminal-green-dim: #3da826;
+    --terminal-glow: 0 0 6px rgba(78, 201, 50, 0.15);
+
+    /* Accent colors for status indicators */
+    --accent-green: #4ec932;
+    --accent-green-dim: rgba(78, 201, 50, 0.12);
+    --accent-yellow: #e8a830;
+    --accent-blue: #3b9eff;
+    --accent-cyan: #06b6d4;
+    --accent-gold: #e8a830;
+    --accent-gold-dim: rgba(232, 168, 48, 0.12);
+    --accent-danger: #ef4444;
+    --accent-danger-dim: rgba(239, 68, 68, 0.10);
+
+    /* Code text color (used in terminal/code contexts that stay dark in both themes) */
+    --text-code: #d4d4d4;
+
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8f9fa;
+    --bg-tertiary: #f0f1f3;
+    --bg-sidebar: #f0f1f3;
+    --bg-input: #ffffff;
+    --bg-hover: #f0f0f0;
+    --bg-active: #e5e7eb;
+    --bg-code: #1e1e1e;
+    --bg-user-msg: rgba(0, 0, 0, 0.02);
+    --bg-assistant-msg: rgba(0, 0, 0, 0.015);
+    --bg-modal-overlay: rgba(0, 0, 0, 0.5);
+    --bg-card: #f8f9fa;
+
+    /* Background image (set via App.tsx or inline style) */
+    --bg-image: none;
+    --bg-image-opacity: 0;
+
+    /* Theme-aware overlay tints (visible on light backgrounds) */
+    --tint-subtle: rgba(0, 0, 0, 0.03);
+    --tint-hover: rgba(0, 0, 0, 0.05);
+
+    --text-primary: #111827;
+    --text-secondary: #6b7280;
+    --text-muted: #9ca3af;
+    --text-inverse: #ffffff;
+
+    --border: #e5e7eb;
+    --border-light: #f3f4f6;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.12);
+
+    --radius-xs: 3px;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 10px;
+    --radius-xl: 14px;
+    --radius-full: 9999px;
+
+    --font-sans: 'DM Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
+    --font-display: 'Space Mono', 'JetBrains Mono', monospace;
+
+    --sidebar-w: 300px;
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-spring: cubic-bezier(0.16, 0, 0.84, 1);
+    --duration: 200ms;
+    --duration-fast: 120ms;
+}
+
+[data-theme="dark"] {
+    /* Refined dark palette — deep backgrounds with subtle blue-purple undertones.
+     * Inspired by premium dark UIs with sophisticated color depth. */
+    --bg-primary: #0e0e16;       /* Main content — deep dark with blue undertone */
+    --bg-secondary: #0a0a12;     /* Header, input area — near-black */
+    --bg-tertiary: #1a1a28;      /* Cards, badges, tool panels — lifted with purple tint */
+    --bg-sidebar: #08080d;       /* Sidebar — deepest black */
+    --bg-input: #12121c;         /* Input field — card-level dark */
+    --bg-hover: #1e1e2e;         /* Hover states — visible lift with tint */
+    --bg-active: #262638;        /* Active/selected — obvious highlight */
+    --bg-code: #0a0a12;          /* Code blocks — near-black */
+    --bg-card: #12121c;          /* Cards — slightly lifted */
+    --bg-user-msg: rgba(255, 255, 255, 0.015);
+    --bg-assistant-msg: rgba(255, 255, 255, 0.02);
+    --bg-modal-overlay: rgba(0, 0, 0, 0.88);
+
+    --text-primary: #e8e8f0;     /* Bright white with warmth */
+    --text-secondary: #9898b0;   /* Clear secondary with purple tint */
+    --text-muted: #8585a0;       /* Muted — WCAG AA compliant (5.1:1 against bg-primary) */
+
+    --border: #222236;           /* Borders — blue-purple tinted */
+    --border-light: #1a1a2a;     /* Subtle dividers */
+
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.6);
+    --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.7);
+    --shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.8);
+
+    --tint-subtle: rgba(255, 255, 255, 0.02);
+    --tint-hover: rgba(255, 255, 255, 0.04);
+
+    /* Dark mode background image -- slightly higher opacity for atmosphere */
+    --bg-image: none;
+    --bg-image-opacity: 0;
+}
+
+/* Reset */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+
+html, body, #root {
+    height: 100%;
+    overflow: hidden;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.72;
+}
+
+/* Background image overlay -- uses CSS custom property set via theme.
+ * Place background images in src/assets/bg/ and import in App.tsx,
+ * or use absolute URLs. The image is applied to #root::before so it
+ * sits behind all content. Opacity is kept very low so text stays legible.
+ */
+#root::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: -1;
+    background-image: var(--bg-image, none);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    opacity: var(--bg-image-opacity, 0);
+}
+
+/* Subtle grain texture overlay — dark mode only for premium feel.
+ * z-index: 1 keeps it above backgrounds but below interactive elements. */
+[data-theme="dark"] #root::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.025'/%3E%3C/svg%3E");
+    opacity: 0.4;
+}
+
+button { cursor: pointer; border: none; background: none; font: inherit; color: inherit; }
+input, textarea { font: inherit; color: var(--text-primary); background: var(--bg-input); }
+a { color: var(--amd-red); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Text selection -- AMD red tint for brand cohesion */
+::selection {
+    background: rgba(237, 28, 36, 0.18);
+    color: inherit;
+}
+::-moz-selection {
+    background: rgba(237, 28, 36, 0.18);
+    color: inherit;
+}
+
+/* Layout */
+.app { display: flex; height: 100vh; height: 100dvh; position: relative; }
+.main-content { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; position: relative; }
+
+/* ── View transitions ───────────────────────────────────────────── */
+.view-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    transition: opacity 220ms var(--ease), transform 220ms var(--ease);
+    will-change: opacity, transform;
+}
+
+.view-container.view-transitioning {
+    opacity: 0;
+    transform: scale(0.984) translateY(10px);
+}
+
+/* Ambient background glow — subtle radial gradients for depth (dark mode only).
+ * Creates the atmosphere from the reference report design. */
+[data-theme="dark"] .main-content::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+        radial-gradient(ellipse 600px 500px at 85% 10%, rgba(237, 28, 36, 0.06) 0%, transparent 70%),
+        radial-gradient(ellipse 500px 400px at 10% 90%, rgba(78, 201, 50, 0.03) 0%, transparent 70%),
+        radial-gradient(ellipse 400px 350px at 50% 50%, rgba(59, 158, 255, 0.025) 0%, transparent 70%);
+}
+
+/* Focus indicators for keyboard accessibility -- terminal green */
+:focus-visible {
+    outline: 2px solid var(--terminal-green);
+    outline-offset: 2px;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+    outline: 2px solid var(--terminal-green);
+    outline-offset: 2px;
+}
+
+/* Scrollbar -- thin, refined */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── Shared Button Utilities ──────────────────────────────────────── */
+
+.btn-primary {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 11px 28px;
+    background: var(--amd-red); color: white;
+    border-radius: var(--radius-md);
+    font-weight: 600; font-size: 14px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    transition: all var(--duration) var(--ease);
+    position: relative;
+    overflow: hidden;
+}
+.btn-primary:hover {
+    background: var(--amd-red-dark);
+    box-shadow: 0 0 20px rgba(237, 28, 36, 0.3);
+    transform: translateY(-1px);
+}
+.btn-primary:active {
+    transform: translateY(0);
+}
+
+.btn-secondary {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 18px;
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    font-weight: 500; font-size: 13px;
+    font-family: var(--font-mono);
+    transition: all var(--duration) var(--ease);
+}
+.btn-secondary:hover {
+    border-color: var(--amd-red);
+    color: var(--amd-red);
+    background: var(--amd-red-dim2);
+}
+.btn-secondary:active {
+    transform: translateY(0) scale(0.98);
+}
+
+.btn-danger {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 18px;
+    border: 1px solid var(--amd-red); border-radius: var(--radius-md);
+    color: var(--amd-red); font-weight: 500; font-size: 13px;
+    font-family: var(--font-mono);
+    transition: all var(--duration) var(--ease);
+}
+.btn-danger:hover { background: var(--amd-red); color: white; }
+.btn-danger:active { transform: scale(0.98); }
+
+.btn-icon {
+    display: flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    transition: all var(--duration) var(--ease);
+}
+.btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-icon:active { transform: scale(0.94); }
+
+.btn-icon-sm {
+    display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    transition: all var(--duration) var(--ease);
+}
+.btn-icon-sm:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-icon-sm:active { transform: scale(0.94); }
+
+/* ── Beta Badge ─────────────────────────────────────────────────── */
+
+.beta-badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--accent-gold-dim);
+    color: var(--accent-gold);
+    border: 1px solid rgba(232, 168, 48, 0.2);
+    vertical-align: middle;
+    line-height: 1.3;
+}
+
+/* ── Modal Base ──────────────────────────────────────────────────── */
+
+.modal-overlay {
+    position: fixed; inset: 0; z-index: 100;
+    background: var(--bg-modal-overlay);
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    display: flex; align-items: center; justify-content: center;
+    animation: fadeIn var(--duration-fast) var(--ease);
+}
+
+.modal-panel {
+    position: relative;
+    width: 560px; max-width: 92%; max-height: 85vh;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lg);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    animation: slideUp 250ms var(--ease);
+}
+
+.modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 24px; border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.modal-header h3 {
+    font-size: 14px; font-weight: 600; font-family: var(--font-mono);
+    text-transform: uppercase; letter-spacing: 1.5px;
+    color: var(--text-secondary);
+}
+
+.modal-body {
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+.modal-body::-webkit-scrollbar { width: 5px; }
+.modal-body::-webkit-scrollbar-track { background: transparent; }
+.modal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+.modal-body::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── AnimatedPresence exit animations ──────────────────────────── */
+.animated-presence.exiting .modal-overlay {
+    animation: modalOverlayOut 200ms var(--ease) forwards;
+}
+.animated-presence.exiting .modal-panel {
+    animation: modalPanelOut 250ms var(--ease) forwards;
+}
+
+@keyframes modalOverlayOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+}
+@keyframes modalPanelOut {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(12px); }
+}
+
+/* ── Sidebar Overlay (Mobile) ────────────────────────────────────── */
+
+.sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    animation: fadeIn var(--duration-fast) var(--ease);
+}
+
+/* Hamburger toggle for mobile */
+.sidebar-toggle {
+    display: none;
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 51;
+    width: 38px;
+    height: 38px;
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    align-items: center;
+    justify-content: center;
+    color: var(--text-primary);
+    box-shadow: var(--shadow-sm);
+    transition: all var(--duration) var(--ease);
+    backdrop-filter: blur(12px);
+}
+.sidebar-toggle:hover { background: var(--bg-hover); }
+
+/* ── Loading Spinner ─────────────────────────────────────────────── */
+
+.loading-spinner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    flex: 1;
+}
+
+.loading-spinner::after {
+    content: '';
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--border);
+    border-top-color: var(--amd-red);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+/* ── Toast Notification ──────────────────────────────────────────── */
+
+.toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 200;
+    padding: 12px 24px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    box-shadow: var(--shadow-lg);
+    animation: toastIn 200ms var(--ease), toastOut 200ms var(--ease) 2.5s forwards;
+    pointer-events: none;
+    backdrop-filter: blur(12px);
+}
+
+.toast-undo {
+    pointer-events: all;
+    cursor: pointer;
+}
+
+.toast-undo .toast-action {
+    color: var(--amd-red);
+    font-weight: 600;
+    margin-left: 12px;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+/* ── Animations ──────────────────────────────────────────────────── */
+
+@keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+@keyframes toastOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(8px); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideDown { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(12px); } }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes glow {
+    0%, 100% { box-shadow: 0 0 4px rgba(0, 255, 159, 0.1); }
+    50% { box-shadow: 0 0 10px rgba(0, 255, 159, 0.2); }
+}
+/* Terminal cursor blink -- block style */
+@keyframes cursorBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+/* Red dot glow -- traveling wave for "Thinking..." dots (used globally) */
+.thinking-dots span {
+    animation: loadingDotGlow 2.4s ease-in-out infinite;
+    opacity: 0.15;
+    color: var(--amd-red, #ff3b3b);
+    text-shadow: 0 0 2px rgba(237, 28, 36, 0.2);
+}
+.thinking-dots span:nth-child(1) { animation-delay: 0s; }
+.thinking-dots span:nth-child(2) { animation-delay: 0.5s; }
+.thinking-dots span:nth-child(3) { animation-delay: 1.0s; }
+
+@keyframes loadingDotGlow {
+    0%, 15% { opacity: 0.15; text-shadow: 0 0 2px rgba(237, 28, 36, 0.2); }
+    25% { opacity: 1; text-shadow: 0 0 8px rgba(237, 28, 36, 0.8), 0 0 3px rgba(237, 28, 36, 1); }
+    40%, 100% { opacity: 0.15; text-shadow: 0 0 2px rgba(237, 28, 36, 0.2); }
+}
+/* Scroll reveal animation */
+@keyframes revealUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Theme transition smoothing ─────────────────────────────────── */
+html.theme-transitioning,
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
+    transition: background-color 400ms ease,
+                color 300ms ease,
+                border-color 300ms ease,
+                box-shadow 300ms ease !important;
+}
+
+/* ── Reduced Motion ──────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+    [data-theme="dark"] #root::after {
+        display: none;
+    }
+}
+
+/* ── Responsive: Tablet (<= 900px) ─────────────────────────────── */
+@media (max-width: 900px) {
+    :root { --sidebar-w: 260px; }
+}
+
+/* ── Responsive: Mobile (<= 768px) ─────────────────────────────── */
+@media (max-width: 768px) {
+    .sidebar-toggle { display: flex; }
+    .sidebar-overlay.visible { display: block; }
+
+    .sidebar {
+        position: fixed !important;
+        left: 0; top: 0; bottom: 0;
+        z-index: 50;
+        width: var(--sidebar-w) !important;
+        min-width: var(--sidebar-w) !important;
+        transform: translateX(-100%);
+        transition: transform 250ms var(--ease);
+        box-shadow: none;
+    }
+
+    .sidebar.open {
+        transform: translateX(0);
+        box-shadow: var(--shadow-lg);
+    }
+
+    /* On mobile, sidebar is never collapsed -- use slide-out instead */
+    .sidebar.collapsed {
+        width: var(--sidebar-w) !important;
+        min-width: var(--sidebar-w) !important;
+    }
+    .sidebar.collapsed .sidebar-brand .brand-text,
+    .sidebar.collapsed .sidebar-search,
+    .sidebar.collapsed .session-list,
+    .sidebar.collapsed .privacy-badge span:not(.privacy-dot),
+    .sidebar.collapsed .version-badge,
+    .sidebar.collapsed .new-task-btn {
+        display: revert;
+    }
+    .sidebar.collapsed .sidebar-top { padding: 16px 16px 12px; justify-content: space-between; }
+    .sidebar.collapsed .sidebar-brand { gap: 10px; }
+    .sidebar.collapsed .sidebar-top-actions { gap: 4px; }
+    .sidebar.collapsed .sidebar-bottom { flex-direction: row; padding: 12px 14px; gap: 0; align-items: center; }
+    .sidebar.collapsed .sidebar-actions { flex-direction: row; gap: 2px; }
+
+    /* Hide collapse button on mobile (use hamburger instead) */
+    .collapse-btn { display: none; }
+
+    /* Hide resize handle on mobile */
+    .sidebar-resize-handle { display: none !important; }
+
+    .chat-view,
+    .welcome {
+        padding-top: 48px;
+    }
+
+    .chat-header {
+        padding-left: 52px !important;
+    }
+
+    .modal-panel {
+        max-width: 96%;
+        max-height: 90vh;
+    }
+
+    /* Larger touch targets on mobile */
+    .btn-icon { width: 44px; height: 44px; }
+    .btn-icon-sm { width: 36px; height: 36px; }
+
+    /* Prevent iOS zoom on focus */
+    input, textarea, select {
+        font-size: 16px !important;
+    }
+}
+
+/* ── Responsive: Small mobile (<= 480px) ───────────────────────── */
+@media (max-width: 480px) {
+    :root { --sidebar-w: 280px; }
+
+    .modal-panel {
+        max-width: 100%;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+}

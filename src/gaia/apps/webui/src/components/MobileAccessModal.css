@@ -1,0 +1,265 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* Mobile Access Modal - QR code gateway for remote access */
+
+.mobile-modal { width: 420px; }
+
+.mobile-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+/* Status indicator */
+.tunnel-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.tunnel-status .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.tunnel-status .status-dot.active {
+    background: var(--accent-green);
+    box-shadow: 0 0 8px rgba(78, 201, 50, 0.4);
+}
+
+.tunnel-status .status-dot.starting {
+    background: var(--accent-gold);
+    animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+.tunnel-status .status-dot.error {
+    background: var(--accent-danger);
+}
+
+.tunnel-status .status-dot.inactive {
+    background: var(--text-muted);
+}
+
+.tunnel-status .tunnel-spinner {
+    margin-left: auto;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--amd-red);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+/* Error display */
+.tunnel-error {
+    padding: 12px 16px;
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    border-radius: var(--radius-sm);
+    color: var(--accent-danger);
+    font-size: 13px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+/* QR Code area */
+.qr-code-area {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.qr-code-area canvas {
+    border-radius: var(--radius-md);
+    border: 2px solid var(--border);
+    box-shadow: var(--shadow-sm);
+}
+
+.qr-placeholder {
+    width: 200px;
+    height: 200px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: var(--bg-secondary);
+    border: 2px dashed var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+.qr-placeholder.error {
+    border-color: rgba(239, 68, 68, 0.3);
+    color: var(--accent-danger);
+}
+
+.qr-placeholder .placeholder-spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--border);
+    border-top-color: var(--amd-red);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+/* URL display row */
+.tunnel-url-area {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.tunnel-url-area label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.tunnel-url-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.tunnel-url-row input {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-primary);
+    outline: none;
+}
+
+.tunnel-url-row input:focus {
+    border-color: var(--amd-red);
+}
+
+button.copy-url-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: all var(--duration) var(--ease);
+}
+
+button.copy-url-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--amd-red);
+    color: var(--amd-red);
+}
+
+button.copy-url-btn.copied {
+    color: var(--accent-green);
+    border-color: var(--accent-green);
+}
+
+/* Tunnel password hint */
+.tunnel-password-hint {
+    padding: 14px 16px;
+    background: rgba(245, 158, 11, 0.06);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+    border-radius: var(--radius-sm);
+    text-align: center;
+}
+
+.tunnel-password-hint label {
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--accent-gold);
+    margin-bottom: 6px;
+}
+
+.tunnel-password-value {
+    font-size: 22px;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: 1px;
+    user-select: all;
+    cursor: text;
+    margin-bottom: 4px;
+}
+
+.tunnel-password-note {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Instructions */
+.mobile-instructions {
+    padding: 14px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.mobile-instructions ol {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.mobile-instructions li {
+    margin-bottom: 4px;
+}
+
+.mobile-instructions li:last-child {
+    margin-bottom: 0;
+}
+
+/* Actions */
+.mobile-access-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 4px;
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+    .mobile-modal {
+        width: 100%;
+    }
+
+    .qr-code-area canvas {
+        width: 160px !important;
+        height: 160px !important;
+    }
+
+    .qr-placeholder {
+        width: 160px;
+        height: 160px;
+    }
+}

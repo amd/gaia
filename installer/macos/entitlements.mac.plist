@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    GAIA Agent UI — macOS hardened runtime entitlements.
+
+    These entitlements are REQUIRED for the signed-and-notarized Electron
+    app to successfully spawn its child processes (uv, python, gaia) on
+    first-run backend install. Without them the app installs cleanly but
+    crashes the moment it tries to run the bootstrap subprocess.
+
+    See docs/plans/desktop-installer.mdx §7 Phase E for the rationale
+    behind each entitlement.
+
+    Phase C (this file): placeholder committed so electron-builder has a
+    valid entitlements file to sign against during local unsigned builds.
+    Phase E may extend this file with additional entitlements (for example
+    if voice / audio features require microphone access).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.inherit</key>
+    <true/>
+</dict>
+</plist>

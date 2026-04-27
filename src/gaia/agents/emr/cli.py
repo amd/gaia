@@ -302,7 +302,7 @@ def cmd_init(args):
 
     # Required models for EMR agent
     vlm_model = args.vlm_model  # Default: Qwen3-VL-4B-Instruct-GGUF
-    llm_model = "Qwen3-Coder-30B-A3B-Instruct-GGUF"  # For chat/query processing
+    llm_model = "Qwen3.5-35B-A3B-GGUF"  # For chat/query processing
     embed_model = "nomic-embed-text-v2-moe-GGUF"  # For similarity search
 
     REQUIRED_CONTEXT_SIZE = 32768
@@ -1138,8 +1138,8 @@ def _add_common_args(parser):
     )
     parser.add_argument(
         "--vlm-model",
-        default="Qwen3-VL-4B-Instruct-GGUF",
-        help="VLM model for extraction (default: Qwen3-VL-4B-Instruct-GGUF)",
+        default="Gemma-4-E4B-it-GGUF",
+        help="VLM model for extraction (default: Gemma-4-E4B-it-GGUF)",
     )
     parser.add_argument(
         "--debug",
@@ -1212,8 +1212,8 @@ def main():
     )
     parser_init.add_argument(
         "--vlm-model",
-        default="Qwen3-VL-4B-Instruct-GGUF",
-        help="VLM model to download (default: Qwen3-VL-4B-Instruct-GGUF)",
+        default="Gemma-4-E4B-it-GGUF",
+        help="VLM model to download (default: Gemma-4-E4B-it-GGUF)",
     )
     parser_init.add_argument(
         "--debug",
@@ -1233,8 +1233,8 @@ def main():
     )
     parser_test.add_argument(
         "--vlm-model",
-        default="Qwen3-VL-4B-Instruct-GGUF",
-        help="VLM model to use (default: Qwen3-VL-4B-Instruct-GGUF)",
+        default="Gemma-4-E4B-it-GGUF",
+        help="VLM model to use (default: Gemma-4-E4B-it-GGUF)",
     )
     parser_test.add_argument(
         "--max-dimension",

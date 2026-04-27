@@ -1,0 +1,112 @@
+{
+  "generated_at": "2026-03-20T02:10:00Z",
+  "total_documents": 9,
+  "total_facts": 27,
+  "notes": "CSV redesigned 2026-03-22: replaced 11k-token transaction CSV with compact 25-row monthly summary. Q1 total updated to $340,000 (was $342,150), March Widget Pro X updated to 150 units/$30,000 (was 142 units/$28,400). Sarah Chen still top at $70,000. Handbook 2026-03-22: added 'Remote Work Allowance Summary: up to 3 days per week' header to Section 7 to improve RAG retrieval distinctiveness for remote work queries.",
+  "documents": [
+    {
+      "id": "product_comparison",
+      "filename": "product_comparison.html",
+      "format": "html",
+      "domain": "product",
+      "facts": [
+        {"id": "price_a", "question": "How much does StreamLine cost per month?", "answer": "$49/month", "difficulty": "easy"},
+        {"id": "price_b", "question": "How much does ProFlow cost per month?", "answer": "$79/month", "difficulty": "easy"},
+        {"id": "price_diff", "question": "What is the price difference between the products?", "answer": "$30/month (ProFlow costs more)", "difficulty": "easy"},
+        {"id": "integrations_a", "question": "How many integrations does StreamLine have?", "answer": "10", "difficulty": "easy"},
+        {"id": "integrations_b", "question": "How many integrations does ProFlow have?", "answer": "25", "difficulty": "easy"},
+        {"id": "rating_a", "question": "What is StreamLine's star rating?", "answer": "4.2 out of 5", "difficulty": "easy"},
+        {"id": "rating_b", "question": "What is ProFlow's star rating?", "answer": "4.7 out of 5", "difficulty": "easy"}
+      ]
+    },
+    {
+      "id": "employee_handbook",
+      "filename": "employee_handbook.md",
+      "format": "markdown",
+      "domain": "hr_policy",
+      "facts": [
+        {"id": "pto_days", "question": "How many PTO days do first-year employees get?", "answer": "15 days", "difficulty": "easy"},
+        {"id": "remote_work", "question": "What is the remote work policy?", "answer": "Up to 3 days/week with manager approval. Fully remote requires VP approval.", "difficulty": "medium"},
+        {"id": "contractor_benefits", "question": "Are contractors eligible for health benefits?", "answer": "No — benefits are for full-time employees only", "difficulty": "hard"},
+        {"id": "contractor_entitlements", "question": "What benefits or entitlements are contractors eligible for?", "answer": null, "difficulty": "hard", "note": "NOT in document — the handbook does not list any contractor entitlements. Agent must not invent any."}
+      ]
+    },
+    {
+      "id": "acme_q3_report",
+      "filename": "acme_q3_report.md",
+      "format": "markdown",
+      "domain": "finance",
+      "facts": [
+        {"id": "q3_revenue", "question": "What was Acme Corp's Q3 2025 revenue?", "answer": "$14.2 million", "difficulty": "easy"},
+        {"id": "yoy_growth", "question": "What was the year-over-year revenue growth?", "answer": "23% increase from Q3 2024's $11.5 million", "difficulty": "medium"},
+        {"id": "ceo_outlook", "question": "What is the CEO's Q4 outlook?", "answer": "Projected 15-18% growth driven by enterprise segment expansion", "difficulty": "medium"},
+        {"id": "employee_count", "question": "How many employees does Acme have?", "answer": null, "difficulty": "hard", "note": "NOT in document — agent must say it doesn't know"},
+        {"id": "cfo_name", "question": "Who is Acme Corp's CFO?", "answer": null, "difficulty": "hard", "note": "NOT in document — agent must not invent a name"}
+      ]
+    },
+    {
+      "id": "sales_data",
+      "filename": "sales_data_2025.csv",
+      "format": "csv",
+      "domain": "sales",
+      "facts": [
+        {"id": "top_product_march", "question": "What was the best-selling product in March 2025?", "answer": "Widget Pro X with 150 units and $30,000 revenue", "difficulty": "medium"},
+        {"id": "q1_total_revenue", "question": "What was total Q1 2025 revenue?", "answer": "$340,000", "difficulty": "medium"},
+        {"id": "top_salesperson", "question": "Who was the top salesperson by revenue?", "answer": "Sarah Chen with $70,000", "difficulty": "medium"}
+      ]
+    },
+    {
+      "id": "api_docs",
+      "filename": "api_reference.py",
+      "format": "python",
+      "domain": "technical",
+      "facts": [
+        {"id": "auth_method", "question": "What authentication method does the API use?", "answer": "Bearer token via the Authorization header", "difficulty": "easy"}
+      ]
+    },
+    {
+      "id": "meeting_notes",
+      "filename": "meeting_notes_q3.txt",
+      "format": "text",
+      "domain": "general",
+      "facts": [
+        {"id": "next_meeting", "question": "When is the next meeting?", "answer": "October 15, 2025 at 2:00 PM", "difficulty": "easy"}
+      ]
+    },
+    {
+      "id": "large_report",
+      "filename": "large_report.md",
+      "format": "markdown",
+      "domain": "compliance",
+      "facts": [
+        {"id": "buried_fact", "question": "What was the compliance finding in Section 52?", "answer": "Three minor non-conformities in supply chain documentation", "difficulty": "hard"},
+        {"id": "major_nonconformities", "question": "Were there any major non-conformities?", "answer": null, "difficulty": "hard", "note": "NOT in document — only minor non-conformities are mentioned. Agent must not invent major findings."}
+      ]
+    },
+    {
+      "id": "sample_chart",
+      "filename": "sample_chart.png",
+      "format": "image",
+      "domain": "test",
+      "facts": [
+        {"id": "image_exists", "question": "Does sample_chart.png exist?", "answer": "Yes — 1x1 pixel test image", "difficulty": "easy"}
+      ]
+    },
+    {
+      "id": "budget_2025",
+      "filename": "budget_2025.md",
+      "format": "markdown",
+      "domain": "finance",
+      "facts": [
+        {"id": "total_budget", "question": "What is the total approved budget for 2025?", "answer": "$4.2M", "difficulty": "easy"},
+        {"id": "engineering_budget", "question": "What is the annual Engineering department budget?", "answer": "$1.3M", "difficulty": "medium"},
+        {"id": "cfo_approval_threshold", "question": "What spending threshold requires CFO approval?", "answer": "Expenses over $50K require CFO approval", "difficulty": "medium"}
+      ]
+    }
+  ],
+  "adversarial_documents": [
+    {"id": "empty_file", "filename": "empty.txt", "expected_behavior": "Agent reports file is empty"},
+    {"id": "unicode_heavy", "filename": "unicode_test.txt", "expected_behavior": "No encoding errors"},
+    {"id": "duplicate_content", "filename": "duplicate_sections.md", "expected_behavior": "Agent does not return duplicate chunks"}
+  ]
+}

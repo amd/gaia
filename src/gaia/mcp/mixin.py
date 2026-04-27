@@ -226,6 +226,16 @@ class MCPClientMixin:
 
         return server_count
 
+    def get_mcp_status_report(self) -> List[Dict]:
+        """Return runtime connection status for all MCP servers.
+
+        Returns:
+            List of dicts with keys: name, connected, tool_count, error
+        """
+        if self._mcp_manager is None:
+            return []
+        return self._mcp_manager.get_status_report()
+
     def disconnect_mcp_server(self, name: str) -> None:
         """Disconnect from an MCP server and unregister its tools.
 

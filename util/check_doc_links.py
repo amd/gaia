@@ -68,6 +68,8 @@ SKIP_PATTERNS = [
     r"^\$\{",  # JS template literals
     r"^url$",  # Placeholder "url" in markdown syntax examples
     r"github\.com/amd/gaia/compare/",  # Release compare URLs (tags may not exist yet)
+    r"github\.com/amd/gaia/(blob|tree)/main/",  # Same-repo links (may 404 during PRs before merge)
+    r"https?://(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)",  # RFC1918 private IPs (example URLs in docs)
 ]
 
 
@@ -224,9 +226,17 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
                 return "broken", str(e2)
         if e.code == 429:
             return "warning", "HTTP 429 (rate limited)"
+        if e.code >= 500:
+            return "warning", f"HTTP {e.code} (server error)"
         return "broken", f"HTTP {e.code}"
     except urllib.error.URLError as e:
-        return "broken", f"URL error: {e.reason}"
+        # Connection reset / refused is often CDN/anti-bot blocking, not a dead link
+        reason = e.reason
+        if isinstance(reason, (ConnectionResetError, ConnectionRefusedError)):
+            return "warning", f"URL error: {reason} (may block automated requests)"
+        if hasattr(reason, "errno") and reason.errno in (104, 111):
+            return "warning", f"URL error: {reason} (may block automated requests)"
+        return "broken", f"URL error: {reason}"
     except TimeoutError:
         return "warning", "timeout"
     except Exception as e:

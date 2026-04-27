@@ -67,7 +67,8 @@ class ApiAgent(Agent):
             DockerAgent -> gaia-docker
         """
         # All agents follow *Agent naming convention, strip "Agent" suffix
-        class_name = self.__class__.__name__[:-5].lower()  # Remove "Agent"
+        name = self.__class__.__name__
+        class_name = name[:-5].lower() if name.endswith("Agent") else name.lower()
         return f"gaia-{class_name}"
 
     def get_model_info(self) -> Dict[str, Any]:

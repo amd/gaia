@@ -66,7 +66,7 @@ icon: "rocket"
   </Step>
 
   <Step title="Start an LLM server">
-    The agent connects to any OpenAI-compatible LLM server at `http://localhost:8000/api/v1` by default. The recommended backend is [Lemonade Server](https://lemonade-server.ai) (optimized for AMD hardware):
+    The agent connects to any OpenAI-compatible LLM server at `http://localhost:13305/api/v1` by default. The recommended backend is [Lemonade Server](https://lemonade-server.ai) (optimized for AMD hardware):
 
     ```bash
     lemonade-server serve
@@ -92,6 +92,12 @@ icon: "rocket"
     ```
     Select GPU or NPU backend, then try "Full network diagnostic" or ask a specific question. The agent reasons about each result and adapts its approach in real-time.
 
+    **Vision-Language (VLM) demo** (cross-platform — requires a VLM model such as `Qwen3-VL-4B-Instruct-GGUF` loaded on the server):
+    ```bash
+    ./build/vlm_agent path/to/image.png "Describe this image."
+    ```
+    See [API Reference: Vision Language Models](/cpp/api-reference#vision-language-models-vlm) for the `gaia::Image` and `processQuery(..., images)` APIs.
+
     Type `quit` to exit.
   </Step>
 </Steps>
@@ -113,7 +119,7 @@ Verify your build with the unit test suite (no LLM server required):
   </Tab>
 </Tabs>
 
-See the [Testing Guide](/cpp/testing) for the full test suite — unit tests (8 modules), integration tests (LLM, MCP, Wi-Fi, Health), CI pipeline, and how to add new tests.
+See the [Testing Guide](/cpp/testing) for the full test suite — unit tests (12 modules), integration tests (LLM, MCP, Wi-Fi, Health), CI pipeline, and how to add new tests.
 
 ## Next Steps
 

@@ -1,0 +1,70 @@
+{
+  "scenario_id": "no_tools_needed",
+  "status": "PASS",
+  "overall_score": 9.7,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "Hello! What can you help me with?",
+      "agent_response": "**Hey there! I'm GAIA — your local AI assistant.**\n\nI can help you with:\n- Analyzing files and documents (PDFs, CSVs, TXT, etc.)\n- Finding and organizing your stuff across folders\n- Summarizing reports or manuals\n- Answering questions about things you've already indexed\n- Exploring your file system easily\n\nWhat are you working on today?",
+      "agent_tools": [],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 10,
+        "efficiency": 10,
+        "personality": 10,
+        "error_recovery": 10
+      },
+      "overall_score": 10.0,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Agent responded with a friendly, well-structured greeting and clear capability summary. Zero tool calls — perfect tool discipline on a greeting."
+    },
+    {
+      "turn": 2,
+      "user_message": "What is the capital of France?",
+      "agent_response": "Paris",
+      "agent_tools": [],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 8,
+        "efficiency": 10,
+        "personality": 8,
+        "error_recovery": 10
+      },
+      "overall_score": 9.6,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Correctly answered 'Paris' from general knowledge with zero tool calls. Response is very terse (single word with a stray trailing ``` formatting artifact) — minor completeness and personality deductions, but no critical failure."
+    },
+    {
+      "turn": 3,
+      "user_message": "What is 15% of 200?",
+      "agent_response": "30",
+      "agent_tools": [],
+      "scores": {
+        "correctness": 10,
+        "tool_selection": 10,
+        "context_retention": 10,
+        "completeness": 8,
+        "efficiency": 10,
+        "personality": 8,
+        "error_recovery": 10
+      },
+      "overall_score": 9.6,
+      "pass": true,
+      "failure_category": null,
+      "reasoning": "Correctly calculated 30 (15% of 200) with zero tool calls. Concise answer per scoring guidelines earns personality=8. Trailing ``` artifact is a minor formatting issue, not a logic failure."
+    }
+  ],
+  "root_cause": null,
+  "recommended_fix": "Minor: agent appends a stray ``` code-fence marker after short answers (turns 2 and 3). This is a prompt/template formatting artifact — investigate system prompt or response post-processing for spurious code-fence insertion.",
+  "cost_estimate": {
+    "turns": 3,
+    "estimated_usd": 0.02
+  }
+}

@@ -241,31 +241,31 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
 **Available tools:**
 - `generate_image(prompt, model, size, steps, cfg_scale)` - Generate with SD
 - `analyze_image(image_path, focus)` - VLM description
-- `create_story_from_image(image_path, story_style)` - VLM narrative
-- `create_story_from_last_image()` - SD-specific wrapper (finds last image)
+- `create_story_from_image(image_path, story_style)` - VLM narrative, registered by `SDAgent._register_tools()`
 - `list_sd_models()` - Show available models
-- `get_generation_history()` - See generated images
 
 ### Tool Composition Example
 
-SD-specific convenience tool registered in the agent (not in the mixin):
+`SDAgent` registers a single story tool (`create_story_from_image`) and relies on the
+agent's `$PREV` placeholder substitution to chain it after `generate_image`. The
+planner produces a 2-step plan where step 2's `image_path` is the path returned by
+step 1:
 
 ```python
-# In SDAgent._register_tools()
-@tool(atomic=True)  # Single-step execution (no multi-step planning)
-def create_story_from_last_image():
-    """SD-specific wrapper - no need to specify image path."""
-    last_image = self.sd_generations[-1]["image_path"]
-
-    # Calls generic VLM tool
-    return self._create_story_from_image(last_image, story_style="whimsical")
-
-# The @tool decorator automatically registers it - no need to call register_tool()
+# In SDAgent._register_tools()  (simplified)
+@tool(atomic=True)  # atomic = single-step; planner does not sub-decompose it
+def create_story_from_image(image_path: str, story_style: str = "any") -> dict:
+    """Generate a creative short story (2-3 paragraphs) based on an image."""
+    story = self.vlm_client.extract_from_image(
+        Path(image_path).read_bytes(),
+        prompt=f"Write a {story_style} short story about this image.",
+    )
+    return {"status": "success", "story": story, "image_path": image_path}
 ```
 
-**Why `atomic=True`?** This tool wraps multiple VLM calls internally (analyze + story). Marking it atomic tells the agent to execute it as a single step without trying to break it down further. The agent can call this tool in one step instead of planning multiple sub-steps.
-
-This demonstrates how agents can add custom tools that compose mixin functionality.
+**Why `atomic=True`?** Inside the tool we make a VLM call; marking it atomic prevents
+the planner from trying to decompose it further. The planner simply calls
+`create_story_from_image` once with the image path from the previous step.
 
 ### Agent Orchestration & Planning
 
@@ -292,13 +292,18 @@ User: "create a robot kitten and tell me a story"
 
 LLM Planning:
 {
-  "thought": "Need to generate image first, then create story",
+  "thought": "Need to generate image first, then create story from it",
   "plan": [
     {"tool": "generate_image", "tool_args": {"prompt": "enhanced..."}},
-    {"tool": "create_story_from_last_image", "tool_args": {}}
+    {"tool": "create_story_from_image",
+     "tool_args": {"image_path": "$PREV.image_path",
+                   "story_style": "whimsical"}}
   ]
 }
 ```
+
+The `$PREV.image_path` placeholder is automatically substituted with the real path
+returned by the preceding step before the tool is invoked.
 
 ### Tool Discovery & Registration
 
@@ -313,16 +318,16 @@ def generate_image(prompt, model, size, steps, cfg_scale):
 
 # 2. Agent-specific tools registered in _register_tools()
 @tool(atomic=True)
-def create_story_from_last_image():
-    """Analyze last SD image and create story."""
+def create_story_from_image(image_path: str, story_style: str = "any"):
+    """Analyze an image and create a short story."""
     ...
 
 # 3. LLM sees all registered tools in system prompt
 _TOOL_REGISTRY = {
     "generate_image": {...},
     "analyze_image": {...},
-    "create_story_from_image": {...},
-    "create_story_from_last_image": {...},  # Custom SD tool
+    "create_story_from_image": {...},  # Registered by SDAgent._register_tools()
+    "list_sd_models": {...},
 }
 ```
 
@@ -349,8 +354,7 @@ self.sd_generations = [
 ```
 
 This enables:
-- `create_story_from_last_image()` to find the most recent image
-- `get_generation_history()` to show what was created
+- Chaining `generate_image` → `create_story_from_image` using `$PREV.image_path`
 - Session continuity ("create another one" references previous)
 
 ### Multi-Model Coordination
@@ -375,7 +379,7 @@ SDXL-Turbo - Generates image → Returns image_path
     ↓
 Qwen3-8B (LLM) - Decides: "Now create story"
     ↓
-Calls: create_story_from_last_image()
+Calls: create_story_from_image(image_path="$PREV.image_path")
     ↓
 Qwen3-VL-4B (VLM) - Analyzes image → Creates story
     ↓

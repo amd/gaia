@@ -416,6 +416,81 @@ TEST_F(ToolRegistryTest, RegisterToolConvenienceWithPolicy) {
     EXPECT_EQ(info->policy, ToolPolicy::CONFIRM);
 }
 
+// ---- Enable / disable tests ----
+
+TEST_F(ToolRegistryTest, SetEnabledReturnsFalseForUnknownTool) {
+    EXPECT_FALSE(registry.setEnabled("nonexistent", false));
+}
+
+TEST_F(ToolRegistryTest, DisabledToolHiddenFromPrompt) {
+    registerEchoTool();
+    registry.registerTool("hidden", "A hidden tool",
+        [](const json&) -> json { return json{}; });
+
+    registry.setEnabled("hidden", false);
+
+    std::string prompt = registry.formatForPrompt();
+    EXPECT_TRUE(prompt.find("echo") != std::string::npos);
+    EXPECT_TRUE(prompt.find("hidden") == std::string::npos);
+}
+
+TEST_F(ToolRegistryTest, DisabledToolRejectedOnExecute) {
+    registerEchoTool();
+    registry.setEnabled("echo", false);
+
+    json result = registry.executeTool("echo", {{"message", "hi"}});
+    EXPECT_EQ(result["status"], "error");
+    EXPECT_TRUE(result["error"].get<std::string>().find("disabled") != std::string::npos);
+}
+
+TEST_F(ToolRegistryTest, ReEnablingRestoresTool) {
+    registerEchoTool();
+    registry.setEnabled("echo", false);
+    registry.setEnabled("echo", true);
+
+    std::string prompt = registry.formatForPrompt();
+    EXPECT_TRUE(prompt.find("echo") != std::string::npos);
+
+    json result = registry.executeTool("echo", {{"message", "hello"}});
+    EXPECT_EQ(result["echoed"], "hello");
+}
+
+TEST_F(ToolRegistryTest, IsEnabledReturnsFalseForUnknownTool) {
+    EXPECT_FALSE(registry.isEnabled("nonexistent"));
+}
+
+TEST_F(ToolRegistryTest, IsEnabledDefault) {
+    registerEchoTool();
+    EXPECT_TRUE(registry.isEnabled("echo"));
+}
+
+TEST_F(ToolRegistryTest, IsEnabledAfterDisable) {
+    registerEchoTool();
+    registry.setEnabled("echo", false);
+    EXPECT_FALSE(registry.isEnabled("echo"));
+}
+
+TEST_F(ToolRegistryTest, EnabledToolsFiltersCorrectly) {
+    registerEchoTool();
+    registry.registerTool("other", "Another tool",
+        [](const json&) -> json { return json{}; });
+
+    registry.setEnabled("echo", false);
+
+    auto enabled = registry.enabledTools();
+    EXPECT_EQ(enabled.size(), 1u);
+    EXPECT_EQ(enabled[0], "other");
+}
+
+TEST_F(ToolRegistryTest, EnabledToolsAllEnabled) {
+    registerEchoTool();
+    registry.registerTool("add", "Add tool",
+        [](const json&) -> json { return json{}; });
+
+    auto enabled = registry.enabledTools();
+    EXPECT_EQ(enabled.size(), 2u);
+}
+
 TEST_F(ToolRegistryTest, ExecuteToolValidateAndConfirm) {
     // Validation runs BEFORE confirmation; confirm callback receives sanitized args
     json argsSeenByConfirm;

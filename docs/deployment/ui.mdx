@@ -1,65 +1,163 @@
 ---
-title: "UI Documentation"
+title: "UI Packaging & Deployment"
 icon: "desktop"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/apps/`](https://github.com/amd/gaia/blob/main/src/gaia/apps/) | [RAUX Repository](https://github.com/aigdat/raux)
+  **Source Code:** [`src/gaia/apps/webui/`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/) | [`src/gaia/ui/`](https://github.com/amd/gaia/blob/main/src/gaia/ui/)
 </Info>
 
-<Badge text="development" color="orange" />
+# Overview
 
-## Table of Contents
-- [GAIA UI Documentation](#gaia-ui-documentation)
-  - [Table of Contents](#table-of-contents)
-- [UI Overview](#ui-overview)
-- [Qt Interface](#qt-interface)
-  - [Prerequisites](#prerequisites)
-  - [Using Qt Designer](#using-qt-designer)
-    - [Launching Qt Designer](#launching-qt-designer)
-    - [Editing the UI](#editing-the-ui)
-    - [Working with Assets](#working-with-assets)
-  - [Compiling Changes](#compiling-changes)
-  - [Troubleshooting](#troubleshooting)
-- [GAIA UI Interface](#raux-interface)
-  - [New in GAIA UI (RAUX)](#new-in-gaia-beta-raux)
-- [License](#license)
+The GAIA Agent UI is distributed as an [npm package](https://www.npmjs.com/package/@amd-gaia/agent-ui) and can also be packaged as an Electron desktop app for Windows and Ubuntu.
 
-# UI Overview
+<CardGroup cols={2}>
+  <Card title="Agent UI Guide" icon="desktop" href="/guides/agent-ui">
+    Features, keyboard shortcuts, troubleshooting, and architecture.
+  </Card>
+  <Card title="Agent UI SDK" icon="code" href="/sdk/sdks/agent-ui">
+    Python backend API: FastAPI server, SQLite database, Pydantic models, and SSE streaming.
+  </Card>
+  <Card title="Custom Installer" icon="box-archive" href="/playbooks/custom-installer/index">
+    Ship a branded GAIA build with your agent pre-loaded.
+  </Card>
+</CardGroup>
 
-GAIA provides a single modern user interface:
-- **GAIA UI (RAUX)** - A modern Electron-based desktop application providing an intuitive interface for GAIA
+---
 
 # Installation
 
-Install GAIA UI on Windows and Ubuntu using the packages from the GitHub [Releases](https://github.com/amd/gaia/releases) page.
+<Warning>
+  Prebuilt desktop installers (`.exe` / `.deb`) are being rolled out. To use
+  the Agent UI today, install via npm (launcher binary is `gaia-ui`):
+
+  ```bash
+  npm install -g @amd-gaia/agent-ui
+  gaia-ui
+  ```
+
+  Or launch from the GAIA CLI: `gaia --ui`. See the
+  [Agent UI guide](/guides/agent-ui) for details.
+</Warning>
+
+Install GAIA UI on Windows and Ubuntu using the packages from the GitHub
+[Releases](https://github.com/amd/gaia/releases) page (when available).
+Artifact names follow
+`gaia-agent-ui-<version>-<arch>-setup.<ext>` (see `electron-builder.yml`).
 
 ## Supported platforms
 - Windows 11 (64-bit) - Full GUI and CLI support
 - Linux: Ubuntu 22.04 LTS or 24.04 LTS (64-bit) - Full GUI and CLI support
 
 ## Windows (.exe)
-1. Download the latest `gaia-ui-setup.exe` from [Releases](https://github.com/amd/gaia/releases).
-2. Double-click `gaia-ui-setup.exe` and follow the prompts.
-3. Launch GAIA UI from the Start Menu (search for "GAIA UI") or the desktop shortcut.
+1. Download `gaia-agent-ui-<version>-x64-setup.exe` (e.g. `gaia-agent-ui-0.17.2-x64-setup.exe`) from [Releases](https://github.com/amd/gaia/releases).
+2. Double-click the installer and follow the prompts.
+3. Launch GAIA from the Start Menu (search for "GAIA") or the desktop shortcut. The underlying binary is `gaia-desktop`.
 4. On first launch, setup may take a moment. An internet connection is required the first time.
-5. Updating: download the newer `gaia-ui-setup.exe` from [Releases](https://github.com/amd/gaia/releases) and run it.
-6. Uninstalling: Windows Settings → Apps → Installed apps → find "GAIA UI" → Uninstall.
+5. Updating: download the newer `gaia-agent-ui-<version>-x64-setup.exe` from [Releases](https://github.com/amd/gaia/releases) and run it.
+6. Uninstalling: Windows Settings → Apps → Installed apps → find "GAIA" → Uninstall.
 
 ## Ubuntu (.deb)
-1. Download the latest `gaia-ui-setup.deb` (amd64) from [Releases](https://github.com/amd/gaia/releases).
-2. Open a terminal in the folder where you downloaded `gaia-ui-setup.deb`, then install with apt:
+1. Download `gaia-agent-ui-<version>-amd64.deb` (e.g. `gaia-agent-ui-0.17.2-amd64.deb`) from [Releases](https://github.com/amd/gaia/releases).
+2. Open a terminal in the download folder, then install with apt:
 ```bash
 sudo apt update
-sudo apt install ./gaia-ui-setup.deb
+sudo apt install ./gaia-agent-ui-*-amd64.deb
 ```
-3. Launch GAIA UI from your application menu (search for "GAIA UI").
+3. Launch GAIA from your application menu (search for "GAIA") or run `gaia-desktop` from a terminal.
 4. On first launch, setup may take a moment. An internet connection is required the first time.
-5. Updating: download the newer `gaia-ui-setup.deb` from [Releases](https://github.com/amd/gaia/releases) and install it again with apt (same command as above).
-6. Uninstalling:
+5. Updating: download the newer `.deb` from [Releases](https://github.com/amd/gaia/releases) and reinstall with apt (same command as above).
+6. Uninstalling (package name is `gaia-desktop`):
 ```bash
-sudo apt remove gaiaui
+sudo apt remove gaia-desktop
 ```
+
+## Ubuntu (.AppImage)
+
+Both the AppImage and the `.deb` ship with `--no-sandbox` to work
+around Ubuntu 24.04.1+'s AppArmor-restricted unprivileged-userns policy
+(`kernel.apparmor_restrict_unprivileged_userns=1`), which otherwise aborts
+Chromium with a FATAL sandbox error on first launch — see the security
+note in
+[Troubleshooting → AppImage on Linux](/reference/troubleshooting#appimage-on-linux).
+Use the AppImage for portable installs or distros without apt.
+
+<Warning>
+  **Ubuntu 24.04 LTS minimal** does not ship the FUSE 2 runtime or the
+  Chromium system libraries that the AppImage bundles. Install them first:
+
+  ```bash
+  sudo apt install libfuse2 libglib2.0-0t64 libgtk-3-0t64 libnss3 \
+      libasound2t64 libxss1 libxtst6 libatk-bridge2.0-0t64 libgbm1
+  ```
+</Warning>
+
+1. Download `gaia-agent-ui-<version>-x86_64.AppImage` from [Releases](https://github.com/amd/gaia/releases).
+2. Make it executable and run:
+```bash
+chmod +x gaia-agent-ui-*.AppImage
+./gaia-agent-ui-*.AppImage
+```
+3. On Ubuntu 24.04.1+, the AppImage runs with `--no-sandbox` by default
+   to work around the distro's AppArmor userns restriction. See
+   [Troubleshooting → AppImage on Linux](/reference/troubleshooting#appimage-on-linux)
+   for the security implications and recovery steps.
+4. To collect logs for a bug report:
+```bash
+gaia diagnostics
+```
+Attach the resulting `~/.gaia/diagnostics-*.tgz` to your GitHub issue.
+
+# GAIA Chat (Lightweight Desktop)
+
+GAIA Chat is a lightweight, privacy-first desktop chat application built with a Python FastAPI backend and a minimal web frontend. It is designed as a lighter alternative to RAUX, focused specifically on chat and document Q&A.
+
+## Key Features
+
+- **Privacy-first**: All data stays local -- no cloud, no telemetry
+- **Document Q&A**: Drag-and-drop 50+ file formats for RAG-powered search
+- **Session management**: Create, rename, export, and delete conversations
+- **Streaming responses**: Real-time SSE streaming from local LLMs
+- **Shared CLI/UI state**: Same SQLite database as `gaia chat` CLI
+- **Modern frontend**: React + TypeScript SPA with Zustand state management
+
+## Architecture
+
+```
+GAIA Chat Desktop
+  Electron Shell (optional) or Browser
+    |
+    v
+  FastAPI Backend (Python, port 4200)
+    - REST API + SSE streaming
+    - SQLite database (WAL mode)
+    |
+    v
+  GAIA Core SDKs
+    - AgentSDK, RAGSDK, LemonadeClient
+    |
+    v
+  Lemonade Server (port 8000)
+```
+
+## Developer Quick Start
+
+```bash
+# 1. Start Lemonade Server
+lemonade-server serve
+
+# 2. Start Agent UI backend
+python -m gaia.ui.server
+
+# 3. Open http://localhost:4200 in your browser
+```
+
+For full documentation, see:
+- [GAIA Chat Desktop Guide](/guides/agent-ui) -- User guide with features and troubleshooting
+- [Agent UI SDK Reference](/sdk/sdks/agent-ui) -- Python backend API documentation
+- [Agent UI Server Spec](/spec/agent-ui-server) -- Technical specification
+
+---
 
 # GAIA UI (RAUX) Interface
 

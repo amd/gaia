@@ -43,8 +43,8 @@ def _estimate_token_count(text: str) -> int:
     return max(1, (byte_length + avg_chars_per_token - 1) // avg_chars_per_token)
 
 
-class ChatSDK(Protocol):
-    """Protocol for chat SDK interface used by checklist generator."""
+class AgentSDK(Protocol):
+    """Protocol for agent SDK interface used by checklist generator."""
 
     def send(self, message: str, timeout: int = 600, no_history: bool = False) -> Any:
         """Send a message and get response."""
@@ -138,7 +138,7 @@ class Orchestrator:
     def __init__(
         self,
         tool_executor: ToolExecutor,
-        llm_client: ChatSDK,
+        llm_client: AgentSDK,
         llm_fixer: Optional[Callable[[str, str], Optional[str]]] = None,
         progress_callback: Optional[Callable[[str, str, int, int], None]] = None,
         console: Optional[AgentConsole] = None,
@@ -544,7 +544,7 @@ class Orchestrator:
         return "\n".join(sections)
 
     def _maybe_summarize_conversation_history(self) -> Optional[str]:
-        """Trigger ChatSDK conversation summarization when available."""
+        """Trigger AgentSDK conversation summarization when available."""
         chat_sdk = getattr(self, "llm_client", None)
         if not chat_sdk or not hasattr(chat_sdk, "summarize_conversation_history"):
             return None
@@ -681,7 +681,7 @@ class Orchestrator:
         Prefers the underlying LLM client's `generate` API when available,
         falling back to `send(..., no_history=True)` for compatibility.
         """
-        # If the ChatSDK exposes the underlying LLM client, use it directly with chat messages
+        # If the AgentSDK exposes the underlying LLM client, use it directly with chat messages
         # to avoid any stored history and ensure system prompts are applied cleanly.
         llm_client = getattr(self.llm_client, "llm_client", None)
         if llm_client and hasattr(llm_client, "generate"):
@@ -830,11 +830,11 @@ class Orchestrator:
     @staticmethod
     def _extract_json(text: str) -> str:
         """Extract JSON blob from arbitrary text (markdown-safe)."""
-        code_block = re.search(r"```(?:json)?\\s*\\n?(.*?)\\n?```", text, re.DOTALL)
+        code_block = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
         if code_block:
             return code_block.group(1).strip()
 
-        json_match = re.search(r"\\{.*\\}", text, re.DOTALL)
+        json_match = re.search(r"\{.*\}", text, re.DOTALL)
         if json_match:
             return json_match.group(0)
 

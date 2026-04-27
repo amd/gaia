@@ -139,6 +139,33 @@ class WorkflowPlan:
     status: str = "pending"  # pending, in_progress, completed, failed
 ```
 
+### 8. MethodSpec
+
+```python
+@dataclass
+class MethodSpec:
+    """Specification for a class method (used by CodeAgent scaffolding)."""
+
+    name: str
+    params: str = "self"
+    docstring: str = "Method description."
+    body: str = "pass"
+    return_type: Optional[str] = None
+```
+
+### 9. LintIssue
+
+```python
+@dataclass
+class LintIssue:
+    """Represents a linting issue found by pylint."""
+
+    type: str       # error | warning | convention | refactor
+    message: str
+    file: str
+    line: int
+```
+
 ---
 
 ## Usage Examples

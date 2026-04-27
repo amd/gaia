@@ -28,6 +28,8 @@ setup(
         "gaia.llm.providers",
         "gaia.audio",
         "gaia.chat",
+        "gaia.ui",
+        "gaia.ui.routers",
         "gaia.database",
         "gaia.talk",
         "gaia.testing",
@@ -53,6 +55,7 @@ setup(
         "gaia.agents.blender.core",
         "gaia.agents.chat",
         "gaia.agents.chat.tools",
+        "gaia.agents.builder",
         "gaia.agents.docker",
         "gaia.agents.emr",
         "gaia.agents.emr.dashboard",
@@ -65,12 +68,16 @@ setup(
         "gaia.agents.code.prompts",
         "gaia.agents.code.tools",
         "gaia.agents.code.validators",
+        "gaia.agents.code_index",
+        "gaia.agents.code_index.tools",
         "gaia.agents.routing",
         "gaia.agents.sd",
         "gaia.agents.summarize",
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
+        "gaia.code_index",
+        "gaia.apps.webui",
     ],
     package_data={
         "gaia.eval": [
@@ -80,6 +87,21 @@ setup(
             "webapp/public/*.html",
             "webapp/public/*.css",
             "webapp/public/*.js",
+        ],
+        # Browser-mode Agent UI bundle. Recursive globs in package_data are
+        # unreliable across setuptools versions, so we list shallow patterns
+        # here and back them up with `recursive-include` in MANIFEST.in. The
+        # CI verifier (util/verify_wheel_dist.py) enforces that the wheel
+        # actually contains these entries before publish.
+        "gaia.apps.webui": [
+            "dist/index.html",
+            "dist/*.svg",
+            "dist/*.png",
+            "dist/*.ico",
+            "dist/*.webmanifest",
+            "dist/*.json",
+            "dist/*.txt",
+            "dist/assets/*",
         ],
     },
     install_requires=[
@@ -103,6 +125,13 @@ setup(
             "uvicorn>=0.32.0",
             "python-multipart>=0.0.9",
         ],
+        "ui": [
+            "fastapi>=0.115.0",
+            "uvicorn>=0.32.0",
+            "python-multipart>=0.0.9",
+            "httpx>=0.27.0",
+            "psutil>=5.9.0",
+        ],
         "audio": [
             "torch>=2.0.0,<2.4",
             "torchvision<0.19.0",
@@ -121,6 +150,7 @@ setup(
             "pytest-benchmark",
             "pytest-mock",
             "pytest-asyncio",
+            "pyfakefs",
             "memory_profiler",
             "matplotlib",
             "adjustText",
@@ -155,10 +185,11 @@ setup(
             "llama-index-readers-youtube-transcript",
         ],
         "rag": [
-            "pypdf",
-            "pymupdf>=1.24.0",
-            "sentence-transformers",
             "faiss-cpu>=1.7.0",
+            "numpy>=1.24.0",
+            "pymupdf>=1.24.0",
+            "pypdf",
+            "sentence-transformers",
         ],
         "lint": [
             "black",

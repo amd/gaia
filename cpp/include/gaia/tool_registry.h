@@ -72,6 +72,21 @@ public:
     /// @return Tool execution result as JSON.
     json executeTool(const std::string& name, const json& args);
 
+    // ---- Enable / disable ----
+
+    /// Enable or disable a tool by name.
+    /// Disabled tools are hidden from formatForPrompt() and rejected in executeTool().
+    /// When used through an Agent, call Agent::rebuildSystemPrompt() afterward to
+    /// flush the cached system prompt so the change is reflected in the next LLM call.
+    /// @return false if the tool is not registered.
+    bool setEnabled(const std::string& name, bool enabled);
+
+    /// Return whether a tool is enabled (returns false if not registered).
+    bool isEnabled(const std::string& name) const;
+
+    /// Return names of all currently enabled tools (in registration order).
+    std::vector<std::string> enabledTools() const;
+
     // ---- Security configuration ----
 
     /// Set the confirmation callback used when a tool's policy is CONFIRM.

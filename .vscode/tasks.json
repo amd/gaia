@@ -59,8 +59,8 @@
             "type": "shell",
             "command": "cmake",
             "args": [
-                "-B", "cpp/build",
-                "-S", "cpp",
+                "-B", "${workspaceFolder}/cpp/build",
+                "-S", "${workspaceFolder}/cpp",
                 "-DCMAKE_BUILD_TYPE=Release"
             ],
             "group": "build",
@@ -76,7 +76,7 @@
             "type": "shell",
             "command": "cmake",
             "args": [
-                "--build", "cpp/build",
+                "--build", "${workspaceFolder}/cpp/build",
                 "--config", "Release",
                 "--parallel"
             ],
@@ -96,7 +96,7 @@
             "type": "shell",
             "command": "ctest",
             "args": [
-                "--test-dir", "cpp/build",
+                "--test-dir", "${workspaceFolder}/cpp/build",
                 "-C", "Release",
                 "--output-on-failure"
             ],

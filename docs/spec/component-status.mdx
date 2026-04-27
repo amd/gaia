@@ -4,7 +4,7 @@ description: "Implementation status and readiness tracking for all GAIA SDK comp
 ---
 
 <Info>
-**Last Updated:** December 10, 2025
+**Last Updated:** April 2026
 **Version:** v1.0.0 (in development)
 **Strategy:** All components marked as "In Development" until exhaustive testing validates them
 </Info>
@@ -133,9 +133,9 @@ description: "Implementation status and readiness tracking for all GAIA SDK comp
   </Card>
 
   <Card title="DatabaseMixin" icon="database" href="./database-mixin">
-    <Badge variant="info">Planned</Badge>
+    <Badge variant="success">Available</Badge>
 
-    Database operations for agents - **Issue #1**
+    Stdlib-sqlite3 mixin for agent-owned persistent state (`src/gaia/database/`).
 
     [View Specification →](./database-mixin)
   </Card>
@@ -154,29 +154,29 @@ description: "Implementation status and readiness tracking for all GAIA SDK comp
 ## Chat & LLM
 
 <Tabs>
-  <Tab title="Chat SDK">
-    <Card title="ChatSDK" icon="comments" href="./chat-sdk">
+  <Tab title="Agent SDK">
+    <Card title="AgentSDK" icon="comments" href="./agent-sdk">
       <Badge variant="success">Available</Badge>
 
       Conversation management with memory
 
-      [View Specification →](./chat-sdk)
+      [View Specification →](./agent-sdk)
     </Card>
 
-    <Card title="ChatConfig" icon="gear" href="./chat-sdk">
+    <Card title="AgentConfig" icon="gear" href="./agent-sdk">
       <Badge variant="success">Available</Badge>
 
       Configuration for chat sessions
 
-      [View Specification →](./chat-sdk)
+      [View Specification →](./agent-sdk)
     </Card>
 
-    <Card title="quick_chat" icon="bolt" href="./chat-sdk">
+    <Card title="quick_chat" icon="bolt" href="./agent-sdk">
       <Badge variant="success">Available</Badge>
 
       One-off chat function
 
-      [View Specification →](./chat-sdk)
+      [View Specification →](./agent-sdk)
     </Card>
   </Tab>
 
@@ -298,20 +298,22 @@ description: "Implementation status and readiness tracking for all GAIA SDK comp
 ## Plugin System
 
 <Note>
-Plugin system is designed and specified, implementation planned
+Agent discovery is live: the Agent UI server uses `AgentRegistry` with YAML
+manifests under `~/.gaia/agents/`. The OpenAI-style API server uses a separate
+hardcoded `AGENT_MODELS` dict.
 </Note>
 
 <CardGroup cols={2}>
-  <Card title="AgentRegistry" icon="list" href="./plugin-registry">
-    <Badge variant="info">Planned</Badge>
+  <Card title="AgentRegistry (Agent UI)" icon="list" href="./plugin-registry">
+    <Badge variant="success">Available</Badge>
 
-    Dynamic agent discovery - **Issue #4**
+    `src/gaia/agents/registry.py` — scans built-ins + `~/.gaia/agents/`.
   </Card>
 
-  <Card title="get_registry" icon="magnifying-glass" href="./plugin-registry">
-    <Badge variant="info">Planned</Badge>
+  <Card title="AGENT_MODELS (API server)" icon="magnifying-glass" href="/sdk/infrastructure/api-server">
+    <Badge variant="success">Available</Badge>
 
-    Registry accessor function - **Issue #4**
+    Static model registry in `src/gaia/api/agent_registry.py`.
   </Card>
 </CardGroup>
 
@@ -468,7 +470,7 @@ Centralized configuration system is planned for a future release
 ---
 
 <Note>
-Component Status Reference - Last Updated: December 2025
+Component Status Reference - Last Updated: April 2026
 </Note>
 
 ---

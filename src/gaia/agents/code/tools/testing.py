@@ -6,7 +6,7 @@ import os
 import shlex
 import subprocess
 import sys
-from datetime import datetime
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -102,7 +102,7 @@ class TestingMixin:
                 if env_vars:
                     env.update({key: str(value) for key, value in env_vars.items()})
 
-                start_time = datetime.utcnow()
+                start_time = time.monotonic()
                 try:
                     result = subprocess.run(
                         cmd,
@@ -113,9 +113,9 @@ class TestingMixin:
                         timeout=timeout,
                         check=False,
                     )
-                    duration = (datetime.utcnow() - start_time).total_seconds()
+                    duration = time.monotonic() - start_time
                 except subprocess.TimeoutExpired as exc:
-                    duration = (datetime.utcnow() - start_time).total_seconds()
+                    duration = time.monotonic() - start_time
                     # Ensure stdout/stderr are strings, not bytes
                     stdout_str = ""
                     stderr_str = ""
@@ -231,7 +231,7 @@ class TestingMixin:
                 else:
                     env["PYTHONPATH"] = project_pythonpath
 
-                start_time = datetime.utcnow()
+                start_time = time.monotonic()
                 try:
                     result = subprocess.run(
                         cmd,
@@ -242,9 +242,9 @@ class TestingMixin:
                         timeout=timeout,
                         check=False,
                     )
-                    duration = (datetime.utcnow() - start_time).total_seconds()
+                    duration = time.monotonic() - start_time
                 except subprocess.TimeoutExpired as exc:
-                    duration = (datetime.utcnow() - start_time).total_seconds()
+                    duration = time.monotonic() - start_time
                     # Ensure stdout/stderr are strings, not bytes
                     stdout_str = ""
                     stderr_str = ""

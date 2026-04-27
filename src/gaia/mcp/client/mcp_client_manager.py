@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Manager for multiple MCP client connections."""
 
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as _FutureTimeoutError
+from concurrent.futures import as_completed
 from typing import Dict, List, Optional
 
 from gaia.logger import get_logger
@@ -27,6 +30,7 @@ class MCPClientManager:
         self.config = config or MCPConfig()
         self.debug = debug
         self._clients: Dict[str, MCPClient] = {}
+        self._failed: Dict[str, str] = {}  # name -> last connection error
 
     def add_server(self, name: str, config: Dict) -> MCPClient:
         """Add and connect to an MCP server.
@@ -98,6 +102,7 @@ class MCPClientManager:
         client = self._clients[name]
         client.disconnect()
         del self._clients[name]
+        self._failed.pop(name, None)
 
         self.config.remove_server(name)
 
@@ -122,6 +127,29 @@ class MCPClientManager:
         """
         return list(self._clients.keys())
 
+    def get_status_report(self) -> List[Dict]:
+        """Return runtime connection status for all known servers.
+
+        Returns:
+            List of dicts with keys: name, connected, tool_count, error
+        """
+        report = []
+        for name, client in self._clients.items():
+            tools = client.list_tools()  # uses cached list — no network call
+            report.append(
+                {
+                    "name": name,
+                    "connected": True,
+                    "tool_count": len(tools),
+                    "error": None,
+                }
+            )
+        for name, error in self._failed.items():
+            report.append(
+                {"name": name, "connected": False, "tool_count": 0, "error": error}
+            )
+        return report
+
     def disconnect_all(self) -> None:
         """Disconnect from all MCP servers."""
         logger.debug("Disconnecting from all MCP servers")
@@ -133,6 +161,7 @@ class MCPClientManager:
                 logger.error(f"Error disconnecting from '{name}': {e}")
 
         self._clients.clear()
+        self._failed.clear()
 
     def load_from_config(self) -> None:
         """Load and connect to all servers from configuration.
@@ -148,33 +177,74 @@ class MCPClientManager:
 
         logger.debug(f"Loading {len(servers)} MCP servers from configuration")
 
+        # Filter to servers that are eligible to connect
+        to_connect = {}
         for name, server_config in servers.items():
             if name in self._clients:
                 logger.debug(f"Skipping already-connected server: {name}")
                 continue
+            if server_config.get("disabled", False):
+                logger.debug(f"Skipping disabled server: {name}")
+                continue
+            transport_type = server_config.get("type", "stdio")
+            if transport_type != "stdio":
+                logger.warning(
+                    f"Skipping server '{name}': GAIA MCP client only supports stdio "
+                    f"transport at this time (found '{transport_type}')"
+                )
+                continue
+            if "command" not in server_config:
+                logger.warning(f"No command specified for server: {name}")
+                continue
+            to_connect[name] = server_config
 
+        if not to_connect:
+            return
+
+        # Connect to all servers in parallel so slow/failing servers don't
+        # block each other (each connection can take 1-3s on failure).
+        # A hard timeout prevents a hanging stdio server from blocking agent
+        # construction indefinitely — the underlying readline() has no OS-level
+        # timeout, so we impose one here at the futures layer.
+        _CONNECT_TIMEOUT = 10.0  # seconds; generous for legitimate servers
+
+        def _connect_one(name, server_config):
             try:
-                # Check transport type - only stdio is supported
-                transport_type = server_config.get("type", "stdio")
-                if transport_type != "stdio":
-                    logger.warning(
-                        f"Skipping server '{name}': GAIA MCP client only supports stdio "
-                        f"transport at this time (found '{transport_type}')"
-                    )
-                    continue
-
-                if "command" not in server_config:
-                    logger.warning(f"No command specified for server: {name}")
-                    continue
-
                 client = MCPClient.from_config(name, server_config, debug=self.debug)
                 if client.connect():
+                    return name, client, None
+                return name, None, client.last_error
+            except Exception as e:
+                return name, None, str(e)
+
+        pool = ThreadPoolExecutor(max_workers=len(to_connect))
+        futures = {
+            pool.submit(_connect_one, name, cfg): name
+            for name, cfg in to_connect.items()
+        }
+        try:
+            for future in as_completed(futures, timeout=_CONNECT_TIMEOUT):
+                name, client, error = future.result()
+                if client is not None:
                     self._clients[name] = client
+                    self._failed.pop(name, None)
                     logger.debug(f"Loaded MCP server: {name}")
                 else:
-                    logger.debug(
-                        f"Failed to connect to server '{name}': {client.last_error}"
+                    self._failed[name] = error or "Unknown error"
+                    logger.debug(f"Failed to connect to server '{name}': {error}")
+        except _FutureTimeoutError:
+            for future, server_name in futures.items():
+                if not future.done():
+                    self._failed[server_name] = (
+                        f"Connection timed out after {_CONNECT_TIMEOUT:.0f}s"
                     )
-
-            except Exception as e:
-                logger.debug(f"Error loading server '{name}': {e}")
+                    logger.warning(
+                        "MCP server '%s' did not respond within %.0fs; skipping",
+                        server_name,
+                        _CONNECT_TIMEOUT,
+                    )
+        finally:
+            # wait=False: don't block on threads that are stuck in readline().
+            # cancel_futures=True: stop any pending (not-yet-started) futures.
+            # Already-running threads become daemon threads and exit with the process.
+            pool.shutdown(wait=False, cancel_futures=True)

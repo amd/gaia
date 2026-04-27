@@ -13,6 +13,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Enable C++ exception handling on MSVC (required for try/catch/throw)
+if(MSVC)
+    add_compile_options(/EHsc)
+endif()
+
 # ---------------------------------------------------------------------------
 # Options -- default ON when this is the top-level project, OFF as a sub-
 # project so consumers only get the library.
@@ -28,6 +33,9 @@ endif()
 # Integration tests require a running Lemonade server -- always OFF by default.
 option(GAIA_BUILD_INTEGRATION_TESTS
     "Build LLM integration tests (requires lemonade-server with Qwen3-4B-GGUF loaded)" OFF)
+
+# Performance benchmarks -- always OFF by default.
+option(GAIA_BUILD_BENCHMARKS "Build performance benchmarks" OFF)
 
 # ---------------------------------------------------------------------------
 # Dependencies -- prefer system packages, fall back to FetchContent
@@ -84,6 +92,8 @@ endif()
 # Library
 # ---------------------------------------------------------------------------
 add_library(gaia_core
+    src/types.cpp
+    src/image.cpp
     src/tool_registry.cpp
     src/console.cpp
     src/clean_console.cpp
@@ -92,6 +102,7 @@ add_library(gaia_core
     src/agent.cpp
     src/mcp_client.cpp
     src/security.cpp
+    src/sse_parser.cpp
 )
 
 add_library(gaia::gaia_core ALIAS gaia_core)
@@ -181,6 +192,9 @@ endif()
 if(GAIA_BUILD_EXAMPLES)
     add_executable(security_demo examples/security_demo.cpp)
     target_link_libraries(security_demo PRIVATE gaia::gaia_core)
+
+    add_executable(vlm_agent examples/vlm_agent.cpp)
+    target_link_libraries(vlm_agent PRIVATE gaia::gaia_core)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -191,9 +205,11 @@ if(GAIA_BUILD_TESTS)
 
     add_executable(tests_mock
         tests/test_types.cpp
+        tests/test_image.cpp
         tests/test_tool_registry.cpp
         tests/test_json_utils.cpp
         tests/test_agent.cpp
+        tests/test_agent_vlm.cpp
         tests/test_mcp_client.cpp
         tests/test_console.cpp
         tests/test_lemonade_client.cpp
@@ -201,12 +217,30 @@ if(GAIA_BUILD_TESTS)
         tests/test_tool_integration.cpp
         tests/test_decision.cpp
         tests/test_security.cpp
+        tests/test_sse_parser.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
         gaia::gaia_core
         GTest::gtest_main
     )
+
+    # VLM tests need httplib (mock LLM server) and the fixtures directory.
+    if(httplib_FOUND)
+        target_link_libraries(tests_mock PRIVATE httplib::httplib)
+    else()
+        target_include_directories(tests_mock SYSTEM PRIVATE
+            $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+    if(OpenSSL_FOUND)
+        target_compile_definitions(tests_mock PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(tests_mock PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+
+    target_compile_definitions(tests_mock PRIVATE
+        GAIA_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    )
+    target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
     include(GoogleTest)
     gtest_discover_tests(tests_mock)
@@ -225,6 +259,7 @@ if(GAIA_BUILD_INTEGRATION_TESTS)
         tests/integration/test_integration_mcp.cpp
         tests/integration/test_integration_wifi.cpp
         tests/integration/test_integration_health.cpp
+        tests/integration/test_integration_vlm.cpp
     )
 
     target_link_libraries(tests_integration PRIVATE
@@ -232,10 +267,45 @@ if(GAIA_BUILD_INTEGRATION_TESTS)
         GTest::gtest
     )
 
+    target_compile_definitions(tests_integration PRIVATE
+        GAIA_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    )
+
     include(GoogleTest)
     gtest_discover_tests(tests_integration
         PROPERTIES TIMEOUT 300
     )
+endif()
+
+# ---------------------------------------------------------------------------
+# Benchmarks
+# ---------------------------------------------------------------------------
+if(GAIA_BUILD_BENCHMARKS)
+    add_executable(gaia_benchmarks benchmarks/bench_main.cpp)
+    target_link_libraries(gaia_benchmarks PRIVATE gaia::gaia_core)
+
+    target_include_directories(gaia_benchmarks PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks
+    )
+
+    # httplib is PRIVATE to gaia_core; benchmarks need it for the mock server
+    if(httplib_FOUND)
+        target_link_libraries(gaia_benchmarks PRIVATE httplib::httplib)
+    else()
+        target_include_directories(gaia_benchmarks SYSTEM PRIVATE
+            $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+
+    # OpenSSL defines must match gaia_core for httplib header consistency
+    if(OpenSSL_FOUND)
+        target_compile_definitions(gaia_benchmarks PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(gaia_benchmarks PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+
+    # Windows: psapi for GetProcessMemoryInfo
+    if(WIN32)
+        target_link_libraries(gaia_benchmarks PRIVATE psapi)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

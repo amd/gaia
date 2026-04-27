@@ -21,6 +21,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.api_agent import ApiAgent
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.code_index.tools.mixin import CodeIndexToolsMixin
 from gaia.security import PathValidator
 
 from .orchestration import (
@@ -76,6 +77,7 @@ class CodeAgent(
     CLIToolsMixin,  # Universal CLI execution with process management
     ExternalToolsMixin,  # Context7 and Perplexity integration for documentation and web search
     ValidationToolsMixin,  # Validation and testing tools
+    CodeIndexToolsMixin,  # Semantic code search / repository indexing
 ):
     """
     Intelligent autonomous code agent for comprehensive Python development workflows.
@@ -93,7 +95,9 @@ class CodeAgent(
         # Agent will plan, generate, lint, fix, test, and verify automatically
     """
 
-    def __init__(self, language="python", project_type="script", **kwargs):
+    def __init__(
+        self, language="python", project_type="script", repo_path=".", **kwargs
+    ):
         """Initialize the Code agent.
 
         Args:
@@ -101,7 +105,7 @@ class CodeAgent(
             project_type: Project type ('frontend', 'backend', 'fullstack', or 'script', default: 'script')
             **kwargs: Agent initialization parameters:
                 - max_steps: Maximum conversation steps (default: 100)
-                - model_id: LLM model to use (default: Qwen3-Coder-30B-A3B-Instruct-GGUF)
+                - model_id: LLM model to use (default: Qwen3.5-35B-A3B-GGUF)
                 - silent_mode: Suppress console output (default: False)
                 - debug: Enable debug logging (default: False)
                 - show_prompts: Display prompts sent to LLM (default: False)
@@ -116,7 +120,7 @@ class CodeAgent(
             kwargs["max_steps"] = 100  # Increased for complex project generation
         # Use the coding model for better code understanding
         if "model_id" not in kwargs:
-            kwargs["model_id"] = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+            kwargs["model_id"] = "Qwen3.5-35B-A3B-GGUF"
         # Disable streaming by default (shows duplicate output)
         # Users can enable with --streaming flag if desired
         if "streaming" not in kwargs:
@@ -135,6 +139,12 @@ class CodeAgent(
 
         # Workspace root for API mode (passed from VSCode)
         self.workspace_root = None
+
+        # Code-index state (used by CodeIndexToolsMixin)
+        code_index_config = kwargs.pop("code_index_config", None)
+        self._init_code_index_state(
+            repo_path=repo_path, code_index_config=code_index_config
+        )
 
         # Progress callback for real-time updates
         self.progress_callback = None
@@ -197,6 +207,7 @@ class CodeAgent(
         self.register_cli_tools()  # CLIToolsMixin (Universal CLI execution)
         self.register_external_tools()  # ExternalToolsMixin (Context7 & Perplexity)
         self.register_validation_tools()  # ValidationToolsMixin (Testing and validation)
+        self.register_code_index_tools()  # CodeIndexToolsMixin (Semantic code search)
 
     def process_query(
         self, user_input: str, workspace_root=None, progress_callback=None, **kwargs
@@ -222,6 +233,7 @@ class CodeAgent(
 
         del kwargs  # Unused - accept for CLI compatibility
         # Store workspace root and change to it if provided
+        original_cwd = os.getcwd()
         if workspace_root:
             self.workspace_root = workspace_root
             self.path_validator.add_allowed_path(workspace_root)
@@ -419,7 +431,7 @@ class CodeAgent(
             return self._fix_code_with_llm(code, "file.ts", error_text)
 
         # Get LLM client for checklist generation (required)
-        # The chat SDK has a send(message, timeout) method compatible with ChatSDK protocol
+        # The chat SDK has a send(message, timeout) method compatible with AgentSDK protocol
         llm_client = getattr(self, "chat", None)
         if llm_client is None:
             raise ValueError(

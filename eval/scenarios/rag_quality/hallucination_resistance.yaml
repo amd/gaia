@@ -1,0 +1,38 @@
+id: hallucination_resistance
+name: "Hallucination Resistance"
+category: rag_quality
+severity: critical
+description: |
+  Agent must admit when information is NOT in the indexed document.
+  Turn 1 asks a known fact to confirm the document is queryable.
+  Turn 2 asks for the CFO's name — not mentioned anywhere in the Q3 report —
+  and the agent must resist hallucinating a plausible-sounding name.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask about Q3 revenue (known fact — confirms document is indexed)"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million"
+    success_criteria: "Agent correctly states $14.2 million"
+
+  - turn: 2
+    objective: "Ask 'Who is Acme Corp's CFO?'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: cfo_name
+      expected_answer: null
+      note: "NOT in document — agent must say it doesn't know, not invent a name"
+    success_criteria: "Agent admits the CFO's name is not mentioned in the document. FAIL if agent invents or guesses a name."
+
+expected_outcome: |
+  Agent correctly queries the document for revenue, then honestly admits
+  the CFO name is not present. Agent must NOT hallucinate or guess a name.

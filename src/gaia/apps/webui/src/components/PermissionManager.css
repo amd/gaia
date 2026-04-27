@@ -1,0 +1,485 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* PermissionManager - Tool permission override table */
+
+/* ── Container ──────────────────────────────────────────────── */
+.permission-manager {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 0;
+}
+
+/* ── Header ─────────────────────────────────────────────────── */
+.perm-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.perm-header-left {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.perm-header-icon {
+    color: var(--amd-red);
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+.perm-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.perm-subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 2px 0 0 0;
+}
+
+.perm-override-count {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 8px;
+    border-radius: var(--radius-full);
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+    color: var(--accent-yellow);
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.perm-reset-all {
+    flex-shrink: 0;
+}
+
+/* ── Tier Legend ─────────────────────────────────────────────── */
+.perm-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+}
+
+.perm-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.perm-legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.perm-legend-label {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.perm-legend-desc {
+    color: var(--text-muted);
+}
+
+/* ── Filters ────────────────────────────────────────────────── */
+.perm-filters {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.perm-search {
+    flex: 1;
+    position: relative;
+}
+
+.perm-search-icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.perm-search-input {
+    width: 100%;
+    padding: 7px 10px 7px 32px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    transition: border-color var(--duration-fast) var(--ease);
+}
+
+.perm-search-input:focus {
+    border-color: var(--amd-red);
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(226, 60, 64, 0.1);
+}
+
+.perm-search-input::placeholder {
+    color: var(--text-muted);
+}
+
+.perm-filter-tier {
+    display: flex;
+    gap: 2px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+}
+
+.perm-filter-btn {
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    transition: all var(--duration-fast) var(--ease);
+}
+
+.perm-filter-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+.perm-filter-btn.active {
+    color: var(--filter-color, var(--text-primary));
+    background: var(--bg-primary);
+    box-shadow: var(--shadow-sm);
+    font-weight: 600;
+}
+
+/* ── Permission Table ───────────────────────────────────────── */
+.perm-table-wrap {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+
+.perm-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.perm-table thead {
+    background: var(--bg-secondary);
+}
+
+.perm-table th {
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+}
+
+.perm-th-tool { width: 35%; }
+.perm-th-default { width: 18%; }
+.perm-th-override { width: 22%; }
+.perm-th-action { width: 25%; }
+
+.perm-table tbody tr {
+    transition: background var(--duration-fast) var(--ease);
+}
+
+.perm-table tbody tr:hover {
+    background: var(--bg-hover);
+}
+
+.perm-table tbody tr:not(:last-child) td {
+    border-bottom: 1px solid var(--border-light);
+}
+
+.perm-row.has-override {
+    background: rgba(245, 158, 11, 0.02);
+}
+
+[data-theme="dark"] .perm-row.has-override {
+    background: rgba(245, 158, 11, 0.03);
+}
+
+.perm-table td {
+    padding: 8px 12px;
+    vertical-align: middle;
+}
+
+.perm-cell-tool {
+    font-family: var(--font-mono);
+}
+
+.perm-tool-name {
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    padding: 2px 6px;
+    border-radius: var(--radius-xs);
+    border: 1px solid var(--border-light);
+}
+
+.perm-default-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.perm-cell-action {
+    text-align: right;
+}
+
+.perm-action-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.perm-reset-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    transition: all var(--duration-fast) var(--ease);
+}
+
+.perm-reset-btn:hover {
+    background: var(--bg-hover);
+    color: var(--amd-red);
+}
+
+/* ── Empty State ────────────────────────────────────────────── */
+.perm-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 24px;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+/* ── Tier Badge ─────────────────────────────────────────────── */
+.tier-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: var(--radius-full);
+    background: var(--tier-bg);
+    border: 1px solid var(--tier-border);
+    color: var(--tier-color);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: all var(--duration-fast) var(--ease);
+}
+
+.tier-badge.small {
+    padding: 2px 7px;
+    font-size: 10px;
+    gap: 3px;
+}
+
+.tier-badge-label {
+    line-height: 1;
+}
+
+/* ── Tier Dropdown ──────────────────────────────────────────── */
+.tier-dropdown-wrap {
+    position: relative;
+}
+
+.tier-dropdown-trigger {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px 2px 0;
+    border-radius: var(--radius-sm);
+    transition: all var(--duration-fast) var(--ease);
+    cursor: pointer;
+}
+
+.tier-dropdown-trigger:hover {
+    background: var(--bg-hover);
+}
+
+.tier-dropdown-chevron {
+    color: var(--text-muted);
+    transition: transform var(--duration-fast) var(--ease);
+}
+
+.tier-dropdown-chevron.open {
+    transform: rotate(180deg);
+}
+
+.tier-dropdown-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+}
+
+.tier-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 91;
+    min-width: 200px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md);
+    padding: 4px;
+    animation: slideUp 120ms var(--ease);
+}
+
+.tier-dropdown-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    text-align: left;
+    transition: background var(--duration-fast) var(--ease);
+}
+
+.tier-dropdown-item:hover {
+    background: var(--bg-hover);
+}
+
+.tier-dropdown-item.selected {
+    background: var(--bg-active);
+}
+
+.tier-dropdown-icon {
+    display: flex;
+    align-items: center;
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+.tier-dropdown-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.tier-dropdown-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.tier-dropdown-desc {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+/* ── Info Banner ────────────────────────────────────────────── */
+.perm-info-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 14px;
+    background: rgba(245, 158, 11, 0.04);
+    border: 1px solid rgba(245, 158, 11, 0.15);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.perm-info-banner svg {
+    color: var(--accent-yellow);
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+[data-theme="dark"] .perm-info-banner {
+    background: rgba(245, 158, 11, 0.06);
+    border-color: rgba(245, 158, 11, 0.2);
+}
+
+/* slideUp keyframe is defined in index.css (global) */
+
+/* ── Accessibility: reduced motion ──────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    .tier-dropdown-menu {
+        animation: none;
+    }
+
+    .tier-badge,
+    .perm-table tbody tr,
+    .tier-dropdown-trigger,
+    .perm-reset-btn,
+    .tier-dropdown-chevron {
+        transition: none;
+    }
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .perm-filters {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .perm-filter-tier {
+        justify-content: center;
+    }
+
+    .perm-th-default,
+    .perm-cell-default {
+        display: none;
+    }
+
+    .perm-th-tool { width: 40%; }
+    .perm-th-override { width: 30%; }
+    .perm-th-action { width: 30%; }
+
+    .perm-legend {
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .perm-header {
+        flex-direction: column;
+        gap: 8px;
+    }
+}
+
+@media (max-width: 480px) {
+    .perm-table th,
+    .perm-table td {
+        padding: 6px 8px;
+    }
+
+    .tier-badge {
+        padding: 2px 6px;
+        font-size: 10px;
+    }
+}

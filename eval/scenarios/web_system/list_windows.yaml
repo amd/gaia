@@ -1,0 +1,28 @@
+id: list_windows
+name: "List Windows Tool"
+category: web_system
+severity: low
+description: |
+  Tests that list_windows tool is registered and returns window/process info.
+  Uses pywinauto if available, falls back to tasklist on Windows.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask agent to list open windows"
+    user_message: "What windows or apps are currently open on this computer?"
+    ground_truth:
+      expected_behavior: "Agent calls list_windows and returns list of windows or processes"
+    success_criteria: |
+      Agent calls list_windows tool and returns a list of open windows/processes.
+      The result may include window titles (if pywinauto installed) or process names
+      (tasklist fallback). PASS if agent attempts list_windows and returns any results.
+      FAIL if agent claims it cannot list windows at all.
+
+expected_outcome: |
+  Agent calls list_windows and returns either window titles (pywinauto) or
+  process list (tasklist fallback). Both outcomes are valid.

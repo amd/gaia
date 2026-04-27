@@ -1,0 +1,82 @@
+{
+  "scenario_id": "smart_discovery",
+  "run_label": "rerun",
+  "status": "FAIL",
+  "overall_score": 2.8,
+  "critical_failure": false,
+  "critical_failure_reason": null,
+  "turns": [
+    {
+      "turn": 1,
+      "user_message": "What is the PTO policy for new employees?",
+      "agent_response": "I didn't find any files matching 'PTO policy' in your common folders (Documents, Downloads, Desktop).\n\nWould you like me to do a deep search across all your drives? This may take a minute.",
+      "agent_tools": ["list_indexed_documents", "search_file"],
+      "tools_expected": ["browse_files", "search_files", "index_document"],
+      "document_indexed": null,
+      "answer_found": false,
+      "correct_answer": "15 days",
+      "scores": {
+        "correctness": 0,
+        "tool_selection": 4,
+        "context_retention": 10,
+        "completeness": 2,
+        "efficiency": 4,
+        "personality": 7,
+        "error_recovery": 3
+      },
+      "overall_score": 4.0,
+      "pass": false,
+      "failure_category": "incomplete_discovery",
+      "reasoning": "Agent correctly used list_indexed_documents to check for existing docs and search_file to search, which shows intent to discover. However, search_file only scanned common Windows folders (Documents, Downloads, Desktop) and did not search the project/corpus directory at C:\\Users\\14255\\Work\\gaia4\\eval\\corpus\\documents\\. Agent never used browse_files to explore the project directory, never called index_document, and never answered the question. Offered a 'deep search' but did not proactively execute it. No hallucination (no critical fail), but discovery failed due to narrow search scope."
+    },
+    {
+      "turn": 2,
+      "user_message": "What about the remote work policy?",
+      "agent_response": "I didn't find any files matching 'remote work policy' in your common folders (Documents, Downloads, Desktop).\n\nWould you like me to do a deep search across all your drives? This may take a minute.",
+      "agent_tools": ["search_file"],
+      "tools_expected": ["query_rag", "browse_files", "index_document"],
+      "document_indexed": null,
+      "answer_found": false,
+      "correct_answer": "up to 3 days per week with manager approval",
+      "re_indexed_same_document": false,
+      "scores": {
+        "correctness": 0,
+        "tool_selection": 3,
+        "context_retention": 2,
+        "completeness": 1,
+        "efficiency": 1,
+        "personality": 6,
+        "error_recovery": 1
+      },
+      "overall_score": 1.6,
+      "pass": false,
+      "failure_category": "no_context_retention_no_adaptation",
+      "reasoning": "Agent repeated the same failed search strategy from Turn 1 (search_file with a different keyword in the same common folders). The event log shows the agent noted '1 previous message restored', but it did not use that context to change approach. In Turn 1 the agent already confirmed no docs were indexed and search failed — in Turn 2 it should have escalated to browse_files or asked the user for a path. No adaptation, no correct answer, identical failure mode."
+    }
+  ],
+  "discovery_summary": {
+    "target_file": "employee_handbook.md",
+    "target_path": "C:\\Users\\14255\\Work\\gaia4\\eval\\corpus\\documents\\employee_handbook.md",
+    "file_discovered": false,
+    "file_indexed": false,
+    "turn1_correct": false,
+    "turn2_correct": false,
+    "tools_attempted": ["list_indexed_documents", "search_file"],
+    "tools_missing": ["browse_files", "index_document"],
+    "search_scope_issue": "search_file tool only scanned common Windows folders; corpus directory is a project subfolder not covered"
+  },
+  "root_cause": "The search_file tool has a limited search scope — it only scans standard Windows user folders (Documents, Downloads, Desktop) and the current working directory (gaia4 root). The eval corpus lives in C:\\Users\\14255\\Work\\gaia4\\eval\\corpus\\documents\\ which is a subdirectory not covered by the default search. The agent never fell back to browse_files to explore the project tree, and it lacked awareness that project-specific data directories exist. In Turn 2 the agent showed no adaptation from Turn 1's failed approach.",
+  "recommended_fix": "1. The search_file tool should recursively search the current working directory tree (not just root level) when common-folder search fails. 2. The agent prompt or tooling should include a 'browse project directory' fallback step when search_file returns no results. 3. Alternatively, add a browse_files call to the agent's default discovery workflow so it actively explores project subdirectories (eval/, corpus/, docs/) before giving up. 4. Improve Turn 2 context retention so the agent recognizes it already attempted discovery in the prior turn and escalates to a different method rather than repeating the same search.",
+  "infra": {
+    "model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    "embedding_model_loaded": true,
+    "lemonade_running": true,
+    "session_id": "32d06ca6-2ed9-4790-8c07-798d88f3280f",
+    "session_deleted": true
+  },
+  "cost_estimate": {
+    "turns": 2,
+    "estimated_usd": 0.03
+  },
+  "timestamp": "2026-03-20T03:18:00Z"
+}

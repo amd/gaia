@@ -1,0 +1,36 @@
+id: no_tools_needed
+name: "No Tools -- General Knowledge"
+category: tool_selection
+severity: high
+description: |
+  No documents are indexed. User asks simple general-knowledge and arithmetic
+  questions. Agent should answer directly from its training data without
+  invoking any tools. Tests tool restraint.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask 'What is the capital of France?'"
+    ground_truth:
+      expected_answer: "Paris"
+    success_criteria: "Agent answers 'Paris' directly. FAIL if agent calls any tools (search_file, browse_files, etc.)."
+
+  - turn: 2
+    objective: "Ask 'What is 15% of 200?'"
+    ground_truth:
+      expected_answer: "30"
+    success_criteria: "Agent answers '30' directly. FAIL if agent calls any tools."
+
+  - turn: 3
+    objective: "Ask 'Tell me a fun fact about penguins.'"
+    ground_truth:
+      expected_behavior: "Agent provides a factual statement about penguins without tool calls"
+    success_criteria: "Agent provides a reasonable fun fact about penguins directly from general knowledge. No tools should be invoked."
+
+expected_outcome: |
+  Agent correctly identifies that no tools are needed for general knowledge
+  and arithmetic questions. Zero tool calls across all three turns.

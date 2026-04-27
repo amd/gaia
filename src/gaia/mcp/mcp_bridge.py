@@ -125,7 +125,7 @@ class GAIAMCPBridge:
     ):
         self.host = host
         self.port = port
-        self.base_url = base_url or "http://localhost:8000/api/v1"
+        self.base_url = base_url or "http://localhost:13305/api/v1"
         self.agents = {}
         self.tools = {}
         self.llm_client = None
@@ -189,7 +189,7 @@ class GAIAMCPBridge:
                     "description": "Natural language Jira orchestration",
                     "capabilities": ["search", "create", "update", "bulk_operations"],
                     "init_params": {
-                        "model_id": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+                        "model_id": "Qwen3.5-35B-A3B-GGUF",
                         "silent_mode": True,
                         "debug": False,
                     },
@@ -333,13 +333,13 @@ class GAIAMCPBridge:
     def _execute_chat(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute chat interaction with conversation context."""
         try:
-            from gaia.chat.sdk import ChatConfig, ChatSDK
+            from gaia.chat.sdk import AgentConfig, AgentSDK
 
             # Initialize chat SDK if not already done
             if self.chat_sdk is None:
-                # ChatSDK uses the global LLM configuration, not a base_url
-                config = ChatConfig()
-                self.chat_sdk = ChatSDK(config=config)
+                # AgentSDK uses the global LLM configuration, not a base_url
+                config = AgentConfig()
+                self.chat_sdk = AgentSDK(config=config)
 
             # Get the query
             query = args.get("query", "")
@@ -570,13 +570,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             if not boundary:
                 raise ValueError("Missing multipart boundary")
 
-            # boundary is bytes, decode for parser if needed
-            boundary = boundary.decode("latin-1").strip('"')
-            boundary_bytes = (
-                boundary
-                if isinstance(boundary, (bytes, bytearray))
-                else str(boundary).encode("utf-8")
-            )
+            # boundary is bytes from parse_options_header; encode to UTF-8 for parser
+            boundary_bytes = boundary.decode("latin-1").strip('"').encode("utf-8")
 
             collector = MultipartCollector()
             mp = MultipartParser(boundary_bytes, callbacks=collector.callbacks())
@@ -627,6 +622,20 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
 
     def handle_jsonrpc(self, data):
         """Handle JSON-RPC requests."""
+        # Validate that data is a dict (JSON-RPC requires an object)
+        if not isinstance(data, dict):
+            self.send_json(
+                400,
+                {
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32600,
+                        "message": "Invalid Request: expected JSON object",
+                    },
+                    "id": None,
+                },
+            )
+            return
         # Validate JSON-RPC
         if "jsonrpc" not in data or data["jsonrpc"] != "2.0":
             self.send_json(
@@ -805,7 +814,7 @@ def main():
     parser.add_argument("--host", default="localhost", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on")
     parser.add_argument(
-        "--base-url", default="http://localhost:8000/api/v1", help="LLM server URL"
+        "--base-url", default="http://localhost:13305/api/v1", help="LLM server URL"
     )
     parser.add_argument(
         "--verbose", action="store_true", help="Enable verbose logging for all requests"

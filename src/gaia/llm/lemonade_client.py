@@ -42,7 +42,12 @@ load_dotenv()
 # =========================================================================
 # Default server host and port (can be overridden via LEMONADE_BASE_URL env var)
 DEFAULT_HOST = "localhost"
-DEFAULT_PORT = 8000
+# Lemonade v10.1.0 changed its default port from 8000 to 13305 as part of the
+# "spring cleaning" release. See:
+#   https://github.com/lemonade-sdk/lemonade/wiki/Migration#v10x---v101
+# Minimum supported Lemonade version is declared in INIT_PROFILES
+# (min_lemonade_version); keep both in lock-step when bumping.
+DEFAULT_PORT = 13305
 # API version supported by this client
 LEMONADE_API_VERSION = "v1"
 # Default URL includes /api/v1 to match documentation and other clients
@@ -67,20 +72,25 @@ def _get_lemonade_config() -> tuple:
     # Parse the URL to extract host and port for backwards compatibility
     parsed = urlparse(base_url)
     host = parsed.hostname or DEFAULT_HOST
-    port = (
-        80
-        if (parsed.port is None and host is not None)
-        else (parsed.port or DEFAULT_PORT)
-    )
+    if parsed.port is not None:
+        port = parsed.port
+    elif parsed.scheme == "https":
+        port = 443
+    elif host != DEFAULT_HOST:
+        port = 80
+    else:
+        port = DEFAULT_PORT
     return (host, port, base_url)
 
 
 # =========================================================================
 # Model Configuration Defaults
 # =========================================================================
-# Default model for text generation - lightweight CPU model for testing
-DEFAULT_MODEL_NAME = "Qwen3-0.6B-GGUF"
-# DEFAULT_MODEL_NAME = "Llama-3.2-3B-Instruct-Hybrid"
+# Default model for simple `gaia llm` queries — intentionally lightweight (0.6B).
+# Agents use Qwen3.5-35B-A3B-GGUF via AGENT_PROFILES (see below), NOT this default.
+# Do NOT change this to 35B — it would break CI tests and force large downloads
+# in minimal setups. The UI default lives in ui/routers/system.py.
+DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
 # =========================================================================
 # Request Configuration Defaults
@@ -117,6 +127,9 @@ class ModelRequirement:
     display_name: str
     required: bool = True
     min_ctx_size: int = 4096  # Minimum context size needed
+    tool_calling: bool = (
+        True  # True for GGUF models via Lemonade --jinja (Tier 0 empirical)
+    )
 
 
 @dataclass
@@ -138,6 +151,7 @@ class LemonadeStatus:
     url: str = field(
         default_factory=lambda: os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
     )
+    version: Optional[str] = None
     context_size: int = 0
     loaded_models: list = field(default_factory=list)
     health_data: dict = field(default_factory=dict)
@@ -146,18 +160,49 @@ class LemonadeStatus:
 
 # Define available models
 MODELS = {
-    # LLM Models
+    # --- Primary model: Gemma 4 E4B (default for all roles) ---
+    "gemma-4-e4b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="Gemma-4-E4B-it-GGUF",
+        display_name="Gemma 4 E4B (Multimodal)",
+        min_ctx_size=32768,
+        tool_calling=True,
+    ),
+    # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
+    "qwen3.5-35b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="Qwen3.5-35B-A3B-GGUF",
+        display_name="Qwen3.5 35B",
+        min_ctx_size=32768,
+        tool_calling=True,
+    ),
     "qwen3-coder-30b": ModelRequirement(
         model_type=ModelType.LLM,
-        model_id="Qwen3-Coder-30B-A3B-Instruct-GGUF",
+        model_id="Qwen3.5-35B-A3B-GGUF",
         display_name="Qwen3 Coder 30B",
         min_ctx_size=32768,
+        tool_calling=True,
     ),
     "qwen3-0.6b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="Qwen3-0.6B-GGUF",
         display_name="Qwen3 0.6B (Fast)",
         min_ctx_size=4096,
+        tool_calling=True,
+    ),
+    "qwen3-vl-4b": ModelRequirement(
+        model_type=ModelType.VLM,
+        model_id="Qwen3-VL-4B-Instruct-GGUF",
+        display_name="Qwen3 VL 4B",
+        min_ctx_size=8192,
+        tool_calling=True,
+    ),
+    "qwen3-8b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="Qwen3-8B-GGUF",
+        display_name="Qwen3 8B",
+        min_ctx_size=16384,
+        tool_calling=True,
     ),
     # Embedding Models
     "nomic-embed": ModelRequirement(
@@ -165,13 +210,7 @@ MODELS = {
         model_id="nomic-embed-text-v2-moe-GGUF",
         display_name="Nomic Embed Text v2",
         min_ctx_size=2048,
-    ),
-    # VLM Models
-    "qwen3-vl-4b": ModelRequirement(
-        model_type=ModelType.VLM,
-        model_id="Qwen3-VL-4B-Instruct-GGUF",
-        display_name="Qwen3 VL 4B",
-        min_ctx_size=8192,
+        tool_calling=False,
     ),
 }
 
@@ -180,74 +219,116 @@ AGENT_PROFILES = {
     "chat": AgentProfile(
         name="chat",
         display_name="Chat Agent",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["gemma-4-e4b", "nomic-embed"],
         min_ctx_size=32768,
         description="Interactive chat with RAG and vision support",
     ),
     "code": AgentProfile(
         name="code",
         display_name="Code Agent",
-        models=["qwen3-coder-30b"],
+        models=["gemma-4-e4b"],
         min_ctx_size=32768,
         description="Autonomous coding assistant",
     ),
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",
-        models=["qwen3-coder-30b"],
+        models=["gemma-4-e4b"],
         min_ctx_size=32768,
         description="Voice-enabled chat",
     ),
     "rag": AgentProfile(
         name="rag",
         display_name="RAG System",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["gemma-4-e4b", "nomic-embed"],
         min_ctx_size=32768,
         description="Document Q&A with retrieval and vision",
     ),
     "blender": AgentProfile(
         name="blender",
         display_name="Blender Agent",
-        models=["qwen3-coder-30b"],
+        models=["gemma-4-e4b"],
         min_ctx_size=32768,
         description="3D content generation in Blender",
     ),
     "jira": AgentProfile(
         name="jira",
         display_name="Jira Agent",
-        models=["qwen3-coder-30b"],
+        models=["gemma-4-e4b"],
         min_ctx_size=32768,
         description="Jira issue management",
     ),
     "docker": AgentProfile(
         name="docker",
         display_name="Docker Agent",
-        models=["qwen3-coder-30b"],
+        models=["gemma-4-e4b"],
         min_ctx_size=32768,
         description="Docker container management",
     ),
     "vlm": AgentProfile(
         name="vlm",
         display_name="Vision Agent",
-        models=["qwen3-vl-4b"],
-        min_ctx_size=8192,
+        models=["gemma-4-e4b"],
+        min_ctx_size=32768,
         description="Image understanding and analysis",
     ),
     "minimal": AgentProfile(
         name="minimal",
         display_name="Minimal (Fast)",
-        models=["qwen3-0.6b"],
-        min_ctx_size=4096,
-        description="Fast responses with smaller model",
+        models=["gemma-4-e4b"],
+        min_ctx_size=32768,
+        description="Fast responses with Gemma 4 E4B",
     ),
     "mcp": AgentProfile(
         name="mcp",
         display_name="MCP Bridge",
-        models=["qwen3-coder-30b", "nomic-embed", "qwen3-vl-4b"],
+        models=["gemma-4-e4b", "nomic-embed"],
         min_ctx_size=32768,
         description="Model Context Protocol bridge server with vision",
     ),
+    "sd": AgentProfile(
+        name="sd",
+        display_name="SD Agent",
+        models=["gemma-4-e4b"],
+        min_ctx_size=32768,
+        description="Stable Diffusion image generation with LLM helper",
+    ),
 }
+
+
+def is_tool_calling_model(model_id: Optional[str]) -> bool:
+    """Return True if model_id supports native OpenAI tool_calls via Lemonade.
+
+    Defaults to True for unknown GGUF models — Tier 0 empirical testing showed
+    every Lemonade GGUF variant returns tool_calls when tools=[] is passed and
+    the embedded-JSON system prompt is NOT present.
+    """
+    if not model_id:
+        return False
+    for mr in MODELS.values():
+        if mr.model_id == model_id:
+            return mr.tool_calling
+    return True  # Unknown GGUF: optimistic default per Tier 0 findings
+
+
+def _validate_profile_model_registry() -> None:
+    """Fail loudly at import time if AGENT_PROFILES references an undeclared model."""
+    for agent_name, profile in AGENT_PROFILES.items():
+        for key in profile.models:
+            if key not in MODELS:
+                raise ValueError(
+                    f"AGENT_PROFILES['{agent_name}'] references model key '{key}' "
+                    f"which is not declared in MODELS. Add it or fix the typo."
+                )
+            mr = MODELS[key]
+            if mr.tool_calling is None:
+                raise ValueError(
+                    f"AGENT_PROFILES['{agent_name}'] -> MODELS['{key}'].tool_calling "
+                    f"is None. Set explicitly to True or False."
+                )
+
+
+_validate_profile_model_registry()
 
 
 class LemonadeClientError(Exception):
@@ -638,6 +719,7 @@ class LemonadeClient:
         self.server_process = None
         self.log = get_logger(__name__)
         self.keep_alive = keep_alive
+        self._log_file = None
 
         # Track active downloads for cancellation support
         self.active_downloads: Dict[str, DownloadTask] = {}
@@ -687,15 +769,19 @@ class LemonadeClient:
             self.server_process = subprocess.Popen(cmd, shell=True)
         elif background == "silent":
             # Run in background with subprocess
-            log_file = open("lemonade.log", "w", encoding="utf-8")
-            self.server_process = subprocess.Popen(
-                base_cmd,
-                stdout=log_file,
-                stderr=log_file,
-                text=True,
-                bufsize=1,
-                shell=True,
-            )
+            self._log_file = open("lemonade.log", "w", encoding="utf-8")
+            try:
+                self.server_process = subprocess.Popen(
+                    base_cmd,
+                    stdout=self._log_file,
+                    stderr=self._log_file,
+                    text=True,
+                    bufsize=1,
+                )
+            except Exception:
+                self._log_file.close()
+                self._log_file = None
+                raise
         else:  # "none" or any other value
             # Run in foreground with real-time output
             self.server_process = subprocess.Popen(
@@ -704,7 +790,6 @@ class LemonadeClient:
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
-                shell=True,
             )
 
             # Print stdout and stderr in real-time only for foreground mode
@@ -796,6 +881,14 @@ class LemonadeClient:
                 except subprocess.TimeoutExpired:
                     self.log.warning("Process did not terminate within timeout")
 
+            # Close log file handle if it was opened for silent mode
+            if hasattr(self, "_log_file") and self._log_file:
+                try:
+                    self._log_file.close()
+                except Exception:
+                    pass
+                self._log_file = None
+
             # Ensure port is free
             kill_process_on_port(self.port)
 
@@ -869,7 +962,7 @@ class LemonadeClient:
         # Check for MoE models first (e.g., "30b-a3b" = 30B total, 3B active)
         # MoE models are smaller than their total parameter count suggests
         if "a3b" in model_lower or "a2b" in model_lower:
-            return 18.0  # MoE models like Qwen3-Coder-30B-A3B are ~18GB
+            return 18.0  # MoE models like Qwen3.5-35B-A3B are ~18GB
 
         # Look for billion parameter indicators (dense models)
         if "70b" in model_lower or "72b" in model_lower:
@@ -1313,6 +1406,27 @@ class LemonadeClient:
             timeout=timeout,
         )
 
+        # Separate OpenAI-standard params from llama.cpp-specific params.
+        # The OpenAI client validates parameters strictly, so non-standard
+        # ones (repeat_penalty, repeat_last_n, etc.) must go via extra_body.
+        _OPENAI_STANDARD = {
+            "frequency_penalty",
+            "presence_penalty",
+            "top_p",
+            "n",
+            "seed",
+            "user",
+            "response_format",
+            "logit_bias",
+        }
+        extra_body = {}
+        standard_kwargs = {}
+        for k, v in kwargs.items():
+            if k in _OPENAI_STANDARD:
+                standard_kwargs[k] = v
+            else:
+                extra_body[k] = v
+
         # Create request parameters
         request_params = {
             "model": model,
@@ -1320,8 +1434,11 @@ class LemonadeClient:
             "temperature": temperature,
             "max_completion_tokens": max_completion_tokens,
             "stream": True,
-            **kwargs,
+            **standard_kwargs,
         }
+
+        if extra_body:
+            request_params["extra_body"] = extra_body
 
         if stop:
             request_params["stop"] = stop
@@ -1362,6 +1479,10 @@ class LemonadeClient:
                                     if hasattr(choice.delta, "content")
                                     and choice.delta.content
                                     else None
+                                ),
+                                "reasoning_content": (
+                                    getattr(choice.delta, "reasoning_content", None)
+                                    or None
                                 ),
                             },
                             "finish_reason": choice.finish_reason,
@@ -1773,7 +1894,7 @@ class LemonadeClient:
         Get detailed information about a specific model.
 
         Args:
-            model_id: The model identifier (e.g., "Qwen3-Coder-30B-GGUF")
+            model_id: The model identifier (e.g., "Qwen3.5-35B-A3B-GGUF")
 
         Returns:
             Dict containing model metadata:
@@ -1789,7 +1910,7 @@ class LemonadeClient:
 
         Examples:
             # Get model checkpoint and recipe
-            model = client.get_model_details("Qwen3-Coder-30B-GGUF")
+            model = client.get_model_details("Qwen3.5-35B-A3B-GGUF")
             print(f"Checkpoint: {model['checkpoint']}")
             print(f"Recipe: {model['recipe']}")
 
@@ -2299,7 +2420,18 @@ class LemonadeClient:
                 console = None
                 print(f"🔄 Loading model: {model}...")
 
-            self.load_model(model, auto_download=True, prompt=False)
+            ctx_size = None
+            for _key, req in MODELS.items():
+                if req.model_id == model:
+                    ctx_size = req.min_ctx_size
+                    break
+
+            if ctx_size is None:
+                self.log.debug(
+                    f"Model '{model}' not in MODELS registry; using server default ctx_size"
+                )
+
+            self.load_model(model, auto_download=True, prompt=False, ctx_size=ctx_size)
 
             # Print model ready message
             try:
@@ -2679,8 +2811,9 @@ class LemonadeClient:
             - Physical Memory (RAM)
             - devices: Dictionary with device information
               - cpu: Name, cores, threads, availability
-              - gpu: AMD iGPU/dGPU name, memory (MB), driver version, availability
-              - npu: Name, driver version, power mode, availability
+              - amd_igpu: AMD integrated GPU name, VRAM, driver version, availability
+              - amd_dgpu: AMD discrete GPU list
+              - amd_npu: AMD NPU name, driver version, power mode, availability
 
         Examples:
             # Check available devices
@@ -2688,10 +2821,10 @@ class LemonadeClient:
             devices = sysinfo.get("devices", {})
 
             # Select best device
-            if devices.get("npu", {}).get("available"):
+            if devices.get("amd_npu", {}).get("available"):
                 print("Using NPU for acceleration")
-            elif devices.get("gpu", {}).get("available"):
-                print("Using GPU for acceleration")
+            elif devices.get("amd_igpu", {}).get("available"):
+                print("Using iGPU for acceleration")
             else:
                 print("Using CPU")
 
@@ -2792,14 +2925,19 @@ class LemonadeClient:
             health = self.health_check()
             status.running = True
             status.health_data = health
+            status.version = health.get("version")
 
             # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
+            # Skip embedding models — their ctx_size is irrelevant for LLM context checks.
             all_models = health.get("all_models_loaded", [])
-            if all_models:
-                status.context_size = (
-                    all_models[0].get("recipe_options", {}).get("ctx_size", 0)
-                )
-            else:
+            for m in all_models:
+                if m.get("type") == "embedding":
+                    continue
+                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
+                if ctx:
+                    status.context_size = ctx
+                    break
+            if not status.context_size:
                 # Fallback for older Lemonade versions
                 status.context_size = health.get("context_size", 0)
 
@@ -2842,7 +2980,7 @@ class LemonadeClient:
             agent: Agent name or "all" for all unique models
 
         Returns:
-            List of model IDs (e.g., ["Qwen3-Coder-30B-A3B-Instruct-GGUF", ...])
+            List of model IDs (e.g., ["Qwen3.5-35B-A3B-GGUF", ...])
         """
         model_ids = set()
 
@@ -3040,21 +3178,28 @@ class LemonadeClient:
             return None
 
     def _check_version_compatibility(
-        self, expected_version: str, quiet: bool = False
+        self,
+        expected_version: str,
+        actual_version: Optional[str] = None,
+        quiet: bool = False,
     ) -> bool:
         """
-        Check if the installed lemonade-server version is compatible.
+        Check if the lemonade-server version is compatible.
 
-        Checks only the major version for compatibility.
+        Checks major version for hard incompatibility, and warns on
+        minor/patch mismatches.
 
         Args:
-            expected_version: Expected version string (e.g., "8.2.2")
+            expected_version: Expected version string (e.g., "10.0.0")
+            actual_version: Actual version string. If None, detected from
+                            the local ``lemonade-server --version`` CLI.
             quiet: Suppress warning output
 
         Returns:
             True if compatible (or version check failed), False if incompatible major version
         """
-        actual_version = self.get_lemonade_version()
+        if actual_version is None:
+            actual_version = self.get_lemonade_version()
 
         if not actual_version:
             # Can't determine version, assume compatible (don't block)
@@ -3085,6 +3230,15 @@ class LemonadeClient:
                     print("")
 
                 return False
+
+            # Same major version – warn if minor/patch differs
+            if actual_version != expected_version:
+                if not quiet:
+                    print(
+                        f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version: "
+                        f"v{actual_version} (expected v{expected_version})"
+                    )
+                    print("   Consider updating: https://lemonade-server.ai")
 
             return True
 
@@ -3165,7 +3319,10 @@ class LemonadeClient:
         # Check version compatibility (warning only, not fatal)
         from gaia.version import LEMONADE_VERSION
 
-        self._check_version_compatibility(LEMONADE_VERSION, quiet=quiet)
+        cli_version = self.get_lemonade_version()
+        self._check_version_compatibility(
+            LEMONADE_VERSION, actual_version=cli_version, quiet=quiet
+        )
 
         # Check current status
         status = self.get_status()
@@ -3173,7 +3330,18 @@ class LemonadeClient:
         if status.running:
             if not quiet:
                 print("✅ Lemonade Server is running")
+                if status.version:
+                    print(f"   Server version: {status.version}")
                 print(f"   Current context size: {status.context_size}")
+
+            # Check running server version against expected (warning only).
+            # Skip if the server reports the same version the CLI already checked.
+            if status.version and status.version != cli_version:
+                self._check_version_compatibility(
+                    LEMONADE_VERSION,
+                    actual_version=status.version,
+                    quiet=quiet,
+                )
 
             # Check context size (warning only, not fatal)
             if status.context_size < required_ctx:

@@ -289,12 +289,14 @@ class BatchExperimentRunner:
 
             # Extract response text
             response = response_data["content"]
-            if isinstance(response, list):
+            if isinstance(response, list) and response:
                 response_text = (
                     response[0].text
                     if hasattr(response[0], "text")
                     else str(response[0])
                 )
+            elif isinstance(response, list):
+                response_text = ""
             else:
                 response_text = (
                     response.text if hasattr(response, "text") else str(response)
@@ -1332,12 +1334,14 @@ class BatchExperimentRunner:
                                 context_prompt
                             )
                             response = response_data["content"]
-                            if isinstance(response, list):
+                            if isinstance(response, list) and response:
                                 response_text = (
                                     response[0].text
                                     if hasattr(response[0], "text")
                                     else str(response[0])
                                 )
+                            elif isinstance(response, list):
+                                response_text = ""
                             else:
                                 response_text = (
                                     response.text
@@ -2048,7 +2052,7 @@ class BatchExperimentRunner:
                     "system_prompt": "Answer questions about meeting transcripts clearly and accurately. Focus on the key information requested.",
                     "max_tokens": 512,
                     "temperature": 0.1,
-                    "parameters": {"host": "localhost", "port": 8000},
+                    "parameters": {"host": "localhost", "port": 13305},
                     "_comment": "Local inference - FREE, runs on your hardware",
                 },
                 {
@@ -2059,7 +2063,7 @@ class BatchExperimentRunner:
                     "system_prompt": "You are a creative meeting analyst. Analyze the transcript thoughtfully and provide insightful information that captures key insights and implications.",
                     "max_tokens": 512,
                     "temperature": 0.7,
-                    "parameters": {"host": "localhost", "port": 8000},
+                    "parameters": {"host": "localhost", "port": 13305},
                     "_comment": "Local inference - FREE, runs on your hardware",
                 },
                 {
@@ -2071,7 +2075,7 @@ class BatchExperimentRunner:
                     "max_tokens": 512,
                     "temperature": 0.1,
                     "max_ctx_size": 8192,
-                    "parameters": {"host": "localhost", "port": 8000},
+                    "parameters": {"host": "localhost", "port": 13305},
                     "_comment": "Local inference with custom context size (8192 tokens) - FREE, runs on your hardware",
                 },
             ],

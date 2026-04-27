@@ -263,7 +263,7 @@ class Prompts:
                 elif entry.startswith(
                     "observation: "
                 ):  # Add support for observation messages
-                    content = entry[12:]
+                    content = entry[len("observation: ") :]
                     formatted_prompt += format_template["observation"].format(
                         content=content
                     )

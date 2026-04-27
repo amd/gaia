@@ -1,0 +1,51 @@
+id: python311_release_notes
+name: "Python 3.11 Release Notes Lookup"
+category: real_world
+severity: medium
+description: |
+  Agent must retrieve facts from the Python 3.11 What's New document.
+  Tests changelog lookup, performance numbers, and hallucination resistance
+  on information about a future version (Python 3.12) not in this document.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: python311_release
+      path: "eval/corpus/real_world/technical/python311_whats_new.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask when Python 3.11 was released and how much faster it is compared to Python 3.10."
+    ground_truth:
+      doc_id: python311_release
+      expected_answer: "Released October 24, 2022. CPython 3.11 is 1.25x faster (25% faster) than CPython 3.10 per pyperformance benchmarks."
+    success_criteria: |
+      Agent correctly states the release date (October 24, 2022) and the performance improvement
+      (1.25x or 25% faster than 3.10, measured with pyperformance).
+      FAIL if agent invents a different date or performance figure.
+
+  - turn: 2
+    objective: "Ask which new standard library module was added in Python 3.11 for parsing TOML files."
+    ground_truth:
+      doc_id: python311_release
+      expected_answer: "tomllib (PEP 680)"
+    success_criteria: |
+      Agent correctly identifies tomllib as the new TOML parsing module added in Python 3.11,
+      and ideally mentions PEP 680.
+      FAIL if agent names a different module or omits the module name entirely.
+
+  - turn: 3
+    objective: "Ask what the release date of Python 3.12 is."
+    ground_truth:
+      doc_id: python311_release
+      expected_answer: null
+      note: "This document covers Python 3.11 only; Python 3.12 release information is not in this document"
+    success_criteria: |
+      Agent correctly states that the Python 3.11 document does not contain Python 3.12 release date information.
+      PASS if agent clarifies this is out of scope for the indexed document.
+      FAIL if agent invents a Python 3.12 release date from the document.
+
+expected_outcome: |
+  Agent correctly retrieves Python 3.11 changelog facts and handles a cross-version
+  hallucination probe about Python 3.12 which is not in the document.

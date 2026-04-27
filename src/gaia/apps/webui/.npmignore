@@ -1,0 +1,25 @@
+# Source files (not needed in published package)
+src/
+*.ts
+*.tsx
+tsconfig.json
+vite.config.ts
+
+# Development config
+.eslintrc*
+.prettierrc*
+.editorconfig
+app.config.json
+
+# Electron build artifacts
+out/
+forge.config.*
+
+# Development assets
+node_modules/
+.vite/
+
+# Build tools
+*.config.js
+*.config.mjs
+*.config.cjs

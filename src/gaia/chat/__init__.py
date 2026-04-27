@@ -5,7 +5,11 @@
 Chat agent module for interactive conversations with LLM models.
 """
 
-from gaia.chat.sdk import (  # noqa: F401
+from gaia.chat.sdk import (  # noqa: F401; Backwards-compatible aliases
+    AgentConfig,
+    AgentResponse,
+    AgentSDK,
+    AgentSession,
     ChatConfig,
     ChatResponse,
     ChatSDK,

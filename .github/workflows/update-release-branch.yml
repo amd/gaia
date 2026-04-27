@@ -20,6 +20,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Skip pre-release tags
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          if [[ "$TAG_NAME" =~ (rc|alpha|beta|dev) ]]; then
+            echo "Skipping pre-release tag: $TAG_NAME"
+            exit 1
+          fi
+
       - name: Update release branch to current tag
         run: |
           TAG_NAME=${GITHUB_REF#refs/tags/}

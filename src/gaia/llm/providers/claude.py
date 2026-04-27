@@ -58,6 +58,9 @@ class ClaudeProvider(LLMClient):
         **kwargs,
     ) -> Union[str, Iterator[str]]:
         # Build parameters for Anthropic messages.create
+        # Claude API requires max_tokens — set default if caller omits it
+        if "max_tokens" not in kwargs:
+            kwargs["max_tokens"] = 4096
         params = {
             "model": model or self._model,
             "messages": messages,

@@ -7,5 +7,6 @@ This package contains tool mixins that can be used across multiple agents.
 """
 
 from .file_tools import FileSearchToolsMixin
+from .screenshot_tools import ScreenshotToolsMixin
 
-__all__ = ["FileSearchToolsMixin"]
+__all__ = ["FileSearchToolsMixin", "ScreenshotToolsMixin"]

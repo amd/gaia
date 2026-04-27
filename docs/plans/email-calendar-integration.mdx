@@ -1,0 +1,534 @@
+---
+title: "Email & Calendar"
+description: "Email triage, calendar management, Outlook integration, and meeting notes with speaker diarization"
+icon: "envelope"
+---
+
+# Email, Calendar & Outlook Integration Plan
+
+> **Date:** 2026-04-01
+>
+> **Milestones:** v0.20.0 (MCP + browser fallback), v0.23.0 (autonomous agents)
+>
+> **Priority:** P0 — Email triage is the highest-demand use case for local AI
+> agents. Always-on + sensitive data = strongest case for local processing.
+
+---
+
+## 1. Why Email & Calendar
+
+Email management is the top use case for AI agent users: overnight triage, morning
+briefs, draft responses. These workloads are always-on and involve sensitive data —
+exactly where local processing has the strongest advantage over cloud APIs.
+
+All email content is processed locally. No cloud APIs touch your inbox.
+
+---
+
+## 2. Existing GitHub Issues
+
+| Issue | Title | Milestone | Focus |
+|-------|-------|-----------|-------|
+| #645 | Email Triage Agent: AI-powered inbox management | v0.23.0 | Dedicated email agent with IMAP/OAuth |
+| #660 | Email and Calendar management via browser automation | v0.20.0 | Playwright-based, works with any web app |
+| #662 | Calendar Agent: AI-powered schedule management | v0.23.0 | Dedicated calendar agent |
+| #663 | Personalized daily briefs: morning digest | v0.20.0 | Combines email + calendar + news |
+
+---
+
+## 3. Integration Approaches
+
+### 3.1 Browser Automation (Fallback)
+
+**Approach:** Use Playwright MCP (or BrowserToolsMixin #458) to interact with Gmail,
+Outlook Web, Google Calendar through the browser.
+
+**Advantages:**
+- Works with ANY web email/calendar — no per-provider API integration
+- No API keys or OAuth setup — user just logs in once
+- Sandboxed via Playwright — safe, cross-platform
+- Enables demos immediately — "check my email" works day one
+- Auth persistence — Playwright browser context saves login sessions
+
+**Disadvantages:**
+- Slower than direct API (browser rendering overhead)
+- Fragile to UI changes in Gmail/Outlook
+- Requires Node.js (for Playwright MCP)
+- Limited to what's visible in the web UI
+
+**Supported providers (via browser):**
+- Gmail (mail.google.com)
+- Outlook Web (outlook.office.com / outlook.live.com)
+- Google Calendar (calendar.google.com)
+- Outlook Calendar (outlook.office.com/calendar)
+- Yahoo Mail, ProtonMail, Fastmail, etc.
+
+**Dependency:** #458 (BrowserToolsMixin with Playwright)
+
+### 3.2 MCP Servers (Phase 1 — Primary Path)
+
+**Approach:** Community MCP servers for Gmail and Google Calendar, installable
+via MCP Settings UI.
+
+| Server | Package | Verified? | Auth |
+|--------|---------|-----------|------|
+| Gmail | `gmail-mcp-server` (v1.0.30) | Yes (npm) | OAuth2 |
+| Google Calendar | `@cocal/google-calendar-mcp` (v2.6.1) | Yes (npm) | OAuth2 |
+| Outlook | `outlook-mcp-server` | Unverified | OAuth2 |
+
+**Advantages:**
+- Faster than browser automation (direct API)
+- More reliable (structured API, not scraping)
+- Works in headless/background mode
+
+**Disadvantages:**
+- Requires OAuth setup (user must create Google Cloud project or use provided credentials)
+- Each provider needs its own MCP server
+- Dependency on community-maintained npm packages
+
+### 3.3 Direct IMAP/OAuth (Phase 2 — v0.23.0)
+
+**Approach:** Native Python email agent using IMAP (read) and SMTP (send) with
+OAuth2 authentication for Gmail/Outlook.
+
+**Advantages:**
+- Fastest — direct protocol, no browser or MCP overhead
+- Most reliable — standard protocols, no third-party dependencies
+- Works offline after initial auth (cached credentials)
+- Full control over email parsing and threading
+
+**Disadvantages:**
+- More implementation effort (~2-3 weeks)
+- Need to handle MIME parsing, threading, attachments
+- OAuth2 flow requires redirect URI handling
+
+**Libraries:** `imaplib` (stdlib), `email` (stdlib), `aiohttp` (OAuth2 flows),
+or `exchangelib` for Exchange/Outlook
+
+### 3.4 Recommended Phased Approach
+
+| Phase | Milestone | Approach | Scope |
+|-------|-----------|----------|-------|
+| **Phase 1** | v0.20.0 | **MCP servers (primary)** | Read + write via `gmail-mcp-server` and `@cocal/google-calendar-mcp` — same approach Claude Code uses. User completes OAuth once, gets structured API access. |
+| **Phase 1 fallback** | v0.20.0 | Browser automation (Playwright) | Fallback for providers without MCP servers. Read-only. |
+| **Phase 2** | v0.23.0 | Native IMAP/OAuth + MS Graph API | Full email triage agent: categorize, draft replies, auto-archive. MS Graph for Outlook/365. |
+| **Phase 3** | v0.23.0+ | Autonomous operation | Scheduled triage, morning briefs, proactive conflict detection |
+
+**Key decision:** Gmail/Calendar are too important for browser automation as the primary
+path. MCP servers provide structured, reliable API access. Browser automation is a
+fallback for edge cases (unsupported providers, demo scenarios without OAuth setup).
+
+---
+
+## 4. Email Triage Agent
+
+**GitHub issue:** #645 (v0.23.0)
+
+### 4.1 Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  Email Triage Agent                   │
+│                                                       │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐ │
+│  │ Email Source │  │ Triage Engine│  │ Action Layer │ │
+│  │             │  │              │  │              │ │
+│  │ • Playwright│  │ • Categorize │  │ • Draft reply│ │
+│  │ • MCP Gmail │  │ • Prioritize │  │ • Archive    │ │
+│  │ • IMAP/OAuth│  │ • Summarize  │  │ • Label      │ │
+│  │ • Exchange  │  │ • Learn prefs│  │ • Notify     │ │
+│  └──────┬──────┘  └──────┬───────┘  └──────┬──────┘ │
+│         │                │                  │         │
+│  ┌──────▼────────────────▼──────────────────▼──────┐ │
+│  │              Memory System (v0.20.0)             │ │
+│  │  • Sender importance (learned over time)         │ │
+│  │  • Triage preferences (what's "urgent" for you)  │ │
+│  │  • Draft style (formal vs casual per contact)    │ │
+│  └─────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────┘
+```
+
+### 4.2 Triage Categories (AI-learned)
+
+| Category | Description | Default Action |
+|----------|-------------|---------------|
+| **Urgent** | Needs response today — from boss, client, deadline | Notify immediately, draft response |
+| **Actionable** | Needs response this week — requests, questions | Include in daily brief, suggest draft |
+| **Informational** | FYI — newsletters, updates, receipts | Summarize in brief, auto-archive after 7 days |
+| **Low priority** | Marketing, social notifications | Auto-archive, exclude from brief |
+
+Categories are learned from user behavior:
+- User responds quickly → sender becomes "urgent"
+- User ignores → sender becomes "low priority"
+- User corrects categorization → agent updates preferences
+
+### 4.3 Email Providers
+
+| Provider | Phase 1 (MCP — Primary) | Phase 1 Fallback (Browser) | Phase 2 (Native) |
+|----------|------------------------|---------------------------|-------------------|
+| Gmail | `gmail-mcp-server` | Playwright → mail.google.com | IMAP + OAuth2 |
+| Outlook/365 | `outlook-mcp-server` | Playwright → outlook.office.com | MS Graph API or IMAP + OAuth2 |
+| Outlook Desktop | N/A | N/A | Exchange via `exchangelib` |
+| Yahoo/Other | N/A | Playwright → provider URL | IMAP + app password |
+
+### 4.4 Privacy Guarantees
+
+- All email content processed locally — never sent to cloud APIs
+- Credentials stored in local credential vault (~/.gaia/credentials.db)
+- Email content not stored permanently — only summaries in memory
+- User can audit what the agent "remembers" about their email patterns
+- No email forwarding or external relay
+
+---
+
+## 5. Calendar Agent
+
+**GitHub issue:** #662 (v0.23.0)
+
+### 5.1 Capabilities
+
+| Capability | Phase 1 (Browser) | Phase 2 (Autonomous) | Phase 3 (Personalized) |
+|-----------|-------------------|---------------------|----------------------|
+| View daily agenda | Read calendar page | Scheduled morning brief | Learns meeting prep preferences |
+| Create events | Fill form via browser | Natural language → event | Suggests optimal times |
+| Conflict detection | Manual check | Proactive alert | Auto-reschedule suggestions |
+| Meeting prep | Summarize related docs | Pull context from email + docs | Learns what context you need |
+| Focus time | Create events manually | Auto-block based on patterns | Learns your deep work hours |
+| Travel buffer | Manual | Auto-add between in-person meetings | Learns commute times |
+
+### 5.2 Calendar Providers
+
+| Provider | Phase 1 (MCP — Primary) | Phase 1 Fallback (Browser) |
+|----------|------------------------|---------------------------|
+| Google Calendar | `@cocal/google-calendar-mcp` | Playwright → calendar.google.com |
+| Outlook Calendar | `outlook-mcp-server` | Playwright → outlook.office.com/calendar |
+| Apple Calendar | N/A | N/A (no web UI) |
+
+---
+
+## 6. Daily Briefs
+
+**GitHub issue:** #663 (v0.20.0)
+
+### 6.1 Brief Contents (personalized over time)
+
+```
+Good morning! Here's your brief for Tuesday, April 1:
+
+📬 EMAIL (12 new since yesterday)
+ • 2 urgent: [Boss] Q2 budget review due today, [Client] Contract question
+ • 4 actionable: PR reviews, meeting requests
+ • 6 informational: newsletters, receipts (auto-archived)
+
+📅 CALENDAR
+ • 9:00 — Team standup (15 min)
+ • 11:00 — Q2 budget review with Sarah (60 min)
+   → Prep: See attached budget spreadsheet from yesterday's email
+ • 14:00 — 1:1 with Alex (30 min)
+ • Focus time available: 10:00-11:00, 15:00-17:00
+
+📰 NEWS (topics you follow)
+ • AMD Ryzen AI 400 reviews published (3 articles)
+ • OpenClaw v3.1 released with new security features
+
+✅ TASKS
+ • PR #427 needs your review (2 days old)
+ • Q2 budget spreadsheet due today
+```
+
+### 6.2 Delivery Channels
+
+| Channel | Phase | Mechanism |
+|---------|-------|-----------|
+| Agent UI notification | v0.20.0 | Electron Notification API → click opens brief |
+| Agent UI chat | v0.20.0 | New chat session "Morning Brief — [date]" |
+| Telegram/Discord | v0.23.0 | Messaging adapter delivers formatted brief |
+| Voice readout | v0.21.0+ | TTS reads brief aloud (Kokoro TTS) |
+
+### 6.3 Personalization via Memory
+
+The brief adapts over time:
+- Learns which email senders are important to you
+- Learns your meeting prep preferences
+- Learns which news topics you engage with
+- Adapts format (detailed vs concise) based on feedback
+- "Stop including weather" → agent remembers permanently
+
+---
+
+## 7. Outlook-Specific Considerations
+
+Outlook is important because:
+1. AMD's primary consumer platform is Windows, and Outlook is the default email client
+2. Enterprise users (Tier 3 target) overwhelmingly use Outlook/Exchange
+3. Outlook has both web (outlook.office.com) and desktop (COM API) versions
+
+### 7.1 Outlook Integration Paths
+
+| Path | Technology | Scope | Effort |
+|------|-----------|-------|--------|
+| **Outlook Web** | Playwright → outlook.office.com | Read/write email + calendar | Low (Phase 1) |
+| **Outlook MCP** | `outlook-mcp-server` (npm) | Read/write via Graph API | Low (Phase 1.5, unverified pkg) |
+| **MS Graph API** | REST API with OAuth2 | Full email + calendar + contacts | Medium (Phase 2) |
+| **Outlook COM** | `win32com.client` (Windows only) | Full desktop Outlook control | High (Windows-only, fragile) |
+| **Exchange** | `exchangelib` Python library | IMAP equivalent for Exchange | Medium (Phase 2) |
+
+**Recommendation:** Start with Outlook Web (Playwright) for demos. Add MS Graph API
+for production quality in Phase 2. Skip COM — too fragile and Windows-only.
+
+### 7.2 MS Graph API Integration (Phase 2)
+
+```python
+# MS Graph API endpoints
+GET  /me/messages                    # List emails
+GET  /me/messages/{id}               # Read email
+POST /me/messages                    # Create draft
+POST /me/messages/{id}/send          # Send email
+GET  /me/calendar/events             # List events
+POST /me/calendar/events             # Create event
+GET  /me/calendar/calendarView       # Events in date range
+```
+
+**Auth:** OAuth2 with MSAL (Microsoft Authentication Library).
+User authenticates once via browser popup, token refreshed automatically.
+
+---
+
+## 8. Security Considerations
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Email content sent to cloud | Critical | All processing local — no cloud LLM calls for email content |
+| OAuth token compromise | High | Encrypted credential vault, token rotation, no plaintext storage |
+| Agent sends email without approval | High | **All send actions require user confirmation** (confirm-first popup) |
+| Agent archives/deletes email without approval | Medium | Configurable: auto-archive requires opt-in, delete always confirms |
+| Browser session hijack (Playwright) | Medium | Sandboxed browser context, localhost-only |
+| Email content in memory | Medium | Summaries only in memory, not full email body; user can audit |
+
+**Critical policy:** The agent can READ email autonomously but NEVER SEND without
+explicit user confirmation. Draft responses are shown in the UI for approval.
+
+---
+
+## 9. Dependencies
+
+```
+Phase 1 (v0.20.0):
+  ├── Gmail/Calendar MCP servers           ← PRIMARY path (no code dep)
+  ├── #458 BrowserToolsMixin (Playwright)  ← FALLBACK only (not a blocker)
+  ├── Memory system (#542-579)             ← for personalization
+  └── Agent UI with tool cards             ← for email preview
+
+Phase 2 (v0.23.0):
+  ├── #634 Autonomy engine                 ← for scheduled triage
+  ├── #635 Messaging adapters              ← for brief delivery
+  ├── Credential vault                     ← for OAuth token storage
+  └── Security model (confirm-first)       ← for send confirmation
+
+Phase 3 (v0.23.0+):
+  ├── Memory system mature                 ← for preference learning
+  └── Daily briefs agent                   ← for morning digest
+```
+
+---
+
+## 10. Implementation Phases
+
+### Phase 1: MCP Server Integration (v0.20.0, primary path)
+
+| Task | Effort | Output |
+|------|--------|--------|
+| Pre-configure Gmail MCP in Settings catalog | 0.5 day | User can enable Gmail API access |
+| Pre-configure Google Calendar MCP | 0.5 day | User can enable Calendar API access |
+| Document OAuth setup flow | 0.5 day | Step-by-step guide in docs |
+| Daily brief generation (on-demand, not scheduled) | 1-2 days | "What's in my inbox/calendar today?" |
+
+**Deliverable:** "Check my email" and "What's on my calendar today?" work via MCP servers.
+
+### Phase 1 Fallback: Browser Automation (v0.20.0, for providers without MCP)
+
+| Task | Effort | Output |
+|------|--------|--------|
+| Email reading via Playwright (Gmail + Outlook Web) | 2-3 days | Read, summarize, search inbox |
+| Calendar reading via Playwright (Google Cal + Outlook Cal) | 1-2 days | View agenda, list events |
+| Auth persistence (Playwright browser context) | 0.5 day | Login once, sessions persist |
+
+**Deliverable:** Fallback path for providers without MCP servers.
+
+### Phase 2: Dedicated Email Triage Agent (v0.23.0, 2-3 weeks)
+
+| Task | Effort | Output |
+|------|--------|--------|
+| EmailTriageAgent class (extends Agent + MemoryMixin) | 2-3 days | New agent in src/gaia/agents/email/ |
+| IMAP/OAuth email source (Gmail + Outlook) | 3-4 days | Direct protocol access |
+| Triage engine (categorize, prioritize, summarize) | 2-3 days | AI-learned categories |
+| Draft response generation | 1-2 days | Agent drafts, user approves |
+| Auto-archive with configurable rules | 1 day | Low-priority cleanup |
+| CalendarAgent class | 2-3 days | New agent in src/gaia/agents/calendar/ |
+| Integration with autonomy engine for scheduled runs | 1-2 days | Morning triage + daily briefs |
+
+**Deliverable:** Autonomous overnight email triage + morning calendar brief.
+
+### Phase 3: Personalization (v0.23.0+, ongoing)
+
+| Task | Effort | Output |
+|------|--------|--------|
+| Sender importance learning | 1-2 days | Memory tracks response patterns |
+| Brief format adaptation | 1 day | Learns concise vs detailed preference |
+| Meeting prep context pulling | 1-2 days | Pulls related email/docs before meetings |
+| Cross-agent integration (email + calendar + tasks) | 1-2 days | Unified daily brief |
+
+---
+
+## 11. Meeting Notes Capture & Analysis
+
+**GitHub issues:** #700 (Meeting notes with diarization), #389 (Voice Agent demo) — v0.21.0
+
+Meeting transcription is a natural extension of the email +
+calendar ecosystem. After checking your calendar for today's meetings, the agent can
+record, transcribe, and summarize each meeting — then include highlights in tomorrow's
+daily brief.
+
+### 11.1 Capabilities
+
+| Capability | Description |
+|-----------|-------------|
+| **Live transcription** | Record meeting audio, transcribe in real-time via Whisper ASR |
+| **Speaker diarization** | Identify and label different speakers ("Speaker 1", "Speaker 2") |
+| **LLM enhancement** | Clean raw ASR: remove fillers, fix punctuation, correct proper nouns |
+| **Structured minutes** | LLM generates: summary, key decisions, action items, attendees |
+| **Auto-labeling** | LLM tags with topic labels and category |
+| **Markdown export** | Save as `.md` with YAML frontmatter to `~/.gaia/voice/notes/` |
+| **Calendar integration** | Pull meeting title + attendees from calendar, attach notes to event |
+| **Daily brief integration** | Meeting highlights appear in next morning's brief |
+| **Search** | Voice or text queries over past meeting transcripts via RAG |
+
+### 11.2 Speaker Diarization
+
+Current Whisper ASR has no speaker diarization. Two approaches:
+
+| Approach | Library | How it Works | Effort |
+|----------|---------|-------------|--------|
+| **pyannote.audio** | `pyannote/speaker-diarization-3.1` | Neural speaker segmentation + clustering. State-of-the-art accuracy. Runs locally on GPU. | Medium — add as optional dependency |
+| **Whisper + post-processing** | `whisperx` or custom VAD + clustering | Use Whisper timestamps + voice activity detection to segment by speaker | Lower accuracy, lower effort |
+| **Lemonade v10 native** | If Lemonade adds diarization | Server-side diarization via Lemonade API | Depends on Lemonade roadmap |
+
+**Recommendation:** Use `pyannote.audio` — best accuracy, runs locally (AMD GPU),
+well-maintained. Install as optional: `pip install gaia[meeting-notes]`.
+
+### 11.3 Pipeline
+
+```
+Microphone / Audio File
+    ↓
+Whisper ASR (raw transcript with timestamps)
+    ↓
+Speaker Diarization (pyannote.audio)
+    ↓
+Merge: align transcript segments with speaker labels
+    ↓
+LLM Enhancement (clean, structure, correct proper nouns)
+    ↓
+LLM Analysis (summary, decisions, action items, labels)
+    ↓
+Store in SQLite + Export as Markdown
+    ↓
+Index in RAG for future search
+    ↓
+Include in next daily brief
+```
+
+### 11.4 Output Format
+
+```markdown
+---
+id: 7
+type: meeting
+title: Q2 Planning
+labels: [roadmap, npu, budget, action-items]
+category: planning
+duration: 31 min
+speakers: [Speaker 1, Speaker 2, Speaker 3]
+calendar_event: "Q2 Planning - Feb 27 2:00 PM"
+created: 2026-02-27T14:01:00
+---
+
+# Q2 Planning — Feb 27, 2026
+
+## Summary
+Reviewed Q2 roadmap priorities. NPU optimization ahead of schedule.
+Budget approved for two additional GPUs. Demo deadline set for March 10th.
+
+## Transcript
+
+**Speaker 1** [00:00]: Welcome everyone. Today we're discussing the Q2 roadmap.
+
+**Speaker 2** [00:15]: NPU work is ahead of schedule. Performance targets
+exceeded on Ryzen AI 300 series.
+
+**Speaker 1** [01:30]: Great. Budget approved for two additional GPUs.
+
+**Speaker 3** [02:00]: I'll handle procurement and prepare the customer demo.
+
+## Key Decisions
+- Use Flux model for image pipeline
+- Launch target: March 15th
+- Two additional GPUs approved
+
+## Action Items
+- [ ] Speaker 3: Prepare customer demo by March 10th
+- [ ] Team: Finalize Q2 milestones by March 3rd
+```
+
+### 11.5 CLI Commands
+
+```bash
+gaia voice --meeting "Q2 Planning"   # Record + transcribe meeting
+gaia voice --meeting --file rec.wav  # Transcribe existing recording
+gaia voice --list --type meeting     # List meeting transcripts
+gaia voice --search "GPU budget"     # Search across meetings
+gaia voice --ui                      # Browse in web UI
+```
+
+### 11.6 Dependencies
+
+- #389 (Voice Agent demo) — base agent with ASR + DatabaseMixin
+- #372 (streaming ASR via Lemonade WebSocket)
+- #386 (TalkSDK auto-detection)
+- #375 (reranking for search)
+- `pyannote.audio` — speaker diarization (optional dependency)
+- Calendar agent (#662) — for meeting context
+- Daily briefs (#663) — for including meeting highlights
+
+### 11.7 Privacy
+
+- All audio processed locally — never sent to cloud
+- Speaker models stored locally (no voice fingerprint exfiltration)
+- Recordings can be auto-deleted after transcription (configurable)
+- Meeting content indexed locally in RAG, never shared
+
+---
+
+## 12. Success Metrics
+
+| Metric | Target | How to Measure |
+|--------|--------|----------------|
+| Time to first email summary | < 2 minutes after setup | From OAuth/login to first inbox summary |
+| Triage accuracy (after 1 week) | > 80% | User corrections vs auto-categorizations |
+| Daily brief delivery | < 30 seconds | Generation time for morning brief |
+| Draft response acceptance rate | > 50% | Drafts sent vs drafts discarded |
+| Email processing latency | < 5 seconds per email | Time to categorize + summarize |
+| Zero cloud data leakage | 100% | Audit log confirms no outbound calls with email content |
+
+---
+
+## 13. Open Questions
+
+| # | Question | Options | Recommendation |
+|---|----------|---------|----------------|
+| 1 | OAuth token storage | Env var vs encrypted vault vs OS keychain | **Encrypted vault** (~/.gaia/credentials.db) — env vars are too fragile for refresh tokens |
+| 2 | Which email protocol for Outlook? | IMAP vs MS Graph vs COM | **MS Graph API** — modern, full-featured, works with MFA |
+| 3 | Should agent auto-archive by default? | Yes (with undo) vs opt-in | **Opt-in** — users need to trust the agent first |
+| 4 | Calendar event creation without confirmation? | Auto-create vs always confirm | **Always confirm** — calendar errors are costly |
+| 5 | Apple Calendar support? | CalDAV vs skip | **Skip for v1** — no web UI, CalDAV is complex, AMD targets Windows |
+| 6 | Shared/team calendars? | Support vs personal only | **Personal only for v1** — team features add auth complexity |

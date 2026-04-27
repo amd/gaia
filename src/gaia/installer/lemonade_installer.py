@@ -348,32 +348,20 @@ class LemonadeInstaller:
         except Exception as e:
             raise RuntimeError(f"Download failed: {e}")
 
-    def install(self, installer_path: Path, silent: bool = True) -> InstallResult:
-        """
-        Install Lemonade Server from the downloaded installer.
-
-        Args:
-            installer_path: Path to the installer file
-            silent: Whether to run silent installation (no UI)
-
-        Returns:
-            InstallResult with success status
-
-        Raises:
-            RuntimeError: If installation fails
-        """
-        if not installer_path.exists():
-            return InstallResult(
-                success=False, error=f"Installer not found: {installer_path}"
-            )
-
-        self._print_status(f"Installing from {installer_path}")
-
+    def install(
+        self, installer_path: Optional[Path] = None, silent: bool = True
+    ) -> InstallResult:
+        """Install Lemonade Server. On Linux, installer_path is unused (PPA flow)."""
+        self._print_status(f"Installing Lemonade Server (system={self.system})")
         try:
             if self.system == "windows":
+                if installer_path is None or not installer_path.exists():
+                    return InstallResult(
+                        success=False, error=f"Installer not found: {installer_path}"
+                    )
                 return self._install_windows(installer_path, silent)
             elif self.system == "linux":
-                return self._install_linux(installer_path)
+                return self._install_via_ppa(non_interactive=silent)
             else:
                 return InstallResult(
                     success=False, error=f"Platform '{self.system}' is not supported"
@@ -615,75 +603,140 @@ class LemonadeInstaller:
 
         return None
 
-    def _install_linux(self, installer_path: Path) -> InstallResult:
-        """Install on Linux using apt (handles dependencies automatically)."""
+    def _install_via_ppa(self, non_interactive: bool = False) -> InstallResult:
+        """Install Lemonade Server on Linux via the Launchpad PPA.
+
+        Linux >= v10.0.1 is distributed only through ppa:lemonade-team/stable.
+        Requires Ubuntu 24.04+ (Debian and older Ubuntu are gated by
+        _check_linux_version).
+        """
         try:
-            # Check Linux version compatibility before attempting install
             version_error = self._check_linux_version()
             if version_error:
                 return InstallResult(success=False, error=version_error)
 
-            # Check if we have root access (geteuid only available on Unix)
-            is_root = False
-            if hasattr(os, "geteuid"):
-                is_root = os.geteuid() == 0
-
-            sudo_prefix = [] if is_root else ["sudo"]
-
-            # Update apt cache first to avoid 404 errors from stale package lists
-            self._print_status("Updating package cache...")
-            update_cmd = sudo_prefix + ["apt", "update"]
-            log.debug(f"Running: {' '.join(update_cmd)}")
-
-            update_result = subprocess.run(
-                update_cmd, capture_output=True, text=True, timeout=120, check=False
-            )
-
-            if update_result.returncode != 0:
-                log.warning(f"apt update failed: {update_result.stderr}")
-                # Continue anyway - update failure shouldn't block install
-
-            # Use 'apt install' instead of 'dpkg -i' so dependencies are
-            # automatically resolved from the system repositories.
-            # The ./ prefix is required for apt to treat it as a local file.
-            deb_path = str(installer_path)
-            if not deb_path.startswith("/"):
-                deb_path = f"./{deb_path}"
-
-            cmd = sudo_prefix + ["apt", "install", "-y", deb_path]
-            log.debug(f"Running: {' '.join(cmd)}")
-            self._print_status("Installing package and dependencies...")
-
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300, check=False
-            )
-
-            if result.returncode != 0:
-                # Combine stdout + stderr for full diagnostic output.
-                # apt puts dependency resolution details in stdout,
-                # but only a generic warning in stderr.
-                full_output = (
-                    result.stdout.strip() + "\n" + result.stderr.strip()
-                ).strip()
+            # add-apt-repository ships pre-installed on Ubuntu 24.04+; if missing
+            # the user is on a minimal image and needs a clear error, not silent apt churn.
+            if shutil.which("add-apt-repository") is None:
                 return InstallResult(
                     success=False,
-                    error=f"apt install failed:\n{full_output}",
+                    error=(
+                        "add-apt-repository not found (required for PPA install).\n"
+                        "Install it first: sudo apt-get install software-properties-common\n"
+                        "Then re-run: gaia init"
+                    ),
+                )
+
+            is_root = hasattr(os, "geteuid") and os.geteuid() == 0
+            sudo_prefix = [] if is_root else ["sudo"]
+
+            # Pre-flight sudo when non-interactive: surface a clean error instead
+            # of hanging at a hidden TTY password prompt.
+            if not is_root and non_interactive:
+                sudo_check = subprocess.run(
+                    ["sudo", "-n", "true"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    stdin=subprocess.DEVNULL,
+                    check=False,
+                )
+                if sudo_check.returncode != 0:
+                    return InstallResult(
+                        success=False,
+                        error=(
+                            "sudo requires a password but gaia init --yes is non-interactive.\n"
+                            "Either run 'sudo -v' first to cache credentials, "
+                            "configure passwordless sudo, or run gaia init as root."
+                        ),
+                    )
+
+            env = os.environ.copy()
+            if non_interactive:
+                env["DEBIAN_FRONTEND"] = "noninteractive"
+
+            def _run(step: str, cmd: list, timeout: int) -> subprocess.CompletedProcess:
+                self._print_status(f"{step}: {' '.join(cmd)}")
+                return subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    check=False,
+                )
+
+            result = _run(
+                "Add PPA",
+                sudo_prefix + ["add-apt-repository", "-y", "ppa:lemonade-team/stable"],
+                timeout=120,
+            )
+            if result.returncode != 0:
+                return InstallResult(
+                    success=False,
+                    error=(
+                        f"Failed to add Lemonade PPA (system={self.system}, root={is_root}).\n"
+                        f"add-apt-repository output:\n{(result.stdout + result.stderr).strip()}\n"
+                        "See https://amd-gaia.ai/reference/troubleshooting"
+                    ),
+                )
+
+            # apt-get update failure is warn-only — stale cache is better than blocking.
+            update_result = _run(
+                "Update apt cache", sudo_prefix + ["apt-get", "update"], timeout=300
+            )
+            if update_result.returncode != 0:
+                log.warning(
+                    "apt-get update failed (rc=%s); continuing with possibly stale cache: %s",
+                    update_result.returncode,
+                    (update_result.stdout + update_result.stderr).strip()[-500:],
+                )
+
+            result = _run(
+                "Install lemonade-server",
+                sudo_prefix + ["apt-get", "install", "-y", "lemonade-server"],
+                timeout=600,
+            )
+            if result.returncode != 0:
+                return InstallResult(
+                    success=False,
+                    error=(
+                        f"apt-get install lemonade-server failed (step=Install, root={is_root}):\n"
+                        f"{(result.stdout + result.stderr).strip()}\n"
+                        "Your apt state may be partial — run 'sudo dpkg --configure -a' to recover.\n"
+                        "See https://amd-gaia.ai/reference/troubleshooting"
+                    ),
+                )
+
+            # Use the real installed version — PPA may ship a different version than target.
+            verify = self.check_installation()
+            installed_version = verify.version or "unknown"
+            if verify.installed and verify.version != self.target_version:
+                log.warning(
+                    "PPA installed Lemonade %s but GAIA expected %s",
+                    verify.version,
+                    self.target_version,
                 )
 
             return InstallResult(
                 success=True,
-                version=self.target_version,
-                message=f"Installed Lemonade v{self.target_version}",
+                version=installed_version,
+                message=f"Installed Lemonade v{installed_version} via PPA",
             )
 
-        except subprocess.TimeoutExpired:
-            return InstallResult(success=False, error="Installation timed out")
+        except subprocess.TimeoutExpired as e:
+            return InstallResult(
+                success=False,
+                error=(
+                    f"PPA install timed out during step (cmd={e.cmd}). "
+                    "If this happened during apt-get install, run 'sudo dpkg --configure -a'."
+                ),
+            )
         except FileNotFoundError as e:
             return InstallResult(
                 success=False, error=f"Required command not found: {e}"
             )
-        except Exception as e:
-            return InstallResult(success=False, error=str(e))
 
     def is_platform_supported(self) -> bool:
         """Check if the current platform is supported for installation."""
@@ -858,7 +911,7 @@ class LemonadeInstaller:
                 is_root = os.geteuid() == 0
 
             sudo_prefix = [] if is_root else ["sudo"]
-            cmd = sudo_prefix + ["apt", "remove", "-y", "lemonade"]
+            cmd = sudo_prefix + ["apt", "remove", "-y", "lemonade-server"]
 
             log.debug(f"Running: {' '.join(cmd)}")
 

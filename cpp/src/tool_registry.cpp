@@ -92,9 +92,30 @@ void ToolRegistry::clear() {
     tools_.clear();
 }
 
+bool ToolRegistry::setEnabled(const std::string& name, bool enabled) {
+    auto it = tools_.find(name);
+    if (it == tools_.end()) return false;
+    it->second.enabled = enabled;
+    return true;
+}
+
+bool ToolRegistry::isEnabled(const std::string& name) const {
+    const ToolInfo* tool = findTool(name);
+    return tool && tool->enabled;
+}
+
+std::vector<std::string> ToolRegistry::enabledTools() const {
+    std::vector<std::string> result;
+    for (const auto& [name, tool] : tools_) {
+        if (tool.enabled) result.push_back(name);
+    }
+    return result;
+}
+
 std::string ToolRegistry::formatForPrompt() const {
     std::ostringstream oss;
     for (const auto& [name, tool] : tools_) {
+        if (!tool.enabled) continue;
         oss << "- " << name << "(";
 
         bool first = true;
@@ -123,6 +144,10 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
 
     if (!tool) {
         return json{{"status", "error"}, {"error", "Tool '" + name + "' not found"}};
+    }
+
+    if (!tool->enabled) {
+        return json{{"status", "error"}, {"error", "Tool '" + tool->name + "' is disabled"}};
     }
 
     if (!tool->callback) {

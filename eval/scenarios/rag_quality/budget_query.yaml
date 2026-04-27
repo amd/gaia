@@ -1,0 +1,43 @@
+id: budget_query
+name: "Budget Document Query"
+category: rag_quality
+severity: medium
+description: |
+  Agent must retrieve budget facts from a structured markdown table document.
+  Tests retrieval of numeric values from a table and policy thresholds.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: budget_2025
+      path: "eval/corpus/documents/budget_2025.md"
+
+turns:
+  - turn: 1
+    objective: "Ask 'What is the total approved budget for 2025?'"
+    ground_truth:
+      doc_id: budget_2025
+      fact_id: total_budget
+      expected_answer: "$4.2M"
+    success_criteria: "Agent states the total approved budget is $4.2M"
+
+  - turn: 2
+    objective: "Ask 'What is the Engineering department's annual budget?'"
+    ground_truth:
+      doc_id: budget_2025
+      fact_id: engineering_budget
+      expected_answer: "$1.3M"
+    success_criteria: "Agent states Engineering's annual budget is $1.3M"
+
+  - turn: 3
+    objective: "Ask 'At what spending level does CFO approval kick in?'"
+    ground_truth:
+      doc_id: budget_2025
+      fact_id: cfo_approval_threshold
+      expected_answer: "Expenses over $50K require CFO approval"
+    success_criteria: "Agent states expenses over $50K require CFO approval"
+
+expected_outcome: |
+  Agent correctly retrieves numeric budget figures from a markdown table
+  and policy thresholds from the document text.

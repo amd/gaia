@@ -990,30 +990,34 @@ Examples:
             )
 
             # Different output based on use case
+            analysis = result.get("analysis", {})
             if use_case == UseCase.RAG:
-                qa_pairs_count = len(result["analysis"]["qa_pairs"])
-                print(
-                    f"  Q&A pairs: {qa_pairs_count} (${cost['total_cost']/qa_pairs_count:.4f} per pair)"
-                )
+                qa_pairs_count = len(analysis.get("qa_pairs", []))
+                if qa_pairs_count > 0:
+                    print(
+                        f"  Q&A pairs: {qa_pairs_count} (${cost['total_cost']/qa_pairs_count:.4f} per pair)"
+                    )
+                else:
+                    print(f"  Q&A pairs: {qa_pairs_count}")
             elif use_case == UseCase.SUMMARIZATION:
                 print(
-                    f"  Summary types generated: {len(result['analysis']['summaries'])} different formats"
+                    f"  Summary types generated: {len(analysis.get('summaries', {}))} different formats"
                 )
                 print(
-                    f"  Evaluation criteria: {len(result['analysis']['evaluation_criteria'])} categories"
+                    f"  Evaluation criteria: {len(analysis.get('evaluation_criteria', {}))} categories"
                 )
             elif use_case == UseCase.QA:
-                print(f"  Q&A pairs: {len(result['analysis']['qa_pairs'])}")
+                print(f"  Q&A pairs: {len(analysis.get('qa_pairs', []))}")
                 print(
-                    f"  Evaluation criteria: {len(result['analysis']['evaluation_criteria'])} categories"
+                    f"  Evaluation criteria: {len(analysis.get('evaluation_criteria', {}))} categories"
                 )
             elif use_case == UseCase.PDF:
-                print(f"  Q&A pairs: {len(result['analysis']['qa_pairs'])}")
+                print(f"  Q&A pairs: {len(analysis.get('qa_pairs', []))}")
                 print(
-                    f"  Summary types generated: {len(result['analysis']['summaries'])} different formats"
+                    f"  Summary types generated: {len(analysis.get('summaries', {}))} different formats"
                 )
                 print(
-                    f"  Evaluation criteria: {len(result['analysis']['evaluation_criteria'])} categories"
+                    f"  Evaluation criteria: {len(analysis.get('evaluation_criteria', {}))} categories"
                 )
 
         elif args.directory:

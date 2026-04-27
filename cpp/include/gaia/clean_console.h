@@ -66,6 +66,8 @@ public:
     void printFinalAnswer(const std::string& answer) override;
     void printCompletion(int stepsTaken, int stepsLimit) override;
     void printDecisionMenu(const std::vector<Decision>& decisions) override;
+    void printStreamToken(const std::string& token) override;
+    void printStreamEnd() override;
 
 protected:
     /// Render **bold** markers as ANSI bold+white, then restore prevColor.

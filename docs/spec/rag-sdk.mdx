@@ -40,7 +40,7 @@ RAGSDK provides document retrieval and Q&A capabilities using Retrieval-Augmente
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+    model: str = "Qwen3.5-35B-A3B-GGUF"
     max_tokens: int = 1024
     chunk_size: int = 500
     chunk_overlap: int = 100
@@ -49,7 +49,7 @@ class RAGConfig:
     cache_dir: str = ".gaia"
     show_stats: bool = False
     use_local_llm: bool = True
-    base_url: str = "http://localhost:8000/api/v1"
+    base_url: str = "http://localhost:13305/api/v1"
 
     # Memory management
     max_indexed_files: int = 100

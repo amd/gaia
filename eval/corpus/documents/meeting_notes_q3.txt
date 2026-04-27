@@ -1,0 +1,140 @@
+MEETING NOTES — Q3 BUSINESS REVIEW
+===================================
+Date: September 24, 2025
+Time: 10:00 AM – 11:45 AM PDT
+Location: Acme Corp HQ, Conference Room B (and Zoom)
+Meeting Type: Quarterly Business Review
+
+ATTENDEES
+---------
+Present in person:
+  - Jane Smith, CEO
+  - Marcus Webb, VP of Sales
+  - Linda Torres, VP of Finance
+  - Raj Patel, Director of Product
+
+Present remotely:
+  - Sandra Kim, VP of Engineering
+  - Tom Nguyen, Director of Marketing
+  - Priya Okonjo, Head of Customer Success
+  - Derek Walsh, Regional Sales Manager (East)
+
+Apologies / Unable to attend:
+  - Carlos Rivera, Director of Operations (traveling)
+
+Facilitator: Marcus Webb
+Note-taker: Linda Torres
+
+
+AGENDA
+------
+1. Q3 2025 Financial Results Review
+2. Sales Pipeline and Q4 Forecast
+3. Product Roadmap Update
+4. Customer Success Highlights and Challenges
+5. Engineering Capacity and Priorities
+6. Action Items and Next Steps
+
+
+DISCUSSION NOTES
+----------------
+
+1. Q3 2025 FINANCIAL RESULTS REVIEW
+
+Linda Torres presented the Q3 financials.
+
+Key figures:
+  - Q3 2025 total revenue: $14.2 million
+  - Year-over-year growth: +23% vs Q3 2024 ($11.5 million)
+  - Gross margin: 68% (up from 65% in Q2)
+  - Operating expenses came in $280K under budget due to delayed hiring
+
+Jane Smith noted that Q3 results exceeded the internal forecast by approximately $600K, primarily driven by a large enterprise deal that closed in early September.
+
+Marcus Webb highlighted the enterprise segment as the primary growth driver. "Three of our top five deals this quarter were new enterprise logos," he said.
+
+Discussion: The team discussed the mix between new logo revenue and expansion revenue. Approximately 40% of Q3 revenue came from expansion of existing accounts.
+
+
+2. SALES PIPELINE AND Q4 FORECAST
+
+Marcus Webb presented the sales pipeline.
+
+  - Q4 pipeline (weighted): $19.2 million
+  - CEO Q4 growth outlook: Projected 15–18% growth driven by enterprise segment expansion
+  - Three new product launches planned for November expected to contribute approximately $1.2 million in Q4
+  - Enterprise segment pipeline is 2.3x larger than the same period last year
+
+Derek Walsh (East region) flagged two large deals (>$500K each) that are at risk due to budget freezes at client organizations. The team agreed to prioritize executive engagement for these accounts.
+
+Priya Okonjo noted that churn risk for Q4 is low — NPS scores improved to 62 (from 54 in Q2).
+
+
+3. PRODUCT ROADMAP UPDATE
+
+Raj Patel reviewed the product roadmap.
+
+Key updates:
+  - Widget Pro X v2.1 launching November 12, 2025. Key feature: enhanced API rate limiting.
+  - Gadget Plus integration with Salesforce: on track for Q4.
+  - Mobile app (Android) entering final QA phase; launch expected December.
+
+Sandra Kim (Engineering) confirmed resourcing for November launches is secured. She noted that the Salesforce integration required 20% more engineering effort than estimated but is still on schedule.
+
+Open issue: Three legacy API endpoints scheduled for deprecation on December 31, 2025. Tom Nguyen agreed to draft a customer communication plan by October 10.
+
+
+4. CUSTOMER SUCCESS HIGHLIGHTS AND CHALLENGES
+
+Priya Okonjo shared highlights:
+  - Acme Corp onboarded 47 new customers in Q3 (vs 38 in Q2).
+  - Average time-to-value has improved from 14 days to 9 days.
+  - Top customer complaint: documentation and API reference clarity.
+
+Action: Raj Patel to schedule a docs sprint with Engineering and Marketing for October.
+
+
+5. ENGINEERING CAPACITY AND PRIORITIES
+
+Sandra Kim presented Engineering capacity for Q4:
+  - Current team: 34 engineers (FTE)
+  - 3 open headcount positions actively recruiting
+  - Capacity is sufficient for committed Q4 work; no scope changes accepted after October 1
+
+The team discussed prioritization if the Salesforce integration slips. Consensus: delay mobile app launch by 2 weeks rather than delay Salesforce integration.
+
+
+6. ACTION ITEMS
+---------------
+
+| Owner          | Action                                               | Due Date     |
+|----------------|------------------------------------------------------|--------------|
+| Tom Nguyen     | Draft API deprecation customer comm plan             | Oct 10, 2025 |
+| Raj Patel      | Schedule October docs sprint                         | Oct 3, 2025  |
+| Marcus Webb    | Executive outreach for 2 at-risk deals               | Oct 1, 2025  |
+| Linda Torres   | Update Q4 financial model with revised pipeline data | Oct 7, 2025  |
+| Sandra Kim     | Confirm final QA timeline for Android mobile app     | Oct 10, 2025 |
+| All VPs        | Submit department Q4 OKR check-ins to Jane Smith     | Oct 14, 2025 |
+
+
+DECISIONS MADE
+--------------
+1. Q4 launch dates for Widget Pro X v2.1 and Salesforce integration are locked; no changes to scope after October 1.
+2. If Salesforce integration slips, mobile app launch will be delayed rather than the integration.
+3. API deprecation plan will go out to customers no later than November 1, 2025.
+
+
+NEXT MEETING
+------------
+The next quarterly business review (Q4 interim check-in) is scheduled for:
+
+    Date: October 15, 2025
+    Time: 2:00 PM PDT
+    Location: Conference Room B and Zoom
+
+Please confirm attendance with Linda Torres by October 10.
+
+
+---
+Notes prepared by: Linda Torres
+Distributed to all attendees: September 25, 2025

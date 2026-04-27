@@ -26,7 +26,9 @@ from gaia.llm.lemonade_client import (
 TEST_MODEL = os.environ.get("GAIA_TEST_MODEL", "Llama-3.2-3B-Instruct-Hybrid")
 
 HOST = "localhost"
-PORT = 8000
+# Respect LEMONADE_PORT env var so Linux CI (lemonade-server-dev, port 8000)
+# can override. Default 13305 matches C++ server / lemonade-server v10.1.0+.
+PORT = int(os.environ.get("LEMONADE_PORT", 13305))
 API_BASE = f"http://{HOST}:{PORT}/api/v1"
 
 
@@ -56,7 +58,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         # Test default initialization
         client = LemonadeClient()
         self.assertEqual(client.host, "localhost")
-        self.assertEqual(client.port, 8000)
+        self.assertEqual(client.port, 13305)
         # The client doesn't expose verbose as a property, so check log level instead
         self.assertEqual(client.log.level, logging.WARNING)
 
@@ -980,7 +982,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         model_ids = self.client.get_required_models("chat")
 
         # Chat agent requires qwen3-coder-30b, nomic-embed, qwen2.5-vl-7b
-        self.assertIn("Qwen3-Coder-30B-A3B-Instruct-GGUF", model_ids)
+        self.assertIn("Qwen3.5-35B-A3B-GGUF", model_ids)
         self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
         self.assertIn("Qwen3-VL-4B-Instruct-GGUF", model_ids)
 
@@ -989,7 +991,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         model_ids = self.client.get_required_models("code")
 
         # Code agent only requires qwen3-coder-30b
-        self.assertIn("Qwen3-Coder-30B-A3B-Instruct-GGUF", model_ids)
+        self.assertIn("Qwen3.5-35B-A3B-GGUF", model_ids)
         self.assertEqual(len(model_ids), 1)
 
     def test_get_required_models_for_minimal(self):
@@ -1005,7 +1007,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         model_ids = self.client.get_required_models("all")
 
         # Should have all unique models
-        self.assertIn("Qwen3-Coder-30B-A3B-Instruct-GGUF", model_ids)
+        self.assertIn("Qwen3.5-35B-A3B-GGUF", model_ids)
         self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
         self.assertIn("Qwen3-VL-4B-Instruct-GGUF", model_ids)
         self.assertIn("Qwen3-0.6B-GGUF", model_ids)

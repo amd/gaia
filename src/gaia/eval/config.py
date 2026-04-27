@@ -8,14 +8,15 @@ This module contains shared configuration constants used across the evaluation f
 """
 
 # Default Claude model for evaluation tasks
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 
 # Claude API pricing (per million tokens) - based on https://www.anthropic.com/pricing
-# Last updated: 2025-10-01
+# Last updated: 2026-03-18
 MODEL_PRICING = {
     # Claude 4.x family
     "claude-opus-4.1": {"input_per_mtok": 15.00, "output_per_mtok": 75.00},
     "claude-opus-4": {"input_per_mtok": 15.00, "output_per_mtok": 75.00},
+    "claude-sonnet-4-6": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
     "claude-sonnet-4.5": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
     "claude-sonnet-4-5-20250929": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
     "claude-sonnet-4": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},

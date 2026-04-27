@@ -2,10 +2,18 @@
 # SPDX-License-Identifier: MIT
 """Lemonade provider - supports ALL methods."""
 
-from typing import Iterator, Optional, Union
+import json
+import logging
+from typing import Iterator, List, Optional, Union
 
 from ..base_client import LLMClient
-from ..lemonade_client import DEFAULT_MODEL_NAME, LemonadeClient
+from ..lemonade_client import DEFAULT_MODEL_NAME, LemonadeClient, is_tool_calling_model
+
+logger = logging.getLogger(__name__)
+
+# Sentinel key used to encode native tool_calls inside a JSON string so that
+# the response type stays `str` everywhere (no callers need updating).
+_NATIVE_TC_KEY = "__tool_calls__"
 
 
 class LemonadeProvider(LLMClient):
@@ -60,10 +68,12 @@ class LemonadeProvider(LLMClient):
         messages: list[dict],
         model: str | None = None,
         stream: bool = False,
+        tools: Optional[List[dict]] = None,
         **kwargs,
-    ) -> Union[str, Iterator[str]]:
+    ) -> Union[str, dict, Iterator[str]]:
         # Use provided model, instance model, or default CPU model
         effective_model = model or self._model or DEFAULT_MODEL_NAME
+        tool_capable = is_tool_calling_model(effective_model)
 
         # Prepend system prompt if set
         if self._system_prompt:
@@ -74,10 +84,42 @@ class LemonadeProvider(LLMClient):
         # Default to low temperature for deterministic responses (matches old LLMClient behavior)
         kwargs.setdefault("temperature", 0.1)
 
+        # Repetition prevention: penalise recently-generated tokens so the
+        # model doesn't get stuck in a loop repeating tables, paragraphs, etc.
+        #
+        # We use TWO layers of protection:
+        #   1. OpenAI-standard params (frequency_penalty, presence_penalty) –
+        #      work in both streaming (OpenAI client) and non-streaming paths.
+        #   2. llama.cpp-native params (repeat_penalty, repeat_last_n) –
+        #      passed via extra_body for the streaming OpenAI client path,
+        #      and directly in kwargs for the non-streaming requests.post path.
+        #
+        # frequency_penalty: additive penalty proportional to token frequency
+        #                    in generated text so far (0.0 = off, 0.0–2.0 range)
+        # presence_penalty:  flat penalty if token appeared at all in output
+        #                    (0.0 = off, 0.0–2.0 range)
+        # repeat_penalty:    llama.cpp multiplicative penalty on tokens in the
+        #                    last repeat_last_n window (1.0 = off, 1.1–1.3 typical)
+        # repeat_last_n:     how far back to look (default 64; 256 covers tables)
+        kwargs.setdefault("frequency_penalty", 0.3)
+        kwargs.setdefault("presence_penalty", 0.1)
+        kwargs.setdefault("repeat_penalty", 1.1)
+        kwargs.setdefault("repeat_last_n", 256)
+
+        # For tool-calling models with tools, always use non-streaming so tool_calls
+        # are returned as a complete structured dict (not fragmented SSE chunks).
+        # Streaming of tool_call delta frames is deferred to a future release.
+        effective_stream = stream and not (tool_capable and tools)
+        effective_tools = tools if tool_capable else None
+
         response = self._backend.chat_completions(
-            model=effective_model, messages=messages, stream=stream, **kwargs
+            model=effective_model,
+            messages=messages,
+            stream=effective_stream,
+            tools=effective_tools,
+            **kwargs,
         )
-        if stream:
+        if effective_stream:
             return self._handle_stream(response)
 
         # Handle error responses gracefully
@@ -88,7 +130,35 @@ class LemonadeProvider(LLMClient):
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")
 
-        return response["choices"][0]["message"]["content"]
+        choice = response["choices"][0]
+        message = choice.get("message", {})
+        finish_reason = choice.get("finish_reason", "")
+        tool_calls = message.get("tool_calls")
+
+        if tool_calls:
+            logger.debug(
+                "tool_call_path=native model_id=%s tool_calling_flag=%s finish_reason=%s",
+                effective_model,
+                tool_capable,
+                finish_reason,
+            )
+            # Encode as JSON string so callers can keep treating responses as str.
+            return json.dumps(
+                {
+                    _NATIVE_TC_KEY: tool_calls,
+                    "finish_reason": finish_reason,
+                }
+            )
+
+        content = message.get("content") or message.get("reasoning_content") or ""
+        logger.debug(
+            "tool_call_path=%s model_id=%s tool_calling_flag=%s finish_reason=%s",
+            "plain_text",
+            effective_model,
+            tool_capable,
+            finish_reason,
+        )
+        return content
 
     def embed(self, texts: list[str], **kwargs) -> list[list[float]]:
         response = self._backend.embeddings(texts, **kwargs)
@@ -115,13 +185,34 @@ class LemonadeProvider(LLMClient):
         return response["choices"][0]["text"]
 
     def _handle_stream(self, response) -> Iterator[str]:
+        in_thinking = False
         for chunk in response:
             if "choices" in chunk and chunk["choices"]:
                 delta = chunk["choices"][0].get("delta", {})
                 content = delta.get("content")
                 if content:
+                    # Close thinking block before yielding actual content
+                    if in_thinking:
+                        yield "</think>"
+                        in_thinking = False
                     yield content
-                elif "text" in chunk["choices"][0]:
-                    text = chunk["choices"][0]["text"]
-                    if text:
-                        yield text
+                else:
+                    # Thinking models (e.g. Qwen3.5) stream reasoning in a
+                    # separate field. Wrap in <think> tags so the UI can
+                    # display it in a collapsible section.
+                    reasoning = delta.get("reasoning_content")
+                    if reasoning:
+                        if not in_thinking:
+                            yield "<think>"
+                            in_thinking = True
+                        yield reasoning
+                    elif "text" in chunk["choices"][0]:
+                        text = chunk["choices"][0]["text"]
+                        if text:
+                            if in_thinking:
+                                yield "</think>"
+                                in_thinking = False
+                            yield text
+        # Close any unclosed thinking block at end of stream
+        if in_thinking:
+            yield "</think>"

@@ -1,0 +1,549 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* ── Agent Terminal ────────────────────────────────────────────────────── */
+
+.agent-terminal {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+  overflow: hidden;
+  position: relative;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────── */
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.terminal-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-icon {
+  color: var(--text-muted);
+}
+
+.terminal-agent-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.terminal-status-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.terminal-status-badge.running {
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--accent-green);
+}
+
+.terminal-status-badge.stopped {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.terminal-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.terminal-line-count {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.terminal-error-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--amd-red);
+  font-weight: 600;
+}
+
+/* ── Tabs ─────────────────────────────────────────────────────────────── */
+
+.terminal-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-light);
+  padding: 0 16px;
+  flex-shrink: 0;
+}
+
+.terminal-tab {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all var(--duration) var(--ease);
+  position: relative;
+}
+
+.terminal-tab:hover {
+  color: var(--text-primary);
+}
+
+.terminal-tab.active {
+  color: var(--amd-red);
+  border-bottom-color: var(--amd-red);
+}
+
+/* ── Toolbar ──────────────────────────────────────────────────────────── */
+
+.terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.terminal-search {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.terminal-search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.terminal-search input {
+  width: 100%;
+  padding: 6px 28px 6px 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  transition: border-color var(--duration) var(--ease);
+}
+
+.terminal-search input:focus {
+  border-color: var(--amd-red);
+}
+
+.terminal-search input::placeholder {
+  color: var(--text-muted);
+}
+
+.terminal-search-clear {
+  position: absolute;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+}
+
+.terminal-search-clear:hover {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.terminal-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-terminal-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+}
+
+.btn-terminal-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.btn-terminal-action:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.btn-terminal-action.active {
+  background: var(--accent-yellow);
+  color: white;
+  border-color: var(--accent-yellow);
+}
+
+.btn-terminal-action.active:hover {
+  background: var(--accent-yellow);
+  opacity: 0.9;
+}
+
+/* ── Terminal Content ─────────────────────────────────────────────────── */
+
+.terminal-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 4px 0;
+  background: var(--bg-code);
+  color: var(--text-primary);
+}
+
+/* Scrollbar styling -- matches global 5px width */
+.terminal-content::-webkit-scrollbar {
+  width: 5px;
+}
+
+.terminal-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.terminal-content::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-full);
+}
+
+.terminal-content::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ── Terminal Line ────────────────────────────────────────────────────── */
+
+.terminal-line {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.terminal-line:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.terminal-line-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 16px;
+  cursor: default;
+}
+
+.terminal-line.expandable .terminal-line-main {
+  cursor: pointer;
+}
+
+.terminal-line-chevron {
+  flex-shrink: 0;
+  width: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.terminal-line-chevron-spacer {
+  visibility: hidden;
+}
+
+.terminal-line-time {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  opacity: 0.6;
+  font-size: 11px;
+  min-width: 60px;
+}
+
+.terminal-line-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.terminal-line-badge {
+  flex-shrink: 0;
+  min-width: 56px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.terminal-line-content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.terminal-line-source {
+  flex-shrink: 0;
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  opacity: 0.4;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+/* Line type color-coding */
+.terminal-line-error .terminal-line-content {
+  color: var(--amd-red);
+}
+
+.terminal-line-warn .terminal-line-content {
+  color: var(--accent-yellow);
+}
+
+.terminal-line-tool .terminal-line-content {
+  color: var(--accent-blue);
+}
+
+.terminal-line-permission .terminal-line-content {
+  color: var(--accent-yellow);
+}
+
+/* Expanded detail */
+.terminal-line-detail {
+  padding: 8px 16px 8px 56px;
+  background: rgba(0, 0, 0, 0.15);
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  animation: detailSlide 150ms var(--ease);
+}
+
+.terminal-line-detail pre {
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+@keyframes detailSlide {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 300px;
+  }
+}
+
+/* ── Empty State ──────────────────────────────────────────────────────── */
+
+.terminal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 200px;
+  color: var(--text-muted);
+  gap: 8px;
+  text-align: center;
+  padding: 32px;
+}
+
+.terminal-empty span {
+  font-size: 13px;
+  font-family: var(--font-sans);
+}
+
+.terminal-empty-hint {
+  font-size: 12px !important;
+  opacity: 0.6;
+}
+
+/* ── Scroll-to-bottom Button ──────────────────────────────────────────── */
+
+.terminal-scroll-btn {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  transition: all var(--duration) var(--ease);
+  z-index: 5;
+  animation: fadeInUp 150ms var(--ease);
+}
+
+.terminal-scroll-btn:hover {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  border-color: var(--amd-red-light);
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* ── Paused Banner ────────────────────────────────────────────────────── */
+
+.terminal-paused-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: rgba(245, 158, 11, 0.1);
+  border-top: 1px solid rgba(245, 158, 11, 0.2);
+  font-size: 12px;
+  color: var(--accent-yellow);
+  flex-shrink: 0;
+}
+
+.terminal-paused-banner button {
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent-yellow);
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+}
+
+.terminal-paused-banner button:hover {
+  background: rgba(245, 158, 11, 0.15);
+}
+
+/* ── Light Theme Overrides ────────────────────────────────────────────── */
+/* Terminal always uses a dark background regardless of theme */
+
+[data-theme="light"] .terminal-content,
+:root:not([data-theme="dark"]) .terminal-content {
+  background: var(--bg-code);
+  color: var(--text-code);
+}
+
+[data-theme="light"] .terminal-line:hover,
+:root:not([data-theme="dark"]) .terminal-line:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+[data-theme="light"] .terminal-line-detail,
+:root:not([data-theme="dark"]) .terminal-line-detail {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] .terminal-line-content,
+:root:not([data-theme="dark"]) .terminal-line-content {
+  color: var(--text-code);
+}
+
+[data-theme="light"] .terminal-line-time,
+:root:not([data-theme="dark"]) .terminal-line-time {
+  color: var(--text-muted);
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .terminal-header {
+    padding: 10px 12px;
+  }
+
+  .terminal-toolbar {
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 12px;
+  }
+
+  .terminal-search {
+    width: 100%;
+  }
+
+  .terminal-toolbar-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .terminal-line-main {
+    padding: 3px 12px;
+    gap: 6px;
+  }
+
+  .terminal-line-badge {
+    display: none;
+  }
+
+  .terminal-line-source {
+    display: none;
+  }
+}
+
+/* ── Reduced Motion ───────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-line-detail,
+  .terminal-scroll-btn,
+  .terminal-paused-banner {
+    animation: none;
+  }
+}

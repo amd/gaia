@@ -21,6 +21,7 @@ EXCLUDED_DIRS = {
     "tests",
     "examples",
     "__pycache__",
+    "node_modules",
 }
 
 

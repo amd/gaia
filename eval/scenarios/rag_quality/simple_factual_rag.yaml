@@ -1,0 +1,42 @@
+id: simple_factual_rag
+name: "Simple Factual RAG"
+category: rag_quality
+severity: critical
+description: |
+  Direct fact lookup from a financial report.
+  Agent must index the document and answer questions from it.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask about Q3 revenue"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million"
+    success_criteria: "Agent states Q3 revenue was $14.2 million"
+
+  - turn: 2
+    objective: "Ask about year-over-year growth"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: yoy_growth
+      expected_answer: "23% increase from Q3 2024's $11.5 million"
+    success_criteria: "Agent mentions 23% growth and/or $11.5M baseline"
+
+  - turn: 3
+    objective: "Ask about CEO outlook for Q4"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: ceo_outlook
+      expected_answer: "Projected 15-18% growth driven by enterprise segment expansion"
+    success_criteria: "Agent mentions 15-18% projected growth"
+
+expected_outcome: |
+  Agent correctly retrieves and reports facts from the Q3 financial report.
