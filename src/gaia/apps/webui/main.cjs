@@ -24,6 +24,7 @@ const TrayManager = require("./services/tray-manager.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
 const PortManager = require("./services/port-manager.cjs");
+const { buildIndexQuery } = require("./services/index-query.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
 const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
 const autoUpdater = require("./services/auto-updater.cjs");
@@ -421,13 +422,13 @@ async function loadApp() {
     // http://localhost:4200/ would show raw JSON instead of the UI.
     //
     // Pass the real backend base URL as a query parameter so the renderer
-    // can reach whatever random port port-manager picked (see #851).
-    // Without this, the compiled bundle falls back to its hardcoded
-    // `http://localhost:4200/api` and every API call 404s.
+    // can reach whatever random port port-manager picked (see #851). The
+    // renderer (apiBase.ts) validates this value against an allowlist
+    // before using it — keep buildIndexQuery in sync with TRUSTED_API_RE.
     const indexPath = path.join(distPath, "index.html");
-    const apiBase = `http://127.0.0.1:${backendPort}/api`;
-    console.log("Loading app from:", indexPath, "api:", apiBase);
-    await mainWindow.loadFile(indexPath, { query: { api: apiBase } });
+    const indexQuery = buildIndexQuery(backendPort);
+    console.log("Loading app from:", indexPath, "api:", indexQuery.api);
+    await mainWindow.loadFile(indexPath, { query: indexQuery });
   } else {
     // Show a simple loading/error page
     mainWindow.loadURL(
