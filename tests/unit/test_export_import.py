@@ -503,9 +503,10 @@ def test_import_bundle_dir_with_no_agent_py_surfaces_error(
     assert not (agents_root / "no-py-bot").exists()
 
 
-def test_export_skips_yaml_only_dirs(tmp_path, fake_home, agents_root):
-    """Export should ignore legacy YAML-only directories silently rather
-    than emitting a bundle the importer would reject."""
+def test_export_skips_yaml_only_dirs(tmp_path, fake_home, agents_root, caplog):
+    """Export should drop legacy YAML-only directories from the bundle (the
+    importer would reject them) but emit a visible log warning per skipped
+    dir so users notice and migrate."""
     py_dir = agents_root / "py-bot"
     py_dir.mkdir()
     (py_dir / "agent.py").write_text("# python\n")
@@ -515,5 +516,11 @@ def test_export_skips_yaml_only_dirs(tmp_path, fake_home, agents_root):
     (yaml_dir / "agent.yaml").write_text("id: yaml-bot\nname: YAML Bot\n")
 
     out = tmp_path / "export.zip"
-    result = export_custom_agents(out)
+    with caplog.at_level("WARNING", logger="gaia.installer.export_import"):
+        result = export_custom_agents(out)
     assert result.agent_ids == ["py-bot"]
+    skip_warnings = [rec for rec in caplog.records if "yaml-bot" in rec.getMessage()]
+    assert (
+        len(skip_warnings) == 1
+    ), "expected exactly one warning naming the skipped YAML-only directory"
+    assert "v0.17.5" in skip_warnings[0].getMessage()
