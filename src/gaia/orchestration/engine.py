@@ -40,7 +40,9 @@ from gaia.utils.logging import get_logger
 
 from gaia.orchestration.adapters import ExecutionResult, OrchestratorPipelineAdapter
 from gaia.orchestration.models import (
+    ConflictReport,
     DependencyGraph,
+    LevelResult,
     Objective,
     ObjectiveStatus,
     ProjectObjectives,
@@ -91,6 +93,10 @@ class OrchestratorConfig:
     enable_supervisor: bool = False
     supervisor_config: Optional[SupervisorConfig] = None
     enable_git_supervisor: bool = False  # GitSupervisor with CircuitBreaker
+    enable_parallel_execution: bool = False
+    max_parallel_objectives: int = 10
+    serialize_hooks: bool = True
+    enable_rollback: bool = True
 
 
 @dataclass
@@ -195,6 +201,10 @@ class ProjectOrchestrator:
             )
             self._supervisor_registry.register("git", self._git_supervisor)
             logger.info("GitSupervisor enabled and registered")
+
+        # Concurrency control for parallel execution
+        self._hook_lock = asyncio.Lock()
+        self._git_op_lock = asyncio.Lock()
 
         logger.info(
             "ProjectOrchestrator initialized",
@@ -346,6 +356,20 @@ class ProjectOrchestrator:
     async def run(self) -> OrchestratorState:
         """
         Run the full dispatch-evaluate-update cycle loop.
+
+        Branches to sequential or parallel mode based on config flag.
+
+        Returns:
+            Final OrchestratorState
+        """
+        if self._config.enable_parallel_execution:
+            return await self._run_parallel_mode()
+        else:
+            return await self._run_sequential_mode()
+
+    async def _run_sequential_mode(self) -> OrchestratorState:
+        """
+        Sequential dispatch-evaluate-update cycle loop.
 
         Loop:
         1. Check pause state
@@ -700,6 +724,27 @@ class ProjectOrchestrator:
     # -----------------------------------------------------------------------
 
     @staticmethod
+    def _apply_status_transition(
+        objective: Objective, target: ObjectiveStatus
+    ) -> None:
+        """
+        Safely transition an objective to a terminal state.
+
+        Uses the required intermediate IN_PROGRESS step to satisfy
+        the status transition rules. Handles objectives already in
+        terminal states.
+        """
+        try:
+            if objective.status == ObjectiveStatus.QUEUED:
+                objective.transition_to(ObjectiveStatus.IN_PROGRESS)
+            objective.transition_to(target)
+        except ValueError as e:
+            logger.debug(
+                f"Status transition skipped for objective "
+                f"'{objective.objective_id}' -> {target.value}: {e}"
+            )
+
+    @staticmethod
     def _build_objective_slug(title: str) -> str:
         """
         Convert an objective title to a URL-safe slug.
@@ -742,3 +787,831 @@ class ProjectOrchestrator:
                 "_git_branch": self._state.objective_branches.get(objective.objective_id),
             },
         )
+
+    # -----------------------------------------------------------------------
+    # Parallel execution engine
+    # -----------------------------------------------------------------------
+
+    async def _run_parallel_mode(self) -> OrchestratorState:
+        """
+        Parallel execution mode for the orchestrator.
+
+        1. Load objectives, build DependencyGraph
+        2. levels = dep_graph.partition_into_levels()
+        3. For each level: run _run_level_parallel()
+        4. If verdict == ABORT: break
+        5. Emit ORCHESTRATOR_COMPLETE
+        """
+        if self._project is None:
+            self.load_objectives()
+
+        # Emit ORCHESTRATOR_START event
+        await self._hook_executor.execute_hooks(
+            ORCHESTRATOR_START,
+            HookContext(
+                event=ORCHESTRATOR_START,
+                pipeline_id=f"orchestrator-{self._project.project_id if self._project else 'unknown'}",
+            ),
+        )
+
+        logger.info("Starting orchestrator dispatch loop (parallel mode)")
+        self._commit_event("orchestrator_started", {"path": self._config.objectives_path})
+
+        # Clean up stale worktrees from previous runs
+        await self._cleanup_all_stale_worktrees()
+
+        levels = self._dep_graph.partition_into_levels()
+
+        for level_number, level_objective_ids in enumerate(levels):
+            level_result = await self._run_level_parallel(
+                level_objective_ids, level_number
+            )
+
+            # Cleanup worktrees for completed objectives in this level
+            for obj_id, outcome in level_result.outcomes.items():
+                branch = self._state.objective_branches.get(obj_id)
+                if branch:
+                    await self._cleanup_worktree(branch, obj_id)
+
+            # Propagate failures to dependent objectives in remaining levels
+            failed_ids = {
+                oid for oid, outcome in level_result.outcomes.items()
+                if not outcome.success
+            }
+            remaining = levels[level_number + 1:]
+            self._propagate_failures_to_dependents(
+                failed_ids, remaining, self._dep_graph,
+            )
+
+            # Supervisor-level evaluation
+            if self._supervisor is not None:
+                try:
+                    outcomes_list = list(level_result.outcomes.values())
+                    verdict_str = self._supervisor.evaluate_level(
+                        outcomes=outcomes_list,
+                        project=self._project,
+                        dep_graph=self._dep_graph,
+                        conflicts=level_result.conflicts,
+                    )
+                    level_result.verdict = verdict_str
+                    if verdict_str == Verdict.ABORT.value:
+                        logger.error(
+                            f"Supervisor ABORT at level {level_number}: "
+                            f"{self._supervisor.state.aborted_reason}"
+                        )
+                        # Rollback failed objectives before breaking
+                        if self._config.enable_rollback:
+                            failed_in_level = {
+                                oid for oid, outcome in level_result.outcomes.items()
+                                if not outcome.success
+                            }
+                            if failed_in_level:
+                                rolled_back = await self._rollback_failed_objectives(
+                                    failed_in_level, level_number
+                                )
+                                logger.info(
+                                    f"Rolled back {rolled_back} failed objectives "
+                                    f"at level {level_number}"
+                                )
+                        break
+                    elif verdict_str == Verdict.PAUSE.value:
+                        logger.warning(
+                            f"Supervisor PAUSE at level {level_number}"
+                        )
+                        self._state.paused = True
+                        # Rollback failed objectives on pause
+                        if self._config.enable_rollback:
+                            failed_in_level = {
+                                oid for oid, outcome in level_result.outcomes.items()
+                                if not outcome.success
+                            }
+                            if failed_in_level:
+                                rolled_back = await self._rollback_failed_objectives(
+                                    failed_in_level, level_number
+                                )
+                                logger.info(
+                                    f"Rolled back {rolled_back} failed objectives "
+                                    f"at level {level_number}"
+                                )
+                        await self._wait_for_resume()
+                except Exception as e:
+                    logger.error(f"Supervisor level evaluation failed: {e}")
+
+            # Rollback on non-supervisor abort verdicts
+            # (e.g., all objectives failed in a level). Only fires when
+            # no supervisor is enabled — supervisor ABORT/PAUSE paths
+            # above already handle rollback before break/continue.
+            # Use .lower() for case-insensitive match: _run_level_parallel
+            # emits "ABORT" (uppercase) while supervisor emits "abort".
+            if (
+                self._supervisor is None
+                and level_result.verdict.lower() == "abort"
+                and self._config.enable_rollback
+            ):
+                failed_in_level = {
+                    oid for oid, outcome in level_result.outcomes.items()
+                    if not outcome.success
+                }
+                if failed_in_level:
+                    rolled_back = await self._rollback_failed_objectives(
+                        failed_in_level, level_number
+                    )
+                    logger.info(
+                        f"Rolled back {rolled_back} failed objectives "
+                        f"at level {level_number}"
+                    )
+
+            if level_result.verdict.lower() == "abort":
+                break
+
+            # Batch save after each level
+            if not self._config.dry_run:
+                try:
+                    self._project.save_atomic(self._config.objectives_path)
+                except Exception as e:
+                    logger.error(f"Failed to save objectives: {e}")
+
+            await self._hook_executor.execute_hooks(
+                CYCLE_COMPLETE,
+                HookContext(
+                    event=CYCLE_COMPLETE,
+                    pipeline_id=f"orchestrator-{self._project.project_id}",
+                ),
+            )
+
+            if self._state.cycle_count >= self._config.max_cycle_iterations:
+                break
+
+        # Emit ORCHESTRATOR_COMPLETE event
+        await self._hook_executor.execute_hooks(
+            ORCHESTRATOR_COMPLETE,
+            HookContext(
+                event=ORCHESTRATOR_COMPLETE,
+                pipeline_id=f"orchestrator-{self._project.project_id if self._project else 'unknown'}",
+            ),
+        )
+
+        logger.info(
+            "Orchestrator dispatch loop finished (parallel mode)",
+            extra={
+                "cycles": self._state.cycle_count,
+                "processed": self._state.objectives_processed,
+                "failed": self._state.objectives_failed,
+            },
+        )
+        self._commit_event(
+            "orchestrator_finished",
+            {
+                "cycles": self._state.cycle_count,
+                "processed": self._state.objectives_processed,
+                "failed": self._state.objectives_failed,
+            },
+        )
+        return self._state
+
+    async def _run_level_parallel(
+        self,
+        level_objectives: list,
+        level_number: int,
+    ) -> LevelResult:
+        """
+        Execute a single dependency level in parallel.
+
+        Flow:
+        1. Fire OBJECTIVE_START hooks for all objectives (serialized via lock)
+        2. Launch executions via asyncio.gather() using execute_without_status_update()
+        3. Batch-apply status transitions for each (objective, result) pair
+        4. Fire OBJECTIVE_COMPLETE / OBJECTIVE_FAILED hooks (serialized via lock)
+        5. Build LevelResult
+        6. save_atomic() once
+        """
+        outcomes: dict = {}
+        conflicts: list = []
+        success_count = 0
+        failure_count = 0
+
+        # Resolve objective objects
+        objectives_map: dict = {}
+        for obj_id in level_objectives:
+            obj = self._project.get_objective(obj_id)
+            if obj is not None:
+                objectives_map[obj_id] = obj
+
+        # Create worktrees for objectives that don't have one yet
+        for obj_id, obj in objectives_map.items():
+            if obj_id not in self._state.objective_branches:
+                branch = await self._create_worktree_for_objective(obj)
+                if branch:
+                    logger.debug(
+                        f"Created worktree branch for objective '{obj_id}': {branch}"
+                    )
+
+        # Step 1: Fire OBJECTIVE_START hooks (serialized)
+        for obj_id, obj in objectives_map.items():
+            if self._config.serialize_hooks:
+                async with self._hook_lock:
+                    hook_context = self._build_hook_context(OBJECTIVE_START, obj)
+                    hook_result = await self._hook_executor.execute_hooks(
+                        OBJECTIVE_START, hook_context
+                    )
+            else:
+                hook_context = self._build_hook_context(OBJECTIVE_START, obj)
+                hook_result = await self._hook_executor.execute_hooks(
+                    OBJECTIVE_START, hook_context
+                )
+
+            if hook_result.halt_pipeline:
+                logger.warning(
+                    f"Hook halted execution at objective '{obj.title}'"
+                )
+                outcomes[obj_id] = ObjectiveOutcome(
+                    objective_id=obj_id,
+                    success=False,
+                    phase=obj.phase,
+                    error_message="Halted by hook",
+                )
+                self._apply_status_transition(obj, ObjectiveStatus.BLOCKED)
+                failure_count += 1
+
+        # Step 2: Launch executions in parallel (bounded by max_parallel_objectives)
+        halted_ids = set(outcomes.keys())
+        tasks = {}
+        for obj_id, obj in objectives_map.items():
+            if obj_id in halted_ids:
+                continue
+            tasks[obj_id] = self._adapter.execute_without_status_update(obj)
+
+        semaphore = asyncio.Semaphore(self._config.max_parallel_objectives)
+
+        async def _bounded(task):
+            async with semaphore:
+                return await task
+
+        bounded_tasks = [_bounded(t) for t in tasks.values()]
+        results = await asyncio.gather(*bounded_tasks, return_exceptions=True)
+
+        # Step 3: Batch-apply status transitions
+        failed_ids: set[str] = set()
+        for (obj_id, task), result in zip(tasks.items(), results):
+            obj = objectives_map[obj_id]
+            if isinstance(result, Exception):
+                # Execution raised an exception
+                self._apply_status_transition(obj, ObjectiveStatus.BLOCKED)
+                obj.error_message = str(result)
+                outcomes[obj_id] = ObjectiveOutcome(
+                    objective_id=obj_id,
+                    success=False,
+                    phase=obj.phase,
+                    error_message=str(result),
+                )
+                failed_ids.add(obj_id)
+                failure_count += 1
+                continue
+
+            result_dict = result
+            if result_dict["success"]:
+                self._apply_status_transition(obj, ObjectiveStatus.COMPLETED)
+                for artifact in result_dict.get("artifacts", []):
+                    obj.add_artifact(artifact)
+                outcomes[obj_id] = ObjectiveOutcome(
+                    objective_id=obj_id,
+                    success=True,
+                    phase=obj.phase,
+                )
+                success_count += 1
+            else:
+                self._apply_status_transition(obj, ObjectiveStatus.BLOCKED)
+                obj.error_message = result_dict.get("error")
+                outcomes[obj_id] = ObjectiveOutcome(
+                    objective_id=obj_id,
+                    success=False,
+                    phase=obj.phase,
+                    error_message=result_dict.get("error"),
+                )
+                failed_ids.add(obj_id)
+                failure_count += 1
+
+        # Detect conflicts among successfully completed objectives
+        completed_ids = [
+            oid for oid, outcome in outcomes.items() if outcome.success
+        ]
+        if completed_ids and self._git_supervisor:
+            branch_map = {
+                oid: self._state.objective_branches.get(oid, "")
+                for oid in completed_ids
+            }
+            branch_map = {k: v for k, v in branch_map.items() if v}
+            conflicts = await self._detect_level_conflicts(completed_ids, branch_map)
+
+        # Step 4: Fire completion hooks (serialized)
+        for obj_id, outcome in outcomes.items():
+            if obj_id not in objectives_map:
+                continue
+            obj = objectives_map[obj_id]
+            event = OBJECTIVE_COMPLETE if outcome.success else OBJECTIVE_FAILED
+            if self._config.serialize_hooks:
+                async with self._hook_lock:
+                    hook_context = self._build_hook_context(event, obj)
+                    hook_context.data["execution_result"] = outcome
+                    await self._hook_executor.execute_hooks(event, hook_context)
+            else:
+                hook_context = self._build_hook_context(event, obj)
+                hook_context.data["execution_result"] = outcome
+                await self._hook_executor.execute_hooks(event, hook_context)
+
+            self._state.record_cycle(obj_id, outcome.success)
+
+        # Step 5: Build LevelResult
+        verdict = "CONTINUE"
+        if failure_count == len(level_objectives):
+            verdict = "ABORT"
+
+        return LevelResult(
+            level_number=level_number,
+            objective_ids=level_objectives,
+            outcomes=outcomes,
+            conflicts=conflicts,
+            success_count=success_count,
+            failure_count=failure_count,
+            verdict=verdict,
+        )
+
+    async def _detect_level_conflicts(
+        self,
+        completed_objective_ids: list[str],
+        branch_map: dict[str, str],
+    ) -> list:
+        """
+        Detect file-level conflicts within a completed level.
+
+        For each pair of objectives that completed successfully:
+        1. Call GitSupervisor.detect_changed_files(branch, base_branch)
+        2. Compute set intersection of changed files
+        3. If intersection non-empty, create ConflictReport
+
+        Args:
+            completed_objective_ids: IDs of objectives that completed successfully.
+            branch_map: Mapping of objective_id -> branch_name.
+
+        Returns:
+            List of ConflictReport instances. Empty list if GitSupervisor
+            is not enabled or no conflicts detected.
+        """
+        if self._git_supervisor is None:
+            return []
+
+        conflicts: list = []
+
+        # Collect (objective_id, changed_files_set) for each completed objective
+        objective_file_sets: list[tuple[str, set[str]]] = []
+
+        for obj_id in completed_objective_ids:
+            branch = branch_map.get(obj_id, "")
+            if not branch:
+                logger.debug(
+                    f"No branch mapped for objective {obj_id}, skipping conflict check"
+                )
+                continue
+
+            async with self._git_op_lock:
+                changed_files = self._git_supervisor.detect_changed_files(
+                    branch, "main"
+                )
+
+            if changed_files:
+                objective_file_sets.append((obj_id, set(changed_files)))
+                logger.debug(
+                    f"Objective {obj_id} (branch {branch}) changed files: {changed_files}"
+                )
+
+        # Pairwise intersection of file sets
+        for i in range(len(objective_file_sets)):
+            for j in range(i + 1, len(objective_file_sets)):
+                obj_id_a, files_a = objective_file_sets[i]
+                obj_id_b, files_b = objective_file_sets[j]
+
+                overlap = files_a & files_b
+                if overlap:
+                    report = ConflictReport(
+                        conflicting_objective_ids=[obj_id_a, obj_id_b],
+                        affected_files=overlap,
+                    )
+                    conflicts.append(report)
+                    logger.warning(
+                        f"Conflict detected between objectives {obj_id_a} and "
+                        f"{obj_id_b}: {overlap}"
+                    )
+
+        return conflicts
+
+    # -----------------------------------------------------------------------
+    # Worktree lifecycle
+    # -----------------------------------------------------------------------
+
+    def _get_repo_root(self) -> Optional[Path]:
+        """
+        Determine the git repo root from the objectives path.
+
+        Returns:
+            Path to the repo root, or None if not determinable.
+        """
+        base_dir = Path(self._config.objectives_path).parent
+        if base_dir.name == ".gaia":
+            return base_dir.parent
+        return None
+
+    async def _create_worktree_for_objective(
+        self,
+        objective: Objective,
+    ) -> Optional[str]:
+        """
+        Create a git worktree for an objective.
+
+        - Creates branch: obj/{id}-{slug}
+        - Creates worktree at: .gaia/worktrees/{objective_id}/
+        - Returns branch name or None on failure
+
+        Args:
+            objective: The objective to create a worktree for.
+
+        Returns:
+            Branch name on success, None on failure.
+        """
+        objective_id = objective.objective_id
+        slug = self._build_objective_slug(objective.title)
+        branch_name = f"obj/{objective_id}-{slug}"
+
+        # Worktree path relative to the objectives file parent (.gaia/)
+        base_dir = Path(self._config.objectives_path).parent
+        worktree_path = base_dir / "worktrees" / objective_id
+
+        repo_root = self._get_repo_root()
+        if repo_root is None:
+            logger.warning(
+                f"Cannot determine repo root for worktree creation: {objective_id}"
+            )
+            return None
+
+        try:
+            async with self._git_op_lock:
+                # Create branch and worktree in one command (-b creates new branch)
+                result = subprocess.run(
+                    ["git", "worktree", "add", "-b", branch_name, str(worktree_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=str(repo_root),
+                )
+                if result.returncode != 0:
+                    # Worktree might already exist from a stale registration
+                    if "already exists" in result.stderr.lower():
+                        # Check if the actual directory exists
+                        if worktree_path.exists():
+                            logger.info(
+                                f"Worktree for objective '{objective_id}' already exists, reusing"
+                            )
+                        else:
+                            # Stale registration — prune and retry
+                            subprocess.run(
+                                ["git", "worktree", "prune"],
+                                capture_output=True,
+                                text=True,
+                                timeout=10,
+                                cwd=str(repo_root),
+                            )
+                            # Force remove stale registration
+                            subprocess.run(
+                                ["git", "worktree", "remove", "--force", str(worktree_path)],
+                                capture_output=True,
+                                text=True,
+                                timeout=10,
+                                cwd=str(repo_root),
+                            )
+                            # Retry creation
+                            result = subprocess.run(
+                                ["git", "worktree", "add", "-b", branch_name, str(worktree_path)],
+                                capture_output=True,
+                                text=True,
+                                timeout=30,
+                                cwd=str(repo_root),
+                            )
+                            if result.returncode != 0:
+                                logger.warning(
+                                    f"Failed to create worktree for objective '{objective_id}': "
+                                    f"{result.stderr.strip()}"
+                                )
+                                return None
+                    else:
+                        logger.warning(
+                            f"Failed to create worktree for objective '{objective_id}': "
+                            f"{result.stderr.strip()}"
+                        )
+                        return None
+
+                self._state.objective_branches[objective_id] = branch_name
+                logger.info(
+                    f"Created worktree for objective '{objective_id}' "
+                    f"(branch: {branch_name}, path: {worktree_path})"
+                )
+                return branch_name
+
+        except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+            logger.warning(f"Worktree creation failed for '{objective_id}': {e}")
+            return None
+
+    async def _cleanup_worktree(
+        self,
+        branch_name: str,
+        objective_id: str,
+    ) -> bool:
+        """
+        Delete the worktree directory for a completed objective.
+
+        - Uses `git worktree remove <path>` to unregister
+        - Branch is retained for audit/history
+        - Serialized via _git_op_lock
+
+        Args:
+            branch_name: The branch associated with the worktree.
+            objective_id: The objective ID for logging.
+
+        Returns:
+            True if cleanup succeeded, False otherwise.
+        """
+        base_dir = Path(self._config.objectives_path).parent
+        worktree_path = base_dir / "worktrees" / objective_id
+
+        repo_root = self._get_repo_root()
+        if repo_root is None:
+            logger.warning(
+                f"Cannot determine repo root for worktree cleanup: {objective_id}"
+            )
+            return False
+
+        try:
+            async with self._git_op_lock:
+                result = subprocess.run(
+                    ["git", "worktree", "remove", str(worktree_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=str(repo_root),
+                )
+                if result.returncode != 0:
+                    # Try with --force as fallback
+                    result = subprocess.run(
+                        ["git", "worktree", "remove", "--force", str(worktree_path)],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        cwd=str(repo_root),
+                    )
+                    if result.returncode != 0:
+                        logger.warning(
+                            f"Failed to cleanup worktree for objective '{objective_id}': "
+                            f"{result.stderr.strip()}"
+                        )
+                        return False
+
+                logger.info(
+                    f"Cleaned up worktree for objective '{objective_id}' "
+                    f"(branch {branch_name} retained)"
+                )
+                return True
+
+        except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+            logger.warning(f"Worktree cleanup failed for '{objective_id}': {e}")
+            return False
+
+    async def _cleanup_all_stale_worktrees(self) -> None:
+        """
+        Clean up leftover worktrees from previous runs.
+
+        Called at start of _run_parallel_mode().
+        Lists all worktrees, removes those matching `obj/` prefix
+        within our .gaia/worktrees directory. Also deletes associated
+        branches to prevent conflicts on re-run.
+        """
+        base_dir = Path(self._config.objectives_path).parent
+        worktrees_dir = base_dir / "worktrees"
+
+        repo_root = self._get_repo_root()
+        if repo_root is None:
+            logger.warning("Cannot determine repo root for stale worktree cleanup")
+            return
+
+        try:
+            async with self._git_op_lock:
+                # List all worktrees in porcelain format
+                result = subprocess.run(
+                    ["git", "worktree", "list", "--porcelain"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=str(repo_root),
+                )
+                if result.returncode != 0:
+                    logger.warning(
+                        f"Failed to list worktrees: {result.stderr.strip()}"
+                    )
+                    return
+
+                # Normalize worktrees_dir path for comparison
+                worktrees_dir_str = str(worktrees_dir).replace("\\", "/")
+
+                # Parse porcelain output to find worktrees with obj/ branches
+                # that are within our .gaia/worktrees directory
+                current_branch = None
+                current_path = None
+                worktrees_to_remove: list[tuple[str, str]] = []
+
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith("worktree "):
+                        # Save previous entry if it matched
+                        current_path_normalized = current_path.replace("\\", "/") if current_path else ""
+                        if (current_path and current_branch
+                                and current_branch.startswith("obj/")
+                                and worktrees_dir_str in current_path_normalized):
+                            worktrees_to_remove.append((current_path, current_branch))
+                        current_path = line[len("worktree "):]
+                        current_branch = None
+                    elif line.startswith("branch "):
+                        # branch refs/heads/obj/something -> obj/something
+                        branch_ref = line[len("branch "):]
+                        if "refs/heads/" in branch_ref:
+                            current_branch = branch_ref.split("refs/heads/")[-1]
+                        else:
+                            current_branch = branch_ref
+
+                # Don't forget the last entry
+                current_path_normalized = current_path.replace("\\", "/") if current_path else ""
+                if (current_path and current_branch
+                        and current_branch.startswith("obj/")
+                        and worktrees_dir_str in current_path_normalized):
+                    worktrees_to_remove.append((current_path, current_branch))
+
+                # Remove each stale worktree and its branch
+                for wt_path, wt_branch in worktrees_to_remove:
+                    try:
+                        remove_result = subprocess.run(
+                            ["git", "worktree", "remove", wt_path],
+                            capture_output=True,
+                            text=True,
+                            timeout=30,
+                            cwd=str(repo_root),
+                        )
+                        if remove_result.returncode != 0:
+                            # Try with --force as fallback
+                            remove_result = subprocess.run(
+                                ["git", "worktree", "remove", "--force", wt_path],
+                                capture_output=True,
+                                text=True,
+                                timeout=30,
+                                cwd=str(repo_root),
+                            )
+                        if remove_result.returncode == 0:
+                            logger.info(
+                                f"Cleaned up stale worktree: {wt_path} (branch: {wt_branch})"
+                            )
+                        # Delete the branch to prevent conflicts on re-run
+                        subprocess.run(
+                            ["git", "branch", "-D", wt_branch],
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                            cwd=str(repo_root),
+                        )
+                    except (subprocess.SubprocessError, FileNotFoundError) as e:
+                        logger.warning(f"Error removing stale worktree {wt_path}: {e}")
+
+                # Also find and delete obj/ branches that have no associated worktree
+                # (leftover from previous runs where worktree dir was deleted)
+                branch_result = subprocess.run(
+                    ["git", "branch", "--list", "obj/*"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    cwd=str(repo_root),
+                )
+                if branch_result.returncode == 0:
+                    for line in branch_result.stdout.splitlines():
+                        branch_name = line.strip().lstrip("* ")
+                        if branch_name:
+                            subprocess.run(
+                                ["git", "branch", "-D", branch_name],
+                                capture_output=True,
+                                text=True,
+                                timeout=10,
+                                cwd=str(repo_root),
+                            )
+                            logger.debug(f"Deleted stale branch: {branch_name}")
+
+        except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+            logger.warning(f"Failed to list worktrees for stale cleanup: {e}")
+
+    # -----------------------------------------------------------------------
+    # Rollback for failed objectives
+    # -----------------------------------------------------------------------
+
+    async def _rollback_failed_objectives(
+        self,
+        failed_ids: set[str],
+        level_number: int,
+    ) -> int:
+        """
+        Rollback failed objectives within a level.
+
+        Order:
+        1. Fire OBJECTIVE_FAILED hook if not already fired
+        2. Use GitSupervisor.rollback() if available (git reset --hard on branch)
+        3. Remove worktree if worktrees enabled
+        4. Update objectives.yaml (handled by caller's save_atomic)
+
+        Only runs when:
+        - enable_rollback is True
+        - enable_parallel_execution is True
+
+        Args:
+            failed_ids: Set of objective_ids that failed
+            level_number: Current level number for logging
+
+        Returns:
+            Number of objectives rolled back
+        """
+        if not self._config.enable_rollback:
+            return 0
+
+        rolled_back = 0
+
+        for obj_id in failed_ids:
+            branch = self._state.objective_branches.get(obj_id)
+
+            if branch is None:
+                logger.debug(
+                    f"No branch mapped for failed objective {obj_id}, "
+                    f"skipping rollback"
+                )
+                continue
+
+            # GitSupervisor rollback
+            if self._git_supervisor is not None:
+                try:
+                    async with self._git_op_lock:
+                        success = self._git_supervisor.rollback(branch)
+                    if success:
+                        logger.info(
+                            f"Rolled back objective '{obj_id}' "
+                            f"(branch: {branch}) at level {level_number}"
+                        )
+                        rolled_back += 1
+                    else:
+                        logger.warning(
+                            f"GitSupervisor.rollback() failed for objective "
+                            f"'{obj_id}' on branch '{branch}'"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Rollback error for objective '{obj_id}' "
+                        f"on branch '{branch}': {e}"
+                    )
+            else:
+                # No GitSupervisor — log and skip gracefully
+                logger.debug(
+                    f"GitSupervisor not enabled, skipping git rollback "
+                    f"for objective '{obj_id}'"
+                )
+
+        return rolled_back
+
+    def _propagate_failures_to_dependents(
+        self,
+        failed_ids: set[str],
+        remaining_levels: list,
+        dep_graph,
+    ) -> None:
+        """
+        Mark objectives as BLOCKED if any dependency failed.
+
+        Args:
+            failed_ids: Set of objective_ids that failed
+            remaining_levels: List of levels not yet executed
+            dep_graph: The dependency graph
+        """
+        for level in remaining_levels:
+            for obj_id in level:
+                obj = self._project.get_objective(obj_id)
+                if obj is None:
+                    continue
+                if obj.status != ObjectiveStatus.QUEUED:
+                    continue
+                # Check if any dependency is in failed_ids
+                deps = dep_graph.get_dependencies(obj_id)
+                if deps & failed_ids:
+                    try:
+                        obj.transition_to(ObjectiveStatus.BLOCKED)
+                        obj.error_message = (
+                            f"Dependency failed: {deps & failed_ids}"
+                        )
+                    except ValueError:
+                        pass  # Already in a terminal state

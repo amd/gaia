@@ -601,3 +601,88 @@ class DependencyGraph:
     def nodes(self) -> Set[str]:
         """Return all node IDs in the graph."""
         return set(self._all_ids)
+
+    def partition_into_levels(self) -> List[List[str]]:
+        """
+        Return objectives grouped by dependency levels.
+
+        Level 0 = objectives with no dependencies (can run in parallel)
+        Level 1 = objectives whose deps are all in Level 0
+        etc.
+
+        Returns:
+            List of lists, where each inner list contains objective_ids
+            that can execute concurrently.
+
+        Raises:
+            ValueError: If circular dependencies are detected
+        """
+        cycles = self.detect_cycles()
+        if cycles:
+            cycle_desc = " -> ".join(cycles[0])
+            raise ValueError(f"Circular dependencies detected: {cycle_desc}")
+
+        # Kahn's algorithm variant: batch zero-in-degree nodes as levels
+        in_degree: Dict[str, int] = {}
+        for oid in self._all_ids:
+            in_degree[oid] = len(
+                self._forward.get(oid, set()) & self._all_ids
+            )
+
+        remaining: Set[str] = set(self._all_ids)
+        levels: List[List[str]] = []
+        processed: int = 0
+
+        while remaining:
+            # Collect all remaining nodes with zero in-degree
+            level = [oid for oid in remaining if in_degree.get(oid, 0) == 0]
+            if not level:
+                break
+
+            levels.append(level)
+            processed += len(level)
+
+            # Remove these nodes from remaining and update in-degrees
+            for node in level:
+                remaining.discard(node)
+                for dependent in self._reverse.get(node, set()):
+                    if dependent in in_degree:
+                        in_degree[dependent] -= 1
+
+        if processed != len(self._all_ids):
+            raise ValueError("Unable to partition all objectives into levels")
+
+        return levels
+
+
+@dataclass
+class ConflictReport:
+    """Records a file-level conflict between parallel objectives."""
+
+    conflicting_objective_ids: list[str]
+    affected_files: set[str]
+    timestamp: str = ""
+
+    def __post_init__(self):
+        if not self.timestamp:
+            from datetime import datetime, timezone
+            self.timestamp = datetime.now(timezone.utc).isoformat()
+
+
+@dataclass
+class LevelResult:
+    """Outcome of executing one dependency level in parallel mode."""
+
+    level_number: int
+    objective_ids: list[str]
+    outcomes: dict  # objective_id -> ObjectiveOutcome
+    conflicts: list  # List[ConflictReport]
+    success_count: int = 0
+    failure_count: int = 0
+    verdict: str = "CONTINUE"  # Verdict enum value as string
+    timestamp: str = ""
+
+    def __post_init__(self):
+        if not self.timestamp:
+            from datetime import datetime, timezone
+            self.timestamp = datetime.now(timezone.utc).isoformat()

@@ -546,3 +546,96 @@ class ProjectSupervisor:
             logger.warning(f"Supervisor REMEDIATE: {reason}")
         else:
             logger.debug(f"Supervisor CONTINUE: {reason}")
+
+    # -----------------------------------------------------------------------
+    # Level evaluation (parallel execution support)
+    # -----------------------------------------------------------------------
+
+    def evaluate_level(
+        self,
+        outcomes: list,
+        project,
+        dep_graph,
+        conflicts: list | None = None,
+    ) -> str:
+        """
+        Evaluate an entire level of parallel executions.
+
+        Logic:
+        1. If any conflict detected -> REMEDIATE
+        2. If all objectives failed -> ABORT
+        3. Count failures, check against max_consecutive_failures
+        4. Otherwise -> CONTINUE
+
+        Args:
+            outcomes: List of ObjectiveOutcome for this level
+            project: Current project state
+            dep_graph: Dependency graph
+            conflicts: Optional list of ConflictReport
+
+        Returns:
+            Verdict enum value as string
+        """
+        # 1. If any conflict detected -> REMEDIATE
+        if conflicts:
+            self._record_verdict(
+                Verdict.REMEDIATE,
+                f"{len(conflicts)} file conflict(s) detected in level",
+            )
+            return Verdict.REMEDIATE.value
+
+        if not outcomes:
+            return Verdict.CONTINUE.value
+
+        # 2. Check failure counts
+        failed = [o for o in outcomes if not o.success]
+        succeeded = [o for o in outcomes if o.success]
+
+        # All objectives failed -> ABORT
+        if len(failed) == len(outcomes):
+            self._record_verdict(
+                Verdict.ABORT,
+                f"All {len(outcomes)} objectives failed in level",
+            )
+            return Verdict.ABORT.value
+
+        # 3. Record outcomes and check consecutive failures
+        for outcome in outcomes:
+            self._state.outcomes.append(outcome)
+            self._state.total_cycles += 1
+
+            if outcome.success:
+                self._state.consecutive_failures = 0
+            else:
+                self._state.consecutive_failures += 1
+                obj_id = outcome.objective_id
+                self._state.objective_failures[obj_id] = (
+                    self._state.objective_failures.get(obj_id, 0) + 1
+                )
+
+                # Per-objective failure tracking -> ABORT
+                obj_failures = self._state.objective_failures.get(obj_id, 0)
+                if obj_failures >= self._config.max_consecutive_failures:
+                    self._record_verdict(
+                        Verdict.ABORT,
+                        f"Objective '{obj_id}' has {obj_failures} failures >= "
+                        f"max ({self._config.max_consecutive_failures})",
+                    )
+                    return Verdict.ABORT.value
+
+        # Project-level consecutive failures -> ABORT
+        if self._state.consecutive_failures >= self._config.max_consecutive_failures:
+            self._record_verdict(
+                Verdict.ABORT,
+                f"Project-level consecutive failures "
+                f"({self._state.consecutive_failures}) >= "
+                f"max ({self._config.max_consecutive_failures})",
+            )
+            return Verdict.ABORT.value
+
+        # 4. Default -> CONTINUE
+        self._record_verdict(
+            Verdict.CONTINUE,
+            f"Level: {len(succeeded)}/{len(outcomes)} succeeded",
+        )
+        return Verdict.CONTINUE.value

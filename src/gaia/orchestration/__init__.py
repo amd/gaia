@@ -16,7 +16,9 @@ Example:
 
 from gaia.orchestration.models import (
     Artifact,
+    ConflictReport,
     DependencyGraph,
+    LevelResult,
     Objective,
     ObjectiveStatus,
     ProjectObjectives,
@@ -46,7 +48,9 @@ from gaia.orchestration.supervisors import (
 
 __all__ = [
     "Artifact",
+    "ConflictReport",
     "DependencyGraph",
+    "LevelResult",
     "Objective",
     "ObjectiveStatus",
     "ProjectObjectives",

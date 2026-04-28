@@ -320,3 +320,79 @@ class OrchestratorPipelineAdapter:
     def get_circuit_breaker_stats(self) -> Dict[str, Any]:
         """Get circuit breaker statistics for monitoring."""
         return self._circuit_breaker.get_statistics()
+
+    async def execute_without_status_update(
+        self, objective: Objective
+    ) -> dict:
+        """
+        Execute an objective through PipelineEngine WITHOUT mutating status.
+
+        Nearly identical to _do_execute() but omits the objective
+        transition_to() and add_artifact() calls. Returns a plain dict
+        instead of ExecutionResult.
+
+        Args:
+            objective: The objective to execute
+
+        Returns:
+            dict with keys: success (bool), artifacts (list), error (str or None)
+        """
+        try:
+            if self._enable_circuit_breaker:
+                wrapped = self._circuit_breaker(self._do_execute_no_mutation)
+                result = await wrapped(objective)
+                return result
+            else:
+                return await self._do_execute_no_mutation(objective)
+
+        except Exception as e:
+            logger.error(
+                f"Pipeline execution failed for objective "
+                f"'{objective.title}' ({objective.objective_id}): {e}",
+                extra={"objective_id": objective.objective_id},
+            )
+            return {
+                "success": False,
+                "artifacts": [],
+                "error": str(e),
+            }
+
+    async def _do_execute_no_mutation(self, objective: Objective) -> dict:
+        """
+        Internal execution logic without objective status mutation.
+
+        Args:
+            objective: The objective to execute
+
+        Returns:
+            dict with success, artifacts, error keys
+        """
+        engine = self.pipeline_engine
+
+        # Build context and config from objective
+        context = self._build_pipeline_context(objective)
+        config = self._build_pipeline_config_dict(objective)
+
+        # Initialize and run with guaranteed cleanup
+        try:
+            await engine.initialize(context, config)
+            snapshot = await engine.start()
+        finally:
+            engine.shutdown()
+
+        # Determine success
+        final_state = getattr(snapshot, "state", None)
+        success = final_state == PipelineState.COMPLETED
+
+        # Extract artifacts
+        artifacts = self._extract_artifacts(snapshot, objective)
+
+        error_msg = None
+        if not success:
+            error_msg = getattr(snapshot, "error_message", "Pipeline did not complete")
+
+        return {
+            "success": success,
+            "artifacts": artifacts,
+            "error": error_msg,
+        }
