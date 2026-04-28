@@ -94,7 +94,7 @@ class RAGConfig:
     cache_dir: str = ".gaia"
     show_stats: bool = False
     use_local_llm: bool = True
-    base_url: str = "http://localhost:8000/api/v1"  # Lemonade server API URL
+    base_url: str = "http://localhost:13305/api/v1"  # Lemonade server API URL
     # Memory management settings
     max_indexed_files: int = 100  # Maximum number of files to keep indexed
     max_total_chunks: int = 10000  # Maximum total chunks across all files
@@ -682,7 +682,9 @@ class RAGSDK:
                 elif not vlm_available and self.config.show_stats:
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
-                    print("     1. Open Lemonade Model Manager (http://localhost:8000)")
+                    print(
+                        "     1. Open Lemonade Model Manager (http://localhost:13305)"
+                    )
                     print(f"     2. Download model: {self.config.vlm_model}")
 
             except Exception as vlm_error:

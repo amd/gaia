@@ -189,7 +189,7 @@
     word-wrap: break-word;
     overflow-wrap: break-word;
     padding-left: 32px;
-    overflow: hidden;
+    overflow-y: hidden;
     min-width: 0;
 }
 

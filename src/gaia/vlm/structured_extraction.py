@@ -64,7 +64,7 @@ class StructuredVLMExtractor:
 
     def __init__(
         self,
-        vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF",
+        vlm_model: str = "Gemma-4-E4B-it-GGUF",
         base_url: Optional[str] = None,
     ):
         """

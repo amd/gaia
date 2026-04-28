@@ -2,10 +2,18 @@
 # SPDX-License-Identifier: MIT
 """Lemonade provider - supports ALL methods."""
 
-from typing import Iterator, Optional, Union
+import json
+import logging
+from typing import Iterator, List, Optional, Union
 
 from ..base_client import LLMClient
-from ..lemonade_client import DEFAULT_MODEL_NAME, LemonadeClient
+from ..lemonade_client import DEFAULT_MODEL_NAME, LemonadeClient, is_tool_calling_model
+
+logger = logging.getLogger(__name__)
+
+# Sentinel key used to encode native tool_calls inside a JSON string so that
+# the response type stays `str` everywhere (no callers need updating).
+_NATIVE_TC_KEY = "__tool_calls__"
 
 
 class LemonadeProvider(LLMClient):
@@ -60,10 +68,12 @@ class LemonadeProvider(LLMClient):
         messages: list[dict],
         model: str | None = None,
         stream: bool = False,
+        tools: Optional[List[dict]] = None,
         **kwargs,
-    ) -> Union[str, Iterator[str]]:
+    ) -> Union[str, dict, Iterator[str]]:
         # Use provided model, instance model, or default CPU model
         effective_model = model or self._model or DEFAULT_MODEL_NAME
+        tool_capable = is_tool_calling_model(effective_model)
 
         # Prepend system prompt if set
         if self._system_prompt:
@@ -96,10 +106,20 @@ class LemonadeProvider(LLMClient):
         kwargs.setdefault("repeat_penalty", 1.1)
         kwargs.setdefault("repeat_last_n", 256)
 
+        # For tool-calling models with tools, always use non-streaming so tool_calls
+        # are returned as a complete structured dict (not fragmented SSE chunks).
+        # Streaming of tool_call delta frames is deferred to a future release.
+        effective_stream = stream and not (tool_capable and tools)
+        effective_tools = tools if tool_capable else None
+
         response = self._backend.chat_completions(
-            model=effective_model, messages=messages, stream=stream, **kwargs
+            model=effective_model,
+            messages=messages,
+            stream=effective_stream,
+            tools=effective_tools,
+            **kwargs,
         )
-        if stream:
+        if effective_stream:
             return self._handle_stream(response)
 
         # Handle error responses gracefully
@@ -110,9 +130,34 @@ class LemonadeProvider(LLMClient):
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")
 
-        content = response["choices"][0]["message"]["content"]
-        if not content:
-            content = response["choices"][0]["message"].get("reasoning_content", "")
+        choice = response["choices"][0]
+        message = choice.get("message", {})
+        finish_reason = choice.get("finish_reason", "")
+        tool_calls = message.get("tool_calls")
+
+        if tool_calls:
+            logger.debug(
+                "tool_call_path=native model_id=%s tool_calling_flag=%s finish_reason=%s",
+                effective_model,
+                tool_capable,
+                finish_reason,
+            )
+            # Encode as JSON string so callers can keep treating responses as str.
+            return json.dumps(
+                {
+                    _NATIVE_TC_KEY: tool_calls,
+                    "finish_reason": finish_reason,
+                }
+            )
+
+        content = message.get("content") or message.get("reasoning_content") or ""
+        logger.debug(
+            "tool_call_path=%s model_id=%s tool_calling_flag=%s finish_reason=%s",
+            "plain_text",
+            effective_model,
+            tool_capable,
+            finish_reason,
+        )
         return content
 
     def embed(self, texts: list[str], **kwargs) -> list[list[float]]:

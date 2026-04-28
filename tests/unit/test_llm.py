@@ -38,7 +38,7 @@ class TestLlmCli(unittest.TestCase):
     def _check_lemonade_server_health(self):
         """Check if lemonade server is running and accessible."""
         try:
-            response = requests.get("http://localhost:8000/api/v1/health", timeout=5)
+            response = requests.get("http://localhost:13305/api/v1/health", timeout=5)
             if response.status_code == 200:
                 print("OK: Lemonade server health check passed")
                 return True
@@ -65,7 +65,7 @@ class TestLlmCli(unittest.TestCase):
         try:
             # Test with explicit --base-url (without /api/v1 to test normalization)
             print(
-                "Executing command: gaia llm 'What is 1+1?' --max-tokens 20 --base-url http://localhost:8000"
+                "Executing command: gaia llm 'What is 1+1?' --max-tokens 20 --base-url http://localhost:13305"
             )
 
             # Test the LLM command with explicit --base-url
@@ -78,7 +78,7 @@ class TestLlmCli(unittest.TestCase):
                     "--max-tokens",
                     "20",
                     "--base-url",
-                    "http://localhost:8000",
+                    "http://localhost:13305",
                 ],
                 capture_output=True,
                 text=True,
@@ -325,7 +325,7 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
             {"id": "test-model", "labels": []}
         ]  # LLM model loaded
         mock_client.get_status.return_value = mock_status
-        mock_client.base_url = "http://localhost:8000/api/v1"
+        mock_client.base_url = "http://localhost:13305/api/v1"
 
         with patch(
             "gaia.llm.lemonade_manager.LemonadeClient",
@@ -362,7 +362,7 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
             {"id": "test-model", "labels": []}
         ]  # LLM model loaded
         mock_client.get_status.return_value = mock_status
-        mock_client.base_url = "http://localhost:8000/api/v1"
+        mock_client.base_url = "http://localhost:13305/api/v1"
 
         with patch(
             "gaia.llm.lemonade_manager.LemonadeClient",
@@ -398,7 +398,7 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
         mock_status.running = True
         mock_status.context_size = 4096
         mock_client.get_status.return_value = mock_status
-        mock_client.base_url = "http://localhost:8000/api/v1"
+        mock_client.base_url = "http://localhost:13305/api/v1"
 
         with patch(
             "gaia.llm.lemonade_manager.LemonadeClient",

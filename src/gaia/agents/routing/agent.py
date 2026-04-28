@@ -56,7 +56,7 @@ class RoutingAgent:
         base_url = agent_kwargs.get("base_url")
         if base_url is None:
             # Read from environment if not provided
-            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
 
         # Initialize LLM client - factory auto-detects provider from flags
         self.llm_client = create_client(

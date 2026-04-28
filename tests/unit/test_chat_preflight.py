@@ -20,7 +20,7 @@ from gaia.ui._chat_helpers import _maybe_load_expected_model
 _HTTPX_GET = "httpx.get"
 _LEMONADE_MANAGER = "gaia.llm.lemonade_manager.LemonadeManager"
 _LEMONADE_CLIENT = "gaia.llm.lemonade_client.LemonadeClient"
-_BASE_URL = "http://localhost:8000/api/v1"
+_BASE_URL = "http://localhost:13305/api/v1"
 
 
 # ---------------------------------------------------------------------------

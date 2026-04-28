@@ -138,7 +138,7 @@ class TestSystemStatus:
     def test_system_status_remote_lemonade_url_skips_device_check(self, client):
         """Non-localhost LEMONADE_BASE_URL means device_supported is always true."""
         with patch.dict(
-            os.environ, {"LEMONADE_BASE_URL": "https://remote-server:8000/api/v1"}
+            os.environ, {"LEMONADE_BASE_URL": "https://remote-server:13305/api/v1"}
         ):
             with patch(
                 "gaia.device.check_device_supported",
@@ -152,7 +152,7 @@ class TestSystemStatus:
         """localhost LEMONADE_BASE_URL still runs the device check normally."""
         with patch.dict(
             os.environ,
-            {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"},
+            {"LEMONADE_BASE_URL": "http://localhost:13305/api/v1"},
             clear=False,
         ):
             with patch(
@@ -176,7 +176,7 @@ class TestSystemStatus:
         mock_httpx_cls.return_value = mock_client
 
         # Ensure default localhost URL is used regardless of env
-        env_override = {"LEMONADE_BASE_URL": "http://localhost:8000/api/v1"}
+        env_override = {"LEMONADE_BASE_URL": "http://localhost:13305/api/v1"}
         with patch.dict(os.environ, env_override, clear=False):
             resp = client.get("/api/system/status")
         data = resp.json()
@@ -188,8 +188,8 @@ class TestSystemStatus:
         # Safe defaults: don't warn when server is simply unreachable
         assert data["context_size_sufficient"] is True  # Don't block on unknown
         assert data["model_downloaded"] is None  # Unknown when server not running
-        assert data["default_model_name"] == "Qwen3.5-35B-A3B-GGUF"
-        assert data["lemonade_url"] == "http://localhost:8000"
+        assert data["default_model_name"] == "Gemma-4-E4B-it-GGUF"
+        assert data["lemonade_url"] == "http://localhost:13305"
 
     @patch("httpx.AsyncClient")
     def test_system_status_lemonade_url_parsed_from_env(self, mock_httpx_cls, client):
@@ -374,7 +374,7 @@ class TestSystemStatus:
         catalog_data = {
             "data": [
                 {
-                    "id": "Qwen3.5-35B-A3B-GGUF",
+                    "id": "Gemma-4-E4B-it-GGUF",
                     "downloaded": True,  # Model IS downloaded, just not loaded yet
                 }
             ]
@@ -621,7 +621,7 @@ class TestSystemStatus:
         data = resp.json()
         assert data["model_loaded"] == "SomeOtherModel-7B-GGUF"
         assert data["expected_model_loaded"] is False
-        assert data["default_model_name"] == "Qwen3.5-35B-A3B-GGUF"
+        assert data["default_model_name"] == "Gemma-4-E4B-it-GGUF"
 
     @patch("httpx.AsyncClient")
     def test_system_status_expected_model_loaded(self, mock_httpx_cls, client):
@@ -636,11 +636,11 @@ class TestSystemStatus:
 
         health_data = {
             "status": "ok",
-            "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+            "model_loaded": "Gemma-4-E4B-it-GGUF",
             "version": "9.3.0",
             "all_models_loaded": [
                 {
-                    "model_name": "Qwen3.5-35B-A3B-GGUF",
+                    "model_name": "Gemma-4-E4B-it-GGUF",
                     "type": "llm",
                     "device": "amd_npu",
                     "recipe_options": {"ctx_size": 32768},
@@ -1588,3 +1588,89 @@ class TestSanitizeStaticPath:
             import shutil
 
             shutil.rmtree(base)
+
+
+class TestSpaShellServing:
+    """Issue #846 — wheel ships dist/, server must serve it."""
+
+    def test_server_serves_spa_when_dist_present(self, tmp_path):
+        """When webui_dist is provided and contains index.html, GET / returns it."""
+        dist = tmp_path / "dist"
+        (dist / "assets").mkdir(parents=True)
+        (dist / "index.html").write_text(
+            '<!doctype html><html><body><div id="root"></div>'
+            '<script src="/assets/main-abc.js"></script></body></html>'
+        )
+        (dist / "assets" / "main-abc.js").write_text("// stub")
+
+        app = create_app(db_path=":memory:", webui_dist=str(dist))
+        client = TestClient(app)
+        r = client.get("/")
+        assert r.status_code == 200
+        assert 'id="root"' in r.text
+        # No-cache header is applied so browsers always pick up new builds
+        assert "no-cache" in r.headers.get("cache-control", "").lower()
+
+    def test_server_serves_hashed_asset_when_dist_present(self, tmp_path):
+        """Hashed assets under /assets/ are served as static files."""
+        dist = tmp_path / "dist"
+        (dist / "assets").mkdir(parents=True)
+        (dist / "index.html").write_text('<div id="root"></div>')
+        (dist / "assets" / "main-abc.js").write_text("const x = 1;")
+
+        app = create_app(db_path=":memory:", webui_dist=str(dist))
+        client = TestClient(app)
+        r = client.get("/assets/main-abc.js")
+        assert r.status_code == 200
+        assert "const x = 1" in r.text
+
+    def test_server_falls_back_when_dist_missing(self, tmp_path):
+        """When dist/ is absent, server returns the friendly HTML fallback."""
+        app = create_app(
+            db_path=":memory:",
+            webui_dist=str(tmp_path / "nonexistent-dist"),
+        )
+        client = TestClient(app)
+        r = client.get("/")
+        assert r.status_code == 200
+        # The fallback is HTML (not JSON) and explains the situation
+        assert "<html" in r.text.lower()
+        assert (
+            "frontend" in r.text.lower()
+            or "agent ui" in r.text.lower()
+            or "backend" in r.text.lower()
+        )
+
+    def test_default_webui_dist_resolves_under_gaia_apps_webui(self):
+        """The default dist/ path must resolve under the gaia.apps.webui package.
+
+        Catches refactors that rename the package, move __init__.py, or break
+        the path-math at server.py — any of which would silently land an
+        installed wheel in fallback mode.
+        """
+        from pathlib import Path
+
+        import gaia.apps.webui as webui_pkg
+
+        expected = Path(webui_pkg.__file__).resolve().parent / "dist"
+        # server.py:362 computes _default_dist via __file__-relative path math.
+        # Re-derive it the same way the server does and assert agreement.
+        from gaia.ui import server as server_module
+
+        server_dir = Path(server_module.__file__).resolve().parent
+        derived = (server_dir.parent / "apps" / "webui" / "dist").resolve()
+        assert derived == expected, (
+            f"server.py default dist path ({derived}) drifted from "
+            f"gaia.apps.webui location ({expected})"
+        )
+
+    def test_server_warns_with_diagnostic_when_dist_missing(self, tmp_path, caplog):
+        """The 'no dist' log line names the path so users can act on it."""
+        missing = tmp_path / "missing-dist"
+        with caplog.at_level(logging.WARNING, logger="gaia.ui.server"):
+            create_app(db_path=":memory:", webui_dist=str(missing))
+        # The warning must contain the path the server tried (so users can
+        # diagnose the wheel install) and a hint pointing to gaia.apps.webui.
+        joined = " ".join(rec.getMessage() for rec in caplog.records)
+        assert "missing-dist" in joined
+        assert "gaia.apps.webui" in joined

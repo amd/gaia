@@ -1,0 +1,743 @@
+{
+  "run_id": "eval-20260424-173305",
+  "timestamp": "2026-04-24T17:58:30.108920+00:00",
+  "config": {
+    "backend_url": "http://localhost:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0
+  },
+  "summary": {
+    "total_scenarios": 7,
+    "passed": 7,
+    "failed": 0,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 1.0,
+    "judged_pass_rate": 1.0,
+    "avg_score": 9.47,
+    "by_category": {
+      "rag_quality": {
+        "passed": 7,
+        "failed": 0,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 9.468571428571428
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "budget_query",
+      "status": "PASS",
+      "overall_score": 9.75,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What is the total approved budget for 2025?",
+          "agent_response": "According to `budget_2025.md`, the **total approved budget for 2025 is $4.2M**. This covers all departments including Engineering ($1.3M), Marketing ($800K), Operations ($1.0M), and R&D ($1.1M).",
+          "agent_tools": [
+            "query_indexed_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.75,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent retrieved $4.2M exactly from budget_2025.md via RAG tool (evidenced by 1303 input tokens including document context). Answer is correct and includes useful department breakdown. Sources field empty in API response but document cited inline; minor deduction on tool_selection and personality for this.",
+          "performance": {
+            "tokens_per_second": 90,
+            "time_to_first_token": 0.834,
+            "input_tokens": 1303,
+            "output_tokens": 127,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What is the Engineering department's annual budget?",
+          "agent_response": "**$1.3 million** — that's the Engineering department's annual budget for 2025 according to `budget_2025.md`. The quarterly breakdown shows Q1 ($320K), Q2 ($330K), Q3 ($340K), and Q4 ($310K).",
+          "agent_tools": [
+            "query_indexed_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.75,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent queried the document (think block explicitly states 'The tool returned the Engineering department annual budget as $1.3M in a table format') and returned the exact correct figure with a bonus quarterly breakdown. Sources array empty in API response but document cited inline.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "At what spending level does CFO approval kick in?",
+          "agent_response": "**$50,000** — CFO approval kicks in for any single expense exceeding that threshold according to `budget_2025.md`. This applies across all departments as part of the financial controls framework.",
+          "agent_tools": [
+            "query_indexed_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.75,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent queried the document (think block: 'The tool result shows that CFO approval is required for expenses >$50K') and correctly stated the $50K threshold with the policy scope. Exact match to ground truth.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 282.5402081012726,
+      "category": "rag_quality",
+      "performance_summary": {
+        "avg_tokens_per_second": 90.0,
+        "avg_time_to_first_token": 0.834,
+        "total_input_tokens": 1303,
+        "total_output_tokens": 127,
+        "flags": [
+          "no_stats"
+        ]
+      }
+    },
+    {
+      "scenario_id": "cross_section_rag",
+      "status": "PASS",
+      "overall_score": 9.18,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Based on the Q3 report, what revenue range should we expect in Q4 given the CEO's growth projection?",
+          "agent_response": "Based on **bb4aa775dc9b_acme_q3_report.md**, here's what we can expect:\n\n**CEO Growth Projection:** The report states that for Q4, they project **15–18% growth** driven by enterprise segment expansion and three new product launches planned for November.\n\n**Q4 Revenue Range Calculation:**\n\n| Metric | Value |\n|--------|-------|\n| Q3 2025 Revenue | $14.2 million |\n| Projected Growth | 15–18% |\n| **Expected Q4 Revenue** | **$16.33 – $16.76 million** |\n\nThis represents a significant acceleration from the +23% YoY growth seen in Q3 compared to last year's quarter ($11.5M → $14.2M).",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 8,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.4,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved both q3_revenue ($14.2M) and ceo_outlook (15-18% growth) via query_specific_file, then synthesized to compute $16.33-$16.76M — within 1% of ground truth endpoints. Full cross-fact synthesis performed. Minor personality deduction for cautious qualifier about internal projections.",
+          "performance": {
+            "tokens_per_second": 88.7,
+            "time_to_first_token": 1.13,
+            "input_tokens": 1849,
+            "output_tokens": 363,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What was the previous year's Q3 revenue, and how does the projected Q4 compare to that?",
+          "agent_response": "**Previous Year's Q3 Revenue:** **$11.5 million** (Q3 2024)\n\n**Projected Q4 Comparison:**\n\n| Period | Revenue | Growth vs Prior Year |\n|--------|---------|---------------------|\n| Q3 2024 | $11.5M | — |\n| Projected Q4 2025 | **$16.3 – $16.8M** | **+42%** vs Q3 2024 |\n\nSo the projected Q4 would be roughly **$4.8–5.3 million higher than last year's same quarter**, representing a ~42% year-over-year increase if those projections hold true.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 8,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 8,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 8.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly states Q3 2024 as $11.5M and uses the projected Q4 range from Turn 1. Context retention is perfect. The growth comparison cites ~42% which captures the low endpoint (16.3/11.5=41.7%) but understates the upper bound (16.8/11.5=46.1%). Ground truth expected 42-46% range — agent only cited the low end. Minor completeness and correctness deductions for not explicitly stating the full percentage range.",
+          "performance": {
+            "tokens_per_second": 89.2,
+            "time_to_first_token": 0.52,
+            "input_tokens": 761,
+            "output_tokens": 372,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 221.13864398002625,
+      "category": "rag_quality",
+      "performance_summary": {
+        "avg_tokens_per_second": 89.0,
+        "avg_time_to_first_token": 0.825,
+        "total_input_tokens": 2610,
+        "total_output_tokens": 735,
+        "flags": []
+      }
+    },
+    {
+      "scenario_id": "csv_analysis",
+      "status": "PASS",
+      "overall_score": 9.15,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Who is the top salesperson by total revenue?",
+          "agent_response": "**Sarah Chen** is the top salesperson with **$70,000** in total revenue across her 5 transactions (460 units sold).",
+          "agent_tools": [
+            "rag"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 8,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.2,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact match on both name (Sarah Chen) and revenue ($70,000). Response was direct, confident, and included supporting detail. Tool selection inferred as RAG from document-grounded answer; no agent_steps metadata returned. Context retention scored 8 as first turn requires no prior context.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What was total Q1 revenue across all salespeople?",
+          "agent_response": "**Total Q1 2025 revenue: $340,000** across **25 transactions**. Monthly breakdown provided but internally inconsistent with a misleading caveat about incomplete March data.",
+          "agent_tools": [
+            "rag"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 9,
+            "context_retention": 9,
+            "completeness": 8,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 8.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Stated total ($340,000) is an exact match to ground truth. However, the monthly breakdown is internally inconsistent and the caveat about incomplete March data is potentially misleading. Correctness scored 9 rather than 10 due to the confusing supplemental table.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What was the best-selling product in March by units sold?",
+          "agent_response": "**Widget Pro X** was the best-selling product in March by units sold — **150 units** total (across sales from Sarah Chen, John Smith, and Emily Brown).",
+          "agent_tools": [
+            "rag"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 9,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.55,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact match on product name (Widget Pro X) and units (150). Response was clean, direct, and added useful attribution detail. No sycophancy, no unnecessary caveats. Best response of the three turns.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        }
+      ],
+      "performance_summary": null,
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 237.7841727733612,
+      "category": "rag_quality"
+    },
+    {
+      "scenario_id": "hallucination_resistance",
+      "status": "PASS",
+      "overall_score": 9.7,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "I'm reviewing the Acme Q3 report. Can you tell me what the total revenue figure was for Q3 2025? I need the exact number from the document.",
+          "agent_response": "According to `bb4aa775dc9b_acme_q3_report.md`, Q3 2025 total revenue was **$14.2 million**. This represents a 23% increase from Q3 2024's $11.5 million.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly stated $14.2 million verbatim from the document. Used index_documents then query_specific_file to retrieve the exact figure. Also provided useful YoY comparison context grounded in the document. No hallucination detected.",
+          "performance": {
+            "tokens_per_second": 90,
+            "time_to_first_token": 1.106,
+            "input_tokens": 1762,
+            "output_tokens": 94,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Looking at the same Acme Q3 report, can you tell me who the CFO of Acme Corp is?",
+          "agent_response": "Based on my search of `bb4aa775dc9b_acme_q3_report.md`, **the document does not mention who the CFO is**. The only executive named is **Jane Smith**, who is identified as the CEO.\n\nThe Q3 report focuses on financial metrics (revenue, margins) and product performance rather than listing senior leadership beyond the CEO letter signature. You may need to check other documents or sources for the CFO information.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent did not hallucinate a CFO name. It correctly queried the document first, found CFO is not mentioned, and clearly stated the information is not present. Accurately noted what executive IS named (CEO Jane Smith), demonstrating good document grounding.",
+          "performance": {
+            "tokens_per_second": 90,
+            "time_to_first_token": 1.125,
+            "input_tokens": 1814,
+            "output_tokens": 131,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 178.20694875717163,
+      "category": "rag_quality",
+      "performance_summary": {
+        "avg_tokens_per_second": 90.0,
+        "avg_time_to_first_token": 1.115,
+        "total_input_tokens": 3576,
+        "total_output_tokens": 225,
+        "flags": []
+      }
+    },
+    {
+      "scenario_id": "negation_handling",
+      "status": "PASS",
+      "overall_score": 9.58,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Hey, quick question - are contractors eligible for health benefits?",
+          "agent_response": "**No.** According to employee_handbook.md, page null: Contractors are **NOT eligible** for company benefits — including health insurance, short-term/long-term disability insurance, and even the Employee Assistance Program (EAP).",
+          "agent_tools": [
+            "rag"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.5,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent clearly and immediately states contractors are NOT eligible, citing the employee handbook and listing specific excluded benefits (health, disability, EAP). Matches ground truth exactly. Bold formatting emphasizes the negative. No hedging.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What about dental and vision? Would contractors get those at least?",
+          "agent_response": "**Nope.** Same deal as health insurance — the document explicitly says contractors don't get *any* of these: dental coverage or vision care fall under the same exclusion from company benefits. It's a blanket no on all standard employee perks.",
+          "agent_tools": [
+            "rag"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.6,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent maintains consistent negation for dental and vision. References prior turn context ('same deal as health insurance'), cites document, and correctly generalizes to a blanket exclusion. Does not fabricate any dental/vision contractor entitlements. Concise and direct.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Okay so what ARE contractors eligible for then? Like what do they actually get from the company?",
+          "agent_response": "**Nothing from the handbook.** According to employee_handbook.md, page null: Contractors are **NOT eligible for any company benefits programs**. The document only specifies what they *don't* get — it doesn't list alternative benefits or entitlements.\n\nContractors operate under separate service agreements (Section 3), so whatever compensation or perks they receive would be defined there, not in this handbook.",
+          "agent_tools": [
+            "rag"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.65,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Expected answer is null (not in document). Agent correctly acknowledges the handbook does not list contractor entitlements and helpfully redirects to separate service agreements without inventing benefits. Honest and well-structured.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        }
+      ],
+      "performance_summary": null,
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 198.8560287952423,
+      "category": "rag_quality"
+    },
+    {
+      "scenario_id": "simple_factual_rag",
+      "status": "PASS",
+      "overall_score": 9.65,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What was Acme Corp's total revenue for Q3 2025?",
+          "agent_response": "According to `bb4aa775dc9b_acme_q3_report.md`, **Acme Corp's total revenue for Q3 2025 was $14.2 million**, representing a 23% increase from Q3 2024's $11.5 million. Results exceeded internal forecast by approximately $600,000, driven by a large enterprise deal that closed in early September.",
+          "agent_tools": [
+            "index_documents",
+            "query_indexed_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.6,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved $14.2M from the indexed document, exactly matching ground truth. Also proactively included YoY context. Minor deduction on tool_selection since RAG tool internals were abstracted (index_documents was implicit via session), and personality for the slightly verbose citation style.",
+          "performance": {
+            "tokens_per_second": 89.4,
+            "time_to_first_token": 1.157,
+            "input_tokens": 1870,
+            "output_tokens": 176,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "How does that compare to Q3 last year? What was the year-over-year growth?",
+          "agent_response": "Q3 2024 revenue was **$11.5 million**, so the year-over-year growth rate was **approximately 23%** (from $11.5M to $14.2M). That's an additional **$2.7 million** in revenue compared to last year's third quarter.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly stated 23% growth and $11.5M Q3 2024 baseline, matching ground truth exactly. Leveraged context from Turn 1 rather than re-querying — optimal efficiency. Minor tool_selection deduction for not explicitly calling a query tool (though using retained context is fine). Personality slightly flat but functional.",
+          "performance": {
+            "tokens_per_second": 89.1,
+            "time_to_first_token": 2.276,
+            "input_tokens": 632,
+            "output_tokens": 182,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What's the CEO's outlook for Q4? Any projections mentioned?",
+          "agent_response": "According to `bb4aa775dc9b_acme_q3_report.md`, **CEO Jane Smith projects 15–18% growth for Q4**, driven by enterprise segment expansion and three new product launches scheduled for November and December:\n\n| Product | Launch Date |\n|---------|-------------|\n| Widget Pro X v2.1 (enhanced API rate limiting) | November 12, 2025 |\n| Gadget Plus integration with Salesforce | Q4 2025 |\n| Mobile app (Android) | December 2025 |\n\nThis would put projected Q4 revenue at approximately **$16.3M–$16.8 million** if the growth targets are met.",
+          "agent_tools": [
+            "index_documents",
+            "query_indexed_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.65,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly cited 15-18% projected growth driven by enterprise segment expansion — exact match to ground truth. Added well-formatted product launch table and computed projected revenue range. Slight efficiency deduction for re-indexing the document. Personality score elevated for confident structure and useful derived calculation.",
+          "performance": {
+            "tokens_per_second": 89.4,
+            "time_to_first_token": 1.106,
+            "input_tokens": 1770,
+            "output_tokens": 211,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 191.60865092277527,
+      "category": "rag_quality",
+      "performance_summary": {
+        "avg_tokens_per_second": 89.3,
+        "avg_time_to_first_token": 1.513,
+        "total_input_tokens": 4272,
+        "total_output_tokens": 569,
+        "flags": []
+      }
+    },
+    {
+      "scenario_id": "table_extraction",
+      "status": "PASS",
+      "overall_score": 9.27,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Quick question — how many integrations does each product support? I need the exact numbers for a comparison.",
+          "agent_response": "According to `c46606312bc9_product_comparison.html`:\n\n- **StreamLine**: **10** native integrations (Slack, Google Drive, Jira)\n- **ProFlow**: **25** integrations (includes Salesforce, HubSpot, Zendesk + 12 more tools)",
+          "agent_tools": [
+            "rag"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 8,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 8
+          },
+          "overall_score": 9.15,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly extracted StreamLine=10 and ProFlow=25 integrations from the indexed HTML document, matching the ground truth exactly. Response was concise, well-formatted, and sourced. First turn so context retention scored slightly lower as no prior context existed.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Which product has the better star rating and by how much?",
+          "agent_response": "**ProFlow** has the better rating by **0.5 stars**:\n\n- **StreamLine**: 4.2 / 5 stars\n- **ProFlow**: 4.7 / 5 stars",
+          "agent_tools": [
+            "rag"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 9,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 8
+          },
+          "overall_score": 9.3,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified ProFlow as higher rated at 4.7 vs StreamLine's 4.2, with the exact 0.5 difference. Response matches ground truth precisely. Minor personality deduction for emoji usage but otherwise direct and accurate.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What is the price difference between the two products?",
+          "agent_response": "**ProFlow costs $30 more per month**:\n\n- **StreamLine**: $49/month\n- **ProFlow**: $79/month\n\nOver a full year, that adds up to **$360**.",
+          "agent_tools": [
+            "rag"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 9,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 8
+          },
+          "overall_score": 9.35,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified the $30/month price difference with ProFlow at $79 and StreamLine at $49, exactly matching the ground truth. Bonus annual calculation ($360) adds completeness without padding.",
+          "performance": {
+            "tokens_per_second": null,
+            "time_to_first_token": null,
+            "input_tokens": null,
+            "output_tokens": null,
+            "flags": [
+              "no_stats"
+            ]
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.77
+      },
+      "elapsed_s": 214.1709702014923,
+      "category": "rag_quality",
+      "performance_summary": null
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.77
+  },
+  "performance": {
+    "avg_tokens_per_second": 89.6,
+    "avg_time_to_first_token": 1.072,
+    "total_input_tokens": 11761,
+    "total_output_tokens": 1656,
+    "scenarios_with_data": 4,
+    "flags": [
+      "no_stats"
+    ]
+  }
+}
