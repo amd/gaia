@@ -17,6 +17,7 @@ import asyncio
 import os
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -473,6 +474,95 @@ class TestParallelExecutionMode:
         assert obj1.status == ObjectiveStatus.BLOCKED
         assert obj2.status == ObjectiveStatus.BLOCKED
 
+    async def test_parallel_execution_raises_exception(self, tmp_path):
+        """One objective raises RuntimeError; exception captured as failure, other succeeds."""
+        config = OrchestratorConfig(
+            objectives_path=str(tmp_path / "objectives.yaml"),
+            enable_parallel_execution=True,
+            max_cycle_iterations=10,
+        )
+        project = ProjectObjectives(
+            project_id="exception-test",
+            objectives=[
+                self._make_objective("obj-001", "Will Raise"),
+                self._make_objective("obj-002", "Will Succeed"),
+            ],
+        )
+        project.save_atomic(config.objectives_path)
+
+        mock_adapter = MagicMock(spec=OrchestratorPipelineAdapter)
+
+        async def mock_execute_no_mutation(obj):
+            if obj.objective_id == "obj-001":
+                raise RuntimeError("Task raised an error")
+            return {"success": True, "artifacts": [], "error": None}
+
+        mock_adapter.execute_without_status_update = AsyncMock(side_effect=mock_execute_no_mutation)
+
+        orchestrator = ProjectOrchestrator(config=config, pipeline_adapter=mock_adapter)
+        orchestrator.load_objectives()
+
+        # Should not crash — exception is captured as failure
+        state = await orchestrator.run()
+
+        # One succeeded, one failed (captured exception)
+        assert state.objectives_processed == 1
+        assert state.objectives_failed == 1
+
+        # Failed objective should be BLOCKED with error message
+        failed_obj = orchestrator.project.get_objective("obj-001")
+        assert failed_obj.status == ObjectiveStatus.BLOCKED
+        assert "Task raised an error" in failed_obj.error_message
+
+        # Succeeded objective should be COMPLETED
+        succeeded_obj = orchestrator.project.get_objective("obj-002")
+        assert succeeded_obj.status == ObjectiveStatus.COMPLETED
+
+    async def test_parallel_multi_exception_same_level(self, tmp_path):
+        """Three objectives all raise different exceptions; all captured, verdict ABORT."""
+        exceptions_raised = {
+            "obj-001": RuntimeError("Runtime failure"),
+            "obj-002": ValueError("Value failure"),
+            "obj-003": TypeError("Type failure"),
+        }
+
+        config = OrchestratorConfig(
+            objectives_path=str(tmp_path / "objectives.yaml"),
+            enable_parallel_execution=True,
+            max_cycle_iterations=10,
+        )
+        project = ProjectObjectives(
+            project_id="multi-exception-test",
+            objectives=[
+                self._make_objective("obj-001", "Runtime Fail"),
+                self._make_objective("obj-002", "Value Fail"),
+                self._make_objective("obj-003", "Type Fail"),
+            ],
+        )
+        project.save_atomic(config.objectives_path)
+
+        mock_adapter = MagicMock(spec=OrchestratorPipelineAdapter)
+
+        async def mock_execute_no_mutation(obj):
+            raise exceptions_raised[obj.objective_id]
+
+        mock_adapter.execute_without_status_update = AsyncMock(side_effect=mock_execute_no_mutation)
+
+        orchestrator = ProjectOrchestrator(config=config, pipeline_adapter=mock_adapter)
+        orchestrator.load_objectives()
+
+        state = await orchestrator.run()
+
+        # All 3 should be captured as failures
+        assert state.objectives_failed == 3
+        assert state.objectives_processed == 0
+
+        # All 3 objectives should be BLOCKED with correct error messages
+        for obj_id, exc in exceptions_raised.items():
+            obj = orchestrator.project.get_objective(obj_id)
+            assert obj.status == ObjectiveStatus.BLOCKED
+            assert str(exc) in obj.error_message
+
 
 # =============================================================================
 # _propagate_failures_to_dependents tests
@@ -698,6 +788,64 @@ class TestHookSerialization:
 
         await orchestrator.run()
         assert OBJECTIVE_START in fired_events
+
+    async def test_hooks_fire_without_serialization_mixed(self, tmp_path):
+        """serialize_hooks=False: one objective halts, one succeeds; no lock acquisition."""
+        lock_acquired = []
+        original_lock = asyncio.Lock()
+
+        class HaltFirstHookNoSerial(BaseHook):
+            name = "halt_first_no_serial"
+            event = OBJECTIVE_START
+            priority = HookPriority.HIGH
+
+            async def execute(self, context: HookContext) -> HookResult:
+                obj_id = context.data.get("objective_id")
+                if obj_id == "obj-001":
+                    return HookResult(halt_pipeline=True)
+                return HookResult.success_result()
+
+        config = OrchestratorConfig(
+            objectives_path=str(tmp_path / "objectives.yaml"),
+            enable_parallel_execution=True,
+            serialize_hooks=False,
+            max_cycle_iterations=10,
+        )
+        project = ProjectObjectives(
+            project_id="hook-no-serial-test",
+            objectives=[
+                Objective(objective_id="obj-001", title="Will Halt", phase="DEVELOPMENT"),
+                Objective(objective_id="obj-002", title="Will Succeed", phase="DEVELOPMENT"),
+            ],
+        )
+        project.save_atomic(config.objectives_path)
+
+        mock_adapter = MagicMock(spec=OrchestratorPipelineAdapter)
+        mock_adapter.execute_without_status_update = AsyncMock(
+            return_value={"success": True, "artifacts": [], "error": None}
+        )
+
+        orchestrator = ProjectOrchestrator(config=config, pipeline_adapter=mock_adapter)
+        orchestrator.load_objectives()
+        orchestrator.hook_registry.register(HaltFirstHookNoSerial())
+
+        # Replace the lock to track acquisition
+        orchestrator._hook_lock = MagicMock(wraps=original_lock)
+
+        state = await orchestrator.run()
+
+        # Halted objective outcome
+        halted_obj = orchestrator.project.get_objective("obj-001")
+        assert halted_obj.status == ObjectiveStatus.BLOCKED
+
+        # Succeeding objective outcome
+        succeeded_obj = orchestrator.project.get_objective("obj-002")
+        assert succeeded_obj.status == ObjectiveStatus.COMPLETED
+        assert state.objectives_processed == 1
+        assert state.objectives_failed == 1
+
+        # Lock should NOT have been acquired when serialize_hooks=False
+        orchestrator._hook_lock.__aenter__.assert_not_called()
 
 
 # =============================================================================
@@ -980,6 +1128,43 @@ class TestConflictDetection:
 
 class TestRollback:
     """Tests for _rollback_failed_objectives and integration into _run_parallel_mode."""
+
+    def _init_git_repo(self, tmp_path):
+        """Initialize a temp git repo with an initial commit."""
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+        )
+        (tmp_path / "initial.txt").write_text("initial")
+        subprocess.run(
+            ["git", "add", "."],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
 
     def _make_objective(self, objective_id="obj-001", title="Test", deps=None, status=ObjectiveStatus.QUEUED):
         return Objective(
@@ -1277,6 +1462,78 @@ class TestRollback:
         assert rolled_back == 2
         # Both rollbacks should have been called
         assert set(call_order) == {"feature/obj-001", "feature/obj-002"}
+
+    async def test_rollback_worktree_cleanup_before_git_rollback(self, tmp_path):
+        """Worktree cleanup occurs before git rollback; rollback succeeds, verdict ABORT."""
+        self._init_git_repo(tmp_path)
+
+        objectives_path = tmp_path / ".gaia" / "objectives.yaml"
+        objectives_path.parent.mkdir(parents=True, exist_ok=True)
+        project = ProjectObjectives(
+            project_id="cleanup-before-rollback-test",
+            objectives=[
+                self._make_objective("obj-001", "Failing Task"),
+            ],
+        )
+        project.save_atomic(str(objectives_path))
+
+        # Track the order of operations
+        operation_order = []
+
+        # Mock GitSupervisor
+        mock_git_supervisor = MagicMock()
+
+        def mock_rollback(branch):
+            operation_order.append("git_rollback")
+            return True
+
+        mock_git_supervisor.rollback.side_effect = mock_rollback
+        mock_git_supervisor.detect_changed_files.return_value = []
+
+        mock_adapter = MagicMock(spec=OrchestratorPipelineAdapter)
+        mock_adapter.execute_without_status_update = AsyncMock(
+            return_value={"success": False, "artifacts": [], "error": "Objective failed"}
+        )
+
+        config = OrchestratorConfig(
+            objectives_path=str(objectives_path),
+            enable_parallel_execution=True,
+            enable_git_supervisor=True,
+            enable_supervisor=True,
+            enable_rollback=True,
+            max_cycle_iterations=10,
+        )
+        orchestrator = ProjectOrchestrator(config=config, pipeline_adapter=mock_adapter)
+        orchestrator.load_objectives()
+        orchestrator._git_supervisor = mock_git_supervisor
+
+        # Wrap _cleanup_worktree to track when it fires
+        original_cleanup = orchestrator._cleanup_worktree
+
+        async def tracked_cleanup(branch, obj_id):
+            operation_order.append("worktree_cleanup")
+            return await original_cleanup(branch, obj_id)
+
+        orchestrator._cleanup_worktree = tracked_cleanup
+
+        state = await orchestrator.run()
+
+        # Verify worktree cleanup happened BEFORE git rollback
+        assert "worktree_cleanup" in operation_order
+        assert "git_rollback" in operation_order
+        assert operation_order.index("worktree_cleanup") < operation_order.index("git_rollback")
+
+        # Rollback should have succeeded
+        mock_git_supervisor.rollback.assert_called_once()
+
+        # Verdict should be ABORT (all objectives failed in the level)
+        assert orchestrator.supervisor is not None
+        assert orchestrator.supervisor.state.current_verdict == Verdict.ABORT
+
+        # Worktree directory should have been removed by cleanup
+        base_dir = Path(objectives_path).parent
+        worktree_path = base_dir / "worktrees" / "obj-001"
+        assert not worktree_path.exists()
 
 
 # =============================================================================
@@ -1640,3 +1897,190 @@ class TestWorktreeLifecycle:
         for obj_id in ["obj-001", "obj-002", "obj-003"]:
             worktree_path = tmp_path / ".gaia" / "worktrees" / obj_id
             assert not worktree_path.exists(), f"Worktree for {obj_id} should be cleaned up"
+
+
+# =============================================================================
+# Test 1: Hook halt pipeline with mixed outcomes
+# =============================================================================
+
+
+class TestHookHaltPipeline:
+    """Tests for hook-driven pipeline halting with mixed objective outcomes."""
+
+    def _make_objective(self, objective_id="obj-001", title="Test", deps=None, status=ObjectiveStatus.QUEUED):
+        return Objective(
+            objective_id=objective_id,
+            title=title,
+            description=f"Description for {title}",
+            status=status,
+            dependencies=deps or [],
+            phase="DEVELOPMENT",
+            priority=5,
+        )
+
+    async def test_hook_halt_pipeline_mixed_outcomes(self, tmp_path):
+        """Hook returns halt_pipeline=True for first objective; second succeeds."""
+        halted_ids = set()
+
+        class HaltFirstObjectiveHook(BaseHook):
+            name = "halt_first_hook"
+            event = OBJECTIVE_START
+            priority = HookPriority.HIGH
+
+            async def execute(self, context: HookContext) -> HookResult:
+                obj_id = context.data.get("objective_id")
+                if obj_id == "obj-001":
+                    halted_ids.add(obj_id)
+                    return HookResult(halt_pipeline=True)
+                return HookResult.success_result()
+
+        config = OrchestratorConfig(
+            objectives_path=str(tmp_path / "objectives.yaml"),
+            enable_parallel_execution=True,
+            serialize_hooks=True,
+            max_cycle_iterations=10,
+        )
+        project = ProjectObjectives(
+            project_id="hook-halt-mixed-test",
+            objectives=[
+                self._make_objective("obj-001", "Will Be Halted"),
+                self._make_objective("obj-002", "Will Succeed"),
+            ],
+        )
+        project.save_atomic(config.objectives_path)
+
+        mock_adapter = MagicMock(spec=OrchestratorPipelineAdapter)
+        mock_adapter.execute_without_status_update = AsyncMock(
+            return_value={"success": True, "artifacts": [], "error": None}
+        )
+
+        orchestrator = ProjectOrchestrator(config=config, pipeline_adapter=mock_adapter)
+        orchestrator.load_objectives()
+        orchestrator.hook_registry.register(HaltFirstObjectiveHook())
+
+        state = await orchestrator.run()
+
+        # Halted objective should have BLOCKED status
+        halted_obj = orchestrator.project.get_objective("obj-001")
+        assert halted_obj.status == ObjectiveStatus.BLOCKED
+
+        # Second objective should succeed
+        assert state.objectives_processed == 1
+        succeeded_obj = orchestrator.project.get_objective("obj-002")
+        assert succeeded_obj.status == ObjectiveStatus.COMPLETED
+
+        # Adapter should NOT have been called for the halted objective
+        call_ids = {call.args[0].objective_id for call in mock_adapter.execute_without_status_update.call_args_list}
+        assert "obj-001" not in call_ids
+        assert "obj-002" in call_ids
+
+
+# =============================================================================
+# Test 2: Semaphore bounds on concurrent executions
+# =============================================================================
+
+
+class TestSemaphoreBounds:
+    """Tests for max_parallel_objectives semaphore enforcement."""
+
+    def _make_objective(self, objective_id="obj-001", title="Test", deps=None, status=ObjectiveStatus.QUEUED):
+        return Objective(
+            objective_id=objective_id,
+            title=title,
+            description=f"Description for {title}",
+            status=status,
+            dependencies=deps or [],
+            phase="DEVELOPMENT",
+            priority=5,
+        )
+
+    async def test_semaphore_bounds_concurrent_executions(self, tmp_path):
+        """With max_parallel_objectives=2, 5 objectives should never exceed 2 concurrent."""
+        current_concurrent = 0
+        peak_concurrent = 0
+        lock = asyncio.Lock()
+
+        async def tracked_execute(obj):
+            nonlocal current_concurrent, peak_concurrent
+            async with lock:
+                current_concurrent += 1
+                if current_concurrent > peak_concurrent:
+                    peak_concurrent = current_concurrent
+            await asyncio.sleep(0.05)
+            async with lock:
+                current_concurrent -= 1
+            return {"success": True, "artifacts": [], "error": None}
+
+        config = OrchestratorConfig(
+            objectives_path=str(tmp_path / "objectives.yaml"),
+            enable_parallel_execution=True,
+            max_parallel_objectives=2,
+            max_cycle_iterations=10,
+        )
+        project = ProjectObjectives(
+            project_id="semaphore-bounds-test",
+            objectives=[
+                self._make_objective(f"obj-{i:03d}", f"Task {i}")
+                for i in range(1, 6)
+            ],
+        )
+        project.save_atomic(config.objectives_path)
+
+        mock_adapter = MagicMock(spec=OrchestratorPipelineAdapter)
+        mock_adapter.execute_without_status_update = AsyncMock(side_effect=tracked_execute)
+
+        orchestrator = ProjectOrchestrator(config=config, pipeline_adapter=mock_adapter)
+        orchestrator.load_objectives()
+
+        state = await orchestrator.run()
+
+        # Peak concurrent should hit exactly 2 with 5 objectives and limit=2
+        assert peak_concurrent == 2
+        # All 5 objectives should have been called
+        assert mock_adapter.execute_without_status_update.call_count == 5
+        assert state.objectives_processed == 5
+
+    async def test_semaphore_serializes_at_one(self, tmp_path):
+        """With max_parallel_objectives=1, peak concurrent must equal 1."""
+        current_concurrent = 0
+        peak_concurrent = 0
+        lock = asyncio.Lock()
+
+        async def tracked_execute(obj):
+            nonlocal current_concurrent, peak_concurrent
+            async with lock:
+                current_concurrent += 1
+                if current_concurrent > peak_concurrent:
+                    peak_concurrent = current_concurrent
+            await asyncio.sleep(0.05)
+            async with lock:
+                current_concurrent -= 1
+            return {"success": True, "artifacts": [], "error": None}
+
+        config = OrchestratorConfig(
+            objectives_path=str(tmp_path / "objectives.yaml"),
+            enable_parallel_execution=True,
+            max_parallel_objectives=1,
+            max_cycle_iterations=10,
+        )
+        project = ProjectObjectives(
+            project_id="semaphore-serial-test",
+            objectives=[
+                self._make_objective(f"obj-{i:03d}", f"Task {i}")
+                for i in range(1, 6)
+            ],
+        )
+        project.save_atomic(config.objectives_path)
+
+        mock_adapter = MagicMock(spec=OrchestratorPipelineAdapter)
+        mock_adapter.execute_without_status_update = AsyncMock(side_effect=tracked_execute)
+
+        orchestrator = ProjectOrchestrator(config=config, pipeline_adapter=mock_adapter)
+        orchestrator.load_objectives()
+
+        state = await orchestrator.run()
+
+        # With max_parallel_objectives=1, peak must be exactly 1
+        assert peak_concurrent == 1
+        assert mock_adapter.execute_without_status_update.call_count == 5
+        assert state.objectives_processed == 5
