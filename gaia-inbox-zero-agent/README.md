@@ -1,6 +1,6 @@
 # GAIA Inbox Zero Agent
 
-Production-ready email triage, categorization, and inbox management agent. Processes real Gmail data from MBOX takeout files using LLM-powered classification.
+Basic-ready email triage, categorization, and inbox management agent. Processes real Gmail data from MBOX takeout files using LLM-powered classification.
 
 ## Quick Start
 
