@@ -52,6 +52,7 @@ from .routers import documents as documents_router_mod
 from .routers import eval_metrics as eval_metrics_router_mod
 from .routers import files as files_router_mod
 from .routers import mcp as mcp_router_mod
+from .routers import orchestrator as orchestrator_router_mod
 from .routers import pipeline as pipeline_router_mod
 from .routers import pipeline_metrics as pipeline_metrics_router_mod
 from .routers import sessions as sessions_router_mod
@@ -204,6 +205,27 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await monitor.start()
         logger.info("Document file monitor started (30s polling interval)")
 
+        # Initialize orchestrator if objectives file exists
+        try:
+            from gaia.orchestration.engine import ProjectOrchestrator
+
+            orchestrator = ProjectOrchestrator()
+            objectives_path = Path(orchestrator.config.objectives_path)
+            if objectives_path.exists():
+                orchestrator.load_objectives()
+                logger.info(
+                    "Orchestrator initialized with objectives from %s",
+                    objectives_path,
+                )
+            else:
+                logger.info(
+                    "Orchestrator created but no objectives found at %s",
+                    objectives_path,
+                )
+            app.state.orchestrator = orchestrator
+        except Exception as exc:
+            logger.debug("Orchestrator initialization skipped: %s", exc)
+
         yield
 
         # Shutdown
@@ -261,6 +283,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.state.session_locks: dict = {}  # session_id -> asyncio.Lock
     app.state.upload_locks: dict = {}  # resolved filepath -> asyncio.Lock
 
+    # Orchestrator state for pipeline orchestration visibility layer
+    app.state.orchestrator = None  # ProjectOrchestrator, initialized on demand
+    app.state._orchestrator_running = False  # Flag tracking concurrent run() calls
+
     # ── Global Exception Handler ────────────────────────────────────────
     # Prevent stack traces from leaking to external users (CodeQL
     # py/stack-trace-exposure).  Log the full traceback server-side
@@ -290,6 +316,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(pipeline_router_mod.router)
     app.include_router(pipeline_metrics_router_mod.router)
     app.include_router(eval_metrics_router_mod.router)
+    app.include_router(orchestrator_router_mod.router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.

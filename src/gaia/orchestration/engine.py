@@ -129,6 +129,22 @@ class OrchestratorState:
         else:
             self.objectives_failed += 1
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize orchestrator state to a dictionary.
+
+        Returns:
+            Dictionary representation of the current orchestrator state,
+            suitable for JSON serialization in REST API responses.
+        """
+        return {
+            "paused": self.paused,
+            "cycle_count": self.cycle_count,
+            "objectives_processed": self.objectives_processed,
+            "objectives_failed": self.objectives_failed,
+            "execution_history": list(self.execution_history),
+            "objective_branches": dict(self.objective_branches),
+        }
+
 
 class ProjectOrchestrator:
     """
