@@ -1383,19 +1383,26 @@ class InitCommand:
                     return (False, "Empty embedding")
                 return (False, "Invalid response format")
             else:
-                # Test LLM with a minimal chat request
+                # Test LLM with a minimal chat request.
+                # Append `/no_think` to suppress thinking-mode (Qwen3+ family etc.)
+                # and give enough budget for a short thinking block to complete.
                 response = client.chat_completions(
                     model=model_id,
-                    messages=[{"role": "user", "content": "Say 'ok'"}],
-                    max_tokens=10,
+                    messages=[{"role": "user", "content": "Say 'ok' /no_think"}],
+                    max_tokens=64,
                     temperature=0,
                 )
                 # Check if we got a valid response
                 if response and response.get("choices"):
-                    content = (
-                        response["choices"][0].get("message", {}).get("content", "")
-                    )
+                    choice = response["choices"][0]
+                    content = choice.get("message", {}).get("content", "")
+                    finish = choice.get("finish_reason")
                     if content:
+                        return (True, None)
+                    # Thinking models may have spent the budget on <think> tokens.
+                    # Treat finish_reason="length" with empty content as a soft pass —
+                    # the model was generating, the budget was just too tight.
+                    if finish == "length":
                         return (True, None)
                     return (False, "Empty response")
                 return (False, "Invalid response format")
