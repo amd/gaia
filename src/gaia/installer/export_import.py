@@ -144,10 +144,17 @@ def export_custom_agents(output_path: Path) -> ExportResult:
     if not agents_root.exists():
         raise ValueError("No custom agents found to export")
 
-    agent_dirs = sorted(
-        (d for d in agents_root.iterdir() if _is_custom_agent_dir(d)),
-        key=lambda p: p.name,
-    )
+    agent_dirs: List[Path] = []
+    for d in sorted(agents_root.iterdir(), key=lambda p: p.name):
+        if _is_custom_agent_dir(d):
+            agent_dirs.append(d)
+        elif d.is_dir() and (d / "agent.yaml").is_file():
+            log.warning(
+                "export: skipping legacy YAML-only agent directory %s "
+                "(YAML manifest agents were removed in v0.17.5; convert to "
+                "agent.py — see https://amd-gaia.ai/guides/custom-agent)",
+                d,
+            )
     if not agent_dirs:
         raise ValueError("No custom agents found to export")
 

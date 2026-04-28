@@ -29,7 +29,7 @@ src/gaia/
 ├── agents/base/       # Agent, MCPAgent, ApiAgent, @tool, AgentConsole, errors
 ├── agents/tools/      # Cross-agent tool mixins (file_tools, screenshot_tools)
 ├── agents/<name>/     # Concrete agents + per-agent tools/
-├── agents/registry.py # KNOWN_TOOLS + AgentManifest (YAML spec)
+├── agents/registry.py # AgentRegistry + KNOWN_TOOLS map
 ├── chat/              # AgentSDK (class `AgentSDK`, formerly `ChatSDK`)
 ├── rag/               # RAGSDK / RAGConfig
 ├── llm/               # LemonadeClient + providers/{claude,openai_provider,lemonade}.py

@@ -196,6 +196,42 @@ class TestPythonAgentLoading:
         # Scalar models value must be rejected, leaving an empty list.
         assert reg.models == []
 
+    def test_companion_yaml_models_non_string_entries_warn(self, tmp_path, caplog):
+        """Non-string entries inside a list `models:` must be filtered with a
+        visible warning so users notice their YAML is malformed, instead of
+        silently dropping the bad values."""
+        agent_dir = tmp_path / "mixed-models"
+        agent_dir.mkdir()
+        (agent_dir / "agent.py").write_text(textwrap.dedent("""
+            from gaia.agents.base.agent import Agent
+
+            class MixedAgent(Agent):
+                AGENT_ID = "mixed-models"
+                AGENT_NAME = "Mixed Models"
+                def _get_system_prompt(self):
+                    return "test"
+                def _register_tools(self):
+                    pass
+        """))
+        (agent_dir / "agent.yaml").write_text(
+            "models:\n  - 123\n  - Qwen3-0.6B-GGUF\n  - null\n"
+        )
+
+        registry = AgentRegistry()
+        with caplog.at_level("WARNING", logger="gaia.agents.registry"):
+            registry._load_python_agent(
+                agent_dir, agent_dir / "agent.py", agent_dir / "agent.yaml"
+            )
+
+        reg = registry.get("mixed-models")
+        assert reg is not None
+        # String entries are kept; ints / None are filtered.
+        assert reg.models == ["Qwen3-0.6B-GGUF"]
+        # And there's an explicit warning naming the dropped entries.
+        assert any(
+            "non-string entries" in rec.getMessage() for rec in caplog.records
+        ), "expected a warning about non-string `models:` entries"
+
 
 # ---------------------------------------------------------------------------
 # Directory-based discovery

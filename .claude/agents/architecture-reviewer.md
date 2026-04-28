@@ -57,7 +57,7 @@ Structure reviews as:
 ## Common pitfalls to flag
 
 - **New tool class outside `tools/` or `<agent>/tools/`** — breaks mixin discoverability
-- **Mixin not added to `KNOWN_TOOLS`** — YAML-manifest agents can't opt in by name
+- **Mixin not added to `KNOWN_TOOLS`** — other agents can't compose it by name
 - **`Agent` subclass with wrong MRO** — mixin `__init__`s silently skipped
 - **Importing `gaia.cli` from a library module** — upward dependency
 - **Duplicated tool logic** — should be a mixin
