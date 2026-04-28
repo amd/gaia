@@ -1021,11 +1021,29 @@ class InitCommand:
                     if not lemonade_path:
                         raise FileNotFoundError("lemonade-server not found in PATH")
 
+                    # Pass --ctx-size so the auto-started server comes up with
+                    # GAIA's required context window (issue #839).  Without this
+                    # the server starts with its default (small) ctx and the
+                    # user is told to stop and restart it manually — bad UX.
+                    min_ctx = INIT_PROFILES[self.profile].get("min_context_size")
+                    if not min_ctx:
+                        raise RuntimeError(
+                            f"Profile {self.profile!r} is missing 'min_context_size' "
+                            f"in INIT_PROFILES; cannot determine --ctx-size for "
+                            f"lemonade-server. Add the key to INIT_PROFILES "
+                            f"in src/gaia/installer/init_command.py."
+                        )
+                    ctx_args = ["--ctx-size", str(min_ctx)]
+                    log.info(
+                        "Starting lemonade-server with %s",
+                        " ".join(ctx_args),
+                    )
+
                     # Start server in background
                     if sys.platform == "win32":
                         # Windows: use subprocess.Popen with no window
                         subprocess.Popen(
-                            [lemonade_path, "serve", "--no-tray"],
+                            [lemonade_path, "serve", "--no-tray", *ctx_args],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                             creationflags=(
@@ -1037,7 +1055,7 @@ class InitCommand:
                     else:
                         # Linux/Mac: background process
                         subprocess.Popen(
-                            [lemonade_path, "serve"],
+                            [lemonade_path, "serve", *ctx_args],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )

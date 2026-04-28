@@ -70,5 +70,5 @@ For each finding: file, line number, the issue, and a concrete fix. Paste the fi
 - **`import logging` then `logging.getLogger(__name__)`** — replace with `gaia.logger.get_logger`
 - **Re-implemented file search / RAG / shell tools** — point to existing mixin in `KNOWN_TOOLS` (`src/gaia/agents/registry.py:26`)
 - **Tool registered outside `_register_tools`** — the `@tool` decorator needs `self` in closure scope
-- **New tool mixin not added to `KNOWN_TOOLS`** — YAML-manifest agents can't use it
+- **New tool mixin not added to `KNOWN_TOOLS`** — other agents can't compose it by name
 - **Docstring-less `@tool`** — the docstring is what the LLM sees; it MUST describe args and return

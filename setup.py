@@ -131,6 +131,21 @@ setup(
             "python-multipart>=0.0.9",
             "httpx>=0.27.0",
             "psutil>=5.9.0",
+            # RAG runtime deps — gaia.ui.server boots faiss + sentence_transformers
+            # eagerly, and gaia.rag.sdk uses pypdf/pymupdf/numpy. See #845.
+            # Version specifiers match the standalone "rag" extra; "ui"
+            # additionally declares safetensors and a torch lower bound.
+            "faiss-cpu>=1.7.0",
+            "numpy>=1.24.0",
+            "pymupdf>=1.24.0",
+            "pypdf",
+            "sentence-transformers",
+            "safetensors",
+            # torch is pinned lower-bound only. The "audio" extra caps
+            # torch<2.4 because torchvision<0.19 / torchaudio require it,
+            # but "ui" ships neither — capping here would force resolver
+            # downgrades for users with torch 2.5+ already installed.
+            "torch>=2.0.0",
         ],
         "audio": [
             "torch>=2.0.0,<2.4",
