@@ -67,6 +67,9 @@ class OutputHandler(ABC):
     each handler chooses to display it.
     """
 
+    blocking_confirmation: bool = False
+    """Whether ``confirm_tool_execution`` waits for an explicit user decision."""
+
     # === Core Progress/State Methods (Required) ===
 
     @abstractmethod

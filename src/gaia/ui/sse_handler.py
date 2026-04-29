@@ -95,6 +95,8 @@ class SSEOutputHandler(OutputHandler):
     The streaming endpoint reads from this queue and yields SSE events.
     """
 
+    blocking_confirmation = True
+
     def __init__(self):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()

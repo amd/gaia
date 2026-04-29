@@ -11,6 +11,8 @@ or denies the tool based on the reviewer's response.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from typing import Any
 
 from gaia.governance import (
@@ -21,6 +23,7 @@ from gaia.governance.checkpoint_bridge import InMemoryCheckpointBridge
 from gaia.governance.policy_binding import StaticPolicyBindingService
 from gaia.governance.receipt_service import InMemoryReceiptService
 from gaia.governance.stubs import RuleBasedPolicyEngine
+from gaia.ui.sse_handler import SSEOutputHandler
 
 
 class _FakeAgent:
@@ -41,6 +44,17 @@ class _StubConsoleAccept:
     as an implicit reviewer. Kept to prove the console is now ignored."""
 
     def confirm_tool_execution(self, _tn, _args):
+        return True
+
+
+class _BlockingConsoleAccept:
+    blocking_confirmation = True
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def confirm_tool_execution(self, tool_name, tool_args):
+        self.calls.append((tool_name, dict(tool_args)))
         return True
 
 
@@ -119,6 +133,61 @@ def test_review_honors_explicit_reviewer_that_delegates_to_console():
     )
     result = agent._execute_tool("publish_post", {"body": "hi"})
     assert result["status"] == "ok"
+
+
+def test_review_uses_blocking_console_when_no_explicit_reviewer():
+    adapter, _ = _build_adapter()
+    console = _BlockingConsoleAccept()
+    agent = _GovernedFakeAgent(
+        governance_adapter=adapter,
+        governance_risk_tags={"publish_post": ["review"]},
+    )
+    agent.console = console
+
+    result = agent._execute_tool("publish_post", {"body": "hi"})
+
+    assert result["status"] == "ok"
+    assert console.calls == [("publish_post", {"body": "hi"})]
+
+
+def test_review_with_sse_console_emits_permission_request_and_runs_on_approve():
+    adapter, _ = _build_adapter()
+    console = SSEOutputHandler()
+    agent = _GovernedFakeAgent(
+        governance_adapter=adapter,
+        governance_risk_tags={"publish_post": ["review"]},
+    )
+    agent.console = console
+    result_holder: dict[str, Any] = {}
+
+    def run_tool():
+        result_holder["result"] = agent._execute_tool("publish_post", {"body": "hi"})
+
+    thread = threading.Thread(target=run_tool)
+    thread.start()
+
+    permission_event = None
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        while not console.event_queue.empty():
+            event = console.event_queue.get_nowait()
+            if event.get("type") == "permission_request":
+                permission_event = event
+                break
+        if permission_event is not None:
+            break
+        time.sleep(0.05)
+
+    assert permission_event is not None
+    assert permission_event["tool"] == "publish_post"
+    assert permission_event["args"] == {"body": "hi"}
+
+    console.resolve_tool_confirmation(approved=True)
+    thread.join(timeout=3.0)
+
+    assert not thread.is_alive()
+    assert result_holder["result"]["status"] == "ok"
+    assert agent.calls == [("publish_post", {"body": "hi"})]
 
 
 def test_review_fails_closed_when_no_reviewer():

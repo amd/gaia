@@ -39,10 +39,10 @@ issues a signed receipt to `receipts.jsonl`, and returns a denied result.
 |---|---|
 | `ALLOW` | Tool runs as usual. |
 | `BLOCK` | Tool is refused. A receipt is written with the full evidence envelope. |
-| `REVIEW` | A checkpoint is opened and your `governance_reviewer` callback is called. APPROVE → tool runs; REJECT → tool is refused. Either way a receipt is written. |
+| `REVIEW` | A checkpoint is opened. Governance calls your `governance_reviewer` callback, or Agent UI's blocking confirmation modal when that is the active console. APPROVE -> tool runs; REJECT -> tool is refused. Either way a receipt is written. |
 
-If `REVIEW` fires and no reviewer is set, the mixin **fails closed** — the tool is
-denied without executing.
+If `REVIEW` fires and neither a reviewer nor a blocking console is available,
+the mixin **fails closed** — the tool is denied without executing.
 
 ## Tagging tools
 
@@ -102,9 +102,11 @@ agent = MyAgent(
 )
 ```
 
-GAIA's default `AgentConsole.confirm_tool_execution` is **not** consulted
-automatically because its default implementation auto-approves. Pass an explicit
-`governance_reviewer` that actually blocks.
+An explicit `governance_reviewer` takes precedence. If none is configured,
+governance delegates to `console.confirm_tool_execution` only when the console
+advertises `blocking_confirmation = True`; Agent UI's `SSEOutputHandler` does
+this and emits the existing `permission_request` modal. GAIA's default console is
+not consulted because its confirmation method auto-approves.
 
 ## Observability callbacks
 
