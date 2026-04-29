@@ -271,11 +271,23 @@ class GovernedAgentMixin:
     ) -> Any:
         if checkpoint_id is None:
             raise GaiaGovernanceError("CHECKPOINT_OPEN without checkpoint_id")
-        approved = self._prompt_review(tool_name, tool_args, decision)
+        approved, review_error = self._prompt_review(tool_name, tool_args, decision)
+        # Stamp the reject reason with the exception type/message when the
+        # REJECT was caused by a reviewer crash, so the audit log can tell
+        # "reviewer chose no" apart from "reviewer raised".
+        if approved:
+            resolution_label = "APPROVE"
+            reason = "reviewer approved"
+        elif review_error is not None:
+            resolution_label = "REJECT"
+            reason = f"reviewer raised {type(review_error).__name__}: {review_error}"
+        else:
+            resolution_label = "REJECT"
+            reason = "reviewer rejected"
         resolution = CheckpointResolution(
-            resolution="APPROVE" if approved else "REJECT",
+            resolution=resolution_label,
             actor_id=self._governance_actor_id,
-            reason="reviewer approved" if approved else "reviewer rejected",
+            reason=reason,
         )
         resolved = adapter.resolve_checkpoint(
             checkpoint_id, resolution, transition.workflow_id
@@ -296,8 +308,14 @@ class GovernedAgentMixin:
         tool_name: str,
         tool_args: dict[str, Any],
         decision: GovernanceDecision,
-    ) -> bool:
+    ) -> tuple[bool, BaseException | None]:
         """Ask the registered reviewer to approve or reject.
+
+        Returns ``(approved, exception_or_None)``. When the reviewer
+        raises, the second element captures the exception so the audit
+        log can record that the REJECT was due to a crash, not a "no"
+        decision. ``BaseException`` (KeyboardInterrupt, SystemExit) is
+        intentionally NOT caught — those should propagate.
 
         Only an **explicit** ``governance_reviewer`` callback is
         honored. GAIA's ``AgentConsole.confirm_tool_execution`` is NOT
@@ -319,16 +337,16 @@ class GovernedAgentMixin:
         reviewer = self._governance_reviewer
         if reviewer is None:
             # Fail closed: REVIEW means "do not run without review".
-            return False
+            return False, None
         try:
-            return bool(reviewer(tool_name, tool_args, decision))
-        except Exception:  # pylint: disable=broad-exception-caught
+            return bool(reviewer(tool_name, tool_args, decision)), None
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning(
                 "governance: reviewer raised for tool %r; failing closed",
                 tool_name,
                 exc_info=True,
             )
-            return False
+            return False, exc
 
     @staticmethod
     def _denied_result(

@@ -150,7 +150,7 @@ def test_block_decision_records_receipt_and_returns_receipt_id():
 
 
 def test_reviewer_exception_is_treated_as_reject(caplog):
-    adapter, _ = _build_adapter()
+    adapter, receipts = _build_adapter()
 
     def boom(*_a, **_kw):
         raise RuntimeError("bad reviewer")
@@ -170,3 +170,33 @@ def test_reviewer_exception_is_treated_as_reject(caplog):
         record.levelname == "WARNING" and record.name == "gaia.governance.mixin"
         for record in caplog.records
     )
+    # Audit-trail fidelity: the receipt's reason must distinguish "reviewer
+    # raised" from "reviewer chose no", carrying the exception type/message
+    # so an auditor reading the JSONL log knows the REJECT was due to a
+    # crash, not a deliberate "no".
+    receipts_list = list(receipts)
+    reject_receipts = [r for r in receipts_list if r.decision == "REJECT"]
+    assert len(reject_receipts) == 1
+    resolution_reason = reject_receipts[0].metadata["evidence"]["resolution"]["reason"]
+    assert "RuntimeError" in resolution_reason
+    assert "bad reviewer" in resolution_reason
+
+
+def test_reviewer_explicit_no_keeps_plain_reason():
+    """Counterpart to the exception test: a reviewer that returns False
+    (a deliberate "no") produces a plain "reviewer rejected" reason in the
+    receipt, NOT an exception-flavored one.
+    """
+    adapter, receipts = _build_adapter()
+    agent = _GovernedFakeAgent(
+        governance_adapter=adapter,
+        governance_risk_tags={"publish_post": ["review"]},
+        governance_reviewer=lambda *_a, **_kw: False,
+    )
+    result = agent._execute_tool("publish_post", {"body": "hi"})
+    assert result["status"] == "denied"
+    receipts_list = list(receipts)
+    reject_receipts = [r for r in receipts_list if r.decision == "REJECT"]
+    assert len(reject_receipts) == 1
+    resolution_reason = reject_receipts[0].metadata["evidence"]["resolution"]["reason"]
+    assert resolution_reason == "reviewer rejected"
