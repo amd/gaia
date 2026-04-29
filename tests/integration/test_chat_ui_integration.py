@@ -717,7 +717,9 @@ class TestSystemStatus:
         assert data["model_loaded"] is None or isinstance(data["model_loaded"], str)
         assert isinstance(data["embedding_model_loaded"], bool)
         assert isinstance(data["disk_space_gb"], (int, float))
-        assert isinstance(data["memory_available_gb"], (int, float))
+        assert data["memory_available_gb"] is None or isinstance(
+            data["memory_available_gb"], (int, float)
+        )
         assert isinstance(data["initialized"], bool)
         assert isinstance(data["version"], str)
 

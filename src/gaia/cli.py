@@ -1680,6 +1680,17 @@ Examples:
         help="Agent UI backend URL (default: http://localhost:4200)",
     )
     agent_eval_parser.add_argument(
+        "--agent-type",
+        default=None,
+        metavar="AGENT_ID",
+        help=(
+            "Agent registration ID to target (e.g. 'gaia-lite'). When set, "
+            "the eval runner instructs the simulator to create sessions with "
+            "this agent_type so scenarios run against the chosen agent. Omit "
+            "to use the backend default."
+        ),
+    )
+    agent_eval_parser.add_argument(
         "--model",
         default="claude-sonnet-4-6",
         help="Eval model (default: claude-sonnet-4-6)",
@@ -3080,6 +3091,7 @@ Let me know your answer!
                 extra_corpus_dirs=getattr(args, "corpus_dir", None),
                 tags=getattr(args, "tag", None),
                 output_format=getattr(args, "output_format", None),
+                agent_type=getattr(args, "agent_type", None),
             )
             scorecard = runner.run(
                 scenario_id=getattr(args, "scenario", None),

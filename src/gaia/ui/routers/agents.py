@@ -87,6 +87,7 @@ def _reg_to_info(reg) -> AgentInfo:
         source=reg.source,
         conversation_starters=reg.conversation_starters,
         models=reg.models,
+        min_memory_gb=reg.min_memory_gb,
     )
 
 

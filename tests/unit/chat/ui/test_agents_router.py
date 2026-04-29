@@ -12,11 +12,20 @@ from gaia.agents.registry import AgentRegistration, AgentRegistry
 from gaia.ui.server import create_app
 
 
-def make_mock_registry(*agent_ids_names):
-    """Create a mock AgentRegistry with the given agents."""
+def make_mock_registry(*agent_specs):
+    """Create a mock AgentRegistry with the given agents.
+
+    Each spec is ``(agent_id, name)`` or ``(agent_id, name, min_memory_gb)``
+    for tests that exercise the memory-requirement field.
+    """
     registry = MagicMock(spec=AgentRegistry)
     registrations = []
-    for agent_id, name in agent_ids_names:
+    for spec in agent_specs:
+        if len(spec) == 3:
+            agent_id, name, min_memory_gb = spec
+        else:
+            agent_id, name = spec
+            min_memory_gb = None
         reg = AgentRegistration(
             id=agent_id,
             name=name,
@@ -26,6 +35,7 @@ def make_mock_registry(*agent_ids_names):
             factory=lambda **kw: None,
             agent_dir=None,
             models=[],
+            min_memory_gb=min_memory_gb,
         )
         registrations.append(reg)
 
@@ -83,8 +93,37 @@ class TestListAgents:
             "source",
             "conversation_starters",
             "models",
+            "min_memory_gb",
         ):
             assert field in agent
+
+    def test_min_memory_gb_defaults_to_null(self, client):
+        """Agents that don't declare a requirement expose null, not missing."""
+        data = client.get("/api/agents").json()
+        for agent in data["agents"]:
+            assert agent["min_memory_gb"] is None
+
+
+class TestAgentWithMemoryRequirement:
+    """Agents that declare min_memory_gb must round-trip it through the API."""
+
+    def test_min_memory_gb_surfaced(self):
+        app = create_app(db_path=":memory:")
+        app.state.agent_registry = make_mock_registry(
+            ("chat", "Chat Agent"),
+            ("gaia-lite", "Gaia Lite", 5.0),
+        )
+        client = TestClient(app)
+
+        data = client.get("/api/agents/gaia-lite").json()
+        assert data["min_memory_gb"] == 5.0
+
+        # List endpoint surfaces it too.
+        list_data = client.get("/api/agents").json()
+        lite = next(a for a in list_data["agents"] if a["id"] == "gaia-lite")
+        chat = next(a for a in list_data["agents"] if a["id"] == "chat")
+        assert lite["min_memory_gb"] == 5.0
+        assert chat["min_memory_gb"] is None
 
 
 class TestGetAgent:

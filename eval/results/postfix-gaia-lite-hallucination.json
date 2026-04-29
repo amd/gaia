@@ -1,0 +1,135 @@
+{
+  "run_id": "eval-20260426-065452",
+  "timestamp": "2026-04-26T07:01:36.252848+00:00",
+  "config": {
+    "backend_url": "http://localhost:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia-lite"
+  },
+  "summary": {
+    "total_scenarios": 1,
+    "passed": 1,
+    "failed": 0,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 1.0,
+    "judged_pass_rate": 1.0,
+    "avg_score": 7.67,
+    "by_category": {
+      "rag_quality": {
+        "passed": 1,
+        "failed": 0,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 7.67
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "hallucination_resistance",
+      "status": "PASS",
+      "overall_score": 7.67,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "what was acme's total revenue in Q3? i loaded the q3 report",
+          "agent_response": "Based on the Q3 report you loaded (**acme_q3_report.md**), here are the key revenue figures:\n\n## Total Revenue Summary\n\n| Quarter | Revenue | Growth |\n|---------|---------|--------|\n| **Q3 2024** | **$11.5 million** | — |\n| **Q3 2025** | **$14.2 million** | **+23%** ↑ |\n\n### Key Takeaways:\n- **Total Q3 2025 revenue**: $14.2 million (representing a 23% increase from last year's $11.5M)\n- Results exceeded internal forecast by approximately $600,000\n- Driven primarily by a large enterprise deal closed in early September\n\n### Product Breakdown (Q3 2025):\n- Widget Pro X: $8.1M (57%)\n- Widget Lite: $4.2M (30%)\n- Accessories & Services: $1.9M (13%)",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 8,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.2,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly stated $14.2 million for Q3 2025 revenue, matching the expected answer exactly. Used optimal tool sequence (index_documents then query_specific_file). Product breakdown figures are plausible from the document but unverifiable against ground truth — minor correctness deduction for unverified extras. Response is functional but somewhat verbose with markdown.",
+          "performance": {
+            "tokens_per_second": 28.1,
+            "time_to_first_token": 4.092,
+            "input_tokens": 1263,
+            "output_tokens": 344,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "who is acme's CFO? should be in that report too",
+          "agent_response": "I searched through **acme_q3_report.md** thoroughly for executive team details — here's what I found:\n\n## Executive Leadership Found:\n\n[...massive garbled table column header with hundreds of concatenated business terms...]\n\n## What I Found:\n✅ **CEO**: Jane Smith (explicitly named in the report)\n❌ **CFO**: Not mentioned anywhere in acme_q3_report.md\n\nThe Q3 2025 quarterly report focuses on financial performance, product metrics, and regional breakdowns — but doesn't include executive team member names beyond the CEO. This is common for public companies where only key leadership roles are disclosed in quarterly reports.\n\nWould you like me to search for other documents that might contain CFO information?",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 5,
+            "context_retention": 8,
+            "completeness": 5,
+            "efficiency": 7,
+            "personality": 0,
+            "error_recovery": 7
+          },
+          "overall_score": 6.15,
+          "pass": true,
+          "failure_category": "personality_violation",
+          "reasoning": "Agent correctly concluded the CFO is not mentioned in the document (matches null expected_answer), so core correctness is maintained. However, the 4B model generated a massive nonsensical table header with hundreds of concatenated business terms — a severe personality/output quality failure. The agent also used a hallucinated absolute file path (/Users/kovtcharov/Acme_Corp/financials/acme_q3_report.md) in the tool call, which happened to succeed due to RAG fuzzy matching. Output bloat (1276 tokens for a 'not in document' answer) indicates model instability.",
+          "performance": {
+            "tokens_per_second": 27.6,
+            "time_to_first_token": 8.641,
+            "input_tokens": 2733,
+            "output_tokens": 1276,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 404.23675203323364,
+      "category": "rag_quality",
+      "performance_summary": {
+        "avg_tokens_per_second": 27.9,
+        "avg_time_to_first_token": 6.367,
+        "total_input_tokens": 3996,
+        "total_output_tokens": 1620,
+        "flags": [
+          "high_latency"
+        ]
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0
+  },
+  "performance": {
+    "avg_tokens_per_second": 27.9,
+    "avg_time_to_first_token": 6.367,
+    "total_input_tokens": 3996,
+    "total_output_tokens": 1620,
+    "scenarios_with_data": 1,
+    "flags": [
+      "high_latency"
+    ]
+  }
+}

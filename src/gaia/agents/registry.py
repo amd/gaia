@@ -7,6 +7,7 @@ import importlib
 import importlib.util
 import inspect
 import os
+import platform
 import re
 import threading
 import time
@@ -55,6 +56,11 @@ class AgentRegistration:
     agent_dir: Optional[Path]
     models: List[str]  # ordered preference list
     hidden: bool = False  # hidden agents are excluded from the UI agent selector
+    # Minimum free system memory (GB) recommended before loading this agent's
+    # preferred model. `None` = no requirement declared. The UI shows a warning
+    # in Settings when memory_available_gb < min_memory_gb so the user isn't
+    # surprised by a load failure or heavy swapping mid-session.
+    min_memory_gb: Optional[float] = None
 
 
 class AgentRegistry:
@@ -64,11 +70,35 @@ class AgentRegistry:
     and the ``~/.gaia/agents/`` directory for custom agents.
     """
 
+    # Legacy agent IDs that were renamed. Existing UI sessions store the old
+    # ID in ``sessions.agent_type`` in the ChatDatabase; silently resolving
+    # the alias keeps those sessions working without a DB migration. All
+    # lookups (``get``, ``create_agent``, ``resolve_model``) honour the map.
+    _LEGACY_ID_ALIASES: Dict[str, str] = {
+        "chat-lite": "gaia-lite",
+    }
+
     def __init__(self):
         self._agents: Dict[str, AgentRegistration] = {}
         self._lemonade_models: Optional[List[str]] = None  # cache
         self._lemonade_models_last_fail: Optional[float] = None  # monotonic timestamp
         self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Legacy ID resolution
+    # ------------------------------------------------------------------
+
+    def canonical_id(self, agent_id: str) -> str:
+        """Return the current canonical ID for *agent_id*, resolving aliases.
+
+        Returns the input unchanged when no alias exists so callers can use
+        the result as a stable cache key — two requests for ``chat-lite`` and
+        ``gaia-lite`` both produce ``gaia-lite``, so the per-session agent
+        cache doesn't thrash when a client mixes the old and new names.
+        """
+        if agent_id in self._agents:
+            return agent_id
+        return self._LEGACY_ID_ALIASES.get(agent_id, agent_id)
 
     # ------------------------------------------------------------------
     # Discovery
@@ -141,6 +171,96 @@ class AgentRegistry:
             )
         )
         logger.info("registry: Registered built-in agent: chat (ChatAgent)")
+
+        # --- Gaia Lite (smaller ~4B model, Mac/low-memory friendly) ---
+        # Reuses the full ChatAgent feature set but presets model_id to a
+        # compact ~4B checkpoint so it runs on hardware that can't host the
+        # 35B default. It's an agent (tools + RAG + MCP), not a bare chat
+        # bot — the "Lite" refers only to the model size. The preset is
+        # applied via setdefault so callers can still override (e.g. for
+        # tests or explicit user selection).
+        #
+        # Preferred-model list is platform-conditional:
+        #
+        # macOS primary is **Qwen3.5-4B-GGUF** (2.91 GB, "tool-calling"
+        # label in the Lemonade catalog). Empirically Gemma-3-4b-it-GGUF
+        # emits tool calls as Gemini-style ```tool_code``` text blocks
+        # rather than OpenAI-compatible function calls — the GAIA agent
+        # runtime never executes them, so the model can't actually use
+        # RAG, file search, or any other tool. The "personality" eval
+        # category dropped to 1/3 PASS with Gemma 3 4B, with both
+        # failures rooted in this format mismatch (see the eval run
+        # at eval/results/eval-20260426-061705).
+        # Qwen 3.5 is explicitly trained for the OpenAI tool-call format.
+        #
+        # Linux/Windows still leads with Gemma-4-E4B-it-GGUF — those
+        # platforms use a different llama.cpp bundle that ships the
+        # gemma4 architecture handler (added in llama.cpp b8637 /
+        # ggml-org/llama.cpp#21309), and Gemma 4 also carries the
+        # "tool-calling" label. macOS Lemonade v10.2.0 ships an older
+        # bundle (b8460) that can't load Gemma 4, and Lemonade actively
+        # reverts local binary swaps on restart — tracked upstream at
+        # lemonade-sdk/lemonade#1741.
+        #
+        # Each list keeps the alternative platform's primary as a
+        # fallback so ``resolve_model`` can fall through if the primary
+        # is unavailable on a given install.
+        #
+        # Single source of truth — the factory's setdefault below MUST
+        # agree with this list's first entry, or the runtime preset and
+        # the UI's advertised primary will diverge.
+        if platform.system() == "Darwin":
+            _GAIA_LITE_MODELS = ["Qwen3.5-4B-GGUF", "Gemma-4-E4B-it-GGUF"]
+        else:
+            _GAIA_LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Qwen3.5-4B-GGUF"]
+
+        # Memory floor for the gaia-lite agent. Gemma 4 E4B / Qwen3.5-4B Q4_K_M
+        # weights are ~2.5–2.7 GB on disk; add KV-cache for a 32K context window
+        # plus runtime overhead → 5 GB is the comfortable load floor. Below
+        # this the UI surfaces a Memory Warning so the user isn't surprised
+        # by a load failure or heavy swapping mid-session. Update the constant
+        # (not just the registration) if the preferred model list grows a
+        # bigger checkpoint, so the rationale stays adjacent to the number.
+        _GAIA_LITE_MIN_MEMORY_GB = 5.0
+
+        def gaia_lite_factory(**kwargs):
+            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
+            # setdefault pulls from the registration's preferred-models list
+            # so the runtime preset stays in lockstep with the UI's advertised
+            # primary — change the list, the factory follows automatically.
+            filtered.setdefault("model_id", _GAIA_LITE_MODELS[0])
+            config = ChatAgentConfig(**filtered)
+            return ChatAgent(config=config)
+
+        self._register(
+            AgentRegistration(
+                id="gaia-lite",
+                name="Gaia Lite",
+                description=(
+                    "Lightweight GAIA agent — same features as the default Chat "
+                    "Agent (RAG, file tools, MCP) but runs on a ~4B model, "
+                    "suitable for Mac and other hardware that cannot host the "
+                    "35B default."
+                ),
+                source="builtin",
+                conversation_starters=[
+                    "What can you help me with?",
+                    "Summarize this document",
+                    "Search my files for...",
+                ],
+                factory=gaia_lite_factory,
+                agent_dir=None,
+                models=_GAIA_LITE_MODELS,
+                min_memory_gb=_GAIA_LITE_MIN_MEMORY_GB,
+            )
+        )
+        logger.info(
+            "registry: Registered built-in agent: gaia-lite (ChatAgent, primary %s)",
+            _GAIA_LITE_MODELS[0],
+        )
 
         # --- BuilderAgent ---
         try:
@@ -375,8 +495,13 @@ class AgentRegistry:
             self._agents[registration.id] = registration
 
     def get(self, agent_id: str) -> Optional[AgentRegistration]:
-        """Return the registration for *agent_id*, or ``None``."""
-        return self._agents.get(agent_id)
+        """Return the registration for *agent_id*, or ``None``.
+
+        Legacy aliases (e.g. ``chat-lite`` → ``gaia-lite``) are resolved
+        transparently so existing persisted sessions keep working after a
+        rename.
+        """
+        return self._agents.get(self.canonical_id(agent_id))
 
     def list(self) -> List[AgentRegistration]:
         """Return all registered agents."""
@@ -388,13 +513,17 @@ class AgentRegistry:
         Raises:
             ValueError: If *agent_id* is not registered.
         """
-        reg = self._agents.get(agent_id)
+        # Route through get() so legacy aliases (e.g. chat-lite → gaia-lite)
+        # resolve consistently with lookups.
+        reg = self.get(agent_id)
         if reg is None:
             raise ValueError(
                 f"Unknown agent ID: '{agent_id}'. "
                 f"Available: {list(self._agents.keys())}"
             )
-        logger.info("registry: Creating agent '%s'", agent_id)
+        logger.info(
+            "registry: Creating agent '%s' (resolved id='%s')", agent_id, reg.id
+        )
         return reg.factory(**kwargs)
 
     # ------------------------------------------------------------------
@@ -409,11 +538,18 @@ class AgentRegistry:
         """Return first preferred model that is available, or ``None``.
 
         Args:
-            agent_id: Registered agent identifier.
+            agent_id: Registered agent identifier. Legacy aliases (see
+                :attr:`_LEGACY_ID_ALIASES`) are resolved transparently so
+                stored session IDs that pre-date a rename still pick up
+                the canonical agent's preferred model list.
             available_models: Pre-fetched list of model IDs.  When
                 ``None``, queries the Lemonade server automatically.
         """
-        reg = self._agents.get(agent_id)
+        # Use get() not _agents.get() so alias → canonical mapping applies.
+        # Otherwise a session stored with agent_type="chat-lite" would fall
+        # through to the default 35B model instead of the 4B preset, silently
+        # regressing the whole reason gaia-lite exists.
+        reg = self.get(agent_id)
         if not reg or not reg.models:
             return None
 
