@@ -136,6 +136,14 @@ class GovernedAgentMixin:
             return super()._execute_tool(tool_name, tool_args)  # type: ignore[misc]
 
         if outcome.status == "TERMINATED":
+            self._emit_policy_alert(
+                tool_name,
+                decision.decision,
+                decision.reason,
+                decision.rule_ids,
+                decision.policy_version,
+                outcome.metadata.get("receipt_id"),
+            )
             return self._denied_result(
                 tool_name,
                 decision.decision,
@@ -349,6 +357,38 @@ class GovernedAgentMixin:
                 exc_info=True,
             )
             return False, exc
+
+    def _emit_policy_alert(
+        self,
+        tool_name: str,
+        governance_decision: str,
+        reason: str,
+        rule_ids: list[str],
+        policy_version: str,
+        receipt_id: str | None,
+    ) -> None:
+        """Notify capable consoles that governance blocked a tool call."""
+        if governance_decision != "BLOCK":
+            return
+        console = getattr(self, "console", None)
+        alert = getattr(console, "print_policy_alert", None)
+        if not callable(alert):
+            return
+        try:
+            alert(
+                tool_name,
+                governance_decision,
+                reason,
+                rule_ids,
+                policy_version,
+                receipt_id,
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "governance: failed to emit policy alert for tool %r",
+                tool_name,
+                exc_info=True,
+            )
 
     @staticmethod
     def _denied_result(

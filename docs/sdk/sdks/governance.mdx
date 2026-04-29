@@ -108,6 +108,12 @@ advertises `blocking_confirmation = True`; Agent UI's `SSEOutputHandler` does
 this and emits the existing `permission_request` modal. GAIA's default console is
 not consulted because its confirmation method auto-approves.
 
+When a policy returns `BLOCK`, the governed tool body is not executed and the
+adapter writes a BLOCK receipt. If the active console supports
+`print_policy_alert`, GAIA also emits a user-visible policy alert. Agent UI's
+`SSEOutputHandler` sends this as a `policy_alert` SSE event with the blocked
+tool, decision, reason, rule IDs, policy version, and receipt ID.
+
 ## Observability callbacks
 
 ```python

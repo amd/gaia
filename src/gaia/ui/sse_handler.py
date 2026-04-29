@@ -737,6 +737,28 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_event = None
         return result
 
+    def print_policy_alert(
+        self,
+        tool_name: str,
+        decision: str,
+        reason: str,
+        rule_ids: List[str],
+        policy_version: str,
+        receipt_id: Optional[str] = None,
+    ) -> None:
+        """Emit a policy alert event for a governance-blocked tool call."""
+        event: Dict[str, Any] = {
+            "type": "policy_alert",
+            "tool": tool_name,
+            "decision": decision,
+            "reason": reason,
+            "rule_ids": list(rule_ids),
+            "policy_version": policy_version,
+        }
+        if receipt_id is not None:
+            event["receipt_id"] = receipt_id
+        self._emit(event)
+
     def resolve_tool_confirmation(self, approved: bool) -> bool:
         """Unblock the agent thread waiting in ``confirm_tool_execution()``.
 

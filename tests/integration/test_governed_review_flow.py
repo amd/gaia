@@ -218,6 +218,41 @@ def test_block_decision_records_receipt_and_returns_receipt_id():
     assert receipts_list[0].decision == "BLOCK"
 
 
+def test_block_decision_with_sse_console_emits_policy_alert():
+    adapter, receipts = _build_adapter()
+    console = SSEOutputHandler()
+    agent = _GovernedFakeAgent(
+        governance_adapter=adapter,
+        governance_risk_tags={"drop_table": ["blocked"]},
+    )
+    agent.console = console
+
+    result = agent._execute_tool("drop_table", {"name": "users"})
+
+    assert result["status"] == "denied"
+    assert result["governance_decision"] == "BLOCK"
+    assert agent.calls == []
+
+    events = []
+    while not console.event_queue.empty():
+        events.append(console.event_queue.get_nowait())
+    policy_alerts = [event for event in events if event.get("type") == "policy_alert"]
+    assert policy_alerts == [
+        {
+            "type": "policy_alert",
+            "tool": "drop_table",
+            "decision": "BLOCK",
+            "reason": "blocked by policy",
+            "rule_ids": ["rule:block"],
+            "policy_version": "v0",
+            "receipt_id": result["receipt_id"],
+        }
+    ]
+    receipts_list = list(receipts)
+    assert len(receipts_list) == 1
+    assert receipts_list[0].decision == "BLOCK"
+
+
 def test_reviewer_exception_is_treated_as_reject(caplog):
     adapter, receipts = _build_adapter()
 
