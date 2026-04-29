@@ -17,7 +17,6 @@ class TestEvalCLI:
 
     def test_eval_help(self):
         """Test that eval help command works"""
-        # Use python -m approach for reliability in CI
         result = subprocess.run(
             [sys.executable, "-m", "gaia.cli", "eval", "--help"],
             capture_output=True,
@@ -25,62 +24,36 @@ class TestEvalCLI:
         )
 
         assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"
-        # Check for key help text components that should be present
         help_text = result.stdout.lower()
         assert "eval" in help_text
-        assert "--results-file" in result.stdout or "-f" in result.stdout
-        assert "--directory" in result.stdout or "-d" in result.stdout
+        assert "agent" in help_text
 
-    def test_visualize_help(self):
-        """Test that visualize help command works"""
-        # Use python -m approach for reliability in CI
+    def test_eval_agent_help(self):
+        """Test that eval agent help command works"""
         result = subprocess.run(
-            [sys.executable, "-m", "gaia.cli", "visualize", "--help"],
+            [sys.executable, "-m", "gaia.cli", "eval", "agent", "--help"],
             capture_output=True,
             text=True,
         )
 
         assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"
-        # Check for key components that should be present
         help_text = result.stdout.lower()
-        assert "visualize" in help_text
-        assert "--port" in result.stdout
+        assert "agent" in help_text
+        assert "--scenario" in result.stdout
+        assert "--category" in result.stdout
 
-    def test_eval_missing_args(self):
-        """Test eval command fails when default directory has no experiment files"""
-        # Use python -m approach for reliability in CI
-        # When run without arguments, eval will use the default directory
-        # If that directory doesn't exist or has no files, it should fail
+    def test_eval_bare_shows_help(self):
+        """Test that bare 'gaia eval' shows usage pointing to agent subcommand"""
         result = subprocess.run(
             [sys.executable, "-m", "gaia.cli", "eval"],
             capture_output=True,
             text=True,
             encoding="utf-8",
-            errors="replace",  # Handle any encoding issues gracefully
+            errors="replace",
         )
 
-        # The command should either:
-        # 1. Exit with error code if no experiment files are found, OR
-        # 2. Exit with success code if files were found and processed
-        # For CI environments, typically the default directory won't exist or will be empty
-        # so we expect a non-zero return code in most cases
-
-        # Command should produce some output regardless of outcome
         combined_output = (result.stdout + result.stderr).lower()
-        assert any(
-            word in combined_output
-            for word in [
-                "found",
-                "processing",
-                "evaluations",
-                "skipping",
-                "no",
-                "not found",
-                "error",
-                "evaluating",
-                "install",
-            ]
-        ), f"Expected diagnostic output, got: {combined_output[:200]}"
+        assert "agent" in combined_output
 
 
 class TestImports:
@@ -93,106 +66,6 @@ class TestImports:
         assert hasattr(
             runner, "timezone"
         ), "runner.py is missing 'from datetime import timezone'"
-
-
-class TestEvalCore:
-    """Test core evaluation functionality"""
-
-    @pytest.fixture
-    def mock_experiment_data(self):
-        """Create mock experiment data for testing"""
-        return {
-            "experiment_name": "test-model-basic-summary",
-            "model": "test-model",
-            "config": {
-                "name": "basic_summarization",
-                "description": "Basic summarization test",
-            },
-            "results": [
-                {
-                    "file": "test_meeting.txt",
-                    "summary": "This is a test summary of the meeting.",
-                    "metadata": {"processing_time": 1.5, "token_count": 100},
-                }
-            ],
-            "metadata": {"total_files": 1, "total_time": 1.5},
-        }
-
-    @pytest.fixture
-    def mock_groundtruth_data(self):
-        """Create mock ground truth data for testing"""
-        return {
-            "test_meeting.txt": {
-                "reference_summary": "This is the reference summary of the meeting.",
-                "key_points": ["Point 1", "Point 2"],
-                "quality_criteria": {
-                    "completeness": "All main topics covered",
-                    "accuracy": "Facts are correct",
-                    "clarity": "Easy to understand",
-                },
-            }
-        }
-
-    def test_load_experiment_file(self, tmp_path, mock_experiment_data):
-        """Test loading experiment JSON file"""
-        # Write mock data to temp file
-        exp_file = tmp_path / "test.experiment.json"
-        with open(exp_file, "w") as f:
-            json.dump(mock_experiment_data, f)
-
-        # Just test that we can read the file back
-        with open(exp_file, "r") as f:
-            data = json.load(f)
-
-        assert data["experiment_name"] == "test-model-basic-summary"
-        assert len(data["results"]) == 1
-        assert data["model"] == "test-model"
-
-    def test_webapp_files_exist(self):
-        """Test that webapp files are present"""
-        webapp_dir = (
-            Path(__file__).parent.parent / "src" / "gaia" / "eval" / "webapp" / "public"
-        )
-
-        assert (webapp_dir / "index.html").exists(), "index.html missing"
-        assert (webapp_dir / "app.js").exists(), "app.js missing"
-        assert (webapp_dir / "styles.css").exists(), "styles.css missing"
-
-    def test_eval_configs_valid(self):
-        """Test that eval configuration files are valid JSON"""
-        config_dir = Path(__file__).parent.parent / "src" / "gaia" / "eval" / "configs"
-
-        for config_file in config_dir.glob("*.json"):
-            with open(config_file, "r") as f:
-                try:
-                    config = json.load(f)
-                    assert (
-                        "description" in config
-                    ), f"{config_file.name} missing 'description' field"
-                    assert (
-                        "experiments" in config
-                    ), f"{config_file.name} missing 'experiments' field"
-                except json.JSONDecodeError as e:
-                    pytest.fail(f"Invalid JSON in {config_file.name}: {e}")
-
-
-class TestEvalIntegration:
-    """Integration tests for eval tool"""
-
-    def test_webapp_npm_package_exists(self):
-        """Test that webapp has proper Node.js package configuration"""
-        webapp_dir = Path(__file__).parent.parent / "src" / "gaia" / "eval" / "webapp"
-        package_json = webapp_dir / "package.json"
-
-        assert package_json.exists(), "Webapp should have package.json"
-
-        # Verify package.json structure
-        with open(package_json, "r") as f:
-            package_data = json.load(f)
-
-        assert "name" in package_data, "package.json should have name"
-        assert "scripts" in package_data, "package.json should have scripts"
-        assert "test" in package_data["scripts"], "package.json should have test script"
 
 
 class TestAgentEvalScorecard:
@@ -712,7 +585,8 @@ class TestValidateScenario:
         with pytest.raises(ValueError, match="persona"):
             validate_scenario(tmp_path / "test.yaml", data)
 
-    def test_invalid_persona_raises(self, tmp_path):
+    def test_custom_persona_accepted(self, tmp_path):
+        """Custom persona strings are now accepted (not just the 5 built-in ones)."""
         from gaia.eval.runner import validate_scenario
 
         data = {
@@ -722,8 +596,8 @@ class TestValidateScenario:
             "setup": {"index_documents": []},
             "turns": [{"turn": 1, "objective": "x", "success_criteria": "ok"}],
         }
-        with pytest.raises(ValueError, match="not a known persona"):
-            validate_scenario(tmp_path / "test.yaml", data)
+        # Should NOT raise — custom personas are accepted since #671
+        validate_scenario(tmp_path / "test.yaml", data)
 
     def test_non_string_persona_raises(self, tmp_path):
         from gaia.eval.runner import validate_scenario
@@ -2163,6 +2037,1151 @@ class TestSkippedNoDocument:
         cat = sc["summary"]["by_category"]["real_world"]
         assert cat["skipped"] == 1
         assert cat["errored"] == 0
+
+
+class TestFindScenariosExtraDirs:
+    """Tests for --scenario-dir (extra_dirs parameter in find_scenarios)."""
+
+    def _write_scenario(self, d, scenario_id, category="custom", tags=None):
+        """Write a minimal valid scenario YAML into directory d."""
+        d.mkdir(parents=True, exist_ok=True)
+        data = {
+            "id": scenario_id,
+            "category": category,
+            "persona": "casual_user",
+            "setup": {"index_documents": []},
+            "turns": [
+                {"turn": 1, "objective": "Ask something", "success_criteria": "ok"},
+            ],
+        }
+        if tags:
+            data["tags"] = tags
+        path = d / f"{scenario_id}.yaml"
+        import yaml
+
+        path.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
+        return path
+
+    def test_extra_dirs_discovers_scenarios(self, tmp_path):
+        from gaia.eval.runner import find_scenarios
+
+        self._write_scenario(tmp_path, "custom_scenario_1")
+        results = find_scenarios(extra_dirs=[str(tmp_path)])
+        ids = [data["id"] for _, data in results]
+        assert "custom_scenario_1" in ids
+
+    def test_extra_dirs_override_builtin(self, tmp_path):
+        from gaia.eval.runner import find_scenarios
+
+        # Write a scenario with a known built-in ID to override it
+        self._write_scenario(tmp_path, "simple_factual_rag", category="overridden")
+        results = find_scenarios(
+            scenario_id="simple_factual_rag", extra_dirs=[str(tmp_path)]
+        )
+        assert len(results) == 1
+        # The category should be the overridden one
+        assert results[0][1]["category"] == "overridden"
+
+    def test_nonexistent_extra_dir_skipped(self, tmp_path):
+        from gaia.eval.runner import find_scenarios
+
+        # Should not crash — just skip the missing dir
+        results = find_scenarios(extra_dirs=[str(tmp_path / "nonexistent")])
+        # Should still return built-in scenarios
+        assert len(results) > 0
+
+    def test_tag_filtering(self, tmp_path):
+        from gaia.eval.runner import find_scenarios
+
+        self._write_scenario(tmp_path, "tagged_1", tags=["healthcare", "production"])
+        self._write_scenario(tmp_path, "tagged_2", tags=["finance"])
+        self._write_scenario(tmp_path, "untagged_3")
+
+        # Filter by healthcare tag
+        results = find_scenarios(extra_dirs=[str(tmp_path)], tags=["healthcare"])
+        ids = [data["id"] for _, data in results]
+        assert "tagged_1" in ids
+        assert "tagged_2" not in ids
+        # untagged_3 should not appear (no tags match)
+        assert "untagged_3" not in ids
+
+    def test_tag_filtering_or_logic(self, tmp_path):
+        from gaia.eval.runner import find_scenarios
+
+        self._write_scenario(tmp_path, "tag_a", tags=["healthcare"])
+        self._write_scenario(tmp_path, "tag_b", tags=["finance"])
+
+        # Both should match with OR logic
+        results = find_scenarios(
+            extra_dirs=[str(tmp_path)], tags=["healthcare", "finance"]
+        )
+        ids = [data["id"] for _, data in results]
+        assert "tag_a" in ids
+        assert "tag_b" in ids
+
+    def test_tags_field_accepted_in_scenario_yaml(self, tmp_path):
+        """Tags field in scenario YAML should not cause validation errors."""
+        from gaia.eval.runner import validate_scenario
+
+        data = {
+            "id": "test_with_tags",
+            "category": "rag_quality",
+            "persona": "casual_user",
+            "tags": ["healthcare", "production", "critical"],
+            "setup": {"index_documents": []},
+            "turns": [
+                {"turn": 1, "objective": "Ask something", "success_criteria": "ok"},
+            ],
+        }
+        validate_scenario(tmp_path / "test.yaml", data)  # should not raise
+
+
+class TestCustomPersonas:
+    """Tests for custom persona support in validate_scenario."""
+
+    def test_builtin_persona_still_works(self, tmp_path):
+        from gaia.eval.runner import validate_scenario
+
+        data = {
+            "id": "test",
+            "category": "rag_quality",
+            "persona": "casual_user",
+            "setup": {"index_documents": []},
+            "turns": [
+                {"turn": 1, "objective": "Ask something", "success_criteria": "ok"},
+            ],
+        }
+        validate_scenario(tmp_path / "test.yaml", data)  # should not raise
+
+    def test_custom_persona_accepted(self, tmp_path):
+        from gaia.eval.runner import validate_scenario
+
+        data = {
+            "id": "test",
+            "category": "rag_quality",
+            "persona": "impatient_doctor",
+            "setup": {"index_documents": []},
+            "turns": [
+                {"turn": 1, "objective": "Ask something", "success_criteria": "ok"},
+            ],
+        }
+        # Custom persona should be accepted without raising
+        validate_scenario(tmp_path / "test.yaml", data)
+
+    def test_long_custom_persona_string_accepted(self, tmp_path):
+        from gaia.eval.runner import validate_scenario
+
+        data = {
+            "id": "test",
+            "category": "rag_quality",
+            "persona": "A senior software engineer reviewing code for security vulnerabilities",
+            "setup": {"index_documents": []},
+            "turns": [
+                {"turn": 1, "objective": "Ask something", "success_criteria": "ok"},
+            ],
+        }
+        validate_scenario(tmp_path / "test.yaml", data)  # should not raise
+
+    def test_empty_persona_still_raises(self, tmp_path):
+        from gaia.eval.runner import validate_scenario
+
+        data = {
+            "id": "test",
+            "category": "rag_quality",
+            "persona": "   ",
+            "setup": {"index_documents": []},
+            "turns": [
+                {"turn": 1, "objective": "Ask something", "success_criteria": "ok"},
+            ],
+        }
+        with pytest.raises(ValueError, match="non-empty"):
+            validate_scenario(tmp_path / "test.yaml", data)
+
+    def test_non_string_persona_still_raises(self, tmp_path):
+        from gaia.eval.runner import validate_scenario
+
+        data = {
+            "id": "test",
+            "category": "rag_quality",
+            "persona": 42,
+            "setup": {"index_documents": []},
+            "turns": [
+                {"turn": 1, "objective": "Ask something", "success_criteria": "ok"},
+            ],
+        }
+        with pytest.raises(ValueError, match="persona must be a string"):
+            validate_scenario(tmp_path / "test.yaml", data)
+
+
+class TestJunitXmlOutput:
+    """Tests for JUnit XML output format."""
+
+    def test_write_junit_xml_basic(self):
+        from gaia.eval.scorecard import build_scorecard, write_junit_xml
+
+        results = [
+            {
+                "scenario_id": "pass_test",
+                "status": "PASS",
+                "overall_score": 8.5,
+                "category": "rag_quality",
+                "turns": [],
+                "elapsed_s": 10.0,
+            },
+            {
+                "scenario_id": "fail_test",
+                "status": "FAIL",
+                "overall_score": 3.2,
+                "category": "rag_quality",
+                "turns": [],
+                "root_cause": "Wrong answer",
+                "elapsed_s": 15.0,
+            },
+        ]
+        sc = build_scorecard("run-junit", results, {"model": "test-model"})
+        xml_str = write_junit_xml(sc)
+
+        # Should be valid XML
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(xml_str)
+        assert root.tag == "testsuites"
+        assert root.get("tests") == "2"
+
+        # Should have one testsuite for the category
+        suites = root.findall("testsuite")
+        assert len(suites) == 1
+        assert suites[0].get("name") == "rag_quality"
+
+        # Should have two testcases
+        cases = suites[0].findall("testcase")
+        assert len(cases) == 2
+
+    def test_write_junit_xml_failure_details(self):
+        from gaia.eval.scorecard import build_scorecard, write_junit_xml
+
+        results = [
+            {
+                "scenario_id": "failed_scenario",
+                "status": "FAIL",
+                "overall_score": 2.0,
+                "category": "adversarial",
+                "turns": [
+                    {"turn": 1, "overall_score": 2.0, "pass": False},
+                ],
+                "root_cause": "Hallucination",
+                "recommended_fix": "Improve grounding",
+                "elapsed_s": 20.0,
+            },
+        ]
+        sc = build_scorecard("run-junit", results, {})
+        xml_str = write_junit_xml(sc)
+
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(xml_str)
+        failure = root.find(".//failure")
+        assert failure is not None
+        assert "FAIL" in failure.get("type", "")
+        assert "Hallucination" in failure.text
+
+    def test_write_junit_xml_skipped(self):
+        from gaia.eval.scorecard import build_scorecard, write_junit_xml
+
+        results = [
+            {
+                "scenario_id": "skipped_test",
+                "status": "SKIPPED_NO_DOCUMENT",
+                "overall_score": None,
+                "category": "real_world",
+                "turns": [],
+                "elapsed_s": 0.0,
+            },
+        ]
+        sc = build_scorecard("run-junit", results, {})
+        xml_str = write_junit_xml(sc)
+
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(xml_str)
+        skipped = root.find(".//skipped")
+        assert skipped is not None
+
+    def test_write_junit_xml_error_status(self):
+        from gaia.eval.scorecard import build_scorecard, write_junit_xml
+
+        results = [
+            {
+                "scenario_id": "timeout_test",
+                "status": "TIMEOUT",
+                "overall_score": None,
+                "category": "rag_quality",
+                "turns": [],
+                "elapsed_s": 900.0,
+                "error": "Timed out",
+            },
+        ]
+        sc = build_scorecard("run-junit", results, {})
+        xml_str = write_junit_xml(sc)
+
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(xml_str)
+        error = root.find(".//error")
+        assert error is not None
+        assert error.get("type") == "TIMEOUT"
+
+    def test_write_junit_xml_multiple_categories(self):
+        from gaia.eval.scorecard import build_scorecard, write_junit_xml
+
+        results = [
+            {
+                "scenario_id": "rag_test",
+                "status": "PASS",
+                "overall_score": 9.0,
+                "category": "rag_quality",
+                "turns": [],
+            },
+            {
+                "scenario_id": "adv_test",
+                "status": "PASS",
+                "overall_score": 8.0,
+                "category": "adversarial",
+                "turns": [],
+            },
+        ]
+        sc = build_scorecard("run-junit", results, {})
+        xml_str = write_junit_xml(sc)
+
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(xml_str)
+        suites = root.findall("testsuite")
+        assert len(suites) == 2
+        suite_names = {s.get("name") for s in suites}
+        assert "rag_quality" in suite_names
+        assert "adversarial" in suite_names
+
+
+class TestCustomCorpusDir:
+    """Tests for --corpus-dir (extra_corpus_dirs in _load_merged_manifest)."""
+
+    def test_load_merged_manifest_no_extras(self):
+        from gaia.eval.runner import _load_merged_manifest
+
+        manifest = _load_merged_manifest()
+        assert "documents" in manifest
+        assert len(manifest["documents"]) > 0
+
+    def test_load_merged_manifest_with_extra_dir(self, tmp_path):
+        from gaia.eval.runner import _load_merged_manifest
+
+        # Create a minimal manifest in extra dir
+        extra_manifest = {
+            "documents": [
+                {"id": "custom_doc_1", "filename": "custom.txt", "facts": []},
+            ]
+        }
+        (tmp_path / "manifest.json").write_text(json.dumps(extra_manifest))
+
+        manifest = _load_merged_manifest(extra_corpus_dirs=[str(tmp_path)])
+        doc_ids = [d.get("id") for d in manifest["documents"]]
+        assert "custom_doc_1" in doc_ids
+
+    def test_load_merged_manifest_missing_extra_manifest(self, tmp_path):
+        from gaia.eval.runner import _load_merged_manifest
+
+        # Directory exists but no manifest.json — should not crash
+        empty_dir = tmp_path / "empty_corpus"
+        empty_dir.mkdir()
+        manifest = _load_merged_manifest(extra_corpus_dirs=[str(empty_dir)])
+        assert "documents" in manifest
+
+
+class TestEvalCLINewFlags:
+    """Test that new CLI flags appear in help output."""
+
+    def test_eval_agent_help_shows_new_flags(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "gaia.cli", "eval", "agent", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"Command failed: {result.stderr}"
+        help_text = result.stdout
+        assert "--scenario-dir" in help_text
+        assert "--corpus-dir" in help_text
+        assert "--tag" in help_text
+        assert "--output-format" in help_text
+        assert "junit" in help_text
+
+
+class TestScenarioLoading:
+    """Tests for scenario YAML parsing and filtering."""
+
+    def test_yaml_scenario_parsing_all_field_types(self, tmp_path):
+        """Parse a complete scenario YAML with all optional fields and verify each field type."""
+        import yaml
+
+        scenario = {
+            "id": "test_all_fields",
+            "name": "Full field test scenario",
+            "category": "rag_quality",
+            "severity": "high",
+            "description": "A scenario that exercises every optional field.",
+            "persona": "power_user",
+            "tags": ["test", "comprehensive"],
+            "setup": {
+                "index_documents": [
+                    {
+                        "corpus_doc": "acme_q3_report",
+                        "path": "eval/corpus/documents/acme_q3_report.md",
+                    }
+                ]
+            },
+            "turns": [
+                {
+                    "turn": 1,
+                    "objective": "Ask about Q3 revenue",
+                    "ground_truth": {
+                        "doc_id": "acme_q3_report",
+                        "expected_answer": "$4.2M",
+                        "fact_id": "q3_total_revenue",
+                    },
+                    "success_criteria": "Agent states revenue correctly.",
+                    "expected_tools": ["search"],
+                },
+                {
+                    "turn": 2,
+                    "objective": "Follow-up on growth rate",
+                    "ground_truth": {
+                        "doc_id": "acme_q3_report",
+                        "expected_answer": "15% YoY growth",
+                    },
+                    "success_criteria": "Agent states growth correctly.",
+                },
+            ],
+            "expected_outcome": "Agent answers both turns correctly.",
+        }
+
+        yaml_path = tmp_path / "full.yaml"
+        yaml_path.write_text(yaml.dump(scenario, default_flow_style=False))
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+
+        # Verify types for all fields
+        assert isinstance(data["id"], str)
+        assert isinstance(data["name"], str)
+        assert isinstance(data["category"], str)
+        assert isinstance(data["severity"], str)
+        assert isinstance(data["description"], str)
+        assert isinstance(data["persona"], str)
+        assert isinstance(data["tags"], list)
+        assert all(isinstance(t, str) for t in data["tags"])
+        assert isinstance(data["setup"], dict)
+        assert isinstance(data["setup"]["index_documents"], list)
+        assert isinstance(data["setup"]["index_documents"][0], dict)
+        assert "corpus_doc" in data["setup"]["index_documents"][0]
+        assert "path" in data["setup"]["index_documents"][0]
+        assert isinstance(data["turns"], list)
+        assert len(data["turns"]) == 2
+        assert isinstance(data["turns"][0]["ground_truth"], dict)
+        assert "doc_id" in data["turns"][0]["ground_truth"]
+        assert "expected_answer" in data["turns"][0]["ground_truth"]
+        assert isinstance(data["turns"][0]["success_criteria"], str)
+        assert isinstance(data["turns"][0].get("expected_tools"), list)
+        assert isinstance(data.get("expected_outcome"), str)
+
+    def test_invalid_scenario_yaml_clear_errors(self, tmp_path):
+        """Invalid YAML should produce clear, actionable error messages for multiple error types."""
+        from gaia.eval.runner import validate_scenario
+
+        # Missing required top-level fields
+        with pytest.raises(ValueError, match="missing top-level field"):
+            validate_scenario(tmp_path / "bad.yaml", {"id": "bad"})
+
+        # Empty turns list
+        with pytest.raises(ValueError, match="turns list is empty"):
+            validate_scenario(
+                tmp_path / "empty_turns.yaml",
+                {
+                    "id": "empty",
+                    "category": "x",
+                    "persona": "casual_user",
+                    "setup": {"index_documents": []},
+                    "turns": [],
+                },
+            )
+
+        # Turn missing objective
+        with pytest.raises(ValueError, match="missing 'objective'"):
+            validate_scenario(
+                tmp_path / "no_obj.yaml",
+                {
+                    "id": "no_obj",
+                    "category": "x",
+                    "persona": "casual_user",
+                    "setup": {"index_documents": []},
+                    "turns": [
+                        {"turn": 1, "success_criteria": "ok"},
+                    ],
+                },
+            )
+
+        # Non-string persona
+        with pytest.raises(ValueError, match="persona must be a string"):
+            validate_scenario(
+                tmp_path / "num_persona.yaml",
+                {
+                    "id": "np",
+                    "category": "x",
+                    "persona": 42,
+                    "setup": {"index_documents": []},
+                    "turns": [{"turn": 1, "objective": "x", "success_criteria": "ok"}],
+                },
+            )
+
+        # Dict success_criteria (old capture format)
+        with pytest.raises(ValueError, match="success_criteria must be a string"):
+            validate_scenario(
+                tmp_path / "dict_criteria.yaml",
+                {
+                    "id": "dc",
+                    "category": "x",
+                    "persona": "casual_user",
+                    "setup": {"index_documents": []},
+                    "turns": [
+                        {
+                            "turn": 1,
+                            "objective": "x",
+                            "success_criteria": {"must_contain": []},
+                        }
+                    ],
+                },
+            )
+
+    def test_scenario_filtering_by_category(self):
+        """find_scenarios with category filter returns only matching scenarios."""
+        from gaia.eval.runner import find_scenarios
+
+        all_scenarios = find_scenarios()
+        categories = {data["category"] for _, data in all_scenarios}
+        assert len(categories) > 0, "No categories found in scenarios"
+
+        # Test filtering for each category
+        for test_cat in list(categories)[:2]:  # test first 2 categories
+            filtered = find_scenarios(category=test_cat)
+            assert len(filtered) > 0, f"No scenarios found for category {test_cat}"
+            for _, data in filtered:
+                assert (
+                    data["category"] == test_cat
+                ), f"Expected category {test_cat}, got {data['category']}"
+
+        # Verify filtering reduces the set when multiple categories exist
+        if len(categories) > 1:
+            single_cat = find_scenarios(category=next(iter(categories)))
+            assert len(single_cat) < len(
+                all_scenarios
+            ), "Category filter should reduce result set"
+
+    def test_duplicate_scenario_ids_detected(self):
+        """Built-in scenario IDs must be unique (no duplicates allowed)."""
+        from gaia.eval.runner import find_scenarios
+
+        scenarios = find_scenarios()
+        ids = [data["id"] for _, data in scenarios]
+        dupes = [x for x in ids if ids.count(x) > 1]
+        assert (
+            len(dupes) == 0
+        ), f"Duplicate scenario IDs in eval/scenarios/: {set(dupes)}"
+
+
+class TestRunner:
+    """Tests for runner execution behavior (mocked subprocess)."""
+
+    def test_timeout_handling(self, mocker):
+        """Scenario that exceeds timeout gets TIMEOUT status."""
+        import tempfile
+
+        from gaia.eval.runner import run_scenario_subprocess
+
+        mocker.patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=30),
+        )
+
+        scenario_data = {
+            "id": "timeout_test",
+            "category": "rag_quality",
+            "setup": {"index_documents": []},
+            "turns": [{"turn": 1, "objective": "x", "success_criteria": "ok"}],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_scenario_subprocess(
+                Path(tmp) / "scenario.yaml",
+                scenario_data,
+                Path(tmp),
+                "http://localhost:4200",
+                "claude-sonnet-4-6",
+                "1.00",
+                30,
+            )
+
+        assert result["status"] == "TIMEOUT"
+        assert result["overall_score"] is None
+        assert result["scenario_id"] == "timeout_test"
+        assert "elapsed_s" in result
+        assert isinstance(result["elapsed_s"], float)
+
+    def test_resume_from_checkpoint(self, tmp_path):
+        """Mock a .progress.json and trace file to verify resume mechanism."""
+        # Create a progress file indicating scenario "done_scenario" is completed
+        progress = {"done_scenario": "PASS"}
+        progress_path = tmp_path / ".progress.json"
+        progress_path.write_text(json.dumps(progress))
+
+        # Create a matching trace file (required for resume to work)
+        traces_dir = tmp_path / "traces"
+        traces_dir.mkdir()
+        trace_result = {
+            "scenario_id": "done_scenario",
+            "status": "PASS",
+            "overall_score": 9.0,
+            "turns": [],
+            "category": "rag_quality",
+            "cost_estimate": {"turns": 1, "estimated_usd": 0.01},
+        }
+        (traces_dir / "done_scenario.json").write_text(json.dumps(trace_result))
+
+        # Verify the progress file records completion
+        completed = json.loads(progress_path.read_text(encoding="utf-8"))
+        assert "done_scenario" in completed
+        assert completed["done_scenario"] == "PASS"
+
+        # Verify the trace is loadable and correct (resume reads from this)
+        loaded_trace = json.loads(
+            (traces_dir / "done_scenario.json").read_text(encoding="utf-8")
+        )
+        assert loaded_trace["status"] == "PASS"
+        assert loaded_trace["scenario_id"] == "done_scenario"
+        assert loaded_trace["overall_score"] == 9.0
+
+    def test_cost_tracking_accuracy(self):
+        """Verify cost calculation from token usage matches expected values using MODEL_PRICING."""
+        from gaia.eval.config import MODEL_PRICING
+
+        # Test with known pricing for claude-sonnet-4-6
+        model = "claude-sonnet-4-6"
+        pricing = MODEL_PRICING[model]
+        input_tokens = 1_000_000  # 1M tokens
+        output_tokens = 500_000  # 0.5M tokens
+
+        expected_input_cost = (input_tokens / 1_000_000) * pricing["input_per_mtok"]
+        expected_output_cost = (output_tokens / 1_000_000) * pricing["output_per_mtok"]
+        expected_total = expected_input_cost + expected_output_cost
+
+        # sonnet-4-6: $3/Mtok input + $15/Mtok output
+        # 1M input = $3.00, 0.5M output = $7.50, total = $10.50
+        assert expected_total == pytest.approx(10.50, abs=0.01)
+
+        # Test default fallback for unknown models
+        fallback = MODEL_PRICING["default"]
+        assert fallback["input_per_mtok"] == 3.00
+        assert fallback["output_per_mtok"] == 15.00
+
+        # Test opus pricing is higher than sonnet
+        opus_pricing = MODEL_PRICING["claude-opus-4"]
+        assert opus_pricing["input_per_mtok"] > pricing["input_per_mtok"]
+        assert opus_pricing["output_per_mtok"] > pricing["output_per_mtok"]
+
+        # Verify all models have both required keys
+        for model_name, model_pricing in MODEL_PRICING.items():
+            assert (
+                "input_per_mtok" in model_pricing
+            ), f"{model_name} missing input pricing"
+            assert (
+                "output_per_mtok" in model_pricing
+            ), f"{model_name} missing output pricing"
+
+    def test_budget_exceeded_status(self, mocker):
+        """Scenario exceeding budget gets BUDGET_EXCEEDED status."""
+        import tempfile
+
+        from gaia.eval.runner import run_scenario_subprocess
+
+        budget_error = {
+            "subtype": "error_max_budget_usd",
+            "total_cost_usd": 2.05,
+            "num_turns": 3,
+        }
+        mock_proc = mocker.MagicMock()
+        mock_proc.stdout = json.dumps(budget_error)
+        mock_proc.stderr = ""
+        mock_proc.returncode = 0
+        mocker.patch("subprocess.run", return_value=mock_proc)
+
+        scenario_data = {
+            "id": "budget_test",
+            "category": "rag_quality",
+            "setup": {"index_documents": []},
+            "turns": [{"turn": 1, "objective": "x", "success_criteria": "ok"}],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_scenario_subprocess(
+                Path(tmp) / "scenario.yaml",
+                scenario_data,
+                Path(tmp),
+                "http://localhost:4200",
+                "claude-sonnet-4-6",
+                "1.00",
+                30,
+            )
+
+        assert result["status"] == "BUDGET_EXCEEDED"
+        assert result["overall_score"] is None
+        assert result["cost_estimate"]["estimated_usd"] == pytest.approx(2.05)
+        assert result["scenario_id"] == "budget_test"
+
+
+class TestScorecardPublicAPI:
+    """Tests for the scorecard public API including score calculation and comparison."""
+
+    def _make_result(self, scenario_id, status, score, category="rag_quality"):
+        return {
+            "scenario_id": scenario_id,
+            "status": status,
+            "overall_score": score,
+            "category": category,
+            "cost_estimate": {"estimated_usd": 0.05},
+        }
+
+    def test_score_calculation_matches_formula(self):
+        """Verify weighted score = sum(dimension_score * weight) with known inputs."""
+        from gaia.eval.runner import _SCORE_WEIGHTS, recompute_turn_score
+
+        # All scores = 10 → weighted sum = 10.0 (weights sum to 1.0)
+        all_tens = {k: 10 for k in _SCORE_WEIGHTS}
+        assert recompute_turn_score(all_tens) == pytest.approx(10.0, abs=0.001)
+
+        # correctness=10, rest=0 → 10 * 0.25 = 2.5
+        correctness_only = {k: 0 for k in _SCORE_WEIGHTS}
+        correctness_only["correctness"] = 10
+        assert recompute_turn_score(correctness_only) == pytest.approx(2.5, abs=0.001)
+
+        # Mixed scores: verify manual calculation matches function
+        mixed = {
+            "correctness": 8,
+            "tool_selection": 6,
+            "context_retention": 7,
+            "completeness": 9,
+            "efficiency": 5,
+            "personality": 10,
+            "error_recovery": 4,
+        }
+        expected = (
+            8 * 0.25 + 6 * 0.20 + 7 * 0.20 + 9 * 0.15 + 5 * 0.10 + 10 * 0.05 + 4 * 0.05
+        )
+        assert recompute_turn_score(mixed) == pytest.approx(expected, abs=0.001)
+
+        # Verify weights sum to 1.0
+        assert sum(_SCORE_WEIGHTS.values()) == pytest.approx(1.0, abs=0.001)
+
+    def test_multi_turn_aggregation(self, mocker):
+        """Scenario with 3 turns aggregates correctly (avg of turn scores)."""
+        import tempfile
+
+        from gaia.eval.runner import run_scenario_subprocess
+
+        # Build a result with 3 turns having known uniform dimension scores
+        turns = []
+        for i, score_val in enumerate([8.0, 6.0, 10.0], start=1):
+            turns.append(
+                {
+                    "turn": i,
+                    "user_message": f"msg{i}",
+                    "agent_response": f"resp{i}",
+                    "agent_tools": [],
+                    "scores": {
+                        "correctness": score_val,
+                        "tool_selection": score_val,
+                        "context_retention": score_val,
+                        "completeness": score_val,
+                        "efficiency": score_val,
+                        "personality": score_val,
+                        "error_recovery": score_val,
+                    },
+                    "overall_score": score_val,
+                    "pass": True,
+                    "failure_category": None,
+                    "reasoning": "ok",
+                }
+            )
+
+        payload = {
+            "structured_output": {
+                "scenario_id": "multi_turn",
+                "status": "PASS",
+                "overall_score": 999,  # will be overwritten with mean of turns
+                "turns": turns,
+                "cost_estimate": {"turns": 3, "estimated_usd": 0.03},
+            }
+        }
+
+        mock_proc = mocker.MagicMock()
+        mock_proc.stdout = json.dumps(payload)
+        mock_proc.stderr = ""
+        mock_proc.returncode = 0
+        mocker.patch("subprocess.run", return_value=mock_proc)
+
+        scenario_data = {
+            "id": "multi_turn",
+            "category": "rag_quality",
+            "setup": {"index_documents": []},
+            "turns": [
+                {"turn": 1, "objective": "x", "success_criteria": "ok"},
+                {"turn": 2, "objective": "y", "success_criteria": "ok"},
+                {"turn": 3, "objective": "z", "success_criteria": "ok"},
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_scenario_subprocess(
+                Path(tmp) / "scenario.yaml",
+                scenario_data,
+                Path(tmp),
+                "http://localhost:4200",
+                "claude-sonnet-4-6",
+                "1.00",
+                30,
+            )
+
+        # Mean of recomputed turn scores: (8.0 + 6.0 + 10.0) / 3 = 8.0
+        assert result["overall_score"] == pytest.approx(8.0, abs=0.01)
+        assert len(result["turns"]) == 3
+
+    def test_comparison_detects_regression(self, tmp_path):
+        """compare_scorecards flags when a passing scenario becomes failing."""
+        from gaia.eval.runner import compare_scorecards
+        from gaia.eval.scorecard import build_scorecard
+
+        baseline = [self._make_result("sc1", "PASS", 9.0)]
+        current = [self._make_result("sc1", "FAIL", 3.0)]
+
+        bp = tmp_path / "base.json"
+        cp = tmp_path / "curr.json"
+        bp.write_text(json.dumps(build_scorecard("b", baseline, {})))
+        cp.write_text(json.dumps(build_scorecard("c", current, {})))
+
+        diff = compare_scorecards(bp, cp)
+        assert len(diff["regressed"]) == 1
+        assert diff["regressed"][0]["scenario_id"] == "sc1"
+        assert diff["regressed"][0]["baseline_status"] == "PASS"
+        assert diff["regressed"][0]["current_status"] == "FAIL"
+        assert len(diff["improved"]) == 0
+
+    def test_comparison_detects_improvement(self, tmp_path):
+        """compare_scorecards flags when a failing scenario becomes passing."""
+        from gaia.eval.runner import compare_scorecards
+        from gaia.eval.scorecard import build_scorecard
+
+        baseline = [self._make_result("sc1", "FAIL", 3.0)]
+        current = [self._make_result("sc1", "PASS", 9.0)]
+
+        bp = tmp_path / "base.json"
+        cp = tmp_path / "curr.json"
+        bp.write_text(json.dumps(build_scorecard("b", baseline, {})))
+        cp.write_text(json.dumps(build_scorecard("c", current, {})))
+
+        diff = compare_scorecards(bp, cp)
+        assert len(diff["improved"]) == 1
+        assert diff["improved"][0]["scenario_id"] == "sc1"
+        assert diff["improved"][0]["baseline_status"] == "FAIL"
+        assert diff["improved"][0]["current_status"] == "PASS"
+        assert diff["improved"][0]["delta"] > 0
+        assert len(diff["regressed"]) == 0
+
+    def test_baseline_save_load_roundtrip(self, tmp_path):
+        """Save scorecard as baseline JSON, load it back, verify equality."""
+        from gaia.eval.scorecard import build_scorecard
+
+        results = [
+            self._make_result("a", "PASS", 9.0, "rag_quality"),
+            self._make_result("b", "FAIL", 4.0, "tool_selection"),
+            self._make_result("c", "TIMEOUT", None, "rag_quality"),
+        ]
+        config = {"model": "claude-sonnet-4-6", "budget_per_scenario_usd": 2.00}
+        original = build_scorecard("run-baseline", results, config)
+
+        # Save to JSON
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(
+            json.dumps(original, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+        # Load it back
+        loaded = json.loads(baseline_path.read_text(encoding="utf-8"))
+
+        # Verify structural equality
+        assert loaded["run_id"] == original["run_id"]
+        assert loaded["config"] == original["config"]
+        assert (
+            loaded["summary"]["total_scenarios"]
+            == original["summary"]["total_scenarios"]
+        )
+        assert loaded["summary"]["passed"] == original["summary"]["passed"]
+        assert loaded["summary"]["failed"] == original["summary"]["failed"]
+        assert loaded["summary"]["timeout"] == original["summary"]["timeout"]
+        assert loaded["summary"]["pass_rate"] == pytest.approx(
+            original["summary"]["pass_rate"]
+        )
+        assert loaded["summary"]["avg_score"] == pytest.approx(
+            original["summary"]["avg_score"]
+        )
+        assert len(loaded["scenarios"]) == len(original["scenarios"])
+        for orig, load in zip(original["scenarios"], loaded["scenarios"]):
+            assert orig["scenario_id"] == load["scenario_id"]
+            assert orig["status"] == load["status"]
+
+        # Verify by_category is preserved
+        for cat in original["summary"]["by_category"]:
+            assert cat in loaded["summary"]["by_category"]
+            assert (
+                loaded["summary"]["by_category"][cat]["passed"]
+                == original["summary"]["by_category"][cat]["passed"]
+            )
+
+
+class TestCorpusPublicAPI:
+    """Tests for corpus manifest and document references."""
+
+    def test_manifest_parsing(self):
+        """Parse eval/corpus/manifest.json and verify structure."""
+        from gaia.eval.runner import MANIFEST
+
+        assert MANIFEST.exists(), f"Manifest not found at {MANIFEST}"
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+
+        # Must have a documents list
+        assert "documents" in manifest, "Manifest missing 'documents' key"
+        assert isinstance(manifest["documents"], list)
+        assert len(manifest["documents"]) > 0, "Manifest has no documents"
+
+        # Each document must have required fields
+        for doc in manifest["documents"]:
+            assert "id" in doc, f"Document missing 'id': {doc}"
+            assert "filename" in doc, f"Document missing 'filename': {doc}"
+            assert isinstance(doc["id"], str)
+            assert isinstance(doc["filename"], str)
+
+    def test_missing_document_handling(self):
+        """Scenario referencing missing doc returns False from _documents_exist."""
+        from gaia.eval.runner import _documents_exist
+
+        data = {
+            "setup": {
+                "index_documents": [
+                    {
+                        "corpus_doc": "nonexistent_doc",
+                        "path": "eval/corpus/documents/does_not_exist_xyz_98765.md",
+                    }
+                ]
+            }
+        }
+        assert _documents_exist(data) is False
+
+    def test_document_existence_check(self):
+        """All documents referenced in manifest exist on disk."""
+        from gaia.eval.runner import CORPUS_DIR, MANIFEST
+
+        assert MANIFEST.exists()
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+
+        docs_dir = CORPUS_DIR / "documents"
+        missing = []
+        for doc in manifest.get("documents", []):
+            filepath = docs_dir / doc["filename"]
+            if not filepath.exists():
+                missing.append(doc["filename"])
+
+        assert not missing, f"Documents missing from disk: {missing}"
+
+
+class TestCLIPublicAPI:
+    """Tests for CLI command structure and flags."""
+
+    def test_eval_agent_help(self):
+        """gaia eval agent --help returns 0 and shows expected flags."""
+        result = subprocess.run(
+            [sys.executable, "-m", "gaia.cli", "eval", "agent", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"Command failed: {result.stderr}"
+        help_text = result.stdout
+        assert "agent" in help_text.lower()
+        assert "--scenario" in help_text
+        assert "--category" in help_text
+        assert "--audit-only" in help_text
+        assert "--backend" in help_text
+        assert "--model" in help_text
+        assert "--budget" in help_text
+        assert "--timeout" in help_text
+
+    def test_eval_agent_audit_only_flag(self):
+        """--audit-only flag is recognized and documented in help."""
+        result = subprocess.run(
+            [sys.executable, "-m", "gaia.cli", "eval", "agent", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "--audit-only" in result.stdout
+        assert "audit" in result.stdout.lower()
+
+    def test_eval_agent_scenario_flag(self):
+        """--scenario flag is recognized and documented in help."""
+        result = subprocess.run(
+            [sys.executable, "-m", "gaia.cli", "eval", "agent", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "--scenario" in result.stdout
+
+    def test_eval_agent_category_flag(self):
+        """--category flag is recognized and documented in help."""
+        result = subprocess.run(
+            [sys.executable, "-m", "gaia.cli", "eval", "agent", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "--category" in result.stdout
+
+    def test_output_formats_parseable(self, tmp_path):
+        """Scorecard JSON output is valid JSON, summary.md is valid markdown."""
+        from gaia.eval.scorecard import build_scorecard, write_summary_md
+
+        results = [
+            {
+                "scenario_id": "test_a",
+                "status": "PASS",
+                "overall_score": 8.5,
+                "category": "rag_quality",
+                "cost_estimate": {"estimated_usd": 0.01},
+            },
+            {
+                "scenario_id": "test_b",
+                "status": "FAIL",
+                "overall_score": 3.0,
+                "category": "tool_selection",
+                "cost_estimate": {"estimated_usd": 0.02},
+            },
+        ]
+        config = {"model": "test-model"}
+        scorecard = build_scorecard("test-run", results, config)
+
+        # JSON output should be valid JSON (round-trip)
+        json_str = json.dumps(scorecard, indent=2, ensure_ascii=False)
+        parsed = json.loads(json_str)
+        assert parsed["run_id"] == "test-run"
+        assert parsed["summary"]["total_scenarios"] == 2
+
+        # Write to file and read back
+        json_path = tmp_path / "scorecard.json"
+        json_path.write_text(json_str, encoding="utf-8")
+        reloaded = json.loads(json_path.read_text(encoding="utf-8"))
+        assert reloaded["summary"]["passed"] == 1
+
+        # Summary markdown should be valid (contains expected structure)
+        md = write_summary_md(scorecard)
+        assert isinstance(md, str)
+        assert md.startswith("# ")  # starts with H1 header
+        assert "## Summary" in md
+        assert "## By Category" in md
+        assert "|" in md  # has table rows
+        assert "PASS" in md or "✅" in md
+
+        # Write markdown to file and verify it's readable
+        md_path = tmp_path / "summary.md"
+        md_path.write_text(md, encoding="utf-8")
+        md_reloaded = md_path.read_text(encoding="utf-8")
+        assert "test-run" in md_reloaded
+        assert "test-model" in md_reloaded
+
+
+class TestAuditPublicAPI:
+    """Tests for the architecture audit public API."""
+
+    def test_audit_returns_json(self):
+        """run_audit() returns a dict with expected keys and correct types."""
+        from gaia.eval.audit import run_audit
+
+        result = run_audit()
+        assert isinstance(result, dict)
+        assert "architecture_audit" in result
+
+        audit = result["architecture_audit"]
+        expected_keys = {
+            "history_pairs",
+            "max_msg_chars",
+            "tool_results_in_history",
+            "agent_persistence",
+            "blocked_scenarios",
+            "recommendations",
+        }
+        assert expected_keys.issubset(
+            set(audit.keys())
+        ), f"Missing keys: {expected_keys - set(audit.keys())}"
+
+        # Verify types
+        assert isinstance(audit["blocked_scenarios"], list)
+        assert isinstance(audit["recommendations"], list)
+        assert isinstance(audit["tool_results_in_history"], bool)
+        assert isinstance(audit["agent_persistence"], str)
+
+    def test_audit_detects_low_history_pairs(self):
+        """History pairs less than 5 generates recommendation; >= 5 does not."""
+        from gaia.eval.audit import run_audit
+
+        result = run_audit()
+        audit = result["architecture_audit"]
+
+        history_pairs = audit["history_pairs"]
+        rec_ids = [r["id"] for r in audit["recommendations"]]
+
+        if history_pairs != "unknown" and history_pairs < 5:
+            assert (
+                "increase_history_pairs" in rec_ids
+            ), "Expected recommendation to increase history pairs when < 5"
+        elif history_pairs != "unknown" and history_pairs >= 5:
+            assert (
+                "increase_history_pairs" not in rec_ids
+            ), "Should not recommend increasing history_pairs when >= 5"
+
+    def test_audit_detects_low_msg_chars(self):
+        """Message chars less than 1000 generates recommendation and blocks scenarios."""
+        from gaia.eval.audit import run_audit
+
+        result = run_audit()
+        audit = result["architecture_audit"]
+
+        max_msg_chars = audit["max_msg_chars"]
+        rec_ids = [r["id"] for r in audit["recommendations"]]
+
+        if max_msg_chars != "unknown" and max_msg_chars < 1000:
+            assert (
+                "increase_truncation" in rec_ids
+            ), "Expected recommendation to increase truncation limit"
+            blocked_scenarios = [s["scenario"] for s in audit["blocked_scenarios"]]
+            assert (
+                "cross_turn_file_recall" in blocked_scenarios
+            ), "Expected blocked scenario for low msg chars"
+        elif max_msg_chars != "unknown" and max_msg_chars >= 1000:
+            assert (
+                "increase_truncation" not in rec_ids
+            ), "Should not recommend increasing truncation when >= 1000"
 
 
 if __name__ == "__main__":

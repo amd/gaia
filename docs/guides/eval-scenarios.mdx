@@ -1,0 +1,645 @@
+---
+title: "Scenario Authoring"
+description: "Write custom evaluation scenarios with YAML, ground truth, and corpus documents"
+icon: "file-pen"
+---
+
+<Info>
+  **Source Code:** [`eval/scenarios/`](https://github.com/amd/gaia/tree/main/eval/scenarios)
+</Info>
+
+## Overview
+
+Scenarios are YAML files that define multi-turn conversations the eval agent will simulate against the live Agent UI. Each scenario specifies a persona, documents to index, user objectives per turn, and ground truth for scoring.
+
+The runner discovers scenarios automatically via recursive glob under `eval/scenarios/`. Place your YAML file in the appropriate category subdirectory and it will be picked up on the next run.
+
+---
+
+## Scenario YAML Format
+
+Here is the complete schema with all fields documented:
+
+```yaml
+# Required fields
+id: my_custom_scenario           # Unique identifier (snake_case, alphanumeric + underscores)
+name: "My Custom Scenario"       # Human-readable display name
+category: rag_quality            # Category (see list below)
+severity: critical               # critical | high | medium | low
+description: |                   # Multi-line description of what this scenario tests
+  Describe the purpose and scope of this test.
+
+persona: power_user              # User persona (see Personas section below)
+
+# Setup phase -- documents to index before conversation starts
+setup:
+  index_documents:               # List of documents to pre-index (can be empty [])
+    - corpus_doc: acme_q3_report # References manifest.json document ID
+      path: "eval/corpus/documents/acme_q3_report.md"  # Path relative to repo root
+
+# Conversation turns -- at least one required
+turns:
+  - turn: 1                      # Sequential integer starting from 1
+    objective: "Ask about Q3 revenue"  # What the user wants to achieve
+    user_message: "What was Q3 revenue?"  # (Optional) Explicit message text
+
+    # At least one of ground_truth or success_criteria is required per turn
+    ground_truth:                 # Structured ground truth for precise scoring
+      doc_id: acme_q3_report     # Source document ID from manifest
+      fact_id: q3_revenue        # (Optional) Specific fact ID from manifest
+      fact_ids: [q3_revenue, yoy_growth]  # (Optional) Multiple fact IDs
+      expected_answer: "$14.2 million"    # Expected answer (null = agent must say "I don't know")
+      expected_behavior: "Agent synthesizes pricing data"  # (Optional) Behavioral expectation
+      note: "Revenue is in section 2"     # (Optional) Clarification for the judge
+
+    success_criteria: "Agent correctly states Q3 revenue was $14.2 million"  # Plain English pass condition
+
+  - turn: 2
+    objective: "Follow-up about growth"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: yoy_growth
+      expected_answer: "23%"
+    success_criteria: "Agent states year-over-year growth of 23%"
+
+# Optional: Summary of what a passing run looks like
+expected_outcome: |
+  Agent correctly retrieves financial data from the Q3 report across both turns.
+```
+
+### Key Field Rules
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `id` | Yes | Unique across all scenarios. Use `snake_case`. |
+| `category` | Yes | Must be one of the 10 defined categories. |
+| `persona` | Yes | Must be one of the 5 defined personas. |
+| `setup.index_documents` | Yes | Can be empty (`[]`) for scenarios that test discovery. |
+| `turns` | Yes | At least one turn required. Numbers must be sequential starting from 1. |
+| `ground_truth` or `success_criteria` | One required per turn | Providing both gives maximum judging precision. |
+| `expected_answer` | Optional | When non-null, strict automatic-zero rules apply. When `null`, agent must say it doesn't know. |
+| `user_message` | Optional | If omitted, the eval agent generates a natural message from `objective` + `persona`. |
+
+<Note>
+  When `expected_answer` is non-null, the judge applies **strict automatic-zero rules**: wrong numbers (>5% deviation), wrong names, lazy refusals (saying "I can't find that" without calling the query tool), and hallucinated sources all result in a correctness score of 0.
+</Note>
+
+---
+
+## Categories
+
+Place scenario files in the appropriate subdirectory under `eval/scenarios/`:
+
+```
+eval/scenarios/
+├── rag_quality/          # RAG retrieval and fact lookup
+├── context_retention/    # Cross-turn context awareness
+├── tool_selection/       # Correct tool usage and discovery
+├── error_recovery/       # Error handling and graceful degradation
+├── adversarial/          # Edge cases and robustness
+├── personality/          # GAIA voice and personality compliance
+├── vision/               # Screenshot capture and VLM
+├── real_world/           # Real documents (10-K, RFC, papers, etc.)
+├── web_system/           # Web and system tools
+└── captured/             # User-captured scenarios from live sessions
+```
+
+| Category | Use When Testing... |
+|----------|---------------------|
+| `rag_quality` | Factual extraction, hallucination resistance, CSV/table parsing, cross-section synthesis |
+| `context_retention` | Pronoun resolution, remembering indexed documents, multi-document conversations |
+| `tool_selection` | Tool routing, smart document discovery, multi-step planning, knowing when NOT to use tools |
+| `error_recovery` | Missing files, empty search results, vague queries, graceful fallbacks |
+| `adversarial` | Empty files, very large documents, rapid topic switching |
+| `personality` | Conciseness, avoiding sycophancy, admitting limitations honestly |
+| `vision` | Screenshot capture, VLM analysis, graceful degradation when VLM unavailable |
+| `real_world` | Real PDFs, spreadsheets, legal documents, financial filings |
+| `web_system` | Clipboard, notifications, webpage fetching, system information |
+| `captured` | Replaying real user sessions as golden-path tests |
+
+---
+
+## Personas
+
+Each scenario specifies a persona that shapes how the eval agent crafts user messages:
+
+| Persona | Behavior | When to Use |
+|---------|----------|-------------|
+| `casual_user` | Short messages, uses pronouns ("that file"), occasionally vague | Testing robustness with ambiguous input |
+| `power_user` | Precise requests, specific file names, multi-step instructions | Testing efficiency and correct tool routing |
+| `confused_user` | Wrong terminology, self-correcting mid-sentence | Testing error recovery and clarification |
+| `adversarial_user` | Edge cases, topic switches, impossible requests | Testing hallucination resistance and boundary handling |
+| `data_analyst` | Numbers, comparisons, aggregations, structured output expectations | Testing numerical accuracy and data synthesis |
+
+<Tip>
+  Use `power_user` for straightforward RAG tests. Use `adversarial_user` for scenarios that test failure modes. Use `casual_user` to test whether the agent handles real-world ambiguity.
+</Tip>
+
+---
+
+## Step-by-Step: Write a Custom Scenario
+
+### Step 1: Choose Your Category and Persona
+
+Decide what aspect of agent behavior you're testing, and which user persona best exercises it.
+
+### Step 2: Identify or Create Corpus Documents
+
+Check `eval/corpus/manifest.json` for existing documents. If you need a new document:
+
+1. Add the file to `eval/corpus/documents/`
+2. Update `eval/corpus/manifest.json` with the document entry and facts (see [Corpus Management](#corpus-management) below)
+
+### Step 3: Write the YAML
+
+Create a new file at `eval/scenarios/<category>/<your_scenario_id>.yaml`:
+
+```yaml
+id: budget_threshold_check
+name: "Budget Approval Threshold"
+category: rag_quality
+severity: high
+description: |
+  Tests whether the agent correctly extracts the CFO approval
+  threshold from the budget document and applies it in context.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: budget_2025
+      path: "eval/corpus/documents/budget_2025.md"
+
+turns:
+  - turn: 1
+    objective: "Ask about the CFO approval threshold"
+    ground_truth:
+      doc_id: budget_2025
+      fact_id: cfo_threshold
+      expected_answer: "$50,000"
+    success_criteria: "Agent states the CFO approval threshold is $50,000"
+
+  - turn: 2
+    objective: "Ask if a $75,000 expense needs CFO approval"
+    ground_truth:
+      doc_id: budget_2025
+      fact_id: cfo_threshold
+      expected_behavior: "Agent applies the $50K threshold to conclude $75K needs CFO approval"
+    success_criteria: "Agent correctly reasons that $75,000 exceeds the $50,000 threshold"
+
+expected_outcome: |
+  Agent extracts the approval threshold and applies it to a follow-up question.
+```
+
+### Step 4: Validate
+
+Run your scenario in isolation:
+
+```bash
+gaia eval agent --scenario budget_threshold_check
+```
+
+Review the trace file at `eval/results/<run_id>/traces/budget_threshold_check.json` for detailed scoring and reasoning.
+
+### Step 5: Iterate
+
+If the scenario is flaky (passing/failing inconsistently):
+- Make `success_criteria` more specific
+- Add `expected_answer` with exact values
+- Add `note` fields to clarify edge cases for the judge
+- Consider whether the persona is too ambiguous
+
+---
+
+## Corpus Management
+
+The test corpus lives in `eval/corpus/` with a manifest that defines documents and their ground truth facts.
+
+### Directory Structure
+
+```
+eval/corpus/
+├── manifest.json              # Main corpus manifest
+├── documents/                 # Synthetic test documents
+│   ├── acme_q3_report.md
+│   ├── employee_handbook.md
+│   ├── sales_data_2025.csv
+│   ├── product_comparison.html
+│   └── ...
+├── adversarial/               # Adversarial test files
+│   ├── empty.txt
+│   ├── unicode_test.txt
+│   └── duplicate_sections.md
+└── real_world/                # Real documents (not git-committed)
+    ├── manifest.json
+    └── ...
+```
+
+### Manifest Format
+
+The manifest (`eval/corpus/manifest.json`) defines documents and their ground truth facts:
+
+```json
+{
+  "generated_at": "2026-03-20T02:10:00Z",
+  "total_documents": 9,
+  "total_facts": 27,
+  "notes": "Description of corpus changes",
+
+  "documents": [
+    {
+      "id": "acme_q3_report",
+      "filename": "acme_q3_report.md",
+      "format": "markdown",
+      "domain": "finance",
+      "facts": [
+        {
+          "id": "q3_revenue",
+          "question": "What was Acme Corp's Q3 2025 revenue?",
+          "answer": "$14.2 million",
+          "difficulty": "easy"
+        },
+        {
+          "id": "yoy_growth",
+          "question": "What was the year-over-year revenue growth?",
+          "answer": "23%",
+          "difficulty": "easy"
+        },
+        {
+          "id": "ceo_outlook",
+          "question": "What is the CEO's growth projection for Q4?",
+          "answer": "15-18% growth",
+          "difficulty": "medium"
+        }
+      ]
+    }
+  ],
+
+  "adversarial_documents": [
+    {
+      "id": "empty_file",
+      "filename": "empty.txt",
+      "expected_behavior": "Agent reports the file is empty or has no indexable content"
+    }
+  ]
+}
+```
+
+### Adding a New Document
+
+1. Create the document file in `eval/corpus/documents/`:
+
+```bash
+echo "Your document content here" > eval/corpus/documents/my_document.md
+```
+
+2. Add a document entry to `manifest.json`:
+
+```json
+{
+  "id": "my_document",
+  "filename": "my_document.md",
+  "format": "markdown",
+  "domain": "technical",
+  "facts": [
+    {
+      "id": "key_fact_1",
+      "question": "What is the main finding?",
+      "answer": "The specific answer",
+      "difficulty": "easy"
+    }
+  ]
+}
+```
+
+3. Validate the manifest:
+
+```bash
+gaia eval agent --generate-corpus
+```
+
+### Document Formats
+
+| Format | Extension | Notes |
+|--------|-----------|-------|
+| `markdown` | `.md` | Best for structured text with sections |
+| `html` | `.html` | Preserves tables and formatting |
+| `csv` | `.csv` | Tests tabular data extraction |
+| `text` | `.txt` | Plain text |
+| `python` | `.py` | Code documentation |
+| `image` | `.png` | Tests vision capabilities |
+
+### Fact Difficulty Levels
+
+| Level | Meaning |
+|-------|---------|
+| `easy` | Fact is stated directly in the document |
+| `medium` | Requires reading comprehension or inference |
+| `hard` | Requires synthesis across sections or numerical calculation |
+
+---
+
+## The 7 Scoring Dimensions In-Depth
+
+### Correctness (25%)
+
+Factual accuracy against ground truth. The most heavily weighted dimension.
+
+**Scoring guide:**
+- **10** = Exact match with ground truth
+- **7** = Minor omission but core fact correct
+- **4** = Partially correct
+- **0** = Wrong answer, hallucination, or invented facts
+
+**Automatic zero rules** (when `expected_answer` is non-null):
+- Wrong number: ground truth is specific and response deviates >5%
+- Wrong name: different person or entity named
+- Lazy refusal: says "I can't find that" without calling the query tool
+- Hallucinated source: claims a fact "from the document" that contradicts ground truth
+
+**Numerical precision:**
+| Deviation from Ground Truth | Max Score |
+|-----------------------------|-----------|
+| ≤1% | 10 |
+| ≤5% | 8 |
+| 5-15% | 4 |
+| 15-50% | 1 |
+| >50% | 0 |
+
+### Tool Selection (20%)
+
+Whether the agent chose the right tools in the right order.
+
+- **10** = Optimal tool chain
+- **7** = Correct tools with 1-2 extra calls
+- **4** = Wrong tool but recovered
+- **0** = Completely wrong tools or skipped required tools
+
+### Context Retention (20%)
+
+Whether the agent used information from prior turns.
+
+- **10** = Perfect recall and pronoun resolution
+- **7** = Mostly remembered, minor gaps
+- **4** = Missed key context from prior turns
+- **0** = Completely ignored conversation history
+
+<Note>
+  Capped at 4 if the agent re-asks for information already established in a prior turn.
+</Note>
+
+### Completeness (15%)
+
+Whether all parts of the question were answered.
+
+- **10** = Every aspect addressed
+- **7** = Most parts answered
+- **4** = Partial answer
+- **0** = Didn't answer the question
+
+### Efficiency (10%)
+
+Whether the agent took the optimal path.
+
+- **10** = Minimal necessary tool calls
+- **7** = 1-2 extra steps
+- **4** = Redundant work
+- **0** = Tool loop (3+ identical calls)
+
+### Personality (5%)
+
+GAIA voice and tone compliance.
+
+- **10** = Concise, direct, professional
+- **7** = Neutral tone
+- **4** = Generic AI hedging ("As an AI, I...")
+- **0** = Sycophantic or overly verbose
+
+### Error Recovery (5%)
+
+Graceful handling of failure conditions.
+
+- **10** = Graceful fallback with helpful message
+- **7** = Recovered after retry
+- **4** = Partial recovery
+- **0** = Gave up without explanation
+
+---
+
+## Real Examples
+
+### RAG Quality: Simple Factual Lookup
+
+```yaml
+id: simple_factual_rag
+name: "Simple Factual RAG"
+category: rag_quality
+severity: critical
+description: |
+  Direct fact lookup from a financial report.
+  Tests basic RAG retrieval and factual accuracy.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask about Q3 revenue"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million"
+    success_criteria: "Agent states Q3 revenue was $14.2 million"
+
+expected_outcome: |
+  Agent correctly retrieves and reports facts from the Q3 financial report.
+```
+
+### Context Retention: Cross-Turn File Recall
+
+```yaml
+id: cross_turn_file_recall
+category: context_retention
+
+setup:
+  index_documents:
+    - corpus_doc: product_comparison
+      path: "eval/corpus/documents/product_comparison.html"
+
+turns:
+  - turn: 1
+    objective: "Ask agent to list what documents are available/indexed"
+    ground_truth:
+      expected_behavior: "Agent lists the product comparison document"
+    success_criteria: "Agent lists the product comparison document"
+
+  - turn: 2
+    objective: "Ask about pricing without naming the file: 'how much do the two products cost?'"
+    ground_truth:
+      doc_id: product_comparison
+      fact_ids: [price_a, price_b]
+      expected_answer: "StreamLine $49/month, ProFlow $79/month"
+    success_criteria: "Agent correctly states both prices from the indexed document"
+
+  - turn: 3
+    objective: "Follow-up with pronoun: 'which one is better value for money?'"
+    ground_truth:
+      doc_id: product_comparison
+      expected_behavior: "Agent synthesizes pricing, ratings, and integrations"
+    success_criteria: "Agent gives a reasoned comparison using prices ($49 vs $79)"
+```
+
+### Personality: Honest Limitation
+
+```yaml
+id: honest_limitation
+category: personality
+
+setup:
+  index_documents:
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask 'How many employees does Acme Corp have?'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: employee_count
+      expected_answer: null    # NOT in document -- agent must say it doesn't know
+      note: "NOT in document -- agent must say it doesn't know"
+    success_criteria: "Agent admits it cannot find employee count. FAIL if agent guesses."
+
+  - turn: 2
+    objective: "Ask 'What CAN you tell me about Acme from the document?'"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_ids: [q3_revenue, yoy_growth, ceo_outlook]
+      expected_answer: "Q3 revenue $14.2M, YoY growth 23%, CEO projects 15-18% Q4 growth"
+    success_criteria: "Agent summarizes what IS in the document"
+```
+
+### Adversarial: Empty File
+
+```yaml
+id: empty_file
+category: adversarial
+
+setup:
+  index_documents: []   # No pre-indexing
+
+turns:
+  - turn: 1
+    objective: "Ask 'Please index eval/corpus/adversarial/empty.txt and tell me what it contains.'"
+    ground_truth:
+      expected_behavior: "Agent reports the file is empty or has no indexable content"
+    success_criteria: "Agent states the file is empty. FAIL if agent hallucinates content."
+```
+
+### Tool Selection: Smart Discovery
+
+```yaml
+id: smart_discovery
+category: tool_selection
+
+setup:
+  index_documents: []   # No pre-indexed documents
+
+turns:
+  - turn: 1
+    objective: "Ask about PTO policy with no documents indexed"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: pto_days
+      expected_answer: "15 days"
+    success_criteria: |
+      Agent discovers and indexes employee_handbook.md,
+      then correctly answers: first-year employees get 15 PTO days.
+      FAIL if agent says 'no documents available' without trying to find them.
+
+  - turn: 2
+    objective: "Ask follow-up: 'what about the remote work policy?'"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: remote_work
+      expected_answer: "Up to 3 days/week with manager approval"
+    success_criteria: "Agent answers from already-indexed document without re-indexing"
+```
+
+---
+
+## Best Practices
+
+### What Makes a Good Scenario
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check">
+    - Use specific, verifiable ground truth facts
+    - Test one behavior per scenario (single responsibility)
+    - Provide both `ground_truth` AND `success_criteria`
+    - Include `expected_answer` with exact values when possible
+    - Add `note` fields to clarify ambiguous cases
+    - Test negative cases (`expected_answer: null`)
+  </Card>
+
+  <Card title="Don't" icon="xmark">
+    - Write vague success criteria ("Agent responds helpfully")
+    - Test multiple unrelated behaviors in one scenario
+    - Assume the agent has context from other scenarios
+    - Use subjective quality judgments as pass criteria
+    - Create scenarios that depend on external services
+    - Omit `ground_truth` when exact answers are available
+  </Card>
+</CardGroup>
+
+### Avoiding Flaky Scenarios
+
+A flaky scenario passes and fails inconsistently across runs. Common causes:
+
+1. **Vague success criteria** -- "Agent provides a good answer" is too subjective. Be specific: "Agent states the Q3 revenue was $14.2 million."
+
+2. **Missing expected_answer** -- Without an exact expected value, the judge has more latitude. Always provide `expected_answer` when the fact is deterministic.
+
+3. **Ambiguous persona behavior** -- If `user_message` is omitted, the eval agent generates messages from `objective` + `persona`. For critical tests, provide an explicit `user_message` to remove variability.
+
+4. **Timing-sensitive tests** -- Don't test time-dependent behavior (e.g., "What day is it?"). Ground truth must be static.
+
+5. **External dependencies** -- Don't rely on external URLs, APIs, or services that may be unavailable.
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Getting Started" icon="microscope" href="/guides/eval">
+    Run your first eval and read the scorecard
+  </Card>
+
+  <Card title="CI/CD Integration" icon="gears" href="/guides/eval-ci">
+    Automate eval runs in GitHub Actions
+  </Card>
+
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli#agent-eval">
+    Complete command reference for `gaia eval agent`
+  </Card>
+
+  <Card title="Agent Eval Benchmark" icon="chart-bar" href="/eval">
+    Architecture details, scoring pipeline, and internals
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

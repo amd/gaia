@@ -355,7 +355,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 - **Agent SDK** (`src/gaia/chat/`): AgentSDK class (formerly ChatSDK) for programmatic chat - see [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx)
 - **Agent UI Backend** (`src/gaia/ui/`): FastAPI server with modular routers (chat, documents, files, sessions, system, tunnel), SSE streaming, database - see [`docs/guides/agent-ui.mdx`](docs/guides/agent-ui.mdx)
 - **Agent UI Frontend** (`src/gaia/apps/webui/`): React/TypeScript/Vite desktop app with Electron shell - see [`docs/sdk/sdks/agent-ui.mdx`](docs/sdk/sdks/agent-ui.mdx)
-- **Evaluation** (`src/gaia/eval/`): Batch experiments and ground truth - see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)
+- **Evaluation** (`src/gaia/eval/`): Agent eval benchmark with scenario-based testing - see [`docs/guides/eval.mdx`](docs/guides/eval.mdx)
 
 ### Agent Implementations
 
@@ -543,7 +543,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
    - LLM backend: `src/gaia/llm/` (+ `providers/` for Claude/OpenAI)
    - Audio processing: `src/gaia/audio/` (whisper_asr.py, kokoro_tts.py)
    - RAG system: `src/gaia/rag/` (sdk.py, pdf_utils.py)
-   - Evaluation: `src/gaia/eval/` (eval.py, batch_experiment.py)
+   - Evaluation: `src/gaia/eval/` (runner.py, scorecard.py, audit.py)
    - Applications: `src/gaia/apps/` (webui/, jira/, llm/, summarize/, docker/, example/, _shared/)
    - Agent SDK: `src/gaia/chat/` (AgentSDK class, formerly ChatSDK)
    - Agent UI backend: `src/gaia/ui/` (FastAPI server, routers, SSE handler)

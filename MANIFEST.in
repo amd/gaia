@@ -11,9 +11,6 @@ include src/gaia/interface/img/*
 include LICENSE
 include README.md
 
-# Include evaluation webapp files
-recursive-include src/gaia/eval/webapp *
-
 # Include the pre-built Agent UI bundle so `pip install amd-gaia[ui]` ships a
 # working browser UI. setuptools `package_data` recursive globs are unreliable
 # across versions, so we list the bundle here as the authoritative inclusion

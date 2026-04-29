@@ -41,7 +41,6 @@ setup(
         "gaia.apps.summarize",
         "gaia.apps.summarize.templates",
         "gaia.eval",
-        "gaia.eval.fix_code_testbench",
         "gaia.installer",
         "gaia.rag",
         "gaia.mcp",
