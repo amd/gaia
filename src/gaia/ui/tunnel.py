@@ -610,17 +610,19 @@ class TunnelManager:
             # Check if ngrok process died
             if self._process and self._process.poll() is not None:
                 stderr = self._drain_ngrok_output()
-                # Raw output goes to DEBUG only — even after _mask_ngrok_secrets
-                # masks plausible authtokens, CodeQL's
-                # py/clear-text-logging-sensitive-data rule treats any
-                # subprocess-pipe-derived string as tainted at non-debug
-                # levels. The parsed friendly error (set below) is the
-                # user-facing channel; this DEBUG line is only for hands-on
-                # debugging when the rest of the diagnostic isn't enough.
+                # We deliberately do NOT log the captured stderr content,
+                # even after _mask_ngrok_secrets masks plausible authtokens:
+                # CodeQL's py/clear-text-logging-sensitive-data rule treats
+                # any subprocess-pipe-derived string as tainted at every
+                # level (DEBUG included), and we'd rather respect the rule
+                # than fight it. The parsed friendly error (set below) is
+                # the user-facing diagnostic; for a hands-on debug session
+                # the operator can re-run ``ngrok http <port>`` manually.
                 logger.error(
-                    "ngrok exited after %.1fs (see debug log for output)", elapsed
+                    "ngrok exited after %.1fs (%d chars of output captured)",
+                    elapsed,
+                    len(stderr or ""),
                 )
-                logger.debug("ngrok output on exit:\n%s", stderr or "(empty)")
                 self._error = _parse_ngrok_error(stderr)
                 return None
 
@@ -657,10 +659,12 @@ class TunnelManager:
                     self._process.kill()
                     self._process.wait(timeout=2)
                 stderr = self._drain_ngrok_output()
-                # See note above: raw drained output goes to DEBUG only to
-                # keep CodeQL's clear-text-logging rule happy; the
-                # user-facing channel is _parse_ngrok_error() below.
-                logger.debug("ngrok output on timeout:\n%s", stderr or "(empty)")
+                # See note above: do NOT log captured stderr content (CodeQL's
+                # clear-text-logging rule). Length-only is a safe diagnostic.
+                logger.error(
+                    "ngrok timed out (%d chars of output captured)",
+                    len(stderr or ""),
+                )
         except Exception as e:
             logger.debug("Error terminating timed-out ngrok: %s", e)
 
