@@ -151,7 +151,7 @@ Pick the install path that fits you best:
     |------|-------------|
     | `gaia chat --ui --ui-port 8080` | Custom port |
     | `gaia --ui --ui-port 8080` | Custom port (top-level alias) |
-    | `gaia --ui --base-url http://192.168.1.100:8000/api/v1` | Connect to Lemonade on another machine (e.g., GPU workstation) |
+    | `gaia --ui --base-url http://192.168.1.100:13305/api/v1` | Connect to Lemonade on another machine (e.g., GPU workstation) |
 
     <Note>
       If you see a missing dependencies error, install the UI extras:
@@ -237,6 +237,17 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
     - Ensure the file is a supported format and not password-protected
     - Keep file size under 100MB
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
+  </Accordion>
+
+  <Accordion title="First-run network egress to huggingface.co">
+    The first time you index a document, the embedding model
+    (`sentence-transformers`) is downloaded from `huggingface.co` (~100 MB,
+    cached under `~/.cache/huggingface/`). Subsequent runs are offline.
+
+    If your environment blocks `huggingface.co`, pre-seed the cache on a
+    machine with internet access and copy it to the target machine, or set
+    `HF_HOME` to point at a pre-populated cache directory before launching
+    the UI.
   </Accordion>
 
   <Accordion title="Frontend shows JSON instead of the UI">

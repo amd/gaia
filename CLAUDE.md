@@ -281,7 +281,7 @@ gaia/
 │   │   ├── emr/        # MedicalIntakeAgent for healthcare (VLM)
 │   │   ├── routing/    # RoutingAgent for intelligent agent selection
 │   │   ├── sd/         # SDAgent for Stable Diffusion image generation
-│   │   └── registry.py # YAML-manifest agent registry + KNOWN_TOOLS map
+│   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
@@ -374,7 +374,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 
 ### Agent Registry & Tool Mixins
 
-New agents are preferably registered via YAML manifests validated by Pydantic in [`src/gaia/agents/registry.py`](src/gaia/agents/registry.py). The registry exposes `KNOWN_TOOLS` — a curated map of reusable tool mixins that agents opt into by name:
+New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/base/agent.py`](src/gaia/agents/base/agent.py)). Register tools with the `@tool` decorator and compose reusable mixins. [`src/gaia/agents/registry.py`](src/gaia/agents/registry.py) exposes `KNOWN_TOOLS` — a curated map of reusable tool mixins that agents can compose by name:
 
 | Tool name | Mixin | Purpose |
 |-----------|-------|---------|
@@ -386,7 +386,7 @@ New agents are preferably registered via YAML manifests validated by Pydantic in
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 
-When adding a new tool, register it in `KNOWN_TOOLS` so YAML-manifest agents can declare it.
+When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
 ### Default Models
 - General tasks: `Qwen3-0.6B-GGUF`
@@ -677,7 +677,7 @@ Looking at your code, the issue is on line 45 where you're using subprocess.call
 Specialized agents live in `.claude/agents/` (23 total). Each agent file is the authoritative source for its scope, when-to-use / when-NOT-to-use triggers, and conventions — the summaries below are a pointer, not a replacement.
 
 ### Development
-- **gaia-agent-builder** — Creating a new GAIA agent (Python class or YAML manifest). Not for tuning an existing agent's prompt or adding a single tool.
+- **gaia-agent-builder** — Creating a new GAIA agent (Python class). Not for tuning an existing agent's prompt or adding a single tool.
 - **sdk-architect** — Public SDK surface design, cross-module consistency, breaking-change planning.
 - **python-developer** — Idiomatic Python 3.10+ inside `src/gaia/` (not new agents — use gaia-agent-builder).
 - **typescript-developer** — Type-safe TS for the Agent UI and Electron IPC.

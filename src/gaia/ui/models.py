@@ -3,7 +3,7 @@
 
 """Pydantic models for GAIA Agent UI API."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -42,8 +42,8 @@ class SystemStatus(BaseModel):
     # LLM configuration health
     context_size_sufficient: bool = True  # False if loaded ctx < required minimum
     model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
-    default_model_name: str = "Qwen3.5-35B-A3B-GGUF"  # Required model for GAIA Chat
-    lemonade_url: str = "http://localhost:8000"  # Lemonade web UI base URL
+    default_model_name: str = "Gemma-4-E4B-it-GGUF"  # Required model for GAIA Chat
+    lemonade_url: str = "http://localhost:13305"  # Lemonade web UI base URL
     expected_model_loaded: bool = True  # False if a different model is loaded
     # Boot-time initialization tracking (populated from DispatchQueue)
     init_state: str = "ready"  # "initializing" | "ready" | "degraded"
@@ -115,7 +115,7 @@ class AgentInfo(BaseModel):
     id: str
     name: str
     description: str
-    source: str  # "builtin" | "custom_python" | "custom_manifest"
+    source: Literal["builtin", "custom_python"]
     conversation_starters: List[str] = Field(default_factory=list)
     models: List[str] = Field(default_factory=list)
 

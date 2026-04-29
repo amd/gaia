@@ -117,7 +117,7 @@ t2.join();
 
 ### Single-Agent Rules
 
-**Do NOT call `processQuery()` concurrently on the same agent instance.** There are no internal locks — concurrent calls will corrupt conversation history and produce undefined behavior.
+**Do NOT call `processQuery()` concurrently on the same agent instance.** The Agent enforces this with an atomic in-flight guard: the second concurrent call throws `std::runtime_error("Agent::processQuery is not re-entrant")`. Callers must serialize access to a single Agent (or create one per thread/session).
 
 ```cpp
 // NOT SAFE — same instance, two threads
@@ -274,6 +274,13 @@ public:
     // Main execution — blocking, returns {"result": "...", "steps_taken": N}
     json processQuery(const std::string& userInput, int maxSteps = 0);
 
+    // Vision-language (VLM) overloads — send images alongside text.
+    // See the Vision Language Models (VLM) section below for usage.
+    json processQuery(const std::string& userInput,
+                      const std::vector<Image>& images,
+                      int maxSteps = 0);
+    json processQuery(const std::vector<Message>& messages, int maxSteps = 0);
+
     // MCP server management
     bool connectMcpServer(const std::string& name, const json& config);
     void disconnectMcpServer(const std::string& name);
@@ -358,6 +365,77 @@ public:
     std::vector<MCPToolSchema> listTools(bool refresh = false);
     json callTool(const std::string& toolName, const json& arguments);
 };
+```
+
+---
+
+## Vision Language Models (VLM)
+
+The C++ SDK supports vision-language models (VLMs) via the OpenAI-compatible
+`/chat/completions` endpoint. Images are sent inline as base64 data URIs.
+
+### `gaia::Image`
+
+```cpp
+#include <gaia/types.h>
+
+// Load from disk (MIME auto-detected from magic bytes).
+gaia::Image img = gaia::Image::fromFile("photo.png");
+
+// Or from bytes (explicit MIME or auto-detect).
+std::vector<std::uint8_t> bytes = readSomewhere();
+gaia::Image img2 = gaia::Image::fromBytes(bytes);                 // auto-detect
+gaia::Image img3 = gaia::Image::fromBytes(bytes, "image/jpeg");   // explicit
+```
+
+Supported formats: `image/png`, `image/jpeg`, `image/gif`, `image/webp`,
+`image/bmp`. Unsupported MIME types and empty buffers throw
+`std::invalid_argument`.
+
+**Size cap.** `Image::fromFile` rejects files larger than
+`GAIA_MAX_IMAGE_BYTES` (default 20 MiB, compile-time override). It also rejects
+non-regular files (directories, symlinks, FIFOs, devices) for safety.
+
+### Sending images with `processQuery`
+
+Two new overloads accept images:
+
+```cpp
+gaia::AgentConfig cfg;
+cfg.modelId     = "Qwen3-VL-4B-Instruct-GGUF";
+cfg.contextSize = 32768;   // recommended minimum for VLM
+gaia::Agent agent(cfg);
+
+// 1) Convenience overload: text + images
+gaia::Image img = gaia::Image::fromFile("photo.png");
+gaia::json result = agent.processQuery("Describe this image.", {img});
+
+// 2) Caller-composed messages overload (advanced)
+std::vector<gaia::Message> msgs = {
+    gaia::Message::fromUser("What is in this image?", {img}),
+};
+gaia::json result2 = agent.processQuery(msgs);
+```
+
+**Context size.** VLM models require a large context window — **32768 is the
+recommended minimum**. Smaller values (e.g. 2048) will surface a raw server
+error as `std::runtime_error` from `processQuery`.
+
+**History semantics.** Both overloads are stateful and symmetric with the
+string overload: they read `conversationHistory_` as request context, and
+append the input user messages (with image parts **stripped**) plus the
+assistant's final answer. Image base64 is never retained in history.
+
+**Thread safety.** `Agent` is **not re-entrant** — concurrent `processQuery`
+calls on the same Agent throw `std::runtime_error`. See [Thread
+Safety](#thread-safety) above.
+
+### End-to-end example
+
+See [`cpp/examples/vlm_agent.cpp`](https://github.com/amd/gaia/blob/main/cpp/examples/vlm_agent.cpp):
+
+```bash
+./build/vlm_agent path/to/image.png "What is in this image?"
 ```
 
 ---

@@ -31,6 +31,7 @@
 "use strict";
 
 const { spawn, spawnSync, execSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -61,12 +62,31 @@ const NETWORK_CHECK_HOSTS = Object.freeze([
 ]);
 const NETWORK_CHECK_TIMEOUT_MS = 5000;
 
-// TODO: Pin uv to a specific version and verify SHA256 of the downloaded
-// binary. Currently ensureUv() uses the unversioned astral.sh install
-// script which always fetches the latest release. A follow-up should
-// download a specific release tarball from GitHub and verify its SHA256
-// against known-good hashes. See:
-//   https://github.com/astral-sh/uv/releases
+// ── Bundled `uv` binary ──────────────────────────────────────────────────────
+//
+// Issue #782 / T3: the AppImage now ships a pinned `uv` under
+// `extraResources` (see electron-builder.yml). At runtime we copy it into
+// `~/.gaia/bin/uv` with atomic-rename + SHA256 verification. The previous
+// `curl | sh` path is retained only as an unpackaged-dev fallback so
+// contributors running from source keep working.
+//
+// When bumping uv, update BOTH:
+//   - .github/workflows/build-installers.yml (tarball .tar.gz SHA256 — archive)
+//   - BUNDLED_UV_SHA256 below (extracted ELF binary SHA256)
+// These are two different digests: the workflow verifies the downloaded
+// archive against upstream's published .sha256, then extracts the `uv` binary
+// which is what `ensureUv()` hashes at runtime.
+//
+// Currently pinned: uv v0.5.14 linux-x64.
+const BUNDLED_UV_VERSION = "0.5.14";
+const BUNDLED_UV_SHA256 = {
+  "linux-x64": "0e05d828b5708e8a927724124db3746396afddad6273c47283d7c562dc795bd6",
+};
+
+const MANAGED_UV_DIR = path.join(GAIA_HOME, "bin");
+const MANAGED_UV_BIN = IS_WINDOWS
+  ? path.join(MANAGED_UV_DIR, "uv.exe")
+  : path.join(MANAGED_UV_DIR, "uv");
 
 const STATES = Object.freeze({
   IDLE: "idle",
@@ -624,90 +644,321 @@ class InstallError extends Error {
 }
 
 /**
- * Ensure `uv` is available. Installs it from astral.sh if missing.
- * Throws an InstallError if installation fails.
+ * Which `extraResources` subdirectory holds the bundled uv for this host.
+ * Returns null for platforms we don't yet ship a binary for (falls through
+ * to the dev fallback).
  */
-async function ensureUv({ onProgress } = {}) {
-  const report = makeProgressReporter(onProgress);
+function bundledUvPlatformKey() {
+  if (process.platform === "linux" && process.arch === "x64") return "linux-x64";
+  if (process.platform === "win32" && process.arch === "x64") return "win-x64";
+  if (process.platform === "darwin" && process.arch === "arm64") return "mac-arm64";
+  return null;
+}
 
-  if (commandExists("uv")) {
-    log("uv already installed");
-    report(STAGES.ENSURE_UV, 100, "uv is already installed");
-    return;
-  }
+/**
+ * Stream-SHA256 a file. Returns lowercase hex.
+ */
+function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(filePath);
+    stream.on("error", reject);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
 
-  report(STAGES.ENSURE_UV, 0, "Installing uv (Python package manager)");
-  log("Installing uv...");
+/**
+ * Resolve the bundled uv binary path inside the Electron resources dir.
+ * Returns null if this isn't an Electron-packaged runtime (no
+ * `process.resourcesPath`) or if the host platform isn't bundled.
+ */
+function findBundledUvResource() {
+  const key = bundledUvPlatformKey();
+  if (!key) return null;
+  const resourcesPath = process.resourcesPath;
+  if (!resourcesPath) return null;
+  const candidate = path.join(
+    resourcesPath,
+    "vendor",
+    "uv",
+    key,
+    IS_WINDOWS ? "uv.exe" : "uv"
+  );
+  return fs.existsSync(candidate) ? candidate : null;
+}
 
-  let result;
-  if (IS_WINDOWS) {
-    result = await runCommand(
-      "powershell",
-      ["-ExecutionPolicy", "Bypass", "-Command", "irm https://astral.sh/uv/install.ps1 | iex"],
-      { stageLabel: "uv-install" }
-    );
-  } else {
-    result = await runCommand(
-      "bash",
-      ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
-      { stageLabel: "uv-install" }
-    );
-  }
-
-  if (result.code !== 0) {
+/**
+ * Atomically install the bundled uv into ~/.gaia/bin/uv after verifying
+ * its SHA256 against BUNDLED_UV_SHA256. Returns the installed path.
+ *
+ * Writes to `uv.tmp-<pid>-<rand>` with mode 0o700, verifies hash,
+ * `chmod +x`, then `fs.rename()` (atomic on same filesystem).
+ */
+async function installBundledUv(sourcePath, platformKey) {
+  const expected = BUNDLED_UV_SHA256[platformKey];
+  if (!expected) {
     throw new InstallError(
-      `Could not install uv automatically (exit code ${result.code}).`,
-      {
-        stage: STAGES.ENSURE_UV,
-        code: result.code,
-        suggestion: IS_WINDOWS
-          ? 'Install uv manually: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"'
-          : "Install uv manually: curl -LsSf https://astral.sh/uv/install.sh | sh",
-      }
+      `No bundled uv checksum registered for platform ${platformKey}.`,
+      { stage: STAGES.ENSURE_UV }
     );
   }
 
-  // On some shells, PATH isn't refreshed for the current process. Re-check
-  // after adding the default uv install dirs. uv has shipped under both
-  // ~/.cargo/bin and ~/.local/bin at different times — most notably the
-  // Windows installer migrated from .cargo/bin to %USERPROFILE%\.local\bin
-  // in early 2025. Try BOTH paths on every platform to be robust against
-  // installer version drift.
-  if (!commandExists("uv")) {
-    const candidates = [
-      path.join(os.homedir(), ".local", "bin"),
-      path.join(os.homedir(), ".cargo", "bin"),
-    ];
-    for (const uvDir of candidates) {
-      if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
-        process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
-        log(`Added ${uvDir} to PATH for this process`);
-      }
-    }
+  ensureGaiaHome();
+  try {
+    fs.mkdirSync(MANAGED_UV_DIR, { recursive: true });
+  } catch (err) {
+    throw new InstallError(
+      `Could not create ${MANAGED_UV_DIR}: ${err.message}`,
+      { stage: STAGES.ENSURE_UV }
+    );
   }
 
-  if (!commandExists("uv")) {
+  const rand = crypto.randomBytes(6).toString("hex");
+  const tmpPath = path.join(
+    MANAGED_UV_DIR,
+    `uv.tmp-${process.pid}-${rand}${IS_WINDOWS ? ".exe" : ""}`
+  );
+
+  // Copy source → tmp with restrictive mode.
+  await new Promise((resolve, reject) => {
+    const rs = fs.createReadStream(sourcePath);
+    const ws = fs.createWriteStream(tmpPath, { mode: 0o700 });
+    rs.on("error", reject);
+    ws.on("error", reject);
+    ws.on("finish", resolve);
+    rs.pipe(ws);
+  });
+
+  let actual;
+  try {
+    actual = await sha256File(tmpPath);
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
     throw new InstallError(
-      "uv installed but not found on PATH. A shell restart may be required.",
+      `Could not hash copied uv binary: ${err.message}`,
+      { stage: STAGES.ENSURE_UV }
+    );
+  }
+
+  if (actual !== expected) {
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    throw new InstallError(
+      `Bundled uv SHA256 mismatch (expected ${expected}, got ${actual}).`,
       {
         stage: STAGES.ENSURE_UV,
         suggestion:
-          "Restart your terminal or reboot, then re-launch GAIA. If the problem persists, install uv manually from https://astral.sh/uv",
+          "The AppImage/installer may be corrupt. Re-download from https://amd-gaia.ai and try again.",
       }
     );
   }
 
-  report(STAGES.ENSURE_UV, 100, "uv installed");
-  log("uv install complete");
+  try {
+    if (!IS_WINDOWS) fs.chmodSync(tmpPath, 0o700);
+  } catch (err) {
+    log(`Warning: chmod on tmp uv failed: ${err.message}`);
+  }
+
+  try {
+    // rename() is atomic on the same filesystem on POSIX; on Windows
+    // it requires the target not to exist, so unlink first.
+    if (IS_WINDOWS && fs.existsSync(MANAGED_UV_BIN)) {
+      try { fs.unlinkSync(MANAGED_UV_BIN); } catch { /* ignore */ }
+    }
+    fs.renameSync(tmpPath, MANAGED_UV_BIN);
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    throw new InstallError(
+      `Could not install uv to ${MANAGED_UV_BIN}: ${err.message}`,
+      { stage: STAGES.ENSURE_UV }
+    );
+  }
+
+  log(`Installed bundled uv v${BUNDLED_UV_VERSION} → ${MANAGED_UV_BIN}`);
+  return MANAGED_UV_BIN;
+}
+
+/**
+ * Prepend ~/.gaia/bin to this process's PATH so child spawns see our
+ * managed uv before any system-wide install.
+ */
+function addManagedBinToPath() {
+  if (
+    process.env.PATH &&
+    !process.env.PATH.split(path.delimiter).includes(MANAGED_UV_DIR)
+  ) {
+    process.env.PATH = `${MANAGED_UV_DIR}${path.delimiter}${process.env.PATH}`;
+    log(`Prepended ${MANAGED_UV_DIR} to PATH for this process`);
+  }
+}
+
+/**
+ * Ensure `uv` is available. Preference order (per issue #782 / T3):
+ *   1. Managed copy at ~/.gaia/bin/uv with matching SHA256 (warm-install fast path).
+ *   2. Bundled binary in process.resourcesPath/vendor/uv/<platform>/uv:
+ *      copy atomically to ~/.gaia/bin/uv with SHA256 verification.
+ *   3. DEV-ONLY fallback (app.isPackaged === false OR no resourcesPath):
+ *      the original `curl | sh` from astral.sh. Not a shipped-user path.
+ *   4. System `uv` on PATH (last resort — unverified version).
+ *
+ * Throws InstallError on failure.
+ */
+async function ensureUv({ onProgress, isPackaged } = {}) {
+  const report = makeProgressReporter(onProgress);
+  report(STAGES.ENSURE_UV, 0, "Checking uv (Python package manager)");
+
+  const platformKey = bundledUvPlatformKey();
+  const expectedSha = platformKey ? BUNDLED_UV_SHA256[platformKey] : null;
+
+  // Fast path: warm install already on disk with correct hash.
+  if (expectedSha && fs.existsSync(MANAGED_UV_BIN)) {
+    try {
+      const actual = await sha256File(MANAGED_UV_BIN);
+      if (actual === expectedSha) {
+        log(`Managed uv at ${MANAGED_UV_BIN} passed SHA256 check — reusing`);
+        addManagedBinToPath();
+        report(STAGES.ENSURE_UV, 100, "uv ready (cached)");
+        return;
+      }
+      log(
+        `Managed uv hash mismatch (expected ${expectedSha}, got ${actual}) — replacing`
+      );
+    } catch (err) {
+      log(`Could not verify managed uv: ${err.message} — replacing`);
+    }
+  }
+
+  // Bundled path (the shipped-user path — AppImage, NSIS, DMG).
+  const bundled = findBundledUvResource();
+  if (bundled && platformKey) {
+    report(STAGES.ENSURE_UV, 30, "Installing bundled uv");
+    log(`Using bundled uv from ${bundled}`);
+
+    // Verify the source resource matches the manifest before copying —
+    // catches AppImage corruption before we touch the user's home.
+    const srcHash = await sha256File(bundled);
+    if (srcHash !== expectedSha) {
+      throw new InstallError(
+        `Bundled uv resource SHA256 mismatch (expected ${expectedSha}, got ${srcHash}).`,
+        {
+          stage: STAGES.ENSURE_UV,
+          suggestion:
+            "The installer appears to be corrupt. Re-download GAIA from https://amd-gaia.ai and try again.",
+        }
+      );
+    }
+    await installBundledUv(bundled, platformKey);
+    addManagedBinToPath();
+    report(STAGES.ENSURE_UV, 100, "uv installed (bundled)");
+    return;
+  }
+
+  // DEV-ONLY fallback for contributors running from source (no
+  // extraResources, no packaged app). Never fires for end users.
+  const isDev = isPackaged === false || !process.resourcesPath;
+  if (isDev) {
+    if (commandExists("uv")) {
+      log("uv already on PATH (dev) — using system install");
+      report(STAGES.ENSURE_UV, 100, "uv is already installed (system)");
+      return;
+    }
+
+    log("[dev] No bundled uv and no system uv — falling back to curl|sh installer");
+    let result;
+    if (IS_WINDOWS) {
+      result = await runCommand(
+        "powershell",
+        [
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "irm https://astral.sh/uv/install.ps1 | iex",
+        ],
+        { stageLabel: "uv-install-dev" }
+      );
+    } else {
+      result = await runCommand(
+        "bash",
+        ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
+        { stageLabel: "uv-install-dev" }
+      );
+    }
+
+    if (result.code !== 0) {
+      throw new InstallError(
+        `Could not install uv automatically (exit code ${result.code}).`,
+        {
+          stage: STAGES.ENSURE_UV,
+          code: result.code,
+          suggestion: IS_WINDOWS
+            ? 'Install uv manually: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"'
+            : "Install uv manually: curl -LsSf https://astral.sh/uv/install.sh | sh",
+        }
+      );
+    }
+
+    if (!commandExists("uv")) {
+      const candidates = [
+        path.join(os.homedir(), ".local", "bin"),
+        path.join(os.homedir(), ".cargo", "bin"),
+      ];
+      for (const uvDir of candidates) {
+        if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
+          process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
+          log(`Added ${uvDir} to PATH for this process`);
+        }
+      }
+    }
+
+    if (!commandExists("uv")) {
+      throw new InstallError(
+        "uv installed but not found on PATH. A shell restart may be required.",
+        {
+          stage: STAGES.ENSURE_UV,
+          suggestion:
+            "Restart your terminal or reboot, then re-launch GAIA. If the problem persists, install uv manually from https://astral.sh/uv",
+        }
+      );
+    }
+
+    report(STAGES.ENSURE_UV, 100, "uv installed (dev fallback)");
+    return;
+  }
+
+  // Packaged build, but we somehow don't have a bundled binary for this
+  // platform AND no system uv. Last-ditch: accept an unverified system uv
+  // if present; otherwise fail with a clear message.
+  if (commandExists("uv")) {
+    log(
+      `No bundled uv for ${process.platform}-${process.arch}, using system uv on PATH (unverified)`
+    );
+    report(STAGES.ENSURE_UV, 100, "uv ready (system, unverified)");
+    return;
+  }
+
+  throw new InstallError(
+    `No bundled uv available for ${process.platform}-${process.arch} and no system uv found.`,
+    {
+      stage: STAGES.ENSURE_UV,
+      suggestion:
+        "Install uv manually from https://astral.sh/uv and re-launch GAIA.",
+    }
+  );
 }
 
 // ── Backend install ──────────────────────────────────────────────────────────
 
 /**
  * Read the pinned backend version from package.json (or a caller override).
+ * Returns null when GAIA_LOCAL_WHEEL is set — the caller uses the wheel path
+ * directly and skips the PyPI version pin (CI release-build fast-path).
  */
 function resolveBackendVersion(opts = {}) {
   if (opts.version) return opts.version;
+  // CI override: install from a local wheel instead of a pinned PyPI version.
+  // Breaks the circular dependency in release builds where the AppImage smoke
+  // test runs before PyPI publish.
+  if (process.env.GAIA_LOCAL_WHEEL) return null;
   try {
     // package.json is one directory up from the services/ (or bin/) directory.
     // We look relative to this module's own location.
@@ -734,7 +985,16 @@ function resolveBackendVersion(opts = {}) {
 async function installBackend(opts = {}) {
   const report = makeProgressReporter(opts.onProgress);
   const version = resolveBackendVersion(opts);
-  const pipPackage = `amd-gaia[ui]==${version}`;
+  // GAIA_LOCAL_WHEEL: CI-only. When set, install from the given wheel path
+  // instead of pulling from PyPI. This breaks the circular dependency in
+  // release pipeline smoke tests that run before PyPI publish. The `[ui]`
+  // extras marker is preserved so the local install matches the PyPI path
+  // (fastapi, uvicorn, python-multipart, httpx, psutil) — otherwise the
+  // backend venv comes up missing every UI dep and /api/health never binds.
+  const localWheel = process.env.GAIA_LOCAL_WHEEL || null;
+  const pipPackage = localWheel
+    ? `${localWheel}[ui]`
+    : `amd-gaia[ui]==${version}`;
 
   log("================================================");
   log("  Installing GAIA backend");
@@ -745,7 +1005,7 @@ async function installBackend(opts = {}) {
   setState(STATES.INSTALLING, { stage: STAGES.ENSURE_UV, version });
 
   // Stage 1: ensure uv
-  await ensureUv({ onProgress: opts.onProgress });
+  await ensureUv({ onProgress: opts.onProgress, isPackaged: opts.isPackaged });
 
   // Stage 2: create venv
   setState(STATES.INSTALLING, { stage: STAGES.CREATE_VENV, version });
@@ -800,7 +1060,8 @@ async function installBackend(opts = {}) {
     GAIA_PYTHON_BIN,
   ];
   // Linux/macOS: use CPU-only PyTorch to avoid huge CUDA wheels.
-  if (!IS_WINDOWS) {
+  // Skip when installing from a local wheel — PyPI index not needed.
+  if (!IS_WINDOWS && !localWheel) {
     pipArgs.push("--extra-index-url", "https://download.pytorch.org/whl/cpu");
   }
 
@@ -979,11 +1240,13 @@ async function ensureBackend(opts = {}) {
     }
 
     // Fast-path: already installed at the expected version.
+    // Skip when expectedVersion is null (GAIA_LOCAL_WHEEL is set) — always
+    // reinstall from the local wheel so CI gets a fresh install each run.
     const expectedVersion = resolveBackendVersion(opts);
     const existingBin = findGaiaBin();
     if (existingBin) {
       const installedVersion = getInstalledVersion(existingBin);
-      if (installedVersion === expectedVersion) {
+      if (expectedVersion !== null && installedVersion === expectedVersion) {
         log(
           `GAIA backend already installed at version ${installedVersion} — nothing to do`
         );

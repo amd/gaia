@@ -72,6 +72,42 @@ sudo apt install ./gaia-agent-ui-*-amd64.deb
 sudo apt remove gaia-desktop
 ```
 
+## Ubuntu (.AppImage)
+
+Both the AppImage and the `.deb` ship with `--no-sandbox` to work
+around Ubuntu 24.04.1+'s AppArmor-restricted unprivileged-userns policy
+(`kernel.apparmor_restrict_unprivileged_userns=1`), which otherwise aborts
+Chromium with a FATAL sandbox error on first launch — see the security
+note in
+[Troubleshooting → AppImage on Linux](/reference/troubleshooting#appimage-on-linux).
+Use the AppImage for portable installs or distros without apt.
+
+<Warning>
+  **Ubuntu 24.04 LTS minimal** does not ship the FUSE 2 runtime or the
+  Chromium system libraries that the AppImage bundles. Install them first:
+
+  ```bash
+  sudo apt install libfuse2 libglib2.0-0t64 libgtk-3-0t64 libnss3 \
+      libasound2t64 libxss1 libxtst6 libatk-bridge2.0-0t64 libgbm1
+  ```
+</Warning>
+
+1. Download `gaia-agent-ui-<version>-x86_64.AppImage` from [Releases](https://github.com/amd/gaia/releases).
+2. Make it executable and run:
+```bash
+chmod +x gaia-agent-ui-*.AppImage
+./gaia-agent-ui-*.AppImage
+```
+3. On Ubuntu 24.04.1+, the AppImage runs with `--no-sandbox` by default
+   to work around the distro's AppArmor userns restriction. See
+   [Troubleshooting → AppImage on Linux](/reference/troubleshooting#appimage-on-linux)
+   for the security implications and recovery steps.
+4. To collect logs for a bug report:
+```bash
+gaia diagnostics
+```
+Attach the resulting `~/.gaia/diagnostics-*.tgz` to your GitHub issue.
+
 # GAIA Chat (Lightweight Desktop)
 
 GAIA Chat is a lightweight, privacy-first desktop chat application built with a Python FastAPI backend and a minimal web frontend. It is designed as a lighter alternative to RAUX, focused specifically on chat and document Q&A.

@@ -136,7 +136,7 @@ class VLMClient:
 
         Note:
             - Model will be auto-downloaded if not available (may take hours)
-            - base_url defaults to http://localhost:8000/api/v1
+            - base_url defaults to http://localhost:13305/api/v1
 
         Environment Variables:
             LEMONADE_BASE_URL: Default base URL for Lemonade server
@@ -160,7 +160,7 @@ class VLMClient:
             ...     print("Model not available")
             ❌ VLM model not found: Qwen3-VL-4B-Instruct-GGUF
             📥 To download this model:
-               1. Open Lemonade Model Manager (http://localhost:8000)
+               1. Open Lemonade Model Manager (http://localhost:13305)
                2. Search for: Qwen3-VL-4B-Instruct-GGUF
                3. Click 'Download' to install the model
         """
@@ -803,7 +803,7 @@ with VLMClient() as vlm:
 from gaia.llm import VLMClient
 
 # Connect to remote server
-vlm = VLMClient(base_url="http://192.168.1.100:8000/api/v1")
+vlm = VLMClient(base_url="http://192.168.1.100:13305/api/v1")
 
 with open("image.png", "rb") as f:
     text = vlm.extract_from_image(f.read())

@@ -130,7 +130,7 @@ class BuilderAgent(Agent):
         effective_base_url = (
             config.base_url
             if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:8000/api/v1")
+            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
         )
 
         self.response_mode = "conversational"

@@ -125,7 +125,7 @@ the state file. It must complete in under 5 seconds.
 | Node.js | `node --version` | same | same | `shutil.which` + subprocess |
 | Python | `sys.version` | same | same | stdlib |
 | Lemonade installed | `lemonade-server --version` | same | same | `shutil.which` + subprocess |
-| Lemonade running | HTTP GET `http://localhost:8000/api/version` | same | same | `requests.get` with 2s timeout |
+| Lemonade running | HTTP GET `http://localhost:13305/api/version` | same | same | `requests.get` with 2s timeout |
 | Models available | Lemonade `/api/models` endpoint | same | same | HTTP GET |
 | Disk write speed | Write 10 MB temp file, measure time | same | same | `tempfile` + `time` |
 
@@ -591,7 +591,7 @@ Default is opt-out. Stored in `~/.gaia/preferences.json`.
 
 ### Linux
 
-- Lemonade Server installed via `.deb` package or pip.
+- Lemonade Server installed via `ppa:lemonade-team/stable` (Ubuntu 24.04+).
 - `gaia init` detects distro and uses appropriate package manager.
 - NPU detection via `lspci` and `/sys/class/` device tree.
 - Desktop packaging via AppImage.

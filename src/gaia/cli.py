@@ -147,6 +147,7 @@ def initialize_lemonade_for_agent(
     agent_context_sizes = {
         "code": 32768,
         "chat": 32768,
+        "code_index": 32768,
         "jira": 32768,
         "blender": 32768,
         "docker": 32768,
@@ -897,7 +898,7 @@ def main():
         "--base-url",
         default=None,
         help=(
-            "Remote Lemonade server base URL (e.g. https://host:8000/api/v1)."
+            "Remote Lemonade server base URL (e.g. https://host:13305/api/v1)."
             " Used with --ui."
         ),
     )
@@ -1471,8 +1472,8 @@ Available agents: chat, code, talk, rag, blender, jira, docker, vlm, minimal, mc
     download_parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Lemonade server port (default: 8000)",
+        default=13305,
+        help="Lemonade server port (default: 13305)",
     )
     download_parser.set_defaults(action="download")
 
@@ -1556,7 +1557,7 @@ Available agents: chat, code, talk, rag, blender, jira, docker, vlm, minimal, mc
     kill_parser.add_argument(
         "--lemonade",
         action="store_true",
-        help="Kill Lemonade server (port 8000)",
+        help="Kill Lemonade server (port 13305)",
     )
 
     # Add LLM app command
@@ -2524,6 +2525,28 @@ Examples:
         "--all", action="store_true", help="Clear all caches"
     )
 
+    # Diagnostics command (bundle logs + system info for bug reports)
+    diagnostics_parser = subparsers.add_parser(
+        "diagnostics",
+        help="Bundle GAIA logs and system info into a tarball for bug reports",
+    )
+    diagnostics_parser.add_argument(
+        "--output",
+        default=None,
+        help=(
+            "Destination path for the diagnostics tarball "
+            "(default: ~/.gaia/diagnostics-<YYYYMMDD-HHMMSS>.tgz)"
+        ),
+    )
+    diagnostics_parser.add_argument(
+        "--no-logs",
+        action="store_true",
+        help=(
+            "Omit log files from the bundle (useful when logs may contain "
+            "sensitive chat content)"
+        ),
+    )
+
     # Agent command (export/import custom agent bundles)
     agent_parser = subparsers.add_parser(
         "agent",
@@ -3381,7 +3404,7 @@ Let me know your answer!
                 else:
                     # Fallback to port kill if stop command fails
                     log.warning(f"lemonade-server stop failed: {result.stderr}")
-                    port_result = kill_process_by_port(8000)
+                    port_result = kill_process_by_port(13305)
                     if port_result["success"]:
                         print(f"✅ {port_result['message']}")
                     else:
@@ -3389,7 +3412,7 @@ Let me know your answer!
             except FileNotFoundError:
                 # lemonade-server not in PATH, fallback to port kill
                 log.warning("lemonade-server not found, falling back to port kill")
-                port_result = kill_process_by_port(8000)
+                port_result = kill_process_by_port(13305)
                 if port_result["success"]:
                     print(f"✅ {port_result['message']}")
                 else:
@@ -4715,6 +4738,11 @@ Let me know your answer!
         handle_cache_command(args)
         return
 
+    # Handle Diagnostics command
+    if args.action == "diagnostics":
+        handle_diagnostics_command(args)
+        return
+
     # Handle Agent (export/import) command
     if args.action == "agent":
         handle_agent_command(args)
@@ -4818,10 +4846,14 @@ Let me know your answer!
                     sys.exit(0)
 
             # Download and install
-            print("Downloading Lemonade Server...")
             try:
-                installer_path = installer.download_installer()
-                print("Installing...")
+                if installer.system == "linux":
+                    print("Adding Lemonade PPA and installing lemonade-server...")
+                    installer_path = None
+                else:
+                    print("Downloading Lemonade Server...")
+                    installer_path = installer.download_installer()
+                    print("Installing...")
                 result = installer.install(installer_path, silent=args.silent)
 
                 if result.success:
@@ -5516,7 +5548,7 @@ def handle_sd_command(args):
     # Create config - ensure LLM model is set
     llm_model = getattr(args, "model", None)
     if not llm_model:
-        llm_model = "Qwen3-8B-GGUF"  # Default LLM for prompt enhancement
+        llm_model = "Gemma-4-E4B-it-GGUF"  # Default LLM for prompt enhancement
 
     config = SDAgentConfig(
         sd_model=args.sd_model,
@@ -5525,7 +5557,7 @@ def handle_sd_command(args):
         show_stats=getattr(args, "stats", False),
         use_claude=getattr(args, "use_claude", False),
         use_chatgpt=getattr(args, "use_chatgpt", False),
-        base_url=getattr(args, "base_url", "http://localhost:8000/api/v1"),
+        base_url=getattr(args, "base_url", "http://localhost:13305/api/v1"),
         model_id=llm_model,
     )
 
@@ -5812,6 +5844,176 @@ def handle_cache_command(args):
         cache_log.error(f"Error managing cache: {e}")
         print(f"❌ Error: {e}")
         sys.exit(1)
+
+
+def handle_diagnostics_command(args):
+    """Handle the 'gaia diagnostics' command.
+
+    Bundles GAIA log files and a short system-info snapshot into a compressed
+    tarball suitable for attaching to bug reports. Captures:
+
+    - ``~/.gaia/electron-install.log``
+    - ``~/.gaia/gaia.log``
+    - ``~/.gaia/electron-main.log`` (if present; emitted by the Electron shell)
+    - ``~/.gaia/electron-install-state.json``
+    - ``uname -a`` output
+    - ``lsb_release -a`` output, falling back to ``/etc/os-release``
+    - ``env`` entries matching ``gaia|lemonade|xdg|wayland|display`` (case-insensitive)
+    - ``lsof -iTCP:4200`` output (when ``lsof`` is available)
+
+    Args:
+        args: Parsed command-line arguments. Supports ``--output`` to override
+            the destination path and ``--no-logs`` to omit log files from the
+            bundle.
+    """
+    import datetime
+    import io
+    import re
+    import tarfile
+
+    diag_log = get_logger(__name__)
+
+    gaia_dir = Path.home() / ".gaia"
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    if args.output:
+        output_path = Path(args.output).expanduser().resolve()
+    else:
+        output_path = gaia_dir / f"diagnostics-{timestamp}.tgz"
+
+    # Ensure the parent directory exists (e.g. first-ever run before ~/.gaia
+    # has been created by any other GAIA command).
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        diag_log.error(f"Unable to create diagnostics output directory: {e}")
+        print(f"❌ Error: unable to create {output_path.parent}: {e}")
+        sys.exit(1)
+
+    # Log files and state file collected from ~/.gaia
+    log_files = [
+        gaia_dir / "electron-install.log",
+        gaia_dir / "gaia.log",
+        gaia_dir / "electron-main.log",
+    ]
+    state_files = [
+        gaia_dir / "electron-install-state.json",
+    ]
+
+    def _run(cmd):
+        """Run a shell command and return its combined stdout/stderr as text.
+
+        Returns a human-readable error string on failure instead of raising,
+        so a single missing tool does not abort the bundle.
+        """
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            out = result.stdout or ""
+            if result.stderr:
+                out += f"\n[stderr]\n{result.stderr}"
+            return out
+        except FileNotFoundError:
+            return f"[command not found: {cmd[0]}]"
+        except (subprocess.SubprocessError, OSError) as e:
+            # Narrow to the specific failure modes this function is
+            # expected to tolerate (tool hung, spawn failed, permission
+            # denied). Real logic errors must still propagate so we
+            # don't silently bury them per CLAUDE.md's no-silent-fallback
+            # rule.
+            return f"[error running {' '.join(cmd)}: {e}]"
+
+    # System info snapshot
+    sysinfo_parts = []
+    sysinfo_parts.append("=== uname -a ===\n" + _run(["uname", "-a"]))
+
+    lsb = _run(["lsb_release", "-a"])
+    if lsb.startswith("[command not found"):
+        os_release = Path("/etc/os-release")
+        if os_release.is_file():
+            try:
+                lsb = os_release.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                lsb = f"[error reading /etc/os-release: {e}]"
+        else:
+            lsb = "[lsb_release and /etc/os-release both unavailable]"
+    sysinfo_parts.append("=== lsb_release / os-release ===\n" + lsb)
+
+    env_filter = re.compile(
+        r"^(GAIA|LEMONADE|XDG|WAYLAND|DISPLAY|X_|QT_|GTK_)", re.IGNORECASE
+    )
+    # Redact values for keys that look like they might carry secrets. The
+    # filter above already restricts the set of keys, but a user may still
+    # have set e.g. GAIA_API_KEY or LEMONADE_TOKEN, and we must not ship
+    # those in a bug-report tarball.
+    secret_filter = re.compile(
+        r"key|token|secret|pass(word|wd)?|auth|credential", re.IGNORECASE
+    )
+    env_lines = []
+    for k, v in sorted(os.environ.items()):
+        if not env_filter.search(k):
+            continue
+        v_safe = "[redacted]" if secret_filter.search(k) else v
+        env_lines.append(f"{k}={v_safe}")
+    sysinfo_parts.append(
+        "=== env (filtered: GAIA|LEMONADE|XDG|WAYLAND|DISPLAY|X_|QT_|GTK_; secrets redacted) ===\n"
+        + "\n".join(env_lines)
+    )
+
+    # lsof on port 4200 — only if lsof is present; capture_output handles absence.
+    sysinfo_parts.append(
+        "=== lsof -iTCP:4200 (legacy default) ===\n" + _run(["lsof", "-iTCP:4200"])
+    )
+    sysinfo_parts.append(
+        "=== ss -tlnp (all TCP listeners) ===\n" + _run(["ss", "-tlnp"])
+    )
+
+    sysinfo_blob = "\n\n".join(sysinfo_parts).encode("utf-8")
+
+    # Build the tarball
+    try:
+        with tarfile.open(output_path, "w:gz") as tar:
+            # Always include the system-info snapshot
+            info = tarfile.TarInfo(name="system-info.txt")
+            info.size = len(sysinfo_blob)
+            info.mtime = int(datetime.datetime.now().timestamp())
+            tar.addfile(info, io.BytesIO(sysinfo_blob))
+
+            # Always include state files (no chat content)
+            for entry in state_files:
+                if entry.is_file():
+                    tar.add(
+                        str(entry),
+                        arcname=entry.name,
+                        filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
+                    )
+
+            # Log files gated by --no-logs
+            if not args.no_logs:
+                for entry in log_files:
+                    if entry.is_file():
+                        tar.add(
+                            str(entry),
+                            arcname=entry.name,
+                            filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
+                        )
+            else:
+                note = b"Log files omitted (--no-logs was passed).\n"
+                info = tarfile.TarInfo(name="LOGS-OMITTED.txt")
+                info.size = len(note)
+                info.mtime = int(datetime.datetime.now().timestamp())
+                tar.addfile(info, io.BytesIO(note))
+    except OSError as e:
+        diag_log.error(f"Error writing diagnostics bundle: {e}")
+        print(f"❌ Error writing {output_path}: {e}")
+        sys.exit(1)
+
+    print(f"✓ Diagnostics bundle written to: {output_path}")
 
 
 def handle_agent_command(args):
