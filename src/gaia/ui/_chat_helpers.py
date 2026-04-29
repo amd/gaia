@@ -114,11 +114,15 @@ def _classify_chat_exception(exc: BaseException):
     )
 
     # 1. Direct typed match anywhere in the cause chain.
+    # Walk both ``__cause__`` (explicit ``raise ... from e``) and ``__context__``
+    # (implicit ``raise ...`` inside an ``except`` block) so we don't lose the
+    # typed-class metadata (e.g. ``LemonadeContextOverflowError.retryable``)
+    # for handlers that re-raise without ``from``.
     cur: Optional[BaseException] = exc
     while cur is not None:
         if isinstance(cur, LemonadeError):
             return cur
-        cur = cur.__cause__
+        cur = cur.__cause__ or cur.__context__
 
     # 2. Substring match on the stringified exception — covers the case
     # where AgentSDK re-raises with ``str(original)`` as the message,
