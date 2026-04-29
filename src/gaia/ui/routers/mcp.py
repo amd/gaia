@@ -467,7 +467,7 @@ async def get_agent_mcp_server_status():
     The server exposes Agent UI tools (sessions, chat, files, memory) to MCP
     clients such as Claude Code. It is started separately from the chat backend.
     """
-    global _agent_mcp_process, _agent_mcp_port  # noqa: PLW0603
+    global _agent_mcp_process  # noqa: PLW0603
 
     running = False
     pid = None

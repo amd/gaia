@@ -390,9 +390,7 @@ class TestCanonicalAgentType:
             set_agent_registry(None)
 
 
-
 # ── Regression: registered-agent streaming path must not double-index ─────
-
 
 class TestSessionAgentKwargsShape:
     """Tests for _session_agent_kwargs() — the single source of truth for

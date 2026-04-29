@@ -815,7 +815,11 @@ class SSEOutputHandler(OutputHandler):
         if self.background_mode:
             # Can't block — no active SSE consumer.  Return the sentinel so the
             # caller can decide whether to proceed or schedule a retry.
-            return default_if_no_response if default_if_no_response is not None else "__NO_RESPONSE__"
+            return (
+                default_if_no_response
+                if default_if_no_response is not None
+                else "__NO_RESPONSE__"
+            )
 
         # Register the pending request
         evt = threading.Event()

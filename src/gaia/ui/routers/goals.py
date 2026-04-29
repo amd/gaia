@@ -5,7 +5,7 @@
 
 import logging
 import threading
-from typing import List, Optional, get_args
+from typing import Optional, get_args
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator

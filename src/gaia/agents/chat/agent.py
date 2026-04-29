@@ -526,8 +526,8 @@ If you are unsure which document a user refers to and documents are already inde
         # Without indexed docs or a library, the full 3000-token discovery ruleset
         # is wasted tokens (pure-chat / memory-only sessions).  Show a compact hint
         # instead, and keep the full rules for when files are actually relevant.
-        has_file_context = has_indexed or has_library or bool(
-            getattr(self, "watch_directories", [])
+        has_file_context = (
+            has_indexed or has_library or bool(getattr(self, "watch_directories", []))
         )
 
         if not has_file_context:
@@ -1764,7 +1764,9 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
             """
             valid_states = {"idle", "scheduled", "paused"}
             if state not in valid_states:
-                return f"Invalid state '{state}'. Must be one of: {sorted(valid_states)}"
+                return (
+                    f"Invalid state '{state}'. Must be one of: {sorted(valid_states)}"
+                )
 
             # Clamp wake_in_seconds for "scheduled" state
             if state == "scheduled":
@@ -1821,9 +1823,16 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
                 )
             # Fallback for non-SSE consoles (interactive sessions)
             try:
-                return input(f"\n[Agent asking]: {message}\n> ").strip() or "__NO_RESPONSE__"
+                return (
+                    input(f"\n[Agent asking]: {message}\n> ").strip()
+                    or "__NO_RESPONSE__"
+                )
             except (EOFError, OSError):
-                return default_if_no_response if default_if_no_response is not None else "__NO_RESPONSE__"
+                return (
+                    default_if_no_response
+                    if default_if_no_response is not None
+                    else "__NO_RESPONSE__"
+                )
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools

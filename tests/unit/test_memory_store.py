@@ -4290,8 +4290,6 @@ class TestReconciliationQueries:
 
     @pytest.fixture
     def store(self, tmp_path):
-        import numpy as np
-
         s = MemoryStore(db_path=tmp_path / "reconcile.db")
         yield s
         s.close()

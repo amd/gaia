@@ -4948,7 +4948,6 @@ def _bootstrap_system(force: bool = True):
 def _bootstrap_reset_system():
     """Clear all system context entries and optionally disable auto-collection."""
     from gaia.agents.base.memory import (
-        _load_memory_settings,
         _save_memory_settings,
         _system_context_is_enabled,
     )

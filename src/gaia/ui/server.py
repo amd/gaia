@@ -43,6 +43,7 @@ from ._chat_helpers import _get_chat_response  # noqa: F401
 from ._chat_helpers import _index_document  # noqa: F401
 from ._chat_helpers import _resolve_rag_paths  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
+from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
 from .database import ChatDatabase
@@ -51,7 +52,6 @@ from .routers import agents as agents_router_mod
 from .routers import chat as chat_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
-from .agent_loop import agent_loop
 from .routers import goals as goals_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod

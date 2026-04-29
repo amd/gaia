@@ -23,8 +23,6 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from gaia.agents.base.memory_store import (
     CONFIDENCE_BUMP_PER_RECALL,

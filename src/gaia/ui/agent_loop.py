@@ -27,7 +27,6 @@ Design notes:
 import asyncio
 import logging
 import os
-import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,7 +59,9 @@ _TICK_TIMEOUT = int(os.environ.get("GAIA_AGENT_TICK_TIMEOUT", "300"))
 class AgentTrigger:
     """A reason to wake the agent loop."""
 
-    source: str  # "user_message_followup" | "idle_tick" | "scheduled_wake" | "continuation"
+    source: (
+        str  # "user_message_followup" | "idle_tick" | "scheduled_wake" | "continuation"
+    )
     session_id: Optional[str] = None
     meta: Dict[str, Any] = field(default_factory=dict)
 
@@ -146,9 +147,7 @@ class AgentLoop:
         """Main coroutine: drain trigger queue and process each trigger."""
         while not self._stop_event.is_set():
             try:
-                trigger = await asyncio.wait_for(
-                    self._trigger_queue.get(), timeout=5.0
-                )
+                trigger = await asyncio.wait_for(self._trigger_queue.get(), timeout=5.0)
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
@@ -288,7 +287,7 @@ class AgentLoop:
             from gaia.agents.base.goal_store import GoalStore
 
             store = GoalStore()
-            return store.get_actionable_goals(limit=5)
+            return store.get_actionable_goals()[:5]
         except Exception as exc:
             logger.debug("AgentLoop: GoalStore lookup failed: %s", exc)
             return []
@@ -382,7 +381,9 @@ class AgentLoop:
                 history_pairs = _helpers._build_history_pairs(messages)
                 agent.conversation_history = []
                 for u, a in history_pairs[-3:]:  # 3-pair rolling window for ticks
-                    agent.conversation_history.append({"role": "user", "content": u[:1000]})
+                    agent.conversation_history.append(
+                        {"role": "user", "content": u[:1000]}
+                    )
                     agent.conversation_history.append(
                         {"role": "assistant", "content": a[:1000]}
                     )

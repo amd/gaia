@@ -1990,14 +1990,22 @@ class MemoryMixin:
                     time_to=time_to or None,
                 )
                 _search_ms = (_t.perf_counter() - _search_t0) * 1000
-                logger.debug("recall: hybrid_search took %.1fms → %d results", _search_ms, len(results))
+                logger.debug(
+                    "recall: hybrid_search took %.1fms → %d results",
+                    _search_ms,
+                    len(results),
+                )
                 # Apply domain post-filter if provided
                 if domain:
                     results = [r for r in results if r.get("domain") == domain]
             elif entity:
                 _db_t0 = _t.perf_counter()
                 results = mixin._memory_store.get_by_entity(entity, limit=limit)
-                logger.debug("recall: get_by_entity took %.1fms → %d results", (_t.perf_counter() - _db_t0) * 1000, len(results))
+                logger.debug(
+                    "recall: get_by_entity took %.1fms → %d results",
+                    (_t.perf_counter() - _db_t0) * 1000,
+                    len(results),
+                )
                 if domain:
                     results = [r for r in results if r.get("domain") == domain]
             elif category or domain:
@@ -2019,9 +2027,7 @@ class MemoryMixin:
                     )
                     raw = page.get("items", [])
                     results = (
-                        [r for r in raw if r.get("domain") == domain]
-                        if domain
-                        else raw
+                        [r for r in raw if r.get("domain") == domain] if domain else raw
                     )
                 else:
                     results = mixin._memory_store.get_by_category(
@@ -2032,7 +2038,9 @@ class MemoryMixin:
                     )
                 logger.debug(
                     "recall: get_by_category(cat=%s, domain=%s, offset=%d) took %.1fms → %d results",
-                    effective_category, domain or "any", offset,
+                    effective_category,
+                    domain or "any",
+                    offset,
                     (_t.perf_counter() - _db_t0) * 1000,
                     len(results),
                 )
@@ -2048,7 +2056,10 @@ class MemoryMixin:
                     offset=0,
                     limit=limit * 4,  # over-fetch to account for filtering
                 )
-                logger.debug("recall: get_all_knowledge took %.1fms", (_t.perf_counter() - _db_t0) * 1000)
+                logger.debug(
+                    "recall: get_all_knowledge took %.1fms",
+                    (_t.perf_counter() - _db_t0) * 1000,
+                )
                 filtered = []
                 for item in page.get("items", []):
                     created = item.get("created_at", "")
@@ -2065,13 +2076,20 @@ class MemoryMixin:
                 page = mixin._memory_store.get_all_knowledge(
                     context=context, limit=limit, offset=offset
                 )
-                logger.debug("recall: get_all_knowledge took %.1fms", (_t.perf_counter() - _db_t0) * 1000)
+                logger.debug(
+                    "recall: get_all_knowledge took %.1fms",
+                    (_t.perf_counter() - _db_t0) * 1000,
+                )
                 results = page.get("items", [])
 
             total_ms = (_t.perf_counter() - _recall_t0) * 1000
             logger.info(
                 "recall: total=%.1fms results=%d (query=%r cat=%r domain=%r)",
-                total_ms, len(results), query[:50] if query else "", category, domain,
+                total_ms,
+                len(results),
+                query[:50] if query else "",
+                category,
+                domain,
             )
 
             # Sensitive items ARE accessible via explicit recall tool calls

@@ -2322,10 +2322,6 @@ class TestMemoryReconciliation:
     @pytest.fixture
     def recon_host(self, tmp_path):
         """Create a MemoryMixin host for reconciliation testing."""
-        from unittest.mock import MagicMock
-
-        import numpy as np
-
         from gaia.agents.base.memory import MemoryMixin
 
         class TestReconAgent(MemoryMixin, FakeAgent):

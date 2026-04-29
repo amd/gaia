@@ -6,9 +6,24 @@ import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpe
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { getSessionHash } from '../utils/format';
 import gaiaRobot from '../assets/gaia-robot.png';
 import type { Session } from '../types';
 import './Sidebar.css';
+
+/** Copy a session's hash link to the clipboard. */
+function copySessionLink(e: React.MouseEvent, sessionId: string) {
+    e.stopPropagation();
+    e.preventDefault();
+    const hash = getSessionHash(sessionId);
+    const url = `${window.location.origin}${window.location.pathname}#${hash}`;
+    navigator.clipboard.writeText(url).then(() => {
+        log.ui.info(`Copied session link: ${url}`);
+    }).catch(() => {
+        // Fallback: select the URL in a temporary input
+        log.ui.warn('Clipboard write failed');
+    });
+}
 
 interface SidebarProps {
     onNewTask: () => void;
@@ -28,6 +43,14 @@ function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSele
     onDelete: (e: React.MouseEvent | React.KeyboardEvent, id: string) => void;
     formatTime: (iso: string) => string;
 }) {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopyHash = useCallback((e: React.MouseEvent) => {
+        copySessionLink(e, s.id);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+    }, [s.id]);
+
     return (
         <div
             className={`session-item ${isActive ? 'active' : ''} ${isDeleting ? 'session-deleting' : ''}`}

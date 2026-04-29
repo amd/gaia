@@ -1597,6 +1597,7 @@ class AgentEvalRunner:
                 fix_mode=fix_mode,
                 max_fix_iterations=max_fix_iterations,
                 target_pass_rate=target_pass_rate,
+                keep_sessions=keep_sessions,
             )
 
     def _run_locked(
@@ -1606,6 +1607,7 @@ class AgentEvalRunner:
         fix_mode=False,
         max_fix_iterations=3,
         target_pass_rate=0.90,
+        keep_sessions=False,
     ):
         """Internal entry — holds the eval lock; only called by ``run()``."""
 

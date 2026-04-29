@@ -161,7 +161,9 @@ def collect_system_info() -> List[Dict[str, str]]:
                     stderr=subprocess.DEVNULL,
                     text=True,
                 )
-                gpu_names = [l.strip() for l in output.splitlines() if l.strip()]
+                gpu_names = [
+                    line.strip() for line in output.splitlines() if line.strip()
+                ]
             except Exception:
                 pass
         elif _sys == "Darwin":
@@ -190,9 +192,9 @@ def collect_system_info() -> List[Dict[str, str]]:
                     text=True,
                 )
                 gpu_names = [
-                    l.strip()
-                    for l in output.splitlines()
-                    if "vga" in l.lower() and l.strip()
+                    line.strip()
+                    for line in output.splitlines()
+                    if "vga" in line.lower() and line.strip()
                 ][:3]
             except Exception:
                 pass
