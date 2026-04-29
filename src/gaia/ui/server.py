@@ -409,9 +409,24 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             return FileResponse(_index_html, headers=_NO_CACHE)
 
     else:
-        logger.info(
-            "No frontend build found at %s. Run 'npm run build' in the webui directory.",
-            _webui_dist,
+        # Resolve to an absolute path so users can act on the warning. Prefer
+        # the resolved form, but fall back to the raw value if the directory
+        # truly doesn't exist (resolve() of a missing path is harmless on POSIX
+        # but can surprise on Windows).
+        try:
+            _resolved_for_log = _webui_dist.resolve()
+        except OSError:
+            _resolved_for_log = _webui_dist
+        logger.warning(
+            "No frontend build found at %s (resolved from gaia.apps.webui). "
+            "If you installed via pip, the wheel may have shipped without "
+            "dist/ — diagnose with: "
+            "python -c 'import gaia.apps.webui as m; "
+            "from pathlib import Path; "
+            'print(Path(m.__file__).parent / "dist")\'. '
+            "If you installed from source, run 'npm ci && npm run build' "
+            "in src/gaia/apps/webui/.",
+            _resolved_for_log,
         )
 
         _FALLBACK_HTML = """<!DOCTYPE html>

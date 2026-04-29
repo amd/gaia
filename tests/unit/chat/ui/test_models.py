@@ -34,7 +34,7 @@ class TestSystemStatus:
         assert status.model_loaded is None
         assert status.embedding_model_loaded is False
         assert status.disk_space_gb == 0.0
-        assert status.memory_available_gb == 0.0
+        assert status.memory_available_gb is None
         assert status.initialized is False
         from gaia.version import __version__
 

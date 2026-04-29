@@ -17,9 +17,9 @@ Usage:
 
 import contextlib
 import errno
-import fcntl
 import functools
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -29,6 +29,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger(__name__)
+
+# fcntl is POSIX-only — on Windows the eval lock degrades to a no-op (the
+# Lemonade race the lock guards against doesn't happen on a contributor's
+# Windows box, where Lemonade Server isn't typically running concurrent evals).
+if sys.platform == "win32":
+    fcntl = None  # type: ignore[assignment]
+else:
+    import fcntl  # type: ignore[no-redef]
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 EVAL_DIR = REPO_ROOT / "eval"
@@ -87,6 +97,12 @@ def _acquire_eval_lock():
     PID has exited) are reclaimed automatically.
     """
     if os.environ.get(_LOCK_ENV_BYPASS) == "1":
+        yield
+        return
+
+    # Windows: fcntl is unavailable — degrade to a no-op (same shape as the
+    # OSError-on-/tmp short-circuit below).
+    if fcntl is None:
         yield
         return
 
@@ -182,7 +198,13 @@ def _acquire_eval_lock():
 
 REAL_WORLD_MANIFEST = REAL_WORLD_CORPUS_DIR / "manifest.json"
 
+# User-local directories for custom scenarios and corpus.
+# Auto-discovered if they exist; also addable via --scenario-dir / --corpus-dir.
+USER_SCENARIOS_DIR = Path.home() / ".gaia" / "eval" / "scenarios"
+USER_CORPUS_DIR = Path.home() / ".gaia" / "eval" / "corpus"
+
 # Personas defined in eval/prompts/simulator.md.  validate_scenario enforces this list.
+# Custom personas are allowed — these are documented defaults.
 _KNOWN_PERSONAS = frozenset(
     {"casual_user", "power_user", "confused_user", "adversarial_user", "data_analyst"}
 )
@@ -226,15 +248,21 @@ def validate_scenario(path: Path, data: dict) -> None:
                 "(required so the runner can verify the file exists before running)"
             )
 
-    # Validate persona against the known list defined in simulator.md.
+    # Validate persona: must be a non-empty string.
+    # The 5 built-in personas (casual_user, power_user, etc.) are documented defaults,
+    # but any non-empty string is accepted to support custom persona descriptions.
     persona = data.get("persona")
     if persona is not None:
         if not isinstance(persona, str):
             errors.append(f"persona must be a string, got {type(persona).__name__}")
+        elif not persona.strip():
+            errors.append("persona must be a non-empty string")
         elif persona not in _KNOWN_PERSONAS:
-            errors.append(
-                f"persona '{persona}' is not a known persona; "
-                f"use one of: {', '.join(sorted(_KNOWN_PERSONAS))}"
+            logger.info(
+                "Scenario '%s' uses custom persona '%s' (not in built-in set: %s)",
+                sid,
+                persona,
+                ", ".join(sorted(_KNOWN_PERSONAS)),
             )
 
     turns = data.get("turns", [])
@@ -306,26 +334,74 @@ def _documents_exist(scenario_data: dict) -> bool:
     return True
 
 
-def find_scenarios(scenario_id=None, category=None):
+def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
     """Find scenario YAML files matching filters.
+
+    Args:
+        scenario_id: Only return the scenario with this ID.
+        category: Only return scenarios in this category.
+        extra_dirs: List of additional directories to scan for scenario YAML files.
+            Scenarios from extra_dirs override built-in scenarios with the same ID.
+        tags: List of tags to filter by. If specified, only scenarios whose ``tags``
+            field contains at least one of these tags are returned (OR logic).
 
     Returns list of (path, data) tuples. Raises RuntimeError if any YAML is
     unparseable or fails schema validation.
     """
+    # Collect all directories to scan: built-in first, then user-local, then extra.
+    dirs_to_scan = [SCENARIOS_DIR]
+
+    # Auto-discover user-local scenarios directory
+    if USER_SCENARIOS_DIR.is_dir():
+        dirs_to_scan.append(USER_SCENARIOS_DIR)
+        logger.info("Auto-discovered user scenarios dir: %s", USER_SCENARIOS_DIR)
+
+    # Append any extra directories from --scenario-dir
+    if extra_dirs:
+        for d in extra_dirs:
+            p = Path(d)
+            if p.is_dir():
+                dirs_to_scan.append(p)
+                logger.info("Adding extra scenario dir: %s", p)
+            else:
+                logger.warning("Scenario directory does not exist, skipping: %s", p)
+
+    # Scan all directories; later entries override earlier ones (by scenario ID).
+    scenarios_by_id = {}  # id -> (path, data)
+    for scan_dir in dirs_to_scan:
+        for path in sorted(scan_dir.rglob("*.yaml")):
+            try:
+                data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            except Exception as e:
+                raise RuntimeError(f"Failed to parse scenario YAML {path}: {e}") from e
+            try:
+                validate_scenario(path, data)
+            except ValueError as e:
+                raise RuntimeError(str(e)) from e
+
+            sid = data.get("id")
+            if sid in scenarios_by_id:
+                prev_path = scenarios_by_id[sid][0]
+                logger.info(
+                    "Scenario '%s' from %s overrides built-in at %s",
+                    sid,
+                    path,
+                    prev_path,
+                )
+            scenarios_by_id[sid] = (path, data)
+
+    # Apply filters
     scenarios = []
-    for path in sorted(SCENARIOS_DIR.rglob("*.yaml")):
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except Exception as e:
-            raise RuntimeError(f"Failed to parse scenario YAML {path}: {e}") from e
-        try:
-            validate_scenario(path, data)
-        except ValueError as e:
-            raise RuntimeError(str(e)) from e
+    for sid, (path, data) in sorted(scenarios_by_id.items(), key=lambda x: x[0]):
         if scenario_id and data.get("id") != scenario_id:
             continue
         if category and data.get("category") != category:
             continue
+        # Tag filtering: scenario must have at least one matching tag (OR logic)
+        if tags:
+            scenario_tags = set(data.get("tags", []))
+            if not scenario_tags.intersection(tags):
+                continue
         scenarios.append((path, data))
     return scenarios
 
@@ -633,21 +709,19 @@ def preflight_check(backend_url):
     return errors
 
 
-def run_scenario_subprocess(
-    _scenario_path,
-    scenario_data,
-    run_dir,
-    backend_url,
-    model,
-    budget,
-    timeout,
-    agent_type=None,
-):
-    """Invoke claude -p for one scenario. Returns parsed result dict."""
-    scenario_id = scenario_data["id"]
+def _load_merged_manifest(extra_corpus_dirs=None):
+    """Load and merge corpus manifest from built-in + user-local + extra dirs.
+
+    Args:
+        extra_corpus_dirs: Optional list of additional corpus directories, each
+            expected to contain a ``manifest.json``.
+
+    Returns:
+        Merged manifest dict with combined document lists.
+    """
     manifest_data = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    # Merge real-world manifest facts if present, so the eval agent has ground
-    # truth for all document types (standard + real-world) in a single context block.
+
+    # Merge real-world manifest facts if present
     if REAL_WORLD_MANIFEST.exists():
         try:
             rw_manifest = json.loads(REAL_WORLD_MANIFEST.read_text(encoding="utf-8"))
@@ -665,6 +739,71 @@ def run_scenario_subprocess(
             "documents": merged_docs,
             "total_documents": len(merged_docs),
         }
+
+    # Auto-discover user-local corpus manifest
+    user_manifest = USER_CORPUS_DIR / "manifest.json"
+    if user_manifest.is_file():
+        try:
+            user_data = json.loads(user_manifest.read_text(encoding="utf-8"))
+            extra_docs = user_data.get("documents", [])
+            manifest_data["documents"] = manifest_data.get("documents", []) + extra_docs
+            manifest_data["total_documents"] = len(manifest_data["documents"])
+            logger.info(
+                "Merged %d document(s) from user corpus: %s",
+                len(extra_docs),
+                USER_CORPUS_DIR,
+            )
+        except (json.JSONDecodeError, OSError) as exc:
+            print(
+                f"[WARN] Could not load user corpus manifest {user_manifest}: {exc}",
+                file=sys.stderr,
+            )
+
+    # Merge extra corpus directories from --corpus-dir
+    if extra_corpus_dirs:
+        for corpus_dir_str in extra_corpus_dirs:
+            corpus_dir_path = Path(corpus_dir_str)
+            extra_manifest = corpus_dir_path / "manifest.json"
+            if extra_manifest.is_file():
+                try:
+                    extra_data = json.loads(extra_manifest.read_text(encoding="utf-8"))
+                    extra_docs = extra_data.get("documents", [])
+                    manifest_data["documents"] = (
+                        manifest_data.get("documents", []) + extra_docs
+                    )
+                    manifest_data["total_documents"] = len(manifest_data["documents"])
+                    logger.info(
+                        "Merged %d document(s) from extra corpus: %s",
+                        len(extra_docs),
+                        corpus_dir_path,
+                    )
+                except (json.JSONDecodeError, OSError) as exc:
+                    print(
+                        f"[WARN] Could not load corpus manifest {extra_manifest}: {exc}",
+                        file=sys.stderr,
+                    )
+            else:
+                logger.warning(
+                    "No manifest.json found in corpus dir: %s", corpus_dir_path
+                )
+
+    return manifest_data
+
+
+def run_scenario_subprocess(
+    _scenario_path,
+    scenario_data,
+    run_dir,
+    backend_url,
+    model,
+    budget,
+    timeout,
+    extra_corpus_dirs=None,
+    agent_type=None,
+):
+    """Invoke claude -p for one scenario. Returns parsed result dict."""
+    scenario_id = scenario_data["id"]
+    manifest_data = _load_merged_manifest(extra_corpus_dirs=extra_corpus_dirs)
 
     prompt = build_scenario_prompt(
         scenario_data, manifest_data, backend_url, agent_type=agent_type
@@ -1362,6 +1501,10 @@ class AgentEvalRunner:
         budget_per_scenario=DEFAULT_BUDGET,
         timeout_per_scenario=DEFAULT_TIMEOUT,
         results_dir=None,
+        extra_scenario_dirs=None,
+        extra_corpus_dirs=None,
+        tags=None,
+        output_format=None,
         agent_type=None,
     ):
         self.backend_url = backend_url
@@ -1369,6 +1512,10 @@ class AgentEvalRunner:
         self.budget = budget_per_scenario
         self.timeout = timeout_per_scenario
         self.results_dir = Path(results_dir) if results_dir else RESULTS_DIR
+        self.extra_scenario_dirs = extra_scenario_dirs or []
+        self.extra_corpus_dirs = extra_corpus_dirs or []
+        self.tags = tags or []
+        self.output_format = output_format
         self.agent_type = agent_type
 
     def _print_summary(self, scorecard, run_id, run_dir):
@@ -1435,10 +1582,18 @@ class AgentEvalRunner:
         """Internal entry — holds the eval lock; only called by ``run()``."""
 
         # Find scenarios
-        scenarios = find_scenarios(scenario_id=scenario_id, category=category)
+        scenarios = find_scenarios(
+            scenario_id=scenario_id,
+            category=category,
+            extra_dirs=self.extra_scenario_dirs,
+            tags=self.tags if self.tags else None,
+        )
         if not scenarios:
+            filter_desc = f"id={scenario_id}, category={category}"
+            if self.tags:
+                filter_desc += f", tags={self.tags}"
             print(
-                f"[ERROR] No scenarios found (id={scenario_id}, category={category})",
+                f"[ERROR] No scenarios found ({filter_desc})",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -1529,6 +1684,9 @@ class AgentEvalRunner:
                 self.model,
                 self.budget,
                 effective_timeout,
+                extra_corpus_dirs=(
+                    self.extra_corpus_dirs if self.extra_corpus_dirs else None
+                ),
                 agent_type=self.agent_type,
             )
             results.append(result)
@@ -1548,6 +1706,14 @@ class AgentEvalRunner:
             "agent_type": self.agent_type,
         }
         scorecard = aggregate_scorecard(results, run_id, run_dir, config)
+
+        # Write JUnit XML if requested
+        if self.output_format == "junit":
+            from gaia.eval.scorecard import write_junit_xml
+
+            junit_path = run_dir / "results.xml"
+            junit_path.write_text(write_junit_xml(scorecard), encoding="utf-8")
+            print(f"[INFO] JUnit XML written to: {junit_path}")
 
         # Print summary
         self._print_summary(scorecard, run_id, run_dir)
@@ -1612,6 +1778,9 @@ class AgentEvalRunner:
                     self.model,
                     self.budget,
                     effective_timeout,
+                    extra_corpus_dirs=(
+                        self.extra_corpus_dirs if self.extra_corpus_dirs else None
+                    ),
                     agent_type=self.agent_type,
                 )
                 rerun_results.append(result)

@@ -14,7 +14,12 @@ import time
 from enum import Enum
 from typing import Optional
 
-from gaia.llm.lemonade_client import DEFAULT_CONTEXT_SIZE, LemonadeClient
+from gaia.llm.lemonade_client import (
+    DEFAULT_CONTEXT_SIZE,
+    DEFAULT_MODEL_NAME,
+    LemonadeClient,
+    LemonadeClientError,
+)
 from gaia.logger import get_logger
 
 # Re-export for backwards compatibility — existing callers import
@@ -320,24 +325,55 @@ class LemonadeManager:
                         cls.print_server_error(min_context_size)
                     return False
 
-                # Cache server state for subsequent calls.
-                # We set initialized=True even if context check fails below,
-                # so future calls can use cached state without reconnecting.
+                # Defensive normalisation: some Lemonade versions can return
+                # `loaded_models: null` in their JSON, which would crash the
+                # `any(... for model in ...)` calls below.
+                if status.loaded_models is None:
+                    status.loaded_models = []
+
+                # Snapshot context size — we may overwrite it below if the
+                # preload helper successfully seeds the server.
+                context_size_value = status.context_size or 0
+
+                # Detect LLM-loaded state once for the branch decisions below.
+                llm_models_loaded = any(
+                    "image" not in model.get("labels", [])
+                    for model in status.loaded_models
+                )
+
+                # Idle server (no model loaded, no ctx reported): proactively
+                # load the default model with the required ctx_size.  Without
+                # this, the user would land on a server with a too-small
+                # default ctx and be told to manually stop and restart it
+                # (issue #839).  We run this BEFORE setting cls._initialized
+                # so a failed preload leaves the singleton retryable instead
+                # of poisoned with (initialized=True, ctx=0).
+                if context_size_value == 0 and not llm_models_loaded:
+                    cls._try_preload_with_ctx(
+                        client, min_context_size, quiet, cls._lock
+                    )
+                    context_size_value = min_context_size
+                    # Re-fetch model list so the small-ctx reload branch below
+                    # sees the freshly-loaded model.
+                    status = client.get_status()
+                    if status.loaded_models is None:
+                        status.loaded_models = []
+                    llm_models_loaded = any(
+                        "image" not in model.get("labels", [])
+                        for model in status.loaded_models
+                    )
+
+                # Cache server state for subsequent calls.  Setting
+                # _initialized=True after the preload guard ensures a failed
+                # preload does NOT poison the singleton: ensure_ready will
+                # re-enter this block on the next call.
                 cls._initialized = True
                 cls._base_url = client.base_url
-                cls._context_size = status.context_size or 0
+                cls._context_size = context_size_value
 
                 cls._log.debug(
                     f"Lemonade ready at {cls._base_url} "
                     f"(context: {cls._context_size} tokens)"
-                )
-
-                # Verify context size - only warn if insufficient AND LLM models are loaded
-                # SD models don't have context size, only LLM models do
-                # Check if any loaded models are LLMs (not SD models with "image" label)
-                llm_models_loaded = any(
-                    "image" not in model.get("labels", [])
-                    for model in status.loaded_models
                 )
 
                 # Only warn if:
@@ -365,11 +401,88 @@ class LemonadeManager:
 
                 return True
 
+            except LemonadeClientError:
+                # Actionable error from the preload helper — propagate so the
+                # caller sees the three-part guidance instead of a silent
+                # return False (CLAUDE.md "no silent fallbacks").
+                raise
             except Exception as e:
                 cls._log.warning(f"Failed to initialize Lemonade: {e}")
                 if not quiet:
                     cls.print_server_error(min_context_size)
                 return False
+
+    @classmethod
+    def _try_preload_with_ctx(
+        cls,
+        client: "LemonadeClient",
+        min_context_size: int,
+        quiet: bool,
+        lock: "threading.Lock",
+    ) -> None:
+        """Load the default LLM with the required ctx_size on an idle server.
+
+        Closes the gap left by `_try_reload_with_ctx`, which only handles the
+        "model already loaded with too-small ctx" path.  When the server is
+        running but idle (no model loaded, no ctx reported), this helper
+        proactively seeds it so the user does not see the legacy
+        "Restart with: lemonade-server serve --ctx-size N" message
+        (issue #839).
+
+        Releases `lock` for the duration of the blocking `load_model` call —
+        important because `auto_download=True` means a first-run user pays a
+        full model-download window (potentially minutes), and we must not
+        block other threads (status pollers, parallel `ensure_ready` callers)
+        for that long.  Mirrors the lock discipline of `_try_reload_with_ctx`.
+
+        Raises:
+            LemonadeClientError: if `load_model` fails. Carries an actionable
+                message (Lemonade / ctx_size= / lemonade-server serve) so the
+                user can recover manually if the auto-preload cannot.
+        """
+        cls._log.info(
+            "Preloading '%s' with ctx_size=%d on idle Lemonade server",
+            DEFAULT_MODEL_NAME,
+            min_context_size,
+        )
+        if not quiet:
+            print(
+                f"\n⏳ Loading {DEFAULT_MODEL_NAME} with ctx_size={min_context_size} "
+                f"tokens. This may take a moment (first run downloads the model)...",
+                flush=True,
+            )
+
+        # Release the lock for the duration of the blocking call so
+        # concurrent callers and status-pollers are not stalled.  The
+        # `finally` block re-acquires before any exception propagates back
+        # up to the surrounding `with cls._lock:` context manager.
+        lock.release()
+        try:
+            client.load_model(
+                DEFAULT_MODEL_NAME,
+                ctx_size=min_context_size,
+                prompt=False,
+                auto_download=True,
+            )
+        except Exception as e:
+            raise LemonadeClientError(
+                f"Failed to preload Lemonade model {DEFAULT_MODEL_NAME!r} with "
+                f"ctx_size={min_context_size} on idle server at "
+                f"{client.base_url}.\n"
+                f"To recover manually: stop the running server, then run "
+                f"'lemonade-server serve --ctx-size {min_context_size}' and "
+                f"re-run your GAIA command.\n"
+                f"See the Lemonade server log for details "
+                f"(typical path: ~/.cache/lemonade/server.log)."
+            ) from e
+        finally:
+            lock.acquire()
+
+        if not quiet:
+            print(
+                f"✅ Loaded {DEFAULT_MODEL_NAME} with ctx_size={min_context_size}.",
+                flush=True,
+            )
 
     @classmethod
     def _try_reload_with_ctx(

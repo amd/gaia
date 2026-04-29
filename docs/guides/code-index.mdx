@@ -131,7 +131,7 @@ This launches `CodeAgent` with the `CodeIndexToolsMixin` already wired in, so th
 | `get_index_status` | Report current index state |
 | `clear_code_index` | Remove the cached index |
 
-YAML-manifest agents can opt in by listing `code_index` under `tools` — it's registered in `KNOWN_TOOLS` ([`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)). For SDK-level composition see the [SDK reference](/sdk/sdks/code-index).
+Custom agents compose `CodeIndexToolsMixin` directly in their class declaration; it's also registered in `KNOWN_TOOLS["code_index"]` ([`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)) for dynamic resolution. For SDK-level composition see the [SDK reference](/sdk/sdks/code-index).
 
 ### Example interaction
 

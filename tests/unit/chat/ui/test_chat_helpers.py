@@ -17,9 +17,11 @@ import pytest
 
 from gaia.ui._chat_helpers import (
     _build_history_pairs,
+    _canonical_agent_type,
     _compute_allowed_paths,
     _find_last_tool_step,
     _resolve_rag_paths,
+    set_agent_registry,
 )
 
 # ── _build_history_pairs ──────────────────────────────────────────────────
@@ -328,6 +330,67 @@ class TestFindLastToolStep:
         assert result["label"] == "has_type"
 
 
+# ── _canonical_agent_type ─────────────────────────────────────────────────
+
+
+class TestCanonicalAgentType:
+    """Tests for ``_canonical_agent_type``.
+
+    The Apr-20 review removed the silent ``except Exception`` wrapper on
+    the registry lookup (CLAUDE.md "fail loudly" rule). These tests
+    document the resulting contract: pass-through when no registry is
+    set, delegate to ``registry.canonical_id`` otherwise, and propagate
+    AttributeError if a caller wires up a registry that doesn't honour
+    the protocol.
+    """
+
+    def test_returns_input_when_registry_unset(self):
+        """No registry installed → return the input unchanged.
+
+        Pre-discovery (e.g. early server startup, test fixtures that
+        haven't called ``set_agent_registry``) falls through this path.
+        """
+        set_agent_registry(None)
+        try:
+            assert _canonical_agent_type("anything") == "anything"
+        finally:
+            set_agent_registry(None)
+
+    def test_delegates_to_canonical_id(self):
+        """Healthy registry → result of ``registry.canonical_id``.
+
+        Confirms the alias-resolution contract with a fake registry:
+        old IDs map to canonical, unknowns pass through.
+        """
+
+        class FakeRegistry:
+            def canonical_id(self, agent_id: str) -> str:
+                return {"chat-lite": "gaia-lite"}.get(agent_id, agent_id)
+
+        set_agent_registry(FakeRegistry())
+        try:
+            assert _canonical_agent_type("chat-lite") == "gaia-lite"
+            assert _canonical_agent_type("unknown") == "unknown"
+        finally:
+            set_agent_registry(None)
+
+    def test_propagates_attributeerror_when_registry_lacks_canonical_id(self):
+        """A registry mock without ``canonical_id`` must surface the
+        AttributeError loudly — the prior ``except Exception: return
+        agent_type`` swallowed this and produced silent cache thrash.
+
+        Ratchets the Apr-20 review fix: any future regression that
+        reintroduces the broad except will fail this test.
+        """
+        set_agent_registry(MagicMock(spec=[]))  # no methods on the mock
+        try:
+            with pytest.raises(AttributeError):
+                _canonical_agent_type("chat-lite")
+        finally:
+            set_agent_registry(None)
+
+
+
 # ── Regression: registered-agent streaming path must not double-index ─────
 
 
@@ -413,14 +476,12 @@ class TestStreamingRegisteredAgentDoesNotDoubleIndex:
             _Path(__file__).parents[4] / "src" / "gaia" / "ui" / "_chat_helpers.py"
         ).read_text()
 
-        # Locate the streaming registered-agent factory call. Signature:
-        # ``registry.create_agent(agent_type, **_build_create_kwargs(...,
-        # streaming=True), **_session_agent_kwargs(rag_file_paths=[], ...))``.
-        # We anchor on ``streaming=True`` (only the streaming branch sets it)
-        # followed by ``_session_agent_kwargs(`` to find the right call-site.
+        # Locate the streaming registered-agent factory call. It's the only
+        # ``registry.create_agent(`` invocation in ``_stream_chat_response``
+        # that passes ``streaming=True`` to ``_build_create_kwargs``.
         m = re.search(
-            r"registry\.create_agent\(\s*agent_type,[^)]*?streaming=True"
-            r"[^)]*?\)\s*,\s*\*\*_session_agent_kwargs\(([^)]+)\)",
+            r"registry\.create_agent\(\s*agent_type,\s*\*\*_build_create_kwargs\("
+            r"[^)]*?streaming=True[^)]*?\),\s*\*\*_session_agent_kwargs\(([^)]+)\)",
             src,
             re.DOTALL,
         )

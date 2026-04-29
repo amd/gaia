@@ -37,17 +37,25 @@ def _health_ok(all_models):
 
 
 def _model(type_, name=None, ctx_size=32768):
-    """Build a /health ``all_models_loaded`` entry.
+    """Build an ``all_models_loaded`` entry.
 
-    ``name`` defaults to ``test-{type_}`` for tests that don't care about
-    model-name matching.  ``ctx_size`` defaults to 32768 (DEFAULT_CONTEXT_SIZE)
-    so the fast-path tests don't trip the ctx-too-small reload branch.
+    ``name`` defaults to a non-matching ``test-<type>`` so callers must opt
+    in to the "right model loaded" fast path by passing the expected
+    model_id explicitly. ``ctx_size`` defaults to the 32K floor the
+    pre-flight requires; pass a smaller value to exercise the small-ctx
+    reload branch.
     """
     return {
         "type": type_,
-        "model_name": name or f"test-{type_}",
+        "model_name": name if name is not None else f"test-{type_}",
         "recipe_options": {"ctx_size": ctx_size},
     }
+
+
+# Constant used by fast-path tests below: the model_name *must* match the
+# expected model passed to ``_maybe_load_expected_model`` for the new
+# right-model + right-ctx pre-flight to short-circuit.
+_EXPECTED_LLM = "Qwen3.5-35B-A3B-GGUF"
 
 
 # ---------------------------------------------------------------------------
@@ -98,19 +106,50 @@ def test_embedding_only_triggers_load():
 
 
 # ---------------------------------------------------------------------------
+# 2b. Right model loaded but ctx_size < 32K → load_model IS called (reload)
+# ---------------------------------------------------------------------------
+
+
+def test_right_model_wrong_ctx_triggers_reload():
+    """Right model name but ctx_size below the 32K floor must still
+    trigger a reload — Lemonade may have auto-loaded the model at its
+    default 4096 ctx, which silently truncates ChatAgent's >7K-token
+    system prompt and produces empty streams.
+
+    Negative coverage for the fast-path tests above: they confirm the
+    skip; this confirms the reload happens whenever ctx is too small,
+    even if the model name matches.
+    """
+    health = _health_ok([_model("llm", name=_EXPECTED_LLM, ctx_size=4096)])
+
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=health),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        mock_instance = MagicMock()
+        mock_cls.return_value = mock_instance
+
+        _maybe_load_expected_model(_EXPECTED_LLM)
+
+        # load_model must be called with the 32K ctx_size, not whatever
+        # Lemonade was holding the model at.
+        mock_instance.load_model.assert_called_once()
+        kwargs = mock_instance.load_model.call_args.kwargs
+        assert (
+            kwargs.get("ctx_size") == 32768
+        ), f"Expected reload at ctx_size=32768, got {kwargs.get('ctx_size')!r}"
+
+
+# ---------------------------------------------------------------------------
 # 3. LLM active (fast path) → load_model NOT called
 # ---------------------------------------------------------------------------
 
 
 def test_llm_active_skips_load():
-    """Expected LLM already loaded with sufficient ctx → fast path.
-
-    Pre-flight is now strict: it short-circuits only when the EXPECTED
-    model is loaded (not just any LLM) AND its ctx_size is ≥ 32K.  The
-    old "any LLM is fine" behaviour was a silent footgun (gaia-lite
-    expects 4B but 0.6B was loaded, no reload ever fired).
-    """
-    health = _health_ok([_model("llm", name="Qwen3.5-35B-A3B-GGUF")])
+    """Right LLM + ctx >= 32K → fast path; LemonadeClient must NOT be instantiated."""
+    health = _health_ok([_model("llm", name=_EXPECTED_LLM)])
 
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
@@ -119,7 +158,7 @@ def test_llm_active_skips_load():
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
 
-        _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")
+        _maybe_load_expected_model(_EXPECTED_LLM)
 
         mock_cls.assert_not_called()
 
@@ -130,12 +169,8 @@ def test_llm_active_skips_load():
 
 
 def test_vlm_active_skips_load():
-    """Expected VLM already loaded with sufficient ctx → fast path.
-
-    VLMs (type='vlm') are treated as valid chat models; the same name +
-    ctx invariants apply.
-    """
-    health = _health_ok([_model("vlm", name="Qwen3.5-35B-A3B-GGUF")])
+    """Right VLM + ctx >= 32K → fast path; LemonadeClient must NOT be instantiated."""
+    health = _health_ok([_model("vlm", name=_EXPECTED_LLM)])
 
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
@@ -144,7 +179,7 @@ def test_vlm_active_skips_load():
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
 
-        _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")
+        _maybe_load_expected_model(_EXPECTED_LLM)
 
         mock_cls.assert_not_called()
 
@@ -266,12 +301,8 @@ def test_sse_loading_message_emitted():
 
 
 def test_sse_not_called_on_fast_path():
-    """Expected LLM loaded with sufficient ctx (fast path) → no SSE event.
-
-    The SSE handler is only meant to surface "Loading LLM model..." to the
-    user when the pre-flight is actually going to load.  Fast path = silent.
-    """
-    health = _health_ok([_model("llm", name="Qwen3.5-35B-A3B-GGUF")])
+    """Right LLM + ctx >= 32K (fast path) → SSE handler must NOT be called."""
+    health = _health_ok([_model("llm", name=_EXPECTED_LLM)])
     sse = MagicMock()
 
     with (
@@ -280,7 +311,7 @@ def test_sse_not_called_on_fast_path():
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
 
-        _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF", sse_handler=sse)
+        _maybe_load_expected_model(_EXPECTED_LLM, sse_handler=sse)
 
     sse._emit.assert_not_called()
 
@@ -292,16 +323,12 @@ def test_sse_not_called_on_fast_path():
 
 def test_concurrent_second_thread_skips_load():
     """Double-check inside the lock: if another thread already loaded the
-    expected model with sufficient ctx, the current thread skips load_model.
-
-    The re-check matches the same name + ctx invariants as the outer check
-    (otherwise a wrong-model load by another thread would still pass the
-    inner gate, defeating the gate's purpose).
-    """
+    expected model with a sufficient context window, the current thread
+    skips load_model entirely."""
     # First call (before lock): empty → triggers load path
-    # Second call (inside lock re-check): expected llm present at 32K → skip
+    # Second call (inside lock re-check): right model + 32K ctx → skip
     empty_health = _health_ok([])
-    loaded_health = _health_ok([_model("llm", name="Qwen3.5-35B-A3B-GGUF")])
+    loaded_health = _health_ok([_model("llm", name=_EXPECTED_LLM)])
 
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
@@ -310,10 +337,10 @@ def test_concurrent_second_thread_skips_load():
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
 
-        _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")
+        _maybe_load_expected_model(_EXPECTED_LLM)
 
-        # load_model must NOT be called because re-check found the
-        # expected model loaded at sufficient ctx.
+        # load_model must NOT be called because re-check found the right
+        # model loaded with a sufficient context window.
         mock_cls.assert_not_called()
 
 
