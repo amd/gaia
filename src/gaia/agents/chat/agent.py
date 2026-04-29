@@ -1771,8 +1771,6 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
             # Clamp wake_in_seconds for "scheduled" state
             if state == "scheduled":
                 wake_in_seconds = max(30, min(86400, wake_in_seconds))
-                if wake_in_seconds != wake_in_seconds:  # unreachable — kept for clarity
-                    pass
 
             if hasattr(_agent.console, "loop_state_directive"):
                 _agent.console.loop_state_directive = {

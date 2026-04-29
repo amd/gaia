@@ -496,7 +496,7 @@ def _detect_languages(path: Path, max_depth: int = 2) -> List[str]:
     """Detect programming languages in a directory by file extensions."""
     lang_counts: Dict[str, int] = {}
     try:
-        for depth, (dirpath, dirnames, filenames) in enumerate(os.walk(path)):
+        for depth, (_dirpath, dirnames, filenames) in enumerate(os.walk(path)):
             if depth >= max_depth:
                 dirnames.clear()
                 continue
@@ -1054,7 +1054,7 @@ class SystemDiscovery:
         self,
         roots: dict,
         domain_urls: Dict[str, int],
-        browser_name: str,
+        browser_name: str,  # pylint: disable=unused-argument
     ) -> None:
         """Recursively extract bookmark URLs from Chromium JSON roots."""
         for _root_name, root_data in roots.items():
@@ -1420,7 +1420,7 @@ class SystemDiscovery:
             i = 0
             while True:
                 try:
-                    name, data, _vtype = winreg.EnumValue(key, i)
+                    _name, data, _vtype = winreg.EnumValue(key, i)
                     i += 1
                     # Check string values for email patterns
                     if isinstance(data, str):
@@ -2311,7 +2311,7 @@ class SystemDiscovery:
             if music_dir.exists() and music_dir.is_dir():
                 music_exts = {".mp3", ".flac", ".aac", ".wav", ".m4a"}
                 track_count = 0
-                for depth, (dirpath, dirnames, filenames) in enumerate(
+                for depth, (_dirpath, dirnames, filenames) in enumerate(
                     os.walk(str(music_dir))
                 ):
                     if depth >= 2:
@@ -2337,7 +2337,7 @@ class SystemDiscovery:
             if pictures_dir.exists() and pictures_dir.is_dir():
                 raw_exts = {".raw", ".cr2", ".cr3", ".nef", ".arw", ".dng"}
                 raw_count = 0
-                for depth, (dirpath, dirnames, filenames) in enumerate(
+                for depth, (_dirpath, dirnames, filenames) in enumerate(
                     os.walk(str(pictures_dir))
                 ):
                     if depth >= 2:
@@ -2361,9 +2361,7 @@ class SystemDiscovery:
         try:
             davinci_paths = [
                 Path("C:/Program Files/Blackmagic Design/DaVinci Resolve"),
-                Path(
-                    "C:/Program Files/Blackmagic Design" "/DaVinci Resolve/Resolve.exe"
-                ),
+                Path("C:/Program Files/Blackmagic Design/DaVinci Resolve/Resolve.exe"),
             ]
             for dv_path in davinci_paths:
                 if dv_path.exists():
@@ -2508,19 +2506,19 @@ class SystemDiscovery:
         scan_map = {
             "file_system": lambda: self.scan_file_system(paths=paths),
             "git_repos": lambda: self.scan_git_repos(paths=paths),
-            "git_identity": lambda: self.scan_git_identity(),
-            "shell_config": lambda: self.scan_shell_config(),
-            "project_manifests": lambda: self.scan_project_manifests(),
-            "ssh_config": lambda: self.scan_ssh_config(),
-            "home_structure": lambda: self.scan_home_structure(),
-            "installed_apps": lambda: self.scan_installed_apps(),
-            "browser_bookmarks": lambda: self.scan_browser_bookmarks(),
+            "git_identity": self.scan_git_identity,
+            "shell_config": self.scan_shell_config,
+            "project_manifests": self.scan_project_manifests,
+            "ssh_config": self.scan_ssh_config,
+            "home_structure": self.scan_home_structure,
+            "installed_apps": self.scan_installed_apps,
+            "browser_bookmarks": self.scan_browser_bookmarks,
             "browser_history": lambda: self.scan_browser_history(days=history_days),
-            "email_accounts": lambda: self.scan_email_accounts(),
-            "windows_userassist": lambda: self.scan_windows_userassist(),
-            "recent_file_types": lambda: self.scan_recent_file_types(),
-            "gaming_and_media": lambda: self.scan_gaming_and_media(),
-            "macos_app_usage": lambda: self.scan_macos_app_usage(),
+            "email_accounts": self.scan_email_accounts,
+            "windows_userassist": self.scan_windows_userassist,
+            "recent_file_types": self.scan_recent_file_types,
+            "gaming_and_media": self.scan_gaming_and_media,
+            "macos_app_usage": self.scan_macos_app_usage,
         }
 
         results: Dict[str, List[Dict]] = {}

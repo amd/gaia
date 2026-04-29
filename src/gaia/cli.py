@@ -1777,7 +1777,7 @@ Examples:
     )
 
     # Add new subparser for generating summary reports from evaluation directories
-    report_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "report",
         help="Generate summary report from evaluation results directory",
         parents=[parent_parser],
@@ -4254,7 +4254,7 @@ def _handle_memory_status():
         # Temporal section
         tp = stats["temporal"]
         if tp["upcoming_count"] > 0 or tp["overdue_count"] > 0:
-            print(f"\n  Temporal:")
+            print("\n  Temporal:")
             if tp["upcoming_count"] > 0:
                 print(f"    Upcoming (7d): {tp['upcoming_count']}")
             if tp["overdue_count"] > 0:
@@ -4438,11 +4438,9 @@ def _bootstrap_infer():
     reading it.
     """
     import json as _json
-    import logging as _logging
 
     from gaia.agents.base.discovery import SystemDiscovery
     from gaia.agents.base.memory_store import MemoryStore
-    from gaia.llm import create_client
 
     print("\n=== GAIA Memory — AI Profile Inference ===")
     print(
@@ -4665,9 +4663,9 @@ def _bootstrap_infer():
         raise RuntimeError(f"Error opening memory database: {e}") from e
 
     # Silence noisy store INFO logs
-    _store_logger = _logging.getLogger("gaia.agents.base.memory_store")
+    _store_logger = logging.getLogger("gaia.agents.base.memory_store")
     _orig_level = _store_logger.level
-    _store_logger.setLevel(_logging.WARNING)
+    _store_logger.setLevel(logging.WARNING)
 
     approved = 0
     skipped = 0
@@ -4906,14 +4904,12 @@ def _bootstrap_system(force: bool = True):
         print(f"❌ Error opening memory database: {e}")
         return
 
-    import logging as _logging
-
-    _store_logger = _logging.getLogger("gaia.agents.base.memory_store")
+    _store_logger = logging.getLogger("gaia.agents.base.memory_store")
     _orig_level = _store_logger.level
 
     try:
         # Silence INFO-level store logs — end users don't need per-row output
-        _store_logger.setLevel(_logging.WARNING)
+        _store_logger.setLevel(logging.WARNING)
 
         if force:
             # Clear existing system entries before re-storing

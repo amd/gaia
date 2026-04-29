@@ -323,15 +323,6 @@ class AgentLoop:
             "signal your status so the loop knows what to do next."
         )
 
-        # Build a minimal ChatRequest-like object
-        from gaia.ui.models import ChatRequest
-
-        request = ChatRequest(
-            session_id=session_id,
-            message=tick_prompt,
-            stream=False,
-        )
-
         result_holder: Dict[str, Any] = {"error": None}
         db = self._db
 
@@ -339,14 +330,13 @@ class AgentLoop:
             try:
                 import gaia.ui._chat_helpers as _helpers
 
+                # Run the heavier sync work inline (we're in a thread)
+                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
                 # Reuse cached agent if available; build fresh if not.
                 # We bypass the full _stream_chat_response pipeline to avoid
                 # yielding SSE events (nothing is consuming them in background mode).
                 # The SSEOutputHandler still captures events for the activity log.
-                _helpers._stream_chat_response  # ensure module is loaded
-
-                # Run the heavier sync work inline (we're in a thread)
-                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
                 model_id = session.get("model")
                 custom_model = db.get_setting("custom_model")

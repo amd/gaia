@@ -36,6 +36,7 @@ Spec: docs/spec/agent-memory-architecture.md
 import concurrent.futures
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime, timedelta
@@ -272,8 +273,31 @@ class MemoryMixin:
             context: Active context scope (e.g., 'work', 'personal', 'global').
 
         Raises:
-            RuntimeError: If Lemonade embedding service is unreachable.
+            RuntimeError: If Lemonade embedding service is unreachable
+                (unless ``GAIA_MEMORY_DISABLED=1`` is set, in which case
+                memory is skipped entirely — used by security tests and CI
+                environments that don't need memory but instantiate agents).
         """
+        # Explicit opt-out for environments that don't need memory (security
+        # tests, lint-time imports, etc.).  This is NOT a silent fallback —
+        # the user/test author has explicitly set the env var.
+        if os.environ.get("GAIA_MEMORY_DISABLED") == "1":
+            logger.info(
+                "[MemoryMixin] memory disabled via GAIA_MEMORY_DISABLED=1; "
+                "skipping init"
+            )
+            self._memory_store = None
+            self._memory_context = context
+            self._auto_extract_enabled = False
+            self._incognito = True
+            self._original_user_input = None
+            self._embedder = None
+            self._faiss_index = None
+            self._faiss_id_map = []
+            self._memory_post_init_pending = False
+            self._memory_session_id = str(uuid4())
+            return
+
         from gaia.agents.base.memory_store import MemoryStore
 
         # Step 1: Open/create DB, apply schema migrations
@@ -295,7 +319,7 @@ class MemoryMixin:
 
         # Step 2: Validate Lemonade embedding service connectivity [HARD REQUIREMENT]
         try:
-            embedder = self._get_embedder()
+            self._get_embedder()
             # Validate connectivity with a small test embedding
             test_vec = self._embed_text("connectivity test")
             if test_vec.shape[0] != EMBEDDING_DIM:
@@ -767,7 +791,6 @@ class MemoryMixin:
         vector_results = []
         faiss_hits = self._faiss_search(query_vec, oversample)
         if faiss_hits:
-            faiss_hit_ids = {kid for kid, _ in faiss_hits}
             # Fetch candidate items from store with filters already applied.
             # We over-fetch (top_k=oversample*2) so filtering by the FAISS hit
             # set still yields enough items.
@@ -783,7 +806,7 @@ class MemoryMixin:
             pool_by_id = {item["id"]: item for item in candidate_pool}
 
             # Preserve FAISS ranking order, only keep items that pass filters
-            for kid, score in faiss_hits:
+            for kid, _score in faiss_hits:
                 item = pool_by_id.get(kid)
                 if item is not None:
                     vector_results.append(item)
@@ -1957,9 +1980,7 @@ class MemoryMixin:
               time_to   : ISO 8601 date upper bound (e.g. '2026-03-31')
 
             At least one parameter required."""
-            import time as _t
-
-            _recall_t0 = _t.perf_counter()
+            _recall_t0 = time.perf_counter()
             if not any([query, category, domain, context, entity, time_from, time_to]):
                 return {
                     "status": "error",
@@ -1978,7 +1999,7 @@ class MemoryMixin:
 
             if query:
                 # Use hybrid search for query-based recall
-                _search_t0 = _t.perf_counter()
+                _search_t0 = time.perf_counter()
                 results = mixin._hybrid_search(
                     query=query,
                     category=category or None,
@@ -1989,7 +2010,7 @@ class MemoryMixin:
                     time_from=time_from or None,
                     time_to=time_to or None,
                 )
-                _search_ms = (_t.perf_counter() - _search_t0) * 1000
+                _search_ms = (time.perf_counter() - _search_t0) * 1000
                 logger.debug(
                     "recall: hybrid_search took %.1fms → %d results",
                     _search_ms,
@@ -1999,17 +2020,17 @@ class MemoryMixin:
                 if domain:
                     results = [r for r in results if r.get("domain") == domain]
             elif entity:
-                _db_t0 = _t.perf_counter()
+                _db_t0 = time.perf_counter()
                 results = mixin._memory_store.get_by_entity(entity, limit=limit)
                 logger.debug(
                     "recall: get_by_entity took %.1fms → %d results",
-                    (_t.perf_counter() - _db_t0) * 1000,
+                    (time.perf_counter() - _db_t0) * 1000,
                     len(results),
                 )
                 if domain:
                     results = [r for r in results if r.get("domain") == domain]
             elif category or domain:
-                _db_t0 = _t.perf_counter()
+                _db_t0 = time.perf_counter()
                 # If only domain provided (no category), use 'note' as default since
                 # domain is a sub-type of notes/facts (journal entries are category=note)
                 effective_category = category or "note"
@@ -2041,12 +2062,12 @@ class MemoryMixin:
                     effective_category,
                     domain or "any",
                     offset,
-                    (_t.perf_counter() - _db_t0) * 1000,
+                    (time.perf_counter() - _db_t0) * 1000,
                     len(results),
                 )
             elif time_from or time_to:
                 # Time-range only: use get_all_knowledge with SQL-level pagination.
-                _db_t0 = _t.perf_counter()
+                _db_t0 = time.perf_counter()
                 page = mixin._memory_store.get_all_knowledge(
                     category=category or None,
                     context=context or None,
@@ -2058,7 +2079,7 @@ class MemoryMixin:
                 )
                 logger.debug(
                     "recall: get_all_knowledge took %.1fms",
-                    (_t.perf_counter() - _db_t0) * 1000,
+                    (time.perf_counter() - _db_t0) * 1000,
                 )
                 filtered = []
                 for item in page.get("items", []):
@@ -2072,17 +2093,17 @@ class MemoryMixin:
                     filtered.append(item)
                 results = filtered[offset : offset + limit]
             else:
-                _db_t0 = _t.perf_counter()
+                _db_t0 = time.perf_counter()
                 page = mixin._memory_store.get_all_knowledge(
                     context=context, limit=limit, offset=offset
                 )
                 logger.debug(
                     "recall: get_all_knowledge took %.1fms",
-                    (_t.perf_counter() - _db_t0) * 1000,
+                    (time.perf_counter() - _db_t0) * 1000,
                 )
                 results = page.get("items", [])
 
-            total_ms = (_t.perf_counter() - _recall_t0) * 1000
+            total_ms = (time.perf_counter() - _recall_t0) * 1000
             logger.info(
                 "recall: total=%.1fms results=%d (query=%r cat=%r domain=%r)",
                 total_ms,

@@ -12,17 +12,17 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
+# Single source of truth imported from the data layer so that all three
+# validation sites (remember tool, update_memory tool, REST router) stay
+# in sync automatically when categories are added or removed.
+from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
+
 from ..database import ChatDatabase
 from ..dependencies import get_db
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["memory"])
-
-# Single source of truth imported from the data layer so that all three
-# validation sites (remember tool, update_memory tool, REST router) stay
-# in sync automatically when categories are added or removed.
-from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
 
 # Safe defaults returned when the data-layer lacks v2 methods.
 # Defined once here so memory_stats() doesn't repeat the literals.

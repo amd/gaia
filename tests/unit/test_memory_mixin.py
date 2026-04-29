@@ -119,34 +119,45 @@ def _mock_v2_init_context():
 
     @contextmanager
     def _ctx():
-        mock_embedder = _make_mock_embedder()
-        with (
-            patch.object(MemoryMixin, "_get_embedder", return_value=mock_embedder),
-            patch.object(
-                MemoryMixin,
-                "_embed_text",
-                return_value=np.random.rand(768).astype(np.float32),
-            ),
-            patch.object(MemoryMixin, "_backfill_embeddings", return_value=0),
-            patch.object(MemoryMixin, "_rebuild_faiss_index", return_value=None),
-            patch.object(
-                MemoryMixin,
-                "reconcile_memory",
-                return_value={
-                    "pairs_checked": 0,
-                    "reinforced": 0,
-                    "contradicted": 0,
-                    "weakened": 0,
-                    "neutral": 0,
-                },
-            ),
-            patch.object(
-                MemoryMixin,
-                "consolidate_old_sessions",
-                return_value={"consolidated": 0, "extracted_items": 0},
-            ),
-        ):
-            yield mock_embedder
+        # Memory tests must run the real init_memory() flow (with mocked
+        # external deps).  If a parent CI job sets GAIA_MEMORY_DISABLED=1
+        # to skip memory init in non-memory tests, override it here so the
+        # mocked init still exercises the full code path.
+        import os
+
+        prior_disabled = os.environ.pop("GAIA_MEMORY_DISABLED", None)
+        try:
+            mock_embedder = _make_mock_embedder()
+            with (
+                patch.object(MemoryMixin, "_get_embedder", return_value=mock_embedder),
+                patch.object(
+                    MemoryMixin,
+                    "_embed_text",
+                    return_value=np.random.rand(768).astype(np.float32),
+                ),
+                patch.object(MemoryMixin, "_backfill_embeddings", return_value=0),
+                patch.object(MemoryMixin, "_rebuild_faiss_index", return_value=None),
+                patch.object(
+                    MemoryMixin,
+                    "reconcile_memory",
+                    return_value={
+                        "pairs_checked": 0,
+                        "reinforced": 0,
+                        "contradicted": 0,
+                        "weakened": 0,
+                        "neutral": 0,
+                    },
+                ),
+                patch.object(
+                    MemoryMixin,
+                    "consolidate_old_sessions",
+                    return_value={"consolidated": 0, "extracted_items": 0},
+                ),
+            ):
+                yield mock_embedder
+        finally:
+            if prior_disabled is not None:
+                os.environ["GAIA_MEMORY_DISABLED"] = prior_disabled
 
     return _ctx()
 

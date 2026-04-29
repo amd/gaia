@@ -411,14 +411,18 @@ def _canonical_agent_type(agent_type: str) -> str:
     Keeps the per-session agent cache from thrashing when a client mixes the
     old and new IDs within the same session — both resolve to the same
     canonical ID and therefore the same cache entry.
+
+    Raises:
+        AttributeError: if the registered registry lacks ``canonical_id``.
+            We deliberately surface this loudly rather than fall back to the
+            raw ``agent_type`` — silent fallbacks here cause cache thrash that
+            is hard to debug. See the regression test in
+            tests/unit/chat/ui/test_chat_helpers.py.
     """
     registry = _agent_registry
     if registry is None:
         return agent_type
-    try:
-        return registry.canonical_id(agent_type)
-    except Exception:  # pragma: no cover — defensive; canonical_id is pure
-        return agent_type
+    return registry.canonical_id(agent_type)
 
 
 def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
