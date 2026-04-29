@@ -154,17 +154,32 @@
 }
 .sidebar-search input {
     width: 100%;
-    padding: 8px 12px 8px 32px;
+    padding: 9px 12px 9px 32px;
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg); /* 10 px — matches session-item rounding */
     outline: none;
     font-size: 12px;
     font-family: var(--font-sans);
-    transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
+    background: var(--bg-tertiary);
+    /* Subtle inset shadow makes the input feel slightly recessed
+       (the inverse of session-item active which sits forward). */
+    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.03);
+    transition: border-color var(--duration) var(--ease),
+                box-shadow var(--duration) var(--ease),
+                background var(--duration) var(--ease);
+}
+.sidebar-search input:hover {
+    border-color: var(--border-light);
 }
 .sidebar-search input:focus {
-    border-color: rgba(237, 28, 36, 0.4);
-    box-shadow: 0 0 12px rgba(237, 28, 36, 0.08);
+    /* Tone-down: was 0.4 alpha border + 12 px red glow which looked
+       alarming. Soft brand-red ring at lower intensity reads as
+       focus without the "warning" vibe. */
+    border-color: rgba(237, 28, 36, 0.35);
+    background: var(--bg-secondary);
+    box-shadow:
+        inset 0 1px 1px rgba(0, 0, 0, 0.04),
+        0 0 0 3px rgba(237, 28, 36, 0.08);
 }
 .sidebar-search input::placeholder { color: var(--text-muted); font-family: var(--font-sans); }
 
@@ -194,53 +209,67 @@
     padding-top: 12px;
 }
 
-/* Session items -- refined list entries */
+/* Session items — softer, more rounded list entries.
+ * Same design language as the GAIA message card: rounder, subtle
+ * elevation when active/hovered, less red bleed. The previous active
+ * state used heavy red box-shadows + an inset red glow that fought
+ * with the message bubble for visual attention; this version reads
+ * as "selected" via clean lift + accent without screaming red. */
 .session-item {
     display: flex;
     align-items: center;
-    padding: 8px 10px 8px 12px;
-    border-radius: var(--radius-md);
+    padding: 9px 10px 9px 14px;
+    border-radius: var(--radius-lg); /* 10 px — softer than the old 8 px */
     cursor: pointer;
-    margin-bottom: 2px;
+    margin-bottom: 3px;
     position: relative;
-    transition: background-color 220ms var(--ease), box-shadow 280ms var(--ease), transform var(--duration-fast) var(--ease);
+    border: 1px solid transparent;
+    transition: background-color 220ms var(--ease),
+                border-color 220ms var(--ease),
+                box-shadow 280ms var(--ease),
+                transform var(--duration-fast) var(--ease);
     outline: none;
 }
 
-/* Animated left selection indicator */
-.session-item::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 20%;
-    width: 2px;
-    height: 60%;
-    background: linear-gradient(180deg, var(--amd-red-light) 0%, var(--amd-red) 60%);
-    border-radius: 0 2px 2px 0;
-    transform: scaleY(0);
-    transform-origin: center;
-    transition: transform 300ms var(--ease), opacity 200ms var(--ease), box-shadow 300ms var(--ease);
-    opacity: 0;
-}
+/* Removed: the ::before red indicator bar.
+ * Selection used to be a vertical AMD-red gradient strip on the left
+ * edge — same visual vocabulary as .msg-error, so the active row
+ * read as "this row is broken" rather than "this row is selected".
+ * Active state is now communicated purely via elevation + bg lift,
+ * matching the GAIA message-card design language. */
 
 .session-item:hover {
     background: var(--bg-hover);
-}
-
-/* Hover indicator hint */
-.session-item:hover::before {
-    transform: scaleY(0.35);
-    opacity: 0.45;
+    border-color: var(--border-light);
 }
 
 /* Press / tap feedback */
 .session-item:active:not(.session-deleting) {
-    transform: scale(0.982);
+    transform: scale(0.985);
     transition-duration: 80ms;
 }
 
+/* Active session — neutral elevated card.
+ *
+ * Matches the GAIA message bubble's 3D treatment exactly:
+ *   (1) inset 1-px top-edge highlight     → "lit from above"
+ *   (2) crisp 1-px contact shadow         → defines bottom edge
+ *   (3) soft mid-distance shadow          → the actual elevation
+ *   (4) wider ambient shadow              → grounds the card
+ * Plus a neutral background lift (--bg-active) — no red hue at all.
+ *
+ * The selected row now reads as "this card is in front" instead of
+ * "this row is on fire", which is the design vocabulary the user
+ * asked for. Brand red is reserved for actual errors (.msg-error)
+ * and for the small "GAIA" name text in message headers. */
 .session-item.active {
     background: var(--bg-active);
+    border-color: var(--border);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        0 1px 1px rgba(0, 0, 0, 0.04),
+        0 4px 10px -2px rgba(0, 0, 0, 0.10),
+        0 8px 20px -8px rgba(0, 0, 0, 0.08);
     animation: sessionActivate 320ms var(--ease);
 }
 
@@ -249,32 +278,30 @@
     text-shadow: 0 0 0.4px var(--text-primary);
 }
 
-/* Active indicator — full height with glow */
-.session-item.active::before {
-    transform: scaleY(1);
-    opacity: 1;
-    box-shadow: 2px 0 10px rgba(237, 28, 36, 0.45);
-}
-
 [data-theme="dark"] .session-item.active {
-    background: rgba(237, 28, 36, 0.08);
-    box-shadow: inset 0 0 28px rgba(237, 28, 36, 0.07);
-    /* Run shared entrance + separate dark background/glow animation in parallel */
-    animation: sessionActivate 320ms var(--ease), sessionActivateDarkBg 380ms var(--ease);
+    /* Dark mode active: NO red tint anywhere. The previous version
+       had `rgba(237, 28, 36, 0.06)` background + `rgba(237, 28, 36, 0.12)`
+       border + an inset 28-px red glow which collectively made every
+       selected row look like a tinted warning band. Now it's a
+       neutral white-tinted card sitting forward on the dark sidebar,
+       same visual logic as the assistant message card in dark mode. */
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 1px 2px rgba(0, 0, 0, 0.30),
+        0 6px 16px -2px rgba(0, 0, 0, 0.45),
+        0 12px 28px -10px rgba(0, 0, 0, 0.30);
+    animation: sessionActivate 320ms var(--ease);
 }
 
-/* Entrance animation — slide in from left with overshoot */
+/* Entrance animation — gentle drift from -4 px with no overshoot.
+   The previous overshoot was a tiny "bounce" past the resting
+   position, which read as kinetic but slightly unstable. A clean
+   ease-out matches the calm card vocabulary. */
 @keyframes sessionActivate {
     0%   { transform: translateX(-4px); opacity: 0.65; }
-    55%  { transform: translateX(1.5px); }
     100% { transform: translateX(0); opacity: 1; }
-}
-
-/* Dark mode only: background flood-in with overshoot, runs alongside sessionActivate */
-@keyframes sessionActivateDarkBg {
-    0%   { background: transparent; box-shadow: none; }
-    55%  { background: rgba(237, 28, 36, 0.12); }
-    100% { background: rgba(237, 28, 36, 0.08); box-shadow: inset 0 0 28px rgba(237, 28, 36, 0.07); }
 }
 
 .session-item:focus-visible {
@@ -417,10 +444,14 @@
     }
 }
 
-/* Bottom bar -- status row */
+/* Bottom bar — status row.
+ * Inset 1-px highlight on the top edge gives a subtle "lip" between
+ * the scrolling list above and this fixed status row, reinforcing
+ * the panel-stack visual without a harsh hairline. */
 .sidebar-bottom {
     padding: 12px 14px;
     border-top: 1px solid var(--border);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
     display: flex;
     align-items: center;
     justify-content: space-between;

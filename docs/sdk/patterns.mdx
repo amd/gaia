@@ -89,36 +89,7 @@ class HelloAgent(Agent):
 
 ---
 
-## Pattern 2: YAML-manifest agent (no Python)
-
-When the agent is a system prompt + known tool mixins, skip Python entirely.
-
-```yaml
-# ~/.gaia/agents/research/agent.yaml
-# yaml-language-server: $schema=https://amd-gaia.ai/schemas/agent-manifest.schema.json
-manifest_version: 1
-id: research
-name: Research Agent
-description: Answers questions by searching local documents.
-instructions: |
-  You are a research assistant. For every question, use the rag tool to find
-  relevant passages before answering. Cite the source path.
-tools:
-  - rag
-  - file_search
-models:
-  - Qwen3.5-35B-A3B-GGUF
-  - Qwen3-0.6B-GGUF
-conversation_starters:
-  - "What does the design doc say about X?"
-  - "Find me the section on authentication."
-```
-
-**Tool names must be keys in `KNOWN_TOOLS`** (`src/gaia/agents/registry.py`). Typos fail Pydantic validation with a helpful error listing the valid names. Editors with the YAML language server surface the `enum` constraint from the schema.
-
----
-
-## Pattern 3: MCP-enabled agent
+## Pattern 2: MCP-enabled agent
 
 `MCPClientMixin` must be initialized *before* `super().__init__()` runs — the base `Agent.__init__` calls `_register_tools`, which may reference `self._mcp_manager`.
 
@@ -173,9 +144,9 @@ Companion `mcp_servers.json`:
 
 ---
 
-## Pattern 4: Composing tool mixins
+## Pattern 3: Composing tool mixins
 
-Pull in reusable capabilities instead of duplicating them. GAIA convention: **`Agent` goes first** in the base list, mixins follow. This matches `ChatAgent`, `SDAgent`, `MedicalIntakeAgent`, and the dynamic class built by the registry for YAML-manifest agents.
+Pull in reusable capabilities instead of duplicating them. GAIA convention: **`Agent` goes first** in the base list, mixins follow. This matches `ChatAgent`, `SDAgent`, and `MedicalIntakeAgent`.
 
 ```python
 from gaia.agents.base.agent import Agent
@@ -199,11 +170,11 @@ class DocEditorAgent(Agent, RAGToolsMixin, FileIOToolsMixin):
         self.register_file_io_tools()
 ```
 
-The convention is `register_<tool_name>_tools()` — the registry uses this by name for YAML-manifest agents. Keep it if you add a new mixin.
+The convention is `register_<tool_name>_tools()`. Keep it consistent if you add a new mixin so existing agents can opt in by inheritance and a single method call.
 
 ---
 
-## Pattern 5: Custom tool decorated with `@tool`
+## Pattern 4: Custom tool decorated with `@tool`
 
 Inside `_register_tools`, the `@tool` decorator captures `self` via closure. The docstring is what the LLM sees — write it for the LLM, not for Python readers.
 
@@ -231,7 +202,7 @@ def _register_tools(self) -> None:
 
 ---
 
-## Pattern 6: Registering a built-in agent
+## Pattern 5: Registering a built-in agent
 
 Add to `AgentRegistry._register_builtin_agents` in `src/gaia/agents/registry.py`. The factory must filter kwargs to valid dataclass fields so callers can pass extra kwargs without crashing.
 
@@ -258,7 +229,7 @@ self._register(
 
 ---
 
-## Pattern 7: Testing with mocked Lemonade
+## Pattern 6: Testing with mocked Lemonade
 
 Most unit tests should mock Lemonade. Real inference belongs in integration tests gated by `require_lemonade`.
 
@@ -284,7 +255,7 @@ Fixtures live in `tests/conftest.py`. See [`docs/sdk/testing.mdx`](/sdk/testing)
 
 ---
 
-## Pattern 8: Lint your agent before opening a PR
+## Pattern 7: Lint your agent before opening a PR
 
 The convention linter catches missing tests, missing docs, missing registry entries, and base-class violations.
 
@@ -304,7 +275,7 @@ python -m pytest tests/test_hello_agent.py -xvs
 | Register `@tool` at module scope | The decorator needs `self`; top-level loses the binding. |
 | Hard-code `http://localhost:13305` | Breaks Docker/CI where Lemonade runs elsewhere. |
 | Mix `time.sleep` into the reasoning loop | Blocks SSE streaming in the UI backend. |
-| Add a mixin without a `KNOWN_TOOLS` entry | YAML-manifest agents cannot opt in by name. |
+| Add a mixin without a `KNOWN_TOOLS` entry | The BuilderAgent template scaffolds tool imports from this map; missing entries break agent generation. |
 | Write `.mdx` docs without updating `docs/docs.json` | Mintlify returns 404 for the page. |
 | Call `subprocess` with user input | Command injection; use `shlex.quote` or a list of args. |
 
@@ -316,5 +287,4 @@ python -m pytest tests/test_hello_agent.py -xvs
 - [Tools](/sdk/core/tools) — tool decorator, LLM contract, parameters
 - [Testing](/sdk/testing) — fixtures, mocking, integration patterns
 - [Best Practices](/sdk/best-practices) — when to extract a mixin, when to inline, naming
-- [Registry source](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py) — `KNOWN_TOOLS` map, `AgentManifest` model
-- [Manifest JSON Schema](https://github.com/amd/gaia/blob/main/schemas/agent-manifest.schema.json) — editor autocomplete for `agent.yaml`
+- [Registry source](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py) — `KNOWN_TOOLS` map, Python agent loader

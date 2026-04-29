@@ -21,7 +21,7 @@ const CTX_PRESETS = [
 ];
 
 export function SettingsModal() {
-    const { setShowSettings, sessions, removeSession } = useChatStore();
+    const { setShowSettings, sessions, removeSession, agents } = useChatStore();
     const [status, setStatus] = useState<SystemStatus | null>(null);
     const [loading, setLoading] = useState(true);
     const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
@@ -37,6 +37,15 @@ export function SettingsModal() {
     const [mcpPort, setMcpPort] = useState<number>(8765);
     const [mcpBusy, setMcpBusy] = useState(false);
     const [urlCopied, setUrlCopied] = useState(false);
+
+    // ── Active Model override ─────────────────────────────────────────────────
+    const [customModel, setCustomModel] = useState<string>('');
+    const [savedCustomModel, setSavedCustomModel] = useState<string>('');
+    const [settingsLoaded, setSettingsLoaded] = useState(false);
+    const [savingModel, setSavingModel] = useState(false);
+    const [saveError, setSaveError] = useState<string | null>(null);
+    const [justSaved, setJustSaved] = useState(false);
+    const justSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
         log.system.info('Checking system status...');
@@ -54,17 +63,62 @@ export function SettingsModal() {
             setCtxSize(sett.context_size ?? MIN_CONTEXT_SIZE);
             setAgentMCP(agentSrv);
             if (agentSrv.port) setMcpPort(agentSrv.port);
+            // Load custom_model from the same settings payload so the
+            // Active Model input starts pre-filled with the persisted value.
+            const cm = sett.custom_model ?? '';
+            setCustomModel(cm);
+            setSavedCustomModel(cm);
             log.system.timed('Settings modal data loaded', t, {
                 lemonade: sys.lemonade_running ? 'running' : 'stopped',
                 model: sys.model_loaded || 'none',
                 ctx: sett.context_size ?? 'default',
                 agentMCP: agentSrv.running ? `running:${agentSrv.port}` : 'stopped',
+                customModel: cm || 'none',
             });
+            if (!sys.lemonade_running) {
+                log.system.warn('Lemonade Server is NOT running.');
+            }
         }).catch((err) => {
             log.system.error('Failed to load settings modal data', err);
             setStatus(null);
-        }).finally(() => setLoading(false));
+        }).finally(() => {
+            setLoading(false);
+            setSettingsLoaded(true);
+        });
     }, []);
+
+    useEffect(() => {
+        return () => { if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current); };
+    }, []);
+
+    const saveCustomModel = useCallback(async () => {
+        const trimmed = customModel.trim();
+        // Backend distinguishes "not sent" (no-op) from "explicit empty string"
+        // (clear). Sending null would be interpreted as no-op because Pydantic
+        // defaults unset fields to None. Use "" to clear.
+        const payload = trimmed.length > 0 ? trimmed : '';
+        setSavingModel(true);
+        setSaveError(null);
+        setJustSaved(false);
+        try {
+            log.system.info('Saving custom_model override', { custom_model: payload });
+            const updated = await api.updateSettings({ custom_model: payload });
+            const nextValue = updated.custom_model ?? '';
+            setCustomModel(nextValue);
+            setSavedCustomModel(nextValue);
+            setJustSaved(true);
+            if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current);
+            justSavedTimerRef.current = setTimeout(() => setJustSaved(false), 2200);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.system.error('Failed to save custom_model', err);
+            setSaveError(msg);
+        } finally {
+            setSavingModel(false);
+        }
+    }, [customModel]);
+
+    const customModelDirty = customModel.trim() !== savedCustomModel.trim();
 
     const modelName = status?.default_model_name ?? DEFAULT_MODEL_NAME;
     const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(
@@ -72,7 +126,7 @@ export function SettingsModal() {
         settings?.context_size ?? undefined,
     );
 
-    // ── Context-size save ─────────────────────────────────────────────────────
+    // ── Context-size save (persists; reload model separately to apply) ────────
     const saveCtxSize = useCallback(async () => {
         setCtxSaving(true);
         try {
@@ -220,7 +274,11 @@ export function SettingsModal() {
                                         ok={status.disk_space_gb > 5}
                                         hint={!status.model_loaded && status.disk_space_gb < 30 ? `Models require ~25 GB — only ${status.disk_space_gb} GB available` : undefined}
                                     />
-                                    <StatusRow label="Memory" value={`${status.memory_available_gb} GB available`} ok={status.memory_available_gb > 2} />
+                                    <StatusRow
+                                        label="Memory"
+                                        value={status.memory_available_gb != null ? `${status.memory_available_gb} GB available` : 'unknown'}
+                                        ok={status.memory_available_gb != null && status.memory_available_gb > 2}
+                                    />
                                     {status.processor_name && (
                                         <StatusRow
                                             label="Processor"
@@ -306,6 +364,63 @@ export function SettingsModal() {
                         )}
                     </section>
 
+                    {/* Active Model */}
+                    <section className="settings-section">
+                        <h4>Active Model</h4>
+                        <p className="model-override-desc">
+                            Override the model used by the active agent. Leave empty to use the current agent&rsquo;s preferred model.
+                        </p>
+                        <div className="model-input-row">
+                            <input
+                                type="text"
+                                className={`model-input${savedCustomModel ? ' has-override' : ''}`}
+                                placeholder="Use agent default"
+                                value={customModel}
+                                onChange={(e) => { setCustomModel(e.target.value); setSaveError(null); setJustSaved(false); }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && !savingModel && customModelDirty && settingsLoaded) {
+                                        e.preventDefault();
+                                        void saveCustomModel();
+                                    }
+                                }}
+                                disabled={!settingsLoaded || savingModel}
+                                spellCheck={false}
+                                autoCapitalize="off"
+                                autoCorrect="off"
+                                aria-label="Custom model override"
+                            />
+                            <div className="model-btn-group">
+                                <button
+                                    className={`btn-model-save${justSaved ? ' saved' : ''}`}
+                                    onClick={() => { void saveCustomModel(); }}
+                                    disabled={!settingsLoaded || savingModel || (!customModelDirty && !justSaved)}
+                                    aria-label="Save custom model"
+                                >
+                                    {savingModel ? (
+                                        <><Loader2 size={13} className="btn-spinner" /> Saving…</>
+                                    ) : justSaved ? (
+                                        <><CheckCircle2 size={13} /> Saved</>
+                                    ) : (
+                                        'Save'
+                                    )}
+                                </button>
+                            </div>
+                        </div>
+                        <p className="model-status-hint">
+                            Accepts a Lemonade model ID (e.g. <code>Qwen3-4B-Instruct-2507-GGUF</code>)
+                            {' '}or a HuggingFace ID (e.g. <code>unsloth/Qwen3-4B-GGUF</code>).
+                        </p>
+                        {saveError && (
+                            <div className="model-warning" role="alert">
+                                <AlertCircle size={14} />
+                                <div className="model-warning-content">
+                                    <strong>Could not save</strong>
+                                    <p>{saveError}</p>
+                                </div>
+                            </div>
+                        )}
+                    </section>
+
                     {/* Context Window Size */}
                     <section className="settings-section">
                         <h4>Context Window</h4>
@@ -349,6 +464,36 @@ export function SettingsModal() {
                             </p>
                         )}
                     </section>
+
+                    {/* Memory Warnings */}
+                    {status && status.memory_available_gb != null && (() => {
+                        const available = status.memory_available_gb;
+                        const warnings = agents.filter(
+                            (a) => a.min_memory_gb != null && a.min_memory_gb > available,
+                        );
+                        if (warnings.length === 0) return null;
+                        return (
+                            <section className="settings-section">
+                                <h4>Memory Warnings</h4>
+                                <div className="status-grid">
+                                    {warnings.map((a) => (
+                                        <div key={a.id} className="status-row status-row--has-hint">
+                                            <span className="status-label">{a.name}</span>
+                                            <div className="status-value-wrap">
+                                                <span className="status-value warn memory-warning-value">
+                                                    <AlertCircle size={12} />
+                                                    Needs ~{a.min_memory_gb} GB free
+                                                </span>
+                                                <span className="status-hint">
+                                                    Only {status.memory_available_gb} GB available &mdash; model load may fail or swap heavily.
+                                                </span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </section>
+                        );
+                    })()}
 
                     {/* Agent UI MCP Server */}
                     <section className="settings-section">

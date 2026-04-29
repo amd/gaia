@@ -3,15 +3,23 @@ title: "Evaluation Framework"
 icon: "flask-vial"
 ---
 
+<Warning>
+  **Deprecated:** The batch-experiment, ground-truth generation, and visualize commands documented on this page have been removed in v0.18.0. They are replaced by the new **Agent Eval Benchmark** — a scenario-based framework that tests the live Agent UI end-to-end.
+
+  **Use the new framework instead:**
+  - [Getting Started](/guides/eval) — run your first eval in 5 minutes
+  - [Scenario Authoring](/guides/eval-scenarios) — write custom YAML scenarios
+  - [CI/CD Integration](/guides/eval-ci) — regression detection in GitHub Actions
+  - [CLI Reference](/reference/cli#agent-eval) — full `gaia eval agent` command reference
+</Warning>
+
 <Info>
   **Source Code:** [`src/gaia/eval/`](https://github.com/amd/gaia/tree/main/src/gaia/eval)
 </Info>
 
-<Badge text="development" color="orange" />
+## Overview (Legacy)
 
-## Overview
-
-The GAIA evaluation framework provides systematic tools for testing and comparing AI model performance across different deployment scenarios. This framework enables generation of synthetic test data, creation of evaluation standards, and automated performance comparison.
+The legacy evaluation framework provided tools for batch experiments and ground-truth comparison. **These commands have been removed.** The documentation below is retained for historical reference only.
 
 ### Quick Example: Email Summarization
 
@@ -1333,13 +1341,12 @@ Check consolidated report timing:
 cat ./output/experiments/consolidated_experiments_report.json | jq '.metadata.total_execution_time_seconds'
 ```
 
-## Fix Code Testbench
+## Agent Eval Benchmark
 
-See the dedicated page for the code-fixing prompt testbench, including usage, examples, scenarios, and options: [Fix Code Testbench](./eval/fix-code-testbench).
-
-## Examples
-
-See the [evaluation configs](https://github.com/amd/gaia/tree/main/src/gaia/eval/configs) directory for sample configurations and test data.
+For the new scenario-based eval framework that tests the live Agent UI end-to-end, see:
+- [Getting Started Guide](/guides/eval) — run your first eval in 5 minutes
+- [Scenario Authoring](/guides/eval-scenarios) — write custom YAML scenarios
+- [CI/CD Integration](/guides/eval-ci) — regression detection in GitHub Actions
 
 ---
 

@@ -1,0 +1,57 @@
+NIST CYBERSECURITY FRAMEWORK 2.0 — FRAMEWORK OVERVIEW
+(Synthetic summary for evaluation purposes)
+
+The NIST Cybersecurity Framework (CSF) 2.0 is a voluntary framework
+published by the U.S. National Institute of Standards and Technology to
+help organizations manage and reduce cybersecurity risk. Version 2.0
+expands and refines the original framework first published in 2014 and
+updated as version 1.1 in 2018.
+
+RELEASE
+
+NIST CSF 2.0 was released on February 26, 2024. The 2.0 release marks the
+first major revision since version 1.1.
+
+WHAT'S NEW IN 2.0
+
+The most significant structural change in CSF 2.0 is the addition of a
+new core function. Version 1.1 included five core functions; version 2.0
+introduces a sixth core function, GOVERN (abbreviated GV), which was not
+present in version 1.1. The new GOVERN function elevates organizational
+governance, risk-management strategy, and supply-chain considerations to
+the top level of the framework.
+
+CORE FUNCTIONS (CSF 2.0)
+
+CSF 2.0 organizes cybersecurity activities into 6 core functions:
+  1. Govern   (GV)  — new in 2.0
+  2. Identify (ID)
+  3. Protect  (PR)
+  4. Detect   (DE)
+  5. Respond  (RS)
+  6. Recover  (RC)
+
+CATEGORIES AND SUBCATEGORIES
+
+The 6 core functions are decomposed into categories and subcategories.
+CSF 2.0 contains a total of 106 subcategories across the six functions,
+each describing a specific cybersecurity outcome that organizations may
+work toward.
+
+INTENDED AUDIENCE
+
+CSF 2.0 is intended for use by organizations of all sizes and sectors,
+including critical infrastructure operators, small businesses, and
+non-U.S. organizations. The framework is technology-neutral and is
+designed to be used alongside sector-specific guidance and other risk
+management resources.
+
+NOTE ON PROCESS HISTORY
+
+This overview summarizes the framework structure and release. Process
+artifacts associated with the development of CSF 2.0 — for example, the
+length of the public comment period preceding final publication — are
+documented in the separate development history materials maintained by
+NIST and are not included in this overview.
+
+END OF OVERVIEW

@@ -298,3 +298,127 @@ def write_summary_md(scorecard):
     ]
 
     return "\n".join(lines) + "\n"
+
+
+def write_junit_xml(scorecard):
+    """Convert scorecard results to JUnit XML format for CI integration.
+
+    Each category becomes a ``<testsuite>`` and each scenario becomes a
+    ``<testcase>``.  Failed / blocked / errored scenarios include a
+    ``<failure>`` element with score details and root cause.
+
+    Args:
+        scorecard: Scorecard dict as produced by :func:`build_scorecard`.
+
+    Returns:
+        JUnit XML string ready to be written to a file.
+    """
+    import xml.etree.ElementTree as ET
+
+    testsuites = ET.Element("testsuites")
+
+    summary = scorecard.get("summary", {})
+    testsuites.set("name", f"GAIA Agent Eval — {scorecard.get('run_id', 'unknown')}")
+    testsuites.set("tests", str(summary.get("total_scenarios", 0)))
+    testsuites.set(
+        "failures", str(summary.get("failed", 0) + summary.get("blocked", 0))
+    )
+    testsuites.set(
+        "errors",
+        str(
+            summary.get("timeout", 0)
+            + summary.get("budget_exceeded", 0)
+            + summary.get("infra_error", 0)
+            + summary.get("errored", 0)
+        ),
+    )
+    testsuites.set("time", str(scorecard.get("timestamp", "")))
+
+    # Group scenarios by category
+    by_cat = {}
+    for result in scorecard.get("scenarios", []):
+        cat = result.get("category", "unknown")
+        by_cat.setdefault(cat, []).append(result)
+
+    for cat_name, cat_scenarios in sorted(by_cat.items()):
+        testsuite = ET.SubElement(testsuites, "testsuite")
+        testsuite.set("name", cat_name)
+        testsuite.set("tests", str(len(cat_scenarios)))
+        cat_failures = sum(
+            1
+            for r in cat_scenarios
+            if r.get("status") in ("FAIL", "BLOCKED_BY_ARCHITECTURE")
+        )
+        cat_errors = sum(
+            1
+            for r in cat_scenarios
+            if r.get("status")
+            in ("TIMEOUT", "BUDGET_EXCEEDED", "INFRA_ERROR", "SETUP_ERROR", "ERRORED")
+        )
+        cat_skipped = sum(
+            1 for r in cat_scenarios if r.get("status") == "SKIPPED_NO_DOCUMENT"
+        )
+        testsuite.set("failures", str(cat_failures))
+        testsuite.set("errors", str(cat_errors))
+        testsuite.set("skipped", str(cat_skipped))
+
+        for result in cat_scenarios:
+            testcase = ET.SubElement(testsuite, "testcase")
+            sid = result.get("scenario_id", "unknown")
+            testcase.set("name", sid)
+            testcase.set("classname", f"gaia.eval.{cat_name}")
+
+            elapsed = result.get("elapsed_s")
+            if isinstance(elapsed, (int, float)):
+                testcase.set("time", f"{elapsed:.1f}")
+
+            status = result.get("status", "ERRORED")
+            score = result.get("overall_score")
+            score_str = f"{score:.1f}/10" if isinstance(score, (int, float)) else "n/a"
+
+            if status == "PASS":
+                # Passing tests have no sub-elements
+                pass
+            elif status == "SKIPPED_NO_DOCUMENT":
+                skipped_el = ET.SubElement(testcase, "skipped")
+                skipped_el.set("message", "Corpus document(s) not on disk")
+            elif status in ("FAIL", "BLOCKED_BY_ARCHITECTURE"):
+                failure = ET.SubElement(testcase, "failure")
+                failure.set("message", f"{status} — score: {score_str}")
+                failure.set("type", status)
+                details = [f"Status: {status}", f"Score: {score_str}"]
+                if result.get("root_cause"):
+                    details.append(f"Root cause: {result['root_cause']}")
+                if result.get("recommended_fix"):
+                    details.append(f"Recommended fix: {result['recommended_fix']}")
+                # Include per-turn summaries
+                for turn in result.get("turns", []):
+                    turn_num = turn.get("turn", "?")
+                    turn_score = turn.get("overall_score")
+                    turn_score_str = (
+                        f"{turn_score:.1f}"
+                        if isinstance(turn_score, (int, float))
+                        else "n/a"
+                    )
+                    turn_pass = "PASS" if turn.get("pass") else "FAIL"
+                    details.append(
+                        f"  Turn {turn_num}: {turn_pass} ({turn_score_str}/10)"
+                    )
+                failure.text = "\n".join(details)
+            else:
+                # Infrastructure errors (TIMEOUT, ERRORED, etc.)
+                error = ET.SubElement(testcase, "error")
+                error.set("message", f"{status} — score: {score_str}")
+                error.set("type", status)
+                error_text = result.get(
+                    "error", f"Scenario ended with status: {status}"
+                )
+                error.text = str(error_text)
+
+    # Serialize to string with XML declaration
+    tree = ET.ElementTree(testsuites)
+    import io
+
+    buf = io.BytesIO()
+    tree.write(buf, encoding="utf-8", xml_declaration=True)
+    return buf.getvalue().decode("utf-8")

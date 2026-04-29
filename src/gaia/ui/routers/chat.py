@@ -173,6 +173,31 @@ async def send_message(
                 msg_id = db.add_message(request.session_id, "assistant", response_text)
                 # Notify AgentLoop after the non-streaming response completes
                 _notify_loop(request.session_id)
+
+                # Fire-and-forget auto-titling — same hook the streaming
+                # path uses. GAIA renames its own session after the first
+                # answer (and on topic shifts thereafter); see
+                # _maybe_update_session_title for the rules. We pass
+                # model_id from the loaded session so the title call uses
+                # whichever LLM is actually live in Lemonade.
+                try:
+                    from gaia.ui._chat_helpers import _maybe_update_session_title
+
+                    _title_task = asyncio.create_task(
+                        _maybe_update_session_title(
+                            db=db,
+                            session_id=request.session_id,
+                            user_msg=request.message,
+                            assistant_msg=response_text or "",
+                            model_id=session.get("model"),
+                        )
+                    )
+                    # Pin a reference so GC doesn't kill the task before
+                    # it finishes; the function is short and self-contained,
+                    # so a stray reference is fine.
+                    _title_task.add_done_callback(lambda _t: None)
+                except Exception:  # pylint: disable=broad-except
+                    pass  # auto-titling failures must never block a response
                 return ChatResponse(
                     message_id=msg_id,
                     content=response_text,

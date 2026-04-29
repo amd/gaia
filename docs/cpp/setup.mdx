@@ -168,17 +168,13 @@ icon: "wrench"
 
     The agent needs an OpenAI-compatible LLM server. [Lemonade Server](https://lemonade-server.ai) is recommended (optimized for AMD hardware).
 
-    Download and install the `.deb` package (v10.2.0):
+    Install via the Launchpad PPA (Ubuntu 24.04+):
 
     ```bash
-    # Download the .deb package
-    curl -L -o lemonade-server_10.2.0_amd64.deb https://github.com/lemonade-sdk/lemonade/releases/download/v10.2.0/lemonade-server_10.2.0_amd64.deb
-
-    # Install it
-    sudo dpkg -i lemonade-server_10.2.0_amd64.deb
+    sudo add-apt-repository ppa:lemonade-team/stable
+    sudo apt-get update
+    sudo apt-get install -y lemonade-server
     ```
-
-    Or download directly from the [Lemonade v10.2.0 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v10.2.0).
 
     After installation, start the server:
     ```bash

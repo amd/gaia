@@ -825,13 +825,12 @@ class AttachDocumentRequest(BaseModel):
   <Accordion title="GET /api/agents">
     List all agents registered via `AgentRegistry` — built-in agents plus any
     custom agents discovered under `~/.gaia/agents/`. See
-    [`plugin-registry`](/spec/plugin-registry) for the manifest format.
+    [`plugin-registry`](/spec/plugin-registry) for the registration format.
   </Accordion>
 
   <Accordion title="GET /api/agents/{agent_id}">
     Return details for a single registered agent (description, models,
-    conversation starters, source = `builtin` / `custom_python` /
-    `custom_manifest`).
+    conversation starters, `source` = `builtin` or `custom_python`).
   </Accordion>
 </AccordionGroup>
 

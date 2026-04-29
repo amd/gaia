@@ -239,6 +239,17 @@ See the [Agent UI MCP Server guide](/guides/mcp/agent-ui) for setup instructions
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
   </Accordion>
 
+  <Accordion title="First-run network egress to huggingface.co">
+    The first time you index a document, the embedding model
+    (`sentence-transformers`) is downloaded from `huggingface.co` (~100 MB,
+    cached under `~/.cache/huggingface/`). Subsequent runs are offline.
+
+    If your environment blocks `huggingface.co`, pre-seed the cache on a
+    machine with internet access and copy it to the target machine, or set
+    `HF_HOME` to point at a pre-populated cache directory before launching
+    the UI.
+  </Accordion>
+
   <Accordion title="Frontend shows JSON instead of the UI">
     The Agent UI frontend has not been built.
 

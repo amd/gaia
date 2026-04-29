@@ -336,6 +336,55 @@
     line-height: 1.5;
     font-family: var(--font-sans);
 }
+.model-status-hint code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+/* Inline icon + text for memory warning rows. */
+.memory-warning-value {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+/* Context-size preset chips: quick buttons for common ctx values. */
+.ctx-preset-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 8px 0 10px;
+}
+.btn-ctx-preset {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: border-color 120ms, color 120ms, background 120ms;
+}
+.btn-ctx-preset:hover:not(:disabled) {
+    border-color: var(--border);
+    color: var(--text-primary);
+}
+.btn-ctx-preset.active {
+    background: var(--bg-accent, var(--bg-secondary));
+    border-color: var(--text-accent, var(--text-primary));
+    color: var(--text-primary);
+}
+.btn-ctx-preset:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
 
 /* Danger zone */
 .danger-zone {

@@ -80,6 +80,14 @@
                 ]
               },
               {
+                "group": "Agent Eval",
+                "pages": [
+                  "guides/eval",
+                  "guides/eval-scenarios",
+                  "guides/eval-ci"
+                ]
+              },
+              {
                 "group": "Playbooks",
                 "pages": [
                   "playbooks/index",
@@ -313,7 +321,6 @@
                 "group": "Evaluation Framework",
                 "pages": [
                   "reference/eval",
-                  "reference/eval/fix-code-testbench",
                   "eval"
                 ]
               },

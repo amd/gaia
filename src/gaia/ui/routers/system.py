@@ -4,20 +4,25 @@
 """System and health-check endpoints for GAIA Agent UI."""
 
 import asyncio
+import json
 import logging
 import os
 import shutil
 import sys
+import threading
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from gaia.llm.lemonade_client import DEFAULT_CONTEXT_SIZE
 
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_dispatch_queue
 from ..models import (
+    DownloadProgress,
     InitTaskInfo,
     ModelStatus,
     SettingsResponse,
@@ -39,8 +44,9 @@ router = APIRouter(tags=["system"])
 # Default model required for GAIA Chat agent
 _DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 # Minimum context window (tokens) needed for reliable agent operation.
-# Must match DEFAULT_CONTEXT_SIZE in gaia.llm.lemonade_manager.
-_MIN_CONTEXT_SIZE = 32768
+# Sourced from ``gaia.llm.lemonade_client`` to keep the GAIA-wide ctx
+# requirement in a single module (see that module's ``DEFAULT_CONTEXT_SIZE``).
+_MIN_CONTEXT_SIZE = DEFAULT_CONTEXT_SIZE
 
 
 def _get_lemonade_base_url() -> str:
@@ -73,6 +79,324 @@ async def _lemonade_post(
                 )
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("%s failed: %s", log_context, exc)
+
+
+# ── Download progress tracking ──────────────────────────────────────────────
+#
+# Lemonade's ``POST /v1/pull`` with ``stream=true`` emits SSE events:
+#
+#     event: progress
+#     data: {"bytes_downloaded":N, "bytes_previously_downloaded":M,
+#            "bytes_total":T, "file":"foo.gguf", "file_index":i,
+#            "percent":p, "total_download_size":T_total, "total_files":n}
+#     event: complete
+#     data: {...}
+#     event: error
+#     data: {"error":"..."}
+#
+# We hold one open streaming POST per active download and stash the latest
+# event in ``_download_progress`` so the frontend's existing
+# ``/api/system/status`` poll loop picks it up — no second polling channel
+# needed and no SSE pass-through endpoint to maintain.
+#
+# Why an in-memory dict instead of a per-request channel: there's only one
+# UI per server, downloads are slow (minutes), and the cost of one keyed
+# lookup per status poll is negligible. If we ever need to surface progress
+# to multiple distinct clients we can swap this for a fan-out without
+# touching callers.
+_download_progress: Dict[str, Dict[str, Any]] = {}
+_download_progress_lock = threading.Lock()
+_DOWNLOAD_PROGRESS_TTL = 30.0  # seconds to retain a terminal entry post-finish
+
+
+def _set_download_progress(model_name: str, payload: Dict[str, Any]) -> None:
+    with _download_progress_lock:
+        _download_progress[model_name] = payload
+
+
+def _get_download_progress(model_name: str) -> Optional[Dict[str, Any]]:
+    """Return a copy of the latest progress dict, or None."""
+    with _download_progress_lock:
+        entry = _download_progress.get(model_name)
+        return dict(entry) if entry else None
+
+
+def _clear_download_progress(model_name: str) -> None:
+    with _download_progress_lock:
+        _download_progress.pop(model_name, None)
+
+
+async def _evict_progress_after_ttl(model_name: str) -> None:
+    """Delay-evict a terminal progress entry so the frontend's poll cycle
+    has a chance to observe the ``complete`` / ``error`` state once.
+    Without this, a fast download finishes between two polls and the UI
+    misses the "complete" beat entirely.
+    """
+    try:
+        await asyncio.sleep(_DOWNLOAD_PROGRESS_TTL)
+    finally:
+        _clear_download_progress(model_name)
+
+
+def _parse_pull_event_block(block: str) -> Optional[Dict[str, Any]]:
+    """Convert one ``event:/data:`` block from Lemonade's pull stream into
+    ``{"event": <name>, "data": <parsed-json>}``.
+
+    Lemonade sends ``event: <name>`` then ``data: <json>`` then a blank
+    line.  Any malformed lines are skipped — pull streams are best-effort
+    and a single garbled block shouldn't tank the whole UI.
+    """
+    event_name: Optional[str] = None
+    data_payload: Optional[Dict[str, Any]] = None
+    for raw_line in block.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("event:"):
+            event_name = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            try:
+                data_payload = json.loads(line.split(":", 1)[1].strip())
+            except json.JSONDecodeError:
+                continue
+    if event_name is None:
+        return None
+    return {"event": event_name, "data": data_payload or {}}
+
+
+async def _auto_load_after_download(model_name: str) -> None:
+    """Issue a Lemonade ``/v1/load`` for ``model_name`` at our default ctx.
+
+    Called from ``_stream_lemonade_pull`` once the pull completes so the
+    user doesn't have to take a second action ("model downloaded — now go
+    click Load") to actually start chatting. We use the same
+    ``DEFAULT_CONTEXT_SIZE`` (32K) the rest of GAIA expects, otherwise
+    Lemonade falls back to its own much smaller default and the next
+    chat hits the "ctx too small" reload branch.
+
+    Errors are swallowed: a load failure here surfaces via the existing
+    ``/api/system/status`` health check; logging is enough.
+    """
+    payload = {
+        "model_name": model_name,
+        "ctx_size": DEFAULT_CONTEXT_SIZE,
+    }
+    logger.info(
+        "Auto-load after download: %s (ctx_size=%d)",
+        model_name,
+        DEFAULT_CONTEXT_SIZE,
+    )
+    # 600 s ceiling is generous on purpose: cold mmap + KV-cache alloc
+    # for a fresh GGUF can take 30–60 s on consumer hardware, more on
+    # cold disks. Better to wait than to fire a 30 s timeout that then
+    # makes the user wonder why "model loaded" never flips.
+    await _lemonade_post(
+        "load",
+        payload,
+        timeout=600.0,
+        log_context=f"Auto-load {model_name}",
+    )
+
+
+async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
+    """Issue ``POST /v1/pull?stream=true`` and feed the SSE event stream
+    into ``_download_progress[model_name]``.
+
+    Handles three terminal cases (success, server error, connection
+    blowup) and always leaves the entry in a state the frontend can
+    interpret; an unhandled exception that left ``state="downloading"``
+    would peg the UI's spinner forever.
+    """
+    import httpx  # pylint: disable=import-outside-toplevel
+
+    base_url = _get_lemonade_base_url()
+    payload: Dict[str, Any] = {"model_name": model_name, "stream": True}
+    if force:
+        payload["force"] = True
+
+    _set_download_progress(
+        model_name,
+        {
+            "state": "starting",
+            "model_name": model_name,
+            "percent": 0,
+            "file": None,
+            "file_index": 0,
+            "total_files": 0,
+            "downloaded_bytes": 0,
+            "total_bytes": 0,
+            "message": None,
+        },
+    )
+    logger.info("Pull stream starting: %s (force=%s)", model_name, force)
+
+    # Track files we've already finished so the running ``downloaded_bytes``
+    # advances monotonically across the multi-file pull. Lemonade's progress
+    # events carry per-file counters; we synthesise an overall counter by
+    # adding each file's ``bytes_total`` once it transitions away.
+    completed_bytes_total = 0
+    last_file: Optional[str] = None
+    last_bytes_total = 0
+
+    # Connect timeout 10 s (network quirks); read timeout disabled because the
+    # download itself can take many minutes between progress events on a slow
+    # link, and we'd rather hold open than wrongly bail.
+    client_timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=client_timeout) as client:
+            async with client.stream("POST", f"{base_url}/pull", json=payload) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    snippet = body.decode("utf-8", errors="replace")[:300]
+                    _set_download_progress(
+                        model_name,
+                        {
+                            "state": "error",
+                            "model_name": model_name,
+                            "percent": 0,
+                            "file": None,
+                            "file_index": 0,
+                            "total_files": 0,
+                            "downloaded_bytes": 0,
+                            "total_bytes": 0,
+                            "message": (
+                                f"Lemonade /pull returned {resp.status_code}: {snippet}"
+                            ),
+                        },
+                    )
+                    logger.error(
+                        "Pull stream HTTP %d for %s: %s",
+                        resp.status_code,
+                        model_name,
+                        snippet,
+                    )
+                    return
+
+                buffer = ""
+                async for chunk in resp.aiter_text():
+                    buffer += chunk
+                    # SSE blocks are separated by a blank line.
+                    while "\n\n" in buffer:
+                        block, buffer = buffer.split("\n\n", 1)
+                        parsed = _parse_pull_event_block(block)
+                        if parsed is None:
+                            continue
+                        ev = parsed["event"]
+                        data = parsed["data"]
+
+                        if ev == "progress":
+                            file_name = data.get("file") or ""
+                            current_bytes = int(data.get("bytes_downloaded") or 0)
+                            file_total = int(data.get("bytes_total") or 0)
+                            total_size = int(data.get("total_download_size") or 0)
+
+                            # When the file changes, the previous file's full
+                            # ``bytes_total`` becomes part of the cumulative
+                            # downloaded count. Using the last seen total
+                            # (rather than the new event's reported total)
+                            # avoids underflow when files have skipped bytes.
+                            if last_file is not None and file_name != last_file:
+                                completed_bytes_total += last_bytes_total
+
+                            last_file = file_name
+                            last_bytes_total = file_total
+
+                            overall_bytes = completed_bytes_total + current_bytes
+                            overall_percent = (
+                                int(min(100, overall_bytes * 100 / total_size))
+                                if total_size > 0
+                                else int(data.get("percent") or 0)
+                            )
+
+                            _set_download_progress(
+                                model_name,
+                                {
+                                    "state": "downloading",
+                                    "model_name": model_name,
+                                    "percent": overall_percent,
+                                    "file": file_name,
+                                    "file_index": int(data.get("file_index") or 0),
+                                    "total_files": int(data.get("total_files") or 0),
+                                    "downloaded_bytes": overall_bytes,
+                                    "total_bytes": total_size,
+                                    "message": None,
+                                },
+                            )
+                        elif ev == "complete":
+                            _set_download_progress(
+                                model_name,
+                                {
+                                    "state": "complete",
+                                    "model_name": model_name,
+                                    "percent": 100,
+                                    "file": None,
+                                    "file_index": int(data.get("file_index") or 0),
+                                    "total_files": int(data.get("total_files") or 0),
+                                    "downloaded_bytes": completed_bytes_total
+                                    + last_bytes_total,
+                                    "total_bytes": completed_bytes_total
+                                    + last_bytes_total,
+                                    "message": None,
+                                },
+                            )
+                            logger.info("Pull stream complete: %s", model_name)
+                            # Kick off auto-load so the user doesn't have to
+                            # manually click "Load" after a multi-minute pull.
+                            # We hand off to a separate task because the load
+                            # itself can take ~30 s (the 4B GGUFs warm-load
+                            # quickly, but mmap + KV-cache alloc is real work)
+                            # and we want this stream's TTL eviction to fire
+                            # on schedule rather than waiting on the load.
+                            load_task = asyncio.create_task(
+                                _auto_load_after_download(model_name)
+                            )
+                            _background_tasks.add(load_task)
+                            load_task.add_done_callback(_background_tasks.discard)
+                        elif ev == "error":
+                            err_msg = (
+                                data.get("error")
+                                or data.get("message")
+                                or "Download failed"
+                            )
+                            _set_download_progress(
+                                model_name,
+                                {
+                                    "state": "error",
+                                    "model_name": model_name,
+                                    "percent": 0,
+                                    "file": None,
+                                    "file_index": 0,
+                                    "total_files": 0,
+                                    "downloaded_bytes": 0,
+                                    "total_bytes": 0,
+                                    "message": err_msg,
+                                },
+                            )
+                            logger.error(
+                                "Pull stream error for %s: %s", model_name, err_msg
+                            )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("Pull stream blew up for %s: %s", model_name, exc, exc_info=True)
+        _set_download_progress(
+            model_name,
+            {
+                "state": "error",
+                "model_name": model_name,
+                "percent": 0,
+                "file": None,
+                "file_index": 0,
+                "total_files": 0,
+                "downloaded_bytes": 0,
+                "total_bytes": 0,
+                "message": f"Download stream interrupted: {exc}",
+            },
+        )
+    finally:
+        # Schedule TTL-bounded eviction so the next download (potentially with
+        # the same model_name on retry) starts from a clean ``starting`` state.
+        evict_task = asyncio.create_task(_evict_progress_after_ttl(model_name))
+        _background_tasks.add(evict_task)
+        evict_task.add_done_callback(_background_tasks.discard)
 
 
 @router.get("/api/system/status", response_model=SystemStatus)
@@ -155,14 +479,28 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
 
-                # Validate that the loaded model matches what GAIA Chat expects.
-                # Respects custom_model override if the user has configured one.
+                # Validate that the loaded model matches what GAIA Chat (or any
+                # registered agent) expects. A custom_model override wins over
+                # everything; otherwise the loaded model is "expected" if it
+                # matches the baseline default *or* any registered agent's
+                # preferred model list. This stops Gaia Lite's 4B (or any other
+                # non-default agent model) from tripping a "Wrong model" banner.
                 if status.model_loaded:
                     custom_model = db.get_setting("custom_model")
-                    expected = (custom_model or _DEFAULT_MODEL_NAME).lower()
-                    status.expected_model_loaded = (
-                        status.model_loaded.lower() == expected
-                    )
+                    loaded_lower = status.model_loaded.lower()
+                    if custom_model:
+                        status.expected_model_loaded = (
+                            loaded_lower == custom_model.lower()
+                        )
+                    else:
+                        acceptable = {_DEFAULT_MODEL_NAME.lower()}
+                        registry = getattr(request.app.state, "agent_registry", None)
+                        if registry is not None:
+                            for reg in registry.list():
+                                for m in reg.models:
+                                    if m:
+                                        acceptable.add(m.lower())
+                        status.expected_model_loaded = loaded_lower in acceptable
                     # Surface the actual expected name in the response so the
                     # frontend can name it precisely in the warning banner.
                     status.default_model_name = custom_model or _DEFAULT_MODEL_NAME
@@ -184,6 +522,13 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             for m in catalog_resp.json().get("data", []):
                                 if m.get("id", "").lower() == default_lower:
                                     status.model_downloaded = m.get("downloaded", False)
+                                    # Capture the catalog size so the
+                                    # "not downloaded" banner can show an
+                                    # accurate hint instead of a hard-coded
+                                    # number that drifts with model changes.
+                                    cat_size = m.get("size")
+                                    if cat_size is not None:
+                                        status.default_model_size_gb = float(cat_size)
                                     break
                             # Model not found in catalog → treat as not downloaded
                             if status.model_downloaded is None:
@@ -267,6 +612,17 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         status.memory_available_gb = round(mem.available / (1024**3), 1)
     except ImportError:
         pass
+    except Exception as exc:
+        # psutil is installed but the syscall failed — seen in containers
+        # under tight seccomp policies, on read-only /proc, etc. Leaving the
+        # field as None (rather than aborting the whole status endpoint) lets
+        # the modal suppress its memory-warning banner instead of rendering
+        # a misleading "0 GB available" panel. Logged loudly so the cause is
+        # traceable rather than silently degraded.
+        logger.warning(
+            "psutil.virtual_memory() failed (%s); memory_available_gb stays None",
+            exc,
+        )
 
     # Initialized check
     init_marker = Path.home() / ".gaia" / "chat" / "initialized"
@@ -322,6 +678,15 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         status.init_tasks = [
             InitTaskInfo(name=j.name, status=j.status.value) for j in visible
         ]
+
+    # ── Live download progress ──────────────────────────────────────────
+    # Surfaced for whichever model the UI cares about (custom override
+    # wins, else the registered default). Looking up by model name keeps
+    # us decoupled from concurrent pulls of unrelated models.
+    target_model = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
+    progress_dict = _get_download_progress(target_model)
+    if progress_dict:
+        status.download_progress = DownloadProgress(**progress_dict)
 
     return status
 
@@ -426,13 +791,17 @@ async def update_settings(
 ):
     """Update user settings.
 
-    Setting custom_model to an empty string or null clears the override
-    and reverts to the default model.
+    Setting ``custom_model`` to an **empty string** clears the override
+    and reverts to the default model. Sending ``null`` (or omitting the
+    field) is a no-op — by GAIA convention only explicit ``""`` clears.
+    Pydantic *can* distinguish an explicit ``null`` from an unset field
+    via ``model_fields_set``; we don't lean on that distinction here so
+    clients have a single, simple rule (omit to keep, ``""`` to clear).
 
-    Setting context_size to null resets to the default (32768 tokens).
+    Setting ``context_size`` to null resets to the default (32768 tokens).
     Non-null values must be >= 32768.
 
-    Setting agent_mode controls autonomous behaviour:
+    Setting ``agent_mode`` controls autonomous behaviour:
     'manual' | 'goal_driven' | 'autonomous' (default).
     """
     if request.custom_model is not None:
@@ -496,7 +865,10 @@ async def health(db: ChatDatabase = Depends(get_db)):
 
 class LoadModelRequest(BaseModel):
     model_name: str
-    ctx_size: Optional[int] = None
+    # ctx_size must be positive. Lemonade silently accepts 0 or negative values
+    # and then fails deep in the backend with no actionable error — enforce at
+    # the boundary so callers get a 422 immediately.
+    ctx_size: Optional[int] = Field(None, gt=0)
 
 
 @router.post("/api/system/load-model", status_code=202)
@@ -529,23 +901,20 @@ class DownloadModelRequest(BaseModel):
 async def download_model_endpoint(body: DownloadModelRequest):
     """Trigger downloading a model via Lemonade server (non-blocking).
 
-    Returns 202 immediately; download proceeds in the background.
-    Poll /api/system/status to detect when the model becomes available.
-    Set force=True to re-download even if the file already exists (repairs
-    corrupted or incomplete downloads).
+    Returns 202 immediately; the actual download runs in a background task
+    that streams Lemonade's ``POST /v1/pull`` SSE events into an in-memory
+    progress map. Frontend polls ``/api/system/status`` to read the latest
+    ``download_progress`` snapshot — no separate progress endpoint to
+    maintain.
+
+    Set ``force=True`` to re-download even if the file already exists
+    (repairs corrupted or incomplete downloads).
     """
     model_name = body.model_name.strip()
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name must not be empty")
 
-    payload: dict = {"model_name": model_name}
-    if body.force:
-        payload["force"] = True
-    task = asyncio.create_task(
-        _lemonade_post(
-            "pull", payload, timeout=7200.0, log_context=f"Download {model_name}"
-        )
-    )
+    task = asyncio.create_task(_stream_lemonade_pull(model_name, body.force))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return {"status": "downloading", "model": model_name}
