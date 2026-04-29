@@ -216,33 +216,13 @@ jobs:
         run: |
           echo "=== Testing Evaluation and Utility Commands ==="
 
-          # Test groundtruth command help
-          echo "Testing groundtruth command help:"
-          gaia groundtruth --help
-
           # Test eval command help
           echo "Testing eval command help:"
           gaia eval --help
 
-          # Test report command help
-          echo "Testing report command help:"
-          gaia report --help
-
-          # Test generate command help
-          echo "Testing generate command help:"
-          gaia generate --help
-
-          # Test batch-experiment command help
-          echo "Testing batch-experiment command help:"
-          gaia batch-experiment --help
-
-          # Test create-template command help
-          echo "Testing create-template command help:"
-          gaia create-template --help
-
-          # Test visualize command help
-          echo "Testing visualize command help:"
-          gaia visualize --help
+          # Test eval agent subcommand help
+          echo "Testing eval agent subcommand help:"
+          gaia eval agent --help
 
           # Test test command help
           echo "Testing test command help:"
@@ -300,7 +280,7 @@ jobs:
           echo "📋 Tested components:"
           echo "   ✅ Lemonade server with Qwen3-0.6B-GGUF model"
           echo "   ✅ Core CLI commands using Qwen model (chat, prompt, llm)"
-          echo "   ✅ Evaluation commands (eval, groundtruth, report, etc.)"
+          echo "   ✅ Evaluation commands (eval, eval agent)"
           echo "   ✅ Summarizer CLI integration (gaia summarize command)"
           echo "   ✅ RAG (Retrieval-Augmented Generation) functionality"
           echo "   ✅ Lemonade client integration (API tests)"

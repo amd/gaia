@@ -213,9 +213,7 @@ def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
             try:
                 data = yaml.safe_load(path.read_text(encoding="utf-8"))
             except Exception as e:
-                raise RuntimeError(
-                    f"Failed to parse scenario YAML {path}: {e}"
-                ) from e
+                raise RuntimeError(f"Failed to parse scenario YAML {path}: {e}") from e
             try:
                 validate_scenario(path, data)
             except ValueError as e:
@@ -582,9 +580,7 @@ def _load_merged_manifest(extra_corpus_dirs=None):
             extra_manifest = corpus_dir_path / "manifest.json"
             if extra_manifest.is_file():
                 try:
-                    extra_data = json.loads(
-                        extra_manifest.read_text(encoding="utf-8")
-                    )
+                    extra_data = json.loads(extra_manifest.read_text(encoding="utf-8"))
                     extra_docs = extra_data.get("documents", [])
                     manifest_data["documents"] = (
                         manifest_data.get("documents", []) + extra_docs
@@ -1472,7 +1468,9 @@ class AgentEvalRunner:
                 self.model,
                 self.budget,
                 effective_timeout,
-                extra_corpus_dirs=self.extra_corpus_dirs if self.extra_corpus_dirs else None,
+                extra_corpus_dirs=(
+                    self.extra_corpus_dirs if self.extra_corpus_dirs else None
+                ),
             )
             results.append(result)
 
@@ -1562,7 +1560,9 @@ class AgentEvalRunner:
                     self.model,
                     self.budget,
                     effective_timeout,
-                    extra_corpus_dirs=self.extra_corpus_dirs if self.extra_corpus_dirs else None,
+                    extra_corpus_dirs=(
+                        self.extra_corpus_dirs if self.extra_corpus_dirs else None
+                    ),
                 )
                 rerun_results.append(result)
 

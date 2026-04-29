@@ -320,7 +320,9 @@ def write_junit_xml(scorecard):
     summary = scorecard.get("summary", {})
     testsuites.set("name", f"GAIA Agent Eval — {scorecard.get('run_id', 'unknown')}")
     testsuites.set("tests", str(summary.get("total_scenarios", 0)))
-    testsuites.set("failures", str(summary.get("failed", 0) + summary.get("blocked", 0)))
+    testsuites.set(
+        "failures", str(summary.get("failed", 0) + summary.get("blocked", 0))
+    )
     testsuites.set(
         "errors",
         str(
@@ -379,9 +381,7 @@ def write_junit_xml(scorecard):
                 pass
             elif status == "SKIPPED_NO_DOCUMENT":
                 skipped_el = ET.SubElement(testcase, "skipped")
-                skipped_el.set(
-                    "message", "Corpus document(s) not on disk"
-                )
+                skipped_el.set("message", "Corpus document(s) not on disk")
             elif status in ("FAIL", "BLOCKED_BY_ARCHITECTURE"):
                 failure = ET.SubElement(testcase, "failure")
                 failure.set("message", f"{status} — score: {score_str}")
@@ -396,7 +396,9 @@ def write_junit_xml(scorecard):
                     turn_num = turn.get("turn", "?")
                     turn_score = turn.get("overall_score")
                     turn_score_str = (
-                        f"{turn_score:.1f}" if isinstance(turn_score, (int, float)) else "n/a"
+                        f"{turn_score:.1f}"
+                        if isinstance(turn_score, (int, float))
+                        else "n/a"
                     )
                     turn_pass = "PASS" if turn.get("pass") else "FAIL"
                     details.append(
@@ -408,7 +410,9 @@ def write_junit_xml(scorecard):
                 error = ET.SubElement(testcase, "error")
                 error.set("message", f"{status} — score: {score_str}")
                 error.set("type", status)
-                error_text = result.get("error", f"Scenario ended with status: {status}")
+                error_text = result.get(
+                    "error", f"Scenario ended with status: {status}"
+                )
                 error.text = str(error_text)
 
     # Serialize to string with XML declaration
