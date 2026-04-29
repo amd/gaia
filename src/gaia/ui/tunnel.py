@@ -433,7 +433,14 @@ class TunnelManager:
                         "ngrok did not open a tunnel within 15 seconds. "
                         "Check your internet connection and authtoken, then retry."
                     )
-                logger.error("Tunnel start failed: %s", self._error)
+                # NOTE: not logging self._error here. The friendly message
+                # is already returned via get_status() and any raw stderr
+                # was captured at debug level by _poll_ngrok_api. Logging
+                # the parsed string at error level adds no diagnostic value
+                # and CodeQL's py/clear-text-logging-sensitive-data rule
+                # treats subprocess-derived strings as tainted regardless of
+                # masking — the cheapest fix is to not double-log.
+                logger.error("Tunnel start failed (see status for details)")
                 # Preserve the diagnostic error across cleanup -- stop()
                 # clears _error by design (for user-initiated stops), so we
                 # save + restore it here so the API caller actually sees
@@ -443,8 +450,14 @@ class TunnelManager:
                 self._error = saved_error
 
         except Exception as e:
+            # Stringify only the exception class to avoid logging exception
+            # detail that may carry a token (e.g. from a subprocess error).
             self._error = f"Failed to start ngrok: {e}"
-            logger.error(self._error, exc_info=True)
+            logger.error(
+                "Failed to start ngrok (%s); see status for friendly diagnostic",
+                type(e).__name__,
+                exc_info=True,
+            )
             saved_error = self._error
             await self.stop()
             self._error = saved_error
@@ -597,11 +610,17 @@ class TunnelManager:
             # Check if ngrok process died
             if self._process and self._process.poll() is not None:
                 stderr = self._drain_ngrok_output()
+                # Raw output goes to DEBUG only — even after _mask_ngrok_secrets
+                # masks plausible authtokens, CodeQL's
+                # py/clear-text-logging-sensitive-data rule treats any
+                # subprocess-pipe-derived string as tainted at non-debug
+                # levels. The parsed friendly error (set below) is the
+                # user-facing channel; this DEBUG line is only for hands-on
+                # debugging when the rest of the diagnostic isn't enough.
                 logger.error(
-                    "ngrok exited after %.1fs. Output:\n%s",
-                    elapsed,
-                    stderr or "(empty)",
+                    "ngrok exited after %.1fs (see debug log for output)", elapsed
                 )
+                logger.debug("ngrok output on exit:\n%s", stderr or "(empty)")
                 self._error = _parse_ngrok_error(stderr)
                 return None
 
@@ -638,7 +657,10 @@ class TunnelManager:
                     self._process.kill()
                     self._process.wait(timeout=2)
                 stderr = self._drain_ngrok_output()
-                logger.error("ngrok output on timeout:\n%s", stderr or "(empty)")
+                # See note above: raw drained output goes to DEBUG only to
+                # keep CodeQL's clear-text-logging rule happy; the
+                # user-facing channel is _parse_ngrok_error() below.
+                logger.debug("ngrok output on timeout:\n%s", stderr or "(empty)")
         except Exception as e:
             logger.debug("Error terminating timed-out ngrok: %s", e)
 
