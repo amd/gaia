@@ -173,8 +173,12 @@ class TestTunnelManager:
         assert status["error"] is not None
         err = status["error"]
         # Friendly guidance: either mention the config command or the dashboard.
+        # Use full-URL prefix matches so a hostile host like
+        # ``evil.dashboard.ngrok.com.attacker.tld`` would not satisfy the assertion.
         assert "authtoken" in err.lower()
-        assert "ngrok config add-authtoken" in err or "dashboard.ngrok.com" in err
+        assert (
+            "ngrok config add-authtoken" in err or "https://dashboard.ngrok.com/" in err
+        )
 
     def test_stop_when_not_running(self):
         """stop() is safe to call when tunnel is not running."""
@@ -223,7 +227,9 @@ class TestParseNgrokError:
         )
         assert "authtoken" in msg.lower()
         assert "ngrok config add-authtoken" in msg
-        assert "dashboard.ngrok.com" in msg
+        # Match the full URL prefix (https://dashboard.ngrok.com/) rather than a
+        # bare substring so a lookalike host can't satisfy the assertion.
+        assert "https://dashboard.ngrok.com/" in msg
 
     def test_authtoken_error_by_code(self):
         from gaia.ui.tunnel import _parse_ngrok_error
@@ -242,7 +248,8 @@ class TestParseNgrokError:
         # Should mention it was rejected/invalid (not "not configured").
         assert "rejected" in msg.lower() or "invalid" in msg.lower()
         # Should point the user at the dashboard to re-copy a fresh one.
-        assert "dashboard.ngrok.com" in msg
+        # Full URL prefix to avoid matching a lookalike host.
+        assert "https://dashboard.ngrok.com/" in msg
         # Must NOT claim the authtoken is "not configured" -- misleading
         # here, since it IS configured, just invalid.
         assert "not configured" not in msg.lower()
@@ -263,7 +270,8 @@ class TestParseNgrokError:
             "sessions. (ERR_NGROK_108)"
         )
         assert "simultaneous" in msg.lower() or "already running" in msg.lower()
-        assert "dashboard.ngrok.com/agents" in msg
+        # Full URL match (with scheme + path) so a lookalike host can't satisfy.
+        assert "https://dashboard.ngrok.com/agents" in msg
 
     def test_network_error(self):
         from gaia.ui.tunnel import _parse_ngrok_error
@@ -334,6 +342,60 @@ class TestParseNgrokError:
             or "internet" in msg.lower()
             or "network" in msg.lower()
         )
+
+    def test_connection_refused_lookalike_host_does_not_match(self):
+        """A hostile string that *contains* ``tunnel.ngrok.com`` as a substring
+        must NOT trip the ngrok-specific network branch.
+
+        Locks in the word-boundary regex used by ``_parse_ngrok_error`` so a
+        future refactor back to a naked ``in`` check (which CodeQL flagged as
+        py/incomplete-url-substring-sanitization) is caught.
+        """
+        from gaia.ui.tunnel import _parse_ngrok_error
+
+        # ``connection refused`` *and* the literal ``tunnel.ngrok.com`` substring
+        # appears, but only as a misleading subdomain of an attacker-controlled
+        # host. The match must NOT fire — the message that actually surfaces is
+        # the generic fallback (``ngrok failed to start: ...``).
+        msg = _parse_ngrok_error(
+            "evil.tunnel.ngrok.com.attacker.tld: connection refused"
+        )
+        assert "internet connection" not in msg.lower()
+        assert "ngrok failed to start" in msg
+
+
+class TestMaskNgrokSecrets:
+    """``_mask_ngrok_secrets`` redacts plausible authtokens before logging."""
+
+    def test_authtoken_field_is_masked(self):
+        from gaia.ui.tunnel import _mask_ngrok_secrets
+
+        masked = _mask_ngrok_secrets(
+            "config: authtoken: 2abcdefghijklmnopqrstuvwxyz_zyxwvutsrqponmlkjihgfedcba"
+        )
+        assert "2abcdefghij" not in masked
+        assert "[REDACTED]" in masked
+
+    def test_long_opaque_token_is_masked_anywhere(self):
+        from gaia.ui.tunnel import _mask_ngrok_secrets
+
+        # An ngrok-shaped long token appearing inline (e.g. echoed in stderr
+        # without the ``authtoken:`` prefix) must still be redacted.
+        masked = _mask_ngrok_secrets(
+            "rejected token: 2ABCDEFGHIJKLMNOPQRSTUVWXYZ_zyxwvutsrqponmlkjihgfedcba "
+            "please retry"
+        )
+        assert "2ABCDEFGHIJ" not in masked
+        assert "[REDACTED]" in masked
+        # Non-secret context is preserved.
+        assert "please retry" in masked
+
+    def test_safe_input_unchanged(self):
+        from gaia.ui.tunnel import _mask_ngrok_secrets
+
+        text = "ngrok exited cleanly: no authtoken issues"
+        # No secret-shaped substring → string passes through verbatim.
+        assert _mask_ngrok_secrets(text) == text
 
 
 class TestCheckNgrokAuthtokenConfigured:

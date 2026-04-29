@@ -9,9 +9,11 @@ data for easy mobile onboarding.
 """
 
 import asyncio
+import hmac
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import uuid
@@ -57,6 +59,39 @@ _NGROK_SESSION_LIMIT_HINT = (
     "active tunnel at a time. Stop any other ngrok processes (check your "
     "dashboard at https://dashboard.ngrok.com/agents) and try again."
 )
+
+
+# Patterns that match plausible ngrok authtokens or other secrets that may
+# appear in ngrok's stderr/stdout (e.g. a rejected-authtoken error often
+# echoes the offending value back). Replaced with ``[REDACTED]`` before any
+# captured output reaches a logger or the friendly-error parser.
+_NGROK_SECRET_PATTERNS = (
+    # ``authtoken: <value>`` in any quoting / case (logfmt or YAML echo).
+    re.compile(r"(authtoken[:=]\s*['\"]?)\S+", re.IGNORECASE),
+    # ngrok's modern authtokens look like ``2<base32 ~26 chars>_<base32 ~26 chars>``
+    # — long opaque strings; redact them wherever they appear.
+    re.compile(r"\b2[A-Za-z0-9]{20,}_[A-Za-z0-9]{20,}\b"),
+)
+
+
+def _mask_ngrok_secrets(text: str) -> str:
+    """Redact authtoken-shaped substrings before any captured output is logged.
+
+    ngrok normally redacts secrets in its own logfmt output, but the
+    rejected-authtoken / config-parse-error paths can echo the offending
+    value back in stderr. ERROR-level lines often end up pasted into bug
+    reports verbatim — we don't want a leaked authtoken to be the price of
+    a useful diagnostic.
+    """
+    if not text:
+        return text
+    masked = text
+    for pat in _NGROK_SECRET_PATTERNS:
+        masked = pat.sub(
+            lambda m: (m.group(1) + "[REDACTED]") if m.lastindex else "[REDACTED]",
+            masked,
+        )
+    return masked
 
 
 def _ngrok_config_candidates() -> list:
@@ -201,12 +236,17 @@ def _parse_ngrok_error(stderr_text: str) -> str:
     # Network / DNS problems. The "connection refused" branch is filtered to
     # the ngrok hostname so generic "connection refused" from a local service
     # doesn't get mis-attributed; the others (no such host / dial tcp / network
-    # unreachable) are already specific enough on their own.
+    # unreachable) are already specific enough on their own. Word-boundary
+    # regex (not naked substring) so a hostile string like
+    # ``evil.com/tunnel.ngrok.com.attacker.tld`` can't trip the branch.
     if (
         "no such host" in low
         or "dial tcp" in low
         or "network is unreachable" in low
-        or ("connection refused" in low and "tunnel.ngrok.com" in low)
+        or (
+            "connection refused" in low
+            and re.search(r"(?<![\w.-])tunnel\.ngrok\.com(?![\w.-])", low) is not None
+        )
     ):
         return (
             "Could not reach ngrok's servers. Check your internet connection "
@@ -292,10 +332,20 @@ class TunnelManager:
 
         Returns:
             True if token matches the active tunnel's token.
+
+        Notes:
+            Uses ``hmac.compare_digest`` for constant-time comparison to
+            avoid leaking token bits via response-time differences. Even
+            though the token is a 122-bit UUID4 (timing attacks aren't
+            practically feasible at that entropy), constant-time compare
+            is the convention for any auth-token check and removes the
+            class of bug from review.
         """
         if not self.active or not self._token:
             return False
-        return token == self._token
+        if not isinstance(token, str):
+            return False
+        return hmac.compare_digest(token, self._token)
 
     async def start(self) -> dict:
         """Start the ngrok tunnel.
@@ -502,7 +552,8 @@ class TunnelManager:
         """Best-effort drain of ngrok's stdout+stderr for error reporting.
 
         Called after ngrok has exited or been terminated.  Returns combined
-        stdout+stderr text (truncated if excessively long).
+        stdout+stderr text (truncated if excessively long, and with any
+        plausible authtoken values masked so error logs are safe to share).
         """
         combined = []
         for pipe_name in ("stdout", "stderr"):
@@ -518,6 +569,7 @@ class TunnelManager:
             except Exception as e:
                 logger.debug("Error draining ngrok %s: %s", pipe_name, e)
         text = "\n".join(combined).strip()
+        text = _mask_ngrok_secrets(text)
         # Truncate to keep logs manageable; friendly parser takes first line.
         return text[:4000]
 
