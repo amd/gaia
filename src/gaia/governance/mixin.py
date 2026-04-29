@@ -44,6 +44,7 @@ without review") and avoids silent pass-through.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .action_mapper import map_gaia_tool_call_to_action_request
@@ -58,6 +59,8 @@ from .schemas import (
     WorkflowTransition,
     new_id,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GovernedAgentMixin:
@@ -167,18 +170,25 @@ class GovernedAgentMixin:
         if callable(resolver):
             try:
                 resolved = resolver(tool_name)  # pylint: disable=not-callable
+                if resolved:
+                    return resolved
+            except LookupError:
+                pass  # Tool not in registry — fall through to raw name.
             except Exception:  # pylint: disable=broad-exception-caught
-                resolved = None
-            if resolved:
-                return resolved
+                logger.warning(
+                    "governance: _resolve_tool_name raised unexpectedly for %r; "
+                    "falling back to raw name — canonical tag lookup may be incomplete",
+                    tool_name,
+                    exc_info=True,
+                )
         return tool_name
 
     def _build_action_request(
         self, tool_name: str, tool_args: dict[str, Any]
     ) -> ActionRequest:
-        # Merge decorator-declared tags with explicit dict tags. Explicit
-        # dict wins when both declare a tag for the same tool, so users
-        # can override decorator defaults without editing source.
+        # Merge decorator-declared tags with explicit dict tags — additive
+        # (union, deduplicated). Decorator tags come first; explicit dict
+        # tags are appended. Neither side overrides the other.
         decorated_tags = read_risk_tags(self._lookup_tool_fn(tool_name))
         explicit_tags = self._governance_risk_tags.get(tool_name, [])
         merged_tags = list(dict.fromkeys([*decorated_tags, *explicit_tags]))
@@ -202,7 +212,7 @@ class GovernedAgentMixin:
         """
         try:
             from gaia.agents.base.tools import _TOOL_REGISTRY  # type: ignore
-        except Exception:  # pylint: disable=broad-exception-caught
+        except ImportError:
             return None
         entry = _TOOL_REGISTRY.get(tool_name)
         if not entry:
@@ -236,7 +246,11 @@ class GovernedAgentMixin:
             self._governance_callback(tool_name, tool_args, action, decision)
         except Exception:  # pylint: disable=broad-exception-caught
             # Observational callbacks must never break tool execution.
-            pass
+            logger.warning(
+                "governance: callback raised for tool %r; continuing",
+                tool_name,
+                exc_info=True,
+            )
 
     def _handle_review_checkpoint(
         self,
@@ -301,6 +315,11 @@ class GovernedAgentMixin:
         try:
             return bool(reviewer(tool_name, tool_args, decision))
         except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "governance: reviewer raised for tool %r; failing closed",
+                tool_name,
+                exc_info=True,
+            )
             return False
 
     @staticmethod

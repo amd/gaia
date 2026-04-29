@@ -20,9 +20,9 @@ Usage::
 
 The mixin reads ``__gaia_governance__`` off the tool function at call
 time and merges those tags with any dict passed via
-``governance_risk_tags=``. The explicit dict wins when a tool appears
-in both, so callers can override decorator defaults without editing
-source.
+``governance_risk_tags=``. Tags are **additive** (union, deduplicated):
+decorator tags come first, then dict tags are appended. Neither side
+overrides the other.
 """
 
 from __future__ import annotations

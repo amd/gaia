@@ -4,6 +4,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from decimal import Decimal
+from math import inf, nan
+from pathlib import PurePosixPath
+from uuid import UUID
+
 from gaia.governance import (
     ActionRequest,
     CheckpointResolution,
@@ -12,7 +18,7 @@ from gaia.governance import (
 )
 from gaia.governance.checkpoint_bridge import InMemoryCheckpointBridge
 from gaia.governance.policy_binding import StaticPolicyBindingService
-from gaia.governance.receipt_service import InMemoryReceiptService
+from gaia.governance.receipt_service import InMemoryReceiptService, JsonlReceiptService
 from gaia.governance.stubs import RuleBasedPolicyEngine
 
 
@@ -88,6 +94,162 @@ def test_handle_transition_review_opens_checkpoint():
     outcome = adapter.handle_transition(_transition(), decision)
     assert outcome.status == "CHECKPOINT_OPEN"
     assert outcome.checkpoint_id is not None
+
+
+def test_block_receipt_handles_non_json_tool_args():
+    adapter = _adapter()
+    decision = adapter.govern_action(_action("delete_file", ["blocked"]))
+    transition = WorkflowTransition(
+        workflow_id="wf_test",
+        transition_id="t1",
+        from_state="START",
+        to_state="RUN",
+        transition_type="tool_call",
+        related_action_id="a1",
+        payload={"tool_args": {"path": PurePosixPath("/tmp/example")}},
+    )
+
+    outcome = adapter.handle_transition(transition, decision)
+
+    assert outcome.status == "TERMINATED"
+    receipt = adapter.receipt_service.get_receipt(outcome.metadata["receipt_id"])
+    assert receipt is not None
+    path_evidence = receipt.metadata["evidence"]["transition"]["payload"]["tool_args"][
+        "path"
+    ]
+    assert path_evidence == {"__type__": "PurePosixPath", "value": "/tmp/example"}
+
+
+def test_block_receipt_with_non_json_args_writes_strict_jsonl(tmp_path):
+    adapter = GaiaGovernanceAdapter(
+        policy_engine=RuleBasedPolicyEngine(),
+        checkpoint_runtime=InMemoryCheckpointBridge(),
+        receipt_service=JsonlReceiptService(tmp_path / "receipts.jsonl"),
+        policy_binding=StaticPolicyBindingService(),
+    )
+    decision = adapter.govern_action(_action("delete_file", ["blocked"]))
+    transition = WorkflowTransition(
+        workflow_id="wf_test",
+        transition_id="t1",
+        from_state="START",
+        to_state="RUN",
+        transition_type="tool_call",
+        related_action_id="a1",
+        payload={"tool_args": {"path": PurePosixPath("/tmp/example")}},
+    )
+
+    outcome = adapter.handle_transition(transition, decision)
+
+    receipt = adapter.receipt_service.get_receipt(outcome.metadata["receipt_id"])
+    path_evidence = receipt.metadata["evidence"]["transition"]["payload"]["tool_args"][
+        "path"
+    ]
+    assert path_evidence == {"__type__": "PurePosixPath", "value": "/tmp/example"}
+
+
+@dataclass
+class CustomEvidence:
+    name: str
+    score: Decimal
+
+
+class SlotOnlyEvidence:
+    __slots__ = ()
+
+
+class SelfReferentialEvidence:
+    def __init__(self):
+        self.self = self
+
+
+def test_block_receipt_canonicalizes_complex_evidence_without_repr_fallback():
+    adapter = _adapter()
+    decision = adapter.govern_action(_action("delete_file", ["blocked"]))
+    transition = WorkflowTransition(
+        workflow_id="wf_test",
+        transition_id="t1",
+        from_state="START",
+        to_state="RUN",
+        transition_type="tool_call",
+        related_action_id="a1",
+        payload={
+            "tool_args": {
+                "non_finite": [nan, inf, -inf],
+                "bytes": b"\x00\xff",
+                "tuple": ("a", 1),
+                "set": {"b", "a"},
+                "mapping": {1: "integer", "1": "string"},
+                "uuid": UUID("00000000-0000-0000-0000-000000000001"),
+                "custom": CustomEvidence(name="alpha", score=Decimal("1.20")),
+                "opaque": SlotOnlyEvidence(),
+            }
+        },
+    )
+
+    outcome = adapter.handle_transition(transition, decision)
+
+    receipt = adapter.receipt_service.get_receipt(outcome.metadata["receipt_id"])
+    args = receipt.metadata["evidence"]["transition"]["payload"]["tool_args"]
+    assert args["non_finite"] == [
+        {"__type__": "float", "value": "nan"},
+        {"__type__": "float", "value": "inf"},
+        {"__type__": "float", "value": "-inf"},
+    ]
+    assert args["bytes"] == {"__type__": "bytes", "value": "00ff"}
+    assert args["tuple"] == {"__type__": "tuple", "items": ["a", 1]}
+    assert args["set"] == {"__type__": "set", "items": ["a", "b"]}
+    assert args["mapping"] == {
+        "__type__": "mapping",
+        "entries": [["1", "string"], [1, "integer"]],
+    }
+    assert args["uuid"] == {
+        "__type__": "UUID",
+        "value": "00000000-0000-0000-0000-000000000001",
+    }
+    assert args["custom"]["fields"] == {
+        "name": "alpha",
+        "score": {"__type__": "Decimal", "value": "1.20"},
+    }
+    assert args["opaque"] == {
+        "__type__": "test_governance_adapter.SlotOnlyEvidence",
+        "unserializable": True,
+    }
+
+
+def test_block_receipt_canonicalizes_cycles_without_recursing():
+    adapter = _adapter()
+    decision = adapter.govern_action(_action("delete_file", ["blocked"]))
+    cyclic_dict = {}
+    cyclic_dict["self"] = cyclic_dict
+    cyclic_list = []
+    cyclic_list.append(cyclic_list)
+    cyclic_object = SelfReferentialEvidence()
+    transition = WorkflowTransition(
+        workflow_id="wf_test",
+        transition_id="t1",
+        from_state="START",
+        to_state="RUN",
+        transition_type="tool_call",
+        related_action_id="a1",
+        payload={
+            "tool_args": {
+                "dict": cyclic_dict,
+                "list": cyclic_list,
+                "object": cyclic_object,
+            }
+        },
+    )
+
+    outcome = adapter.handle_transition(transition, decision)
+
+    receipt = adapter.receipt_service.get_receipt(outcome.metadata["receipt_id"])
+    args = receipt.metadata["evidence"]["transition"]["payload"]["tool_args"]
+    assert args["dict"]["self"] == {"__type__": "builtins.dict", "cycle": True}
+    assert args["list"] == [{"__type__": "builtins.list", "cycle": True}]
+    assert args["object"]["fields"]["self"] == {
+        "__type__": "test_governance_adapter.SelfReferentialEvidence",
+        "cycle": True,
+    }
 
 
 def test_resolve_checkpoint_approve_resumes_and_records_receipt():

@@ -147,7 +147,8 @@
                       "sdk/sdks/mcp",
                       "sdk/sdks/llm",
                       "sdk/sdks/vlm",
-                      "sdk/sdks/audio"
+                      "sdk/sdks/audio",
+                      "sdk/sdks/governance"
                     ]
                   },
                   {

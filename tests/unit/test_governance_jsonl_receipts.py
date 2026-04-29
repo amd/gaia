@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from math import nan
 
 import pytest
 
@@ -72,3 +74,21 @@ def test_parent_directory_auto_created(tmp_path):
     svc.issue_receipt(_record("rcpt_nested"))
     assert path.exists()
     assert path.parent.is_dir()
+
+
+def test_issue_rejects_non_canonical_metadata(tmp_path):
+    svc = JsonlReceiptService(tmp_path / "strict.jsonl")
+    record = _record("rcpt_bad")
+    record = replace(record, metadata={"bad": object()})
+
+    with pytest.raises(TypeError):
+        svc.issue_receipt(record)
+
+
+def test_issue_rejects_non_finite_numbers(tmp_path):
+    svc = JsonlReceiptService(tmp_path / "strict_float.jsonl")
+    record = _record("rcpt_nan")
+    record = replace(record, metadata={"score": nan})
+
+    with pytest.raises(ValueError):
+        svc.issue_receipt(record)

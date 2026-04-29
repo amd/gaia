@@ -17,6 +17,7 @@ Both implement :class:`gaia.governance.protocols.ReceiptServiceProtocol`.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, fields
 from pathlib import Path
 from threading import Lock
@@ -24,6 +25,8 @@ from typing import Iterator
 
 from .exceptions import GaiaGovernanceError
 from .schemas import ReceiptRecord
+
+logger = logging.getLogger(__name__)
 
 
 class InMemoryReceiptService:
@@ -69,7 +72,7 @@ class JsonlReceiptService:
         self._lock = Lock()
 
     def issue_receipt(self, record: ReceiptRecord) -> str:
-        line = json.dumps(asdict(record), default=str, sort_keys=True)
+        line = json.dumps(asdict(record), allow_nan=False, sort_keys=True)
         with self._lock:
             with self.path.open("a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
@@ -100,8 +103,13 @@ class JsonlReceiptService:
                 try:
                     data = json.loads(stripped)
                     yield ReceiptRecord(**{k: v for k, v in data.items() if k in known})
-                except Exception:  # pylint: disable=broad-exception-caught
+                except (json.JSONDecodeError, TypeError, KeyError):
                     pass  # Skip malformed or schema-mismatched lines.
+                except Exception:  # pylint: disable=broad-exception-caught
+                    logger.warning(
+                        "receipt log: unexpected error deserializing line; skipping",
+                        exc_info=True,
+                    )
 
     def __iter__(self) -> Iterator[ReceiptRecord]:
         return self._read_all()

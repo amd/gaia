@@ -61,9 +61,10 @@ agent = MyAgent(
 )
 ```
 
-Both work together. If both declare tags for the same tool, the dict
-wins so you can override decorator defaults at configuration time
-without editing source.
+Both work together. Tags are **additive** (union, deduplicated): decorator
+tags come first, then dict tags are appended. Neither side overrides the
+other, so a tool declared `"review"` in a decorator and `"blocked"` in
+the dict will carry both tags.
 
 ## Configuration
 
