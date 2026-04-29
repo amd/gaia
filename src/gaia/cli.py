@@ -48,6 +48,7 @@ current_dir = Path(__file__).resolve().parent
 parent_dir = current_dir.parent.parent.parent
 sys.path.append(str(parent_dir))
 
+
 def check_lemonade_health(host=None, port=None):
     """Check if Lemonade server is running and healthy using LemonadeClient."""
     log = get_logger(__name__)
@@ -1755,7 +1756,6 @@ Examples:
         "'junit' writes a JUnit XML file for CI integration.",
     )
 
-
     perf_vis_parser = subparsers.add_parser(
         "perf-vis",
         help="Visualize llama.cpp performance metrics from log files",
@@ -2160,7 +2160,6 @@ Examples:
             print(f"❌ Error: {e}")
             sys.exit(1)
         return
-
 
     # Handle summarize command
     if args.action == "summarize":

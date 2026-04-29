@@ -2098,9 +2098,7 @@ class TestFindScenariosExtraDirs:
         self._write_scenario(tmp_path, "untagged_3")
 
         # Filter by healthcare tag
-        results = find_scenarios(
-            extra_dirs=[str(tmp_path)], tags=["healthcare"]
-        )
+        results = find_scenarios(extra_dirs=[str(tmp_path)], tags=["healthcare"])
         ids = [data["id"] for _, data in results]
         assert "tagged_1" in ids
         assert "tagged_2" not in ids
@@ -2538,9 +2536,7 @@ class TestScenarioLoading:
                     "category": "x",
                     "persona": 42,
                     "setup": {"index_documents": []},
-                    "turns": [
-                        {"turn": 1, "objective": "x", "success_criteria": "ok"}
-                    ],
+                    "turns": [{"turn": 1, "objective": "x", "success_criteria": "ok"}],
                 },
             )
 
@@ -2594,7 +2590,9 @@ class TestScenarioLoading:
         scenarios = find_scenarios()
         ids = [data["id"] for _, data in scenarios]
         dupes = [x for x in ids if ids.count(x) > 1]
-        assert len(dupes) == 0, f"Duplicate scenario IDs in eval/scenarios/: {set(dupes)}"
+        assert (
+            len(dupes) == 0
+        ), f"Duplicate scenario IDs in eval/scenarios/: {set(dupes)}"
 
 
 class TestRunner:
@@ -2698,8 +2696,12 @@ class TestRunner:
 
         # Verify all models have both required keys
         for model_name, model_pricing in MODEL_PRICING.items():
-            assert "input_per_mtok" in model_pricing, f"{model_name} missing input pricing"
-            assert "output_per_mtok" in model_pricing, f"{model_name} missing output pricing"
+            assert (
+                "input_per_mtok" in model_pricing
+            ), f"{model_name} missing input pricing"
+            assert (
+                "output_per_mtok" in model_pricing
+            ), f"{model_name} missing output pricing"
 
     def test_budget_exceeded_status(self, mocker):
         """Scenario exceeding budget gets BUDGET_EXCEEDED status."""
@@ -2778,13 +2780,7 @@ class TestScorecardPublicAPI:
             "error_recovery": 4,
         }
         expected = (
-            8 * 0.25
-            + 6 * 0.20
-            + 7 * 0.20
-            + 9 * 0.15
-            + 5 * 0.10
-            + 10 * 0.05
-            + 4 * 0.05
+            8 * 0.25 + 6 * 0.20 + 7 * 0.20 + 9 * 0.15 + 5 * 0.10 + 10 * 0.05 + 4 * 0.05
         )
         assert recompute_turn_score(mixed) == pytest.approx(expected, abs=0.001)
 
@@ -2929,7 +2925,10 @@ class TestScorecardPublicAPI:
         # Verify structural equality
         assert loaded["run_id"] == original["run_id"]
         assert loaded["config"] == original["config"]
-        assert loaded["summary"]["total_scenarios"] == original["summary"]["total_scenarios"]
+        assert (
+            loaded["summary"]["total_scenarios"]
+            == original["summary"]["total_scenarios"]
+        )
         assert loaded["summary"]["passed"] == original["summary"]["passed"]
         assert loaded["summary"]["failed"] == original["summary"]["failed"]
         assert loaded["summary"]["timeout"] == original["summary"]["timeout"]
@@ -2947,7 +2946,10 @@ class TestScorecardPublicAPI:
         # Verify by_category is preserved
         for cat in original["summary"]["by_category"]:
             assert cat in loaded["summary"]["by_category"]
-            assert loaded["summary"]["by_category"][cat]["passed"] == original["summary"]["by_category"][cat]["passed"]
+            assert (
+                loaded["summary"]["by_category"][cat]["passed"]
+                == original["summary"]["by_category"][cat]["passed"]
+            )
 
 
 class TestCorpusPublicAPI:
