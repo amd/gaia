@@ -216,6 +216,18 @@ class OutputHandler(ABC):
         """Request user confirmation before executing a tool. Returns True to proceed."""
         return True
 
+    def print_policy_alert(
+        self,
+        tool_name: str,  # pylint: disable=unused-argument
+        decision: str,  # pylint: disable=unused-argument
+        reason: str,  # pylint: disable=unused-argument
+        rule_ids: List[str],  # pylint: disable=unused-argument
+        policy_version: str,  # pylint: disable=unused-argument
+        receipt_id: Optional[str] = None,  # pylint: disable=unused-argument
+    ) -> None:
+        """Report a policy decision that blocked tool execution. Optional no-op."""
+        ...
+
     def print_separator(self, length: int = 50):  # pylint: disable=unused-argument
         """Print separator. Optional - default no-op."""
         ...

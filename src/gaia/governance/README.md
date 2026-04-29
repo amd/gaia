@@ -115,6 +115,15 @@ agent = MyAgent(
 If no reviewer or blocking console is available, REVIEW decisions **fail closed**
 (tool denied).
 
+## Agent UI policy alerts
+
+When a policy returns `BLOCK`, `GovernedAgentMixin` still refuses the tool before
+the body executes and returns a denied tool result. If the active console
+implements `print_policy_alert`, the mixin also emits a policy alert with the
+blocked tool, decision, reason, rule IDs, policy version, and receipt ID.
+Agent UI's `SSEOutputHandler` sends this as a `policy_alert` SSE event so the
+frontend can distinguish a policy refusal from a generic tool failure.
+
 ## Security properties
 
 - **Canonical name resolution:** governance resolves the registered
