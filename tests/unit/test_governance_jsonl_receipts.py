@@ -92,3 +92,26 @@ def test_issue_rejects_non_finite_numbers(tmp_path):
 
     with pytest.raises(ValueError):
         svc.issue_receipt(record)
+
+
+def test_read_all_skips_malformed_lines(tmp_path):
+    """A corrupt line in the middle of the audit log must not block
+    readers from finding subsequent valid records.
+    """
+    path = tmp_path / "mixed.jsonl"
+    svc = JsonlReceiptService(path)
+    svc.issue_receipt(_record("rcpt_good_1"))
+    # Inject a malformed line + a schema-mismatched line directly into
+    # the file, simulating partial writes from a prior crashed process.
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("{not valid json\n")
+        fh.write('{"receipt_id": "rcpt_orphan", "missing_required_fields": true}\n')
+    svc.issue_receipt(_record("rcpt_good_2"))
+
+    # Fresh instance to bypass the cache and force a full disk scan.
+    fresh = JsonlReceiptService(path)
+    assert fresh.get_receipt("rcpt_good_1").receipt_id == "rcpt_good_1"
+    assert fresh.get_receipt("rcpt_good_2").receipt_id == "rcpt_good_2"
+    # The malformed/orphan lines do NOT yield valid records during iteration.
+    fresh2 = JsonlReceiptService(path)
+    assert {r.receipt_id for r in fresh2} == {"rcpt_good_1", "rcpt_good_2"}

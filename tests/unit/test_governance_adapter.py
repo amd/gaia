@@ -10,10 +10,14 @@ from math import inf, nan
 from pathlib import PurePosixPath
 from uuid import UUID
 
+import pytest
+
 from gaia.governance import (
     ActionRequest,
     CheckpointResolution,
     GaiaGovernanceAdapter,
+    GaiaGovernanceError,
+    GovernanceDecision,
     WorkflowTransition,
 )
 from gaia.governance.checkpoint_bridge import InMemoryCheckpointBridge
@@ -94,6 +98,18 @@ def test_handle_transition_review_opens_checkpoint():
     outcome = adapter.handle_transition(_transition(), decision)
     assert outcome.status == "CHECKPOINT_OPEN"
     assert outcome.checkpoint_id is not None
+
+
+def test_handle_transition_rejects_unknown_decision_type():
+    """``GovernanceDecision.decision`` is ``Literal[...]`` but Python does
+    not enforce literal types at runtime. A custom PolicyEngine that
+    returns a decision string the adapter doesn't recognize must raise
+    rather than silently allow the call.
+    """
+    adapter = _adapter()
+    bogus = GovernanceDecision(decision="WAT", reason="x", policy_version="v0")
+    with pytest.raises(GaiaGovernanceError):
+        adapter.handle_transition(_transition(), bogus)
 
 
 def test_block_receipt_handles_non_json_tool_args():
@@ -211,7 +227,7 @@ def test_block_receipt_canonicalizes_complex_evidence_without_repr_fallback():
         "score": {"__type__": "Decimal", "value": "1.20"},
     }
     assert args["opaque"] == {
-        "__type__": "test_governance_adapter.SlotOnlyEvidence",
+        "__type__": f"{SlotOnlyEvidence.__module__}.SlotOnlyEvidence",
         "unserializable": True,
     }
 
@@ -247,7 +263,7 @@ def test_block_receipt_canonicalizes_cycles_without_recursing():
     assert args["dict"]["self"] == {"__type__": "builtins.dict", "cycle": True}
     assert args["list"] == [{"__type__": "builtins.list", "cycle": True}]
     assert args["object"]["fields"]["self"] == {
-        "__type__": "test_governance_adapter.SelfReferentialEvidence",
+        "__type__": f"{SelfReferentialEvidence.__module__}.SelfReferentialEvidence",
         "cycle": True,
     }
 

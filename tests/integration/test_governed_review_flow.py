@@ -10,6 +10,7 @@ or denies the tool based on the reviewer's response.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from gaia.governance import (
@@ -148,7 +149,7 @@ def test_block_decision_records_receipt_and_returns_receipt_id():
     assert receipts_list[0].decision == "BLOCK"
 
 
-def test_reviewer_exception_is_treated_as_reject():
+def test_reviewer_exception_is_treated_as_reject(caplog):
     adapter, _ = _build_adapter()
 
     def boom(*_a, **_kw):
@@ -159,6 +160,13 @@ def test_reviewer_exception_is_treated_as_reject():
         governance_risk_tags={"publish_post": ["review"]},
         governance_reviewer=boom,
     )
+    caplog.set_level(logging.WARNING, "gaia.governance.mixin")
     result = agent._execute_tool("publish_post", {"body": "hi"})
     assert result["status"] == "denied"
     assert agent.calls == []
+    # A misbehaving reviewer must be visible to operators, not just silently
+    # treated as REJECT. Match on logger name, not message string.
+    assert any(
+        record.levelname == "WARNING" and record.name == "gaia.governance.mixin"
+        for record in caplog.records
+    )

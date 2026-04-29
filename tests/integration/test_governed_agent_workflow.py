@@ -14,6 +14,7 @@ or MCP. The goal is to prove that:
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from gaia.governance import (
@@ -116,7 +117,7 @@ def test_review_decision_without_reviewer_fails_closed():
     assert decisions == ["REVIEW"]
 
 
-def test_callback_exception_does_not_break_execution():
+def test_callback_exception_does_not_break_execution(caplog):
     def boom(*_a, **_kw):
         raise RuntimeError("callback exploded")
 
@@ -124,5 +125,39 @@ def test_callback_exception_does_not_break_execution():
         governance_adapter=_adapter(),
         governance_callback=boom,
     )
+    caplog.set_level(logging.WARNING, "gaia.governance.mixin")
     result = agent._execute_tool("get_weather", {"city": "Austin"})
     assert result["status"] == "ok"
+    # The exception was swallowed but a warning was logged so an operator
+    # can detect a misbehaving callback. Don't assert the message string —
+    # just that something was warned about the mixin.
+    assert any(
+        record.levelname == "WARNING" and record.name == "gaia.governance.mixin"
+        for record in caplog.records
+    )
+
+
+def test_unknown_transition_outcome_fails_closed():
+    """Defensive: if a custom CheckpointRuntime returns an outcome status
+    the mixin doesn't recognize, deny the call rather than letting it
+    silently pass through.
+    """
+
+    class _BogusOutcomeAdapter(GaiaGovernanceAdapter):
+        def handle_transition(self, transition, decision):
+            from gaia.governance.schemas import TransitionOutcome
+
+            return TransitionOutcome(status="WAT", reason="from outer space")
+
+    adapter = _BogusOutcomeAdapter(
+        policy_engine=RuleBasedPolicyEngine(),
+        checkpoint_runtime=InMemoryCheckpointBridge(),
+        receipt_service=InMemoryReceiptService(),
+        policy_binding=StaticPolicyBindingService(),
+    )
+    agent = _GovernedFakeAgent(governance_adapter=adapter)
+    result = agent._execute_tool("get_weather", {"city": "Austin"})
+    assert result["status"] == "denied"
+    assert result["governance_decision"] == "ERROR"
+    assert "unknown transition outcome" in result["error"]
+    assert agent.calls == []

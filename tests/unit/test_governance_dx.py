@@ -138,20 +138,19 @@ def test_mixin_reads_decorated_tags_from_registry():
     assert agent.calls == []
 
 
-def test_explicit_dict_overrides_decorated_tags():
+def test_explicit_empty_dict_does_not_downgrade_decorator_tags():
+    """Document the additive-only semantic: an empty explicit list cannot
+    cancel a decorator-declared tag. Merge rule is union+dedup, not override.
+    """
     adapter = GaiaGovernanceAdapter.default(audit_log=None)
-    # Decorator says "blocked" but explicit dict downgrades to no tags ->
-    # ALLOW. Use case: ops override during incident.
     agent = _GovernedFakeAgent(
         governance_adapter=adapter,
         governance_risk_tags={"_dx_decorated_blocked": []},
     )
-    # Merged tags will be ["blocked"] (from decorator) + [] (explicit).
-    # With the current merge rule (union, dedup), explicit-empty does
-    # NOT downgrade. Document this as "additive only" — tightening in
-    # a future revision if needed.
+    # Merged tags = ["blocked"] (decorator) ∪ [] (explicit) = ["blocked"].
+    # The decorator tag still applies; the explicit-empty does NOT downgrade.
     result = agent._execute_tool("_dx_decorated_blocked", {})
-    assert result["status"] == "denied"  # decorator tag still applies
+    assert result["status"] == "denied"
 
 
 def test_read_risk_tags_handles_missing_attribute():
